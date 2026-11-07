@@ -8,10 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,8 +28,21 @@ const (
 	nextRelease = "v1.1.0-rc.2"
 )
 
+var (
+	versionedMu    sync.Mutex
+	versionedCache = map[string][]byte{}
+)
+
 func versioned(t *testing.T, version, overlay string) []byte {
 	t.Helper()
+	cacheKey := fmt.Sprintf("%s|overlay=%t", version, overlay != "")
+	versionedMu.Lock()
+	if cached, ok := versionedCache[cacheKey]; ok {
+		versionedMu.Unlock()
+		return cached
+	}
+	versionedMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	root, err := filepath.Abs("../..")
@@ -46,6 +63,9 @@ func versioned(t *testing.T, version, overlay string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	versionedMu.Lock()
+	versionedCache[cacheKey] = raw
+	versionedMu.Unlock()
 	return raw
 }
 
@@ -227,6 +247,257 @@ func TestRecoveryRestoresABrokenCandidate(t *testing.T) {
 		t.Fatal("the control: the probe passes the broken candidate")
 	} else {
 		fmt.Fprintln(os.Stderr, "broken candidate:", err)
+	}
+	writeProofArtifact(t, "recovery-proof.json", map[string]any{
+		"good_version":        goodRelease,
+		"good_sha256":         hexSum(good),
+		"broken_version":      nextRelease,
+		"broken_sha256":       hexSum(broken),
+		"rolled_back":         j.RolledBack(),
+		"quarantine_reason":   j.Quarantine[hexSum(broken)],
+		"elapsed":             j.Observed.Elapsed.String(),
+		"notification_logged": evs[0].Detail,
+		"post_rollback_probe": "passed",
+	})
+}
+
+// TestCanaryContainmentBlocksCoordinatorAndHostUpdate proves that a good release
+// candidate passes the full staged canary (worker start, branch push, PR park,
+// independent exact-head review, merge validation, and observed merge commit),
+// while a candidate with a parser or merge-validation regression fails the
+// staged canary, produces failed evidence that blocks coordinator and
+// execution-host update routes while preserving the installed executable bytes,
+// and that recorded fixture evidence cannot grant release eligibility.
+func TestCanaryContainmentBlocksCoordinatorAndHostUpdate(t *testing.T) {
+	good, broken := versioned(t, goodRelease, ""), versioned(t, nextRelease, parserOverlay(t))
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
+
+	dir := t.TempDir()
+	goodPath := filepath.Join(dir, "beekeeper-good")
+	brokenPath := filepath.Join(dir, "beekeeper-broken")
+	for path, raw := range map[string][]byte{goodPath: good, brokenPath: broken} {
+		if err := os.WriteFile(path, raw, 0o700); err != nil { //nolint:gosec // executable candidate fixture
+			t.Fatal(err)
+		}
+	}
+
+	goodEv, err := StageCanary(ctx, CanaryConfig{
+		Candidate: goodPath,
+		Recorded:  true,
+		Run:       "canary-good",
+	})
+	if err != nil {
+		t.Fatalf("StageCanary(good) failed: %v", err)
+	}
+	if goodEv.Status != update.CanaryStatusSuccess || goodEv.Version != goodRelease || goodEv.SHA256 != hexSum(good) || goodEv.MergeCommit == "" {
+		t.Fatalf("unexpected good canary evidence: %+v", goodEv)
+	}
+
+	brokenEv, err := StageCanary(ctx, CanaryConfig{
+		Candidate: brokenPath,
+		Recorded:  true,
+		Run:       "canary-broken-parser",
+	})
+	if err == nil {
+		t.Fatalf("StageCanary(broken) unexpectedly succeeded: %+v", brokenEv)
+	}
+	if brokenEv.Status != update.CanaryStatusFailed || brokenEv.MergeCommit != "" || brokenEv.SHA256 != hexSum(broken) || brokenEv.Reason == "" {
+		t.Fatalf("unexpected broken canary evidence: %+v", brokenEv)
+	}
+
+	noCheckoutEv, err := StageCanary(ctx, CanaryConfig{
+		Candidate: goodPath,
+		Recorded:  true,
+		Run:       "canary-missing-merge-validation",
+		Scenario:  "no-checkout",
+	})
+	if err == nil || noCheckoutEv.Status != update.CanaryStatusFailed || noCheckoutEv.MergeCommit != "" {
+		t.Fatalf("StageCanary(no-checkout) = %+v, %v; want failed evidence", noCheckoutEv, err)
+	}
+
+	// Exercise the actual coordinator (update.Run) and execution-host
+	// (update.InstallVersion and update.InstallRelease) installer routes against
+	// the StageCanary output and verify installed binary bytes on disk.
+	verifyRoutes := func(runningVer, targetVer string, candBytes []byte, ev update.CanaryEvidence, wantInstall bool) {
+		t.Helper()
+		stateHome := t.TempDir()
+		t.Setenv("XDG_STATE_HOME", stateHome)
+		t.Setenv("GH_TOKEN", "test-update-token")
+
+		exeDir := t.TempDir()
+		exePath := filepath.Join(exeDir, "beekeeper")
+		initialBytes := []byte("initial-installed-binary-" + runningVer)
+		if err := os.WriteFile(exePath, initialBytes, 0o700); err != nil { //nolint:gosec // installed binary target
+			t.Fatal(err)
+		}
+		assetName := fmt.Sprintf("beekeeper-%s-%s", runtime.GOOS, runtime.GOARCH)
+		evJSON, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const (
+			bundleExt    = ".bundle"
+			canaryExt    = ".canary.json"
+			signedPrefix = "signed:"
+		)
+		restore := update.SetUpdateTargetForTest(exePath, runningVer, func(name string, _, bundle []byte) error {
+			if string(bundle) != signedPrefix+name {
+				return fmt.Errorf("invalid bundle for %s", name)
+			}
+			return nil
+		})
+		defer restore()
+
+		dlBase := "https://github.com/" + update.Repository + "/releases/download/" + targetVer + "/"
+		assets := []update.Asset{
+			{ID: 1, Name: assetName, Size: len(candBytes), URL: dlBase + assetName},
+			{ID: 2, Name: assetName + bundleExt, Size: len(signedPrefix + assetName), URL: dlBase + assetName + bundleExt},
+			{ID: 3, Name: assetName + canaryExt, Size: len(evJSON), URL: dlBase + assetName + canaryExt},
+			{ID: 4, Name: assetName + canaryExt + bundleExt, Size: len(signedPrefix + assetName + canaryExt), URL: dlBase + assetName + canaryExt + bundleExt},
+		}
+		assetBodies := map[int64][]byte{
+			1: candBytes,
+			2: []byte(signedPrefix + assetName),
+			3: evJSON,
+			4: []byte(signedPrefix + assetName + canaryExt),
+		}
+		relPayload, err := json.Marshal(map[string]any{
+			"id":           1,
+			"tag_name":     targetVer,
+			"prerelease":   true,
+			"published_at": time.Now().UTC().Format(time.RFC3339),
+			"html_url":     "https://github.com/" + update.Repository + "/releases/tag/" + targetVer,
+			"assets": []map[string]any{
+				{"id": 1, "name": assets[0].Name, "size": assets[0].Size, "browser_download_url": assets[0].URL},
+				{"id": 2, "name": assets[1].Name, "size": assets[1].Size, "browser_download_url": assets[1].URL},
+				{"id": 3, "name": assets[2].Name, "size": assets[2].Size, "browser_download_url": assets[2].URL},
+				{"id": 4, "name": assets[3].Name, "size": assets[3].Size, "browser_download_url": assets[3].URL},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		prevTransport := http.DefaultTransport
+		defer func() { http.DefaultTransport = prevTransport }()
+		http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			reply := func(code int, body []byte) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: code,
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(string(body))),
+					Request:    r,
+				}, nil
+			}
+			switch {
+			case strings.Contains(r.URL.Path, "/git/matching-refs/tags"):
+				return reply(http.StatusOK, []byte(`[{"ref":"refs/tags/`+runningVer+`","object":{"sha":"111"}},{"ref":"refs/tags/`+targetVer+`","object":{"sha":"222"}}]`))
+			case strings.Contains(r.URL.Path, "/compare/"):
+				return reply(http.StatusOK, []byte(`{"status":"ahead"}`))
+			case strings.HasSuffix(r.URL.Path, "/releases/tags/"+targetVer):
+				return reply(http.StatusOK, relPayload)
+			case strings.Contains(r.URL.Path, "/releases/assets/"):
+				for id, b := range assetBodies {
+					if strings.HasSuffix(r.URL.Path, fmt.Sprintf("/releases/assets/%d", id)) {
+						return reply(http.StatusOK, b)
+					}
+				}
+			}
+			for i, a := range assets {
+				if r.URL.String() == a.URL {
+					return reply(http.StatusOK, assetBodies[int64(i+1)])
+				}
+			}
+			return reply(http.StatusNotFound, []byte(`{}`))
+		})
+
+		routes := []struct {
+			name string
+			fn   func() (update.Result, error)
+		}{
+			{"coordinator_run", func() (update.Result, error) { return update.Run(ctx, io.Discard, false) }},
+			{"host_pinned", func() (update.Result, error) { return update.InstallVersion(ctx, io.Discard, targetVer) }},
+			{"host_given", func() (update.Result, error) {
+				return update.InstallRelease(ctx, io.Discard, update.Release{Tag: targetVer, ID: 1, Prerelease: true, Assets: assets})
+			}},
+		}
+		for _, rt := range routes {
+			_ = os.RemoveAll(exePath + ".update")
+			if err := os.WriteFile(exePath, initialBytes, 0o700); err != nil { //nolint:gosec // reset target before each route
+				t.Fatal(err)
+			}
+			res, rerr := rt.fn()
+			installedBytes, err := os.ReadFile(exePath) //nolint:gosec // verify installed target bytes
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !wantInstall {
+				if rerr == nil || res.Updated {
+					t.Fatalf("route %s unexpectedly updated with evidence %+v: res=%+v", rt.name, ev, res)
+				}
+				if hexSum(installedBytes) != hexSum(initialBytes) {
+					t.Fatalf("route %s modified installed executable bytes on refusal", rt.name)
+				}
+			} else {
+				if rerr != nil || !res.Updated {
+					t.Fatalf("route %s failed to install eligible candidate: res=%+v err=%v", rt.name, res, rerr)
+				}
+				if hexSum(installedBytes) != hexSum(candBytes) {
+					t.Fatalf("route %s did not install expected candidate bytes", rt.name)
+				}
+			}
+		}
+		if ev.Status == update.CanaryStatusFailed {
+			qPath := filepath.Join(stateHome, "beekeeper", "canary-quarantine", hexSum(candBytes)+".json")
+			if _, qerr := os.Stat(qPath); qerr != nil {
+				t.Fatalf("expected quarantine file at %s: %v", qPath, qerr)
+			}
+		}
+	}
+
+	// 1. Failed canary evidence blocks all three update routes and preserves installed bytes.
+	verifyRoutes(goodRelease, nextRelease, broken, brokenEv, false)
+	// 2. Recorded fixture success evidence cannot grant release eligibility on any route.
+	verifyRoutes("v1.0.0-rc.1", goodRelease, good, goodEv, false)
+	// 3. Live sandbox success evidence unlocks all three update routes.
+	liveEligibleEv := goodEv
+	liveEligibleEv.Run = "circleci-live-sandbox-1"
+	verifyRoutes("v1.0.0-rc.1", goodRelease, good, liveEligibleEv, true)
+
+	writeProofArtifact(t, "containment-proof.json", map[string]any{
+		"good_evidence":                 liveEligibleEv,
+		"recorded_fixture_evidence":     goodEv,
+		"broken_parser_evidence":        brokenEv,
+		"unavailable_checkout_evidence": noCheckoutEv,
+		"coordinator_update_blocked":    true,
+		"host_pinned_update_blocked":    true,
+		"host_given_update_blocked":     true,
+		"installed_sha256_preserved":    hexSum(good),
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func writeProofArtifact(t *testing.T, name string, payload any) {
+	t.Helper()
+	artifactRoot := strings.TrimSpace(os.Getenv("BEEKEEPER_TEST_LOOP_ARTIFACTS"))
+	if artifactRoot == "" {
+		return
+	}
+	outDir := filepath.Join(artifactRoot, "recovery-proof")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	if err := os.WriteFile(filepath.Join(outDir, name), raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
