@@ -1293,6 +1293,25 @@ fi
 		return string(out), cerr
 	}
 
+	// The temporary policy skips publication without provisioning or fake evidence.
+	policyDir := filepath.Join(workDir, "internal", "update")
+	if err := os.MkdirAll(policyDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(policyDir, "sandbox-proof-required.txt")
+	if err := os.WriteFile(policyPath, []byte("false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, cerr := runPublisher(); cerr != nil || !strings.Contains(out, "temporarily disabled") {
+		t.Fatalf("disabled policy: err=%v out=%s", cerr, out)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "blobs.txt")); !os.IsNotExist(err) {
+		t.Fatalf("disabled publisher created evidence blobs: %v", err)
+	}
+	if err := os.WriteFile(policyPath, []byte("true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	// 1. Incomplete sandbox provisioning fails closed (no fallback to recorded mode).
 	if out, cerr := runPublisher("BEEKEEPER_CANARY_REPO=" + testSandboxRepo); cerr == nil || !strings.Contains(out, "refusing to fall back to recorded fixture mode") {
 		t.Fatalf("incomplete provisioning should fail closed: err=%v out=%s", cerr, out)

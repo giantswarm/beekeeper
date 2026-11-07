@@ -108,6 +108,14 @@ jobs:
     - checkout
     - attach_workspace:
         at: .
+    - run:
+        name: Apply shared sandbox proof policy
+        command: |
+          case "$(cat internal/update/sandbox-proof-required.txt)" in
+            false) echo "Sandbox proof publication temporarily disabled"; circleci-agent step halt ;;
+            true) ;;
+            *) echo "Invalid sandbox proof policy" >&2; exit 1 ;;
+          esac
     - architect/tools-info
     - run:
         name: Retry transient Rekor conflict lookups during blob signing
