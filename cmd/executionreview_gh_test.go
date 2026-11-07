@@ -73,7 +73,7 @@ func TestReadDeskReviewRefusesAnotherPullRequestsReview(t *testing.T) {
 	}
 }
 
-func TestExecutionReviewReportVerifiesFixedHeadDescentAndGreenCI(t *testing.T) {
+func TestExecutionReviewReportVerifiesFixedHeadDescentBeforeCI(t *testing.T) {
 	const (
 		url          = "https://github.com/o/r/pull/14#pullrequestreview-346"
 		assignedHead = "0123456789abcdef0123456789abcdef01234567"
@@ -120,18 +120,14 @@ func TestExecutionReviewReportVerifiesFixedHeadDescentAndGreenCI(t *testing.T) {
 		}}}
 	}
 
-	// Refused when fixedHead is not green or does not descend from assignedHead.
+	// Descent is required even when CI is pending. The loop owns the CI gate.
 	if err := (&app{}).captureExecutionReviewReport(context.Background(), newState(), reviewer, "Review: approved\n"+url, time.Now(), true); err == nil {
-		t.Fatal("accepted self-fixed review head before CI was green and descent verified")
-	}
-	pullGreen = true
-	if err := (&app{}).captureExecutionReviewReport(context.Background(), newState(), reviewer, "Review: approved\n"+url, time.Now(), true); err == nil {
-		t.Fatal("accepted self-fixed review head that did not descend from assignedHead")
+		t.Fatal("accepted self-fixed review head without descent verified")
 	}
 	descends = true
 	st := newState()
 	if err := (&app{}).captureExecutionReviewReport(context.Background(), st, reviewer, "Review: approved\n"+url, time.Now(), true); err != nil {
-		t.Fatalf("expected green descendant self-fixed review head to be accepted, got: %v", err)
+		t.Fatalf("expected pending-CI descendant self-fixed review head to be accepted, got: %v", err)
 	}
 	if st.DeskReviews[0].Result == nil || st.DeskReviews[0].Result.Head != fixedHead {
 		t.Fatalf("unexpected review result: %+v", st.DeskReviews[0].Result)
