@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
 // EventOutbox is an append committed atomically with state.json. Offset and
@@ -18,13 +20,13 @@ type EventOutbox struct {
 	Data   []byte `json:"data"`
 }
 
-func (s *FileStore) commitEvents(st *State, events []Event) error {
+func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[execution.Ref]execution.LeaseGrant) error {
 	unlock, err := s.commitLock(context.Background())
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	if err := s.preserveRenewals(st); err != nil {
+	if err := s.preserveRenewals(st, leasesBefore); err != nil {
 		return err
 	}
 

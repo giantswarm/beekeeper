@@ -85,8 +85,9 @@ func (s *FileStore) RenewExecutionLease(ctx context.Context, ref execution.Ref, 
 
 // preserveRenewals runs under both locks. A slow callback may have read an
 // earlier sequence. Carry forward only grants for its exact registration;
-// deletion, stop and a replacement generation still commit atomically.
-func (s *FileStore) preserveRenewals(st *State) error {
+// explicit lease edits, deletion, stop and a replacement generation still commit
+// atomically. Only a lease left unchanged by the callback can be carried forward.
+func (s *FileStore) preserveRenewals(st *State, leasesBefore map[execution.Ref]execution.LeaseGrant) error {
 	current, err := s.load()
 	if err != nil {
 		return err
@@ -103,6 +104,10 @@ func (s *FileStore) preserveRenewals(st *State) error {
 	for _, start := range st.Starts {
 		r := start.Execution
 		if r == nil {
+			continue
+		}
+		before, hadLease := leasesBefore[r.Request.Ref]
+		if (r.Lease == nil && hadLease) || (r.Lease != nil && (!hadLease || *r.Lease != before)) {
 			continue
 		}
 		latest := leases[r.Request.Ref]
