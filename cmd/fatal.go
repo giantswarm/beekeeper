@@ -630,8 +630,8 @@ func fatalGuards(dir string, cfg *config.Config) []fatal.Observation {
 		{config.AgyHarness, filepath.Join(home, ".gemini", "config", "hooks.json"), len(m.AgyHook) > 0, install.CheckAgyHooks},
 		{"codex", codexHooksPath(home, true, cfg.Codex), len(m.CodexHook) > 0, func(_ string, exe, home string) string { return checkCodexHooks(home, dir, exe, true, cfg.Codex) }},
 	} {
-		o := fatal.Observation{ID: "guard:" + c.name, Disabled: !c.desired}
-		if c.desired {
+		o := fatal.Observation{ID: "guard:" + c.name, Disabled: !c.desired || !cfg.Hooks.GuardsEnabled()}
+		if !o.Disabled {
 			o.Failed = c.check(c.path, exe, home) != ""
 			o.Evidence = "installed guard configuration fails validation"
 		}

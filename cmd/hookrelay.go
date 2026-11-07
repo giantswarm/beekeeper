@@ -49,7 +49,7 @@ func (a *app) relayHookCmd() *cobra.Command {
 						return err
 					}
 				}
-				if reason := guideStopReason(st, ev.Session, time.Now()); ev.Event == guideStopEvent && reason != "" {
+				if reason := guideStopReason(st, ev.Session, time.Now()); ev.Event == guideStopEvent && a.cfg.Hooks.GuardsEnabled() && reason != "" {
 					return json.NewEncoder(a.out).Encode(map[string]string{"decision": "block", "reason": reason})
 				}
 			}
