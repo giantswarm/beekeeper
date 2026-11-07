@@ -70,7 +70,7 @@ loop runs every board.tidyEvery.`,
 }
 
 func (a *app) boardNextCmd() *cobra.Command {
-	var claim, replace bool
+	var claim, replace, exemptOnly bool
 	var waits string
 	var skip []string
 	var view nextView
@@ -210,8 +210,15 @@ Exit 3 means no admitted pick. --claim counts and records under one lock.
 The active incident hold's named repair and board.order steps with
 wipExempt: true pass this gate and still count. Manual agents start counts
 and warns above the limit. Reviews, fixes, wakes, rework and merges continue.
-The loop checks before reading its board or monitored queue: full costs no
-walk and sets no refill pause; a release frees a place on the next pass.`,
+The loop checks before ordinary board or monitored queue reads. At a full or
+stale limit it makes no read when no exempt route is configured. With an
+exempt step or active named incident repair, it uses --wip-exempt-only:
+the existing board ranking, ownership, blockers and other eligibility checks
+still apply, only exempt candidates are considered, and the monitored queue
+is not read. This mode never falls back to ordinary work even if a delivery
+ends during the read. A held limit sets no refill pause, so a release frees
+a place on the next pass. Every new start also respects slots reserved for
+pending reviews and fixes; those existing-work routes have no WIP gate.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if view.limit < 0 {
@@ -236,6 +243,15 @@ walk and sets no refill pause; a release frees a place on the next pass.`,
 				return usageErr("--replace replaces the record of a --claim: pass --claim too")
 			} else {
 				me, _ = a.caller()
+			}
+			if exemptOnly {
+				st, err := a.store.Read()
+				if err != nil {
+					return err
+				}
+				if !a.deliveryExemptIntake(st) {
+					return a.printNext(nextResult{WIP: readDeliveryWIP(st, a.cfg.Delivery.WIPLimit, a.cfg.Supervisor.LoopInterval.Duration, a.timeNow())}, 0, view)
+				}
 			}
 			cl := a.boardClient()
 			snap, err := cl.Read(cmd.Context(), a.now)
@@ -262,9 +278,12 @@ walk and sets no refill pause; a release frees a place on the next pass.`,
 			if err != nil {
 				return err
 			}
-			sc := pickScope{wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+			sc := pickScope{exemptOnly: exemptOnly, wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
 				gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
 				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
+			if exemptOnly {
+				cands = slices.DeleteFunc(cands, func(c board.Candidate) bool { return !deliveryExempt(st, a.timeNow(), c.Ref, c.WIPExempt) })
+			}
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
@@ -296,6 +315,7 @@ walk and sets no refill pause; a release frees a place on the next pass.`,
 			return a.printNext(res, len(cands), view)
 		},
 	}
+	c.Flags().BoolVar(&exemptOnly, strings.TrimPrefix(deliveryExemptOnlyFlag, "--"), false, "Only consider configured WIP exemptions and active named incident repairs; retain all ordinary eligibility checks")
 	c.Flags().BoolVar(&claim, "claim", false, "record the item as the calling session's (sessions serve), atomically")
 	c.Flags().BoolVar(&replace, "replace", false, "with --claim: replace the session's record even while the item it serves is open")
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on, for the record")
@@ -529,6 +549,7 @@ func nextSkip(skip []string, pick *board.Candidate) []string {
 // task or note names belongs to, and what the running sessions work on
 // (servingWork).
 type pickScope struct {
+	exemptOnly   bool
 	me           state.Party
 	alive        func(state.Party) bool
 	gone         func(state.Agent) bool
@@ -698,11 +719,14 @@ func heldByDecision(notes []state.Note, it board.Item) string {
 // the pull request, and a sub-issue offered through an epic by whatever owns
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
-	res := nextFreePreview(st, cands, sc)
 	now := sc.listed
 	if sc.wipNow != nil {
 		now = sc.wipNow()
 	}
+	if sc.exemptOnly {
+		cands = slices.DeleteFunc(slices.Clone(cands), func(c board.Candidate) bool { return !deliveryExempt(st, now, c.Ref, c.WIPExempt) })
+	}
+	res := nextFreePreview(st, cands, sc)
 	res.WIP = readDeliveryWIP(st, sc.wipLimit, sc.loopInterval, now)
 	res.WouldPick = res.Pick
 	if res.WIP.Reason == "" {

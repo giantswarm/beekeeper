@@ -1,11 +1,20 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+const (
+	deliveryExemptOnlyFlag = "--wip-exempt-only"
+	deliveryNextCommand    = "next"
+	deliveryJSONFlag       = "--json"
 )
 
 type deliveryWIP struct {
@@ -39,13 +48,42 @@ func readDeliveryWIP(st *state.State, limit int, interval time.Duration, now tim
 	return v
 }
 
-func deliveryExempt(st *state.State, now time.Time, ref string, exempt bool) bool {
+// A repair exception belongs to its incident's repository and lasts only
+// while that incident is active. Malformed or lifted holds grant no exception.
+func deliveryRepairs(st *state.State, now time.Time) []string {
+	var refs []string
 	for _, h := range st.Holds {
-		if ref != "" && h.Incident && h.Active(now) && strings.EqualFold(h.Except, ref) {
-			return true
+		r, ok := parseRef(h.Except)
+		if h.Incident && h.Active(now) && ok && strings.EqualFold(h.Target, r.Repo) {
+			refs = append(refs, refName(r))
 		}
 	}
-	return exempt
+	return refs
+}
+
+func deliveryExempt(st *state.State, now time.Time, ref string, exempt bool) bool {
+	return exempt || ref != "" && slices.ContainsFunc(deliveryRepairs(st, now), func(r string) bool { return strings.EqualFold(r, ref) })
+}
+
+func (a *app) deliveryExemptIntake(st *state.State) bool {
+	return len(deliveryRepairs(st, a.timeNow())) > 0 || slices.ContainsFunc(a.cfg.Board.Order, func(s config.BoardStep) bool { return s.WIPExempt })
+}
+
+// Only new issue starts use this check. The frozen references travel with
+// their worker stream, never in a field another pass could overwrite.
+func (l *supervisorLoop) deliveryPriority(ctx context.Context, reserved ...[]string) error {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return err
+	}
+	refs := deliveryReservedRefs(st, reserved...)
+	if len(refs) == 0 {
+		return nil
+	}
+	if l.deliveryRoom(l.fillRoom(l.fillCapacity(ctx)), st, refs) <= 0 {
+		return errLoopLater
+	}
+	return nil
 }
 
 func (l *supervisorLoop) deliveryStart(ref string, exempt bool) error {
@@ -86,6 +124,9 @@ func (l *supervisorLoop) deliveryFillRoom(room int, st *state.State, reserved ..
 			l.fillPause = fillPause{}
 			l.fillEmpty = 0
 			l.mu.Unlock()
+		}
+		if l.a.deliveryExemptIntake(st) {
+			return room
 		}
 		return 0
 	}

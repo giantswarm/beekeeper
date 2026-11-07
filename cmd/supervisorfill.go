@@ -66,11 +66,22 @@ func deliveryReservations(st *state.State) []string {
 	return refs
 }
 
-func (l *supervisorLoop) deliveryRoom(room int, st *state.State, reserved ...[]string) int {
+// Keep earlier reservations even after their starts register, and include
+// observations committed by an older stream since this pass was planned.
+func deliveryReservedRefs(st *state.State, reserved ...[]string) []string {
 	refs := deliveryReservations(st)
 	if len(reserved) > 0 {
-		refs = reserved[0]
+		for _, ref := range reserved[0] {
+			if !slices.Contains(refs, ref) {
+				refs = append(refs, ref)
+			}
+		}
 	}
+	return refs
+}
+
+func (l *supervisorLoop) deliveryRoom(room int, st *state.State, reserved ...[]string) int {
+	refs := deliveryReservedRefs(st, reserved...)
 
 	slices.Sort(refs)
 	key := "delivery reservations " + strings.Join(refs, ",")
@@ -231,6 +242,11 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		if err != nil {
 			return err
 		}
+		room := l.deliveryFillRoom(l.fillRoom(cap), live, reserved...)
+		if room <= 0 {
+			return nil
+		}
+		ordinary := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow()).Reason == ""
 		capacity, alive := fillCapacityKey(cap), fillLive(live)
 		l.mu.Lock()
 		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
@@ -241,10 +257,10 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		paused := !l.fillPause.until.IsZero()
 		l.mu.Unlock()
-		pause := func() { l.pauseFill(capacity, alive) }
-		room := l.deliveryFillRoom(l.fillRoom(cap), live, reserved...)
-		if room <= 0 {
-			return nil
+		pause := func() {
+			if ordinary {
+				l.pauseFill(capacity, alive)
+			}
 		}
 		if started == 0 {
 			limit = room
@@ -279,7 +295,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return nil // the board may lag the worker's registration
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
-		what, err := l.startItem(ctx, act, *next)
+		what, err := l.startItem(ctx, act, *next, reserved...)
 		if err != nil {
 			if !errors.Is(err, errLoopLater) {
 				pause()

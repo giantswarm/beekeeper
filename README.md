@@ -2288,17 +2288,24 @@ a place is free. A delivery observation older than three loop intervals also hol
 new starts. `board next --json` includes `wip` (limit, count, items, freshness and
 reason) and `would_pick`, the first otherwise free item. Its `pick` is null and exit
 status is 3 when no item is admitted; `skipped` and `after_pick` still preview the
-ordinary walk. Claims count and record under one lock. The loop checks before its
-board or monitored queue read, setting no refill pause at the limit: a completed
-release frees the next pass. It checks again immediately before dispatch.
+ordinary walk. Claims count and record under one lock.
+
+The loop checks before ordinary board or monitored queue reads. With no known
+exemption route, full/stale intake makes no read. Configured exempt steps and
+active named incident repairs instead allow exemption-only board discovery
+(`board next --wip-exempt-only`), retaining the existing ranking and admission
+checks, skipping the monitored queue, and never falling back to ordinary picks.
+The held limit sets no refill pause, so a completed release frees the next pass.
+It checks again immediately before dispatch.
 
 Reviews, forwards, fixes, wakes, rework, merges and repairs keep their existing
 admission rules. An active incident hold's named repair and a `board.order` step
 with `wipExempt: true` pass the WIP gate and still count. A manual `agents start`
 is counted and warns above the limit. Slots needed by `review-queued` deliveries
-and fixes without a live worker are reserved before filling new issues, including
-work waiting from earlier passes. The log names the reserving deliveries once per
-episode; dry-run applies the same reservation. Capacity ceilings, review headroom,
+and fixes without a live worker are reserved before every new issue start,
+including done-event `KindNext` starts and work waiting from earlier passes. Each worker stream carries its frozen
+reservations through discovery and the fresh dispatch check. The log names the
+reserving deliveries once per episode; dry-run applies the same reservation. Capacity ceilings, review headroom,
 verdict and JSON stay unchanged.
 
 `delivery.stallAfter` defaults to `24h` (a positive duration). A stalled delivery
