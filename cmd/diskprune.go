@@ -167,6 +167,7 @@ type diskRun struct {
 	dry    bool
 	// pressure runs name what still holds the space.
 	pressure  bool
+	docker    *dockerRun
 	caches    []cacheReport
 	uncovered []cacheReport
 	// unknown names the processes whose references kept candidates.
@@ -181,6 +182,9 @@ func (r diskRun) String() string {
 	}
 	verb := freedVerb(r.dry)
 	parts := []string{fmt.Sprintf("disk: %s %s in %d cache/output/tmp/trash entries", verb, sizeStr(r.Freed+r.trees.freed()), r.Removed)}
+	if r.docker != nil {
+		parts = append(parts, r.docker.String())
+	}
 	if r.trees.kept != nil {
 		parts = append(parts, r.trees.String())
 	}
@@ -240,6 +244,16 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	pressure = pressure || m.pressure
 	r.pressure = pressure
 	r.foreign = m.foreign
+	if pressure {
+		docker := a.pruneDockerForPressure(dry, true, a.dockerHolds)
+		r.Freed += max(int64(0), docker.before.Images-docker.after.Images) + max(int64(0), docker.before.BuildCache-docker.after.BuildCache)
+		if docker.err != nil {
+			r.Errors = append(r.Errors, fmt.Errorf("Docker: %w", docker.err))
+		}
+		if docker.notable() {
+			r.docker = &docker
+		}
+	}
 	a.pruneDiskCaches(&r, m, pressure)
 	known, ok := rereadDisk(&r, &m)
 	if !ok {
