@@ -296,7 +296,7 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 
 // keepAnsweredOpen keeps note id open in st.Notes (restoring it from
 // st.Defaulted if needed) and applies an optional deferral.
-func keepAnsweredOpen(st *state.State, id int, deferAt time.Time, reason string) (found, defaulted bool) {
+func keepAnsweredOpen(st *state.State, id int, now, deferAt time.Time, reason string) (found, defaulted bool) {
 	is := func(o state.Note) bool { return o.ID == id }
 	i := slices.IndexFunc(st.Notes, is)
 	if i < 0 {
@@ -310,6 +310,12 @@ func keepAnsweredOpen(st *state.State, id int, deferAt time.Time, reason string)
 		slices.SortFunc(st.Notes, func(a, b state.Note) int { return cmp.Compare(a.ID, b.ID) })
 		i = slices.IndexFunc(st.Notes, is)
 		defaulted = true
+	}
+	// A kept-open reply must give an overdue decision a fresh answer window,
+	// otherwise the next watch immediately applies its default again.
+	if deferAt.IsZero() && st.Notes[i].Kind == noteDecision && !st.Notes[i].Due.IsZero() && !st.Notes[i].Due.After(now) {
+		st.Notes[i].Due = now.Add(defaultedKeep).UTC()
+		st.Notes[i].Fired = time.Time{}
 	}
 	if !deferAt.IsZero() {
 		setNoteDeferral(&st.Notes[i], deferAt, reason)

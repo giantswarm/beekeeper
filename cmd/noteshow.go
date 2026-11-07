@@ -214,6 +214,9 @@ func (a *app) retainedNote(id int) (*shownNote, error) {
 		if an.About != "" && !strings.HasPrefix(an.About, "note#") {
 			n.Refs = []string{an.About}
 		}
+		if e.NoteSnapshot != nil {
+			n = *e.NoteSnapshot
+		}
 		parseNoteTextParts(&n)
 		return &shownNote{Note: n, Status: closedAnswered, Answer: an.Answer, Closure: &e}, nil
 	}

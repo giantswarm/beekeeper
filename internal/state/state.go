@@ -1769,6 +1769,8 @@ type Event struct {
 	Subject string `json:"subject,omitempty"`
 	// NoteTeam identifies the note owner independently of the event actor.
 	NoteTeam string `json:"noteTeam,omitempty"`
+	// NoteSnapshot retains the complete note for file-backed reopen after closure.
+	NoteSnapshot *Note `json:"noteSnapshot,omitempty"`
 }
 
 // NoteLookup is the optional complete history of a store that retains closed notes.

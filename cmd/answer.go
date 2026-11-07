@@ -137,7 +137,13 @@ func (a *app) recordAnswerWithOptions(ctx context.Context, about string, noteID,
 		if n, _ = answerable(st, noteID, a.now); n == nil {
 			return refused("note #%d is not open, nor closed by its default within %s", noteID, shortDur(defaultedKeep))
 		}
-		if text, err = answerText(n, choice, text); err != nil {
+		if stayOpen && text == "" {
+			return usageErr("an answer is the person's words")
+		}
+		if !stayOpen {
+			text, err = answerText(n, choice, text)
+		}
+		if err != nil {
 			return err
 		}
 		if err := a.refuseOptionLabelOnly(st, me, n, choice, verbatim); err != nil {
@@ -166,7 +172,7 @@ func (a *app) recordAnswerWithOptions(ctx context.Context, about string, noteID,
 		evs := []state.Event{answerEvent(me, &rec, n)}
 		if n != nil {
 			if stayOpen {
-				found, defaulted := keepAnsweredOpen(st, n.ID, deferAt, opts.deferReason)
+				found, defaulted := keepAnsweredOpen(st, n.ID, a.now, deferAt, opts.deferReason)
 				closedMeanwhile, wasOpen = !found, found && !defaulted
 				if found && !deferAt.IsZero() {
 					evs = append(evs, deferEvent(me, n, deferAt, opts.deferReason))
@@ -324,7 +330,12 @@ func answerEvent(by state.Party, rec *recordedAnswer, n *state.Note) state.Event
 	if n != nil {
 		note = fmt.Sprintf(", note #%d asked by %q for %q: %q", n.ID, n.By.Name, n.For, n.Text)
 	}
-	return event(by, answerRecorded, "%s answered by %q via %s%s%s: %s", rec.About, rec.By, rec.Via, at, note, rec.Answer)
+	e := event(by, answerRecorded, "%s answered by %q via %s%s%s: %s", rec.About, rec.By, rec.Via, at, note, rec.Answer)
+	if n != nil {
+		cp := *n
+		e.NoteSnapshot = &cp
+	}
+	return e
 }
 
 // tellServing tells the sessions serving about (sessions serve) line, and

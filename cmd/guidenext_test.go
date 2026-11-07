@@ -334,3 +334,60 @@ func TestNoteReopenAndHandoverUnbackedProseWarning(t *testing.T) {
 	// Reopened note #1 retains its options and refs, so answering with --choice 1 succeeds.
 	noteCmdRun(t, a, "answer", "1", "--choice", "1", "merge")
 }
+
+func TestKeptOpenReplyRetainsWordsAndRenewsExpiredDecision(t *testing.T) {
+	a := guideNextApp(t)
+	words := "Ship (Recommended) — can we discuss this first?"
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = []state.Note{{ID: 1, Kind: noteDecision, For: notePerson, By: state.Party{Name: "Agent nine"}, Text: "Ship?", Options: []string{"Ship: release today", "Wait: release later"}, Refs: []string{refOne}, Due: a.now.Add(-time.Hour)}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	noteCmdRun(t, a, "answer", "1", "--keep-open", words)
+	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == answerRecorded })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("answer event: %v %v", evs, err)
+	}
+	answer, ok := parseAnswered(evs[0])
+	if !ok || answer.Answer != words {
+		t.Fatalf("kept-open reply changed: %+v", answer)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if due := defaultDue(st, a.now); len(due) != 0 || len(st.Notes) != 1 {
+		t.Fatalf("kept-open note immediately defaulted: %+v", due)
+	}
+}
+
+func TestReopenRetainsTodoKindAndFiler(t *testing.T) {
+	for _, closeWith := range []string{"answer", "done"} {
+		t.Run(closeWith, func(t *testing.T) {
+			a, _ := noteApp(t)
+			by := state.Party{Name: "Agent nine", Session: "original-filer"}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Notes = []state.Note{{ID: 1, Kind: noteTodo, For: notePerson, By: by, Text: "Review the proposal"}}
+				st.NextNote = 1
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if closeWith == "answer" {
+				noteCmdRun(t, a, "answer", "1", "done")
+			} else {
+				noteCmdRun(t, a, "done", "1", "--reason", "withdrawn")
+			}
+			noteCmdRun(t, a, "reopen", "1")
+			st, err := a.store.Read()
+			if err != nil || len(st.Notes) != 1 {
+				t.Fatalf("reopened state: %+v %v", st, err)
+			}
+			n := st.Notes[0]
+			if n.Kind != noteTodo || n.By.Session != by.Session || !n.Due.IsZero() {
+				t.Fatalf("reopen lost todo metadata: %+v", n)
+			}
+		})
+	}
+}
