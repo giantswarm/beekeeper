@@ -61,8 +61,9 @@ type Observed struct {
 	LoopStartedAt time.Duration `json:"loopStartedAt,omitempty"`
 }
 
-// NoteLoop records when the candidate's loop started, once, in observed time:
-// at most the time observed so far, so a machine that slept gains nothing.
+// NoteLoop records when the candidate's loop started, once, in observed time.
+// The age is capped by the time observed so far; the controller caps it at one
+// step, so a sleep or downtime before the first sighting shortens no grace.
 func (o *Observed) NoteLoop(s Signals) {
 	if o.LoopStarted || !s.LoopStarted {
 		return
