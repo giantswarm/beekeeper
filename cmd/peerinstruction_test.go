@@ -32,10 +32,7 @@ func TestRelayGuideWithoutHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(sent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(readFile(t, sent))
 	var input struct{ Message string }
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &input); err != nil {
 		t.Fatal(err)
@@ -57,7 +54,9 @@ func TestRelayGuideWithoutHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := a.logCmd()
-	c.SetArgs([]string{"--verb", relayMessageVerb})
+	if err := c.Flags().Set("verb", relayMessageVerb); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -163,10 +162,7 @@ func TestWakeGuideAfterRelayWithoutHooks(t *testing.T) {
 	if targets := relayed(t, sent); len(targets) != 1 || targets[0] != to.Name {
 		t.Fatalf("wrong holder: %v", targets)
 	}
-	raw, err := os.ReadFile(sent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(readFile(t, sent))
 	var input struct{ Message string }
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &input); err != nil || input.Message != message {
 		t.Fatalf("payload: %q, %v", input.Message, err)
@@ -187,10 +183,7 @@ func TestRelayInstructionQueuesPayloadSeparately(t *testing.T) {
 	if got := relayed(t, sent); len(got) != 1 || got[0] != "recipient" {
 		t.Fatalf("notification: %v", got)
 	}
-	raw, err := os.ReadFile(sent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(readFile(t, sent))
 	var input struct{ Message string }
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &input); err != nil || !strings.Contains(input.Message, "beekeeper log --verb agents.message") || strings.Contains(input.Message, "Click the OAuth consent") {
 		t.Fatalf("worker notice must offer no-hook recovery without duplicating payload: %q, %v", input.Message, err)
