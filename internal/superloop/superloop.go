@@ -1262,14 +1262,24 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			a := base
 			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
 			a.Kind = KindRework
-			a.Message = fmt.Sprintf("%s at head %s conflicts with its base. Fetch origin, merge the base into the branch, resolve the conflicts, run focused checks and push, then wait for green CI and park again for desk review. Never force-push.", p.URL, short(p.Head))
+			a.Message = fmt.Sprintf("%s at head %s conflicts with its base. Fetch origin, merge the base into the branch, resolve the conflicts without local tests or lints and push, then immediately park again for the loop to run CI and review. Never force-push.", p.URL, short(p.Head))
 			if !l.has(a.Key) {
 				add(a)
 			}
 		}
 		return
 	}
-	planRed(l, p, w, isParked, add)
+	// A reviewer publishes fixes and reports approval before CI completes.
+	// The author's saved park still names the original head. Route failures
+	// of the authenticated round verdict's current head back to that worker,
+	// using the verdict time as a stable, deduplicated CI handoff boundary.
+	ciWorker := w
+	if isParked && !sameHead(w.ParkedHead, p.Head) && len(rs) > 0 {
+		if v := p.verdict(rs[len(rs)-1], l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) {
+			ciWorker.ParkedHead, ciWorker.ParkedAt = p.Head, v.At
+		}
+	}
+	planRed(l, p, ciWorker, isParked, add)
 	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && !slices.ContainsFunc(p.Reviews, func(r Review) bool {
 		return r.Verdict == ChangesRequested && (sameHead(r.Head, p.Head) || !r.At.Before(l.keys[goKey(ref, head)].At))
 	}) && in.baseMerged(p, head) {
