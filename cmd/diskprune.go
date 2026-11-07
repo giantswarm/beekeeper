@@ -248,7 +248,7 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		docker := a.pruneDockerForPressure(dry, true, a.dockerHolds)
 		r.Freed += max(int64(0), docker.before.Images-docker.after.Images) + max(int64(0), docker.before.BuildCache-docker.after.BuildCache)
 		if docker.err != nil {
-			r.Errors = append(r.Errors, fmt.Errorf("Docker: %w", docker.err))
+			r.Errors = append(r.Errors, fmt.Errorf("docker: %w", docker.err))
 		}
 		if docker.notable() {
 			r.docker = &docker
