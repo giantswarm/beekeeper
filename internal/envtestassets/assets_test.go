@@ -145,8 +145,16 @@ func TestEnsureReusesDefaultStore(t *testing.T) {
 	if err := os.MkdirAll(assets, 0700); err != nil {
 		t.Fatal(err)
 	}
+	assetsRoot, err := os.OpenRoot(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = assetsRoot.Close() }()
 	for _, name := range []string{"etcd", "kube-apiserver"} {
-		if err := os.WriteFile(filepath.Join(assets, name), []byte("#!/bin/sh\n"), 0700); err != nil {
+		if err := assetsRoot.WriteFile(name, []byte("#!/bin/sh\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := assetsRoot.Chmod(name, 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,7 +163,12 @@ func TestEnsureReusesDefaultStore(t *testing.T) {
 	if err != nil || got != assets {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	data, err := os.ReadFile(filepath.Join(state, "envtest", "assets-"+version))
+	stateRoot, err := os.OpenRoot(filepath.Join(state, "envtest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stateRoot.Close() }()
+	data, err := stateRoot.ReadFile("assets-" + version)
 	if err != nil || string(data) != assets {
 		t.Fatalf("marker %q, %v", data, err)
 	}

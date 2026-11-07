@@ -64,7 +64,7 @@ func Ensure(ctx context.Context, stateDir string) (string, error) {
 		}
 		return assets, nil
 	}
-	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", dir, "-p", "path", version)
+	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", dir, "-p", "path", version) // #nosec G204 -- fixed tool and flags; absolute state directory is one argument, never shell input
 	// Provision independently of the target repository's module/workspace settings.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
