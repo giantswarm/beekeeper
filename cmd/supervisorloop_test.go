@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4068,5 +4069,55 @@ func TestReview3325MissingClosureStatesSurviveReplay(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A step the stopping loop cancels is no failure of the step: recorded, it
+// would back off for up to an hour, across the restart
+// (https://github.com/giantswarm/beekeeper/issues/3390).
+func TestLoopStepCanceledByTheLoopIsNoFailure(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, inTurn := beekeeperRun, loopInTurn
+	t.Cleanup(func() { beekeeperRun, loopInTurn = run, inTurn })
+	beekeeperRun = func(ctx context.Context, _ ...string) (string, int, error) {
+		return "", 0, cmp.Or(ctx.Err(), errors.New("unavailable"))
+	}
+	loopInTurn = func(*app, state.Party) bool { return false }
+	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "w1"}}}}
+	act := superloop.Action{Kind: superloop.KindDone, Key: "done w1", Agent: "w1"}
+	failures := map[string]loopFailure{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := l.execAction(ctx, st, nil, failures, act); err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 0 {
+		t.Fatalf("a canceled step was recorded as failed: %+v", failures)
+	}
+	if evs := r.logged(t, loopFailureVerb); len(evs) != 0 {
+		t.Fatalf("a canceled step logged a failure: %+v", evs)
+	}
+	// The same error while the loop runs is the step's own failure.
+	if err := l.execAction(context.Background(), st, nil, failures, act); err != nil {
+		t.Fatal(err)
+	}
+	if failures[act.Key].Count != 1 {
+		t.Fatalf("a failing step was not recorded: %+v", failures)
+	}
+}
+
+// A busy state lock is told apart from other pass failures, wrapped or not:
+// the loop skips the pass instead of exiting on it.
+func TestLoopTellsABusyStateLock(t *testing.T) {
+	busy := &state.LockBusyError{PID: 1, Command: "beekeeper guide watch", Since: time.Now(), Waited: 2 * time.Minute}
+	if !lockBusy(busy) || !lockBusy(fmt.Errorf("reading the state: %w", busy)) {
+		t.Fatal("a busy state lock was not told")
+	}
+	if lockBusy(errors.New("disk full")) || lockBusy(nil) {
+		t.Fatal("another failure was told a busy lock")
 	}
 }

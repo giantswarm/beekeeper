@@ -932,8 +932,20 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 				}
 				continue
 			}
-			return err
+			if !lockBusy(err) || once {
+				return err
+			}
+			// A busy state lock fails this pass, not the loop: exiting
+			// would cancel every action still running (each then fails
+			// with context canceled and backs off for up to an hour), and
+			// the next pass reads the state afresh.
+			l.sayOnce("state lock busy", "SUPERVISOR LOOP pass skipped, retrying next pass: %v", err)
+			if !l.waitNextPass(ctx) {
+				return nil
+			}
+			continue
 		}
+		l.clearSaid("state lock busy")
 		l.lifecyclePhase("between passes")
 		if _, rerr := l.reexec(ctx); rerr != nil {
 			return rerr
@@ -948,6 +960,13 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			return nil
 		}
 	}
+}
+
+// lockBusy says err is a wait for the state lock that ended before its
+// holder released it.
+func lockBusy(err error) bool {
+	var busy *state.LockBusyError
+	return errors.As(err, &busy)
 }
 
 // waitNextPass waits for LoopInterval, ctx.Done(), or a replaced binary so
@@ -1763,6 +1782,11 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	what, err := l.act(ctx, st, act)
 	switch {
 	case errors.Is(err, errLoopLater):
+		return nil
+	case err != nil && ctx.Err() != nil:
+		// The loop is stopping: its cancellation is no failure of the
+		// step, and a recorded one would back the step off across the
+		// restart.
 		return nil
 	case err != nil:
 		return l.failed(act, failures, err)
