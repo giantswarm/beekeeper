@@ -32,7 +32,7 @@ func fakeRelayTurn(t *testing.T, turn string) string {
 	t.Helper()
 	dir := t.TempDir()
 	sent := filepath.Join(dir, "sent")
-	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nreq=\"{${last#*\\{}\"\necho \"$req\" >> \"" + sent + "\"\n" + turn + "\n"
+	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nreq=\"{${last#*\\{}\"\nprintf '%s\\n' \"$req\" >> \"" + sent + "\"\n" + turn + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
