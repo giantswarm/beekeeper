@@ -11,7 +11,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/giantswarm/go-selfupdate v1.7.4
+	github.com/giantswarm/go-selfupdate v1.7.5
 	github.com/giantswarm/mcp-toolkit v0.5.0
 	github.com/giantswarm/selfupdate-cosign v0.3.22
 	github.com/go-jose/go-jose/v4 v4.1.9
