@@ -729,9 +729,9 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 			lines = append(lines, fmt.Sprintf("GUIDE RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
-		reportsSince, workCount := st.GuideReportsSince, len(st.GuideWork)
+		reportsSince, workText := st.GuideReportsSince, guideWorkText(st)
 		pl, pf := guideProblemLines(st, guideReportEvents(st, problems, a.now))
-		pf = pf || !reportsSince.Equal(st.GuideReportsSince) || workCount != len(st.GuideWork)
+		pf = pf || !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st)
 		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
 		cl, cf := a.centralGuideLines(st, sessions, central.notes, central.closed, centralErr == nil)
 		lines = append(lines, cl...)

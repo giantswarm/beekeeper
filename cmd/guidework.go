@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	guideWorkGoal    = "goal"
-	guideWorkBacklog = "backlog"
-	guideWorkCheck   = "check"
-	guideStopEvent   = "Stop"
+	guideWorkGoal      = "goal"
+	guideWorkBacklog   = "backlog"
+	guideWorkCheck     = "check"
+	guideStopEvent     = "Stop"
+	guideBacklogPrefix = "Historical worker problem backlog (close together with guide work done):\n"
 )
 
 func guideWorkText(st *state.State) string {
@@ -182,35 +183,35 @@ func guideReportEvents(st *state.State, events []state.Event, now time.Time) []s
 			continue
 		}
 		fresh = append(fresh, e)
-		if e.At.After(st.GuideReportsSince) {
-			st.GuideReportsSince = e.At
-		}
 	}
 	// Repair reports already imported by older versions. Preserve their text
 	// in one explicitly marked backlog, closable with the ordinary done command.
 	var kept []state.GuideWork
 	var backlog *state.GuideWork
+	migrated := false
 	for _, work := range st.GuideWork {
 		if work.Kind == guideWorkBacklog || work.Source != "" && (oldSources[work.Source] || work.Due.Before(now.Add(-24*time.Hour))) {
+			if work.Kind != guideWorkBacklog {
+				migrated = true
+			}
+			body := strings.TrimPrefix(work.Text, guideBacklogPrefix)
 			if backlog == nil {
 				copy := work
 				copy.Kind = guideWorkBacklog
 				copy.Source = ""
-				if work.Kind != guideWorkBacklog {
-					copy.Text = "Historical worker problem backlog (close together with guide work done):\n" + work.Text
-				}
+				copy.Text = guideBacklogPrefix + body
 				backlog = &copy
 			} else {
-				backlog.Text += "\n" + work.Text
+				migrated = true
+				backlog.Text += "\n" + body
 			}
 			continue
 		}
 		kept = append(kept, work)
 	}
-	if backlog != nil {
-		kept = append(kept, *backlog)
+	if migrated && backlog != nil {
+		st.GuideWork = append(kept, *backlog)
 	}
-	st.GuideWork = kept
 	return fresh
 }
 

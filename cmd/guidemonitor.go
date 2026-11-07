@@ -69,7 +69,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 			}
 		}
 		for _, work := range st.GuideWork {
-			if !work.Due.After(w.now) {
+			if guideWorkBlocks(work, w.now) {
 				notice(fmt.Sprintf("work:%d:%s", work.ID, work.Due.String()), fmt.Sprintf("GUIDE WORK DUE: %d [%s] %s; run `beekeeper guide work`.", work.ID, work.Kind, escapedLine(work.Text)))
 			}
 		}
