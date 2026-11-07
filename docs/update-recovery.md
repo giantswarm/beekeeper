@@ -71,6 +71,28 @@ their quiet moments as after an update; a broker serving calls is left to finish
 service that is down starts at once. A loop still on the failed binary after ten
 evaluations is restarted, because a broken loop may never reach a quiet moment.
 
+The loop writes `supervisor-loop-lifecycle.json` after acquiring its exclusive
+loop lock and at pass boundaries. It retains the candidate version, startup time,
+last phase, and an exit code with a bounded error classification. It contains no
+command output or configuration. The missing-heartbeat rollback reason includes
+this evidence only when its version and timestamps match the installed candidate.
+A startup marker or a stalled pass never counts as a heartbeat, extends the grace
+period, or permits promotion. A competing loop cannot overwrite the owner's record.
+
+For a failed rollout, collect the installation and recovery evaluation timestamps,
+the loop service's result and exit status, its bounded startup/exit journal, and
+the lifecycle record. Compare the last completed-pass heartbeat with the first
+candidate startup and phase timestamps to distinguish an incumbent that never
+re-executed, a startup/lock failure, an exited pass and a pass still in progress.
+Do not run a second loop against live state to obtain this evidence.
+
+The recovery controller runs retained last-known-good bytes. A controller predating
+these diagnostics still prints its older rollback reason even when the candidate
+writes a lifecycle record. Inspect that record separately during the first rollout;
+new rollback formatting is available after a release containing it has become the
+verified recovery target. This does not authorize replacing a controller or clearing
+a fence to make probation succeed.
+
 An update waits for the verdict of a supervised candidate. A later release can
 install after a rollback, and the writer fence lets it write: see below.
 

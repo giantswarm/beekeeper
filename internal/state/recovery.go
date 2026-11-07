@@ -73,6 +73,9 @@ type recoveryFence struct {
 	Failed string `json:"failed,omitempty"`
 }
 
+// ErrRecoveryWriterFenced identifies a refused state write after rollback.
+var ErrRecoveryWriterFenced = errors.New("state writes fenced after binary recovery; complete probation of a compatible signed release before resuming newer writers")
+
 func (s *FileStore) checkRecoveryFence() error {
 	var fence recoveryFence
 	found, err := s.ReadFile(recoveryFenceFile, &fence)
@@ -93,7 +96,7 @@ func (s *FileStore) checkRecoveryFence() error {
 	if failed, known := fenceVersion(fence.Failed); ok && known && own.GreaterThan(failed) {
 		return nil
 	}
-	return errors.New("state writes fenced after binary recovery; complete probation of a compatible signed release before resuming newer writers")
+	return ErrRecoveryWriterFenced
 }
 
 func (s *FileStore) writeRecoveryFence(version, failed string) error {
