@@ -32,7 +32,7 @@ func TestInstructionAtNextBoundary(t *testing.T) {
 			if event == "Stop" && decoded["decision"] != "block" {
 				t.Fatalf("turn ended without instruction: %s", out)
 			}
-			if got := InstructionStatus(path); got != "delivered" {
+			if got := InstructionStatus(path); got != "consumed" {
 				t.Fatalf("status %s", got)
 			}
 			if out, err := InstructionHook(dir, "waiting-session", event); err != nil || len(out) != 0 {
