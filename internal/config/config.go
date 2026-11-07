@@ -62,6 +62,8 @@ type Config struct {
 	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
+	// Fatal adds machine-specific outage probes to the independent sentinel.
+	Fatal Fatal `yaml:"fatal"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
 	// LeaseRound is the default round when a lease purpose names no duration (1h).
@@ -2086,6 +2088,27 @@ func opRef(s string) bool {
 	return strings.HasPrefix(s, "op://") && len(parts) >= 3 && !slices.Contains(parts, "")
 }
 
+// Fatal configures additional probes for critical machine components.
+type Fatal struct {
+	// Checks are fatal health checks, never arbitrary worker reports. Exit 0
+	// is healthy, 1 is failed, 2 is deliberately disabled, others unknown.
+	Checks []FatalCheck `yaml:"checks"`
+	// Repositories are repositories whose default branch CI is critical.
+	Repositories []string `yaml:"repositories"`
+	// Checkouts maps repair repositories to source checkouts; otherwise the
+	// source is projects.dir/<repository-name>. Repairs use managed worktrees.
+	Checkouts map[string]string `yaml:"checkouts"`
+}
+
+type FatalCheck struct {
+	Name  string   `yaml:"name"`
+	Probe []string `yaml:"probe"`
+	// Harness excludes the broken harness from repair selection.
+	Harness string `yaml:"harness"`
+	// Repository owns this check's repair (default giantswarm/beekeeper).
+	Repository string `yaml:"repository"`
+}
+
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
 	Faults []Fault `yaml:"faults"`
@@ -3496,6 +3519,9 @@ func (c *Config) defaults() error {
 		state = filepath.Join(home, ".local", "state")
 	}
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
+	if c.Fatal.Repositories == nil {
+		c.Fatal.Repositories = []string{"giantswarm/beekeeper"}
+	}
 	setStr(&c.Disk.Prune, DiskPruneAuto)
 	if c.Disk.TrashDirs == nil {
 		c.Disk.TrashDirs = []string{filepath.Join(c.StateDir, "trash"), filepath.Join(state, "trash")}
@@ -4464,6 +4490,32 @@ func (c *Config) validateEach(report func(error)) {
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
 		report(fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB))
 	}
+	checks := map[string]bool{}
+	if len(c.Fatal.Checks) > 16 || len(c.Fatal.Repositories) > 16 {
+		report(fmt.Errorf("fatal: at most 16 checks and 16 repositories"))
+	}
+	for i, check := range c.Fatal.Checks {
+		if check.Name == "" || len(check.Probe) == 0 || check.Probe[0] == "" || checks[check.Name] {
+			report(fmt.Errorf("fatal.checks[%d]: unique name and probe required", i))
+		}
+		if check.Harness != "" && !slices.Contains([]string{ClaudeHarness, OmpHarness, AgyHarness, CodexHarness}, check.Harness) {
+			report(fmt.Errorf("fatal.checks[%d]: unknown harness", i))
+		}
+		checks[check.Name] = true
+		if check.Repository != "" && !validFatalRepository(check.Repository) {
+			report(fmt.Errorf("fatal.checks[%d]: invalid repository", i))
+		}
+	}
+	for _, repo := range c.Fatal.Repositories {
+		if !validFatalRepository(repo) {
+			report(fmt.Errorf("fatal.repositories: expected owner/repository"))
+		}
+	}
+	for repo, dir := range c.Fatal.Checkouts {
+		if !validFatalRepository(repo) || dir == "" {
+			report(fmt.Errorf("fatal.checkouts: valid repository and checkout required"))
+		}
+	}
 	faults := map[string]bool{}
 	for i, f := range c.Doctor.Faults {
 		if f.Name == "" || f.Probe == "" || f.Remedy == "" || faults[f.Name] {
@@ -4635,6 +4687,18 @@ func (c *Config) IsLeasable(name string) bool {
 }
 
 // ownerReposEach reports entries of field that are not owner/repo.
+func validFatalRepository(repo string) bool {
+	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(repo) {
+		return false
+	}
+	for _, part := range strings.Split(repo, "/") {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func ownerReposEach(field string, repos []string, report func(error)) {
 	for _, r := range repos {
 		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {

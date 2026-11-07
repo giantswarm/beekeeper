@@ -101,6 +101,25 @@ func sameCommand(a, b json.RawMessage) bool {
 		len(x.Hooks) == 1 && len(y.Hooks) == 1 && x.Hooks[0].Command == y.Hooks[0].Command
 }
 
+// CheckClaudeHooks validates the installed guard without returning settings or
+// command values. Installation ownership determines whether to call it.
+func CheckClaudeHooks(path, exe, _ string) string {
+	s, err := readSettings(path)
+	if err != nil {
+		return "guard settings cannot be parsed"
+	}
+	for _, want := range Hooks(exe) {
+		list, err := s.hooks(want.Event)
+		if err != nil {
+			return "guard hooks cannot be parsed"
+		}
+		if _, state := find(list, want, nil); state != fileSame {
+			return "installed guard hook missing or changed"
+		}
+	}
+	return ""
+}
+
 // planHooks adds the hooks a settings file lacks and updates the entries of
 // this binary's hooks in place.
 func (e Env) planHooks(p *plan, m *Manifest) error {
