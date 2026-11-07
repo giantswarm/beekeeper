@@ -442,7 +442,13 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			// another desk's claim of the brief's issue refuses the start,
 			// --force aside, before anything is judged or recorded
-			if err := a.claimGate(cmd.Context(), name, briefIssue(brief), force, dryRun); err != nil {
+			issues := briefIssues(brief)
+			for _, iss := range issues {
+				if err := a.claimGate(cmd.Context(), name, iss, force, dryRun); err != nil {
+					return err
+				}
+			}
+			if err := a.openPullStartGate(cmd.Context(), name, brief, issues, review || ofSelfHosted, force, dryRun); err != nil {
 				return err
 			}
 			// an omp agent whose provider's key is in the vault starts where
@@ -612,7 +618,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: briefIssue(brief), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
 				if byTimer {
 					if timerLine == "" {
 						var err error
@@ -2051,7 +2057,13 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 		ag.Task, ag.AssignedAt = task, s.At
 		if serves != "" {
 			st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(s.Party) })
-			st.Records = append(st.Records, state.Record{Session: s.Party, Issue: serves, By: s.By, At: s.At})
+			for _, iss := range strings.Split(serves, ",") {
+				if iss = strings.TrimSpace(iss); iss != "" && !slices.ContainsFunc(st.Records, func(o state.Record) bool {
+					return o.Session.Is(s.Party) && strings.EqualFold(o.Issue, iss)
+				}) {
+					st.Records = append(st.Records, state.Record{Session: s.Party, Issue: iss, By: s.By, At: s.At})
+				}
+			}
 		}
 	}
 	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return x.Execution == nil && s.At.Sub(x.At) > startsKept })
@@ -2188,6 +2200,28 @@ func gapsNote(gaps []string) string {
 // briefURL is an issue's or a pull request's URL in a brief.
 var briefURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
 
+// briefIssueURL is an issue URL in a brief, excluding PR URLs.
+var briefIssueURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)`)
+
+// briefPullURL is a pull request URL in a brief.
+var briefPullURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)`)
+
+// briefPulls returns all distinct pull requests (owner/repo#n) named by URL in brief.
+func briefPulls(brief string) []string {
+	var out []string
+	for _, m := range briefPullURL.FindAllStringSubmatch(brief, -1) {
+		ref := m[1] + "#" + m[2]
+		if !slices.ContainsFunc(out, func(existing string) bool { return strings.EqualFold(existing, ref) }) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// briefContextIntro matches a line prefix that cites a related or follow-up
+// issue for background rather than assigning it as work.
+var briefContextIntro = regexp.MustCompile(`(?i)\b(?:follow-?up\s+(?:to|from)|blocked\s+by|depends\s+on|see\s+also|related\s+to)\b`)
+
 // briefIssue is the issue a brief works, owner/repo#n: the first issue or
 // pull request its text names by URL; empty when it names none.
 func briefIssue(brief string) string {
@@ -2196,6 +2230,31 @@ func briefIssue(brief string) string {
 		return ""
 	}
 	return m[1] + "#" + m[2]
+}
+
+// briefIssues returns all distinct assigned issues (owner/repo#n) named by URL
+// in brief, excluding background/follow-up citations, or falls back to
+// briefIssue(brief) when none is an issue URL.
+func briefIssues(brief string) []string {
+	var out []string
+	for line := range strings.SplitSeq(brief, "\n") {
+		for _, loc := range briefIssueURL.FindAllStringSubmatchIndex(line, -1) {
+			prefix := line[:loc[0]]
+			if briefContextIntro.MatchString(prefix) {
+				continue
+			}
+			ref := line[loc[2]:loc[3]] + "#" + line[loc[4]:loc[5]]
+			if !slices.ContainsFunc(out, func(existing string) bool { return strings.EqualFold(existing, ref) }) {
+				out = append(out, ref)
+			}
+		}
+	}
+	if len(out) == 0 {
+		if first := briefIssue(brief); first != "" {
+			return []string{first}
+		}
+	}
+	return out
 }
 
 // briefTask is the roster's task for a brief: its first line without a

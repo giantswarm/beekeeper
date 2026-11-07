@@ -14,7 +14,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const installationA = "installation-a"
+const (
+	installationA  = "installation-a"
+	testReviewID   = "100"
+	testReviewHost = "review-host"
+)
 
 func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 	t.Helper()
@@ -35,10 +39,11 @@ func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{ID: "worker-review", Head: head, Verdict: superloop.Approved, At: now.Add(time.Second)}}}
-	old, login := readLoopPull, readDeskLogin
-	t.Cleanup(func() { readLoopPull, readDeskLogin = old, login })
+	old, login, fixed := readLoopPull, readDeskLogin, readReviewerFixedHead
+	t.Cleanup(func() { readLoopPull, readDeskLogin, readReviewerFixedHead = old, login, fixed })
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
 	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
+	readReviewerFixedHead = func(context.Context, string, string, string) (bool, error) { return true, nil }
 	use := execution.MergeUse{ID: "review-grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	assignMergeReview(t, a, use, 1)
 	return a, use, pull
@@ -162,7 +167,7 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 	old := readDeskReview
 	t.Cleanup(func() { readDeskReview = old })
 	readDeskReview = func(_ context.Context, repository string, pr int, id string) (superloop.Review, error) {
-		if repository != use.Repository || pr != use.PR || id != "100" {
+		if repository != use.Repository || pr != use.PR || id != testReviewID {
 			t.Fatal("review fetched from a different repository or URL")
 		}
 		return *review, nil
@@ -548,12 +553,12 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.DeskReviews = nil
 		start := &st.Starts[len(st.Starts)-1]
-		start.Host = "review-host"
+		start.Host = testReviewHost
 		start.Session = "remote-codex-review-session"
 		start.Harness = execution.HarnessCodex
 		record := *st.Starts[0].Execution
 		record.Handle.Ref.Execution = "independent-review-execution"
-		record.Handle.Ref.Host = "review-host"
+		record.Handle.Ref.Host = testReviewHost
 		record.Request.Harness = execution.HarnessCodex
 		record.Request.Ref = record.Handle.Ref
 		start.Execution = &record
@@ -578,5 +583,111 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	}
 	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	fixedHead := strings.Repeat("c", 40)
+	pull.Head = fixedHead
+	use.Head = fixedHead
+	review := superloop.Review{
+		ID:      "reviewer-fixed-approval",
+		Author:  "shared-github-account",
+		Head:    fixedHead,
+		Commit:  fixedHead,
+		Verdict: superloop.Approved,
+		URL:     fmt.Sprintf("https://github.com/%s/pull/%d#pullrequestreview-100", use.Repository, use.PR),
+		Body:    fmt.Sprintf("Desk review (opus): approved\nHead reviewed: `%s`\nfixed nit directly on branch", fixedHead),
+		At:      time.Now(),
+	}
+	pull.Reviews = []superloop.Review{review}
+	old := readDeskReview
+	t.Cleanup(func() { readDeskReview = old })
+	readDeskReview = func(_ context.Context, repository string, pr int, id string) (superloop.Review, error) {
+		if repository != use.Repository || pr != use.PR || id != testReviewID {
+			t.Fatal("review fetched from a different repository or URL")
+		}
+		return review, nil
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		round := executionReviewRound(st, use)
+		return nil, a.captureExecutionReviewReport(context.Background(), st, round.Reviewer, "Desk review (opus): approved\n"+review.URL, time.Now(), true)
+	}); err != nil {
+		t.Fatalf("reviewer approval of fixed head refused: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := executionReviewRound(st, use).Result.Head; got != fixedHead {
+		t.Fatalf("Result.Head = %q, want %q", got, fixedHead)
+	}
+	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, fixedHead, loopParty)
+	if err != nil {
+		t.Fatalf("issueExecutionMerge on reviewer-fixed head failed: %v", err)
+	}
+	use.ID = grant.ID
+	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
+		t.Fatalf("executionMergeLive on reviewer-fixed head failed: %v", err)
+	}
+}
+
+func TestReview3325RemoteReviewerAuthorBranchSelfFix(t *testing.T) {
+	a, use, _ := mergeReviewRig(t)
+	const authorBranch = "feat/author-branch-7"
+
+	rec := &state.ExecutionRecord{
+		Handle:  execution.Handle{Ref: use.Ref, Commit: use.Head},
+		Request: execution.StartRequest{GitHub: true, GitRef: authorBranch, Repository: use.Repository},
+	}
+	if got := executionOwnedBranch(rec); got != authorBranch {
+		t.Fatalf("executionOwnedBranch() = %q, want %q", got, authorBranch)
+	}
+	j := execution.Journal{
+		Handle:  rec.Handle,
+		Request: rec.Request,
+	}
+	if got := executionGitHubTargetBranch(j); got != authorBranch {
+		t.Fatalf("executionGitHubTargetBranch() = %q, want %q", got, authorBranch)
+	}
+	if err := execution.ValidateWorkerPush([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + authorBranch}, executionGitHubTargetBranch(j)); err != nil {
+		t.Fatalf("ValidateWorkerPush on assigned PR branch failed: %v", err)
+	}
+
+	reviewerRef := execution.Ref{Host: testReviewHost, Execution: "review-exec-7", Generation: 1}
+	now := time.Now()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Starts {
+			if st.Starts[i].Name == superloop.ReviewerName(fmt.Sprintf("%s#%d", use.Repository, use.PR), 1) {
+				st.Starts[i].Execution = &state.ExecutionRecord{
+					Handle: execution.Handle{Ref: reviewerRef, Commit: use.Head},
+					Request: execution.StartRequest{
+						Ref:           reviewerRef,
+						Harness:       execution.HarnessCodex,
+						Repository:    use.Repository,
+						GitRef:        authorBranch,
+						LeaseRequired: true,
+					},
+					Lease: &execution.LeaseGrant{ExpiresAt: now.Add(time.Minute)},
+				}
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if round := assignedExecutionReviewRound(st, reviewerRef); round == nil {
+		t.Fatal("assignedExecutionReviewRound did not match assigned reviewer execution")
+	}
+	if _, err := a.publishExecutionWithMode(context.Background(), st, reviewerRef, executionPublication{
+		Head:  strings.Repeat("d", 40),
+		Title: "feat: attempt metadata change",
+	}, false); err == nil || !strings.Contains(err.Error(), "not create or edit pull request metadata") {
+		t.Fatalf("reviewer publication with --title should be refused, got %v", err)
 	}
 }

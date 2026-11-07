@@ -70,10 +70,18 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", err
 	}
 	if p.State == superloop.Merged && (p.Head == act.Head || l.baseMerged(ctx, p, act.Head)) {
+		closed, closeErr := closeMergedPullIssues(ctx, st, p)
+		l.recordClosedPullIssues(closed)
+		if closeErr != nil {
+			return "", closeErr
+		}
 		return fmt.Sprintf("merged %s at %s", act.URL, p.Head), nil
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
+	}
+	if err := ensureCombinedPullCloses(ctx, st, &p); err != nil {
+		return "", err
 	}
 	if latestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
 		return "", refused("a review requested changes; new supervisor approval required")
@@ -163,6 +171,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		// one is the reviewed change.
 		if p.Head != act.Head && !l.baseMerged(ctx, p, act.Head) {
 			return "", refused("merged head differs from the reviewed head; reconciliation required")
+		}
+		closed, closeErr := closeMergedPullIssues(ctx, st, p)
+		l.recordClosedPullIssues(closed)
+		if closeErr != nil {
+			return "", closeErr
 		}
 		return fmt.Sprintf("merged %s at %s (merge commit %s)", act.URL, p.Head, p.MergeCommit), nil
 	}
@@ -318,6 +331,20 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 	}
 	if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok {
 		return l.endAbsorbed(ctx, st, act, strings.TrimSpace(by))
+	}
+	if act.Message != strings.ToLower(superloop.Closed) {
+		l.mu.Lock()
+		mp, ok := l.merged[act.Ref]
+		l.mu.Unlock()
+		if ok {
+			mp.Ref = cmp.Or(mp.Ref, act.Ref)
+			mp.URL = cmp.Or(mp.URL, act.URL)
+			closed, closeErr := closeMergedPullIssues(ctx, st, mp)
+			l.recordClosedPullIssues(closed)
+			if closeErr != nil {
+				return "", closeErr
+			}
+		}
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
@@ -527,6 +554,25 @@ func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act s
 		})
 		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	}
+	l.mu.Lock()
+	byPull := l.merged[by]
+	l.mu.Unlock()
+	if byPull.Ref == "" {
+		readBy, err := readLoopPull(ctx, by)
+		if err != nil {
+			return "", err
+		}
+		byPull = readBy
+	}
+	byPull.Ref = cmp.Or(byPull.Ref, by)
+	if !slices.ContainsFunc(byPull.Absorbs, func(a string) bool { return strings.EqualFold(a, act.Ref) }) {
+		byPull.Absorbs = append(byPull.Absorbs, act.Ref)
+	}
+	closed, closeErr := closeMergedPullIssues(ctx, st, byPull)
+	l.recordClosedPullIssues(closed)
+	if closeErr != nil {
+		return "", closeErr
+	}
 	if err := l.claim(act, targetAgent); err != nil {
 		return "", err
 	}
@@ -620,6 +666,160 @@ func pullRefURL(ref string) string {
 	return ref
 }
 
+var closePullIssue = func(ctx context.Context, issue github.PR, pullURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, err := github.RunGH(github.ActingOn(ctx, issue.Repo), "issue", "close", strconv.Itoa(issue.N), "--repo", issue.Repo, "--reason", "completed", "--comment", fmt.Sprintf("Closed by %s.", pullURL))
+	return err
+}
+
+var editPullBody = func(ctx context.Context, pull github.PR, body string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, err := github.RunGH(github.ActingOn(ctx, pull.Repo), "pr", "edit", strconv.Itoa(pull.N), "--repo", pull.Repo, "--body", body)
+	return err
+}
+
+func (l *supervisorLoop) recordClosedPullIssues(closed []string) {
+	if l == nil || len(closed) == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.opens == nil {
+		l.opens = map[string]loopOpen{}
+	}
+	now := l.a.timeNow()
+	for _, ref := range closed {
+		l.opens[ref] = loopOpen{open: false, at: now}
+	}
+}
+
+func absorbedClosingIssues(ctx context.Context, st *state.State, absorbs []string) ([]string, error) {
+	var out []string
+	add := func(raw string) {
+		r, ok := parseRef(raw)
+		if !ok {
+			return
+		}
+		name := refName(r)
+		if !slices.ContainsFunc(out, func(e string) bool { return strings.EqualFold(e, name) }) {
+			out = append(out, name)
+		}
+	}
+	for _, orig := range absorbs {
+		if st != nil {
+			if rp, ok := st.ReviewParkFor(orig); ok && rp.Serves != "" && !strings.EqualFold(rp.Serves, orig) {
+				add(rp.Serves)
+			}
+			for _, ag := range st.Agents {
+				if ag.Park != nil && strings.EqualFold(ag.Park.On, orig) {
+					if s := cmp.Or(loopServes(st, ag), loopTaskServes(ag, orig)); s != "" && !strings.EqualFold(s, orig) {
+						add(s)
+					}
+				}
+			}
+		}
+		origPull, err := readLoopPull(ctx, orig)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range origPull.Closes {
+			add(c)
+		}
+		for _, c := range superloop.ParseClosingIssues(orig, origPull.Title+"\n"+origPull.Body) {
+			add(c)
+		}
+	}
+	return out, nil
+}
+
+func ensureCombinedPullCloses(ctx context.Context, st *state.State, p *superloop.Pull) error {
+	if p == nil || len(p.Absorbs) == 0 {
+		return nil
+	}
+	absorbed, err := absorbedClosingIssues(ctx, st, p.Absorbs)
+	if err != nil {
+		return err
+	}
+	for _, issue := range absorbed {
+		if !slices.ContainsFunc(p.Closes, func(e string) bool { return strings.EqualFold(e, issue) }) {
+			p.Closes = append(p.Closes, issue)
+		}
+	}
+	if p.State != superloop.Open || len(p.Closes) == 0 {
+		return nil
+	}
+	updated := superloop.AppendClosingKeywords(p.Ref, p.Body, p.Closes)
+	if updated == p.Body {
+		return nil
+	}
+	pr, ok := parseRef(p.Ref)
+	if !ok {
+		return nil
+	}
+	if err := editPullBody(ctx, pr, updated); err != nil {
+		return err
+	}
+	p.Body = updated
+	return nil
+}
+
+func closeMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pull) ([]string, error) {
+	var candidates []string
+	add := func(raw string) {
+		r, ok := parseRef(raw)
+		if !ok || strings.EqualFold(refName(r), p.Ref) {
+			return
+		}
+		name := refName(r)
+		if !slices.ContainsFunc(candidates, func(e string) bool { return strings.EqualFold(e, name) }) {
+			candidates = append(candidates, name)
+		}
+	}
+	for _, c := range p.Closes {
+		add(c)
+	}
+	for _, c := range superloop.ParseClosingIssues(p.Ref, p.Title+"\n"+p.Body) {
+		add(c)
+	}
+	absorbed, err := absorbedClosingIssues(ctx, st, p.Absorbs)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range absorbed {
+		add(c)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	var refs []github.PR
+	for _, c := range candidates {
+		if r, ok := parseRef(c); ok {
+			refs = append(refs, r)
+		}
+	}
+	states, err := refStates(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	pullURL := cmp.Or(p.URL, pullRefURL(p.Ref))
+	var closed []string
+	for _, r := range refs {
+		s, ok := states[r]
+		if !ok || s.Kind == github.RefPullRequest {
+			continue
+		}
+		if s.State == github.Open {
+			if err := closePullIssue(ctx, r, pullURL); err != nil {
+				return closed, err
+			}
+		}
+		closed = append(closed, refName(r))
+	}
+	return closed, nil
+}
+
 // moveServedDone moves the task ref served to Done. A saved Serves can name a
 // pull request, which the board refuses as no issue: that must not fail the end.
 func (l *supervisorLoop) moveServedDone(ctx context.Context, serves, ref string) error {
@@ -670,6 +870,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	if p.State == superloop.Merged && p.Head == head {
+		st, _ := a.store.Read()
+		if _, err := closeMergedPullIssues(ctx, st, p); err != nil {
+			doc.ExitCode = github.SquashTooling
+			doc.Reason = err.Error()
+			return doc
+		}
 		doc.ExitCode = 0
 		doc.MergeCommitSha = p.MergeCommit
 		return doc
@@ -889,6 +1095,10 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeld
 		return doc
 	}
+	if err := ensureCombinedPullCloses(ctx, st, &p); err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
 	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
 	// A merge queue retests the merge group when the base advances; --admin
 	// would bypass it. Without a queue the lane's own merge-result check
@@ -919,6 +1129,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	switch {
 	case p.State == superloop.Merged && p.Head == merging:
+		if _, err := closeMergedPullIssues(ctx, st, p); err != nil {
+			doc.ExitCode = github.SquashTooling
+			doc.Reason = err.Error()
+			return doc
+		}
 		doc.ExitCode = 0
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"

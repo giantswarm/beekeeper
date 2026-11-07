@@ -32,6 +32,7 @@ const (
 	loginField   = "login"
 	ghAPI        = "api"
 	ghGraphQL    = "graphql"
+	ghPR         = "pr"
 )
 
 // Serve runs this process as the fixture's GitHub CLI or Git wrapper and returns
@@ -102,6 +103,8 @@ func serveGitHub() int {
 		return 0
 	case starts("search", "prs"):
 		return emit([]any{})
+	case starts(ghPR, "list"):
+		return emit([]any{})
 	case starts(ghAPI, "user"):
 		fmt.Println(fixtureBot)
 		return 0
@@ -115,7 +118,7 @@ func serveGitHub() int {
 	case starts(ghAPI) && len(args) == 4 && strings.HasPrefix(args[1], "repos/fixture/project/commits/") && args[2] == "--jq" && args[3] == ".commit.committer.date":
 		fmt.Println("2026-01-01T00:00:00Z")
 		return 0
-	case starts("pr", "view"):
+	case starts(ghPR, "view"):
 		// Model a push between the planner's read and the merge executor's read.
 		if os.Getenv("FIXTURE_CASE") == "moved-head" {
 			countPath := filepath.Join(root, "read-count")
@@ -139,7 +142,7 @@ func serveGitHub() int {
 			return emit(map[string]any{"errors": []any{map[string]any{"message": "fixture unavailable"}}})
 		}
 		return emit(map[string]any{"data": map[string]any{"repository": map[string]any{"mergeQueue": nil}}})
-	case starts("pr", "merge"):
+	case starts(ghPR, "merge"):
 		pin := slices.Index(args, "--match-head-commit")
 		if pin < 0 || pin+1 >= len(args) || args[pin+1] != p["headRefOid"] {
 			panic("merge lacks current exact-head pin")

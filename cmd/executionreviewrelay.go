@@ -33,10 +33,12 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 	}
 	_, i := executionRecord(st, ref)
 	var round *state.DeskReview
+	roundIndex := -1
 	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
 		candidate := &st.DeskReviews[n]
 		if sameReviewSession(candidate.Reviewer, st.Starts[i].Party) {
 			round = candidate
+			roundIndex = n
 			break
 		}
 	}
@@ -54,12 +56,26 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 	if err != nil {
 		return "", err
 	}
-	if pull.Head != round.Head || pull.State != superloop.Open {
+	if pull.State != superloop.Open || (request.Body == "" && pull.Head != round.Head) {
 		return "", refused("assigned pull request head changed or is no longer open")
 	}
 	number := strconv.Itoa(r.N)
 	if request.Body != "" {
-		if superloop.Verdict("COMMENTED", request.Body) == "" || superloop.ReviewedHead(request.Body, "") != round.Head {
+		verdict := superloop.Verdict("COMMENTED", request.Body)
+		reviewedHead := superloop.ReviewedHead(request.Body, "")
+		headOK := reviewedHead == round.Head && pull.Head == round.Head
+		if !headOK && verdict == superloop.Approved && reviewedHead != "" && reviewedHead == pull.Head {
+			if descends, descErr := readReviewerFixedHead(ctx, round.Ref, round.Head, reviewedHead); descErr == nil && descends {
+				headOK = true
+				for _, prev := range st.DeskReviews[:roundIndex] {
+					if strings.EqualFold(prev.Ref, round.Ref) && (prev.Head == pull.Head || prev.Result != nil && prev.Result.Head == pull.Head) {
+						headOK = false
+						break
+					}
+				}
+			}
+		}
+		if verdict == "" || !headOK {
 			return "", refused("review must begin with Review: approved or Review: changes requested and name the assigned Head reviewed")
 		}
 		// Reconcile a lost response before posting again. Only this round's exact
@@ -80,12 +96,12 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 		}
 		for _, page := range pages {
 			for _, review := range page {
-				if review.Body == request.Body && review.Commit == round.Head && !review.At.Before(round.AssignedAt.Add(-30*time.Second)) && review.URL != "" {
+				if review.Body == request.Body && review.Commit == reviewedHead && !review.At.Before(round.AssignedAt.Add(-30*time.Second)) && review.URL != "" {
 					return review.URL, nil
 				}
 			}
 		}
-		out, err := github.RunGH(ctx, workerGitHubAPIGroup, "repos/"+r.Repo+"/pulls/"+number+"/reviews", "--method", "POST", reviewRelayRawField, "event=COMMENT", reviewRelayRawField, "commit_id="+round.Head, reviewRelayRawField, "body="+request.Body)
+		out, err := github.RunGH(ctx, workerGitHubAPIGroup, "repos/"+r.Repo+"/pulls/"+number+"/reviews", "--method", "POST", reviewRelayRawField, "event=COMMENT", reviewRelayRawField, "commit_id="+reviewedHead, reviewRelayRawField, "body="+request.Body)
 		if err != nil {
 			return "", err
 		}

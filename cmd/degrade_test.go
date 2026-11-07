@@ -23,8 +23,13 @@ import (
 func stubApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
 	orig := plat
+	origUnmergedGH := unmergedGH
 	plat = platform.Stub()
-	t.Cleanup(func() { plat = orig })
+	unmergedGH = func(context.Context, ...string) ([]byte, error) { return []byte("[]"), nil }
+	t.Cleanup(func() {
+		plat = orig
+		unmergedGH = origUnmergedGH
+	})
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	cfg := "stateDir: " + dir + "\nleaseDir: " + filepath.Join(dir, "leases") + "\n" +

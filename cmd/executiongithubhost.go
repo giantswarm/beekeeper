@@ -95,7 +95,8 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				}
 				binary = s.Config.Tools[execution.ToolGitHub].Executable
 			} else {
-				if err := execution.ValidateWorkerPush(args, execution.GitHubBranch(j.Handle.Ref)); err != nil {
+				targetBranch := executionGitHubTargetBranch(j)
+				if err := execution.ValidateWorkerPush(args, targetBranch); err != nil {
 					return refused("%v", err)
 				}
 				binary = workerGitHubGitExecutable
@@ -110,7 +111,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					return refused("network git cannot override the owned workspace or configuration")
 				}
 				if request.Write {
-					if err := execution.ValidateWorkerPush(args, execution.GitHubBranch(j.Handle.Ref)); err != nil {
+					if err := execution.ValidateWorkerPush(args, targetBranch); err != nil {
 						return err
 					}
 				}
@@ -178,7 +179,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				env = append(env, "GH_TOKEN="+token.Token)
 			}
 			if name == "github-git" && request.Write {
-				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, execution.GitHubBranch(j.Handle.Ref), env)
+				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, executionGitHubTargetBranch(j), env)
 				if err != nil {
 					return err
 				}
@@ -191,6 +192,13 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 		}})
 	}
 	return commands
+}
+
+func executionGitHubTargetBranch(j execution.Journal) string {
+	if g := nonDefaultGitRef(j.Request.GitRef); g != "" {
+		return g
+	}
+	return execution.GitHubBranch(j.Handle.Ref)
 }
 
 func workerGitHubWorkDir(defaultWorkspace, defaultRepo string) (string, string) {
