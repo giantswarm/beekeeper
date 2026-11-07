@@ -107,6 +107,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					}
 					targetBranch = target.Branch
 					request.PushBranch = targetBranch
+					request.PushReview = target.ReviewID
 				}
 				if err := execution.ValidateWorkerPush(args, targetBranch); err != nil {
 					return refused("%v", err)
@@ -197,6 +198,17 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				}
 				defer cleanup()
 				args, env = isolatedArgs, isolatedEnv
+				// Object inspection and transfer preparation may outlive a repair grant.
+				// Revalidate the exact round immediately before the isolated push starts.
+				resolve := request
+				resolve.ResolvePush = true
+				var target workerGitHubPushTarget
+				if err := execution.CoordinatorCall(ctx, co.Callback, string(j.Handle.Ref.Host), workerGitHubIssue, j.Handle.Ref, resolve, j.Request.ControlKey, &target, s.Callback); err != nil {
+					return err
+				}
+				if target.Branch != targetBranch || target.ReviewID != request.PushReview {
+					return refused("push assignment changed during preparation")
+				}
 			}
 			child := exec.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
 			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = workDir, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
@@ -207,7 +219,8 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 }
 
 type workerGitHubPushTarget struct {
-	Branch string `json:"branch"`
+	Branch   string `json:"branch"`
+	ReviewID string `json:"review_id,omitempty"`
 }
 
 func executionGitHubTargetBranch(j execution.Journal) string {

@@ -37,6 +37,7 @@ type workerGitHubRequest struct {
 	Write       bool   `json:"write"`
 	ResolvePush bool   `json:"resolve_push,omitempty"`
 	PushBranch  string `json:"push_branch,omitempty"`
+	PushReview  string `json:"push_review,omitempty"`
 }
 
 type workerOAuthTokenResponse struct {
@@ -165,7 +166,10 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 	}
 	if request.PushBranch != "" {
 		branch := executionOwnedBranch(r)
-		if assignedExecutionReviewRound(st, ref) != nil {
+		if round := assignedExecutionReviewRound(st, ref); round != nil {
+			if request.PushReview != round.ID {
+				return refused("push review assignment changed")
+			}
 			if request.Repository != r.Request.Repository {
 				return refused("review push repository mismatch")
 			}
@@ -175,6 +179,9 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 			if err != nil {
 				return err
 			}
+		}
+		if assignedExecutionReviewRound(st, ref) == nil && request.PushReview != "" {
+			return refused("push review assignment ended")
 		}
 		if !request.Write || request.PushBranch != branch {
 			return refused("push branch authorization changed")
@@ -243,7 +250,9 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 			return nil, err
 		}
 		branch := executionOwnedBranch(r)
-		if assignedExecutionReviewRound(st, req.Ref) != nil {
+		reviewID := ""
+		if round := assignedExecutionReviewRound(st, req.Ref); round != nil {
+			reviewID = round.ID
 			if request.Repository != r.Request.Repository {
 				return nil, refused("review push repository mismatch")
 			}
@@ -252,7 +261,7 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 				return nil, err
 			}
 		}
-		return workerGitHubPushTarget{Branch: branch}, nil
+		return workerGitHubPushTarget{Branch: branch, ReviewID: reviewID}, nil
 	}
 	// Serialize issuance and revocation independently of the scheduling store;
 	// GitHub and vault I/O never hold its lock.

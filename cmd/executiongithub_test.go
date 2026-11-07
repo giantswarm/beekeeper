@@ -631,7 +631,7 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 			err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &target, false)
 			switch scenario {
 			case "authorized":
-				if err != nil || target.Branch != branch {
+				if err != nil || target.Branch != branch || target.ReviewID == "" {
 					t.Fatalf("assigned branch refused: %+v %v", target, err)
 				}
 			case "source only", "default trunk", "wrong session":
@@ -645,6 +645,14 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 			}
 			// Revalidation on credential use must reject a branch other than the
 			// resolved target, before any credential mint or network write.
+			if scenario == "authorized" {
+				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: target.ReviewID}); err != nil {
+					t.Fatalf("current round push refused: %v", err)
+				}
+				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: "different-round"}); err == nil {
+					t.Fatal("another round borrowed the branch grant")
+				}
+			}
 			request.ResolvePush = false
 			request.PushBranch = "unrelated/branch"
 			var ignored workerGitHubToken

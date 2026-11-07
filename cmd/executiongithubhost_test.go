@@ -59,6 +59,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	calls := 0
 	wantRepo, wantWrite, refuseIssue := workerGitHubPrivateRepo, false, false
 	resolvedBranch := execution.GitHubBranch(r.Ref)
+	resolvedReview := ""
 	s.Callback = func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
 		var req execution.CallbackRequest
 		if err := execution.Decode(raw, &req); err != nil {
@@ -69,9 +70,9 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 			t.Fatal("wrong host callback scope")
 		}
 		if scope.ResolvePush {
-			return json.Marshal(execution.WireResponse{Protocol: execution.Protocol, RequestID: req.RequestID, Ref: r.Ref, Payload: mustExecutionJSON(t, workerGitHubPushTarget{Branch: resolvedBranch})})
+			return json.Marshal(execution.WireResponse{Protocol: execution.Protocol, RequestID: req.RequestID, Ref: r.Ref, Payload: mustExecutionJSON(t, workerGitHubPushTarget{Branch: resolvedBranch, ReviewID: resolvedReview})})
 		}
-		if scope.PushBranch != "" && scope.PushBranch != resolvedBranch {
+		if scope.PushBranch != "" && (scope.PushBranch != resolvedBranch || scope.PushReview != resolvedReview) {
 			return nil, errors.New("push grant changed")
 		}
 		calls++
@@ -334,6 +335,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	// The trusted coordinator's review grant must control both validation and
 	// the isolated actual push, even though the source journal alone grants none.
 	resolvedBranch = "fixture/assigned-author"
+	resolvedReview = "assigned-review-round"
 	reviewPush := a.executionGitHubCommands()[1]
 	reviewPush.SetArgs([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + resolvedBranch})
 	reviewPush.SetOut(&output)
@@ -345,6 +347,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal("assigned author push used a different branch or head")
 	}
 	resolvedBranch = execution.GitHubBranch(r.Ref)
+	resolvedReview = ""
 
 	// Secondary repository inside the owned workspace can push to its own
 	// execution branch and park on its PR for review.
