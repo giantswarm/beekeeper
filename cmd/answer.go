@@ -18,18 +18,29 @@ import (
 // they concern.
 const answerRecorded = "answer.recorded"
 
+// answerNoteOpts configures whether recording a person's words on a note keeps
+// the note open or defers it instead of closing it.
+type answerNoteOpts struct {
+	keepOpen    bool
+	deferDue    string
+	deferReason string
+}
+
 // answerCmd records a person's words for the session that asked.
 func (a *app) answerCmd() *cobra.Command {
 	var noteID, choice int
 	var via string
 	var post bool
+	var opts answerNoteOpts
 	c := &cobra.Command{
 		Use:   "answer <owner/repo#n|URL> [<words>]",
 		Short: "Record a person's answer, word for word, for the session it concerns",
 		Long: `Record the person's words verbatim, however they came (--via cli or
 slack), about the issue or pull request they concern: answer.recorded is
 logged with the thread, the words and how they came. --note <id> closes that note
-(--choice <n> picks one of its options, 1-based, the words optional then)
+(--choice <n> picks one of its options, 1-based, the words optional then;
+--keep-open or --defer <due> records the words while leaving the note open in
+the queue when the reply does not settle the decision)
 and tells the session that filed it; without a note, the sessions serving
 the thread (beekeeper sessions serve) are told. A decision its default
 closed within the last day is still answered: the answer replaces the
@@ -56,13 +67,19 @@ The hand-over's answers and note add's re-ask warning read answer.recorded
 			if choice != 0 && noteID == 0 {
 				return usageErr("--choice picks an option of a note: --note <id>")
 			}
-			return a.recordAnswer(cmd.Context(), refName(r), noteID, choice, via, strings.Join(args[1:], " "), post)
+			if (opts.keepOpen || opts.deferDue != "") && noteID == 0 {
+				return usageErr("--keep-open and --defer apply to a note: --note <id>")
+			}
+			return a.recordAnswerWithOptions(cmd.Context(), refName(r), noteID, choice, via, strings.Join(args[1:], " "), post, opts)
 		},
 	}
 	c.Flags().IntVar(&noteID, "note", 0, "the note the answer answers: it closes, its filer is told")
 	c.Flags().IntVar(&choice, "choice", 0, "the note's option chosen, 1-based")
 	c.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack")
 	c.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
+	c.Flags().BoolVar(&opts.keepOpen, "keep-open", false, "record the person's reply verbatim while leaving the note open")
+	c.Flags().StringVar(&opts.deferDue, "defer", "", "record the person's reply verbatim and defer the note until this time (22:55 or 3h)")
+	c.Flags().StringVar(&opts.deferReason, "reason", "", "with --defer, why the note is deferred")
 	return c
 }
 
@@ -78,16 +95,29 @@ type recordedAnswer struct {
 	Note    int           `json:"note,omitempty"`
 	// Replaced is the default the answer replaces, of a decision its
 	// default had closed.
-	Replaced string   `json:"replacedDefault,omitempty"`
-	Told     []string `json:"told,omitempty"`
+	Replaced      string   `json:"replacedDefault,omitempty"`
+	KeptOpen      bool     `json:"keptOpen,omitempty"`
+	DeferredUntil string   `json:"deferredUntil,omitempty"`
+	Told          []string `json:"told,omitempty"`
 }
 
-// recordAnswer records words about about (owner/repo#n), answering note
-// noteID when it is not 0: the event, the note closed, the asking session
-// told and, with post, the comment.
-func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int, via, words string, post bool) error {
+// recordAnswerWithOptions records words about about (owner/repo#n), answering
+// note noteID when it is not 0: the event, the note closed (or kept open /
+// deferred), the asking session told and, with post, the comment.
+func (a *app) recordAnswerWithOptions(ctx context.Context, about string, noteID, choice int, via, words string, post bool, opts answerNoteOpts) error {
 	if via != viaCLI && via != viaSlack {
 		return usageErr("--via %q is none of %s, %s", via, viaCLI, viaSlack)
+	}
+	stayOpen := opts.keepOpen || strings.TrimSpace(opts.deferDue) != ""
+	if stayOpen && choice != 0 {
+		return usageErr("--choice selects an option and closes the note; omit --choice with --keep-open or --defer")
+	}
+	deferAt, err := untilTime(a.now, opts.deferDue)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(opts.deferDue) != "" && !deferAt.After(a.now) {
+		return usageErr("--defer %q must be in the future", opts.deferDue)
 	}
 	me, err := a.caller()
 	if err != nil {
@@ -122,7 +152,10 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 			}
 		}
 	}
-	rec := recordedAnswer{About: about, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID}
+	rec := recordedAnswer{About: about, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID, KeptOpen: stayOpen}
+	if !deferAt.IsZero() {
+		rec.DeferredUntil = deferAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+	}
 	if post {
 		if err := a.postAnswer(ctx, &rec); err != nil {
 			return err
@@ -130,14 +163,23 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 	}
 	closedMeanwhile, wasOpen := false, false
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		evs := []state.Event{answerEvent(me, &rec, n)}
 		if n != nil {
-			found, defaulted := takeAnswered(st, n.ID)
-			closedMeanwhile, wasOpen = !found, found && !defaulted
-			if defaulted {
-				rec.Replaced = n.Default
+			if stayOpen {
+				found, defaulted := keepAnsweredOpen(st, n.ID, deferAt, opts.deferReason)
+				closedMeanwhile, wasOpen = !found, found && !defaulted
+				if found && !deferAt.IsZero() {
+					evs = append(evs, deferEvent(me, n, deferAt, opts.deferReason))
+				}
+			} else {
+				found, defaulted := takeAnswered(st, n.ID)
+				closedMeanwhile, wasOpen = !found, found && !defaulted
+				if defaulted {
+					rec.Replaced = n.Default
+				}
 			}
 		}
-		return []state.Event{answerEvent(me, &rec, n)}, nil
+		return evs, nil
 	})
 	if err != nil {
 		return fmt.Errorf("the answer is not logged%s: %w", rec.posted(), err)
@@ -152,8 +194,8 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		if s := a.tellFiler(ctx, me, n, line); s != "" {
 			notes = append(notes, s)
 		}
-		// A decision its default closed released its hold then.
-		if wasOpen {
+		// A decision its default closed released its hold then; one kept open keeps its hold.
+		if wasOpen && !stayOpen {
 			notes = append(notes, a.release(ctx, me, n, closedAnswered)...)
 		}
 	} else {
@@ -166,6 +208,10 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		return err
 	}
 	switch {
+	case n != nil && !deferAt.IsZero():
+		notes = append([]string{fmt.Sprintf("note #%d kept open and deferred until %s", n.ID, clock(a.now, deferAt))}, notes...)
+	case n != nil && stayOpen:
+		notes = append([]string{fmt.Sprintf("note #%d kept open", n.ID)}, notes...)
 	case rec.Replaced != "":
 		notes = append([]string{fmt.Sprintf("note #%d answered after its default: the answer replaces %q", n.ID, oneLine(rec.Replaced))}, notes...)
 	case n != nil:

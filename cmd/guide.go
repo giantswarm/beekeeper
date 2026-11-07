@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -308,7 +309,15 @@ func (a *app) queueText(q queueItem) string {
 		owner += " on " + n.By.Host
 	}
 	s := fmt.Sprintf("%s for %s %s", noteRef(n), who, owner)
-	if !n.Due.IsZero() {
+	if n.Kind == noteTodo {
+		s = fmt.Sprintf("%s [todo] for %s %s", noteRef(n), who, owner)
+	}
+	if u, why, ok := noteDeferral(n); ok && a.now.Before(u) {
+		s += ", deferred until " + clock(a.now, u)
+		if why != "" {
+			s += " (" + why + ")"
+		}
+	} else if !n.Due.IsZero() {
 		s += ", due " + clock(a.now, n.Due)
 		if !n.Due.After(a.now) {
 			s += " (overdue)"
@@ -444,12 +453,28 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 	if more != nil {
 		q = more(q)
 	}
-	it := nextDecision(q, r.AskingFrom+"#"+strconv.Itoa(r.Asking))
+	it := nextDecisionAt(q, r.AskingFrom+"#"+strconv.Itoa(r.Asking), a.now)
 	if it == nil {
 		r.Asking, r.AskingFrom = 0, ""
 		guideRole.set(st, r)
-		waiting := len(q)
-		line := "no open decision for " + cmp.Or(a.cfg.Guide.Person, "the person")
+		deferredCount, nextDue, waiting := 0, time.Time{}, 0
+		for _, item := range q {
+			if item.Note == nil {
+				waiting++
+				continue
+			}
+			if u, _, ok := noteDeferral(item.Note); ok && a.now.Before(u) {
+				deferredCount++
+				if nextDue.IsZero() || u.Before(nextDue) {
+					nextDue = u
+				}
+			}
+		}
+		who := cmp.Or(a.cfg.Guide.Person, "the person")
+		line := "no open decision for " + who
+		if deferredCount > 0 {
+			line = fmt.Sprintf("no decision currently due for %s; %d deferred note(s) wait in the queue (next due %s): beekeeper guide queue", who, deferredCount, clock(a.now, nextDue))
+		}
 		if waiting > 0 {
 			line += fmt.Sprintf("; %d session(s) wait on their person: beekeeper guide queue", waiting)
 		}
@@ -458,8 +483,11 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 	n := *it.Note
 	it.Note = &n
 	ref := strings.TrimPrefix(noteRef(&n), "#")
-	lines := []string{"asking " + a.queueText(*it),
-		fmt.Sprintf("record the answer word for word: beekeeper note answer %s \"<answer>\"; the next decision comes after it", ref)}
+	answerLine := fmt.Sprintf("record the answer word for word: beekeeper note answer %s \"<answer>\"; the next decision comes after it", ref)
+	if len(n.Options) > 0 {
+		answerLine = fmt.Sprintf("record the answer word for word: beekeeper note answer %s --choice <n> \"<answer>\" (or --keep-open / --defer <due> when the reply does not decide an option); the next decision comes after it", ref)
+	}
+	lines := []string{"asking " + a.queueText(*it), answerLine}
 	if n.ID == r.Asking && n.Central == r.AskingFrom {
 		lines[0] = "still " + lines[0]
 		return it, lines, nil, nil
@@ -470,14 +498,17 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 }
 
 // nextDecision is the note the guide asks now: asking (its noteRef) while
-// it is open in q, else the note in q due first, by due time, then the
-// undated in filing order; nil when q holds no note.
-func nextDecision(q []queueItem, asking string) *queueItem {
+// it is open in q and not deferred past now, else the non-deferred note in q
+// due first, by due time, then the undated in filing order; nil when q holds
+// no currently due note.
+func nextDecisionAt(q []queueItem, asking string, now time.Time) *queueItem {
 	var next *queueItem
 	for i := range q {
 		it := &q[i]
 		switch {
 		case it.Note == nil:
+			continue
+		case !now.IsZero() && noteDeferredAt(it.Note, now):
 			continue
 		case noteRef(it.Note) == asking:
 			return it
@@ -566,9 +597,13 @@ the hand-over before gets only what changed; --full prints everything.`,
 				}
 			}
 			relay := a.relayLine(guideRole, r)
+			unbacked := a.unbackedPersonItems(st, q, s)
 			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
 			facts = append(facts, textFacts("guide-work", guideWorkText(st))...)
 			facts = append(facts, textFacts("standing", a.capture(func() { a.printStanding(s) }))...)
+			if len(unbacked) > 0 {
+				facts = append(facts, textFacts("unqueued-open", strings.Join(unbacked, "\n"))...)
+			}
 			return a.delta("guide-handover", full, facts, func() {
 				_, _ = fmt.Fprintf(a.out, "# Guide hand-over, %s\n\n%s\n", a.now.Format("2006-01-02 15:04 MST"), head)
 				if relay != "" {
@@ -578,6 +613,13 @@ the hand-over before gets only what changed; --full prints everything.`,
 				a.printStanding(s)
 				_, _ = fmt.Fprintln(a.out, "\n## Queue")
 				a.printQueue(q)
+				if len(unbacked) > 0 {
+					_, _ = fmt.Fprintln(a.out, "\n## Unqueued open-with-person items (warning)")
+					_, _ = fmt.Fprintln(a.out, unbackedProseHeader)
+					for _, w := range unbacked {
+						_, _ = fmt.Fprintln(a.out, "- "+w)
+					}
+				}
 				_, _ = fmt.Fprintln(a.out, "\n## Owned work, goals and restoration deadlines\n"+guideWorkText(st))
 			})
 		},
@@ -626,6 +668,14 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 		}
 		p("")
 	}
+	if unbacked := a.unbackedPersonItems(st, q, s); len(unbacked) > 0 {
+		section(p, "Unqueued open-with-person items (warning)", false, "")
+		p("%s", unbackedProseHeader)
+		for _, w := range unbacked {
+			p("- %s", w)
+		}
+		p("")
+	}
 	if l := a.relayLine(guideRole, r); section(p, "Relay", l == "", "None open.") {
 		p("%s\n", l)
 	}
@@ -634,6 +684,156 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 		p("- `%s`: %s", c[0], c[1])
 	}
 	return nil
+}
+
+const unbackedProseHeader = "Prose notes are not tracked by `beekeeper guide queue`; verify each candidate item below and either back it in state (`beekeeper note reopen <id>`, `beekeeper note defer <id> --due <time>`, or `beekeeper note add --for <person> --kind todo`) or remove stale prose:"
+
+var (
+	openWithHeading = regexp.MustCompile(`(?i)^#+\s*(?:still\s+)?(?:open\s+with|waiting\s+on|questions?\s+(?:open\s+)?for|pending\s+with)\b`)
+	anyHeading      = regexp.MustCompile(`^#+\s+\S`)
+	proseNoteMention = regexp.MustCompile(`(?i)\bnote\s+#?(\d+)\b`)
+	proseOpenClaim   = regexp.MustCompile(`(?i)\b(?:still\s+open\s+with|open\s+with\s+\S+|unanswered\b|ask\s+with\s+the\b|waiting\s+on\s+you\b|needs\s+\S+'?s\s+review\b)`)
+)
+
+// unbackedPersonItems scans standing instructions, guide work, and the latest
+// guide handover markdown note in guide.desk/guide.dir for candidate
+// "open with the person" items that have no matching open note in q.
+func (a *app) unbackedPersonItems(st *state.State, q []queueItem, standing string) []string {
+	openIDs := map[int]bool{}
+	openRefs := map[string]bool{}
+	for _, it := range q {
+		if it.Note == nil {
+			continue
+		}
+		openIDs[it.Note.ID] = true
+		for _, r := range a.noteNames(it.Note) {
+			openRefs[strings.ToLower(r)] = true
+		}
+	}
+	type source struct {
+		name string
+		text string
+	}
+	var sources []source
+	if strings.TrimSpace(standing) != "" {
+		sources = append(sources, source{name: standingFile, text: standing})
+	}
+	if st != nil {
+		for _, w := range st.GuideWork {
+			if strings.TrimSpace(w.Text) != "" {
+				sources = append(sources, source{name: fmt.Sprintf("guide work #%d", w.ID), text: w.Text})
+			}
+		}
+	}
+	if path, text := a.latestGuideHandoverNote(); text != "" {
+		sources = append(sources, source{name: path, text: text})
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(msg string) {
+		if !seen[msg] {
+			seen[msg] = true
+			out = append(out, msg)
+		}
+	}
+	for _, src := range sources {
+		inOpenSection := false
+		for rawLine := range strings.Lines(src.text) {
+			line := strings.TrimSpace(rawLine)
+			if line == "" {
+				continue
+			}
+			if anyHeading.MatchString(line) {
+				inOpenSection = openWithHeading.MatchString(line)
+				continue
+			}
+			if strings.EqualFold(line, "none") || strings.EqualFold(line, "none.") || strings.EqualFold(line, "- none") {
+				continue
+			}
+			if !inOpenSection && !proseOpenClaim.MatchString(line) {
+				continue
+			}
+			noteMatches := proseNoteMention.FindAllStringSubmatch(line, -1)
+			namedRefs := namedRefs(line, a.cfg.Board.Owner)
+			if len(noteMatches) > 0 {
+				for _, m := range noteMatches {
+					id, err := strconv.Atoi(m[1])
+					if err == nil && !openIDs[id] {
+						add(fmt.Sprintf("%s: mentions note #%d as open with the person, but note #%d is not in the open queue: %s", src.name, id, id, truncate(oneLine(line), 200)))
+					}
+				}
+				continue
+			}
+			if len(namedRefs) > 0 {
+				for _, ref := range namedRefs {
+					if !openRefs[strings.ToLower(ref)] {
+						add(fmt.Sprintf("%s: mentions %s as open with the person with no matching open note in the queue: %s", src.name, ref, truncate(oneLine(line), 200)))
+					}
+				}
+				continue
+			}
+			if inOpenSection {
+				add(fmt.Sprintf("%s: unbacked open-with-person prose item (no matching open note in the queue): %s", src.name, truncate(oneLine(line), 200)))
+			}
+		}
+	}
+	return out
+}
+
+func (a *app) latestGuideHandoverNote() (string, string) {
+	var dirs []string
+	for _, raw := range []string{a.cfg.Guide.Desk, a.cfg.Guide.Dir} {
+		d := strings.TrimSpace(raw)
+		if d == "" {
+			continue
+		}
+		expanded := homePath(d)
+		for _, candidate := range []string{filepath.Join(expanded, "notes"), expanded} {
+			if !slices.Contains(dirs, candidate) {
+				dirs = append(dirs, candidate)
+			}
+		}
+	}
+	bestRun := -1
+	var bestPath string
+	var bestMod time.Time
+	runPattern := regexp.MustCompile(`(?i)^handover-guide(?:-run-(\d+))?\.md$`)
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			m := runPattern.FindStringSubmatch(e.Name())
+			if m == nil {
+				continue
+			}
+			run := 0
+			if m[1] != "" {
+				run, _ = strconv.Atoi(m[1])
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if run > bestRun || (run == bestRun && info.ModTime().After(bestMod)) {
+				bestRun = run
+				bestMod = info.ModTime()
+				bestPath = filepath.Join(dir, e.Name())
+			}
+		}
+	}
+	if bestPath == "" {
+		return "", ""
+	}
+	raw, err := os.ReadFile(bestPath) //nolint:gosec // configured guide.desk or guide.dir handover markdown file
+	if err != nil {
+		return "", ""
+	}
+	return filepath.Base(bestPath), string(raw)
 }
 
 func (a *app) guideWatchCmd() *cobra.Command {

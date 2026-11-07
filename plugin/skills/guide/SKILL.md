@@ -75,13 +75,13 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   to file in its owning repository, put on the board in `Backlog` with `beekeeper board add <issue> --kind <kind>` (inspect fields with `beekeeper board show <issue>`) and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
   each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
-  `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due
-  first, and the next only once that one is answered or closed. `beekeeper guide queue` is the whole queue: the open notes for the
-  person with the session that filed each, its deadline and its default, then the sessions waiting
-  on them with what they need. `beekeeper answer <owner/repo#n> [--note <id>] "<words>"` records an answer
+  `Monitor` with the command the line names. `beekeeper guide next` serves the one decision currently due to ask now, due
+  first, and the next once that one is answered, deferred (`beekeeper note defer <id> --due <time>`) or closed. `beekeeper guide queue` is the whole queue: every open note for the
+  person (active decisions, deferred decisions with future due times, and `--kind todo` person action items) with the session that filed each, its deadline and its default, then the sessions waiting
+  on them with what they need. `beekeeper answer <owner/repo#n> [--note <id>] "<words>"` (or `beekeeper note answer <id> [--choice <n>] "<words>"`) records an answer
   verbatim in beekeeper's log, closes the note (one its default closed within the day too: the answer
   replaces the default) and tells the owning session, whichever way the answer came (a note, this
-  conversation, Slack); nothing goes to GitHub, where the work's own result shows. The supervisor reads it
+  conversation, Slack); when the person's reply asks a side question or defers deciding the options, pass `--defer <due> [--reason "<why>"]` or `--keep-open` (or run `beekeeper note defer <id> --due <due>`) so the verbatim reply is logged and sent while the note stays open in the queue. If a note was closed prematurely, `beekeeper note reopen <id> [--due <due>]` restores it to the open queue while preserving prior `answer.recorded` history. Nothing goes to GitHub, where the work's own result shows. The supervisor reads it
   from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns (or a past guide run's, including question-dialog answers and notes), `ListAgents` its messaging address.
@@ -134,6 +134,8 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
+  When a note has options, pass `--choice <n>` when the person selects an option; when their reply asks a follow-up question or defers deciding, use `--defer <due> [--reason "<why>"]` or `--keep-open` (or `beekeeper note defer <id> --due <due>`) rather than closing the note without a decision.
+- **Status openings come from the whole queue, and deferrals/todos live in state.** Read `beekeeper guide queue --full` before summarizing what waits on the person: distinguish "nothing due right now" from "nothing waiting on you", and never say nothing waits while any decision, deferred note, person todo (`beekeeper note add --for <person> --kind todo`) or waiting session is in the queue. Never track a deferred question or person-owned action item (such as a company review PR) only in prose hand-over markdown; keep it open in state with `note defer`, `note reopen`, or `note add --kind todo`, and reconcile any `Unqueued open-with-person items` warning from `beekeeper guide handover`.
 - **Priorities and goes are the board's.** Priority is determined by issue Status and order on the
   board only, never a separate number. A priority the person states is a board move
   (`beekeeper board move <item> <status>`) or a board reorder
