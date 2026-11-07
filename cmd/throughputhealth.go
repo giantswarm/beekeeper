@@ -77,9 +77,16 @@ func (a *app) operationOutcome(operation, reason, rawURL string, success bool) e
 // Keep retry/backoff decisions out of this ledger. Only a command actually
 // attempted contributes; capacity and budget refusals are intentional holds.
 func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, args ...string) (string, error) {
+	begin := l.a.timeNow()
 	out, err := l.run(ctx, args...)
 	if err != nil && (errors.Is(err, context.Canceled) || Code(err) == ExitRefused || isLoopGitHubHeldOutput(out)) {
 		return out, err
+	}
+	// A start cut off after it registered its session (killed while it
+	// waited for the state lock: exit -1) did start: its roster entry is
+	// the outcome, not the child's exit status.
+	if err != nil && len(args) >= 3 && l.startRegistered(args[2], begin) {
+		err = nil
 	}
 	reason := throughputStartFailed
 	if err == nil {
@@ -89,6 +96,17 @@ func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, arg
 		return out, saveErr
 	}
 	return out, err
+}
+
+// startRegistered says whether the roster holds name, registered since begin.
+func (l *supervisorLoop) startRegistered(name string, begin time.Time) bool {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return strings.EqualFold(ag.Name, name) && !ag.Registered.Before(begin)
+	})
 }
 
 func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superloop.Action, unknown bool) error {

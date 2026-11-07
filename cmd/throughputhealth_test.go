@@ -261,3 +261,55 @@ func TestThroughputStallEscalatesAndRecoversAfterUnknown(t *testing.T) {
 		t.Fatal("incident and recovery must each be filed once")
 	}
 }
+
+// A review start killed after it registered its session (exit -1 while it
+// waited for the state lock) started: the loop neither reports it failed
+// nor counts it as a failed start command.
+func TestLoopReviewStartKilledAfterRegistering(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			name := args[2]
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: name}, Registered: time.Now(), Task: "review " + loopURL})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return "started " + name + ": codex agent\nthe state lock is busy: still held after 2m0s", -1
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if strings.Contains(r.out.String(), "SUPERVISOR REVIEW FAILED") {
+		t.Fatalf("a registered start reported failed:\n%s", r.out)
+	}
+	outcomes := r.logged(t, throughputOutcomeVerb)
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes %v", outcomes)
+	}
+	var o throughputOutcome
+	if err := json.Unmarshal([]byte(outcomes[0].Detail), &o); err != nil {
+		t.Fatal(err)
+	}
+	if !o.Success || o.Reason != "" {
+		t.Fatalf("outcome %+v", o)
+	}
+}
+
+// A start that failed without a roster entry stays a failed start.
+func TestLoopReviewStartFailedWithoutRegistering(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "killed", -1
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if !strings.Contains(r.out.String(), "SUPERVISOR REVIEW FAILED") {
+		t.Fatalf("an unregistered start not reported failed:\n%s", r.out)
+	}
+}
