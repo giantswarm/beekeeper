@@ -346,6 +346,33 @@ func TestCmdPackageHasNoGoConstFindings(t *testing.T) {
 	}
 }
 
+// A PR behind its base is checked for its own changes, not for files only the
+// base changed (https://github.com/giantswarm/beekeeper/issues/3392).
+func TestMergeResultGoConstSkipsBaseOnlyFiles(t *testing.T) {
+	baseOnly := "package other\n\nfunc A() string { return \"base-only\" }\nfunc B() string { return \"base-only\" }\nfunc C() string { return \"base-only\" }\n"
+	repo := newMergeCheckRepo(t, map[string]string{"other/other.go": baseOnly}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+	repo.advanceMain(t, repo.head1)
+	r := newLoopRig(t)
+	r.a.cfg.Disk.Checkouts = []string{repo.dir}
+	_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if code != 0 {
+		t.Fatalf("base-only file blamed on PR: %d: %s", code, reason)
+	}
+}
+
+// golangci-lint's goconst skips integer strings outside numbers.min/max (3).
+func TestGoConstMatchesGolangciNumberRange(t *testing.T) {
+	dir := t.TempDir()
+	src := "package p\n\nvar _ = []string{\"137\", \"137\", \"137\", \"0x3\", \"0x3\", \"0x3\"}\n"
+	if err := os.WriteFile(filepath.Join(dir, "p_test.go"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	finding := checkPackageGoConst(dir, ".")
+	if strings.Contains(finding, `"137"`) || !strings.Contains(finding, `"0x3"`) {
+		t.Fatalf("got %q", finding)
+	}
+}
+
 func TestMergeResultChecksCoverUnchangedAndDependentTests(t *testing.T) {
 	for _, dependent := range []bool{false, true} {
 		t.Run(fmt.Sprint(dependent), func(t *testing.T) {

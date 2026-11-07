@@ -290,7 +290,9 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			}
 		}
 	}
-	stale := budgetAt.IsZero() || l.a.timeNow().Sub(budgetAt) > max(3*l.a.cfg.Watch.Interval.Duration, time.Minute)
+	// A live watch's tick can wait minutes on the state lock: only a reading
+	// older than that says the watch is gone.
+	stale := budgetAt.IsZero() || l.a.timeNow().Sub(budgetAt) > max(3*l.a.cfg.Watch.Interval.Duration, loopBudgetStale)
 	l.holdStarts(budgetHeld || stale || len(active) > 0)
 	if l.holdingStarts() {
 		l.sayOnce("watch-hold", "SUPERVISOR STARTS HELD: watch budget held=%t stale=%t; machine conditions %v", budgetHeld, stale, active)
@@ -299,3 +301,9 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	}
 	return nil
 }
+
+// loopBudgetStale is the least age at which the watch's budget reading
+// holds starts as stale: the watch's tick waits up to 2m on the state lock
+// under load, and a 1m window held every start of a live watch for an hour
+// (https://github.com/giantswarm/beekeeper/issues/3388).
+const loopBudgetStale = 5 * time.Minute

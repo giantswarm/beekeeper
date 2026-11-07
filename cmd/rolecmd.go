@@ -258,6 +258,9 @@ func (a *app) runStop(rl role, force bool) error {
 // roleStatus says who holds rl, with its context against relayAt: exit 3
 // when nobody does, 4 in the session a relay relieved.
 func (a *app) roleStatus(rl role) error {
+	if !a.json && !a.cfg.Hooks.GuardsEnabled() {
+		_, _ = fmt.Fprintln(a.out, "guards: off (hooks.guards=false)")
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return err

@@ -154,6 +154,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			attempts[ref]++
 		}
 	}
+	l.fillRan()
 	startedHere := map[string]bool{}
 	for key, c := range claims {
 		if !strings.HasPrefix(key, loopFillKey) {
@@ -181,6 +182,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		cap := l.fillCapacity(ctx)
 		if cap == nil {
+			l.stallWait("", "capacity --json did not answer")
 			return nil // a gate refusal is never a reason to start
 		}
 		live, err := l.a.store.Read()
@@ -200,6 +202,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		pause := func() { l.pauseFill(capacity, alive) }
 		room := l.fillRoom(cap)
 		if room <= 0 {
+			l.stallClear() // no free slot: nothing waits on the loop
 			return nil
 		}
 		if started == 0 {
@@ -213,14 +216,17 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		next, err := l.nextItem(ctx)
 		if errors.Is(err, errLoopLater) {
+			l.stallWait("", "the GitHub budget is under github.floor: no board walk")
 			return nil // the budget recovers on its own: no pause, no failure
 		}
 		if err != nil {
+			l.stallWait("", "board next failed: "+oneLine(err.Error()))
 			pause()
 			l.sayOnce("fill board", "SUPERVISOR NEXT FAILED board next: %v", err)
 			return nil
 		}
 		if next == nil {
+			l.stallClear() // the board offers nothing: nothing waits
 			pause()
 			return nil
 		}
@@ -231,12 +237,18 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		r, _ := parseRef(next.Ref)
 		name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
 		if slices.ContainsFunc(live.Agents, func(ag state.Agent) bool { return ag.Name == name }) {
+			l.stallWait(next.URL, fmt.Sprintf("board next offers it, but the roster already has an agent named %q", name))
 			pause()
 			return nil // the board may lag the worker's registration
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
 		what, err := l.startItem(ctx, act, *next)
 		if err != nil {
+			why := "its start failed: " + oneLine(err.Error())
+			if errors.Is(err, errLoopLater) {
+				why = "its start waits: no room for a start on any host, or an incident, unmerged-backlog, fatal or unread-repository hold (the SUPERVISOR … WAITS lines name it)"
+			}
+			l.stallWait(next.URL, why)
 			pause()
 			if !errors.Is(err, errLoopLater) {
 				l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", act.Key, err)
@@ -248,6 +260,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		attempts[next.Ref]++
 		startedHere[next.Ref] = true
+		l.stallClear()
 		l.mu.Lock()
 		l.fillEmpty = 0
 		l.mu.Unlock()

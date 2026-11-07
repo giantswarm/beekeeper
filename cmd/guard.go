@@ -667,6 +667,24 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			cfgErr := a.loadConfig()
+			if cfgErr == nil && !a.cfg.Hooks.GuardsEnabled() {
+				// Keep instruction delivery independent of enforcement. Result
+				// redaction, sessionstart and worktree hooks are separate commands.
+				var out []byte
+				switch {
+				case isCodex:
+					out = codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), guard.PassCodex())
+				case isAgy:
+					out = guard.PassAgy()
+				default:
+					out = peer.WithInstructionContext(a.cfg.StateDir, raw, nil)
+				}
+				a.recordGitHubCalls(raw, formatFlag, out)
+				if len(out) > 0 {
+					_, _ = w.Write(out)
+				}
+				return nil
+			}
 			if isCodex {
 				if reason := guard.ValidateCodexInput(raw); reason != "" {
 					_, _ = w.Write(guard.DenyCodex(reason))
@@ -852,7 +870,7 @@ context instead. beekeeper install registers it in
 			if a.loadConfig() != nil {
 				return nil // a broken configuration must not block a session's start
 			}
-			if !held && a.cfg.Sandbox.Required {
+			if !held && a.cfg.Sandbox.Required && a.cfg.Hooks.GuardsEnabled() {
 				_, _ = a.out.Write(guard.UnsandboxedStart())
 				return nil
 			}
