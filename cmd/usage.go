@@ -1438,13 +1438,12 @@ func (w *watcher) execUsageNow(ctx context.Context, u config.Usage) (usageReadin
 	return r, validateReadingAt(r, u, now)
 }
 
-func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.Time) {
-	if now.IsZero() {
-		now = w.usageNow()
-	}
+// refreshUsage stamps every provider read with its own observation time: a
+// slow earlier provider must not age the schedule of the next one.
+func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
-			now = w.usageNow()
+			now := w.usageNow()
 			p := k.Providers[name]
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
@@ -1471,7 +1470,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 		}
 		return
 	}
-	now = w.usageNow()
+	now := w.usageNow()
 	w.mu.Lock()
 	w.lastUsage = now
 	w.mu.Unlock()
@@ -1531,9 +1530,6 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	}
 	if !w.chores {
 		_, u := w.resolveUsage(ctx, k)
-		if w.app != nil && w.app.now.After(w.now) {
-			w.now = w.app.now
-		}
 		if u == nil {
 			return nil
 		}
@@ -1550,7 +1546,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	w.now = now
 	if w.usageNeedsRefresh(k, now) {
 		w.inFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
-			w.refreshUsage(ctx, k, now)
+			w.refreshUsage(ctx, k)
 		})
 		now = w.usageNow()
 		w.now = now
@@ -1597,9 +1593,6 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 				continue
 			}
 			r, err := w.resolveReading(ctx, usageProviderFile(name), p.Usage)
-			if w.app != nil && w.app.now.After(w.now) {
-				w.now = w.app.now
-			}
 			if err != nil {
 				w.mu.Lock()
 				if w.providerUsageErr == nil {
@@ -1617,7 +1610,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		w.now = now
 		if w.usageNeedsRefresh(k, now) {
 			w.inFlight(ctx, usageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
-				w.refreshUsage(ctx, k, now)
+				w.refreshUsage(ctx, k)
 			})
 			now = w.usageNow()
 			w.now = now
