@@ -79,6 +79,10 @@ func TestLeaseLostReplyRetriesOriginalGrantAndStopsRevokeRenewal(t *testing.T) {
 	if _, err := f.s.renewLease(ctx, f.r.Ref); err == nil {
 		t.Fatal("lost reply reported success")
 	}
+	failed, err := f.s.Read(f.r.Ref)
+	if err != nil || failed.LeaseFailure == nil || failed.LeaseFailure.Stage != "callback" || failed.LeaseFailure.Kind != "unreachable" || failed.LeaseFailure.Count != 1 {
+		t.Fatal("bounded renewal failure context missing", err)
+	}
 	grant, err := f.s.renewLease(ctx, f.r.Ref)
 	if err != nil || grant == nil || grant.Sequence != 1 {
 		t.Fatal("lost reply created another grant", err)

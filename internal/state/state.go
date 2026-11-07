@@ -2039,6 +2039,11 @@ func (s *FileStore) Exclusive(fn func() error) error {
 		return err
 	}
 	defer unlock()
+	commitUnlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer commitUnlock()
 	return fn()
 }
 

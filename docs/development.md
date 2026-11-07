@@ -1151,6 +1151,35 @@ must inspect/recover after an error rather than assume the callback was undone.
 `Peek` stays nonblocking and exposes any retained outbox. An unrelated log edit
 refuses recovery without deleting evidence.
 
+Lease renewal uses `state.commit.lock`, a short transaction lock shared by all
+state commits and outbox recovery. It reads and changes the authoritative
+`state.json` under that lock, without waiting for desk readers or slow
+`Update` callbacks under `state.lock`. An ordinary update carries forward any
+newer lease for the same generation and registration at commit, so it cannot
+undo a concurrent renewal. Stop, revocation and registration changes linearize
+at that same commit boundary. `Exclusive` and binary recovery hold both locks.
+The lock order is always desk lock then commit lock; renewal never acquires the
+desk lock or appends events. Commit-lock acquisition is bounded to five seconds
+and callback deadlines remain in force. Lease lifetime and replay rules are
+unchanged.
+
+This lock protocol requires restarting **all coordinator state writers** when
+installing this change; a running older writer does not take the commit lock.
+Do not run a mixed-version coordinator or roll back its binary with writers
+still running. The host journal retains the last renewal failure's time,
+elapsed duration, stage, fixed failure category, last sequence and failure
+count. It retains no callback error text, SSH output, control keys or routes;
+a successful retry does not erase the earlier failure. Failure diagnostics
+use the attempt's existing deadline and cannot prolong expired authority.
+
+For the live proof, park a remote worker, retain its execution/generation and
+thread identities, exercise concurrent desk reads and updates for longer than
+90 seconds, and verify advancing lease sequences without a stop request.
+Resume it and verify the same thread. Record only those identities and lease
+metadata, then take the required alert snapshot; never attach raw transcripts
+or host routes. Deterministic tests cover the lock overlap separately from this
+post-release proof.
+
 The outbox fault-injection suite covers failed and partial writes, sync and close
 errors, both sides of the append, reopen and duplicate prevention. The actual
 update path also exercises a failing event device and recovery after replacement.

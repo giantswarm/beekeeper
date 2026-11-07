@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,15 @@ type EventOutbox struct {
 }
 
 func (s *FileStore) commitEvents(st *State, events []Event) error {
+	unlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := s.preserveRenewals(st); err != nil {
+		return err
+	}
+
 	if len(events) == 0 {
 		return writeJSON(s.path("state.json"), st)
 	}
@@ -56,6 +66,12 @@ func (s *FileStore) commitEvents(st *State, events []Event) error {
 // recoverEvents runs under the exclusive state lock. A failure keeps the
 // durable outbox; another command can retry after the underlying fault is fixed.
 func (s *FileStore) recoverEvents() (*State, error) {
+	unlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	st, err := s.load()
 	if err != nil || st.EventOutbox == nil {
 		return st, err
