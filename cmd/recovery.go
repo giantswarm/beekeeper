@@ -241,6 +241,9 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	}
 	switch verdict {
 	case update.RollBack:
+		if reason == "no health heartbeat from the candidate's loop" {
+			reason += ": " + c.loopSilence(j.Candidate.Version, j.InstalledAt)
+		}
 		return c.rollback(ctx, j, reason)
 	case update.Promote:
 		return c.promote(ctx, j)

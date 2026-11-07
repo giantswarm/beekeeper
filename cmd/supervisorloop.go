@@ -673,6 +673,7 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // supervisorLoop is one run of the loop: what it said once.
 type supervisorLoop struct {
+	lifecycle *loopLifecycle
 	reviewDir string // explicit agents review checkout
 	mu        sync.Mutex
 	a         *app
@@ -845,7 +846,7 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 	return w.out.Write(p)
 }
 
-func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
+func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	// One loop per state: a second would take each action again.
@@ -858,6 +859,23 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: time.Now().UTC(), Phase: "startup"}
+	life.At = life.Started
+	_ = a.store.WriteFile(loopLifecycleFile, life)
+	defer func() {
+		crash := recover()
+		life.At, life.Exited, life.Failure = time.Now().UTC(), true, loopFailureKind(runErr)
+		if runErr != nil {
+			life.Code = Code(runErr)
+		}
+		if crash != nil {
+			life.Code, life.Failure = ExitError, "panic (see candidate service journal)"
+		}
+		_ = a.store.WriteFile(loopLifecycleFile, life)
+		if crash != nil {
+			panic(crash)
+		}
+	}()
 	// Observers read a PID marker instead of briefly contending for this lock.
 	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		return err
@@ -878,6 +896,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	l.once = once
+	l.lifecycle = life
 	defer func() {
 		cancel()
 		l.passActions.Wait()
@@ -902,6 +921,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		l.mu.Lock()
 		l.reexecFailed = false
 		l.mu.Unlock()
+		l.lifecyclePhase("begin pass")
 		if err := l.pass(ctx); err != nil {
 			if reexec, rerr := l.reexec(ctx); rerr != nil {
 				return rerr
@@ -913,6 +933,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 			}
 			return err
 		}
+		l.lifecyclePhase("between passes")
 		if _, rerr := l.reexec(ctx); rerr != nil {
 			return rerr
 		}
@@ -1190,6 +1211,7 @@ func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
 
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
+	l.lifecyclePhase("reload configuration")
 	l.reloadConfig()
 	a := l.a.snapshotAtNow()
 	l.mu.Lock()
@@ -1201,6 +1223,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("watch conditions")
 		if err := l.watchConditions(ctx); err != nil {
 			l.holdStarts(true)
 			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
@@ -1209,6 +1232,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("watch alerts")
 		if err := l.watchAlerts(ctx); err != nil {
 			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
 		} else {
@@ -1219,6 +1243,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	l.lifecyclePhase("read state and dispatch timers")
 	// Wall-clock timer jobs keep running while GitHub observations are
 	// held. Board commands they invoke still share the query admission gate.
 	if !l.dryRun {
@@ -1252,6 +1277,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.clearSaid("graphql allowance")
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("tidy and sync claims")
 		l.tidy(ctx, st)
 		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
@@ -1261,6 +1287,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
+	l.lifecyclePhase("recover quota and parks")
 	if err := l.recoverQuota(ctx, st); err != nil {
 		return err
 	}
@@ -1282,6 +1309,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	l.lifecyclePhase("observe workers and pull requests")
 	own := a.cfg.Supervisor.Ownership
 	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
@@ -1323,6 +1351,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Notes = append(in.Notes, superloop.Note{ID: n.ID, For: n.For, By: by, Text: n.Text})
 		}
 	}
+	l.lifecyclePhase("read event history")
 	taken, err := a.store.Follow("supervisor-loop-taken", func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
 	if err != nil {
 		return err
@@ -1574,6 +1603,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			delete(claims, key)
 		}
 	}
+	l.lifecyclePhase("observe releases and plan")
 	postMerge := superloop.ReleaseWorkers(in)
 	l.mu.Lock()
 	l.postMerge = postMerge
@@ -1628,6 +1658,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
+	l.lifecyclePhase("plan and record heartbeat")
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if !l.dryRun {
 		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
