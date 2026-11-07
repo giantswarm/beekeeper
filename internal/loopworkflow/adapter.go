@@ -32,6 +32,7 @@ const (
 	loginField   = "login"
 	ghAPI        = "api"
 	ghGraphQL    = "graphql"
+	stateField   = "state"
 )
 
 // Serve runs this process as the fixture's GitHub CLI or Git wrapper and returns
@@ -103,11 +104,11 @@ func serveGitHub() int {
 	case starts("search", "prs"):
 		return emit([]any{})
 	case starts("pr", "list"):
-		if p["state"] != "OPEN" {
+		if p[stateField] != "OPEN" {
 			return emit([]any{})
 		}
 		return emit([]any{map[string]any{
-			"number": 1, "url": p["url"], "state": p["state"],
+			"number": 1, "url": p["url"], stateField: p[stateField],
 			"createdAt": time.Now().UTC().Format(time.RFC3339), "isDraft": p["isDraft"],
 			"headRefName": p["headRefName"], "title": p["title"], "body": p["body"],
 		}})
@@ -182,7 +183,7 @@ func serveGitHub() int {
 		git(gitCommit, "-m", "fixture merge")
 		sha := git(gitRevParse, gitHead)
 		git(gitPush, originRemote, mainBranch)
-		p["state"] = "MERGED"
+		p[stateField] = "MERGED"
 		p["mergeCommit"] = map[string]any{"oid": sha}
 		raw, err = json.Marshal(p)
 		if err != nil {
