@@ -736,10 +736,11 @@ type supervisorLoop struct {
 	pulls map[string]loopPullObservation
 	// openPulls are the desk's open pull requests the sweep last listed,
 	// at openPullsAt.
-	openPulls   []string
-	openPullsAt time.Time
-	unmerged    map[string]loopUnmergedObservation
-	cfgSum      [32]byte
+	openPulls       []string
+	openPullsAt     time.Time
+	sweepIncomplete bool
+	unmerged        map[string]loopUnmergedObservation
+	cfgSum          [32]byte
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -1324,7 +1325,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		in.Filed = l.filedIssues(st)
 	}
 	for _, ag := range st.Agents {
-		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
+		w := superloop.Worker{Done: ag.Done, Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt, w.Waits = loopParkOn(ag.Park), ag.Park.At, ag.Park.Waits
 			// A verified park requests review even while retirement waits for
@@ -1334,6 +1335,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
+		for _, record := range st.Records {
+			if record.Session.Is(ag.Party) && record.Ended.IsZero() {
+				w.Issues = append(w.Issues, record.Issue)
+			}
+		}
 		if !ag.Done {
 			w.Mentions = namedRefs(ag.Task, a.cfg.Board.Owner)
 		}
@@ -1469,6 +1475,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
+	for _, d := range st.Deliveries {
+		if d.Active() {
+			for _, ref := range d.Pulls {
+				if !slices.Contains(tracked, ref) {
+					tracked = append(tracked, ref)
+				}
+			}
+		}
+	}
 	sortTrackedPulls(in, tracked)
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
@@ -1660,6 +1675,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	l.lifecyclePhase("plan and record heartbeat")
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if !l.dryRun {
+		if err := l.observeDeliveries(ctx, in, unread); err != nil {
+			return err
+		}
+	}
 	if !l.dryRun {
 		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
 			return err
@@ -4396,11 +4416,10 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	return nil
 }
 
-// loopReleaseContains fails closed: only this program's repository is installed
-// by self-update, and GitHub must prove the merge is an ancestor of its tag.
+// loopReleaseContains proves the actual merge is an ancestor of the tag using REST.
 var loopReleaseContains = func(ctx context.Context, ref, commit, version string) (bool, error) {
 	r, ok := parseRef(ref)
-	if !ok || r.Repo != "giantswarm/beekeeper" || commit == "" {
+	if !ok || commit == "" {
 		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)

@@ -743,8 +743,10 @@ func claimNext(store state.Store, cands []board.Candidate, sc pickScope, waits s
 		r := state.Record{Session: servedBy(st, me), Issue: res.Pick.Ref, Waits: strings.Join(strings.Fields(waits), " "), By: me, At: time.Now().UTC()}
 		st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(me) })
 		st.Records = append(st.Records, r)
+		prev := slices.Clone(st.Deliveries)
+		st.StartDelivery(r.Issue, r.Session.Name, r.Waits, r.At)
 		res.Claimed = true
-		return []state.Event{about(event(me, verbBoardClaim, "%s: %s (%s)", r.Session.Name, recordText(r), res.Pick.Why()), r.Issue)}, nil
+		return append(state.DeliveryEvents(prev, st.Deliveries, me), about(event(me, verbBoardClaim, "%s: %s (%s)", r.Session.Name, recordText(r), res.Pick.Why()), r.Issue)), nil
 	})
 	return res, err
 }

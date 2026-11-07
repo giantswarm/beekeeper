@@ -101,12 +101,13 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model, Effort: sp.effort}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
 		reg, err = a.recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q%s", sp.name, id, model, dir, credentialsText(creds), reg.task, effortText(sp.effort))}, nil
+		return append(state.DeliveryEvents(prevDeliveries, st.Deliveries, by), []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q%s", sp.name, id, model, dir, credentialsText(creds), reg.task, effortText(sp.effort))}...), nil
 	})
 	if err != nil {
 		return err

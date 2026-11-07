@@ -547,3 +547,7 @@ notify:                     # what watch --notify sends to the desktop; the mach
   quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
   urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor and page-unowned default to critical
   repeat: 30m               # a lasting condition (budget) notifies again after this
+
+# Observe deliveries; 0 leaves the limit off. This setting does not enforce starts.
+delivery:
+  wipLimit: 0

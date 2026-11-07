@@ -329,6 +329,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
 		if reg, err = a.recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
@@ -343,7 +344,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 				evs = append(evs, event(by, "lease.handover", "%s: %s from session %s to %s", sp.name, strings.Join(handed, ", "), sp.replaces.Session, id))
 			}
 		}
-		return evs, nil
+		return append(state.DeliveryEvents(prevDeliveries, st.Deliveries, by), evs...), nil
 	})
 	if err != nil {
 		return startedAgent{}, fmt.Errorf("%s runs as background session %s but is not recorded: %w (claude stop %s ends it)", sp.name, id, err, id[:8])
