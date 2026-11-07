@@ -816,6 +816,12 @@ func codexUnreadable(u config.Usage, err error) bool {
 	return err != nil && slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(err)
 }
 
+// codexQuotaStop reports whether err is the built-in Codex reader saying the
+// quota is exhausted: the one Codex outcome that holds starts.
+func codexQuotaStop(u config.Usage, err error) bool {
+	return slices.Equal(u.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(err)
+}
+
 // keptReadingFallback labels a last good reading kept over the read error msg.
 func keptReadingFallback(u config.Usage, msg string) string {
 	if !codexUnreadable(u, errors.New(msg)) {
@@ -1104,7 +1110,7 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			subDerivedCeiling += p.Ceiling
 			continue
 		}
-		if providerErrs[name] != "" && slices.Equal(p.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(errors.New(providerErrs[name])) {
+		if providerErrs[name] != "" && codexQuotaStop(p.Usage, errors.New(providerErrs[name])) {
 			errs = append(errs, name+": "+providerErrs[name])
 			continue
 		}
@@ -1198,7 +1204,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	if err != nil {
 		// An explicit Codex spend/rate-limit stop is authoritative: never mask
 		// it with an older reading. Any other failure keeps the last good one.
-		if haveCached && !(slices.Equal(u.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(err)) &&
+		if haveCached && !codexQuotaStop(u, err) &&
 			validateReadingAt(cached, u, now) == nil {
 			cached.Fallback = keptReadingFallback(u, err.Error())
 			applyQuotaForUsageFile(a.store, file, &cached, now)
@@ -1563,7 +1569,7 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 	w.mu.Lock()
 	uerr := w.usageErr
 	w.mu.Unlock()
-	if uerr != "" && slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(errors.New(uerr)) {
+	if uerr != "" && codexQuotaStop(k.Usage, errors.New(uerr)) {
 		return errorUsageView(k, errors.New(uerr))
 	}
 	var r usageReading
@@ -1704,7 +1710,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.mu.Unlock()
 			if uerr != "" {
 				readings[name] = providerReadingResult{err: errors.New(uerr)}
-				if slices.Equal(p.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(errors.New(uerr)) {
+				if codexQuotaStop(p.Usage, errors.New(uerr)) {
 					continue
 				}
 			}
