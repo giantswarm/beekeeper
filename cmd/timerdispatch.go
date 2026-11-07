@@ -102,7 +102,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 			}
 			// Keep earlier actions alive and retry at the next tick. A busy
 			// writer is not a reason to cancel every dispatched occurrence.
-			fmt.Fprintf(a.out, "TIMER pass skipped, retrying next tick: %v\n", err)
+			_, _ = fmt.Fprintf(a.out, "TIMER pass skipped, retrying next tick: %v\n", err)
 		}
 		if once {
 			d.batches.Wait()
