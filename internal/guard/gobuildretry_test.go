@@ -9,15 +9,16 @@ import (
 )
 
 func TestRunGoBuildRetry(t *testing.T) {
+	const killedExitCode = "137"
 	for _, tt := range []struct {
 		name, command, first, second string
 		wantRC, attempts             int
 	}{
-		{"killed build recovers", ClassBuild, "137", "0", 0, 2},
-		{"retry is bounded", ClassBuild, "137", "137", 137, 2},
+		{"killed build recovers", ClassBuild, killedExitCode, "0", 0, 2},
+		{"retry is bounded", ClassBuild, killedExitCode, killedExitCode, 137, 2},
 		{"ordinary failure", "build", "1", "0", 1, 1},
 		{"successful build", "build", "0", "0", 0, 1},
-		{"other go command", testCommand, "137", "0", 137, 1},
+		{"other go command", testCommand, killedExitCode, "0", 137, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &fakeCapper{}
