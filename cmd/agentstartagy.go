@@ -53,8 +53,10 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
-	if err := refuseUnguardedAgy(); err != nil {
-		return err
+	if a.cfg.Hooks.GuardsEnabled() {
+		if err := refuseUnguardedAgy(); err != nil {
+			return err
+		}
 	}
 	model, err := agyModel(sp.model, func() ([]string, error) { return agyModels(ctx, bin) })
 	if err != nil {

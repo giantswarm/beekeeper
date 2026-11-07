@@ -3990,3 +3990,20 @@ through their existing GitHub identity. The [security-scans rule and App setup](
 describe the read-only permission and how to handle inaccessible alerts.
 
 See [docs/development.md](docs/development.md).
+
+### Temporarily disabling hook guards
+
+Set `hooks.guards: false` to let `hook pretooluse` pass tools unchanged in
+Claude, agy and Codex, including calls normally refused or rewritten for the
+merge gate, build slots, secret reads, allowed organizations or guide roles.
+Unset or `true` keeps enforcement enabled. Configuration errors retain recovery
+mode; they do not silently disable guards.
+
+Instruction relay, result secret redaction, sessionstart and worktree placement
+continue independently. `beekeeper fatal` marks installed harness guard checks
+disabled rather than opening outages or repairs. `beekeeper capacity` and
+`beekeeper guide status` display `guards: off`.
+
+The disk start floor uses `watch.diskMinMiB`: set it to `-1` to disable LOW DISK
+and its start refusal; zero retains the default 5% floor, and a positive value
+sets the floor in MiB. Other capacity thresholds keep their existing keys.
