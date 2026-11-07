@@ -108,7 +108,7 @@ func TestWatchClaudeLoginCredentialStep(t *testing.T) {
 	if !strings.Contains(out.String(), "logged in; access token expires") {
 		t.Fatalf("healthy login absent: %s", out)
 	}
-	writeLogin(t, path, w.now.Add(30*time.Minute), true)
+	writeLogin(t, path, w.now.Add(30*time.Minute), false)
 	w.claudeLogin()
 	w.claudeLogin()
 	st, err := w.store.Read()
@@ -163,4 +163,45 @@ func TestExpiredClaudeLoginStopsLaunches(t *testing.T) {
 	assert(w.resumeBackground(context.Background(), wakeTarget{}, "task"))
 	assert(w.browse(context.Background(), "task", "", "", time.Minute, "", nil, nil))
 	assert(w.launchReport("unused", "unused", "unused", "task"))
+}
+
+func TestClaudeLoginUTCExpiryInCET(t *testing.T) {
+	path := loginFixture(t)
+	cet := time.FixedZone("CET", 60*60)
+	now := time.Date(2026, 11, 7, 13, 17, 0, 0, cet)
+	expiry := time.Date(2026, 11, 7, 13, 14, 57, 0, time.UTC)
+	writeLogin(t, path, expiry, true)
+	v := readClaudeLogin(now)
+	if v.State != claudeLoginExpiring || v.needsLogin() {
+		t.Fatalf("refreshable token with 57 minutes remaining needs no manual login: %+v", v)
+	}
+	if utc := readClaudeLogin(now.UTC()); utc != v {
+		t.Fatalf("timezone changed login state: local=%+v UTC=%+v", v, utc)
+	}
+}
+
+func TestRefreshableClaudeLoginDoesNotFilePersonNote(t *testing.T) {
+	path := loginFixture(t)
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.now = time.Now().UTC().Truncate(time.Millisecond)
+	w.cfg.Guide.Person = "guide-person"
+	for _, offset := range []time.Duration{30 * time.Minute, -time.Minute} {
+		writeLogin(t, path, w.now.Add(offset), true)
+		w.claudeLogin()
+		w.claudeLogin()
+		st, err := w.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Notes) != 0 {
+			t.Fatalf("routine CLI refresh filed person note: %+v", st.Notes)
+		}
+		// Existing login notes use this command as their completion probe.
+		if err := w.claudeLoginCmd().RunE(nil, nil); err != nil {
+			t.Fatalf("refreshable login must clear manual step: %v", err)
+		}
+	}
+	if strings.Contains(out.String(), "browser lease") || !strings.Contains(out.String(), "CLI refresh available") {
+		t.Fatalf("refresh status must stay visible without requesting sign-in: %s", out)
+	}
 }
