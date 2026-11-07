@@ -315,7 +315,7 @@ func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act su
 		l.stageDetail[repairStage] = reason
 		l.mu.Unlock()
 	}
-	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
+	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err
 	}
