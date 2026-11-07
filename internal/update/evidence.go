@@ -105,6 +105,15 @@ var evidenceValidator = func() selfupdate.Validator { return selfupdatecosign.Ne
 //go:embed sandbox-proof-required.txt
 var sandboxProofPolicy string
 
+// SetSandboxProofRequiredForTest selects the provisioned policy for integration
+// tests of containment, returning a restore function. Production uses only the
+// embedded policy; this does not add a runtime configuration override.
+func SetSandboxProofRequiredForTest() func() {
+	previous := sandboxProofPolicy
+	sandboxProofPolicy = "true"
+	return func() { sandboxProofPolicy = previous }
+}
+
 var checkEvidence = checkSandboxEvidence
 
 func checkSandboxEvidence(ctx context.Context, source selfupdate.Source, rel *selfupdate.Release, staged string) error {

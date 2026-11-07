@@ -269,6 +269,9 @@ func TestRecoveryRestoresABrokenCandidate(t *testing.T) {
 // execution-host update routes while preserving the installed executable bytes,
 // and that recorded fixture evidence cannot grant release eligibility.
 func TestCanaryContainmentBlocksCoordinatorAndHostUpdate(t *testing.T) {
+	// This regression exercises future provisioned enforcement. The temporary
+	// default-off policy is covered across all install routes in update's tests.
+	t.Cleanup(update.SetSandboxProofRequiredForTest())
 	good, broken := versioned(t, goodRelease, ""), versioned(t, nextRelease, parserOverlay(t))
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	defer cancel()
