@@ -10,6 +10,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const (
+	stallNoRoom = "no room for the review"
+	stallHead   = "0123abcd"
+)
+
 // failingStartRig is the refill rig whose board always offers an item and
 // whose agents start fails while fail is set, counting the board reads.
 func failingStartRig(t *testing.T, doneN int) (*loopRig, *supervisorLoop, *int, *bool) {
@@ -151,7 +156,7 @@ func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
 	}
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
-			return "no room", ExitRefused
+			return stallNoRoom, ExitRefused
 		}
 		return "", 0
 	}
@@ -212,7 +217,7 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			act := superloop.Action{Kind: kind, Key: kind + " o/r#10@abc", Ref: "o/r#10", URL: "https://github.com/o/r/pull/10", Head: "abc"}
+			act := superloop.Action{Kind: kind, Key: kind + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: "https://github.com/o/r/pull/10", Head: stallHead}
 			in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
 			failures := map[string]loopFailure{act.Key: {Message: "specific command failure"}}
 			check := func(input superloop.Input, actions []superloop.Action) {
