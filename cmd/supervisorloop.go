@@ -702,6 +702,13 @@ type supervisorLoop struct {
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
+	// stall is the refill's flow: when it last ran and since when a start
+	// waits with room (checkStall alarms on it).
+	stall     startStall
+	flowWaits map[string]flowWait
+	// reviewWaits are the review requests this loop planned and has not
+	// started, by pull request (checkStall alarms on the oldest).
+	reviewWaits map[string]reviewWait
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// inFlight tracks actions and ordered streams across passes.
@@ -1689,6 +1696,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
 		}
+		if err := l.checkFlowWaits(in, actions, failures); err != nil {
+			return err
+		}
+		if err := l.checkStall(); err != nil {
+			return err
+		}
 		if err := l.checkUnmergedBacklogs(ctx, in); err != nil {
 			return err
 		}
@@ -1858,9 +1871,12 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
+	l.reviewsPlanned(reviewActs)
 	for _, act := range reviewActs {
 		launch("review:"+act.Ref, func() error {
-			return l.execAction(ctx, st, claims, failures, act)
+			err := l.execAction(ctx, st, claims, failures, act)
+			l.reviewTried(act, failures)
+			return err
 		})
 	}
 
@@ -1905,6 +1921,14 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		for _, act := range nextActs {
 			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
 				return err
+			}
+			// Every next action asks for the same thing, the board's next
+			// item: once one did not settle (its start waits, failed or
+			// backs off), the rest cannot either this pass. Walking the
+			// board for each of them kept a backlog of done events from
+			// ever reaching the refill (https://github.com/giantswarm/beekeeper/issues/3388).
+			if !l.isCompleted(act.Key) {
+				break
 			}
 		}
 		return l.fill(ctx, st, claims, taken)
@@ -2082,6 +2106,12 @@ func (l *supervisorLoop) rememberAction(act superloop.Action) {
 	}
 	l.completed[act.Key] = true
 	l.mu.Unlock()
+}
+
+func (l *supervisorLoop) isCompleted(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.completed[key]
 }
 
 // loopClaim is a claim read back: when, and what its side effect names
@@ -3924,6 +3954,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 					return "", saveErr
 				}
+				l.stallClear()
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {
@@ -3949,6 +3980,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.a.monitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
+	l.stallClear()
 	if place.remote() {
 		return fmt.Sprintf("%q started on %s on %s at %s", name, next.URL, place.Selector, place.Ref), nil
 	}
