@@ -99,7 +99,7 @@ jobs:
 
   publish-canary-evidence:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.42
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.43
       entrypoint: /bin/bash
     resource_class: medium
     environment:
@@ -124,9 +124,7 @@ jobs:
     - architect/cosign-sign-verify:
         kind: blob
         refs_file: /tmp/.cosign_canary_blobs
-    - architect/generate-github-token:
-        env_Token_Key: GITHUB_TOKEN
-        permissions: '{"contents":"write"}'
+    - architect/generate-github-token
     - run:
         name: Upload signed canary evidence to GitHub Release
         command: |
