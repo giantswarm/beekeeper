@@ -1452,6 +1452,28 @@ func TestOverlapClosingIssuesMutual(t *testing.T) {
 	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != "issue worker A" || act.Head != head1 {
 		t.Fatalf("mutual issue workers: %+v", act)
 	}
+	if act.OwnerIssue != "o/r#101" || act.BlockIssue != "o/r#102" {
+		t.Fatalf("dependency must use closing issues: %+v", act)
+	}
+	// Keep the mutual wait explicit while changing closing-issue metadata.
+	in.Workers[0].Serves, in.Workers[1].Serves = overlapPRA, overlapPRB
+	for _, closes := range [][]string{nil, {"o/r#101"}} {
+		p := in.Pulls[overlapPRB]
+		p.Closes = closes
+		in.Pulls[overlapPRB] = p
+		a := only(t, Plan(in), KindOwner)
+		if a.OwnerIssue != "" || a.BlockIssue != "" {
+			t.Fatalf("issue-less or self dependency must be skipped: %+v", a)
+		}
+		if a.Ref != act.Ref || a.Agent != act.Agent {
+			t.Fatalf("skipping dependency changed ownership: %+v", a)
+		}
+	}
+	p := in.Pulls[overlapPRB]
+	p.Closes = []string{"o/r#102"}
+	in.Pulls[overlapPRB] = p
+	in.Workers[0].Serves, in.Workers[1].Serves = "o/r#101", "o/r#102"
+
 	// An active issue worker is the live PR owner, even with a different name.
 	in.Workers[0].ParkedOn = ""
 	if got := Plan(in); len(got) != 0 {
