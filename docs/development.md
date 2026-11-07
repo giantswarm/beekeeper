@@ -1170,7 +1170,8 @@ still running. The host journal retains the last renewal failure's time,
 elapsed duration, stage, fixed failure category, last sequence and failure
 count. It retains no callback error text, SSH output, control keys or routes;
 a successful retry does not erase the earlier failure. Failure diagnostics
-use the attempt's existing deadline and cannot prolong expired authority.
+make one nonblocking journal-lock attempt even when the callback context has
+expired; a busy journal may drop the diagnostic rather than delay expiry.
 
 For the live proof, park a remote worker, retain its execution/generation and
 thread identities, exercise concurrent desk reads and updates for longer than

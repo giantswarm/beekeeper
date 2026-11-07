@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 )
 
@@ -112,9 +113,7 @@ func (s *Server) renewLease(ctx context.Context, ref Ref) (result *LeaseGrant, r
 		case errors.As(resultErr, &unreachable):
 			kind = "unreachable"
 		}
-		diagnosticCtx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		_ = s.update(diagnosticCtx, ref, func(j *Journal) error {
+		_ = s.recordLeaseFailure(ref, func(j *Journal) error {
 			failure := &LeaseRenewalFailure{At: started.UTC(), Duration: time.Since(started), Stage: stage, Kind: kind, Count: 1}
 			if j.Lease != nil {
 				failure.Sequence = j.Lease.Sequence
@@ -165,6 +164,29 @@ func (s *Server) renewLease(ctx context.Context, ref Ref) (result *LeaseGrant, r
 		return nil
 	})
 	return &grant, err
+}
+
+// recordLeaseFailure makes one nonblocking lock attempt, independently of the
+// failed request's context. An exhausted callback deadline must not suppress its
+// own diagnostic, and diagnostics must never queue ahead of lease expiry.
+func (s *Server) recordLeaseFailure(ref Ref, record func(*Journal) error) error {
+	p, err := s.journalPath(ref)
+	if err != nil {
+		return err
+	}
+	l := flock.New(p + ".lock")
+	if ok, err := l.TryLock(); err != nil || !ok {
+		return errors.New("execution journal is busy")
+	}
+	defer func() { _ = l.Unlock() }()
+	j, err := s.Read(ref)
+	if err != nil {
+		return err
+	}
+	if err := record(&j); err != nil {
+		return err
+	}
+	return atomicFile(p, mustJSON(j))
 }
 
 // maintainLease runs only inside the owned runner. Expiry durably records stop
