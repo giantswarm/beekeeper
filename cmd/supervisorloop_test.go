@@ -30,16 +30,18 @@ import (
 )
 
 const (
-	loopOverlapSession = "overlap-session"
-	loopClosingIssue   = "o/r#70"
-	loopUnblock        = "unblock"
-	loopPR             = "o/r#7"
-	loopURL            = "https://github.com/o/r/pull/7"
-	loopHead           = "1111111111111111111111111111111111111111"
-	loopFixed          = "2222222222222222222222222222222222222222"
-	loopWorker         = "worker one"
-	loopSecondWorker   = "worker two"
-	loopPerson         = "pat"
+	loopOverlapWait        = "overlapping PR"
+	loopWaitingIssueWorker = "waiting issue worker"
+	loopOverlapSession     = "overlap-session"
+	loopClosingIssue       = "o/r#70"
+	loopUnblock            = "unblock"
+	loopPR                 = "o/r#7"
+	loopURL                = "https://github.com/o/r/pull/7"
+	loopHead               = "1111111111111111111111111111111111111111"
+	loopFixed              = "2222222222222222222222222222222222222222"
+	loopWorker             = "worker one"
+	loopSecondWorker       = "worker two"
+	loopPerson             = "pat"
 	// loopLocal is a self-hosted provider.
 	loopLocal = "local"
 	// loopQwen is a self-hosted model, loopPostInstall a post-install
@@ -3517,7 +3519,7 @@ func TestLoopOverlapWithoutClosingIssueAssignsOwner(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: loopWaitingIssueWorker, Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: loopOverlapWait}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -3554,7 +3556,7 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 			r.pull.Closes = []string{loopClosingIssue}
 			r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: loopWaitingIssueWorker, Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: loopOverlapWait}}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -3694,7 +3696,7 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 	r.sshLoopHost(t, true)
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: loopWaitingIssueWorker, Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: loopOverlapWait}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
