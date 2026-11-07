@@ -24,6 +24,10 @@ func TestDecideBoundaries(t *testing.T) {
 		{"three failed probes roll back", Observed{ProbeFailures: ProbeFailures}, Signals{}, RollBack},
 		{"a silent loop within its grace waits", Observed{Elapsed: HeartbeatGrace - time.Second}, silent, Wait},
 		{"a silent loop at its grace rolls back", Observed{Elapsed: HeartbeatGrace}, silent, RollBack},
+		{"a loop not yet handed over waits past the grace", Observed{Elapsed: HeartbeatGrace}, Signals{HeartbeatRequired: true, LoopPending: true}, Wait},
+		{"a loop never handed over rolls back at the window", Observed{Elapsed: ProbationWindow}, Signals{HeartbeatRequired: true, LoopPending: true}, RollBack},
+		{"a late loop within its own grace waits", Observed{Elapsed: HeartbeatGrace + 5*time.Minute, LoopStarted: true, LoopStartedAt: 8 * time.Minute}, silent, Wait},
+		{"a late loop at its own grace rolls back", Observed{Elapsed: HeartbeatGrace + 8*time.Minute, LoopStarted: true, LoopStartedAt: 8 * time.Minute}, silent, RollBack},
 		{"a host owes no heartbeat", Observed{Elapsed: HeartbeatGrace, ProbePassed: true}, Signals{}, Wait},
 		{"one second short of the window waits", Observed{Elapsed: ProbationWindow - time.Second, ProbePassed: true}, loop, Wait},
 		{"the window end promotes", Observed{Elapsed: ProbationWindow, ProbePassed: true}, loop, Promote},
@@ -36,6 +40,26 @@ func TestDecideBoundaries(t *testing.T) {
 				t.Fatalf("%s (%s), want %s", got, why, tc.want)
 			}
 		})
+	}
+}
+
+func TestNoteLoopKeepsTheFirstStartInObservedTime(t *testing.T) {
+	o := Observed{Elapsed: 9 * time.Minute}
+	o.NoteLoop(Signals{})
+	if o.LoopStarted {
+		t.Fatal("noted a loop that did not start")
+	}
+	// A start longer ago than observed time (a machine that slept) counts from 0.
+	o.NoteLoop(Signals{LoopStarted: true, LoopStartedAgo: time.Hour})
+	if !o.LoopStarted || o.LoopStartedAt != 0 {
+		t.Fatalf("%+v", o)
+	}
+	o = Observed{Elapsed: 9 * time.Minute}
+	o.NoteLoop(Signals{LoopStarted: true, LoopStartedAgo: time.Minute})
+	o.Elapsed += time.Minute
+	o.NoteLoop(Signals{LoopStarted: true})
+	if o.LoopStartedAt != 8*time.Minute {
+		t.Fatalf("start moved: %+v", o)
 	}
 }
 

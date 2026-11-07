@@ -15,7 +15,8 @@ const (
 	// restores the recovery target at once, so a broken release is gone within it.
 	ProbationWindow = 30 * time.Minute
 	// HeartbeatGrace is how long a candidate's loop may stay silent before the
-	// silence counts as a failure: a replaced loop re-executes at a quiet pass.
+	// silence counts as a failure. It counts from the candidate loop's start: a
+	// replaced loop re-executes only at a quiet pass, which can come late.
 	HeartbeatGrace = 10 * time.Minute
 	// ProbeFailures is how many consecutive failed probes fail a candidate.
 	ProbeFailures = 3
@@ -54,6 +55,20 @@ type Observed struct {
 	Restarted bool `json:"restarted,omitempty"`
 	// RollbackFailures counts the failed attempts at a rollback.
 	RollbackFailures int `json:"rollbackFailures,omitempty"`
+	// LoopStarted says the candidate's own loop was seen running; LoopStartedAt
+	// is the Elapsed at which it started, the start of its heartbeat grace.
+	LoopStarted   bool          `json:"loopStarted,omitempty"`
+	LoopStartedAt time.Duration `json:"loopStartedAt,omitempty"`
+}
+
+// NoteLoop records when the candidate's loop started, once, in observed time:
+// at most the time observed so far, so a machine that slept gains nothing.
+func (o *Observed) NoteLoop(s Signals) {
+	if o.LoopStarted || !s.LoopStarted {
+		return
+	}
+	ago := min(max(s.LoopStartedAgo, 0), o.Elapsed)
+	o.LoopStarted, o.LoopStartedAt = true, o.Elapsed-ago
 }
 
 // Signals are what one evaluation sees of the installed candidate.
@@ -67,6 +82,11 @@ type Signals struct {
 	Unproven string
 	// HeartbeatRequired says this machine runs a loop that must show up.
 	HeartbeatRequired, Heartbeat bool
+	// LoopStarted says the candidate's own loop started after the install,
+	// LoopStartedAgo how long ago. LoopPending says it has not, while a loop of
+	// another version still runs and re-executes at its next quiet pass.
+	LoopStarted, LoopPending bool
+	LoopStartedAgo           time.Duration
 }
 
 // Verdicts of Decide.
@@ -89,7 +109,7 @@ func Decide(o Observed, s Signals) (verdict, reason string) {
 		return RollBack, s.Failure
 	case o.ProbeFailures >= ProbeFailures:
 		return RollBack, fmt.Sprintf("isolated workflow probe failed %d times", o.ProbeFailures)
-	case s.HeartbeatRequired && !s.Heartbeat && o.Elapsed >= HeartbeatGrace:
+	case s.HeartbeatRequired && !s.Heartbeat && heartbeatOverdue(o, s):
 		return RollBack, "no health heartbeat from the candidate's loop"
 	case o.Elapsed < ProbationWindow:
 		return Wait, "in probation"
@@ -99,6 +119,19 @@ func Decide(o Observed, s Signals) (verdict, reason string) {
 		return Wait, "no heartbeat yet"
 	}
 	return Promote, ""
+}
+
+// heartbeatOverdue says a silent candidate loop has used up its grace. A loop
+// that started has HeartbeatGrace from its start; one an older loop has yet to
+// hand over to has the probation window; one that never started, the grace.
+func heartbeatOverdue(o Observed, s Signals) bool {
+	switch {
+	case o.LoopStarted:
+		return o.Elapsed-o.LoopStartedAt >= HeartbeatGrace
+	case s.LoopPending:
+		return o.Elapsed >= ProbationWindow
+	}
+	return o.Elapsed >= HeartbeatGrace
 }
 
 // Inspect reads the journal of the installation at path, nil for none, without

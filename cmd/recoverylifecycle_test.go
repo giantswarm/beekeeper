@@ -25,7 +25,8 @@ func TestRecoveryReportsCandidateExitInsteadOfBareSilence(t *testing.T) {
 	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass, Exited: true, Code: 1, Failure: "state lock busy"}); err != nil {
 		t.Fatal(err)
 	}
-	for range int(update.HeartbeatGrace / time.Minute) {
+	// The candidate loop started at the first tick: its grace ends one tick later.
+	for range int(update.HeartbeatGrace/time.Minute) + 1 {
 		c.mustTick(t)
 	}
 	reason := journal(t, c).Observed.Reason
@@ -54,7 +55,7 @@ func TestRecoveryLifecycleNeverSubstitutesForHeartbeat(t *testing.T) {
 			if err := c.store.WriteFile(loopLifecycleFile, life); err != nil {
 				t.Fatal(err)
 			}
-			for range int(update.HeartbeatGrace / time.Minute) {
+			for range int(update.HeartbeatGrace/time.Minute) + 1 {
 				c.mustTick(t)
 			}
 			j := journal(t, c)
@@ -62,6 +63,67 @@ func TestRecoveryLifecycleNeverSubstitutesForHeartbeat(t *testing.T) {
 				t.Fatalf("lifecycle changed verdict or hid phase: %+v", j)
 			}
 		})
+	}
+}
+
+// The old release's loop re-executes into the candidate only at its next quiet
+// pass: the candidate's grace starts there, not at the install (issue 3345).
+func TestRecoveryGraceStartsWithALateCandidateLoop(t *testing.T) {
+	c, now := recoveryRig(t)
+	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: recoveryGoodVersion}); err != nil {
+		t.Fatal(err)
+	}
+	// The old loop still runs: this process stands in for it.
+	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	handover := int(update.HeartbeatGrace/time.Minute) + 5
+	for range handover {
+		c.mustTick(t)
+	}
+	if installed(t, c) != recoveryBadBytes {
+		t.Fatalf("rolled back before the candidate's loop ran: %s", journal(t, c).Observed.Reason)
+	}
+	// The candidate's loop starts now and stalls in its first pass.
+	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryBadVersion, PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	for range int(update.HeartbeatGrace / time.Minute) {
+		c.mustTick(t)
+		if installed(t, c) != recoveryBadBytes {
+			t.Fatalf("rolled back within the candidate loop's grace: %s", journal(t, c).Observed.Reason)
+		}
+	}
+	c.mustTick(t)
+	j := journal(t, c)
+	if !j.RolledBack() || !strings.Contains(j.Observed.Reason, "last reached "+lifecycleFirstPass) {
+		t.Fatalf("a stalled candidate loop outlived its grace: %+v", j.Observed)
+	}
+}
+
+// An old loop that never hands over still ends the probation: the candidate
+// is rolled back at the window, naming the loop that held on.
+func TestRecoveryRollsBackWhenTheOldLoopNeverHandsOver(t *testing.T) {
+	c, now := recoveryRig(t)
+	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: recoveryGoodVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	ticks := 0
+	for installed(t, c) == recoveryBadBytes && ticks < 2*int(update.ProbationWindow/time.Minute) {
+		c.mustTick(t)
+		ticks++
+	}
+	if ticks != int(update.ProbationWindow/time.Minute) {
+		t.Fatalf("rolled back after %d ticks", ticks)
+	}
+	if reason := journal(t, c).Observed.Reason; !strings.Contains(reason, "another-version loop is still alive") {
+		t.Fatalf("reason hid the old loop: %s", reason)
 	}
 }
 

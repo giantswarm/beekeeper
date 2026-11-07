@@ -235,7 +235,9 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	}
 	o.Elapsed += c.step
 	c.probe(ctx, j, &o)
-	verdict, reason := update.Decide(o, c.signals(ctx, j))
+	s := c.signals(ctx, j)
+	o.NoteLoop(s)
+	verdict, reason := update.Decide(o, s)
 	if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
 		return false, err
 	}
@@ -305,6 +307,15 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 		// which runs none, has only its probe.
 		s.HeartbeatRequired = j.InstalledAt.Sub(obs.At) < recoveryLoopRecent
 		s.Heartbeat = obs.Candidate == version && !obs.At.Before(j.InstalledAt) && now.Sub(obs.At) <= 3*throughputCadence
+	}
+	// The heartbeat's grace starts with the candidate's own loop: a loop of the
+	// old release re-executes only at its next quiet pass, minutes after the
+	// install. An unreadable lifecycle leaves the grace counting from install.
+	if life, otherAlive, err := c.candidateLoop(j.Candidate.Version, j.InstalledAt); err == nil {
+		if life != nil {
+			s.LoopStarted, s.LoopStartedAgo = true, now.Sub(life.Started)
+		}
+		s.LoopPending = otherAlive
 	}
 	evs, err := c.store.Events(0, func(e state.Event) bool { return e.Verb == throughputOutcomeVerb && !e.At.Before(j.InstalledAt) })
 	if err != nil {
