@@ -210,3 +210,31 @@ func TestApprovedConflictingHeadUsesMergeRepair(t *testing.T) {
 		t.Fatalf("wrong reviewed repair head: %+v", a)
 	}
 }
+
+// A reviewer reports its published fixes without waiting for CI. The original
+// worker's park is still on head1; failures on the reviewed head2 must wake it.
+func TestReviewerFixesReturnRedCIToWorkerAndMergeOnlyOnGreen(t *testing.T) {
+	in := Input{Workers: parkedOn(head1, t0), Pulls: pull(head1, true), Rounds: 1}
+	in.Taken = taken(t, t0, only(t, Plan(in), KindReview))
+	approval := Review{ID: "fixed", Head: head2, Verdict: Approved, At: t1}
+	in.Pulls = pull(head2, false, approval)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("pending CI must wait without another review: %+v", got)
+	}
+	p := in.Pulls[pr]
+	p.Red = []Check{{Name: lintCheck, URL: lintURL}}
+	in.Pulls[pr] = p
+	red := only(t, Plan(in), KindRed)
+	if red.Agent != worker || red.Head != head2 {
+		t.Fatalf("reviewer fix CI failure went to %+v", red)
+	}
+	in.Taken = append(in.Taken, taken(t, t1.Add(time.Minute), red)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("red failure was repeated: %+v", got)
+	}
+	in.Pulls = pull(head2, true, approval)
+	goMerge := only(t, Plan(in), KindGo)
+	if goMerge.Head != head2 {
+		t.Fatalf("merge go covered wrong head: %+v", goMerge)
+	}
+}
