@@ -52,6 +52,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			env := os.Environ()
 			var binary string
 			needsToken := true
+			targetBranch := executionGitHubTargetBranch(j)
 			if name == "github-cli" {
 				if len(args) == 0 {
 					return refused("worker gh requires a repository command")
@@ -95,7 +96,18 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				}
 				binary = s.Config.Tools[execution.ToolGitHub].Executable
 			} else {
-				targetBranch := executionGitHubTargetBranch(j)
+				if execution.GitHubGitVerb(args) == workerGitHubPush {
+					resolve := workerGitHubRequest{Repository: defaultRepo, Write: true, ResolvePush: true}
+					var target workerGitHubPushTarget
+					if err := execution.CoordinatorCall(ctx, co.Callback, string(j.Handle.Ref.Host), workerGitHubIssue, j.Handle.Ref, resolve, j.Request.ControlKey, &target, s.Callback); err != nil {
+						return err
+					}
+					if target.Branch == "" {
+						return refused("coordinator returned no push branch")
+					}
+					targetBranch = target.Branch
+					request.PushBranch = targetBranch
+				}
 				if err := execution.ValidateWorkerPush(args, targetBranch); err != nil {
 					return refused("%v", err)
 				}
@@ -179,7 +191,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				env = append(env, "GH_TOKEN="+token.Token)
 			}
 			if name == "github-git" && request.Write {
-				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, executionGitHubTargetBranch(j), env)
+				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, targetBranch, env)
 				if err != nil {
 					return err
 				}
@@ -194,10 +206,11 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 	return commands
 }
 
+type workerGitHubPushTarget struct {
+	Branch string `json:"branch"`
+}
+
 func executionGitHubTargetBranch(j execution.Journal) string {
-	if g := nonDefaultGitRef(j.Request.GitRef); g != "" {
-		return g
-	}
 	return execution.GitHubBranch(j.Handle.Ref)
 }
 

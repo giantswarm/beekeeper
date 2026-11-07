@@ -3981,3 +3981,89 @@ func TestReview3325ClosureFailureRetriesDurably(t *testing.T) {
 		t.Fatalf("issue %s was not closed on retry (closedIssues=%v, url=%s)", issueA, closedIssues, issueURL)
 	}
 }
+
+func TestReview3325MissingClosureStatesSurviveReplay(t *testing.T) {
+	for _, absorbed := range []bool{false, true} {
+		for _, partial := range []bool{false, true} {
+			t.Run(fmt.Sprintf("absorbed=%t/partial=%t", absorbed, partial), func(t *testing.T) {
+				r := newLoopRig(t)
+				const original = "o/r#401"
+				const inherited = "o/r#51"
+				noPost := ""
+				target := loopPR
+				if absorbed {
+					target = original
+				}
+				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.UpsertReviewPark(state.ReviewPark{On: target, Agent: loopWorker, Party: state.Party{Session: "retained-session"}, At: r.a.timeNow(), ReviewHead: loopHead, Serves: "o/r#50", PostMerge: &noPost})
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				r.pull.State = superloop.Merged
+				r.pull.Closes = []string{"o/r#50", inherited}
+				r.pulls[original] = superloop.Pull{Ref: original, State: superloop.Closed, Closes: []string{inherited}}
+				confirmed := false
+				refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+					states := map[github.PR]github.RefState{}
+					for _, ref := range refs {
+						if confirmed || (partial && ref.N == 50) {
+							states[ref] = github.RefState{Kind: github.RefIssue, State: github.Closed}
+						}
+					}
+					return states, nil
+				}
+				act := superloop.Action{Ref: target, URL: pullRefURL(target), Message: strings.ToLower(superloop.Merged)}
+				if absorbed {
+					act.Message = "absorbed by " + loopPR
+				}
+				// Re-open the durable store and construct a new loop before each replay;
+				// the merged-pull cache and the old roster cannot carry the obligation.
+				for attempt := 0; attempt < 2; attempt++ {
+					reopened, err := state.Open(r.a.store.Dir())
+					if err != nil {
+						t.Fatal(err)
+					}
+					r.a.store = reopened
+					l, err := r.a.newSupervisorLoop(false)
+					if err != nil {
+						t.Fatal(err)
+					}
+					st, err := reopened.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := l.endMerged(context.Background(), st, act); err == nil {
+						t.Fatal("missing closure state completed reconciliation")
+					}
+					st, err = reopened.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, ok := st.ReviewParkFor(target); !ok {
+						t.Fatal("lost durable retry ownership")
+					}
+				}
+				confirmed = true
+				l, err := r.a.newSupervisorLoop(false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st, err := r.a.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := l.endMerged(context.Background(), st, act); err != nil {
+					t.Fatalf("confirmed closure failed: %v", err)
+				}
+				st, err = r.a.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := st.ReviewParkFor(target); ok {
+					t.Fatal("confirmed closure still retained ownership")
+				}
+			})
+		}
+	}
+}

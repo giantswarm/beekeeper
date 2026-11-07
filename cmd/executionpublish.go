@@ -75,21 +75,8 @@ func executionBranch(ref execution.Ref) string {
 	return execution.GitHubBranch(ref)
 }
 
-func nonDefaultGitRef(raw string) string {
-	if g := strings.TrimSpace(raw); g != "" && g != workerGitHubHead && g != "main" && g != "master" && !publicationCommit(g) {
-		return g
-	}
-	return ""
-}
-
 func executionOwnedBranch(r *state.ExecutionRecord) string {
 	if r != nil {
-		if r.Published != nil && r.Published.Branch != "" {
-			return r.Published.Branch
-		}
-		if g := nonDefaultGitRef(r.Request.GitRef); g != "" {
-			return g
-		}
 		if r.Request.GitHub {
 			return execution.GitHubBranch(r.Handle.Ref)
 		}
@@ -114,6 +101,39 @@ func assignedExecutionReviewRound(st *state.State, ref execution.Ref) *state.Des
 	}
 	return nil
 }
+
+// executionReviewWriteBranch derives the write grant from the latest durable
+// review assignment and its concrete execution session. Source selection alone
+// never grants write access. Callers also require a live execution lease.
+func executionReviewWriteBranch(ctx context.Context, st *state.State, ref execution.Ref) (string, error) {
+	r, i := executionRecord(st, ref)
+	round := assignedExecutionReviewRound(st, ref)
+	if r == nil || r.Completed || r.Terminal() || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || i < 0 || round == nil || round.ID == "" || round.Round <= 0 || round.Result != nil || round.Head != r.Handle.Commit {
+		return "", refused("no active review branch assignment")
+	}
+	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
+		candidate := &st.DeskReviews[n]
+		if strings.EqualFold(candidate.Ref, round.Ref) {
+			if candidate.ID != round.ID {
+				return "", refused("review branch assignment was superseded")
+			}
+			break
+		}
+	}
+	pr, ok := parseRef(round.Ref)
+	if !ok || !strings.EqualFold(pr.Repo, r.Request.Repository) || !sameReviewSession(round.Reviewer, st.Starts[i].Party) {
+		return "", refused("review branch assignment identity mismatch")
+	}
+	pull, err := readLoopPull(ctx, round.Ref)
+	if err != nil {
+		return "", err
+	}
+	if pull.State != superloop.Open || !strings.EqualFold(pull.Ref, round.Ref) || pull.Branch == "" || pull.Branch != r.Request.GitRef {
+		return "", refused("review branch assignment no longer matches the open pull request")
+	}
+	return pull.Branch, nil
+}
+
 func publicationCommit(s string) bool {
 	b, err := hex.DecodeString(s)
 	return err == nil && len(b) == 20
@@ -552,9 +572,10 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if reason := outboundGuard(a.cfg.Outbound).PublicationRefusal(p.Title+"\n"+p.Body, messages+"\n"+added.String()); reason != "" {
 			return result, refused("%s", reason)
 		}
-		if reviewRound != nil && result.Branch == executionBranch(r.Handle.Ref) {
-			if revPull, pullErr := readLoopPull(ctx, reviewRound.Ref); pullErr == nil && revPull.Branch != "" {
-				result.Branch = revPull.Branch
+		if reviewRound != nil {
+			result.Branch, err = executionReviewWriteBranch(ctx, st, ref)
+			if err != nil {
+				return result, err
 			}
 		}
 		// Reconcile a lost create response by the exact owned branch. An existing
@@ -604,6 +625,12 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		}
 		if _, liveErr := checkAuthority(st, ref); liveErr != nil {
 			return result, liveErr
+		}
+		if reviewRound != nil {
+			branch, authErr := executionReviewWriteBranch(ctx, st, ref)
+			if authErr != nil || branch != result.Branch {
+				return result, refused("review branch authorization changed")
+			}
 		}
 		if _, err = publishGit(ctx, repo, "push", remote, p.Head+":refs/heads/"+result.Branch); err != nil {
 			return result, err

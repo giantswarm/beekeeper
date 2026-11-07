@@ -641,18 +641,18 @@ func TestReview3325RemoteReviewerAuthorBranchSelfFix(t *testing.T) {
 		Handle:  execution.Handle{Ref: use.Ref, Commit: use.Head},
 		Request: execution.StartRequest{GitHub: true, GitRef: authorBranch, Repository: use.Repository},
 	}
-	if got := executionOwnedBranch(rec); got != authorBranch {
-		t.Fatalf("executionOwnedBranch() = %q, want %q", got, authorBranch)
+	if got := executionOwnedBranch(rec); got != execution.GitHubBranch(use.Ref) {
+		t.Fatalf("executionOwnedBranch() = %q, want owned branch %q", got, execution.GitHubBranch(use.Ref))
 	}
 	j := execution.Journal{
 		Handle:  rec.Handle,
 		Request: rec.Request,
 	}
-	if got := executionGitHubTargetBranch(j); got != authorBranch {
-		t.Fatalf("executionGitHubTargetBranch() = %q, want %q", got, authorBranch)
+	if got := executionGitHubTargetBranch(j); got != execution.GitHubBranch(use.Ref) {
+		t.Fatalf("executionGitHubTargetBranch() = %q, want owned branch %q", got, execution.GitHubBranch(use.Ref))
 	}
-	if err := execution.ValidateWorkerPush([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + authorBranch}, executionGitHubTargetBranch(j)); err != nil {
-		t.Fatalf("ValidateWorkerPush on assigned PR branch failed: %v", err)
+	if err := execution.ValidateWorkerPush([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + authorBranch}, executionGitHubTargetBranch(j)); err == nil {
+		t.Fatalf("ValidateWorkerPush admitted unassigned source branch: %v", err)
 	}
 
 	reviewerRef := execution.Ref{Host: testReviewHost, Execution: "review-exec-7", Generation: 1}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const publicationClaudeVersion = "2.1.291"
@@ -1124,5 +1125,90 @@ func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
 	}
 	if rig.a.hasUnrecoveredPublication(rec) {
 		t.Fatal("expected publication to be marked recovered")
+	}
+}
+
+func TestReview3325AssignedReviewerPublication(t *testing.T) {
+	for _, scenario := range []string{"authorized", "unassigned", "expired", "unrelated repo", "wrong ref", "wrong session", "superseded", "finished", "new PR", "metadata"} {
+		t.Run(scenario, func(t *testing.T) {
+			rig := newPublicationRig(t)
+			const authorBranch = "fixture/author-repair"
+			if _, err := publishGit(context.Background(), rig.workspace, "push", rig.remote, rig.base+":refs/heads/"+authorBranch); err != nil {
+				t.Fatal(err)
+			}
+			head := rig.commit(t, "repair.txt", "repair\n")
+			p := rig.publication(t, head)
+			p.Title, p.Body = "", ""
+			rig.created = true
+			originalRead := readLoopPull
+			t.Cleanup(func() { readLoopPull = originalRead })
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: "giantswarm/beekeeper#42", State: superloop.Open, Branch: authorBranch, Head: rig.base}, nil
+			}
+			if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				start := &st.Starts[0]
+				start.Execution.Request.GitRef = authorBranch
+				round := state.DeskReview{ID: "repair-assignment", Ref: "giantswarm/beekeeper#42", Head: rig.base, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()}
+				switch scenario {
+				case "expired":
+					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
+				case "unrelated repo":
+					round.Ref = "other/repo#42"
+				case "wrong ref":
+					start.Execution.Request.GitRef = "fixture/unrelated"
+				case "wrong session":
+					round.Reviewer = state.Party{Session: "different-session"}
+				case "finished":
+					round.Result = &state.DeskReviewResult{}
+				case "new PR":
+					rig.created = false
+				case "metadata":
+					p.Title = "fix: metadata change"
+				}
+				if scenario != "unassigned" {
+					st.DeskReviews = append(st.DeskReviews, round)
+				}
+				if scenario == "superseded" {
+					next := round
+					next.ID = "next-assignment"
+					next.Round++
+					next.Reviewer = state.Party{Session: "next-session"}
+					st.DeskReviews = append(st.DeskReviews, next)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			st, err := rig.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p)
+			if scenario == "authorized" {
+				if err != nil || result.Branch != authorBranch || result.URL != publicationFixturePRURL {
+					t.Fatalf("authorized publication failed: %+v %v", result, err)
+				}
+			} else if scenario == "unassigned" || scenario == "wrong session" {
+				if err == nil && result.Branch == authorBranch {
+					t.Fatal("unassigned execution wrote author branch")
+				}
+			} else if err == nil {
+				t.Fatalf("invalid assignment %s admitted: %+v", scenario, result)
+			}
+			got, readErr := publishGit(context.Background(), rig.workspace, "ls-remote", rig.remote, "refs/heads/"+authorBranch)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			want := rig.base
+			if scenario == "authorized" {
+				want = head
+			}
+			if !strings.HasPrefix(got, want+"\t") {
+				t.Fatalf("author branch changed without authorization: %q", got)
+			}
+			if rig.creates != 0 || len(rig.edits) != 0 {
+				t.Fatal("reviewer created or edited metadata")
+			}
+		})
 	}
 }

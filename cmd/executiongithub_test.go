@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const (
@@ -577,5 +578,79 @@ func TestWorkerGitHubRefreshPersistenceFailureExplainsRecovery(t *testing.T) {
 	_, err := a.refreshWorkerGitHubToken(context.Background(), "")
 	if err == nil || !strings.Contains(err.Error(), "authorization is lost") || !strings.Contains(err.Error(), "beekeeper agents hosts github-login") {
 		t.Fatalf("missing persistence recovery instructions: %v", err)
+	}
+}
+
+func TestReview3325DirectPushAssignment(t *testing.T) {
+	for _, scenario := range []string{"authorized", "source only", "default trunk", "expired", "wrong repo", "wrong branch", "wrong session", "superseded", "completed"} {
+		t.Run(scenario, func(t *testing.T) {
+			a, r := workerGitHubTestApp(t)
+			const branch = "fixture/foreign-source"
+			originalRead := readLoopPull
+			t.Cleanup(func() { readLoopPull = originalRead })
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: r.Repository + "#7", State: superloop.Open, Branch: branch}, nil
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				start := &st.Starts[0]
+				start.Execution.Request.GitRef = branch
+				start.Execution.Handle.Commit = strings.Repeat("a", 40)
+				start.Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}
+				round := state.DeskReview{ID: "assigned-push", Ref: r.Repository + "#7", Head: start.Execution.Handle.Commit, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()}
+				switch scenario {
+				case "default trunk":
+					start.Execution.Request.GitRef = "trunk"
+				case "expired":
+					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
+				case "wrong branch":
+					start.Execution.Request.GitRef = "other/branch"
+				case "wrong session":
+					round.Reviewer = state.Party{Session: "other-session"}
+				case "completed":
+					round.Result = &state.DeskReviewResult{}
+				}
+				if scenario != "source only" && scenario != "default trunk" {
+					st.DeskReviews = append(st.DeskReviews, round)
+				}
+				if scenario == "superseded" {
+					next := round
+					next.ID = "next-round"
+					next.Round++
+					next.Reviewer = state.Party{Session: "next-session"}
+					st.DeskReviews = append(st.DeskReviews, next)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			request := workerGitHubRequest{Repository: r.Repository, Write: true, ResolvePush: true}
+			if scenario == "wrong repo" {
+				request.Repository = "example/private"
+			}
+			var target workerGitHubPushTarget
+			err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &target, false)
+			switch scenario {
+			case "authorized":
+				if err != nil || target.Branch != branch {
+					t.Fatalf("assigned branch refused: %+v %v", target, err)
+				}
+			case "source only", "default trunk", "wrong session":
+				if err == nil && target.Branch != execution.GitHubBranch(r.Ref) {
+					t.Fatalf("source or name granted foreign write: %+v", target)
+				}
+			default:
+				if err == nil {
+					t.Fatalf("invalid assignment admitted: %+v", target)
+				}
+			}
+			// Revalidation on credential use must reject a branch other than the
+			// resolved target, before any credential mint or network write.
+			request.ResolvePush = false
+			request.PushBranch = "unrelated/branch"
+			var ignored workerGitHubToken
+			if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &ignored, false); err == nil {
+				t.Fatal("mismatched branch reached credential issuance")
+			}
+		})
 	}
 }

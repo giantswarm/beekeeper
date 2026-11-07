@@ -236,3 +236,23 @@ func TestGHPRCreateRefusesDuplicateIssuePullRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestReview3325EffectiveDraftFlags(t *testing.T) {
+	h := Hook{Self: testBeekeeperExe, Shell: testShell, PRCreate: func(_, _, _, _, _ string) string { return "duplicate fixture" }}
+	for _, flags := range []string{"--draft --draft=false", "-d -d=false", "--draft=true -d=false", "-d=true --draft=0", "--draft=false", "-d=false", "--draft -dd=false"} {
+		for _, metadata := range []string{`--title t --body 'Closes https://github.com/o/r/issues/55'`, "--fill"} {
+			command := "gh pr create -R o/r " + flags + " " + metadata
+			if d := decide(t, h, t.TempDir(), command, nil); d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("admitted non-draft %s: %+v", command, d)
+			}
+			if d := decideAgyCmd(t, h, t.TempDir(), command); d.Decision != decisionDeny {
+				t.Errorf("agy admitted non-draft %s: %+v", command, d)
+			}
+		}
+	}
+	for _, flags := range []string{"--draft=false --draft", "-d=false -d", "--draft=true", "-d=1"} {
+		if d := decide(t, h, t.TempDir(), "gh pr create -R o/r "+flags+" --fill", nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("denied effective draft %s: %+v", flags, d)
+		}
+	}
+}

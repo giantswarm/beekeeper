@@ -49,10 +49,10 @@ const (
 
 // readRepoOpenPullsWithGH lists open non-draft pull requests in repo
 // (owner/name) through gh, paginating by createdAt when a page hits the
-// 100-item limit so repositories with more than 100 open pull requests are
-// inspected in full.
+// 100-item limit. A stalled or exhausted inventory is an explicit read
+// failure; a strict timestamp cursor would skip unseen ties.
 func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]unmergedPull, error) {
-	search := "draft:false"
+	search := "draft:false sort:created-desc"
 	seen := map[string]bool{}
 	var all []unmergedPull
 	limitArg := strconv.Itoa(unmergedPullPageLimit)
@@ -67,7 +67,9 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 		}
 		added := 0
 		var oldest time.Time
+		missingTimestamp := false
 		for _, p := range page {
+			missingTimestamp = missingTimestamp || p.CreatedAt.IsZero()
 			if !p.CreatedAt.IsZero() && (oldest.IsZero() || p.CreatedAt.Before(oldest)) {
 				oldest = p.CreatedAt
 			}
@@ -84,20 +86,15 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 			all = append(all, p)
 			added++
 		}
-		if len(page) < unmergedPullPageLimit || oldest.IsZero() {
-			break
+		if len(page) < unmergedPullPageLimit {
+			return all, nil
 		}
-		if added == 0 {
-			strictSearch := "draft:false created:<" + oldest.UTC().Format(time.RFC3339)
-			if search == strictSearch {
-				break
-			}
-			search = strictSearch
-			continue
+		if added == 0 || missingTimestamp || oldest.IsZero() {
+			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: timestamp pagination stalled", repo)
 		}
-		search = "draft:false created:<=" + oldest.UTC().Format(time.RFC3339)
+		search = "draft:false sort:created-desc created:<=" + oldest.UTC().Format(time.RFC3339)
 	}
-	return all, nil
+	return nil, fmt.Errorf("open pull request inventory for %s is incomplete: pagination limit reached", repo)
 }
 
 // readRepoOpenPulls lists open pull requests in repo (owner/name). Tests
@@ -113,8 +110,11 @@ func findOpenPullClosingIssues(ctx context.Context, gh github.GH, repo string, p
 	if matched, url := openPullClosingIssue(repo, pulls, ownBranch, closingIssues, absorbedPulls); matched != "" {
 		return matched, url, nil
 	}
-	if len(pulls) < unmergedPullPageLimit || gh == nil {
+	if len(pulls) < unmergedPullPageLimit {
 		return "", "", nil
+	}
+	if gh == nil {
+		return "", "", fmt.Errorf("open pull request search for %s is unavailable", repo)
 	}
 	for _, want := range closingIssues {
 		r, ok := parseRef(want)
@@ -131,6 +131,9 @@ func findOpenPullClosingIssues(ctx context.Context, gh github.GH, repo string, p
 		}
 		if matched, url := openPullClosingIssue(repo, searched, ownBranch, []string{want}, absorbedPulls); matched != "" {
 			return matched, url, nil
+		}
+		if len(searched) >= unmergedPullPageLimit {
+			return "", "", fmt.Errorf("open pull request search for %s is incomplete", want)
 		}
 	}
 	return "", "", nil
@@ -208,20 +211,20 @@ func incidentExempt(st *state.State, now time.Time, refs ...string) bool {
 
 // isTrackedRepairPull reports whether agent name is an authenticated parked
 // owner of prRef on the desk.
-func isTrackedRepairPull(st *state.State, name, prRef string) bool {
+func isTrackedRepairPull(st *state.State, caller state.Party, name, prRef string) bool {
 	if st == nil || name == "" || prRef == "" {
 		return false
 	}
-	if rp, ok := st.ReviewParkFor(prRef); ok && strings.EqualFold(rp.Agent, name) {
+	if rp, ok := st.ReviewParkFor(prRef); ok && strings.EqualFold(rp.Agent, name) && sameReviewSession(rp.Party, caller) {
 		return true
 	}
 	if slices.ContainsFunc(st.Parks, func(p state.Park) bool {
-		return strings.EqualFold(p.On, prRef) && strings.EqualFold(p.By.Name, name)
+		return strings.EqualFold(p.On, prRef) && strings.EqualFold(p.By.Name, name) && sameReviewSession(p.By, caller)
 	}) {
 		return true
 	}
 	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-		return strings.EqualFold(ag.Name, name) && ag.Park != nil && strings.EqualFold(ag.Park.On, prRef)
+		return strings.EqualFold(ag.Name, name) && sameReviewSession(ag.Party, caller) && ag.Park != nil && strings.EqualFold(ag.Park.On, prRef)
 	})
 }
 
@@ -328,8 +331,9 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 			addRepairPull(ref)
 		}
 	}
+	caller, _ := a.caller()
 	for _, pr := range pullsInBrief {
-		if isTrackedRepairPull(st, name, pr) {
+		if isTrackedRepairPull(st, caller, name, pr) {
 			addRepairPull(pr)
 		}
 	}

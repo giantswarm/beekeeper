@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/post"
@@ -427,6 +428,15 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 		if _, ok := repoFlag(a); ok {
 			continue
 		}
+		if strings.HasPrefix(a, "--draft=") || strings.HasPrefix(a, "-d=") {
+			_, value, _ := strings.Cut(a, "=")
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return uninspectableGHBodyReason("gh pr create", "ambiguous --draft value")
+			}
+			isDraft = parsed
+			continue
+		}
 		if a == "-d" || a == "--draft" {
 			isDraft = true
 			continue
@@ -508,6 +518,9 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 			}
 			i++
 			continue
+		}
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a[1:], "d") {
+			return uninspectableGHBodyReason("gh pr create", "ambiguous draft shorthand cluster")
 		}
 		if !strings.HasPrefix(a, "-") {
 			pos = append(pos, a)

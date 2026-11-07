@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -244,6 +245,7 @@ func TestOpenPullStartGateRefusesDuplicateIssueAndUnmergedLimit(t *testing.T) {
 }
 
 func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "repair-owner-session")
 	r := newLoopRig(t)
 	now := r.a.timeNow()
 
@@ -286,6 +288,7 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 		st.ReviewParks = append(st.ReviewParks, state.ReviewPark{
 			On:     loopPR,
 			Agent:  "custom fixer",
+			Party:  func() state.Party { p, _ := r.a.caller(); return p }(),
 			Serves: "o/r#70",
 		})
 		return []state.Event{
@@ -297,6 +300,15 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 	if err := r.a.openPullStartGate(context.Background(), "unrelated worker", fixerBrief, fixerIssues, false, false, false); err == nil {
 		t.Fatal("unrelated worker citing another agent's parked PR should be refused")
 	}
+
+	// A name-only caller cannot borrow the retained owner's park, even when
+	// the target PR and served issue are exactly right and its roster is gone.
+	originalAs := r.a.as
+	r.a.as = "custom fixer"
+	if err := r.a.openPullStartGate(context.Background(), "custom fixer", fixerBrief, fixerIssues, false, false, false); err == nil {
+		t.Fatal("name-only caller borrowed retained repair park")
+	}
+	r.a.as = originalAs
 
 	// 1. Authenticated existing-PR fixer whose brief includes both the PR URL and served issue URL
 	// passes openPullStartGate on a clogged repo and does not self-conflict.
@@ -410,6 +422,9 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 	mockGH := func(_ context.Context, args ...string) ([]byte, error) {
 		calls++
 		cmdLine := strings.Join(args, " ")
+		if strings.Contains(cmdLine, "draft:false 56") {
+			return []byte(`[]`), nil
+		}
 		if !strings.Contains(cmdLine, "draft:false") {
 			t.Fatalf("expected draft:false filter in gh pr list args: %v", args)
 		}
@@ -548,9 +563,9 @@ func TestReview3325PaginationStalls(t *testing.T) {
 	}
 	fullSameTSPage.WriteByte(']')
 
-	// Even when 100 open PRs share the exact same createdAt timestamp and PR #140
-	// shares that timestamp (so created:<= and created:< cannot reach it),
-	// findOpenPullClosingIssues falls back to per-issue search "draft:false 55".
+	// More than 100 PRs can share the boundary timestamp. Refuse the incomplete
+	// inventory rather than using a strict cursor that silently skips unseen ties.
+	// The refusal must propagate to both start admission and raw creation.
 	unmergedGH = func(_ context.Context, args ...string) ([]byte, error) {
 		cmdLine := strings.Join(args, " ")
 		if strings.Contains(cmdLine, "draft:false 55") {
@@ -558,7 +573,7 @@ func TestReview3325PaginationStalls(t *testing.T) {
 				sameTS, issueURL)), nil
 		}
 		if strings.Contains(cmdLine, "created:<") && !strings.Contains(cmdLine, "created:<=") {
-			return []byte(`[]`), nil
+			t.Fatal("strict timestamp cursor skipped unseen ties")
 		}
 		return []byte(fullSameTSPage.String()), nil
 	}
@@ -566,10 +581,92 @@ func TestReview3325PaginationStalls(t *testing.T) {
 		return readRepoOpenPullsWithGH(ctx, unmergedGH, targetRepo)
 	}
 
-	if err := r.a.openPullStartGate(context.Background(), "r 55", issueURL, []string{issueRef}, false, false, false); err == nil || !strings.Contains(err.Error(), "https://github.com/o/r/pull/140") {
-		t.Fatalf("openPullStartGate did not find duplicate PR #140 when 100 open PRs share one timestamp: %v", err)
+	if err := r.a.openPullStartGate(context.Background(), "r 55", issueURL, []string{issueRef}, false, false, false); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("openPullStartGate did not refuse incomplete inventory when 100 open PRs share one timestamp: %v", err)
 	}
-	if reason := r.a.hookPRCreate("sess-1", repo, "branch-dup", "fix: issue 55", "Closes "+issueURL); !strings.Contains(reason, "https://github.com/o/r/pull/140") {
-		t.Fatalf("hookPRCreate did not refuse duplicate PR #140 when 100 open PRs share one timestamp: %q", reason)
+	if reason := r.a.hookPRCreate("sess-1", repo, "branch-dup", "fix: issue 55", "Closes "+issueURL); !strings.Contains(reason, "incomplete") {
+		t.Fatalf("hookPRCreate did not refuse incomplete inventory when 100 open PRs share one timestamp: %q", reason)
+	}
+}
+
+func TestReview3325RepairSessionOwnership(t *testing.T) {
+	owner := state.Party{Name: "retained owner", Session: "original-session", Host: "host-a"}
+	for _, kind := range []string{"review", "park", "agent"} {
+		t.Run(kind, func(t *testing.T) {
+			st := &state.State{}
+			switch kind {
+			case "review":
+				st.ReviewParks = []state.ReviewPark{{On: loopPR, Agent: owner.Name, Party: owner}}
+			case "park":
+				st.Parks = []state.Park{{On: loopPR, By: owner}}
+			case "agent":
+				st.Agents = []state.Agent{{Party: owner, Park: &state.Park{On: loopPR}}}
+			}
+			if !isTrackedRepairPull(st, owner, owner.Name, loopPR) {
+				t.Fatal("genuine session refused")
+			}
+			for _, caller := range []state.Party{{Name: owner.Name}, {Name: owner.Name, Session: "replacement-session"}, {Name: owner.Name, Session: owner.Session, Host: "host-b"}} {
+				if isTrackedRepairPull(st, caller, owner.Name, loopPR) {
+					t.Fatalf("borrowed retained %s with %+v", kind, caller)
+				}
+			}
+			if isTrackedRepairPull(st, owner, owner.Name, "o/r#999") {
+				t.Fatal("unrelated PR exempted")
+			}
+		})
+	}
+}
+
+func TestReview3325InventoryCapsFailClosed(t *testing.T) {
+	for _, mode := range []string{"tie", "missing timestamp", "iteration cap"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := 0
+			gh := func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
+				if !strings.Contains(strings.Join(args, " "), "draft:false") {
+					t.Fatal("draft filter missing")
+				}
+				page := make([]unmergedPull, 100)
+				for i := range page {
+					page[i].Number = i + 1
+					page[i].CreatedAt = time.Unix(100000, 0)
+					if mode == "iteration cap" {
+						page[i].Number += 100 * calls
+						page[i].CreatedAt = time.Unix(int64(100000-100*calls-i), 0)
+					}
+					if mode == "missing timestamp" {
+						page[i].CreatedAt = time.Time{}
+					}
+				}
+				return json.Marshal(page)
+			}
+			if _, err := readRepoOpenPullsWithGH(context.Background(), gh, repo); err == nil {
+				t.Fatal("certified incomplete inventory")
+			}
+			if calls > 20 {
+				t.Fatal("unbounded reads")
+			}
+		})
+	}
+	for _, match := range []bool{false, true} {
+		t.Run(fmt.Sprint("fallback match=", match), func(t *testing.T) {
+			gh := func(context.Context, ...string) ([]byte, error) {
+				page := make([]unmergedPull, 100)
+				for i := range page {
+					page[i] = unmergedPull{Number: i + 1, Body: "Mentions https://github.com/o/r/issues/55"}
+				}
+				if match {
+					page[99].Body = "Closes https://github.com/o/r/issues/55"
+				}
+				return json.Marshal(page)
+			}
+			issue, _, err := findOpenPullClosingIssues(context.Background(), gh, repo, make([]unmergedPull, 100), "", []string{"o/r#55"}, nil)
+			if match && (err != nil || issue == "") {
+				t.Fatalf("affirmative duplicate lost: %s %v", issue, err)
+			}
+			if !match && err == nil {
+				t.Fatal("100 mentions certified absence of older closing PR")
+			}
+		})
 	}
 }

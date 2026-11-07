@@ -336,14 +336,19 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		l.mu.Lock()
 		mp, ok := l.merged[act.Ref]
 		l.mu.Unlock()
-		if ok {
-			mp.Ref = cmp.Or(mp.Ref, act.Ref)
-			mp.URL = cmp.Or(mp.URL, act.URL)
-			closed, closeErr := closeMergedPullIssues(ctx, st, mp)
-			l.recordClosedPullIssues(closed)
-			if closeErr != nil {
-				return "", closeErr
+		if !ok {
+			var readErr error
+			mp, readErr = readLoopPull(ctx, act.Ref)
+			if readErr != nil {
+				return "", readErr
 			}
+		}
+		mp.Ref = cmp.Or(mp.Ref, act.Ref)
+		mp.URL = cmp.Or(mp.URL, act.URL)
+		closed, closeErr := closeMergedPullIssues(ctx, st, mp)
+		l.recordClosedPullIssues(closed)
+		if closeErr != nil {
+			return "", closeErr
 		}
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
@@ -535,25 +540,6 @@ func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act s
 		postMerge   string
 		serves      string
 	)
-	switch {
-	case i >= 0:
-		ag := st.Agents[i]
-		targetAgent = ag.Name
-		targetParty = ag.Party
-		postMerge = strings.TrimSpace(*ag.Park.PostMerge)
-		serves = cmp.Or(loopServes(st, ag), loopTaskServes(ag, act.Ref))
-	case hasRP && rp.PostMerge != nil:
-		targetAgent = rp.Agent
-		targetParty = rp.Party
-		postMerge = strings.TrimSpace(*rp.PostMerge)
-		serves = rp.Serves
-	default:
-		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
-			return nil, nil
-		})
-		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
-	}
 	l.mu.Lock()
 	byPull := l.merged[by]
 	l.mu.Unlock()
@@ -572,6 +558,25 @@ func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act s
 	l.recordClosedPullIssues(closed)
 	if closeErr != nil {
 		return "", closeErr
+	}
+	switch {
+	case i >= 0:
+		ag := st.Agents[i]
+		targetAgent = ag.Name
+		targetParty = ag.Party
+		postMerge = strings.TrimSpace(*ag.Park.PostMerge)
+		serves = cmp.Or(loopServes(st, ag), loopTaskServes(ag, act.Ref))
+	case hasRP && rp.PostMerge != nil:
+		targetAgent = rp.Agent
+		targetParty = rp.Party
+		postMerge = strings.TrimSpace(*rp.PostMerge)
+		serves = rp.Serves
+	default:
+		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			return nil, nil
+		})
+		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	}
 	if err := l.claim(act, targetAgent); err != nil {
 		return "", err
@@ -807,8 +812,8 @@ func closeMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pul
 	var closed []string
 	for _, r := range refs {
 		s, ok := states[r]
-		if !ok || s.Kind == github.RefPullRequest {
-			continue
+		if !ok || s.Kind != github.RefIssue || (s.State != github.Open && s.State != github.Closed) {
+			return closed, fmt.Errorf("issue closure for %s is unconfirmed", refName(r))
 		}
 		if s.State == github.Open {
 			if err := closePullIssue(ctx, r, pullURL); err != nil {
