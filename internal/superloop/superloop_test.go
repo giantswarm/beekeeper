@@ -8,13 +8,15 @@ import (
 )
 
 const (
-	pr      = "o/r#7"
-	prURL   = "https://github.com/o/r/pull/7"
-	head1   = "1111111111111111111111111111111111111111"
-	head2   = "2222222222222222222222222222222222222222"
-	head3   = "3333333333333333333333333333333333333333"
-	worker  = "worker one"
-	release = "v1.2.0"
+	overlapIssueA = "o/r#101"
+	overlapIssueB = "o/r#102"
+	pr            = "o/r#7"
+	prURL         = "https://github.com/o/r/pull/7"
+	head1         = "1111111111111111111111111111111111111111"
+	head2         = "2222222222222222222222222222222222222222"
+	head3         = "3333333333333333333333333333333333333333"
+	worker        = "worker one"
+	release       = "v1.2.0"
 	// guidePerson is the guide's person.
 	guidePerson = "pat"
 	// deskAuthor is the login the desk opens its pull requests as.
@@ -1440,24 +1442,24 @@ func TestOverlapClosingIssuesMutual(t *testing.T) {
 	in := Input{
 		Now: t0.Add(time.Minute),
 		Workers: []Worker{
-			{Name: "issue worker A", Serves: "o/r#101", ParkedOn: overlapPRB, ParkedAt: t0, Started: true},
-			{Name: "issue worker B", Serves: "o/r#102", ParkedOn: overlapPRA, ParkedAt: t0, Started: true},
+			{Name: "issue worker A", Serves: overlapIssueA, ParkedOn: overlapPRB, ParkedAt: t0, Started: true},
+			{Name: "issue worker B", Serves: overlapIssueB, ParkedOn: overlapPRA, ParkedAt: t0, Started: true},
 		},
 		Pulls: map[string]Pull{
-			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", Closes: []string{"o/r#101"}, State: Open, Head: head1},
-			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, Closes: []string{"o/r#102"}, State: Open, Head: head2},
+			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", Closes: []string{overlapIssueA}, State: Open, Head: head1},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, Closes: []string{overlapIssueB}, State: Open, Head: head2},
 		},
 	}
 	act := only(t, Plan(in), KindOwner)
 	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != "issue worker A" || act.Head != head1 {
 		t.Fatalf("mutual issue workers: %+v", act)
 	}
-	if act.OwnerIssue != "o/r#101" || act.BlockIssue != "o/r#102" {
+	if act.OwnerIssue != overlapIssueA || act.BlockIssue != overlapIssueB {
 		t.Fatalf("dependency must use closing issues: %+v", act)
 	}
 	// Keep the mutual wait explicit while changing closing-issue metadata.
 	in.Workers[0].Serves, in.Workers[1].Serves = overlapPRA, overlapPRB
-	for _, closes := range [][]string{nil, {"o/r#101"}} {
+	for _, closes := range [][]string{nil, {overlapIssueA}} {
 		p := in.Pulls[overlapPRB]
 		p.Closes = closes
 		in.Pulls[overlapPRB] = p
@@ -1470,9 +1472,9 @@ func TestOverlapClosingIssuesMutual(t *testing.T) {
 		}
 	}
 	p := in.Pulls[overlapPRB]
-	p.Closes = []string{"o/r#102"}
+	p.Closes = []string{overlapIssueB}
 	in.Pulls[overlapPRB] = p
-	in.Workers[0].Serves, in.Workers[1].Serves = "o/r#101", "o/r#102"
+	in.Workers[0].Serves, in.Workers[1].Serves = overlapIssueA, overlapIssueB
 
 	// An active issue worker is the live PR owner, even with a different name.
 	in.Workers[0].ParkedOn = ""
