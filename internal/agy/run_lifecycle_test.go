@@ -87,7 +87,10 @@ if [ "$2" = cancel ]; then read -r line; fi
 				_, _ = io.WriteString(hold, "release\n")
 				cancel()
 				select {
-				case <-done:
+				case exitErr := <-done:
+					if exitErr != nil {
+						t.Logf("fixture cleanup: %v", exitErr)
+					}
 				case <-time.After(2 * time.Second):
 					t.Error("Run did not end after releasing fixture output")
 				}

@@ -1020,7 +1020,9 @@ wait:
 			}
 			// Also end the launcher if stopping the scope did not end it.
 			_ = c.Process.Kill()
-			<-done
+			if waitErr := <-done; waitErr != nil {
+				logf("launcher stopped: %v", waitErr)
+			}
 			return ExitTimeout, drain
 		case s := <-sig:
 			_ = c.Process.Signal(s)
@@ -1047,7 +1049,9 @@ wait:
 			}
 			logf("%s.scope has no live processes (slot %d); stopping its launcher and releasing the slot", unit, slot)
 			_ = c.Process.Kill()
-			<-done
+			if waitErr := <-done; waitErr != nil {
+				logf("launcher stopped: %v", waitErr)
+			}
 			return 1, drain
 		}
 	}

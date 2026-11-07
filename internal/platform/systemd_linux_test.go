@@ -361,7 +361,13 @@ func TestScopePopulated(t *testing.T) {
 }
 
 func TestRunArgsReplacesStaleSSHSocket(t *testing.T) {
-	dir := t.TempDir()
+	// Keep the full socket path below the Unix socket limit even when TMPDIR
+	// is a long per-run state directory.
+	dir, err := os.MkdirTemp("", "ssh-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 	t.Setenv("SSH_AUTH_SOCK", filepath.Join(dir, "old-login"))
 	socket := filepath.Join(dir, "ssh-agent.socket")

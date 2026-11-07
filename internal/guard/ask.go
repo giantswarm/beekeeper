@@ -18,7 +18,7 @@ func (h Hook) ask(session string, input map[string]any) []byte {
 		if r := h.questionRefusal(input, person); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 		}
-		return nil
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a blocking question dialog stops the guide and its watch. Ask this decision in the conversation, keep handling peer messages and `beekeeper guide watch`, and record the person's answer with `beekeeper answer`. Retain open work and restoration deadlines with `beekeeper guide work add --due <time>`."})
 	}
 	if person == "" {
 		person = "<person>"

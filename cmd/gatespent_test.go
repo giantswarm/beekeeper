@@ -20,13 +20,14 @@ var errGraphQLSpent = errors.New("gh pr view 7: GraphQL: API rate limit already 
 
 // stubSpentRead makes the pull request's read refused under a spent limit
 // until reset, the budget reading GraphQL refused until then (spent) or
-// with no limit spent (no reset known); it counts the reads.
-func stubSpentRead(t *testing.T, reset time.Time, spent bool) *int {
+// with no limit spent (no reset known); it counts the reads. The fixture
+// clock advances explicitly so setup cannot consume the simulated reset.
+func stubSpentRead(t *testing.T, now func() time.Time, reset time.Time, spent bool) *int {
 	t.Helper()
 	asked := stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	read := pullBase
 	pullBase = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
-		if time.Now().Before(reset) {
+		if now().Before(reset) {
 			*asked++
 			return github.PullBase{}, errGraphQLSpent
 		}
@@ -35,8 +36,8 @@ func stubSpentRead(t *testing.T, reset time.Time, spent bool) *int {
 	wasBudget := readBudget
 	t.Cleanup(func() { readBudget = wasBudget })
 	readBudget = func(*app, context.Context) (github.Budget, error) {
-		b := github.Budget{Remaining: 5000, Limit: 5000, Reset: time.Now().Add(time.Hour), GraphQL: &github.GraphQL{Limit: 5000, Remaining: 4000}}
-		if spent && time.Now().Before(reset) {
+		b := github.Budget{Remaining: 5000, Limit: 5000, Reset: now().Add(time.Hour), GraphQL: &github.GraphQL{Limit: 5000, Remaining: 4000}}
+		if spent && now().Before(reset) {
 			b.GraphQL = &github.GraphQL{Refused: "API rate limit already exceeded", Reset: reset}
 		}
 		return b, nil
@@ -79,9 +80,9 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubGitHub(t, github.Open, "")
-	reset := time.Now().Add(time.Second)
-	asked := stubSpentRead(t, reset, true)
 	a := spentLane(t)
+	reset := a.now.Add(time.Second)
+	asked := stubSpentRead(t, func() time.Time { return a.now }, reset, true)
 	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	why, err := g.step()
@@ -101,10 +102,9 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 		t.Errorf("a second step: %q, %v, %d reads; want the wait without a read", why, err, *asked-reads)
 	}
 
-	time.Sleep(time.Until(reset) + 10*time.Millisecond)
-	a.now = time.Now()
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 10*time.Second, 0, true); err != nil {
-		t.Fatalf("exit %d (%v), want the merge run after the reset", Code(err), err)
+	a.now = reset.Add(time.Millisecond)
+	if why, err := g.step(); why != "" || err != nil {
+		t.Fatalf("step after reset: %q, %v; want the merge run", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
 		t.Errorf("merged event %q", d)
@@ -118,9 +118,9 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubGitHub(t, github.Open, "")
-	reset := time.Now().Add(time.Second)
-	stubSpentRead(t, reset, false)
 	a := spentLane(t)
+	reset := a.now.Add(time.Second)
+	stubSpentRead(t, func() time.Time { return a.now }, reset, false)
 	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	if _, err := g.step(); Code(err) != ExitGateRefused {
@@ -134,8 +134,7 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 		t.Fatalf("places %v (%+v), want o/r#7's place kept ahead of o/r#8", got, st.Merges)
 	}
 
-	time.Sleep(time.Until(reset) + 10*time.Millisecond)
-	a.now = time.Now()
+	a.now = reset.Add(time.Millisecond)
 	g = &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid()}
 	if why, err := g.step(); why != "" || err != nil {

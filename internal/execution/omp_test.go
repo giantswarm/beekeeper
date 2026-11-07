@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -242,7 +243,9 @@ func TestExecutionOmpWakesAcknowledgedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancel()
-	<-done
+	if exitErr := <-done; exitErr != nil && !errors.Is(exitErr, context.Canceled) {
+		t.Fatal(exitErr)
+	}
 	prompts, err := os.ReadFile(filepath.Join(dir, "prompts")) //nolint:gosec // owned fake-harness output in the test temporary directory
 	if err != nil {
 		t.Fatal(err)

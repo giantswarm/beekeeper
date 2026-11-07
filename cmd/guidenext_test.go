@@ -117,8 +117,8 @@ func TestGuideQuestionGetsTheNoteChecks(t *testing.T) {
 		}
 		return o.D.PermissionDecision + " " + o.D.PermissionDecisionReason
 	}
-	if out := ask("Merge " + prURL + "? Status quo: " + sqNow + ". Why: " + whyNow); out != " " {
-		t.Fatalf("a complete question is refused: %s", out)
+	if out := ask("Merge " + prURL + "? Status quo: " + sqNow + ". Why: " + whyNow); !strings.Contains(out, "blocking question dialog") {
+		t.Fatalf("a blocking question must be refused: %s", out)
 	}
 	for name, c := range map[string]struct{ q, want string }{
 		"bare #N":       {"Merge #7? Status quo: " + sqNow + ". Why: " + whyNow, "#7 without its full URL"},

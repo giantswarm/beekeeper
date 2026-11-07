@@ -65,7 +65,7 @@ func TestGuidePromptBudget(t *testing.T) {
 	for i := range 40 {
 		queue = append(queue, queueItem{Note: &state.Note{ID: i + 1, Kind: noteDecision, For: "Person", Text: fmt.Sprintf("decision %d: %s", i+1, strings.Repeat("detailed context ", 1000))}})
 	}
-	if err := a.printGuidePrompt(state.Role{}, queue, standing, nil); err != nil {
+	if err := a.printGuidePrompt(state.Role{}, queue, standing, nil, &state.State{}); err != nil {
 		t.Fatal(err)
 	}
 	prompt := out.String()
@@ -99,7 +99,7 @@ func TestGuidePromptReferencesInstructionFile(t *testing.T) {
 	if err := os.WriteFile(a.cfg.Guide.Instructions, []byte(instructions), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.printGuidePrompt(state.Role{}, nil, "", nil); err != nil {
+	if err := a.printGuidePrompt(state.Role{}, nil, "", nil, &state.State{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), a.cfg.Guide.Instructions) || strings.Contains(out.String(), instructions) {
