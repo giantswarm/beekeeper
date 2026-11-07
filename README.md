@@ -2266,6 +2266,27 @@ caps the watch at half a core (`CPUQuota=50%`): at rest a tick costs a stat per 
 before, since the watches keep the parsed desktop records, the transcripts' places and context
 sizes, and their place in the event log across ticks, and read again only what changed.
 
+### Deliveries
+
+`beekeeper delivery` reads the desk's saved issue deliveries without contacting GitHub.
+Each row shows the issue, its pull requests, the step, time in that step, total age,
+worker and wait. A desk pull request with no linked issue counts once; a pull request
+closing several issues counts once per issue. An unread pull stays `unknown` and counts.
+`--json` returns the same reading with ages as durations in nanoseconds and the last
+complete observation time. The supervisor status and the report's Queue relay its count.
+
+`beekeeper delivery --stats --since 168h` reads `delivery.step` events for median and
+worst residence time per step, including ongoing waits clipped to the window, and
+released deliveries per day. Release candidates count as released once a containing tag
+is confirmed. A failed or unconfirmed release stays `releasing`; research completed
+without a pull request, or work closed unmerged without a continuing worker, is `dropped`.
+The release verdict and tag survive removal of the merge from its lane.
+
+`delivery.wipLimit` defaults to `0` (off), accepts nonnegative values through
+`beekeeper config set delivery.wipLimit <n>`, and is displayed for observation only.
+This foundation does not refuse starts, reserve slots or change `capacity` or its JSON.
+New-start enforcement, review/fix priority and stall handling are separate work.
+
 ### The supervisor loop down
 
 The supervisor is the supervisor loop; no session holds its role. While the loop does not run,

@@ -972,6 +972,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
 		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
@@ -990,7 +991,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 				evs = append(evs, event(by, "lease.handover", "%s: %s from session %s to %s", sp.name, strings.Join(handed, ", "), sp.replaces.Session, id))
 			}
 		}
-		return evs, nil
+		return append(state.DeliveryEvents(prevDeliveries, st.Deliveries, by), evs...), nil
 	})
 	if err != nil {
 		return startedAgent{}, err
@@ -2062,6 +2063,7 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 					return o.Session.Is(s.Party) && strings.EqualFold(o.Issue, iss)
 				}) {
 					st.Records = append(st.Records, state.Record{Session: s.Party, Issue: iss, By: s.By, At: s.At})
+					st.StartDelivery(iss, ag.Name, "", s.At)
 				}
 			}
 		}

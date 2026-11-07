@@ -177,6 +177,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	provider, bucket := resolveAgentProviderBucket(k, r.Harness, r.Model)
 	err = a.store.Update(func(current *state.State) ([]state.Event, error) {
+		prevDeliveries := slices.Clone(current.Deliveries)
 		if err := a.refuseStopped(current, "starting an SSH execution"); err != nil {
 			return nil, err
 		}
@@ -218,7 +219,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if over != "" {
 			events = append(events, event(by, verbStart, "%s: started over %s (--force)", name, over))
 		}
-		return events, nil
+		return append(state.DeliveryEvents(prevDeliveries, current.Deliveries, by), events...), nil
 	})
 	if err != nil {
 		return err

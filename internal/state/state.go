@@ -1199,6 +1199,8 @@ type GuideWork struct {
 
 // State is the whole document.
 type State struct {
+	Deliveries    []Delivery  `json:"deliveries,omitempty"`
+	DeliveriesAt  time.Time   `json:"deliveriesAt,omitempty"`
 	GuideReports  []string    `json:"guideReports,omitempty"`
 	GuideWork     []GuideWork `json:"guideWork,omitempty"`
 	NextGuideWork int         `json:"nextGuideWork,omitempty"`

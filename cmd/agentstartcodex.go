@@ -147,6 +147,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
 		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
@@ -162,7 +163,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 				evs = append(evs, event(by, "lease.handover", "%s: %s from %s to codex_%s", sp.name, strings.Join(handed, ", "), cmp.Or(sp.replaces.Session, sp.replaces.HostSession), id))
 			}
 		}
-		return evs, nil
+		return append(state.DeliveryEvents(prevDeliveries, st.Deliveries, by), evs...), nil
 	})
 	if err != nil {
 		return err

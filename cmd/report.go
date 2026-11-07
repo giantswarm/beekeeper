@@ -22,6 +22,7 @@ import (
 // reportFacts are what a status report says, read from beekeeper's state,
 // its event log, the machine and GitHub reads (draft pages when needed).
 type reportFacts struct {
+	Delivery *deliveryView
 	From, To time.Time
 	Zone     *time.Location
 	Person   string
@@ -245,6 +246,8 @@ func (a *app) gatherReport(ctx context.Context, from, to time.Time, zone *time.L
 		}
 		f.Notes = append(f.Notes, n)
 	}
+	delivery := readDelivery(st, a.cfg.Delivery.WIPLimit, to)
+	f.Delivery = &delivery
 	f.Lanes = st.Merges
 	for _, t := range st.Timers {
 		if t.Fired.IsZero() && t.Due.Before(to.Add(to.Sub(from))) {
@@ -440,6 +443,9 @@ func renderReport(f *reportFacts) string {
 
 	p("\n**Queue**\n")
 	lines = nil
+	if f.Delivery != nil {
+		lines = append(lines, f.Delivery.line())
+	}
 	for _, m := range f.Lanes {
 		k := m.Key()
 		if m.PR != 0 {

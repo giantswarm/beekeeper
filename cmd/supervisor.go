@@ -125,9 +125,10 @@ const loopLaunchdLabel = "com.giantswarm.beekeeper.supervisor-loop"
 
 // supervisorView is the supervisor's status for --json.
 type supervisorView struct {
-	Loop    bool   `json:"loop"`
-	PID     int    `json:"pid,omitempty"`
-	Version string `json:"version,omitempty"`
+	Delivery *deliveryView `json:"delivery,omitempty"`
+	Loop     bool          `json:"loop"`
+	PID      int           `json:"pid,omitempty"`
+	Version  string        `json:"version,omitempty"`
 	// Held says what the loop holds of its GitHub reads, Pulls the open
 	// pull requests nobody owns: both for whoever waits on the loop.
 	Held  string `json:"held,omitempty"`
@@ -152,18 +153,23 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		ver = a.loopVersion(c, pid)
 	}
 	held, pulls := a.loopWaitLines()
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	delivery := readDelivery(st, a.cfg.Delivery.WIPLimit, a.timeNow())
 	if a.json {
-		return a.printJSON(supervisorView{Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
+		return a.printJSON(supervisorView{Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}
 	if pid == 0 {
-		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n", loopServiceHint())
+		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n%s\n", loopServiceHint(), delivery.line())
 		return err
 	}
 	line := fmt.Sprintf("the supervisor loop runs (PID %d)", pid)
 	if ver != "" {
 		line = fmt.Sprintf("the supervisor loop runs (PID %d, %s)", pid, ver)
 	}
-	for _, l := range []string{line, held, pulls} {
+	for _, l := range []string{line, held, pulls, delivery.line()} {
 		if l == "" {
 			continue
 		}

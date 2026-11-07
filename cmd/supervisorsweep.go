@@ -147,6 +147,7 @@ func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tra
 			open, err = readOpenPulls(ctx, authors, l.a.cfg.GitHub.AllowedOrgs)
 			return err
 		})
+		l.sweepIncomplete = err != nil || len(open) >= sweepListLimit
 		if err != nil {
 			// The last list stands; the sweep tries again next interval.
 			l.sayOnce("sweep list", "SUPERVISOR SWEEP cannot list the desk's open pull requests (%v): the last list stands", err)

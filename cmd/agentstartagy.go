@@ -80,12 +80,13 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	s := state.Start{Party: state.Party{HostSession: agy.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: agy.Harness, Model: model}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
 		reg, err = a.recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, verbStart, "%s: agy agent %s on %s in %s, dangerously-skip-permissions, busy with %q", sp.name, id, model, dir, reg.task)}, nil
+		return append(state.DeliveryEvents(prevDeliveries, st.Deliveries, by), []state.Event{event(by, verbStart, "%s: agy agent %s on %s in %s, dangerously-skip-permissions, busy with %q", sp.name, id, model, dir, reg.task)}...), nil
 	})
 	if err != nil {
 		return err

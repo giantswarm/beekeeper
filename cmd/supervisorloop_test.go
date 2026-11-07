@@ -172,6 +172,9 @@ func logs(args []string) (state.Event, bool) {
 
 func newLoopRig(t *testing.T) *loopRig {
 	t.Helper()
+	oldDeliveryRelease := readDeliveryRelease
+	t.Cleanup(func() { readDeliveryRelease = oldDeliveryRelease })
+	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return "", "", nil }
 	oldParents := reviewParents
 	t.Cleanup(func() { reviewParents = oldParents })
 	reviewParents = func(context.Context, []string) ([]string, error) { return nil, nil }
