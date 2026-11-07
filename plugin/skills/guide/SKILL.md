@@ -9,6 +9,12 @@ disable-model-invocation: true
 The guide is the person's conversation partner on the desk (the person is the config's
 `guide.person`).
 
+**System faults belong in the core.** Answering a system fault with a desk rule
+or note is an antipattern. Fix beekeeper's behavior in beekeeper; desk rules hold
+only personal choices. Report fatal outages through the core fatal sentinel;
+do not treat a broken harness, config, guard, watch, loop or red main as ordinary
+board work. A component the person deliberately disabled is not an outage.
+
 **Its first rule: a direct request from the person is done, not discussed.** What the person asks
 that the guide's own tools allow (run a command, move or file a board item, open an issue, read a
 session, set, narrow or lift a hold) the guide carries out at once, without first explaining why it

@@ -73,6 +73,24 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 			File{Path: filepath.Join(dir, teleportServiceUnit), Content: service, Service: s.TeleportBotConfig != ""},
 			File{Path: filepath.Join(dir, teleportTimerUnit), Content: []byte(strings.Replace(systemd.TeleportTimer, systemd.TeleportTimerEvery, every, 1)), Service: true})
 	}
+	// Append these after the existing units so their stable ordering remains
+	// useful to installers. The sentinel has no dependency on watch or loop.
+	deferSentinel := func() {
+		stateDir := s.StateDir
+		if stateDir == "" {
+			stateDir = filepath.Join(s.Home, ".local", "state", "beekeeper")
+		}
+		service := "[Unit]\nDescription=beekeeper: independent fatal sentinel\n[Service]\nType=oneshot\nEnvironment=" + quote("PATH="+s.toolPath()) + "\nExecStart=:" + args + " fatal --state-dir " + quote(stateDir) + " scan\nTimeoutStartSec=5min\nUMask=0077\n"
+		timer := "[Unit]\nDescription=beekeeper: check fatal system health every minute\n[Timer]\nOnBootSec=1min\nOnUnitInactiveSec=1min\nUnit=beekeeper-fatal.service\n[Install]\nWantedBy=timers.target\n"
+		files = append(files, File{Path: filepath.Join(dir, "beekeeper-fatal.service"), Content: []byte(service)}, File{Path: filepath.Join(dir, "beekeeper-fatal.timer"), Content: []byte(timer), Service: true})
+	}
+	// Only a fully specified install enables the sentinel; renderer-only
+	// callers without state/config paths retain their existing output.
+	if s.StateDir != "" {
+		deferSentinel()
+		timers := "[Unit]\nDescription=beekeeper: independent timer dispatcher\n[Service]\nEnvironment=" + quote("PATH="+s.toolPath()) + "\nExecStart=:" + args + " timer dispatch\nRestart=always\nRestartSec=10s\nTimeoutStopSec=1min\nUMask=0077\n[Install]\nWantedBy=default.target\n"
+		files = append(files, File{Path: filepath.Join(dir, "beekeeper-timers.service"), Content: []byte(timers), Service: true})
+	}
 	if s.RAMMiB <= 0 {
 		return files, []string{"memory guard: the machine's RAM is unreadable"}
 	}
