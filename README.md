@@ -2891,7 +2891,12 @@ move disposable build output into trash on the same filesystem. Scheduled runs
 keep trash for an hour; run tmp entries need an hour of inactivity in either mode. It also discovers harness worktrees under known
 checkouts. Live processes, running sessions, uncommitted changes and unpublished commits
 protect worktrees; a failed process or remote read keeps data. One `DISK PRUNE` line says
-what it freed and kept and why. `beekeeper disk prune` previews this step; `--apply` runs it.
+what it freed and kept and why. Under disk pressure the same step also prunes unused Docker
+images and reclaimable Docker build cache below their normal size caps, preserving running
+builds, containers, lab leases and recently tagged images. Negative Docker caps still disable
+that cleanup. If space remains below the start floor after pruning, the supervisor sends a
+`GUIDE PROBLEM` with free space, the floor and what remains; starts recover when disk recovers.
+`beekeeper disk prune` previews this step; `--apply` runs it.
 `beekeeper doctor` uses the same automatic policy. Tmpfs and Docker reclamation remain
 independent in either mode. `disk.prune: ask` retains the existing commands and doctor trims described below. See
 [automatic disk reclamation](docs/development.md#automatic-disk-reclamation) for discovery,
