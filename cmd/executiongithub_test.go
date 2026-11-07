@@ -582,7 +582,7 @@ func TestWorkerGitHubRefreshPersistenceFailureExplainsRecovery(t *testing.T) {
 }
 
 func TestReview3325DirectPushAssignment(t *testing.T) {
-	for _, scenario := range []string{"authorized", "source only", "default trunk", "expired", "wrong repo", "wrong branch", "wrong session", "superseded", "completed"} {
+	for _, scenario := range []string{review3325Authorized, "source only", "default trunk", claudeLoginExpired, "wrong repo", "wrong branch", "wrong session", review3325Superseded, workerGitHubCompleted} {
 		t.Run(scenario, func(t *testing.T) {
 			a, r := workerGitHubTestApp(t)
 			const branch = "fixture/foreign-source"
@@ -600,19 +600,19 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 				switch scenario {
 				case "default trunk":
 					start.Execution.Request.GitRef = "trunk"
-				case "expired":
+				case claudeLoginExpired:
 					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
 				case "wrong branch":
 					start.Execution.Request.GitRef = "other/branch"
 				case "wrong session":
 					round.Reviewer = state.Party{Session: "other-session"}
-				case "completed":
+				case workerGitHubCompleted:
 					round.Result = &state.DeskReviewResult{}
 				}
 				if scenario != "source only" && scenario != "default trunk" {
 					st.DeskReviews = append(st.DeskReviews, round)
 				}
-				if scenario == "superseded" {
+				if scenario == review3325Superseded {
 					next := round
 					next.ID = "next-round"
 					next.Round++
@@ -630,7 +630,7 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 			var target workerGitHubPushTarget
 			err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &target, false)
 			switch scenario {
-			case "authorized":
+			case review3325Authorized:
 				if err != nil || target.Branch != branch || target.ReviewID == "" {
 					t.Fatalf("assigned branch refused: %+v %v", target, err)
 				}
@@ -645,7 +645,7 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 			}
 			// Revalidation on credential use must reject a branch other than the
 			// resolved target, before any credential mint or network write.
-			if scenario == "authorized" {
+			if scenario == review3325Authorized {
 				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: target.ReviewID}); err != nil {
 					t.Fatalf("current round push refused: %v", err)
 				}

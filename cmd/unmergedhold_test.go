@@ -589,17 +589,19 @@ func TestReview3325PaginationStalls(t *testing.T) {
 	}
 }
 
+const review3325ShortMissingTimestamp = "short missing timestamp"
+
 func TestReview3325RepairSessionOwnership(t *testing.T) {
 	owner := state.Party{Name: "retained owner", Session: "original-session", Host: "host-a"}
-	for _, kind := range []string{"review", "park", "agent"} {
+	for _, kind := range []string{taskKindReview, "retained park", a2aRoleAgent} {
 		t.Run(kind, func(t *testing.T) {
 			st := &state.State{}
 			switch kind {
-			case "review":
+			case taskKindReview:
 				st.ReviewParks = []state.ReviewPark{{On: loopPR, Agent: owner.Name, Party: owner}}
-			case "park":
+			case "retained park":
 				st.Parks = []state.Park{{On: loopPR, By: owner}}
-			case "agent":
+			case a2aRoleAgent:
 				st.Agents = []state.Agent{{Party: owner, Park: &state.Park{On: loopPR}}}
 			}
 			if !isTrackedRepairPull(st, owner, owner.Name, loopPR) {
@@ -618,7 +620,7 @@ func TestReview3325RepairSessionOwnership(t *testing.T) {
 }
 
 func TestReview3325InventoryCapsFailClosed(t *testing.T) {
-	for _, mode := range []string{"tie", "missing timestamp", "short missing timestamp", "iteration cap"} {
+	for _, mode := range []string{"tie", "missing timestamp", review3325ShortMissingTimestamp, "iteration cap"} {
 		t.Run(mode, func(t *testing.T) {
 			calls := 0
 			gh := func(_ context.Context, args ...string) ([]byte, error) {
@@ -627,7 +629,7 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 					t.Fatal("draft filter missing")
 				}
 				page := make([]unmergedPull, 100)
-				if mode == "short missing timestamp" {
+				if mode == review3325ShortMissingTimestamp {
 					page = page[:1]
 				}
 				for i := range page {
@@ -637,7 +639,7 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 						page[i].Number += 100 * calls
 						page[i].CreatedAt = time.Unix(int64(100000-100*calls-i), 0)
 					}
-					if mode == "missing timestamp" || mode == "short missing timestamp" {
+					if mode == "missing timestamp" || mode == review3325ShortMissingTimestamp {
 						page[i].CreatedAt = time.Time{}
 					}
 				}

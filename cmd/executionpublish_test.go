@@ -1128,8 +1128,15 @@ func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
 	}
 }
 
+const (
+	review3325Authorized = "authorized"
+	review3325Unassigned = "unassigned"
+	review3325Superseded = "superseded"
+	review3325Finished   = "finished"
+)
+
 func TestReview3325AssignedReviewerPublication(t *testing.T) {
-	for _, scenario := range []string{"authorized", "unassigned", "expired", "unrelated repo", "wrong ref", "wrong session", "superseded", "finished", "new PR", "metadata"} {
+	for _, scenario := range []string{review3325Authorized, review3325Unassigned, claudeLoginExpired, "unrelated repo", "wrong ref", "wrong session", review3325Superseded, review3325Finished, "new PR", "metadata"} {
 		t.Run(scenario, func(t *testing.T) {
 			rig := newPublicationRig(t)
 			const authorBranch = "fixture/author-repair"
@@ -1150,7 +1157,7 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				start.Execution.Request.GitRef = authorBranch
 				round := state.DeskReview{ID: "repair-assignment", Ref: "giantswarm/beekeeper#42", Head: rig.base, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()}
 				switch scenario {
-				case "expired":
+				case claudeLoginExpired:
 					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
 				case "unrelated repo":
 					round.Ref = "other/repo#42"
@@ -1158,17 +1165,17 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 					start.Execution.Request.GitRef = "fixture/unrelated"
 				case "wrong session":
 					round.Reviewer = state.Party{Session: "different-session"}
-				case "finished":
+				case review3325Finished:
 					round.Result = &state.DeskReviewResult{}
 				case "new PR":
 					rig.created = false
 				case "metadata":
 					p.Title = "fix: metadata change"
 				}
-				if scenario != "unassigned" {
+				if scenario != review3325Unassigned {
 					st.DeskReviews = append(st.DeskReviews, round)
 				}
-				if scenario == "superseded" {
+				if scenario == review3325Superseded {
 					next := round
 					next.ID = "next-assignment"
 					next.Round++
@@ -1184,11 +1191,11 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p)
-			if scenario == "authorized" {
+			if scenario == review3325Authorized {
 				if err != nil || result.Branch != authorBranch || result.URL != publicationFixturePRURL {
 					t.Fatalf("authorized publication failed: %+v %v", result, err)
 				}
-			} else if scenario == "unassigned" || scenario == "wrong session" {
+			} else if scenario == review3325Unassigned || scenario == "wrong session" {
 				if err == nil && result.Branch == authorBranch {
 					t.Fatal("unassigned execution wrote author branch")
 				}
@@ -1200,7 +1207,7 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				t.Fatal(readErr)
 			}
 			want := rig.base
-			if scenario == "authorized" {
+			if scenario == review3325Authorized {
 				want = head
 			}
 			if !strings.HasPrefix(got, want+"\t") {
