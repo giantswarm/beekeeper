@@ -704,7 +704,8 @@ type supervisorLoop struct {
 	boardNone *loopBoardNone
 	// stall is the refill's flow: when it last ran and since when a start
 	// waits with room (checkStall alarms on it).
-	stall startStall
+	stall     startStall
+	flowWaits map[string]flowWait
 	// reviewWaits are the review requests this loop planned and has not
 	// started, by pull request (checkStall alarms on the oldest).
 	reviewWaits map[string]reviewWait
@@ -1693,6 +1694,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if !l.dryRun {
 		if err := l.stuck(failures, stuckFiled); err != nil {
+			return err
+		}
+		if err := l.checkFlowWaits(in, actions, failures); err != nil {
 			return err
 		}
 		if err := l.checkStall(); err != nil {
@@ -3951,6 +3955,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 					return "", saveErr
 				}
+				l.stallClear()
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {
@@ -3976,6 +3981,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.a.monitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
+	l.stallClear()
 	if place.remote() {
 		return fmt.Sprintf("%q started on %s on %s at %s", name, next.URL, place.Selector, place.Ref), nil
 	}

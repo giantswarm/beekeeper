@@ -200,3 +200,51 @@ func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
 		t.Fatalf("the stall's end is not said:\n%s", r.out)
 	}
 }
+
+// Progress in the refill does not excuse a review or merge decision that
+// never settles. Each lane repeats its alarm, and an unread observation
+// must not reset the wait.
+func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
+	for _, kind := range []string{superloop.KindGo} {
+		t.Run(kind, func(t *testing.T) {
+			r, _ := fillRig(t)
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			act := superloop.Action{Kind: kind, Key: kind + " o/r#10@abc", Ref: "o/r#10", URL: "https://github.com/o/r/pull/10", Head: "abc"}
+			in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
+			failures := map[string]loopFailure{act.Key: {Message: "specific command failure"}}
+			check := func(input superloop.Input, actions []superloop.Action) {
+				t.Helper()
+				if err := l.checkFlowWaits(input, actions, failures); err != nil {
+					t.Fatal(err)
+				}
+			}
+			check(in, []superloop.Action{act})
+			r.a.now = r.a.now.Add(loopStallAfter - time.Second)
+			check(in, []superloop.Action{act})
+			if got := r.logged(t, "supervisor.file"); len(got) != 0 {
+				t.Fatalf("early alarm: %+v", got)
+			}
+			r.a.now = r.a.now.Add(time.Second)
+			l.fillRan()
+			check(in, []superloop.Action{act})
+			check(in, []superloop.Action{act})
+			got := r.logged(t, "supervisor.file")
+			if len(got) != 1 || !strings.Contains(got[0].Detail, act.URL) || !strings.Contains(got[0].Detail, "specific command failure") {
+				t.Fatalf("want one alarm with URL and observed cause: %+v", got)
+			}
+			check(superloop.Input{}, nil)
+			r.a.now = r.a.now.Add(loopStallAfter)
+			check(in, []superloop.Action{act})
+			if got := r.logged(t, "supervisor.file"); len(got) != 2 {
+				t.Fatalf("want repeated alarm after unread observation: %+v", got)
+			}
+			check(in, nil)
+			if len(l.flowWaits) != 0 || !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED") {
+				t.Fatalf("settled decision did not clear: %+v\n%s", l.flowWaits, r.out)
+			}
+		})
+	}
+}

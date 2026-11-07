@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -213,5 +214,84 @@ func (l *supervisorLoop) checkStall() error {
 	l.mu.Lock()
 	*filed = n
 	l.mu.Unlock()
+	return nil
+}
+
+// flowWait is one exact-head merge decision that has not settled.
+// It is independent of refill progress: starting workers must not hide a
+// merge lane that has stopped moving.
+type flowWait struct {
+	ref   string
+	since time.Time
+	filed int
+}
+
+// checkFlowWaits measures the planner's pending merge decisions
+// every pass. Holds and in-flight commands remain pending, so they cannot
+// silently turn a stalled lane into a healthy one. A new head starts a new
+// episode; a settled decision clears it. Unread pulls retain their episodes.
+func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.Action, failures map[string]loopFailure) error {
+	now := l.a.timeNow()
+	pending := map[string]superloop.Action{}
+	for _, act := range actions {
+		if act.Kind == superloop.KindGo {
+			pending[act.Key] = act
+		}
+	}
+	if l.flowWaits == nil {
+		l.flowWaits = map[string]flowWait{}
+	}
+	for key, wait := range l.flowWaits {
+		if _, ok := pending[key]; ok {
+			continue
+		}
+		// An unread GitHub observation is not evidence of recovery.
+		ref := wait.ref
+		if _, observed := in.Pulls[ref]; !observed {
+			continue
+		}
+		if wait.filed > 0 {
+			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR STALL ENDED: %s is no longer pending\n", key)
+		}
+		delete(l.flowWaits, key)
+	}
+	keys := make([]string, 0, len(pending))
+	for key := range pending {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		act := pending[key]
+		wait, exists := l.flowWaits[key]
+		if !exists {
+			wait.since, wait.ref = now, act.Ref
+		}
+		n := int(now.Sub(wait.since) / loopStallAfter)
+		if n > wait.filed {
+			cause := "the planner still requests this decision; no successful completion recorded"
+			l.mu.Lock()
+			failure := failures[key]
+			completed := l.completed[key]
+			if l.inFlight[key] {
+				cause = "its command is still in flight"
+			}
+			l.mu.Unlock()
+			if completed {
+				delete(l.flowWaits, key)
+				continue
+			}
+			if failure.Message != "" {
+				cause = oneLine(failure.Message)
+			}
+			text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm repeats every %s until it settles.", act.Kind, act.URL, act.Head, wait.since.UTC().Format(time.RFC3339), cause, len(pending), loopStallAfter)
+			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+			alarmKey := fmt.Sprintf("stall decision %s %s %d", key, wait.since.UTC().Format("20060102T150405Z"), n)
+			if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: alarmKey}, line); err != nil {
+				return err
+			}
+			wait.filed = n
+		}
+		l.flowWaits[key] = wait
+	}
 	return nil
 }
