@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -59,7 +60,10 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				st, err := a.store.Read()
+				// Stop must remain observable while a writer holds the lock.
+				// Peek reads the atomically replaced snapshot without joining
+				// the queue of readers that can starve timer settlement.
+				st, err := a.store.Peek()
 				if err != nil || st.Stop != nil {
 					cancel()
 					return
@@ -92,7 +96,13 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 		current.cfg, current.now, current.loopNow = cfg, time.Now(), nil
 		_, err = d.pass(&current)
 		if err != nil {
-			return err
+			var busy *state.LockBusyError
+			if once || !errors.As(err, &busy) {
+				return err
+			}
+			// Keep earlier actions alive and retry at the next tick. A busy
+			// writer is not a reason to cancel every dispatched occurrence.
+			fmt.Fprintf(a.out, "TIMER pass skipped, retrying next tick: %v\n", err)
 		}
 		if once {
 			d.batches.Wait()
