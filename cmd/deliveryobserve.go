@@ -50,7 +50,7 @@ var readDeliveryRelease = func(ctx context.Context, p superloop.Pull) (string, s
 	if tag == "" {
 		return "", "", nil
 	}
-	contains, err := loopReleaseContains(ctx, p.Ref, p.MergeCommit, tag)
+	contains, err := releaseTagContains(ctx, p.Ref, p.MergeCommit, tag)
 	if err != nil || !contains {
 		return "", "", err
 	}

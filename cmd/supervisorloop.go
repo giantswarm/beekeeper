@@ -4416,8 +4416,18 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	return nil
 }
 
-// loopReleaseContains proves the actual merge is an ancestor of the tag using REST.
+// loopReleaseContains keeps self-update wakes scoped to this program's repository.
+// Delivery release recovery uses the general containment check independently.
 var loopReleaseContains = func(ctx context.Context, ref, commit, version string) (bool, error) {
+	r, ok := parseRef(ref)
+	if !ok || r.Repo != "giantswarm/beekeeper" {
+		return false, nil
+	}
+	return releaseTagContains(ctx, ref, commit, version)
+}
+
+// releaseTagContains proves the actual merge is an ancestor of the tag using REST.
+func releaseTagContains(ctx context.Context, ref, commit, version string) (bool, error) {
 	r, ok := parseRef(ref)
 	if !ok || commit == "" {
 		return false, nil

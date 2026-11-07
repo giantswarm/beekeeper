@@ -514,3 +514,19 @@ func TestDeliveryLoopWritesBeforeActionsAndRestart(t *testing.T) {
 		t.Fatalf("restart repeated transitions: %d -> %d", len(events), len(after))
 	}
 }
+
+func TestDeliveryGeneralTagCheckKeepsSelfUpdateWakesScoped(t *testing.T) {
+	old := github.RunGH
+	t.Cleanup(func() { github.RunGH = old })
+	calls := 0
+	github.RunGH = func(context.Context, ...string) ([]byte, error) { calls++; return []byte("ahead"), nil }
+	ref := "example/delivery#2"
+	contains, err := releaseTagContains(t.Context(), ref, loopFixed, "v3.0.0")
+	if err != nil || !contains || calls != 1 {
+		t.Fatalf("general check: %v %v calls %d", contains, err, calls)
+	}
+	contains, err = loopReleaseContains(t.Context(), ref, loopFixed, "v3.0.0")
+	if err != nil || contains || calls != 1 {
+		t.Fatalf("self-update crossed repositories: %v %v calls %d", contains, err, calls)
+	}
+}
