@@ -68,7 +68,9 @@ func readClaudeLogin(now time.Time) claudeLogin {
 }
 
 func (v claudeLogin) needsLogin() bool {
-	return v.State == claudeLoginExpired || v.State == claudeLoginExpiring
+	// Access-token expiry is routine when the CLI can refresh it. Keep the
+	// expiry visible, but do not turn it into a repeated browser-login request.
+	return !v.Refreshable && (v.State == claudeLoginExpired || v.State == claudeLoginExpiring)
 }
 func (v claudeLogin) line() string {
 	line := "CLAUDE CLI LOGIN: " + v.State
@@ -92,8 +94,8 @@ func (a *app) requireClaudeLogin() error {
 	return nil
 }
 
-// claude-login is also the login note's probe. Unknown is not proof of a
-// renewal; only a saved login outside the warning window closes the note.
+// claude-login is also the login note's probe. A healthy saved login or a
+// CLI refresh path clears the manual step; unknown authentication does not.
 func (a *app) claudeLoginCmd() *cobra.Command {
 	return &cobra.Command{Use: "claude-login", Short: "Show the local Claude CLI login and access-token expiry", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 		v := readClaudeLogin(a.now)
@@ -104,7 +106,7 @@ func (a *app) claudeLoginCmd() *cobra.Command {
 		} else if _, err := fmt.Fprintln(a.out, v.line()); err != nil {
 			return err
 		}
-		if v.State != "logged in" {
+		if v.State != "logged in" && !v.Refreshable {
 			return &exitError{code: ExitRefused}
 		}
 		return nil
