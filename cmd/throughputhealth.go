@@ -84,8 +84,10 @@ func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, arg
 	}
 	// A start cut off after it registered its session (killed while it
 	// waited for the state lock: exit -1) did start: its roster entry is
-	// the outcome, not the child's exit status.
-	if err != nil && len(args) >= 3 && l.startRegistered(args[2], begin) {
+	// the outcome, not the child's exit status. Registration precedes
+	// launch, so also require the child's confirmation that startup finished.
+	// Otherwise a failed launch with a retained roster entry looks successful.
+	if err != nil && len(args) >= 3 && strings.Contains("\n"+out, "\nstarted "+args[2]+":") && l.startRegistered(args[2], begin) {
 		err = nil
 	}
 	reason := throughputStartFailed

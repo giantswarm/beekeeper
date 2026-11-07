@@ -313,3 +313,36 @@ func TestLoopReviewStartFailedWithoutRegistering(t *testing.T) {
 		t.Fatalf("an unregistered start not reported failed:\n%s", r.out)
 	}
 }
+
+// Registration happens before launch; a retained entry is not launch proof.
+func TestLoopReviewStartLaunchFailedAfterRegistering(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: args[2]}, Registered: time.Now()})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return "starting reviewer: service launch failed (the start stays recorded)", 1
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if !strings.Contains(r.out.String(), "SUPERVISOR REVIEW FAILED") {
+		t.Fatalf("a failed launch was treated as successful:\n%s", r.out)
+	}
+	outcomes := r.logged(t, throughputOutcomeVerb)
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes %v", outcomes)
+	}
+	var o throughputOutcome
+	if err := json.Unmarshal([]byte(outcomes[0].Detail), &o); err != nil {
+		t.Fatal(err)
+	}
+	if o.Success || o.Reason != throughputStartFailed {
+		t.Fatalf("outcome %+v", o)
+	}
+}
