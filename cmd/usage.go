@@ -804,6 +804,40 @@ func errorUsageView(k config.Capacity, err error) (config.Capacity, *usageView) 
 	}
 }
 
+// usageUnreadable is the start of a Fallback that keeps Codex starts going on
+// an unreadable reading. The watch raises such a fallback to the guide.
+const usageUnreadable = "usage unreadable; "
+
+// codexUnreadable reports whether err leaves the built-in Codex reading
+// unknown without saying the quota is exhausted. Such a reading keeps the last
+// good reading, or the configured ceiling when there is none: only an explicit
+// quota stop holds Codex starts.
+func codexUnreadable(u config.Usage, err error) bool {
+	return err != nil && slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(err)
+}
+
+// keptReadingFallback labels a last good reading kept over the read error msg.
+func keptReadingFallback(u config.Usage, msg string) string {
+	if !codexUnreadable(u, errors.New(msg)) {
+		return msg
+	}
+	return usageUnreadable + "kept last good reading: " + msg
+}
+
+func configuredCeilingFallback(msg string) string {
+	return usageUnreadable + "using configured ceiling: " + msg
+}
+
+// configuredCeilingUsageView keeps k's configured ceiling when its Codex
+// reading is unreadable and no good reading is saved.
+func configuredCeilingUsageView(k config.Capacity, err error) (config.Capacity, *usageView) {
+	return k, &usageView{
+		Ceiling:     k.Ceiling,
+		HighPercent: k.Usage.EffectiveHighPercent(),
+		Fallback:    configuredCeilingFallback(err.Error()),
+	}
+}
+
 func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, error) {
 	if a.readUsage != nil {
 		return a.readUsage(ctx, u.Command, u.EffectiveTimeout())
@@ -1070,22 +1104,30 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			subDerivedCeiling += p.Ceiling
 			continue
 		}
-		if providerErrs[name] != "" && slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
+		if providerErrs[name] != "" && slices.Equal(p.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(errors.New(providerErrs[name])) {
 			errs = append(errs, name+": "+providerErrs[name])
 			continue
 		}
+		unreadable := func(msg string) {
+			if codexUnreadable(p.Usage, errors.New(msg)) {
+				anySubscription = true
+				subDerivedCeiling += p.Ceiling
+				return
+			}
+			errs = append(errs, name+": "+msg)
+		}
 		if a.store == nil {
-			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
+			unreadable(cmp.Or(providerErrs[name], "usage not read"))
 			continue
 		}
 		var r usageReading
 		found, err := a.store.ReadFile(usageProviderFile(name), &r)
 		if err != nil || !found {
-			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
+			unreadable(cmp.Or(providerErrs[name], "usage not read"))
 			continue
 		}
 		if verr := validateReadingAt(r, p.Usage, now); verr != nil {
-			errs = append(errs, name+": "+verr.Error())
+			unreadable(verr.Error())
 			continue
 		}
 		applyQuotaForUsageFile(a.store, usageProviderFile(name), &r, now)
@@ -1118,6 +1160,9 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 		return k, nil
 	}
 	r, err := a.resolveReading(ctx, usageFile, k.Usage)
+	if codexUnreadable(k.Usage, err) {
+		return configuredCeilingUsageView(k, err)
+	}
 	if err != nil {
 		return errorUsageView(k, err)
 	}
@@ -1151,11 +1196,11 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		err = validateReadingAt(r, u, now)
 	}
 	if err != nil {
-		// The built-in Codex reader consumes authoritative local events, including
-		// explicit spend/rate-limit stops. Never mask those with an older event.
-		if haveCached && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) &&
+		// An explicit Codex spend/rate-limit stop is authoritative: never mask
+		// it with an older reading. Any other failure keeps the last good one.
+		if haveCached && !(slices.Equal(u.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(err)) &&
 			validateReadingAt(cached, u, now) == nil {
-			cached.Fallback = err.Error()
+			cached.Fallback = keptReadingFallback(u, err.Error())
 			applyQuotaForUsageFile(a.store, file, &cached, now)
 			return cached, nil
 		}
@@ -1186,12 +1231,15 @@ func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessi
 	if u.High {
 		return u.highBlock(a.now)
 	}
-	if u.Error != "" && a.store != nil {
+	// A configured ceiling stands in for an unreadable reading, not for a
+	// USAGE HIGH episode the last good reading opened.
+	noReading := u.Error != "" || (u.At.IsZero() && strings.HasPrefix(u.Fallback, usageUnreadable))
+	if noReading && a.store != nil {
 		var l usageHighLedger
 		if found, err := a.store.ReadFile(usageHighFile, &l); err == nil && found &&
 			l.Episode != "" && !l.ResetsAt.IsZero() && a.now.Before(l.ResetsAt) {
 			return fmt.Sprintf("usage high until %s (in %s); usage unreadable (%s)",
-				clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(u.Error, 80))
+				clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(cmp.Or(u.Error, u.Fallback), 80))
 		}
 	}
 	return ""
@@ -1306,18 +1354,33 @@ func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
 }
 
 func (u *usageView) windowsLine(now time.Time) string {
-	s := windowsPairLine(u.FiveHour, u.SevenDay, now)
-	if u.Fallback != "" {
-		s += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(u.At)), truncate(u.Fallback, 120))
+	return withFallback(windowsPairLine(u.FiveHour, u.SevenDay, now), u.Fallback, u.At, now)
+}
+
+// withFallback appends why a reading is a fallback to its usage summary s. A
+// configured ceiling over an unreadable reading has no reading (at is zero):
+// its summary is the reason alone.
+func withFallback(s, fallback string, at, now time.Time) string {
+	switch {
+	case fallback == "":
+		return s
+	case at.IsZero() && s == "":
+		return truncate(fallback, 120)
+	case at.IsZero():
+		return s + "; " + truncate(fallback, 120)
 	}
-	return s
+	return s + fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(at)), truncate(fallback, 120))
 }
 
 func (u *usageView) capacitySuffix(now time.Time) string {
 	if u.Error != "" {
 		return "usage unknown (" + truncate(u.Error, 120) + ")"
 	}
-	return "usage " + u.windowsLine(now)
+	l := u.windowsLine(now)
+	if strings.HasPrefix(l, usageUnreadable) {
+		return l
+	}
+	return "usage " + l
 }
 
 func (u *usageView) watchLine(now time.Time) string {
@@ -1500,18 +1563,34 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 	w.mu.Lock()
 	uerr := w.usageErr
 	w.mu.Unlock()
-	if uerr != "" && slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
+	if uerr != "" && slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(errors.New(uerr)) {
 		return errorUsageView(k, errors.New(uerr))
 	}
 	var r usageReading
 	if found, err := w.store.ReadFile(usageFile, &r); err == nil && found && validateReadingAt(r, k.Usage, now) == nil {
-		r.Fallback = cmp.Or(uerr, r.Fallback)
+		if uerr != "" {
+			r.Fallback = keptReadingFallback(k.Usage, uerr)
+		}
 		return deriveUsageView(r, k, now)
+	}
+	if uerr != "" && codexUnreadable(k.Usage, errors.New(uerr)) {
+		return configuredCeilingUsageView(k, errors.New(uerr))
 	}
 	if uerr != "" {
 		return errorUsageView(k, errors.New(uerr))
 	}
 	return k, nil
+}
+
+// usageFallback raises a Codex reading kept or replaced by the configured
+// ceiling over an unreadable read to the guide, once per episode, and ends the
+// episode once the reading is good again.
+func (w *watcher) usageFallback(u *usageView) {
+	if strings.HasPrefix(u.Fallback, usageUnreadable) {
+		w.fail("usage-error", "USAGE %s", u.Fallback)
+		return
+	}
+	w.clear("usage-error")
 }
 
 // watchUsage refreshes subscription usage when due, prints USAGE lines, tracks
@@ -1537,7 +1616,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 			w.fail("usage-error", "USAGE unreadable: %s", u.Error)
 			return u
 		}
-		w.clear("usage-error")
+		w.usageFallback(u)
 		w.emitNow("usage", "USAGE: %s", u.watchLine(w.now))
 		w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
 		return u
@@ -1559,7 +1638,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 		w.fail("usage-error", "USAGE unreadable: %s", u.Error)
 		return u
 	}
-	w.clear("usage-error")
+	w.usageFallback(u)
 	if rep := k.Usage.ReportEvery.Duration; rep > 0 {
 		w.mu.Lock()
 		due := w.usageReported.IsZero() || w.now.Sub(w.usageReported) >= rep
@@ -1625,7 +1704,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.mu.Unlock()
 			if uerr != "" {
 				readings[name] = providerReadingResult{err: errors.New(uerr)}
-				if slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
+				if slices.Equal(p.Command, config.DefaultCodexUsageCommand) && codex.QuotaStop(errors.New(uerr)) {
 					continue
 				}
 			}
@@ -1635,7 +1714,9 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 					if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
 						readings[name] = providerReadingResult{err: verr}
 					} else {
-						r.Fallback = cmp.Or(uerr, r.Fallback)
+						if uerr != "" {
+							r.Fallback = keptReadingFallback(p.Usage, uerr)
+						}
 						applyQuotaForUsageFile(w.store, usageProviderFile(name), &r, w.now)
 						readings[name] = providerReadingResult{reading: r, ok: true}
 					}
@@ -1692,6 +1773,8 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		}
 		if pv.Error != "" {
 			w.fail("usage-error-"+name, "USAGE %s unreadable: %s", name, pv.Error)
+		} else if strings.HasPrefix(pv.Fallback, usageUnreadable) {
+			w.fail("usage-error-"+name, "USAGE %s %s", name, pv.Fallback)
 		} else {
 			w.clear("usage-error-" + name)
 		}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -234,9 +235,7 @@ func (p *providerView) findBucket(name string) *bucketView {
 
 func (p *providerView) windowsSummary(now time.Time) (summary string) {
 	defer func() {
-		if p.Fallback != "" {
-			summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
-		}
+		summary = withFallback(summary, p.Fallback, p.At, now)
 	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
@@ -976,6 +975,22 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		errMsg := "usage not read"
 		if res.err != nil {
 			errMsg = res.err.Error()
+		}
+		if codexUnreadable(pCfg.Usage, errors.New(errMsg)) {
+			// Unknown is not exhausted: without a saved good reading the
+			// configured ceiling holds, and the watch raises it to the guide.
+			pv.Fallback = configuredCeilingFallback(errMsg)
+			pv.Ceiling = reviewCeiling(pCfg.Ceiling, extra)
+			switch {
+			case pv.Ceiling == 0:
+				pv.Blocks = []string{ceilingZero}
+			case len(pv.Busy) >= pv.Ceiling:
+				pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
+			default:
+				pv.Room = pv.Ceiling - len(pv.Busy)
+			}
+			pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
+			return pv
 		}
 		pv.Ceiling, pv.Room = 0, 0
 		pv.Error = errMsg

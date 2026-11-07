@@ -2266,15 +2266,17 @@ capacity:
 		}
 	}
 
-	// 1. No rollout files yet -> codex fails closed (ceiling 0, room 0).
+	// 1. No rollout files yet -> unknown is not exhausted: codex keeps its
+	//    configured ceiling and says why.
 	var capOut bytes.Buffer
 	aCap := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &capOut, as: usageCaller}
 	capCmd := aCap.capacityCmd()
 	if err := capCmd.Execute(); err != nil {
 		t.Fatalf("capacity with no codex rollouts: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 0; usage unknown (") {
-		t.Fatalf("expected codex fail-closed when no rollouts exist, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 2; usage unreadable; using configured ceiling: ") ||
+		!strings.Contains(capOut.String(), "room for 2 starts") {
+		t.Fatalf("expected codex at its configured ceiling when no rollouts exist, got:\n%s", capOut.String())
 	}
 
 	// 2. Session A has a valid dual-window reading (5h 18%, 7d 40% vs pace 50%), while newer Session B
@@ -2426,7 +2428,8 @@ capacity:
 		t.Fatalf("expected stale codex reading fallback to allow starts, got:\n%s", capOut.String())
 	}
 
-	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt and fails closed.
+	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt,
+	//    but unknown is not exhausted: codex keeps its configured ceiling.
 	tFuture := t0.Add(10 * time.Minute)
 	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-e-future.jsonl", tFuture,
 		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
@@ -2437,8 +2440,8 @@ capacity:
 	if err := aFuture.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on future codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
-		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 2: AutoCodexWorker; usage unreadable; using configured ceiling: usage reading timestamp 2026-10-28T15:10:00Z is in the future; room for 1 start") {
+		t.Fatalf("expected future codex reading to keep the configured ceiling, got:\n%s", capOut.String())
 	}
 }
 
@@ -3961,5 +3964,90 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 				t.Fatalf("reading must use completion time: %+v, now=%s", r, clk.Now())
 			}
 		})
+	}
+}
+
+// An unreadable Codex reading keeps the last good reading, or the configured
+// ceiling when none is saved, and is raised to the guide; only an explicit
+// quota stop holds Codex starts.
+func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
+	unreadable := errors.New("usage reading timestamp 2026-11-07T12:00:00Z is in the future")
+	stop := errors.New("codex spend control reached")
+	for _, providers := range []bool{false, true} {
+		for _, tc := range []struct {
+			name     string
+			err      error
+			saved    bool
+			wantLine string
+			wantOpen bool
+		}{
+			{"unreadable/no saved reading", unreadable, false, "usage unreadable; using configured ceiling: " + unreadable.Error(), true},
+			{"unreadable/saved reading", unreadable, true, "usage unreadable; kept last good reading: " + unreadable.Error(), true},
+			{"quota stop/saved reading", stop, true, "unreadable: " + stop.Error(), false},
+		} {
+			t.Run(fmt.Sprintf("providers=%t/%s", providers, tc.name), func(t *testing.T) {
+				_, cfgPath := isolateUsageTestEnv(t)
+				if err := os.WriteFile(cfgPath, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := config.Load(cfgPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				store, err := state.OpenVersion(cfg.StateDir, "dev")
+				if err != nil {
+					t.Fatal(err)
+				}
+				clk := newFakeClock(t)
+				start := clk.Now()
+				u := config.Usage{Command: config.DefaultCodexUsageCommand,
+					Every: config.Duration{Duration: time.Minute}, StaleAfter: config.Duration{Duration: time.Hour}}
+				k := config.Capacity{Ceiling: 4, Usage: u}
+				file, codexCeiling := usageFile, 4
+				if providers {
+					k = config.Capacity{Ceiling: 4, Providers: map[string]config.Provider{
+						config.ClaudeHarness: {Ceiling: 2, Usage: config.Usage{Command: []string{"claude-usage"}}},
+						codex.Harness:        {Ceiling: 2, Usage: u},
+					}}
+					file, codexCeiling = usageProviderFile(codex.Harness), 2
+				}
+				cfg.Capacity = k
+				good := func(at time.Time) usageReading {
+					return usageReading{At: at, SourceAt: at, SingleWindow: true,
+						SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}
+				}
+				if tc.saved {
+					if err := store.WriteFile(file, good(start.Add(-5*time.Minute))); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var out bytes.Buffer
+				a := &app{cfg: cfg, store: store, now: start, out: &out}
+				a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+					if slices.Equal(cmd, config.DefaultCodexUsageCommand) {
+						return usageReading{}, tc.err
+					}
+					return good(clk.Now()), nil
+				}
+				w := a.newWatcher(false, true)
+				w.now = start
+				w.clock = clk
+				w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+				view := w.watchUsage(context.Background(), &state.State{}, nil)
+				if view == nil || !strings.Contains(out.String(), tc.wantLine) {
+					t.Fatalf("want watch line %q, view=%+v, out=%s", tc.wantLine, view, out.String())
+				}
+				wantCeiling := 0
+				if providers {
+					wantCeiling = 2 // the Claude provider's
+				}
+				if tc.wantOpen {
+					wantCeiling += codexCeiling
+				}
+				if view.Ceiling != wantCeiling || (view.Error == "") != (tc.wantOpen || providers) {
+					t.Fatalf("ceiling %d, error %q; want ceiling %d, open=%t", view.Ceiling, view.Error, wantCeiling, tc.wantOpen)
+				}
+			})
+		}
 	}
 }
