@@ -235,7 +235,14 @@ func (p *providerView) findBucket(name string) *bucketView {
 func (p *providerView) windowsSummary(now time.Time) (summary string) {
 	defer func() {
 		if p.Fallback != "" {
-			summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
+			if p.At.IsZero() {
+				if summary != "" {
+					summary += "; "
+				}
+				summary += "unreadable (" + truncate(p.Fallback, 120) + ")"
+			} else {
+				summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
+			}
 		}
 	}()
 	if p.Kind == config.KindSelfHosted {
@@ -1909,6 +1916,10 @@ its reset (remaining percent / hours to reset), breaking ties by
 capacity.choices order, with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and at or under the even pace of its 7-day window.
+If built-in Codex usage is unreadable, its last good windows still bound starts;
+without valid saved windows, its configured ceiling applies. The watch reports
+the failure to the guide. Explicit account, spend and rate-limit stops remain
+blocking until a successful reading clears them.
 Every start is decided alike: --review marks a review start, which skips no
 gate (capacity.reviewSkipPace, a choice's skipPace and a positive paceMargin
 no longer let a start run ahead of the pace), and --review-of-self-hosted

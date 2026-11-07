@@ -96,6 +96,13 @@ func HasRollouts(stateDir, sessionsDir string, extraDirs ...string) bool {
 // event.
 var ErrNoUsage = errors.New("no codex usage event")
 
+// UsageStoppedError retains the specific stop while identifying it to callers.
+// Its text can be persisted and restored without losing the stop classification.
+type UsageStoppedError string
+
+func (e UsageStoppedError) Error() string { return string(e) }
+func (e UsageStoppedError) Unwrap() error { return ErrUsageStopped }
+
 func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading, error) {
 	files := rolloutFiles(sessionDirs(stateDir, sessionsDir, extraDirs...))
 	if len(files) == 0 {
@@ -436,15 +443,15 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 	}
 
 	if rl.SpendControlReached {
-		return UsageReading{}, errors.New("codex spend control reached")
+		return UsageReading{}, UsageStoppedError("codex spend control reached")
 	}
 	if rl.RateLimitReachedType != nil {
 		if kind := strings.TrimSpace(*rl.RateLimitReachedType); kind != "" {
-			return UsageReading{}, fmt.Errorf("codex rate limit reached (%s)", kind)
+			return UsageReading{}, UsageStoppedError(fmt.Sprintf("codex rate limit reached (%s)", kind))
 		}
 	}
 	if rl.RateLimitReached {
-		return UsageReading{}, errors.New("codex rate limit reached")
+		return UsageReading{}, UsageStoppedError("codex rate limit reached")
 	}
 
 	prim, err := parseRateLimitWindow(slotPrimary, rl.Primary, at)

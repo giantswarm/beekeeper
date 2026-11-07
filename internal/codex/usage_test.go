@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,6 +188,10 @@ func TestReadUsageFailsClosedOnExplicitInvalidOrStoppedFreshestEvent(t *testing.
 			}
 			if !strings.Contains(err.Error(), tc.wantSub) {
 				t.Fatalf("err = %v, want substring %q", err, tc.wantSub)
+			}
+			wantStopped := tc.name == "spend_control_reached" || tc.name == "rate_limit_reached_type"
+			if errors.Is(err, ErrUsageStopped) != wantStopped {
+				t.Fatalf("stop classification: %v, want stopped=%t", err, wantStopped)
 			}
 		})
 	}

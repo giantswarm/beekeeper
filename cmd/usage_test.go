@@ -2266,15 +2266,15 @@ capacity:
 		}
 	}
 
-	// 1. No rollout files yet -> codex fails closed (ceiling 0, room 0).
+	// 1. No rollout files yet -> keep Codex's configured ceiling and warn.
 	var capOut bytes.Buffer
 	aCap := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &capOut, as: usageCaller}
 	capCmd := aCap.capacityCmd()
 	if err := capCmd.Execute(); err != nil {
 		t.Fatalf("capacity with no codex rollouts: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 0; usage unknown (") {
-		t.Fatalf("expected codex fail-closed when no rollouts exist, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 2") || !strings.Contains(capOut.String(), "using configured ceiling:") {
+		t.Fatalf("expected configured Codex ceiling with unreadable warning, got:\n%s", capOut.String())
 	}
 
 	// 2. Session A has a valid dual-window reading (5h 18%, 7d 40% vs pace 50%), while newer Session B
@@ -2426,7 +2426,7 @@ capacity:
 		t.Fatalf("expected stale codex reading fallback to allow starts, got:\n%s", capOut.String())
 	}
 
-	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt and fails closed.
+	// 6. Future SourceAt is rejected; the saved good reading still bounds starts.
 	tFuture := t0.Add(10 * time.Minute)
 	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-e-future.jsonl", tFuture,
 		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
@@ -2437,8 +2437,8 @@ capacity:
 	if err := aFuture.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on future codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
-		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 2: AutoCodexWorker") || !strings.Contains(capOut.String(), "is in the future") {
+		t.Fatalf("expected last good Codex reading with future timestamp warning, got:\n%s", capOut.String())
 	}
 }
 
@@ -3816,6 +3816,10 @@ read -r keepalive
 	}
 	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err == nil {
 		t.Fatal("fresh stop must block starts")
+	}
+	a.now = a.now.Add(2 * time.Hour)
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("failed probe must preserve an old local stop: %v", err)
 	}
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
 		t.Fatal(err)
