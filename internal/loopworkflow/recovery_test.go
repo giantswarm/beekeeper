@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -519,5 +520,78 @@ func TestRecoveryPromotesAHealthyCandidate(t *testing.T) {
 	}
 	if j := d.journal(t); !j.Settled() || j.RolledBack() || j.Observed == nil || !j.Observed.ProbePassed {
 		t.Fatalf("%+v", j)
+	}
+}
+
+// A retained controller includes its own workflow adapter. Testing two builds
+// of today's source cannot establish compatibility with that older adapter.
+func TestRetainedRecoveryController(t *testing.T) {
+	path := os.Getenv("BEEKEEPER_TEST_RETAINED_CONTROLLER")
+	if path == "" {
+		t.Skip("set BEEKEEPER_TEST_RETAINED_CONTROLLER to the retained release binary")
+	}
+	good, err := os.ReadFile(path) //nolint:gosec // explicit integration-test release executable
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next []byte
+	candidate := os.Getenv("BEEKEEPER_TEST_RECOVERY_CANDIDATE")
+	if candidate != "" {
+		next, err = os.ReadFile(candidate) //nolint:gosec // explicit integration-test release executable
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		next = versioned(t, nextRelease, "")
+	}
+	d := newDesk(t, good, next)
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
+	defer cancel()
+	identity := func(binary string) string {
+		c := exec.CommandContext(ctx, binary, "version") //nolint:gosec // supplied integration-test release
+		c.Env, c.Dir = d.env, d.dir
+		out, err := c.Output()
+		if err != nil || len(strings.Fields(string(out))) < 2 {
+			t.Fatalf("binary identity: %v: %s", err, out)
+		}
+		return strings.Fields(string(out))[1]
+	}
+	j := d.journal(t)
+	j.Previous.Version, j.Displaced.Version = identity(d.good), identity(d.good)
+	j.Candidate.Version = identity(d.target)
+	raw, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.target+".update", "journal.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	failed := os.Getenv("BEEKEEPER_TEST_RECOVERED_FROM")
+	if failed == "" {
+		failed = j.Previous.Version
+	}
+	if err := d.store.RecoverVersion(j.Previous.Version, failed, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	out, err := d.controller(ctx).CombinedOutput()
+	if err != nil {
+		t.Fatalf("retained controller: %v\n%s", err, out)
+	}
+	j = d.journal(t)
+	writer, err := state.OpenVersion(filepath.Join(d.dir, "state"), j.Candidate.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := writer.Update(func(*state.State) ([]state.Event, error) { return nil, nil })
+	var fence map[string]any
+	fenced, fenceErr := d.store.ReadFile("recovery-writer.json", &fence)
+	if j.RolledBack() && (!fenced || fenceErr != nil || !errors.Is(writeErr, state.ErrRecoveryWriterFenced)) {
+		t.Fatalf("rollback failed to fence candidate writes: fence=%v, %v, write=%v\n%s", fenced, fenceErr, writeErr, out)
+	}
+	if !j.Settled() || j.RolledBack() || j.Observed == nil || !j.Observed.ProbePassed {
+		t.Fatalf("retained controller did not promote candidate: %+v\n%s", j, out)
+	}
+	if fenced || fenceErr != nil || writeErr != nil {
+		t.Fatalf("normal probation did not clear writer fence: fence=%v, %v, write=%v", fenced, fenceErr, writeErr)
 	}
 }
