@@ -2283,9 +2283,42 @@ without a pull request, or work closed unmerged without a continuing worker, is 
 The release verdict and tag survive removal of the merge from its lane.
 
 `delivery.wipLimit` defaults to `0` (off), accepts nonnegative values through
-`beekeeper config set delivery.wipLimit <n>`, and is displayed for observation only.
-This foundation does not refuse starts, reserve slots or change `capacity` or its JSON.
-New-start enforcement, review/fix priority and stall handling are separate work.
+`beekeeper config set delivery.wipLimit <n>`. When set, it holds new issues until
+a place is free. A delivery observation older than three loop intervals also holds
+new starts. `board next --json` includes `wip` (limit, count, items, freshness and
+reason) and `would_pick`, the first otherwise free item. Its `pick` is null and exit
+status is 3 when no item is admitted; `skipped` and `after_pick` still preview the
+ordinary walk. Claims count and record under one lock. The loop checks before its
+board or monitored queue read, setting no refill pause at the limit: a completed
+release frees the next pass. It checks again immediately before dispatch.
+
+Reviews, forwards, fixes, wakes, rework, merges and repairs keep their existing
+admission rules. An active incident hold's named repair and a `board.order` step
+with `wipExempt: true` pass the WIP gate and still count. A manual `agents start`
+is counted and warns above the limit. Slots needed by `review-queued` deliveries
+and fixes without a live worker are reserved before filling new issues, including
+work waiting from earlier passes. The log names the reserving deliveries once per
+episode; dry-run applies the same reservation. Capacity ceilings, review headroom,
+verdict and JSON stay unchanged.
+
+`delivery.stallAfter` defaults to `24h` (a positive duration). A stalled delivery
+keeps its place. Both watches share durable episode state: a step lasting that long,
+or a failed/unconfirmed release, files once to the guide with its reference and
+wait; recovery is filed once. `WIP FULL` names the oldest deliveries when the limit
+has stayed full without a step change for that duration. Restarts and concurrent
+watches do not duplicate the reports.
+
+`beekeeper delivery drop <ref> --reason "<why>"` ends only a delivery. It closes no
+pull request and stops no worker. The caller and reason are logged. The drop is
+bound to the actual observed pull-request heads (an unknown head is refused), so
+observing the same head after a restart does not bring it back. A new head opens a
+new delivery episode. No delivery is automatically dropped for being stalled.
+
+The separate `supervisor.unmergedLimit` / `supervisor.unmergedWindow` policy still
+holds new work per repository (defaults: 10 non-draft open pulls created in seven
+days), escalating its own backlog episode. Desk delivery WIP does not replace those
+per-repository semantics. Selecting a managed WIP value and an installed end-to-end
+proof remain separate work.
 
 ### The supervisor loop down
 

@@ -241,75 +241,80 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 }
 
 func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Supervisor.ReviewRounds = 2
-	r.pull.Branch = "fix-2079-branch"
-	r.park(t, loopPR, time.Now())
-	r.started(t, loopWorker, "worker-session-1")
-	work := ""
-	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park.PostMerge = &work
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// Pass 1: the review-parked worker ends (removed from st.Agents, saved in st.ReviewParks)
-	// and the reviewer starts in the freed slot.
-	r.pass(t)
-	if r.called(agentsName, loopRemove, loopWorker) == nil {
-		t.Fatalf("review-parked worker was not ended: %v\n%s", r.calls, r.out)
-	}
-	if start := r.called(agentsName, agentStartName, loopReviewer); start == nil {
-		t.Fatalf("reviewer did not start after worker ended: %v\n%s", r.calls, r.out)
-	}
-	st, err := r.a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.Agents) != 0 || len(st.ReviewParks) != 1 || st.ReviewParks[0].ReviewHead != loopHead {
-		t.Fatalf("expected ended worker in ReviewParks, got Agents=%+v ReviewParks=%+v", st.Agents, st.ReviewParks)
-	}
+	for _, limit := range []int{0, 1} {
+		t.Run(fmt.Sprintf("wip=%d", limit), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Delivery.WIPLimit = limit
+			r.a.cfg.Supervisor.ReviewRounds = 2
+			r.pull.Branch = "fix-2079-branch"
+			r.park(t, loopPR, time.Now())
+			r.started(t, loopWorker, "worker-session-1")
+			work := ""
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents[0].Park.PostMerge = &work
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// Pass 1: the review-parked worker ends (removed from st.Agents, saved in st.ReviewParks)
+			// and the reviewer starts in the freed slot.
+			r.pass(t)
+			if r.called(agentsName, loopRemove, loopWorker) == nil {
+				t.Fatalf("review-parked worker was not ended: %v\n%s", r.calls, r.out)
+			}
+			if start := r.called(agentsName, agentStartName, loopReviewer); start == nil {
+				t.Fatalf("reviewer did not start after worker ended: %v\n%s", r.calls, r.out)
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Agents) != 0 || len(st.ReviewParks) != 1 || st.ReviewParks[0].ReviewHead != loopHead {
+				t.Fatalf("expected ended worker in ReviewParks, got Agents=%+v ReviewParks=%+v", st.Agents, st.ReviewParks)
+			}
 
-	// Pass 2: R1 requests changes; since no worker is waiting, the loop starts a fresh fixer on the PR's branch.
-	r.verdict("R1", loopHead, superloop.ChangesRequested, "fix the nil check in handler.go:42")
-	r.pass(t)
-	fixerStart := r.called(agentsName, agentStartName, loopWorker)
-	if fixerStart == nil {
-		t.Fatalf("ChangesRequested did not start a fixer worker: %v\n%s", r.calls, r.out)
-	}
-	briefBytes, err := os.ReadFile(fixerStart[3])
-	if err != nil {
-		t.Fatal(err)
-	}
-	briefText := string(briefBytes)
-	if !strings.Contains(briefText, "fix-2079-branch") || !strings.Contains(briefText, "fix the nil check in handler.go:42") {
-		t.Fatalf("fixer brief missing branch or findings:\n%s", briefText)
-	}
+			// Pass 2: R1 requests changes; since no worker is waiting, the loop starts a fresh fixer on the PR's branch.
+			r.verdict("R1", loopHead, superloop.ChangesRequested, "fix the nil check in handler.go:42")
+			r.pass(t)
+			fixerStart := r.called(agentsName, agentStartName, loopWorker)
+			if fixerStart == nil {
+				t.Fatalf("ChangesRequested did not start a fixer worker: %v\n%s", r.calls, r.out)
+			}
+			briefBytes, err := os.ReadFile(fixerStart[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			briefText := string(briefBytes)
+			if !strings.Contains(briefText, "fix-2079-branch") || !strings.Contains(briefText, "fix the nil check in handler.go:42") {
+				t.Fatalf("fixer brief missing branch or findings:\n%s", briefText)
+			}
 
-	// Pass 3: the fixer pushes loopFixed and parks for desk review; it ends and R2 starts.
-	r.pull.Head = loopFixed
-	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		party := state.Party{Name: loopWorker, Session: "worker-session-2"}
-		st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Park: &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: deskReviewWait, ReviewHead: loopFixed, PostMerge: &work}})
-		st.Starts = append(st.Starts, state.Start{Party: party, By: loopParty, At: time.Now().Add(time.Minute)})
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	r.pass(t)
-	if r.called(agentsName, loopRemove, loopWorker) == nil {
-		t.Fatalf("fixer worker was not ended on review park: %v\n%s", r.calls, r.out)
-	}
-	reviewer2 := superloop.ReviewerName(loopPR, 2)
-	if r.called(agentsName, agentStartName, reviewer2) == nil {
-		t.Fatalf("second review round did not start: %v\n%s", r.calls, r.out)
-	}
+			// Pass 3: the fixer pushes loopFixed and parks for desk review; it ends and R2 starts.
+			r.pull.Head = loopFixed
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				party := state.Party{Name: loopWorker, Session: "worker-session-2"}
+				st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Park: &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: deskReviewWait, ReviewHead: loopFixed, PostMerge: &work}})
+				st.Starts = append(st.Starts, state.Start{Party: party, By: loopParty, At: time.Now().Add(time.Minute)})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if r.called(agentsName, loopRemove, loopWorker) == nil {
+				t.Fatalf("fixer worker was not ended on review park: %v\n%s", r.calls, r.out)
+			}
+			reviewer2 := superloop.ReviewerName(loopPR, 2)
+			if r.called(agentsName, agentStartName, reviewer2) == nil {
+				t.Fatalf("second review round did not start: %v\n%s", r.calls, r.out)
+			}
 
-	// Pass 4: R2 approves; the loop merges through gate (--reviewed-head) with no worker waiting.
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
-	if r.called(gateCmdName) == nil || r.lastMerged != loopFixed {
-		t.Fatalf("approved second round did not merge: %v\n%s", r.calls, r.out)
+			// Pass 4: R2 approves; the loop merges through gate (--reviewed-head) with no worker waiting.
+			r.verdict("R2", loopFixed, superloop.Approved, "")
+			r.pass(t)
+			if r.called(gateCmdName) == nil || r.lastMerged != loopFixed {
+				t.Fatalf("approved second round did not merge: %v\n%s", r.calls, r.out)
+			}
+		})
 	}
 }
 

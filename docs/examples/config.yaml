@@ -548,6 +548,8 @@ notify:                     # what watch --notify sends to the desktop; the mach
   urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor and page-unowned default to critical
   repeat: 30m               # a lasting condition (budget) notifies again after this
 
-# Observe deliveries; 0 leaves the limit off. This setting does not enforce starts.
+# Delivery admission is additional to capacity; 0 leaves the limit off.
+# board.order steps may set wipExempt: true (still counted).
 delivery:
   wipLimit: 0
+  stallAfter: 24h             # raise a stuck step/full limit; never automatically drop

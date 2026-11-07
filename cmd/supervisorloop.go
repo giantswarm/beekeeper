@@ -734,6 +734,8 @@ type supervisorLoop struct {
 	// pulls reuses unchanged PR observations between passes. A new park,
 	// answer or reviewer report invalidates them before planning.
 	pulls map[string]loopPullObservation
+	// fillPreview is the dry-run projection, used only by synchronous previews.
+	fillPreview *state.State
 	// openPulls are the desk's open pull requests the sweep last listed,
 	// at openPullsAt.
 	openPulls       []string
@@ -1474,6 +1476,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	in.Pulls = map[string]superloop.Pull{}
+	in.PullReadAt = map[string]time.Time{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
 	for _, d := range st.Deliveries {
 		if d.Active() {
@@ -1542,6 +1545,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
+		l.mu.Lock()
+		in.PullReadAt[ref] = l.pulls[ref].at
+		l.mu.Unlock()
 		if (p.State == superloop.Merged || p.State == superloop.Closed) && !hasLoopRound(in.Taken, ref) {
 			unreviewedEnded[strings.ToLower(ref)] = true
 		}
@@ -1694,6 +1700,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	if l.dryRun {
+		preview := *st
+		preview.Deliveries = superloop.Deliveries(in, st.Deliveries)
+		if len(unread) == 0 && !l.sweepIncomplete {
+			preview.DeliveriesAt = in.Now
+		}
+		l.fillPreview = &preview
+		defer func() { l.fillPreview = nil }()
 		for _, act := range actions {
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
 				return err
@@ -1778,6 +1791,14 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 // transitions independently so a merge waiting on CI or in a lane queue never
 // delays a review or worker start, and the reverse.
 func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+	current, readErr := l.a.store.Read()
+	if readErr != nil {
+		return readErr
+	}
+	// Freeze reservations before independent streams can register their starts.
+	// A capacity read and a roster read are not one atomic observation.
+	reservations := deliveryReservations(current)
+
 	planned := map[string]bool{}
 	var (
 		laneOrder  []string
@@ -1907,7 +1928,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 				return err
 			}
 		}
-		return l.fill(ctx, st, claims, taken)
+		return l.fill(ctx, st, claims, taken, reservations)
 	})
 
 	// Keep transitions for one worker ordered, without making a stalled
@@ -3750,6 +3771,9 @@ type loopBoardNone struct{ err error }
 // No walk runs while the GitHub budget is under github.floor: the pass
 // answers errLoopLater, so a done event waits unsettled and costs nothing.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	if err := l.deliveryStart("", false); err != nil {
+		return nil, err
+	}
 	l.mu.Lock()
 	if l.boardNone != nil {
 		err := l.boardNone.err
@@ -3854,11 +3878,15 @@ func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, erro
 }
 
 type loopBoardItem struct {
-	Ref string `json:"ref"`
-	URL string `json:"url"`
+	WIPExempt bool   `json:"wip_exempt,omitempty"`
+	Ref       string `json:"ref"`
+	URL       string `json:"url"`
 }
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
+		return "", err
+	}
 	if l.unreadRepo(next.Ref) != "" {
 		return "", errLoopLater
 	}
@@ -3902,11 +3930,14 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
-	// Placement and preparation may block while an incident hold is set.
+	// Placement and preparation may block while admission changes.
 	if err := l.incidentStart(next.Ref); err != nil {
 		return "", err
 	}
 	if err := l.unmergedStart(ctx, next.Ref); err != nil {
+		return "", err
+	}
+	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
 		return "", err
 	}
 	if err := l.claim(act, name); err != nil {

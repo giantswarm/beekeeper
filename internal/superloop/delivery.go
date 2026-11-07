@@ -2,6 +2,7 @@ package superloop
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -73,8 +74,16 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		}
 		for _, is := range issues {
 			i := ensure(is)
-			if seed := slices.IndexFunc(prev, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) }); seed >= 0 && prev[seed].Started.Before(out[i].Started) {
-				out[i].Started = prev[seed].Started
+			if seed := slices.IndexFunc(prev, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) }); seed >= 0 {
+				old := prev[seed]
+				if old.Started.Before(out[i].Started) {
+					out[i].Started = old.Started
+				}
+				if old.DropReason != "" && out[i].DropReason == "" {
+					out[i].Step, out[i].Since = old.Step, old.Since
+					out[i].DropReason, out[i].DropBy, out[i].DropAt = old.DropReason, old.DropBy, old.DropAt
+					out[i].DroppedHeads = maps.Clone(old.DroppedHeads)
+				}
 			}
 			if !slices.Contains(out[i].Pulls, ref) {
 				out[i].Pulls = append(slices.Clone(out[i].Pulls), ref)
@@ -91,6 +100,37 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		before := d.Step
 		if d.Since.After(in.Now) {
 			continue
+		}
+		d.Heads = maps.Clone(d.Heads)
+		if d.Heads == nil {
+			d.Heads = map[string]string{}
+		}
+		for _, ref := range d.Pulls {
+			readAt := in.Now
+			if in.PullReadAt != nil {
+				readAt = in.PullReadAt[ref]
+			}
+			if p, ok := in.Pulls[ref]; ok && p.Head != "" && (d.DropReason == "" || !readAt.Before(d.DropAt)) {
+				d.Heads[ref] = p.Head
+			}
+		}
+		// A manual drop is tied to the observed heads. Missing observations do
+		// not undo it; only positive evidence of a new head opens the delivery.
+		if d.DropReason != "" {
+			changed := false
+			for _, ref := range d.Pulls {
+				readAt := in.Now
+				if in.PullReadAt != nil {
+					readAt = in.PullReadAt[ref]
+				}
+				if p, ok := in.Pulls[ref]; ok && !readAt.Before(d.DropAt) && p.Head != "" && p.Head != d.DroppedHeads[ref] {
+					changed = true
+				}
+			}
+			if !changed {
+				continue
+			}
+			d.DropReason, d.DroppedHeads = "", nil
 		}
 		var worker *Worker
 		for j := range in.Workers {

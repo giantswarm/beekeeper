@@ -58,7 +58,8 @@ const ModelServer = "model-server"
 
 // Delivery configures observation of issue delivery. A zero limit is off.
 type Delivery struct {
-	WIPLimit int `yaml:"wipLimit"`
+	WIPLimit   int      `yaml:"wipLimit"`
+	StallAfter Duration `yaml:"stallAfter"`
 }
 
 // Config is the parsed configuration with the defaults applied.
@@ -464,6 +465,8 @@ type EpicGate struct {
 // status, kind and labels match (each list matches any of its values, an
 // empty one everything), or the open issues of a GitHub search.
 type BoardStep struct {
+	// WIPExempt permits new issues through the delivery gate, still counted.
+	WIPExempt bool `yaml:"wipExempt"`
 	// Name says why an item of the step is picked.
 	Name string `yaml:"name"`
 	// Status and Kind are the board's Status and Kind values; an
@@ -3513,6 +3516,7 @@ func userHomeDir() (string, error) {
 }
 
 func (c *Config) defaults() error {
+	setDur(&c.Delivery.StallAfter, 24*time.Hour)
 	home, err := userHomeDir()
 	if err != nil {
 		return err
@@ -4049,6 +4053,9 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	if c.Delivery.StallAfter.Duration < 0 {
+		report(fmt.Errorf("delivery.stallAfter must be positive"))
+	}
 	if c.Delivery.WIPLimit < 0 {
 		report(fmt.Errorf("delivery.wipLimit must be nonnegative"))
 	}
