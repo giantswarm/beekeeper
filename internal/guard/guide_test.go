@@ -170,8 +170,8 @@ func TestGuidesQuestionsAreChecked(t *testing.T) {
 		}
 		return decideEvent(t, h, withSession(toolEvent(AskTool, map[string]any{"questions": questions}), session))
 	}
-	if d := ask(guideSession, "Merge it? Status quo: open. Why: risky."); d != nil {
-		t.Errorf("a complete question is refused: %+v", d)
+	if d := ask(guideSession, "Merge it? Status quo: open. Why: risky."); d == nil || !strings.Contains(d.Reason, "blocking question dialog") {
+		t.Errorf("a complete blocking question must still be refused: %+v", d)
 	}
 	d := ask(guideSession, "Merge it? Status quo: open.", "And this?")
 	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "question 2 lacks: --status-quo") ||

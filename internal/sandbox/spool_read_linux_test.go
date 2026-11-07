@@ -64,7 +64,10 @@ func TestReadRefusesSubstitutedFIFO(t *testing.T) {
 					_ = syscall.Close(writer)
 				}
 				select {
-				case <-done:
+				case exitErr := <-done:
+					if exitErr != nil {
+						t.Logf("fixture cleanup: %v", exitErr)
+					}
 				case <-time.After(time.Second):
 					t.Error("read did not end after rescue")
 				}

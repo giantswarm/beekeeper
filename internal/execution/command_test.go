@@ -83,8 +83,8 @@ func TestExecutionCommandsBoundInheritedPipes(t *testing.T) {
 					// so the pre-fix reproducer leaves no stuck command goroutine.
 					_ = child.Kill()
 					cancel()
-					<-done
-					t.Fatal("command waited for inherited pipes after exit or cancellation")
+					exitErr := <-done
+					t.Fatalf("command waited for inherited pipes after exit or cancellation: %v", exitErr)
 				}
 			})
 		}

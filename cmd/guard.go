@@ -572,9 +572,9 @@ the estimated cost, the GraphQL budget as beekeeper last read it, and
 gh project item-add, gh project item-edit by item id, beekeeper board move
 and a filtered read instead. An issue's projectItems passes.
 
-An AskUserQuestion call is refused in every session but the guide's (the
-one beekeeper guide names): the agent files beekeeper note add --for
-<guide.person> and carries on.
+An AskUserQuestion call is refused in every session: the guide asks in
+conversation while keeping its watch and message handling active; other
+agents file beekeeper note add --for <guide.person> and carry on.
 
 The guide asks and relays, it never works itself: in the guide's session
 an Edit, Write or NotebookEdit, a git commit or push, a devctl pr merge or
@@ -585,11 +585,10 @@ file the work in that turn as an issue on the board and tell the person
 in one line, never to hand it back to them; stuck operational state (a
 hold, a pinned release, a parked session) it sets, narrows or lifts itself
 with beekeeper to carry out what the person decided, then reports. Its
-AskUserQuestion is checked
-as note add checks a note for the person: every question asks, carries a
-"Status quo: …" and a "Why: …" part, a "Checked: …" part for a claim that
-something is merged, green, released, rolled or closed, the full URL of
-every #N or owner/repo#N, and a consequence as every option's description.
+blocking question dialogs are refused too, so a waiting decision never stops its
+watch. Guide questions in conversation carry the note's status quo, why, options,
+deadline, default and checked claims. Open work and restoration times are retained
+with guide work add --due <time>; the Stop hook flags due tasks and restorations.
 Questions, notes, SendMessage, reads and beekeeper pass. Other sessions
 are not affected.
 

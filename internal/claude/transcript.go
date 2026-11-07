@@ -22,8 +22,8 @@ type Turn struct {
 	Text string    `json:"text"`
 }
 
-// tailWindow is how much of a transcript's end is read: tool results make
-// lines large, and the last few turns are what is asked for.
+// tailWindow is the initial transcript window. Sparse or larger requests
+// expand it until enough turns have been read, or the start is reached.
 const tailWindow = 2 << 20
 
 // Tail returns the last n turns of the transcript at path.
@@ -44,13 +44,36 @@ func tail(path string, n int, tools bool, onDialog func(Dialog)) ([]Turn, error)
 	if err != nil {
 		return nil, err
 	}
-	off := max(fi.Size()-tailWindow, 0)
+	window := int64(tailWindow)
+	if n <= 0 {
+		window = fi.Size()
+	}
+	for {
+		off := max(fi.Size()-window, 0)
+		turns, err := readTail(f, off, tools, onDialog)
+		if err != nil {
+			return nil, err
+		}
+		if off == 0 || n > 0 && len(turns) >= n {
+			if n > 0 && len(turns) > n {
+				turns = turns[len(turns)-n:]
+			}
+			return turns, nil
+		}
+		window *= 2
+	}
+}
+
+func readTail(f *os.File, off int64, tools bool, onDialog func(Dialog)) ([]Turn, error) {
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return nil, err
 	}
 	r := bufio.NewReaderSize(f, 1<<20)
 	if off > 0 {
 		if _, err := r.ReadBytes('\n'); err != nil { // a partial first line
+			if err == io.EOF {
+				return nil, nil // no complete boundary yet; expand the window
+			}
 			return nil, err
 		}
 	}
@@ -65,9 +88,6 @@ func tail(path string, n int, tools bool, onDialog func(Dialog)) ([]Turn, error)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if n > 0 && len(turns) > n {
-		turns = turns[len(turns)-n:]
 	}
 	return turns, nil
 }
@@ -213,7 +233,7 @@ type Dialog struct {
 	Text      string
 }
 
-// DialogsSince returns the question-dialog answers in the tail window of the
+// DialogsSince returns the question-dialog answers in the whole
 // transcript at path whose timestamp is not before since.
 func DialogsSince(path string, since time.Time) ([]Dialog, error) {
 	var out []Dialog

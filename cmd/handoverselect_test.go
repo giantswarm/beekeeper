@@ -135,7 +135,7 @@ func handoverPrompt(t *testing.T, a *app, out *bytes.Buffer) string {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := a.printGuidePrompt(state.Role{}, nil, s, nil); err != nil {
+	if err := a.printGuidePrompt(state.Role{}, nil, s, nil, &state.State{}); err != nil {
 		t.Fatal(err)
 	}
 	return out.String()

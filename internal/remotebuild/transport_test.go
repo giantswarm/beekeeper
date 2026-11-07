@@ -74,7 +74,10 @@ func TestRemoteKubectlBoundsInheritedPipes(t *testing.T) {
 				cancel()
 				_ = child.Kill()
 				select {
-				case <-done:
+				case exitErr := <-done:
+					if exitErr != nil {
+						t.Logf("fixture cleanup: %v", exitErr)
+					}
 				case <-time.After(3 * time.Second):
 					t.Fatal("transport did not return after fixture cleanup")
 				}

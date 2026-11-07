@@ -1137,3 +1137,34 @@ requires `go-build` (chart publication depends on the image publication).
 Consequently a workflow regression fails the release prerequisite, including
 on tags. The dedicated job gives PRs a stable required-check name and retained
 failure artifacts. Do not add path filters or a skip-on-missing-tool fallback.
+
+## State/event recovery and guide continuity
+
+`FileStore.Update` commits state and an `EventOutbox` together using an atomic
+rename after syncing the temporary file. The directory is synced after renames.
+The outbox records the event-log offset and exact serialized append. Recovery
+accepts only that append's existing prefix, writes its missing suffix, syncs and
+closes the log, then clears the outbox atomically. Open failures happen before
+state commits. Later I/O failures retain the committed append in state; callers
+must inspect/recover after an error rather than assume the callback was undone.
+`Read`, `Update`, `Log` and `Record` recover under the exclusive state lock;
+`Peek` stays nonblocking and exposes any retained outbox. An unrelated log edit
+refuses recovery without deleting evidence.
+
+The outbox fault-injection suite covers failed and partial writes, sync and close
+errors, both sides of the append, reopen and duplicate prevention. The actual
+update path also exercises a failing event device and recovery after replacement.
+This establishes recoverable state/event commits within the filesystem's sync and
+rename guarantees, not protection from storage corruption or hardware that lies
+about durability.
+
+The independent desk watch retains new unreported findings as `GuideWork`,
+notifies the current guide and retries failed delivery. It respects the global
+stop and uses the standby watch only when the supervisor's watch is absent.
+Guide-feed heartbeats are persisted at most every 30 seconds; after the greater
+of two minutes or three watch intervals without one, the independent watch emits
+and delivers a lapse warning. Work belongs to the role, so relaying a guide does
+not discard tasks, goals or restoration times. The guide Stop hook requires a per-turn `guide work check` and flags due
+non-goal work; future work has an explicit next action time. A new user prompt
+invalidates the check, as do work mutations and newly retained findings. The long transcript
+tail test checks that large requests expand beyond the initial 2 MiB window.

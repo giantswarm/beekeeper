@@ -109,23 +109,21 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   transcript and the issue or PR it names: a note may already be answered there, or overtaken by the
   work. An answer the person already gave is recorded with `beekeeper answer` in their words and relayed,
   not asked again.
-- **Each decision carries its whole context; the question is one line.** The person decides from the
-  message alone, so every decision states, in plain words: what it is, from zero (no plan step,
-  note, criterion or issue numbers and no internal names without saying what they are); the status
-  quo, what happens today if nothing changes; why it needs them now, and the default if they don't
-  answer; what each option causes, in effects they would notice (what runs, what stops, what it
-  costs, what can go wrong); the recommendation and its reason. The test: someone who read no
-  transcript can decide from this message alone; a message that fails it is rewritten before it is
-  sent. The question dialog names the owning session, and its question carries a `Status quo: …`
-  and a `Why: …` part, a `Checked: …` part for a claim that something is merged, green, released,
-  rolled or closed, and every issue or PR as its full URL; each option's description is its
-  consequence. The hook refuses a question that lacks one, naming what it lacks.
-- **Waiting decisions are asked, not listed.** Each `GUIDE DECISION` and `GUIDE WAITING`, and
-  every decision `beekeeper guide next` serves, is put to the person in the question dialog of this
-  conversation, the one they read, one at a time and without waiting for them to ask. A note in the
-  queue is not the asking. A note that is work rather than a decision (a problem found to file in
-  its owning repository) is carried out or handed to the supervisor, not put to the person.
-- **Dialog answers verify once.** Serve the local note with `beekeeper guide next` before asking. Keep its option labels and order in the question dialog, and show the thread URL and head from the note. The completed dialog result hook binds the person's selection and verbatim text to that note in this guide session. Record it with `beekeeper answer <thread> --note <id> --choice <n>` for a selected option, adding the verbatim text if any; free text uses no choice. Recording only an option label while the person also wrote text is refused. This channel verifies as the person's word without a terminal confirmation. Cancelled dialogs, other sessions, changed choices and invented text do not verify.
+- **Questions keep the guide available.** Serve one decision with `beekeeper guide next`, then
+  ask it in the conversation without waiting for them to ask, with its status quo, why it needs the person, options, consequences,
+  recommendation, deadline and default. Claims of merged, green or released work carry the check
+  and every issue or PR its full URL. Never use a blocking question dialog: it stops the guide's
+  handling of messages and its watch. Keep processing peer messages and the watch while the answer
+  waits. Record the answer verbatim with `beekeeper answer`; a pending note alone is not asking.
+- **Open work is durable.** Record the person's standing goals with `beekeeper guide work add
+  "<goal>" --kind goal --due <next-check>`. Record each task and change with a restoration deadline before acting,
+  using `--kind task` or `--kind restore` and `--due <next-action-or-restoration-time>`. Work belongs
+  to the guide role and reaches its successor in `guide handover --prompt`. Finish actionable work
+  in the turn and close it with `guide work done <id> --reason "<result or filed issue URL>"`.
+  An external wait is `guide work defer <id> --due <time> --reason "<what it waits on>"`, never
+  a list of things still to do. Before ending each turn, run `guide work check`; the Stop hook
+  requires this review and flags due owned work. The independent desk watch reports overdue work and a lapsed guide watch and delivers new findings without waiting for a
+  guide Monitor to re-arm. A `GUIDE WORK DUE` is read and handled in this turn.
 - **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
