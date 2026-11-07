@@ -5,7 +5,7 @@ description: "Loop-owned merges, promotions and tags through the gate."
 
 # merge — one merge through the gate
 
-- **Loop owns every merge.** Workers push and immediately park; the loop runs CI before review. The loop merges after review and fixes; never ask the person. A changed head needs its exact-head go.
+- **Loop owns every merge.** Workers push, park at once; loop runs CI, merges after review and fixes; never ask the person. A changed head needs its exact-head go.
 - **Report** `merging <n>` before, `merged <n> <version>` after; `tagging <v>` before rolling. Supervisor `hold <repo>` stands until `release <repo>`; watch rules win.
 - **One command per PR:** `devctl pr merge <owner/repo> <n> --update-branch` for `merge.devctlOwners` (the only path; rebase line: `--rebase --update-branch`); promotion: `devctl release promote <owner/repo> --version <proven RC>`. Never bypass exits: 76 queued, park from worktree (below), outcome wakes you, never repeat; 77 refused, report its line, no second merge; 74 unread, repeat once GitHub answers; 3 still "behind": as below, then the same merge again.
 - **Personal loop:** after the go, `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`.
