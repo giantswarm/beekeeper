@@ -50,6 +50,54 @@ func (l *supervisorLoop) fillRoom(cap *capacityView) int {
 	return room
 }
 
+// deliveryReservations identifies existing deliveries before new work competes with the
+// independent review and transition streams. Read durable observations so a
+// pending start from an earlier pass reserves room too.
+func deliveryReservations(st *state.State) []string {
+	refs := []string{}
+	for _, d := range st.Deliveries {
+		live := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return !ag.Done && ag.Task != "" && strings.EqualFold(ag.Name, d.Agent)
+		})
+		if d.Step == state.DeliveryReviewQueued || d.Step == state.DeliveryFixing && !live {
+			refs = append(refs, deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)))
+		}
+	}
+	return refs
+}
+
+// Keep earlier reservations even after their starts register, and include
+// observations committed by an older stream since this pass was planned.
+func deliveryReservedRefs(st *state.State, reserved ...[]string) []string {
+	refs := deliveryReservations(st)
+	if len(reserved) > 0 {
+		for _, ref := range reserved[0] {
+			if !slices.Contains(refs, ref) {
+				refs = append(refs, ref)
+			}
+		}
+	}
+	return refs
+}
+
+func (l *supervisorLoop) deliveryRoom(room int, st *state.State, reserved ...[]string) int {
+	refs := deliveryReservedRefs(st, reserved...)
+
+	slices.Sort(refs)
+	key := "delivery reservations " + strings.Join(refs, ",")
+	l.mu.Lock()
+	for k := range l.said {
+		if strings.HasPrefix(k, "delivery reservations ") && k != key {
+			delete(l.said, k)
+		}
+	}
+	l.mu.Unlock()
+	if len(refs) > 0 {
+		l.sayOnce(key, "SUPERVISOR NEXT RESERVES %d slots for deliveries: %s", len(refs), strings.Join(refs, ", "))
+	}
+	return max(0, room-len(refs))
+}
+
 // fillLive is the names of the roster's agents not done. A park, a resume,
 // a new session or task leaves it alone: none of them makes room.
 func fillLive(st *state.State) []string {
@@ -112,13 +160,20 @@ func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
 }
 
 func (l *supervisorLoop) previewFill(ctx context.Context) error {
-	room := l.fillRoom(l.fillCapacity(ctx))
+	st, err := l.a.store.Read()
+	if err != nil {
+		return err
+	}
+	if l.fillPreview != nil {
+		st = l.fillPreview
+	}
+	room := l.deliveryFillRoom(l.fillRoom(l.fillCapacity(ctx)), st)
 	if room <= 0 {
 		return nil
 	}
 	next, err := l.nextItem(ctx)
 	if errors.Is(err, errLoopLater) {
-		_, err = fmt.Fprintln(l.a.out, "SUPERVISOR WOULD NEXT wait: the GitHub budget is under github.floor")
+		_, err = fmt.Fprintln(l.a.out, "SUPERVISOR WOULD NEXT wait: admission or GitHub budget holds new work")
 		return err
 	}
 	if err != nil {
@@ -140,7 +195,7 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 // the local machine and every host itself, so a full coordinator still
 // fills onto hosts. Claims are per board item, so an interrupted start is
 // reconciled before another start.
-func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[string]loopClaim, taken []superloop.Taken) error {
+func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[string]loopClaim, taken []superloop.Taken, reserved ...[]string) error {
 	if l.a.cfg.Supervisor.WorkerBrief == "" {
 		return nil
 	}
@@ -187,6 +242,11 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		if err != nil {
 			return err
 		}
+		room := l.deliveryFillRoom(l.fillRoom(cap), live, reserved...)
+		if room <= 0 {
+			return nil
+		}
+		ordinary := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow()).Reason == ""
 		capacity, alive := fillCapacityKey(cap), fillLive(live)
 		l.mu.Lock()
 		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
@@ -197,10 +257,10 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		paused := !l.fillPause.until.IsZero()
 		l.mu.Unlock()
-		pause := func() { l.pauseFill(capacity, alive) }
-		room := l.fillRoom(cap)
-		if room <= 0 {
-			return nil
+		pause := func() {
+			if ordinary {
+				l.pauseFill(capacity, alive)
+			}
 		}
 		if started == 0 {
 			limit = room
@@ -235,9 +295,11 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return nil // the board may lag the worker's registration
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
-		what, err := l.startItem(ctx, act, *next)
+		what, err := l.startItem(ctx, act, *next, reserved...)
 		if err != nil {
-			pause()
+			if !errors.Is(err, errLoopLater) {
+				pause()
+			}
 			if !errors.Is(err, errLoopLater) {
 				l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", act.Key, err)
 			}

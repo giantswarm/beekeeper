@@ -2351,6 +2351,14 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 	if w.standby {
 		w.rearmRecovery()
 	}
+	if line, err := w.checkDeliveries(w.now); err != nil {
+		w.fail("delivery", "cannot read delivery health")
+	} else {
+		w.clear("delivery")
+		if line != "" {
+			w.emitNow("delivery", "%s", line)
+		}
+	}
 	if line, err := w.checkThroughput(w.now, false); err != nil {
 		w.fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
 	} else {
