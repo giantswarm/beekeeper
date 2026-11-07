@@ -18,7 +18,7 @@ import (
 func TestCodexUnreadableFallback(t *testing.T) {
 	for _, providers := range []bool{false, true} {
 		for _, chores := range []bool{false, true} {
-			for _, saved := range []string{"none", "good", "high", "expired", "expired-high"} {
+			for _, saved := range []string{ghNone, "good", "high", "expired", "expired-high"} {
 				for _, failure := range []string{"read", "validation"} {
 					t.Run(fmt.Sprintf("providers=%t/chores=%t/saved=%s/%s", providers, chores, saved, failure), func(t *testing.T) {
 						_, cfgPath := isolateUsageTestEnv(t)
@@ -52,7 +52,7 @@ func TestCodexUnreadableFallback(t *testing.T) {
 						if strings.HasPrefix(saved, "expired") {
 							original.At = now.Add(-24 * time.Hour)
 						}
-						if saved != "none" {
+						if saved != ghNone {
 							if err := store.WriteFile(file, original); err != nil {
 								t.Fatal(err)
 							}
@@ -78,7 +78,7 @@ func TestCodexUnreadableFallback(t *testing.T) {
 						}
 						var persisted usageReading
 						found, err := store.ReadFile(file, &persisted)
-						if err != nil || found != (saved != "none") || found && (!persisted.At.Equal(original.At) || persisted.Fallback != "") {
+						if err != nil || found != (saved != ghNone) || found && (!persisted.At.Equal(original.At) || persisted.Fallback != "") {
 							t.Fatalf("failure replaced last observation: found=%t reading=%+v err=%v", found, persisted, err)
 						}
 						if chores {
