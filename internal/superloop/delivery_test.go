@@ -1,0 +1,216 @@
+package superloop
+
+import (
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+const deliveryFirstHead = "aaa"
+const deliveryDeskAuthor = "desk"
+const deliveryCombinedPR = "o/r#30"
+
+const deliveryIssue = "o/r#10"
+const deliveryPR = "o/r#20"
+
+func deliveryInput() Input {
+	return Input{Now: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), Pulls: map[string]Pull{deliveryPR: {Ref: deliveryPR, State: Open, Head: deliveryFirstHead, Author: deliveryDeskAuthor, Closes: []string{deliveryIssue}}}, Desk: Desk{Authors: []string{deliveryDeskAuthor}}, Workers: []Worker{{Name: "implementer", Serves: deliveryIssue, ParkedOn: deliveryPR, ParkedHead: deliveryFirstHead}}}
+}
+func TestDeliveryLifecycle(t *testing.T) {
+	in := deliveryInput()
+	var prev []Delivery
+	cases := []struct {
+		name, step string
+		change     func()
+	}{
+		{"start", state.DeliveryImplementing, func() {}},
+		{"request", state.DeliveryCI, func() { in.Workers[0].ReviewRequested = true }},
+		{"green", state.DeliveryReviewQueued, func() { p := in.Pulls[deliveryPR]; p.Green = true; in.Pulls[deliveryPR] = p }},
+		{"review", state.DeliveryReviewing, func() {
+			in.Taken = append(in.Taken, Taken{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliveryFirstHead), At: in.Now})
+		}},
+		{"findings", state.DeliveryFixing, func() {
+			p := in.Pulls[deliveryPR]
+			p.Reviews = []Review{{Head: deliveryFirstHead, Verdict: ChangesRequested, At: in.Now}}
+			in.Pulls[deliveryPR] = p
+		}},
+		{"fix pushed", state.DeliveryCI, func() {
+			p := in.Pulls[deliveryPR]
+			p.Head = "bbb"
+			p.Green = false
+			in.Pulls[deliveryPR] = p
+			in.Workers[0].ParkedHead = "bbb"
+		}},
+		{"fix green", state.DeliveryReviewQueued, func() { p := in.Pulls[deliveryPR]; p.Green = true; in.Pulls[deliveryPR] = p }},
+		{"second round", state.DeliveryReviewing, func() {
+			in.Taken = append(in.Taken, Taken{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, "bbb"), At: in.Now})
+		}},
+		{"approved lane", state.DeliveryMerging, func() {
+			in.Taken = append(in.Taken, Taken{Kind: KindGo, Ref: deliveryPR, Key: goKey(deliveryPR, "bbb"), At: in.Now})
+		}},
+		{"merged", state.DeliveryReleasing, func() { p := in.Pulls[deliveryPR]; p.State = Merged; in.Pulls[deliveryPR] = p }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in.Now = in.Now.Add(time.Minute)
+			tc.change()
+			got := Deliveries(in, prev)
+			if len(got) != 1 || got[0].Step != tc.step {
+				t.Fatalf("got %+v, want %s", got, tc.step)
+			}
+			if len(prev) > 0 && !got[0].Started.Equal(prev[0].Started) {
+				t.Fatal("start clock changed")
+			}
+			prev = got
+		})
+	}
+}
+func TestDeliveryBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Input)
+		step   string
+		count  int
+	}{
+		{"red", func(in *Input) { p := in.Pulls[deliveryPR]; p.Red = []Check{{Name: "test"}}; in.Pulls[deliveryPR] = p }, state.DeliveryFixing, 1},
+		{"conflict", func(in *Input) {
+			p := in.Pulls[deliveryPR]
+			p.Mergeable = mergeableConflicting
+			in.Pulls[deliveryPR] = p
+		}, state.DeliveryFixing, 1},
+		{"two issues", func(in *Input) {
+			p := in.Pulls[deliveryPR]
+			p.Closes = append(p.Closes, "o/r#11")
+			in.Pulls[deliveryPR] = p
+		}, state.DeliveryImplementing, 2},
+		{"foreign", func(in *Input) { p := in.Pulls[deliveryPR]; p.Author = "someone-else"; in.Pulls[deliveryPR] = p }, "", 0},
+		{"closed continuing", func(in *Input) { p := in.Pulls[deliveryPR]; p.State = Closed; in.Pulls[deliveryPR] = p }, state.DeliveryImplementing, 1},
+		{"closed abandoned", func(in *Input) {
+			p := in.Pulls[deliveryPR]
+			p.State = Closed
+			in.Pulls[deliveryPR] = p
+			in.Workers = nil
+		}, state.DeliveryDropped, 1},
+		{"closed done worker", func(in *Input) {
+			p := in.Pulls[deliveryPR]
+			p.State = Closed
+			in.Pulls[deliveryPR] = p
+			in.Workers[0].Done = true
+		}, state.DeliveryDropped, 1},
+		{"issue-less", func(in *Input) { p := in.Pulls[deliveryPR]; p.Closes = nil; in.Pulls[deliveryPR] = p; in.Workers = nil }, state.DeliveryImplementing, 1},
+		{"saved request", func(in *Input) { in.Workers[0].Saved = true; in.Workers[0].ReviewRequested = true }, state.DeliveryCI, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := deliveryInput()
+			tc.change(&in)
+			got := Deliveries(in, nil)
+			if len(got) != tc.count {
+				t.Fatalf("got %+v", got)
+			}
+			if len(got) > 0 && got[0].Step != tc.step {
+				t.Fatalf("got %+v, want %s", got, tc.step)
+			}
+		})
+	}
+}
+func TestDeliveryFailedReadAndSeed(t *testing.T) {
+	in := deliveryInput()
+	in.OpenPulls = []string{deliveryPR, "o/r#21"}
+	first := Deliveries(in, nil)
+	if len(first) != 2 {
+		t.Fatalf("seed: %+v", first)
+	}
+	in.Pulls = nil
+	in.Workers = nil
+	in.Now = in.Now.Add(time.Hour)
+	got := Deliveries(in, first)
+	if !reflect.DeepEqual(got, first) {
+		t.Fatalf("failed read changed observations: %+v -> %+v", first, got)
+	}
+	if got[1].Step != state.DeliveryUnknown || !got[1].Active() {
+		t.Fatalf("unread seed not counted: %+v", got)
+	}
+}
+func TestDeliveryAbsorbAndReopen(t *testing.T) {
+	in := deliveryInput()
+	first := Deliveries(in, nil)
+	in.Workers = nil
+	p := in.Pulls[deliveryPR]
+	p.State = Closed
+	in.Pulls[deliveryPR] = p
+	dropped := Deliveries(in, first)
+	if dropped[0].Step != state.DeliveryDropped {
+		t.Fatal(dropped)
+	}
+	in.Now = in.Now.Add(time.Hour)
+	p.State = Open
+	in.Pulls[deliveryPR] = p
+	reopened := Deliveries(in, dropped)
+	if reopened[0].Step != state.DeliveryImplementing || !reopened[0].Started.Equal(in.Now) {
+		t.Fatal(reopened)
+	}
+	p.State = Closed
+	in.Pulls[deliveryPR] = p
+	in.Pulls[deliveryCombinedPR] = Pull{Ref: deliveryCombinedPR, State: Open, Head: "ccc", Author: deliveryDeskAuthor, Absorbs: []string{deliveryPR}}
+	in.OpenPulls = []string{deliveryCombinedPR}
+	absorbed := Deliveries(in, reopened)
+	if len(absorbed) != 1 || len(absorbed[0].Pulls) != 2 || absorbed[0].Step == state.DeliveryDropped {
+		t.Fatalf("absorption: %+v", absorbed)
+	}
+}
+func TestDeliveryResearchAndClosedIssue(t *testing.T) {
+	in := deliveryInput()
+	in.Pulls = nil
+	in.Workers = nil
+	prev := []Delivery{{Ref: deliveryIssue, Step: state.DeliveryImplementing, Started: in.Now.Add(-time.Hour), Since: in.Now.Add(-time.Hour), Agent: "researcher"}}
+	for _, closed := range []bool{false, true} {
+		if closed {
+			in.Events = nil
+			in.ClosedIssues = map[string]bool{deliveryIssue: true}
+		} else {
+			in.Events = []Event{{Verb: VerbDone, Agent: "researcher", At: in.Now}}
+		}
+		got := Deliveries(in, prev)
+		if got[0].Step != state.DeliveryDropped {
+			t.Fatal(got)
+		}
+	}
+}
+func TestDeliveryDoesNotMutatePreviousOrPlan(t *testing.T) {
+	in := deliveryInput()
+	prev := Deliveries(in, nil)
+	before := Deliveries(in, nil)
+	plan := Plan(in)
+	in.Pulls[deliveryCombinedPR] = Pull{Ref: deliveryCombinedPR, Author: deliveryDeskAuthor, State: Open, Absorbs: []string{deliveryPR}}
+	_ = Deliveries(in, prev)
+	if !reflect.DeepEqual(prev, before) {
+		t.Fatalf("mutated prev: %+v", prev)
+	}
+	delete(in.Pulls, deliveryCombinedPR)
+	if !reflect.DeepEqual(plan, Plan(in)) {
+		t.Fatal("derivation changed planner")
+	}
+}
+
+func TestDeliveryClosedIssueDropsEvenWithContinuingWorker(t *testing.T) {
+	in := deliveryInput()
+	in.Pulls = nil
+	in.ClosedIssues = map[string]bool{deliveryIssue: true}
+	prev := []Delivery{{Ref: deliveryIssue, Step: state.DeliveryImplementing, Since: in.Now, Started: in.Now, Agent: in.Workers[0].Name}}
+	got := Deliveries(in, prev)
+	if got[0].Step != state.DeliveryDropped {
+		t.Fatal(got)
+	}
+}
+func TestDeliveryDoneRosterDropsResearchWithoutEventHistory(t *testing.T) {
+	in := deliveryInput()
+	in.Pulls = nil
+	in.Workers[0].Done = true
+	prev := []Delivery{{Ref: deliveryIssue, Step: state.DeliveryImplementing, Since: in.Now, Started: in.Now, Agent: in.Workers[0].Name}}
+	got := Deliveries(in, prev)
+	if got[0].Step != state.DeliveryDropped {
+		t.Fatal(got)
+	}
+}

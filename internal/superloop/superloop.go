@@ -219,6 +219,10 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 
 // Worker is an agent on the roster.
 type Worker struct {
+	// Done affects observation only; Plan continues to use its existing events.
+	Done bool
+	// Issues are all active serve records, for observation only.
+	Issues []string
 	// ReviewRequested distinguishes a proven published branch from a plain wait.
 	ReviewRequested bool
 	Name            string
@@ -290,7 +294,10 @@ type Taken struct {
 
 // Input is everything a pass plans from.
 type Input struct {
-	Workers []Worker
+	OpenPulls []string
+	// ClosedIssues contains only successfully read, closed issues.
+	ClosedIssues map[string]bool
+	Workers      []Worker
 	// Pulls are the tracked pull requests (Tracked) by ref.
 	Pulls map[string]Pull
 	// Events are the log's events since the loop's first start.

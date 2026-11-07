@@ -56,8 +56,14 @@ const Browser = "browser"
 // the GiB its models may hold.
 const ModelServer = "model-server"
 
+// Delivery configures observation of issue delivery. A zero limit is off.
+type Delivery struct {
+	WIPLimit int `yaml:"wipLimit"`
+}
+
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
+	Delivery Delivery `yaml:"delivery"`
 	Projects Projects `yaml:"projects"`
 	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
@@ -4043,6 +4049,9 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	if c.Delivery.WIPLimit < 0 {
+		report(fmt.Errorf("delivery.wipLimit must be nonnegative"))
+	}
 	// These intervals drive recurring loops; zero receives a default, while
 	// negative values cannot advance the scheduler.
 	for _, interval := range []struct {

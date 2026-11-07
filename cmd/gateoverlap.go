@@ -241,18 +241,19 @@ func (g *gateRun) confirmRelease(out *merge.Outcome, rc int) (string, int) {
 		if i < 0 {
 			return nil, nil
 		}
+		deliveryEvents := recordDeliveryRelease(st, g.repo, g.pr, *out, st.Merges[i].HandCut, now)
 		if out.ReleaseFailed {
 			m := &st.Merges[i]
 			m.Releasing, m.PID, m.Finished = false, 0, now
 			m.Release, m.ReleaseFailed, m.Exit = out.Release, true, rc
-			return []state.Event{event(g.me, "merge.release", "%s: release %s, lane %s settles without a roll", g.key(), release, g.lane.Name)}, nil
+			return append(deliveryEvents, []state.Event{event(g.me, "merge.release", "%s: release %s, lane %s settles without a roll", g.key(), release, g.lane.Name)}...), nil
 		}
 		if out.Unconfirmed {
 			st.Merges[i].Releasing, st.Merges[i].Finished = false, now
-			return []state.Event{event(g.me, "merge.release", "%s: release unconfirmed, lane %s settles by the settle rule", g.key(), g.lane.Name)}, nil
+			return append(deliveryEvents, []state.Event{event(g.me, "merge.release", "%s: release unconfirmed, lane %s settles by the settle rule", g.key(), g.lane.Name)}...), nil
 		}
 		st.Merges = slices.Delete(st.Merges, i, i+1)
-		return []state.Event{event(g.me, "merge.release", "%s: release %s, lane %s is free", g.key(), release, g.lane.Name)}, nil
+		return append(deliveryEvents, []state.Event{event(g.me, "merge.release", "%s: release %s, lane %s is free", g.key(), release, g.lane.Name)}...), nil
 	})
 	return line, rc
 }

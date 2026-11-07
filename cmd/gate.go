@@ -2443,7 +2443,7 @@ type runOutcome struct {
 func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) []state.Event {
 	m := &st.Merges[i]
 	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
-	var ev []state.Event
+	ev := recordDeliveryRelease(st, repo, pr, out, handCut, now)
 	// The detached gate, rather than its submitting loop, owns the actual
 	// merge outcome. Record it atomically with the merge's terminal event.
 	if m.By.Name == loopParty.Name && pr > 0 && (out.Merged || r.unanswered != nil || st.Stop == nil && rc != github.SquashRed && rc != github.SquashNotApplicable && rc != github.SquashRefused && rc != ExitGateRefused && rc != ExitGateUnread) {
