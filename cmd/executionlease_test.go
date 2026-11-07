@@ -122,7 +122,7 @@ func TestExecutionCoordinatorStopPreservesConcurrentRenewal(t *testing.T) {
 		done <- a.store.Update(func(st *state.State) ([]state.Event, error) {
 			close(entered)
 			<-release
-			st.Stop = &state.Stop{Reason: "stop"}
+			st.Stop = &state.Stop{Reason: "operator desk stop"}
 			return nil, nil
 		})
 	}()

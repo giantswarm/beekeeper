@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
 func TestExecutionLeaseCommitBypassesDeskReadersAndPreservesOutbox(t *testing.T) {
