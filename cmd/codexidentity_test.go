@@ -15,7 +15,7 @@ import (
 
 func TestCodexCallerAndLegacyLabClaim(t *testing.T) {
 	const id, thread = "worker-start", "worker-thread"
-	a := &app{cfg: &config.Config{StateDir: t.TempDir(), LeaseDir: t.TempDir(), Labs: map[string]string{"lab": "test-lab"}}}
+	a := &app{cfg: &config.Config{StateDir: t.TempDir(), LeaseDir: t.TempDir(), Labs: map[string]string{lab: "test-lab"}}}
 	inbox := codex.InboxPath(a.cfg.StateDir, id)
 	if err := os.MkdirAll(filepath.Dir(inbox), 0700); err != nil {
 		t.Fatal(err)
@@ -34,13 +34,13 @@ func TestCodexCallerAndLegacyLabClaim(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "agentlab.yaml"), []byte("clusterName: test-lab\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lease.Dir(a.cfg.LeaseDir).Claim("lab", lease.Holder{HostSession: p.HostSession, Name: p.Name, LabConfig: &lease.LabConfig{Path: filepath.Join(dir, "agentlab.yaml")}}); err != nil {
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(lab, lease.Holder{HostSession: p.HostSession, Name: p.Name, LabConfig: &lease.LabConfig{Path: filepath.Join(dir, "agentlab.yaml")}}); err != nil {
 		t.Fatal(err)
 	}
 	h := guard.Hook{Labs: a.heldLabs}
 	for _, session := range []string{thread, "another-thread", ""} {
 		raw, err := json.Marshal(map[string]any{
-			"session_id": session, "hook_event_name": "PreToolUse", "cwd": dir,
+			"session_id": session, "hook_event_name": guard.PreToolUseEvent, executionOmpCwd: dir,
 			"tool_name": "Bash", "tool_input": map[string]any{"command": "agentlab configure --lab test-lab"},
 		})
 		if err != nil {
