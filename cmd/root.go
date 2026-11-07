@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -321,6 +322,23 @@ func (a *app) callerSession() (state.Party, error) {
 		return state.Party{Name: a.as}, nil
 	}
 	p := envParty(os.Getenv)
+	// Tool shells may retain only CODEX_THREAD_ID. Resolve it through the
+	// runner's recorded link rather than treating the command as a person.
+	if p.Session == "" && p.HostSession == "" && os.Getenv("CODEX_THREAD_ID") != "" {
+		thread := os.Getenv("CODEX_THREAD_ID")
+		inbox := codex.ResolveInbox(a.cfg.StateDir, thread)
+		if inbox != "" && codex.ReadThread(a.cfg.StateDir, inbox) == thread {
+			p.HostSession = codex.HostPrefix + strings.TrimSuffix(filepath.Base(inbox), ".in")
+			p.Session = thread
+		}
+	}
+	if id, ok := strings.CutPrefix(p.HostSession, codex.HostPrefix); ok {
+		p.Session = codex.ReadThread(a.cfg.StateDir, codex.InboxPath(a.cfg.StateDir, id))
+		if p.Name == "" {
+			p.Name = p.HostSession
+		}
+		return p, nil
+	}
 	if os.Getenv(omp.EnvAgent) != "" || os.Getenv(agy.EnvAgent) != "" || os.Getenv(codex.EnvAgent) != "" {
 		return p, nil
 	}

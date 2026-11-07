@@ -1307,6 +1307,7 @@ func (a *app) modelServer() guard.ModelServer {
 // heldLabs lists the held leases of kind labs.
 func (a *app) heldLabs() []lease.Holder {
 	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	a.resolveCodexHolders(hs)
 	return slices.DeleteFunc(hs, func(h lease.Holder) bool { return a.cfg.LabCluster(h.Env) == "" })
 }
 
@@ -1315,11 +1316,24 @@ func (a *app) heldLeases() []lease.Holder {
 		return nil
 	}
 	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	a.resolveCodexHolders(hs)
 	var sessions []*claude.Session
 	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, time.Now())
 	}
 	return a.namedHolders(sessions, hs)
+}
+
+// Claims made before the runner's thread was known still carry its stable
+// host ID. Match that ID to the conversation ID supplied by Codex hooks.
+func (a *app) resolveCodexHolders(hs []lease.Holder) {
+	for i := range hs {
+		if id, ok := strings.CutPrefix(hs[i].HostSession, codex.HostPrefix); ok {
+			if thread := codex.ReadThread(a.cfg.StateDir, codex.InboxPath(a.cfg.StateDir, id)); thread != "" {
+				hs[i].Session = thread
+			}
+		}
+	}
 }
 
 // namedHolders sets each holder's name to the one `lease list` shows: the
