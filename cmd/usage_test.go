@@ -3919,10 +3919,10 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 			file := usageFile
 			if providers {
 				k = config.Capacity{Providers: map[string]config.Provider{
-					"claude": {Usage: config.Usage{Command: []string{"slow"}}},
-					"codex":  {Usage: u},
+					config.ClaudeHarness: {Usage: config.Usage{Command: []string{"slow"}}},
+					codex.Harness:        {Usage: u},
 				}}
-				file = usageProviderFile("codex")
+				file = usageProviderFile(codex.Harness)
 			}
 			a := &app{cfg: cfg, store: store, now: start}
 			a.readUsage = func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
@@ -3933,7 +3933,7 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 			}
 			w := &watcher{app: a, clock: clk}
 			w.refreshUsage(context.Background(), k, start)
-			if w.usageErr != "" || w.providerUsageErr["codex"] != "" {
+			if w.usageErr != "" || w.providerUsageErr[codex.Harness] != "" {
 				t.Fatalf("fresh reading refused: %q, %v", w.usageErr, w.providerUsageErr)
 			}
 			var r usageReading
