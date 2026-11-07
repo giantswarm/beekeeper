@@ -33,7 +33,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 		}
 		to = r.Holder.Name
 		holder = r.Holder.Party
-		for _, e := range events {
+		for _, e := range guideReportEvents(st, events, w.now) {
 			key, text, ok := keyed(e.Detail)
 			if !ok || !strings.Contains(text, fileReportSeparator) || slices.Contains(st.GuideReports, key) {
 				continue
@@ -121,7 +121,7 @@ func guideStopReason(st *state.State, session string, now time.Time) string {
 	}
 	var ids []string
 	for _, work := range st.GuideWork {
-		if work.Kind != guideWorkGoal && !work.Due.After(now) {
+		if guideWorkBlocks(work, now) {
 			ids = append(ids, fmt.Sprint(work.ID))
 		}
 	}
