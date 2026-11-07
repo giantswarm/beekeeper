@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // failingStartRig is the refill rig whose board always offers an item and
@@ -130,6 +131,72 @@ func TestLoopAlarmsWhenTheRefillDoesNotRun(t *testing.T) {
 	}
 	l.fillRan()
 	if !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED") {
+		t.Fatalf("the stall's end is not said:\n%s", r.out)
+	}
+}
+
+// A review request whose start keeps waiting raises the alarm after
+// loopStallAfter, names the pull request, repeats, and says its end once
+// the request is no longer planned (https://github.com/giantswarm/beekeeper/issues/3388).
+func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			return "no room", ExitRefused
+		}
+		return "", 0
+	}
+	stalls := func() []state.Event {
+		var out []state.Event
+		for _, e := range r.logged(t, "supervisor.file") {
+			if strings.Contains(e.Detail, loopReviewStallKey) {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	acts := []superloop.Action{{Kind: superloop.KindReview, Key: "review waits", Ref: loopPR, URL: loopURL, Head: loopHead, Round: 1}}
+	pass := func(acts []superloop.Action) {
+		t.Helper()
+		if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.checkStall(); err != nil {
+			t.Fatal(err)
+		}
+		r.a.now = r.a.now.Add(time.Minute)
+	}
+	for range int(loopStallAfter / time.Minute) {
+		pass(acts)
+	}
+	if got := stalls(); len(got) != 0 {
+		t.Fatalf("alarm before %s: %+v", loopStallAfter, got)
+	}
+	pass(acts)
+	got := stalls()
+	if len(got) != 1 {
+		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), loopStallAfter, r.out)
+	}
+	if d := got[0].Detail; !strings.Contains(d, "Reviews are stalled") || !strings.Contains(d, loopURL) || !strings.Contains(d, "its start waits") {
+		t.Errorf("the alarm does not name the pull request and its cause: %s", d)
+	}
+	for range int(loopStallAfter / time.Minute) {
+		pass(acts)
+	}
+	if got := stalls(); len(got) != 2 {
+		t.Fatalf("%d alarms after 2×%s, want the alarm repeated once", len(got), loopStallAfter)
+	}
+	pass(nil)
+	if !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED: no review request waits") {
 		t.Fatalf("the stall's end is not said:\n%s", r.out)
 	}
 }

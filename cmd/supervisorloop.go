@@ -705,6 +705,9 @@ type supervisorLoop struct {
 	// stall is the refill's flow: when it last ran and since when a start
 	// waits with room (checkStall alarms on it).
 	stall startStall
+	// reviewWaits are the review requests this loop planned and has not
+	// started, by pull request (checkStall alarms on the oldest).
+	reviewWaits map[string]reviewWait
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// inFlight tracks actions and ordered streams across passes.
@@ -1864,9 +1867,12 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
+	l.reviewsPlanned(reviewActs)
 	for _, act := range reviewActs {
 		launch("review:"+act.Ref, func() error {
-			return l.execAction(ctx, st, claims, failures, act)
+			err := l.execAction(ctx, st, claims, failures, act)
+			l.reviewTried(act, failures)
+			return err
 		})
 	}
 
