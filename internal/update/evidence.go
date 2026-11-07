@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -97,7 +98,25 @@ func SetUpdateTargetForTest(exePath, version string, verify func(name string, da
 }
 
 var evidenceValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
-var checkEvidence = requireEvidence
+
+// sandboxProofPolicy is shared with the CircleCI publisher. Enable only after
+// dedicated sandbox provisioning; see docs/sandbox-proof-policy.md.
+//
+//go:embed sandbox-proof-required.txt
+var sandboxProofPolicy string
+
+var checkEvidence = checkSandboxEvidence
+
+func checkSandboxEvidence(ctx context.Context, source selfupdate.Source, rel *selfupdate.Release, staged string) error {
+	switch strings.TrimSpace(sandboxProofPolicy) {
+	case "false":
+		return nil
+	case "true":
+		return requireEvidence(ctx, source, rel, staged)
+	default:
+		return fmt.Errorf("invalid sandbox proof policy")
+	}
+}
 
 func requireEvidence(ctx context.Context, source selfupdate.Source, rel *selfupdate.Release, path string) error {
 	binary, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // verified staged binary path
