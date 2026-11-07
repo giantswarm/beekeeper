@@ -127,6 +127,40 @@ func TestRecoveryRollsBackWhenTheOldLoopNeverHandsOver(t *testing.T) {
 	}
 }
 
+func TestRecoveryLateLoopGraceExcludesUnobservedSleep(t *testing.T) {
+	c, now := recoveryRig(t)
+	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: recoveryGoodVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	for range 15 {
+		c.mustTick(t)
+		*now = now.Add(time.Minute)
+	}
+	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass}); err != nil {
+		t.Fatal(err)
+	}
+	// The loop starts just before sleep, without an intervening controller tick.
+	*now = now.Add(time.Hour)
+	c.mustTick(t)
+	o := journal(t, c).Observed
+	if installed(t, c) != recoveryBadBytes || !o.LoopStarted || o.LoopStartedAt != 15*time.Minute {
+		t.Fatalf("unobserved sleep consumed the late loop's grace: %+v", o)
+	}
+	for range int(update.HeartbeatGrace/time.Minute) - 2 {
+		c.mustTick(t)
+		if installed(t, c) != recoveryBadBytes {
+			t.Fatalf("rolled back within observed grace: %+v", journal(t, c).Observed)
+		}
+	}
+	c.mustTick(t)
+	if !journal(t, c).RolledBack() {
+		t.Fatal("silent loop outlived its observed grace")
+	}
+}
+
 func TestLoopExitPersistsDiagnosticWithoutErrorContents(t *testing.T) {
 	r := newLoopRig(t)
 	r.failRecord = func(e state.Event) bool { return e.Verb == loopStartVerb }

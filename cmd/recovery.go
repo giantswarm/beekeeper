@@ -313,7 +313,10 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 	// install. An unreadable lifecycle leaves the grace counting from install.
 	if life, otherAlive, err := c.candidateLoop(j.Candidate.Version, j.InstalledAt); err == nil {
 		if life != nil {
-			s.LoopStarted, s.LoopStartedAgo = true, now.Sub(life.Started)
+			// A newly seen start can predate this tick by wall-clock hours
+			// after sleep or controller downtime. Only this tick was observed;
+			// never subtract that gap from the candidate's observed grace.
+			s.LoopStarted, s.LoopStartedAgo = true, min(now.Sub(life.Started), c.step)
 		}
 		s.LoopPending = otherAlive
 	}
