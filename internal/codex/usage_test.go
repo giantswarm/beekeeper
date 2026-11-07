@@ -190,7 +190,7 @@ func TestReadUsageFailsClosedOnExplicitInvalidOrStoppedFreshestEvent(t *testing.
 				t.Fatalf("err = %v, want substring %q", err, tc.wantSub)
 			}
 			wantStopped := tc.name == "spend_control_reached" || tc.name == "rate_limit_reached_type"
-			if errors.Is(err, ErrUsageStopped) != wantStopped {
+			if QuotaStop(err) != wantStopped {
 				t.Fatalf("stop classification: %v, want stopped=%t", err, wantStopped)
 			}
 		})
@@ -434,3 +434,26 @@ func TestParseRateLimitsToleratesInformationalFieldShapes(t *testing.T) {
 }
 
 func ptrFloat(f float64) *float64 { return &f }
+
+func TestQuotaStop(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		stop bool
+	}{
+		{quotaError("codex spend control reached"), true},
+		{quotaError("codex rate limit reached (five_hour)"), true},
+		{ErrUsageStopped, true},
+		{errors.New("codex rate limit reached"), true}, // a watch keeps the text only
+		{errors.New("usage reading timestamp 2026-11-07T12:00:00Z is in the future"), false},
+		{errors.New("invalid codex token_count payload: unexpected end of JSON input"), false},
+		{ErrNoUsage, false},
+		{nil, false},
+	} {
+		if got := QuotaStop(tc.err); got != tc.stop {
+			t.Errorf("QuotaStop(%v) = %t, want %t", tc.err, got, tc.stop)
+		}
+	}
+	if !errors.Is(quotaError("codex spend control reached"), ErrQuotaReached) {
+		t.Error("a quota error must match ErrQuotaReached")
+	}
+}

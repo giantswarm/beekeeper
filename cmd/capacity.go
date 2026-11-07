@@ -234,16 +234,7 @@ func (p *providerView) findBucket(name string) *bucketView {
 
 func (p *providerView) windowsSummary(now time.Time) (summary string) {
 	defer func() {
-		if p.Fallback != "" {
-			if p.At.IsZero() {
-				if summary != "" {
-					summary += "; "
-				}
-				summary += "unreadable (" + truncate(p.Fallback, 120) + ")"
-			} else {
-				summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
-			}
-		}
+		summary = withFallback(summary, p.Fallback, p.At, now)
 	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {

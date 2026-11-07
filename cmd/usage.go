@@ -981,7 +981,7 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	if stopped {
 		return usageReading{}, codex.ErrUsageStopped
 	}
-	if errors.Is(err, codex.ErrUsageStopped) {
+	if codex.QuotaStop(err) {
 		return usageReading{}, err
 	}
 	if haveCached && !snapshot.Stopped && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
@@ -1169,7 +1169,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 // retainUsageStop replaces an older good reading with an explicit stop. An
 // ordinary failure cannot reopen capacity until a successful read clears it.
 func (a *app) retainUsageStop(file string, err error) {
-	if a.store != nil && errors.Is(err, codex.ErrUsageStopped) {
+	if a.store != nil && codex.QuotaStop(err) {
 		_ = a.store.WriteFile(file, usageReading{Stop: err.Error()})
 	}
 }
@@ -1190,7 +1190,7 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 	if found && r.Stop != "" {
 		return usageReading{}, codex.UsageStoppedError(r.Stop)
 	}
-	if errors.Is(cause, codex.ErrUsageStopped) {
+	if codex.QuotaStop(cause) {
 		return usageReading{}, cause
 	}
 	if found {
@@ -1209,7 +1209,7 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 		}
 		if err == nil {
 			if cause != nil {
-				r.Fallback = cause.Error()
+				r.Fallback = keptReadingFallback(u, cause.Error())
 			}
 			applyQuotaForUsageFile(a.store, file, &r, now)
 			return r, nil
@@ -1223,9 +1223,23 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 	if !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 		return usageReading{}, cause
 	}
-	r = usageReading{Fallback: "using configured ceiling: " + cause.Error()}
+	r = usageReading{Fallback: configuredCeilingFallback(cause.Error())}
 	applyQuotaForUsageFile(a.store, file, &r, now)
 	return r, nil
+}
+
+// usageUnreadable labels Codex failures that retain windows or the ceiling.
+const usageUnreadable = "usage unreadable; "
+
+func keptReadingFallback(u config.Usage, msg string) string {
+	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(errors.New(msg)) {
+		return usageUnreadable + "kept last good reading: " + msg
+	}
+	return msg
+}
+
+func configuredCeilingFallback(msg string) string {
+	return usageUnreadable + "using configured ceiling: " + msg
 }
 
 // usageHighBlockForAgent returns the USAGE HIGH block reason for ag if USAGE
@@ -1246,12 +1260,13 @@ func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessi
 	if u.High {
 		return u.highBlock(a.now)
 	}
-	if u.Error != "" && a.store != nil {
+	noReading := u.Error != "" || (u.At.IsZero() && strings.HasPrefix(u.Fallback, usageUnreadable))
+	if noReading && a.store != nil {
 		var l usageHighLedger
 		if found, err := a.store.ReadFile(usageHighFile, &l); err == nil && found &&
 			l.Episode != "" && !l.ResetsAt.IsZero() && a.now.Before(l.ResetsAt) {
 			return fmt.Sprintf("usage high until %s (in %s); usage unreadable (%s)",
-				clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(u.Error, 80))
+				clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(cmp.Or(u.Error, u.Fallback), 80))
 		}
 	}
 	return ""
@@ -1366,21 +1381,30 @@ func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
 }
 
 func (u *usageView) windowsLine(now time.Time) string {
-	s := windowsPairLine(u.FiveHour, u.SevenDay, now)
-	if u.Fallback != "" {
-		if u.At.IsZero() {
-			return "unreadable (" + truncate(u.Fallback, 120) + ")"
-		}
-		s += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(u.At)), truncate(u.Fallback, 120))
+	return withFallback(windowsPairLine(u.FiveHour, u.SevenDay, now), u.Fallback, u.At, now)
+}
+
+func withFallback(s, fallback string, at, now time.Time) string {
+	switch {
+	case fallback == "":
+		return s
+	case at.IsZero() && s == "":
+		return truncate(fallback, 120)
+	case at.IsZero():
+		return s + "; " + truncate(fallback, 120)
 	}
-	return s
+	return s + fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(at)), truncate(fallback, 120))
 }
 
 func (u *usageView) capacitySuffix(now time.Time) string {
 	if u.Error != "" {
 		return "usage unknown (" + truncate(u.Error, 120) + ")"
 	}
-	return "usage " + u.windowsLine(now)
+	line := u.windowsLine(now)
+	if strings.HasPrefix(line, usageUnreadable) {
+		return line
+	}
+	return "usage " + line
 }
 
 func (u *usageView) watchLine(now time.Time) string {

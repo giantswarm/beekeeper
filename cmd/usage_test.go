@@ -3818,7 +3818,7 @@ read -r keepalive
 		t.Fatal("fresh stop must block starts")
 	}
 	a.now = a.now.Add(2 * time.Hour)
-	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); !errors.Is(err, codex.ErrUsageStopped) {
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); !codex.QuotaStop(err) {
 		t.Fatalf("failed probe must preserve an old local stop: %v", err)
 	}
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
@@ -3965,5 +3965,90 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 				t.Fatalf("reading must use completion time: %+v, now=%s", r, clk.Now())
 			}
 		})
+	}
+}
+
+// An unreadable Codex reading keeps the last good reading, or the configured
+// ceiling when none is saved, and is raised to the guide; only an explicit
+// quota stop holds Codex starts.
+func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
+	unreadable := errors.New("usage reading timestamp 2026-11-07T12:00:00Z is in the future")
+	stop := errors.New("codex spend control reached")
+	for _, providers := range []bool{false, true} {
+		for _, tc := range []struct {
+			name     string
+			err      error
+			saved    bool
+			wantLine string
+			wantOpen bool
+		}{
+			{"unreadable/no saved reading", unreadable, false, "usage unreadable; using configured ceiling: " + unreadable.Error(), true},
+			{"unreadable/saved reading", unreadable, true, "usage unreadable; kept last good reading: " + unreadable.Error(), true},
+			{"quota stop/saved reading", stop, true, "unreadable: " + stop.Error(), false},
+		} {
+			t.Run(fmt.Sprintf("providers=%t/%s", providers, tc.name), func(t *testing.T) {
+				_, cfgPath := isolateUsageTestEnv(t)
+				if err := os.WriteFile(cfgPath, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := config.Load(cfgPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				store, err := state.OpenVersion(cfg.StateDir, "dev")
+				if err != nil {
+					t.Fatal(err)
+				}
+				clk := newFakeClock(t)
+				start := clk.Now()
+				u := config.Usage{Command: config.DefaultCodexUsageCommand,
+					Every: config.Duration{Duration: time.Minute}, StaleAfter: config.Duration{Duration: time.Hour}}
+				k := config.Capacity{Ceiling: 4, Usage: u}
+				file, codexCeiling := usageFile, 4
+				if providers {
+					k = config.Capacity{Ceiling: 4, Providers: map[string]config.Provider{
+						config.ClaudeHarness: {Ceiling: 2, Usage: config.Usage{Command: []string{"claude-usage"}}},
+						codex.Harness:        {Ceiling: 2, Usage: u},
+					}}
+					file, codexCeiling = usageProviderFile(codex.Harness), 2
+				}
+				cfg.Capacity = k
+				good := func(at time.Time) usageReading {
+					return usageReading{At: at, SourceAt: at, SingleWindow: true,
+						SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}
+				}
+				if tc.saved {
+					if err := store.WriteFile(file, good(start.Add(-5*time.Minute))); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var out bytes.Buffer
+				a := &app{cfg: cfg, store: store, now: start, out: &out}
+				a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+					if slices.Equal(cmd, config.DefaultCodexUsageCommand) {
+						return usageReading{}, tc.err
+					}
+					return good(clk.Now()), nil
+				}
+				w := a.newWatcher(false, true)
+				w.now = start
+				w.clock = clk
+				w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+				view := w.watchUsage(context.Background(), &state.State{}, nil)
+				if view == nil || !strings.Contains(out.String(), tc.wantLine) {
+					t.Fatalf("want watch line %q, view=%+v, out=%s", tc.wantLine, view, out.String())
+				}
+				wantCeiling := 0
+				if providers {
+					wantCeiling = 2 // the Claude provider's
+				}
+				if tc.wantOpen {
+					wantCeiling += codexCeiling
+				}
+				if view.Ceiling != wantCeiling || (view.Error == "") != (tc.wantOpen || providers) {
+					t.Fatalf("ceiling %d, error %q; want ceiling %d, open=%t", view.Ceiling, view.Error, wantCeiling, tc.wantOpen)
+				}
+			})
+		}
 	}
 }
