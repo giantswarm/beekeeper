@@ -73,8 +73,12 @@ An omp agent (agents start --harness omp) or an agy agent (agents start
 call or as its next turn; one whose process ended is refused: nothing resumes
 it.
 
-A session whose CLI runs gets the message by name, as SendMessage by name
-does: it queues and runs at the session's next tool call or as its next turn.
+A session whose CLI runs receives a peer envelope. The Guide's envelope
+contains the message itself and needs no beekeeper hook. Other sessions get
+a notice for a separate hook queue. Every relay's full text is retained before
+sending in beekeeper log --verb agents.message, including for sessions without
+hooks and for a successor Guide. Peer acceptance does not confirm recipient
+consumption; hook consumption does not confirm recipient acknowledgement.
 A background session (agents start --mode background, or, while agents.mode
 is background, a session without a desktop one that claude agents --json
 --all lists as a background session; never one run in a terminal) whose
@@ -241,8 +245,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		if err != nil {
 			return fmt.Errorf("waking %s: %w", ag.Name, err)
 		}
-		_ = a.store.Record(event(by, "agents.wake", "%s: sent by name to its running CLI %d", ag.Name, s.PID))
-		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): %s; instruction reaches its chat at the next tool or turn boundary\n", ag.Name, s.PID, status)
+		outcome := relayInstructionOutcome(status)
+		_ = a.store.Record(event(by, "agents.wake", "%s: running CLI %d: %s", ag.Name, s.PID, outcome))
+		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): %s\n", ag.Name, s.PID, outcome)
 		return err
 	}
 	if u := wakeRunning(ctx, w.id); u != "" {
