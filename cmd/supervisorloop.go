@@ -2612,6 +2612,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
 	case superloop.KindRed:
+		act = attachRedLogs(ctx, act)
 		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
@@ -3017,7 +3018,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately hand CI and review to the loop with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -3025,7 +3026,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately park from the worktree so the loop owns CI:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
 `
@@ -3201,16 +3202,14 @@ narrowed or deferred without a linked follow-up allowed by the issue. Check beha
 including failure paths; dead paths; unsupported claims in code, docs and the PR; and changes
 that a later epic sub-issue would need to undo.
 
-Trust green CI on the exact reviewed head. Do not repeat its full gate. Build only for your
-own probes (new or mutated tests, or a benchmark touched by the diff); in later rounds probe
-only what the fixes touch. For a full review use your own worktree at the pinned head, read
-repository rules and inspect tests and lints. For a light review read the diff, issue and CI
-without checkout or build. Never merge.
+Trust green CI on the exact reviewed head. Do not run local tests, lints, builds or probes.
+Inspect the code and tests. For a full review use your own worktree at the pinned head;
+for a light review read the diff, issue and CI. Never merge.
 
 Every finding is blocking or a nit to fix in this round; drop anything else. When you find
 blocking issues or nits that can be fixed in code, tests or docs, apply your own findings
-directly on the pull request branch ({{.Branch}}), run focused checks on what you touched,
-push once (never force-push), wait for green CI (devctl pr wait), and approve the fixed head
+directly on the pull request branch ({{.Branch}}), push once (never force-push), and approve
+the published fixed head immediately. Do not wait for CI; the loop waits for green before merging,
 so one review round suffices without bouncing back to the worker. Request changes only when a
 finding requires a product or design decision or cannot be fixed on the branch. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
@@ -3221,7 +3220,7 @@ start another independent review for it. Other changes require review of the new
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
 regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or the
-new head SHA in backticks when you pushed fixes and waited for green CI).
+new published head SHA in backticks when you pushed fixes, even while CI is pending).
 Each finding: <file>:<line>: <what is wrong> → <what would be right>.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
