@@ -1,6 +1,7 @@
 package loopworkflow
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,8 +9,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/cgi" //nolint:gosec // G504: test-only local git http-backend harness
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -24,8 +25,10 @@ import (
 )
 
 const (
-	testOrg         = "giantswarm"
-	testSandboxRepo = "giantswarm/beekeeper-Stage-Canary"
+	testOrg           = "giantswarm"
+	testSandboxRepo   = "giantswarm/beekeeper-Stage-Canary"
+	gitUploadPackSvc  = "git-upload-pack"
+	gitReceivePackSvc = "git-receive-pack"
 )
 
 func acceptTestBundles(t *testing.T) {
@@ -507,8 +510,9 @@ func (h *sandboxHarness) installTools(t *testing.T, repo, gitBin string) {
 		t.Fatal(err)
 	}
 
-	// Serve origin.git over HTTPS via git http-backend, requiring Basic Auth
-	// ("x-access-token:<expectedToken>") on every fetch and push request.
+	// Serve origin.git over Git Smart HTTPS (upload-pack / receive-pack
+	// stateless-rpc), requiring Basic Auth ("x-access-token:<expectedToken>")
+	// on every fetch and push request without relying on optional git-daemon CGI.
 	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wantToken, _ := h.expectedToken.Load().(string)
 		user, pass, ok := r.BasicAuth()
@@ -524,16 +528,51 @@ func (h *sandboxHarness) installTools(t *testing.T, repo, gitBin string) {
 		if strings.Contains(r.URL.RawQuery, "git-receive-pack") || strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
 			h.authReceivePack.Add(1)
 		}
-		handler := &cgi.Handler{
-			Path: gitBin,
-			Args: []string{"http-backend"},
-			Env: []string{
-				"GIT_PROJECT_ROOT=" + h.dir,
-				"GIT_HTTP_EXPORT_ALL=1",
-				"REMOTE_USER=" + user,
-			},
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs"):
+			var svc, subcmd, pkt string
+			switch r.URL.Query().Get("service") {
+			case gitUploadPackSvc:
+				svc, subcmd, pkt = gitUploadPackSvc, "upload-pack", "001e# service=git-upload-pack\n0000"
+			case gitReceivePackSvc:
+				svc, subcmd, pkt = gitReceivePackSvc, "receive-pack", "001f# service=git-receive-pack\n0000"
+			default:
+				http.Error(w, "unsupported git service", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-"+svc+"-advertisement")
+			w.Header().Set("Cache-Control", "no-cache")
+			_, _ = io.WriteString(w, pkt)
+			c := exec.CommandContext(r.Context(), gitBin, subcmd, "--stateless-rpc", "--advertise-refs", h.originPath) //nolint:gosec // test git smart-http ref advertisement
+			c.Stdout = w
+			c.Stderr = os.Stderr
+			_ = c.Run()
+		case r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/git-upload-pack") || strings.HasSuffix(r.URL.Path, "/git-receive-pack")):
+			svc := gitUploadPackSvc
+			if strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
+				svc = gitReceivePackSvc
+			}
+			subcmd := strings.TrimPrefix(svc, "git-")
+			body := io.Reader(r.Body)
+			if r.Header.Get("Content-Encoding") == "gzip" {
+				gz, err := gzip.NewReader(r.Body)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				defer func() { _ = gz.Close() }()
+				body = gz
+			}
+			w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", svc))
+			w.Header().Set("Cache-Control", "no-cache")
+			c := exec.CommandContext(r.Context(), gitBin, subcmd, "--stateless-rpc", h.originPath) //nolint:gosec // test git smart-http stateless RPC
+			c.Stdin = body
+			c.Stdout = w
+			c.Stderr = os.Stderr
+			_ = c.Run()
+		default:
+			http.NotFound(w, r)
 		}
-		handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(tlsServer.Close)
 

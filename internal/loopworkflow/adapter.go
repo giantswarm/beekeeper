@@ -87,12 +87,15 @@ func trace(args []string) {
 
 func traceGit() int {
 	trace(append([]string{gitCmd}, os.Args[1:]...))
-	if slices.Contains(os.Args[1:], "get-url") && slices.Contains(os.Args[1:], originRemote) {
-		fmt.Println("https://github.com/fixture/project.git")
-		return 0
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if os.Getenv("FIXTURE_CANDIDATE") != "" && slices.Contains(os.Args[1:], "get-url") && slices.Contains(os.Args[1:], originRemote) {
+		check := exec.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), os.Args[1:]...) //nolint:gosec // scratch fixture git check
+		if check.Run() == nil {
+			fmt.Println("https://github.com/fixture/project.git")
+			return 0
+		}
+	}
 	c := exec.CommandContext(ctx, os.Getenv("FIXTURE_GIT"), os.Args[1:]...) //nolint:gosec // scratch fixture git wrapper
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {

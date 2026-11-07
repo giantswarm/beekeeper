@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,8 +28,21 @@ const (
 	nextRelease = "v1.1.0-rc.2"
 )
 
+var (
+	versionedMu    sync.Mutex
+	versionedCache = map[string][]byte{}
+)
+
 func versioned(t *testing.T, version, overlay string) []byte {
 	t.Helper()
+	cacheKey := fmt.Sprintf("%s|overlay=%t", version, overlay != "")
+	versionedMu.Lock()
+	if cached, ok := versionedCache[cacheKey]; ok {
+		versionedMu.Unlock()
+		return cached
+	}
+	versionedMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	root, err := filepath.Abs("../..")
@@ -49,6 +63,9 @@ func versioned(t *testing.T, version, overlay string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	versionedMu.Lock()
+	versionedCache[cacheKey] = raw
+	versionedMu.Unlock()
 	return raw
 }
 
