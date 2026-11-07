@@ -72,8 +72,8 @@ func (h Hook) sendMessage(session string, input map[string]any) []byte {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + err.Error()})
 		}
 		if where != "" {
-			prefix := "Delivered by beekeeper, not by SendMessage: "
-			if strings.HasPrefix(where, "queued;") {
+			prefix := "Handled by beekeeper: "
+			if strings.HasPrefix(where, "queued") {
 				prefix = "Queued by beekeeper: "
 			}
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: prefix + where +
