@@ -464,6 +464,7 @@ capacity:
 		a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: now, out: &out, as: usageCaller, readUsage: reader}
 		w := a.newWatcher(false, true)
 		w.now = now
+		w.clock = &fakeClock{now: now}
 		w.doctoring.Store(true) // the doctor is not under test
 		w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
 		t.Cleanup(func() { w.bg.Wait() })
@@ -500,6 +501,7 @@ capacity:
 	}
 	woke = nil
 	w2.now = t31
+	w2.clock.(*fakeClock).advance(w2.now.Sub(w2.clk().Now()))
 	out2.Reset()
 	w2.pending(context.Background(), sessionsAt(t31, false))
 	w2.saveMark()
@@ -562,6 +564,7 @@ capacity:
 	cur.FiveHour = &usageWindow{UsedPercent: 3, ResetsAt: reset5h.Add(5 * time.Hour)}
 	woke = nil
 	w3.now = tAfterReset
+	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
 	w3.pending(context.Background(), sessionsAt(tAfterReset, true))
 	w3.saveMark()
@@ -583,6 +586,7 @@ capacity:
 	tSecondHigh := tAfterReset.Add(10 * time.Minute)
 	cur.FiveHour = &usageWindow{UsedPercent: 98, ResetsAt: reset5h.Add(5 * time.Hour)}
 	w3.now = tSecondHigh
+	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
 	w3.pending(context.Background(), sessionsAt(tSecondHigh, false))
 	if !strings.Contains(out3.String(), "USAGE HIGH: 5h 98%") {
@@ -592,6 +596,7 @@ capacity:
 		t.Fatal(err)
 	}
 	w3.now = tSecondHigh.Add(time.Minute)
+	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
 	w3.pending(context.Background(), sessionsAt(w3.now, false))
 	if !strings.Contains(out3.String(), "ENDED USAGE HIGH") {
@@ -1047,6 +1052,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	aWatch.out = &watchOut
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
+	w.clock = &fakeClock{now: t0}
 	w.doctoring.Store(true)
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
 	t.Cleanup(func() { w.bg.Wait() })
@@ -1969,6 +1975,7 @@ capacity:
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut, as: usageCaller, readUsage: reader}
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
+	w.clock = &fakeClock{now: t0}
 	w.doctoring.Store(true)
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
 	t.Cleanup(func() { w.bg.Wait() })
@@ -3904,6 +3911,9 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 	for _, providers := range []bool{false, true} {
 		t.Run(fmt.Sprintf("providers=%t", providers), func(t *testing.T) {
 			_, cfgPath := isolateUsageTestEnv(t)
+			if err := os.WriteFile(cfgPath, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				t.Fatal(err)
