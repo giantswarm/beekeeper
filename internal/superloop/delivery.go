@@ -198,6 +198,9 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 		reviewerDone := slices.ContainsFunc(in.Events, func(e Event) bool {
 			return e.Verb == VerbDone && e.Agent == ReviewerName(p.Ref, len(rs)) && e.At.After(rd.at)
 		})
+		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) && !p.Green {
+			return state.DeliveryCI
+		}
 		if (!reviewerDone || sameHead(rd.head, p.Head)) && p.verdict(rd, l.pushed(p)) == nil {
 			return state.DeliveryReviewing
 		}

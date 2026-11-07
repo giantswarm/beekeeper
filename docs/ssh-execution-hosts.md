@@ -540,10 +540,30 @@ registration, running/exited/unknown process observations, transport failure,
 pending stop and undelivered control. A public report uses only generic
 examples; operational identities and workspace paths belong in local state.
 
+### Loop-owned CI and review
+
+Workers implement without local tests or lints, publish, and immediately park
+from the published workspace with `beekeeper agents park --on <owner/repo#n>
+"desk review"`. The coordinator watches CI on that exact head, returns failures
+with available job output to the worker, and starts an independent reviewer only
+once CI is green.
+
+The reviewer inspects code and tests without running local checks. It fixes its
+own findings on the PR branch, pushes once, posts approval naming that published
+head, and reports completion immediately, even while CI is pending. The loop
+waits for green CI on the fixed head and merges without another review round.
+CI failures on a reviewer's fix head return to the worker. Changes that cannot
+be fixed on the branch still use a changes-requested verdict and worker handoff.
+
+Delivery step transitions remain timestamped in `delivery.step` events;
+`beekeeper delivery --stats` reports step residence times and release throughput.
+A reviewer fix awaiting CI counts as CI even though the worker's park still
+names the original head.
+
 ### Waiting for CI on an execution host
 
-Every prepared host includes the CI wait in beekeeper itself; a separate
-`devctl` installation is not required. After publication, run:
+An explicit CI-only wait is also available in beekeeper itself; a separate
+`devctl` installation is not required. For a CI-only wait, run:
 
 ```sh
 beekeeper agents park --checks --on giantswarm/beekeeper#123 "CI"
