@@ -48,10 +48,11 @@ func instructionDir(stateDir, session string) string {
 	return filepath.Join(stateDir, "peer-inbox", hex.EncodeToString(sum[:]))
 }
 
-// InstructionStatus reports only hook consumption, never notification acceptance.
+// InstructionStatus reports only removal from the hook queue, never recipient
+// acknowledgement or peer notification acceptance.
 func InstructionStatus(path string) string {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return "delivered"
+		return "consumed"
 	}
 	return "queued"
 }
