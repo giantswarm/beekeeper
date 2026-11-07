@@ -81,6 +81,7 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 		t.Run(map[bool]string{false: "off roster", true: "registered"}[roster], func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
+			r.pulls[multiParkSecondPR] = superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Merged, Head: loopHead, MergeCommit: loopFixed}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				ag := st.Agents[0]
 				pm := ""
@@ -142,6 +143,7 @@ func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 func TestLastMergedPullPreservesEarlierPostMergeWork(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
+	r.pulls[multiParkSecondPR] = superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Merged, Head: loopHead, MergeCommit: loopFixed}
 	work, empty := "prove the release", ""
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Park.PostMerge = &work

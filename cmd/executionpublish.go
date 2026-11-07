@@ -128,6 +128,9 @@ func executionReviewWriteBranch(ctx context.Context, st *state.State, ref execut
 	if err != nil {
 		return "", err
 	}
+	if !r.Lease.ExpiresAt.After(time.Now()) {
+		return "", refused("review branch assignment expired during revalidation")
+	}
 	if pull.State != superloop.Open || !strings.EqualFold(pull.Ref, round.Ref) || pull.Branch == "" || pull.Branch != r.Request.GitRef {
 		return "", refused("review branch assignment no longer matches the open pull request")
 	}
