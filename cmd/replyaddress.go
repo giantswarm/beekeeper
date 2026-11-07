@@ -64,7 +64,7 @@ func (a *app) inboxPeer(session, name, msg string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return status + "; instruction reaches the session chat at its next tool or turn boundary", nil
+		return relayInstructionOutcome(status), nil
 	}
 	by := state.Party{Session: session, Name: session}
 	for _, rl := range roles {
