@@ -104,8 +104,9 @@ func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T
 	w.now = relayNow
 	guide := state.Party{Session: "guide-without-monitor", Name: "Guide fixture"}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.GuideReportsSince = w.now.Add(-time.Minute)
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: w.now.Add(-time.Hour)}}
-		return []state.Event{{Verb: loopFileVerb, Detail: "[fixture-report] issue to file" + fileReportSeparator + "the full problem"}}, nil
+		return []state.Event{{At: w.now, Verb: loopFileVerb, Detail: "[fixture-report] issue to file" + fileReportSeparator + "the full problem"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +231,38 @@ func TestGuidePeerTurnInvalidatesWorkCheck(t *testing.T) {
 				t.Fatalf("freshly checked turn blocked: %s", got)
 			}
 		})
+	}
+}
+
+func TestGuideReportsStartNowAndRetainBoundaryAcrossFeeds(t *testing.T) {
+	now := relayNow
+	problem := func(at time.Time, key string) state.Event {
+		return state.Event{At: at, Verb: loopFileVerb, Detail: "[" + key + "] finding" + fileReportSeparator + "details"}
+	}
+	st := &state.State{}
+	old := problem(now.Add(-time.Hour), "old")
+	if got := guideReportEvents(st, []state.Event{old}, now); len(got) != 0 {
+		t.Fatal("replayed pre-upgrade history")
+	}
+	fresh := problem(now.Add(time.Minute), "fresh")
+	if got := guideReportEvents(st, []state.Event{old, fresh}, now.Add(time.Minute)); len(got) != 1 {
+		t.Fatalf("lost fresh report: %+v", got)
+	}
+	if got := guideReportEvents(st, []state.Event{old}, now.Add(2*time.Minute)); len(got) != 0 {
+		t.Fatal("replayed history on another feed")
+	}
+	st.GuideWork = []state.GuideWork{
+		{ID: 1, Source: "old-a", Due: now.Add(-48 * time.Hour), Text: "historical problem alpha"},
+		{ID: 2, Source: "old-b", Due: now.Add(-48 * time.Hour), Text: "historical problem beta"},
+		{ID: 3, Due: now.Add(-48 * time.Hour), Text: "explicit guide task"},
+	}
+	guideReportEvents(st, nil, now)
+	if len(st.GuideWork) != 2 || st.GuideWork[1].Kind != guideWorkBacklog || guideWorkBlocks(st.GuideWork[1], now) || !guideWorkBlocks(st.GuideWork[0], now) {
+		t.Fatalf("backlog migration: %+v", st.GuideWork)
+	}
+	text := st.GuideWork[1].Text
+	guideReportEvents(st, nil, now)
+	if st.GuideWork[1].Text != text {
+		t.Fatal("backlog migration is not idempotent")
 	}
 }
