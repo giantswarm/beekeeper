@@ -46,6 +46,7 @@ const (
 	fixtureChangeMsg = "fixture change"
 	ghAPI            = "api"
 	ghGraphQL        = "graphql"
+	ghPR             = "pr"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -130,6 +131,8 @@ func serveGitHub() int {
 		return 0
 	case starts("search", "prs"):
 		return emit([]any{})
+	case starts(ghPR, "list"):
+		return emit([]any{})
 	case starts(ghAPI, "user"):
 		fmt.Println(fixtureBot)
 		return 0
@@ -137,7 +140,7 @@ func serveGitHub() int {
 		return emit(map[string]any{"head": map[string]any{"sha": p["headRefOid"], "ref": p["headRefName"], "repo": map[string]any{"full_name": "fixture/project"}}, "user": map[string]any{loginField: fixtureBot}})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "issueOrPullRequest(number:") }):
 		return emit(map[string]any{"data": map[string]any{"r0": map[string]any{"issueOrPullRequest": map[string]any{"__typename": "PullRequest", stateField: p[stateField]}}}})
-	case starts("pr", "review"):
+	case starts(ghPR, "review"):
 		head, _ := p["headRefOid"].(string)
 		body := "Desk review (opus): approved\nHead reviewed: `" + head + "`"
 		if idx := slices.Index(args, "--body-file"); idx >= 0 && idx+1 < len(args) {
@@ -173,7 +176,7 @@ func serveGitHub() int {
 	case starts(ghAPI) && len(args) == 4 && strings.HasPrefix(args[1], "repos/fixture/project/commits/") && args[2] == "--jq" && args[3] == ".commit.committer.date":
 		fmt.Println("2026-01-01T00:00:00Z")
 		return 0
-	case starts("pr", "view"):
+	case starts(ghPR, "view"):
 		// Model a push between the planner's read and the merge executor's read.
 		if os.Getenv("FIXTURE_CASE") == "moved-head" {
 			countPath := filepath.Join(root, "read-count")
@@ -197,7 +200,7 @@ func serveGitHub() int {
 			return emit(map[string]any{"errors": []any{map[string]any{"message": "fixture unavailable"}}})
 		}
 		return emit(map[string]any{"data": map[string]any{"repository": map[string]any{"mergeQueue": nil}}})
-	case starts("pr", "merge"):
+	case starts(ghPR, "merge"):
 		pin := slices.Index(args, "--match-head-commit")
 		if pin < 0 || pin+1 >= len(args) || args[pin+1] != p["headRefOid"] {
 			panic("merge lacks current exact-head pin")
@@ -310,7 +313,7 @@ func serveClaude() int {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			body := "Desk review (opus): approved\nHead reviewed: `" + head + "`"
-			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), "pr", "review", "1", "--repo", "fixture/project", "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
+			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", "fixture/project", "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
 			c.Env = append(os.Environ(), "FIXTURE_DIR="+root)
 			if out, err := c.CombinedOutput(); err != nil {
 				panic(fmt.Sprintf("fixture reviewer gh pr review: %v: %s", err, out))

@@ -342,13 +342,21 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, ReviewDecision: j.ReviewDecision, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, ReviewDecision: j.ReviewDecision, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Body: j.Body, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	p.Additions, p.Deletions = j.Additions, j.Deletions
 	p.Updated = j.Updated
 	p.Absorbs = superloop.ParseAbsorbedPulls(ref, j.Title, j.Body)
 	for _, issue := range j.Closes {
 		if r, ok := parseRef(issue.URL); ok {
 			p.Closes = append(p.Closes, refName(r))
+		}
+	}
+	for _, issue := range superloop.ParseClosingIssues(ref, j.Title+"\n"+j.Body) {
+		if r, ok := parseRef(issue); ok {
+			name := refName(r)
+			if !slices.ContainsFunc(p.Closes, func(existing string) bool { return strings.EqualFold(existing, name) }) {
+				p.Closes = append(p.Closes, name)
+			}
 		}
 	}
 	for _, f := range j.Files {
@@ -729,6 +737,7 @@ type supervisorLoop struct {
 	// at openPullsAt.
 	openPulls   []string
 	openPullsAt time.Time
+	unmerged    map[string]loopUnmergedObservation
 	cfgSum      [32]byte
 }
 
@@ -1156,12 +1165,13 @@ func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.pulls != nil {
-		prev := l.pulls[ref]
-		prev.pull = p
-		prev.at = l.a.timeNow()
-		l.pulls[ref] = prev
+	if l.pulls == nil {
+		l.pulls = map[string]loopPullObservation{}
 	}
+	prev := l.pulls[ref]
+	prev.pull = p
+	prev.at = l.a.timeNow()
+	l.pulls[ref] = prev
 	if p.State == superloop.Merged {
 		if l.merged == nil {
 			l.merged = map[string]superloop.Pull{}
@@ -1170,6 +1180,11 @@ func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
 	}
 	if p.State != superloop.Open && len(l.openPulls) > 0 {
 		l.openPulls = slices.DeleteFunc(l.openPulls, func(r string) bool { return strings.EqualFold(r, ref) })
+	}
+	if p.State != superloop.Open && l.unmerged != nil {
+		if r, ok := parseRef(ref); ok {
+			delete(l.unmerged, strings.ToLower(r.Repo))
+		}
 	}
 }
 
@@ -1621,6 +1636,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if !l.dryRun {
 		if err := l.stuck(failures, stuckFiled); err != nil {
+			return err
+		}
+		if err := l.checkUnmergedBacklogs(ctx, in); err != nil {
 			return err
 		}
 	}
@@ -3110,11 +3128,16 @@ that a later epic sub-issue would need to undo.
 
 Trust green CI on the exact reviewed head. Do not repeat its full gate. Build only for your
 own probes (new or mutated tests, or a benchmark touched by the diff); in later rounds probe
-only what the fixes touch. For a full review use your own detached worktree at the pinned
-head, read repository rules and inspect tests and lints. For a light review read the diff,
-issue and CI without checkout or build. Never edit the worker branch or merge.
+only what the fixes touch. For a full review use your own worktree at the pinned head, read
+repository rules and inspect tests and lints. For a light review read the diff, issue and CI
+without checkout or build. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. Open an issue
+Every finding is blocking or a nit to fix in this round; drop anything else. When you find
+blocking issues or nits that can be fixed in code, tests or docs, apply your own findings
+directly on the pull request branch ({{.Branch}}), run focused checks on what you touched,
+push once (never force-push), wait for green CI (devctl pr wait), and approve the fixed head
+so one review round suffices without bouncing back to the worker. Request changes only when a
+finding requires a product or design decision or cannot be fixed on the branch. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
 An approval's nit-only push is checked by the supervisor against the approved head; do not
@@ -3122,7 +3145,8 @@ start another independent review for it. Other changes require review of the new
 
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
-regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `".
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or the
+new head SHA in backticks when you pushed fixes and waited for green CI).
 Each finding: <file>:<line>: <what is wrong> → <what would be right>.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
@@ -3173,12 +3197,19 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		return "", errLoopLater
 	}
 	r, _ := parseRef(act.Ref)
+	rawBranch := ""
+	l.mu.Lock()
+	if cached, ok := l.pulls[act.Ref]; ok {
+		rawBranch = cached.pull.Branch
+	}
+	l.mu.Unlock()
 	if act.Message == "" {
 		p, err := readLoopPull(ctx, act.Ref)
 		if err != nil {
 			return "", err
 		}
 		l.cachePull(act.Ref, p)
+		rawBranch = p.Branch
 		if p.State != "" && p.State != superloop.Open {
 			return "", errLoopLater
 		}
@@ -3195,8 +3226,14 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		if err != nil {
 			return "", err
 		}
+	} else if rawBranch == "" {
+		if p, err := readLoopPull(ctx, act.Ref); err == nil {
+			l.cachePull(act.Ref, p)
+			rawBranch = p.Branch
+		}
 	}
-	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent, Context: act.Message})
+	branch := cmp.Or(rawBranch, fmt.Sprintf("pr-%d", r.N))
+	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Branch: branch, Round: act.Round, Worker: act.Agent, Context: act.Message})
 	if err != nil {
 		return "", err
 	}
@@ -3224,6 +3261,9 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			return "", errLoopLater
 		}
 		return "", err
+	}
+	if place.remote() {
+		place.Ref = branch
 	}
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
 	if l.reviewDir != "" {
@@ -3777,9 +3817,15 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.incidentStart(next.Ref); err != nil {
 		return "", err
 	}
+	if err := l.unmergedStart(ctx, next.Ref); err != nil {
+		return "", err
+	}
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
 	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+	if err := l.a.fatalAdmission(name, false); err != nil {
+		return "", errLoopLater
+	}
 	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
@@ -3807,6 +3853,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	args = append(args, place.excludeFlags()...)
 	// Placement and preparation may block while an incident hold is set.
 	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
+	if err := l.unmergedStart(ctx, next.Ref); err != nil {
 		return "", err
 	}
 	if err := l.claim(act, name); err != nil {
@@ -4118,14 +4167,21 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 				}
 			}
 		}
+		var createdRefs []string
 		for _, c := range w.Created {
 			r, ok := parseRef(c)
 			if !ok {
 				continue
 			}
 			ref := refName(r)
+			createdRefs = append(createdRefs, ref)
 			url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
 			out = append(out, superloop.FiledIssue{Ref: ref, URL: url, Agent: agent, From: from})
+		}
+		if !l.dryRun && len(createdRefs) > 0 && from == "" && agent != guideName && !holdsRole(st, p) && !agentIdle(st, p) && !endedOwner(st, p) {
+			_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+				return recordSessionIssues(current, p, p, l.a.timeNow(), createdRefs), nil
+			})
 		}
 	}
 	return out

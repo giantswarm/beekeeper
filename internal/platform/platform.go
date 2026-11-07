@@ -254,6 +254,9 @@ type SetupSpec struct {
 	Notify bool
 	// ConfigPath is the explicit configuration the loop service reads.
 	ConfigPath string
+	// StateDir pins the sentinel's independent outage journal, even when the
+	// main configuration cannot be parsed.
+	StateDir string
 	// ToolPath is the installing process's PATH, retained for the loop's
 	// external tools when the service manager has a restricted environment.
 	ToolPath string

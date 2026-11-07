@@ -86,7 +86,7 @@ that is starting already refuses it.`,
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return a.roleStatus(guideRole) },
 	}
-	c.AddCommand(start, a.relayCmd(guideRole, guideRelayLong), stop, status, a.guideQueueCmd(), a.guideNextCmd(), a.guideHandoverCmd(), a.guideWatchCmd())
+	c.AddCommand(a.guideWorkCmd(), start, a.relayCmd(guideRole, guideRelayLong), stop, status, a.guideQueueCmd(), a.guideNextCmd(), a.guideHandoverCmd(), a.guideWatchCmd())
 	return c
 }
 
@@ -555,7 +555,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				return err
 			}
 			if prompt {
-				return a.printGuidePrompt(r, q, s, a.boardHoldsHandover(cmd.Context(), st.Notes))
+				return a.printGuidePrompt(r, q, s, a.boardHoldsHandover(cmd.Context(), st.Notes), st)
 			}
 			sv := readHolder(r, sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
 			head := "No guide is recorded."
@@ -567,6 +567,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			}
 			relay := a.relayLine(guideRole, r)
 			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
+			facts = append(facts, textFacts("guide-work", guideWorkText(st))...)
 			facts = append(facts, textFacts("standing", a.capture(func() { a.printStanding(s) }))...)
 			return a.delta("guide-handover", full, facts, func() {
 				_, _ = fmt.Fprintf(a.out, "# Guide hand-over, %s\n\n%s\n", a.now.Format("2006-01-02 15:04 MST"), head)
@@ -577,6 +578,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				a.printStanding(s)
 				_, _ = fmt.Fprintln(a.out, "\n## Queue")
 				a.printQueue(q)
+				_, _ = fmt.Fprintln(a.out, "\n## Owned work, goals and restoration deadlines\n"+guideWorkText(st))
 			})
 		},
 	}
@@ -604,7 +606,7 @@ var guideLiveCommands = [][2]string{
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardHoldsView) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardHoldsView, st *state.State) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -616,6 +618,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 		section(p, "Standing instructions", false, "")
 		p("Read and follow %q.\n", a.standingPath())
 	}
+	p("## Owned work, goals and restoration deadlines\n\n%s\n", guideWorkText(st))
 	a.promptBoard(p, bv)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
@@ -741,7 +744,11 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		dl, de := guideRole.fireRelayDue(st, reading, a.guideDues, a.now)
 		lines = append(lines, dl...)
 		evs := append(append(ce, re...), de...)
-		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
+		heartbeat := st.Guide != nil && a.now.Sub(st.Guide.WatchSeen) >= 30*time.Second
+		if heartbeat {
+			st.Guide.WatchSeen = a.now.UTC()
+		}
+		return lines, evs, heartbeat || seen || fed || len(lines) > 0 || len(evs) > 0
 	}
 	// Preserve the read-only preview when the writer fence refuses the callback.
 	lines, _, changed := fire(st)
@@ -966,6 +973,12 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 			key, text, ok := keyed(e.Detail)
 			if !ok || !strings.Contains(text, fileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
 				continue
+			}
+			if r.Holder != nil && !slices.Contains(st.GuideReports, key) {
+				r.WorkChecked = nil
+				st.NextGuideWork++
+				st.GuideWork = append(st.GuideWork, state.GuideWork{ID: st.NextGuideWork, Kind: paramTask, Text: text, Due: e.At, By: r.Holder.Party, Source: key})
+				st.GuideReports = append(st.GuideReports, key)
 			}
 			r.Fed = append(r.Fed, "problem:"+key)
 			lines = append(lines, "GUIDE PROBLEM: "+escapedLine(text))

@@ -780,6 +780,10 @@ if args[0] == "api" and len(args) >= 2:
             print(json.dumps({"default_branch": "main", "allow_squash_merge": True, "owner": {"type": "Organization"}}))
         sys.exit(0)
 
+if args[:2] == ["pr", "list"]:
+    print("[]")
+    sys.exit(0)
+
 if args[:2] == ["pr", "create"]:
     if fail_pr_create or os.path.exists(state_path + ".fail-pr-create"):
         sys.stderr.write("simulated pr create failure after branch push\n")

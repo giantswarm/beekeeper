@@ -11,6 +11,36 @@
 # for the machine above: tune them to yours or delete them.
 
 # stateDir: /home/ada/.local/state/beekeeper   # default: $XDG_STATE_HOME/beekeeper
+# The independent fatal sentinel is installed as its own timer on systemd.
+# It monitors enabled watch/loop services, configured harnesses, installed
+# guards and the core repository's default-branch CI. Disabled components
+# stay disabled. A separate timer dispatcher fires timers without watch or
+# supervisor; missed timer firing/check deadlines are fatal after 2m grace.
+# `beekeeper install --recovery-only` installs these independent services
+# without restoring hooks, watch or loop that were deliberately uninstalled.
+# Stop/holds/capacity still govern repairs; three attempts,
+# ten minutes apart, with only one repair owner at a time. Only a passing
+# probe clears an outage; unreadable is unknown. Inspect: beekeeper fatal status.
+# fatal:
+#   repositories: [giantswarm/beekeeper] # [] disables default-branch CI probes
+#   checkouts: {giantswarm/beekeeper: ~/projects/beekeeper} # default projects.dir/<repo>
+#   checks:
+#     - name: harness-config
+#       probe: [/opt/tools/harness, config, check] # no shell expansion
+#       harness: agy # exclude this harness from repair selection on failure
+#       repository: giantswarm/beekeeper # default repair owner
+# Probes: exit 0 healthy, 1 fatal, 2 deliberately disabled, others unknown.
+# Output is discarded; put no credentials in probe arguments. A malformed
+# main config uses the private last-known-good fatal-admission.yaml saved
+# at installation and on valid scans, with the unit's pinned --state-dir.
+# The snapshot is bound to the original source; even a repair worker using
+# the snapshot must scan that source before declaring the outage recovered.
+# Recovery still reads current stop, holds and capacity. Without a validated
+# snapshot it detects the outage and fails closed. Observation is bounded
+# separately so slow probes leave time for recovery. Harness version and
+# non-model startup preflights run before optional checks. Unknown harnesses
+# cannot receive repairs. Stop cancels foreground timer actions as well as
+# stopping the installed dispatcher, retaining interrupted actions for resume.
 # Clones belong to the person; sessions create checkouts under worktrees.
 projects:
   dir: ~/projects

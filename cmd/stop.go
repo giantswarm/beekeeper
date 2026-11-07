@@ -17,6 +17,8 @@ import (
 // standbyUnit is the standby watch's installed unit (beekeeper install).
 const standbyUnit = "beekeeper-notify.service"
 
+const timerDispatcherUnit = "beekeeper-timers.service"
+
 // unitActive is the ActiveState of a running unit.
 const unitActive = "active"
 
@@ -76,7 +78,8 @@ stopped until beekeeper resume:
   release wait) or nothing merged; a waiting merge keeps its place;
 - stops every unit of beekeeper's starts, wakes, reopens and status
   reports (beekeeper-agent-*, beekeeper-wake-*, beekeeper-reopen-*,
-  beekeeper-report-*), the standby service (beekeeper-notify.service)
+  beekeeper-report-*), the standby service (beekeeper-notify.service),
+  the independent timer dispatcher (beekeeper-timers.service)
   and the units stop.units names (a timer of the desk's own that would
   start or change something);
 - ends the turn of every session beekeeper started and stops it: its
@@ -115,7 +118,7 @@ func (a *app) resumeCmd() *cobra.Command {
 		Use:   "resume",
 		Short: "Lift beekeeper stop: its holds, and the units it stopped back",
 		Long: `Lift the standing beekeeper stop: the installed units it stopped (the
-standby service, stop.units) start again, the holds the stop set are
+standby service, timer dispatcher, stop.units) start again, the holds the stop set are
 lifted, a hold that stood before it stays, one it replaced is put back as
 it was (unless its time passed meanwhile), and starts, wakes, revives,
 reopens and imports run again. A unit that does not start again is named
@@ -344,7 +347,7 @@ func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, li
 		}
 		lines = append(lines, "stopped "+u)
 	}
-	for _, u := range append([]string{standbyUnit}, a.cfg.Stop.Units...) {
+	for _, u := range append([]string{standbyUnit, timerDispatcherUnit}, a.cfg.Stop.Units...) {
 		switch plat.Launcher.State(ctx, u) {
 		case unitActive, "activating", "reloading":
 		default:

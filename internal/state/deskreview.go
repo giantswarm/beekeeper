@@ -27,6 +27,7 @@ type DeskReviewResult struct {
 	URL          string    `json:"url"`
 	Author       string    `json:"author"`
 	Verdict      string    `json:"verdict"`
+	Head         string    `json:"head,omitempty"`
 	BodyDigest   string    `json:"bodyDigest"`
 	ReportDigest string    `json:"reportDigest"`
 	ReportedAt   time.Time `json:"reportedAt"`

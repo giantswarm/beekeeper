@@ -52,6 +52,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			env := os.Environ()
 			var binary string
 			needsToken := true
+			targetBranch := executionGitHubTargetBranch(j)
 			if name == "github-cli" {
 				if len(args) == 0 {
 					return refused("worker gh requires a repository command")
@@ -95,7 +96,20 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				}
 				binary = s.Config.Tools[execution.ToolGitHub].Executable
 			} else {
-				if err := execution.ValidateWorkerPush(args, execution.GitHubBranch(j.Handle.Ref)); err != nil {
+				if execution.GitHubGitVerb(args) == workerGitHubPush {
+					resolve := workerGitHubRequest{Repository: defaultRepo, Write: true, ResolvePush: true}
+					var target workerGitHubPushTarget
+					if err := execution.CoordinatorCall(ctx, co.Callback, string(j.Handle.Ref.Host), workerGitHubIssue, j.Handle.Ref, resolve, j.Request.ControlKey, &target, s.Callback); err != nil {
+						return err
+					}
+					if target.Branch == "" {
+						return refused("coordinator returned no push branch")
+					}
+					targetBranch = target.Branch
+					request.PushBranch = targetBranch
+					request.PushReview = target.ReviewID
+				}
+				if err := execution.ValidateWorkerPush(args, targetBranch); err != nil {
 					return refused("%v", err)
 				}
 				binary = workerGitHubGitExecutable
@@ -110,7 +124,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					return refused("network git cannot override the owned workspace or configuration")
 				}
 				if request.Write {
-					if err := execution.ValidateWorkerPush(args, execution.GitHubBranch(j.Handle.Ref)); err != nil {
+					if err := execution.ValidateWorkerPush(args, targetBranch); err != nil {
 						return err
 					}
 				}
@@ -178,12 +192,23 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				env = append(env, "GH_TOKEN="+token.Token)
 			}
 			if name == "github-git" && request.Write {
-				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, execution.GitHubBranch(j.Handle.Ref), env)
+				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, targetBranch, env)
 				if err != nil {
 					return err
 				}
 				defer cleanup()
 				args, env = isolatedArgs, isolatedEnv
+				// Object inspection and transfer preparation may outlive a repair grant.
+				// Revalidate the exact round immediately before the isolated push starts.
+				resolve := request
+				resolve.ResolvePush = true
+				var target workerGitHubPushTarget
+				if err := execution.CoordinatorCall(ctx, co.Callback, string(j.Handle.Ref.Host), workerGitHubIssue, j.Handle.Ref, resolve, j.Request.ControlKey, &target, s.Callback); err != nil {
+					return err
+				}
+				if target.Branch != targetBranch || target.ReviewID != request.PushReview {
+					return refused("push assignment changed during preparation")
+				}
 			}
 			child := exec.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
 			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = workDir, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
@@ -191,6 +216,15 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 		}})
 	}
 	return commands
+}
+
+type workerGitHubPushTarget struct {
+	Branch   string `json:"branch"`
+	ReviewID string `json:"review_id,omitempty"`
+}
+
+func executionGitHubTargetBranch(j execution.Journal) string {
+	return execution.GitHubBranch(j.Handle.Ref)
 }
 
 func workerGitHubWorkDir(defaultWorkspace, defaultRepo string) (string, string) {

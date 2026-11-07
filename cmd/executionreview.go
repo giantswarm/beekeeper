@@ -22,6 +22,27 @@ func sameReviewSession(a, b state.Party) bool {
 	return (a.Session != "" && a.Session == b.Session || a.HostSession != "" && a.HostSession == b.HostSession) && a.Is(b)
 }
 
+// readReviewerFixedHead checks whether reviewedHead is a direct fast-forward
+// descendant of assignedHead (ahead > 0 && behind == 0). Tests replace it.
+var readReviewerFixedHead = func(ctx context.Context, ref, assignedHead, reviewedHead string) (bool, error) {
+	r, ok := parseRef(ref)
+	if !ok {
+		return false, fmt.Errorf("invalid ref %s", ref)
+	}
+	raw, err := github.RunGH(ctx, "api", fmt.Sprintf("repos/%s/compare/%s...%s", r.Repo, assignedHead, reviewedHead))
+	if err != nil {
+		return false, err
+	}
+	var cmp struct {
+		AheadBy  int `json:"ahead_by"`
+		BehindBy int `json:"behind_by"`
+	}
+	if err := json.Unmarshal(raw, &cmp); err != nil {
+		return false, err
+	}
+	return cmp.AheadBy > 0 && cmp.BehindBy == 0, nil
+}
+
 // Assignment is recorded only from a supervisor-loop start, never from a
 // worker-selected name or a review's prose. Reconciliation is idempotent.
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
@@ -138,18 +159,25 @@ func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, 
 func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use execution.MergeUse, pull superloop.Pull, loopClaim bool) error {
 	round := executionReviewRound(st, use)
 	_, workerIndex := executionRecord(st, use.Ref)
-	reviewed := use.Head
-	fixes := loopClaim && use.ID == "" && pull.Green && pull.Head == use.Head && round != nil && round.Head != use.Head && round.Result != nil && (round.Result.Verdict == superloop.Approved || round.Result.Verdict == superloop.ChangesRequested)
-	if fixes {
-		reviewed = round.Head
+	roundHead := ""
+	if round != nil {
+		roundHead = round.Head
+		if round.Result != nil && round.Result.Head != "" {
+			roundHead = round.Result.Head
+		}
 	}
-	if !fixes && round != nil && round.Head != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
-		covered, err := readBaseMerge(ctx, pull, round.Head)
+	reviewed := use.Head
+	fixes := loopClaim && use.ID == "" && pull.Green && pull.Head == use.Head && round != nil && roundHead != use.Head && round.Result != nil && (round.Result.Verdict == superloop.Approved || round.Result.Verdict == superloop.ChangesRequested)
+	if fixes {
+		reviewed = roundHead
+	}
+	if !fixes && round != nil && roundHead != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
+		covered, err := readBaseMerge(ctx, pull, roundHead)
 		if err != nil {
 			return err
 		}
-		if covered || st.ReviewNitsChecked(pull.Ref, use.Head, round.Head) {
-			reviewed = round.Head
+		if covered || st.ReviewNitsChecked(pull.Ref, use.Head, roundHead) {
+			reviewed = roundHead
 		}
 	}
 	workerOK := workerIndex >= 0 && round != nil && sameReviewSession(round.Worker, st.Starts[workerIndex].Party)
@@ -158,7 +186,7 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 			return s.Execution != nil && s.Execution.Request.Repository == use.Repository && sameReviewSession(round.Worker, s.Party)
 		})
 	}
-	if round == nil || round.Head != reviewed || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
+	if round == nil || roundHead != reviewed || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result
@@ -228,10 +256,21 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 		if err != nil {
 			return err
 		}
-		if review.ID == "" || review.Author == "" || review.URL != links[0][0] || review.Head != round.Head || review.Commit != round.Head || review.At.Before(round.AssignedAt.Add(-30*time.Second)) || review.Verdict != verdict {
+		headOK := review.Head != "" && review.Head == review.Commit && review.Head == round.Head
+		if !headOK && review.Head != "" && review.Head == review.Commit && review.Verdict == superloop.Approved &&
+			!slices.ContainsFunc(st.DeskReviews[:i], func(prev state.DeskReview) bool {
+				return strings.EqualFold(prev.Ref, round.Ref) && (prev.Head == review.Head || prev.Result != nil && prev.Result.Head == review.Head)
+			}) {
+			if pull, pullErr := readLoopPull(ctx, round.Ref); pullErr == nil && pull.State == superloop.Open && pull.Head == review.Head && pull.Green {
+				if descends, descErr := readReviewerFixedHead(ctx, round.Ref, round.Head, review.Head); descErr == nil && descends {
+					headOK = true
+				}
+			}
+		}
+		if review.ID == "" || review.Author == "" || review.URL != links[0][0] || !headOK || review.At.Before(round.AssignedAt.Add(-30*time.Second)) || review.Verdict != verdict {
 			return refused("reported desk review does not match its assigned head and round")
 		}
-		round.Result = &state.DeskReviewResult{ID: review.ID, URL: review.URL, Author: review.Author, Verdict: review.Verdict, BodyDigest: execution.Digest([]byte(review.Body)), ReportDigest: reportDigest, ReportedAt: at, By: by}
+		round.Result = &state.DeskReviewResult{ID: review.ID, URL: review.URL, Author: review.Author, Verdict: review.Verdict, Head: review.Head, BodyDigest: execution.Digest([]byte(review.Body)), ReportDigest: reportDigest, ReportedAt: at, By: by}
 		return nil
 	}
 	return nil

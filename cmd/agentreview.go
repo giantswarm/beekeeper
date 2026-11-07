@@ -108,6 +108,7 @@ func (a *app) agentReviewCmd() *cobra.Command {
 				return err
 			}
 			l.reviewDir = dir
+			l.cachePull(p.Ref, p)
 			oldModel := a.cfg.Supervisor.ReviewModel
 			a.cfg.Supervisor.ReviewModel = cmp.Or(model, oldModel, defaultReviewModel)
 			defer func() { a.cfg.Supervisor.ReviewModel = oldModel }()

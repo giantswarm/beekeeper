@@ -2030,6 +2030,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 		w.importRows(ctx, st)
 	}
+	if !w.standby || !supervised {
+		w.guideMonitor(ctx, st, sessions)
+	}
 	if w.standby && supervised {
 		return // the supervisor loop's watch reports them
 	}

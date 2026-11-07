@@ -233,6 +233,8 @@ func adapter(args []string) error {
 			return nil
 		case strings.HasPrefix(joined, "search prs "):
 			return emit([]any{})
+		case strings.HasPrefix(joined, "pr list "):
+			return emit([]any{})
 		case len(args) > 2 && args[0] == "pr" && args[1] == "view" && args[2] == "7":
 			return emit(pull(a))
 		case len(args) > 2 && args[0] == "pr" && args[1] == "merge" && args[2] == "7":
@@ -273,6 +275,8 @@ func adapter(args []string) error {
 		case strings.HasPrefix(joined, "api graphql "):
 			q := fields["query"]
 			switch {
+			case strings.Contains(q, "parent{url}"):
+				return data(map[string]any{"repository": map[string]any{"issue": map[string]any{"parent": nil}}})
 			case strings.Contains(q, "fields(first:50)"):
 				return data(map[string]any{"repositoryOwner": map[string]any{"projectV2": map[string]any{"id": "PROJECT", "fields": map[string]any{"nodes": []any{map[string]any{"id": "STATUS", "name": "Status", "options": []any{map[string]any{"id": "ready", "name": "Ready"}, map[string]any{"id": "progress", "name": "In Progress"}, map[string]any{"id": "done", "name": "Done"}}}}}}}})
 			case strings.Contains(q, "items(first:80"):

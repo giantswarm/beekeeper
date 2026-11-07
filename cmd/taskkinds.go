@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -111,9 +112,25 @@ const kindLockWait = 15 * time.Minute
 // pass a cap.
 const kindLockFile = "kinds.lock"
 
+// fatalAdmission stops new ordinary work while an outage needs repair.
+func (a *app) fatalAdmission(name string, review bool) error {
+	q, err := fatal.Read(cmp.Or(a.store.Dir(), a.cfg.StateDir))
+	if err != nil {
+		return fmt.Errorf("fatal admission: %w", err)
+	}
+	// Reviews finish already admitted work, including the outage's own fix.
+	if err := q.Barrier(name); err != nil && !review {
+		return refused("%v", err)
+	}
+	return nil
+}
+
 // withKindAdmission runs start under the kind lock once kindGate admits
-// name; a name of no kind starts without it.
+// name; a name of no kind starts without that lock.
 func (a *app) withKindAdmission(ctx context.Context, name string, start func() error) error {
+	if err := a.fatalAdmission(name, a.selectionKind == taskKindReview); err != nil {
+		return err
+	}
 	if len(a.cfg.Agents.KindsOf(name)) == 0 {
 		return start()
 	}
@@ -129,6 +146,10 @@ func (a *app) withKindAdmission(ctx context.Context, name string, start func() e
 	}
 	defer func() { _ = l.Unlock() }()
 	if err := a.kindGate(name); err != nil {
+		return err
+	}
+	// An outage may have opened while this start waited for its kind lock.
+	if err := a.fatalAdmission(name, a.selectionKind == taskKindReview); err != nil {
 		return err
 	}
 	return start()
