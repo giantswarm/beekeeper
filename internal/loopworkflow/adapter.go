@@ -136,6 +136,20 @@ func serveGitHub() int {
 		return emit([]any{})
 	case starts(ghPR, "list"):
 		return emit([]any{})
+	// This fixture repository has a readable main branch and no release
+	// workflows. Delivery recovery must observe that explicitly, without
+	// allowing unrelated or unrecognized external requests.
+	case starts(ghAPI, "-H", "Accept: application/vnd.github.raw") && len(args) == 4 && slices.Contains([]string{
+		"repos/fixture/project/contents/.github/workflows/zz_generated.auto_release.yaml?ref=main",
+		"repos/fixture/project/contents/.github/workflows/auto-release.yaml?ref=main",
+		"repos/fixture/project/contents/.github/workflows/zz_generated.create_release_pr.yaml?ref=main",
+		"repos/fixture/project/contents/.github/workflows/zz_generated.create_release.yaml?ref=main",
+	}, args[3]):
+		fmt.Fprintln(os.Stderr, "gh: Not Found (HTTP 404)")
+		return 1
+	case starts(ghAPI, "repos/fixture/project/branches/main", "--jq", ".name") && len(args) == 4:
+		fmt.Println(mainBranch)
+		return 0
 	case starts(ghAPI, "user"):
 		fmt.Println(fixtureBot)
 		return 0
