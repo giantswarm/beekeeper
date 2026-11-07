@@ -1129,14 +1129,23 @@ func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
 }
 
 const (
-	review3325Authorized = "authorized"
-	review3325Unassigned = "unassigned"
-	review3325Superseded = "superseded"
-	review3325Finished   = "finished"
+	review3325SourceOnly    = "source only"
+	review3325DefaultTrunk  = "default trunk"
+	review3325WrongRepo     = "wrong repo"
+	review3325WrongBranch   = "wrong branch"
+	review3325WrongSession  = "wrong session"
+	review3325UnrelatedRepo = "unrelated repo"
+	review3325WrongRef      = "wrong ref"
+	review3325NewPR         = "new PR"
+	review3325Metadata      = "metadata"
+	review3325Authorized    = "authorized"
+	review3325Unassigned    = "unassigned"
+	review3325Superseded    = "superseded"
+	review3325Finished      = "finished"
 )
 
 func TestReview3325AssignedReviewerPublication(t *testing.T) {
-	for _, scenario := range []string{review3325Authorized, review3325Unassigned, claudeLoginExpired, "unrelated repo", "wrong ref", "wrong session", review3325Superseded, review3325Finished, "new PR", "metadata"} {
+	for _, scenario := range []string{review3325Authorized, review3325Unassigned, claudeLoginExpired, review3325UnrelatedRepo, review3325WrongRef, review3325WrongSession, review3325Superseded, review3325Finished, review3325NewPR, review3325Metadata} {
 		t.Run(scenario, func(t *testing.T) {
 			rig := newPublicationRig(t)
 			const authorBranch = "fixture/author-repair"
@@ -1159,17 +1168,17 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				switch scenario {
 				case claudeLoginExpired:
 					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
-				case "unrelated repo":
+				case review3325UnrelatedRepo:
 					round.Ref = "other/repo#42"
-				case "wrong ref":
+				case review3325WrongRef:
 					start.Execution.Request.GitRef = "fixture/unrelated"
-				case "wrong session":
+				case review3325WrongSession:
 					round.Reviewer = state.Party{Session: "different-session"}
 				case review3325Finished:
 					round.Result = &state.DeskReviewResult{}
-				case "new PR":
+				case review3325NewPR:
 					rig.created = false
-				case "metadata":
+				case review3325Metadata:
 					p.Title = "fix: metadata change"
 				}
 				if scenario != review3325Unassigned {
@@ -1195,7 +1204,7 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				if err != nil || result.Branch != authorBranch || result.URL != publicationFixturePRURL {
 					t.Fatalf("authorized publication failed: %+v %v", result, err)
 				}
-			} else if scenario == review3325Unassigned || scenario == "wrong session" {
+			} else if scenario == review3325Unassigned || scenario == review3325WrongSession {
 				if err == nil && result.Branch == authorBranch {
 					t.Fatal("unassigned execution wrote author branch")
 				}

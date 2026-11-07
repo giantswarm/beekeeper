@@ -582,7 +582,7 @@ func TestWorkerGitHubRefreshPersistenceFailureExplainsRecovery(t *testing.T) {
 }
 
 func TestReview3325DirectPushAssignment(t *testing.T) {
-	for _, scenario := range []string{review3325Authorized, "source only", "default trunk", claudeLoginExpired, "wrong repo", "wrong branch", "wrong session", review3325Superseded, workerGitHubCompleted} {
+	for _, scenario := range []string{review3325Authorized, review3325SourceOnly, review3325DefaultTrunk, claudeLoginExpired, review3325WrongRepo, review3325WrongBranch, review3325WrongSession, review3325Superseded, workerGitHubCompleted} {
 		t.Run(scenario, func(t *testing.T) {
 			a, r := workerGitHubTestApp(t)
 			const branch = "fixture/foreign-source"
@@ -598,18 +598,18 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 				start.Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}
 				round := state.DeskReview{ID: "assigned-push", Ref: r.Repository + "#7", Head: start.Execution.Handle.Commit, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()}
 				switch scenario {
-				case "default trunk":
+				case review3325DefaultTrunk:
 					start.Execution.Request.GitRef = "trunk"
 				case claudeLoginExpired:
 					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
-				case "wrong branch":
+				case review3325WrongBranch:
 					start.Execution.Request.GitRef = "other/branch"
-				case "wrong session":
+				case review3325WrongSession:
 					round.Reviewer = state.Party{Session: "other-session"}
 				case workerGitHubCompleted:
 					round.Result = &state.DeskReviewResult{}
 				}
-				if scenario != "source only" && scenario != "default trunk" {
+				if scenario != review3325SourceOnly && scenario != review3325DefaultTrunk {
 					st.DeskReviews = append(st.DeskReviews, round)
 				}
 				if scenario == review3325Superseded {
@@ -624,7 +624,7 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := workerGitHubRequest{Repository: r.Repository, Write: true, ResolvePush: true}
-			if scenario == "wrong repo" {
+			if scenario == review3325WrongRepo {
 				request.Repository = "example/private"
 			}
 			var target workerGitHubPushTarget
@@ -634,7 +634,7 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 				if err != nil || target.Branch != branch || target.ReviewID == "" {
 					t.Fatalf("assigned branch refused: %+v %v", target, err)
 				}
-			case "source only", "default trunk", "wrong session":
+			case review3325SourceOnly, review3325DefaultTrunk, review3325WrongSession:
 				if err == nil && target.Branch != execution.GitHubBranch(r.Ref) {
 					t.Fatalf("source or name granted foreign write: %+v", target)
 				}
