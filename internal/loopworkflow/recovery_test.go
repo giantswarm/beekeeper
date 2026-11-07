@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -291,12 +292,32 @@ func TestRetainedRecoveryController(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(d.target+".update", "journal.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	failed := os.Getenv("BEEKEEPER_TEST_RECOVERED_FROM")
+	if failed == "" {
+		failed = j.Previous.Version
+	}
+	if err := d.store.RecoverVersion(j.Previous.Version, failed, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 	out, err := d.controller(ctx).CombinedOutput()
 	if err != nil {
 		t.Fatalf("retained controller: %v\n%s", err, out)
 	}
 	j = d.journal(t)
+	writer, err := state.OpenVersion(filepath.Join(d.dir, "state"), j.Candidate.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := writer.Update(func(*state.State) ([]state.Event, error) { return nil, nil })
+	var fence map[string]any
+	fenced, fenceErr := d.store.ReadFile("recovery-writer.json", &fence)
+	if j.RolledBack() && (!fenced || fenceErr != nil || !errors.Is(writeErr, state.ErrRecoveryWriterFenced)) {
+		t.Fatalf("rollback failed to fence candidate writes: fence=%v, %v, write=%v\n%s", fenced, fenceErr, writeErr, out)
+	}
 	if !j.Settled() || j.RolledBack() || j.Observed == nil || !j.Observed.ProbePassed {
 		t.Fatalf("retained controller did not promote candidate: %+v\n%s", j, out)
+	}
+	if fenced || fenceErr != nil || writeErr != nil {
+		t.Fatalf("normal probation did not clear writer fence: fence=%v, %v, write=%v", fenced, fenceErr, writeErr)
 	}
 }
