@@ -418,10 +418,14 @@ coordinator CI wait in issue #2242, and parked publication/review retention
 from PR #2244 are merged, released and installed. Do not reproduce those
 changes in the proof branch.
 
-Use the existing supervisor-granted host lease procedure. If no execution-host
-resource is available to claim, stop the live phase and record the blocker;
-do not select a host outside that procedure. Use the existing subscription
-login and installed tools without changing accounts, logins or spending settings.
+Use the desk's supervisor-approved execution-host allocation procedure. On a
+desk using `supervisor.hosts` and `hostsFirst`, start on an allocated host with
+`agents start --host <host>`; a separate resource lease is not required unless
+the desk explicitly configures one. The signed execution lease and host
+admission checks still apply. If the desk requires a resource lease, claim it
+before starting; if no approved allocation is available, record the blocker.
+Use the existing subscription login and installed tools without changing
+accounts, logins or spending settings.
 
 On the leased host, record these observations in order:
 
