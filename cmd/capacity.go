@@ -1725,6 +1725,9 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 			continue
 		}
 		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
+		if !a.now.IsZero() {
+			now = a.now
+		}
 		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
 	}
 	for _, name := range k.ProviderNames() {

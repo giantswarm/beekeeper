@@ -1128,7 +1128,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	started := time.Now()
 	now := a.now
 	if now.IsZero() {
-		now = time.Now()
+		now = started
 	}
 	var cached usageReading
 	var haveCached bool
@@ -1142,6 +1142,10 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		}
 	}
 	r, err := a.execUsage(ctx, u)
+	now = now.Add(max(0, time.Since(started)))
+	if !a.now.IsZero() {
+		a.now = now
+	}
 	if err == nil {
 		r.At = now.UTC()
 		err = validateReadingAt(r, u, now)
@@ -1150,7 +1154,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		// The built-in Codex reader consumes authoritative local events, including
 		// explicit spend/rate-limit stops. Never mask those with an older event.
 		if haveCached && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) &&
-			validateReadingAt(cached, u, now.Add(time.Since(started))) == nil {
+			validateReadingAt(cached, u, now) == nil {
 			cached.Fallback = err.Error()
 			applyQuotaForUsageFile(a.store, file, &cached, now)
 			return cached, nil
@@ -1407,28 +1411,40 @@ func usageRefreshTimeout(k config.Capacity) time.Duration {
 	return max(timeout, k.Usage.EffectiveTimeout())
 }
 
+func (w *watcher) usageNow() time.Time {
+	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+		return w.clk().Now()
+	}
+	return w.now
+}
+
 // execUsageNow gives each provider its own observation time, then validates at
 // completion. A refresh can spend minutes on earlier providers; its scheduling
 // time must not make a newly written Codex event appear to be in the future.
 func (w *watcher) execUsageNow(ctx context.Context, u config.Usage) (usageReading, error) {
+	started := w.clk().Now()
+	obs := w.usageNow()
 	reader := w.snapshotAtNow()
-	reader.now = w.clk().Now()
+	reader.now = obs
 	r, err := reader.execUsage(ctx, u)
 	if err != nil {
 		return usageReading{}, err
 	}
-	now := w.clk().Now()
+	now := obs.Add(max(0, w.clk().Now().Sub(started)))
+	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+		now = w.clk().Now()
+	}
 	r.At = now.UTC()
 	return r, validateReadingAt(r, u, now)
 }
 
 func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.Time) {
 	if now.IsZero() {
-		now = w.clk().Now()
+		now = w.usageNow()
 	}
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
-			now = w.clk().Now()
+			now = w.usageNow()
 			p := k.Providers[name]
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
@@ -1455,6 +1471,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 		}
 		return
 	}
+	now = w.usageNow()
 	w.mu.Lock()
 	w.lastUsage = now
 	w.mu.Unlock()
@@ -1514,6 +1531,9 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	}
 	if !w.chores {
 		_, u := w.resolveUsage(ctx, k)
+		if w.app != nil && w.app.now.After(w.now) {
+			w.now = w.app.now
+		}
 		if u == nil {
 			return nil
 		}
@@ -1526,11 +1546,14 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 		w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
 		return u
 	}
-	now := w.now
+	now := w.usageNow()
+	w.now = now
 	if w.usageNeedsRefresh(k, now) {
 		w.inFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
 			w.refreshUsage(ctx, k, now)
 		})
+		now = w.usageNow()
+		w.now = now
 	}
 	_, u := w.currentUsage(k, w.now)
 	if u == nil {
@@ -1574,6 +1597,9 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 				continue
 			}
 			r, err := w.resolveReading(ctx, usageProviderFile(name), p.Usage)
+			if w.app != nil && w.app.now.After(w.now) {
+				w.now = w.app.now
+			}
 			if err != nil {
 				w.mu.Lock()
 				if w.providerUsageErr == nil {
@@ -1587,11 +1613,14 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			readings[name] = providerReadingResult{reading: r, ok: true}
 		}
 	} else {
-		now := w.now
+		now := w.usageNow()
+		w.now = now
 		if w.usageNeedsRefresh(k, now) {
 			w.inFlight(ctx, usageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
 				w.refreshUsage(ctx, k, now)
 			})
+			now = w.usageNow()
+			w.now = now
 		}
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]

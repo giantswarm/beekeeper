@@ -3925,26 +3925,33 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 			clk := newFakeClock(t)
 			start := clk.Now()
 			u := config.Usage{Command: config.DefaultCodexUsageCommand}
-			k := config.Capacity{Usage: u}
+			k := config.Capacity{Ceiling: 4, Usage: u}
 			file := usageFile
 			if providers {
-				k = config.Capacity{Providers: map[string]config.Provider{
-					config.ClaudeHarness: {Usage: config.Usage{Command: []string{"slow"}}},
-					codex.Harness:        {Usage: u},
+				k = config.Capacity{Ceiling: 4, Providers: map[string]config.Provider{
+					config.ClaudeHarness: {Ceiling: 2, Usage: config.Usage{Command: []string{"slow"}}},
+					codex.Harness:        {Ceiling: 2, Usage: u},
 				}}
 				file = usageProviderFile(codex.Harness)
 			}
-			a := &app{cfg: cfg, store: store, now: start}
+			cfg.Capacity = k
+			var out bytes.Buffer
+			a := &app{cfg: cfg, store: store, now: start, out: &out}
 			a.readUsage = func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
 				// Earlier providers and the current command both take time.
 				clk.advance(2 * time.Minute)
 				return usageReading{SourceAt: clk.Now().Add(-4 * time.Second), SingleWindow: true,
 					SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
 			}
-			w := &watcher{app: a, clock: clk}
-			w.refreshUsage(context.Background(), k, start)
-			if w.usageErr != "" || w.providerUsageErr[codex.Harness] != "" {
-				t.Fatalf("fresh reading refused: %q, %v", w.usageErr, w.providerUsageErr)
+			w := a.newWatcher(false, true)
+			w.now = start
+			w.clock = clk
+			w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+			view := w.watchUsage(context.Background(), &state.State{}, nil)
+			if view == nil || view.Error != "" || view.Ceiling == 0 || strings.Contains(out.String(), "unreadable") ||
+				w.usageErr != "" || w.providerUsageErr[codex.Harness] != "" {
+				t.Fatalf("fresh reading refused: view=%+v, out=%s, usageErr=%q, providerErr=%v",
+					view, out.String(), w.usageErr, w.providerUsageErr)
 			}
 			var r usageReading
 			if found, err := store.ReadFile(file, &r); err != nil || !found {
