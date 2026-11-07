@@ -689,8 +689,8 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 const unbackedProseHeader = "Prose notes are not tracked by `beekeeper guide queue`; verify each candidate item below and either back it in state (`beekeeper note reopen <id>`, `beekeeper note defer <id> --due <time>`, or `beekeeper note add --for <person> --kind todo`) or remove stale prose:"
 
 var (
-	openWithHeading = regexp.MustCompile(`(?i)^#+\s*(?:still\s+)?(?:open\s+with|waiting\s+on|questions?\s+(?:open\s+)?for|pending\s+with)\b`)
-	anyHeading      = regexp.MustCompile(`^#+\s+\S`)
+	openWithHeading  = regexp.MustCompile(`(?i)^#+\s*(?:still\s+)?(?:open\s+with|waiting\s+on|questions?\s+(?:open\s+)?for|pending\s+with)\b`)
+	anyHeading       = regexp.MustCompile(`^#+\s+\S`)
 	proseNoteMention = regexp.MustCompile(`(?i)\bnote\s+#?(\d+)\b`)
 	proseOpenClaim   = regexp.MustCompile(`(?i)\b(?:still\s+open\s+with|open\s+with\s+\S+|unanswered\b|ask\s+with\s+the\b|waiting\s+on\s+you\b|needs\s+\S+'?s\s+review\b)`)
 )
