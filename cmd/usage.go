@@ -1407,12 +1407,28 @@ func usageRefreshTimeout(k config.Capacity) time.Duration {
 	return max(timeout, k.Usage.EffectiveTimeout())
 }
 
+// execUsageNow gives each provider its own observation time, then validates at
+// completion. A refresh can spend minutes on earlier providers; its scheduling
+// time must not make a newly written Codex event appear to be in the future.
+func (w *watcher) execUsageNow(ctx context.Context, u config.Usage) (usageReading, error) {
+	reader := w.snapshotAtNow()
+	reader.now = w.clk().Now()
+	r, err := reader.execUsage(ctx, u)
+	if err != nil {
+		return usageReading{}, err
+	}
+	now := w.clk().Now()
+	r.At = now.UTC()
+	return r, validateReadingAt(r, u, now)
+}
+
 func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.Time) {
 	if now.IsZero() {
 		now = w.clk().Now()
 	}
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
+			now = w.clk().Now()
 			p := k.Providers[name]
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
@@ -1423,11 +1439,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 			}
 			w.providerLastUsage[name] = now
 			w.mu.Unlock()
-			r, err := w.execUsage(ctx, p.Usage)
-			if err == nil {
-				r.At = now.UTC()
-				err = validateReadingAt(r, p.Usage, now)
-			}
+			r, err := w.execUsageNow(ctx, p.Usage)
 			w.mu.Lock()
 			if w.providerUsageErr == nil {
 				w.providerUsageErr = map[string]string{}
@@ -1446,11 +1458,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 	w.mu.Lock()
 	w.lastUsage = now
 	w.mu.Unlock()
-	r, err := w.execUsage(ctx, k.Usage)
-	if err == nil {
-		r.At = now.UTC()
-		err = validateReadingAt(r, k.Usage, now)
-	}
+	r, err := w.execUsageNow(ctx, k.Usage)
 	if err != nil {
 		w.mu.Lock()
 		w.usageErr = err.Error()

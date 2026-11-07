@@ -3899,3 +3899,50 @@ func TestCodexAccountStopSurvivesProbeFailure(t *testing.T) {
 		t.Fatalf("successful refresh must recover: %v", err)
 	}
 }
+
+func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
+	for _, providers := range []bool{false, true} {
+		t.Run(fmt.Sprintf("providers=%t", providers), func(t *testing.T) {
+			_, cfgPath := isolateUsageTestEnv(t)
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := state.OpenVersion(cfg.StateDir, "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			clk := newFakeClock(t)
+			start := clk.Now()
+			u := config.Usage{Command: config.DefaultCodexUsageCommand}
+			k := config.Capacity{Usage: u}
+			file := usageFile
+			if providers {
+				k = config.Capacity{Providers: map[string]config.Provider{
+					"claude": {Usage: config.Usage{Command: []string{"slow"}}},
+					"codex":  {Usage: u},
+				}}
+				file = usageProviderFile("codex")
+			}
+			a := &app{cfg: cfg, store: store, now: start}
+			a.readUsage = func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
+				// Earlier providers and the current command both take time.
+				clk.advance(2 * time.Minute)
+				return usageReading{SourceAt: clk.Now().Add(-4 * time.Second), SingleWindow: true,
+					SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
+			}
+			w := &watcher{app: a, clock: clk}
+			w.refreshUsage(context.Background(), k, start)
+			if w.usageErr != "" || w.providerUsageErr["codex"] != "" {
+				t.Fatalf("fresh reading refused: %q, %v", w.usageErr, w.providerUsageErr)
+			}
+			var r usageReading
+			if found, err := store.ReadFile(file, &r); err != nil || !found {
+				t.Fatalf("reading not persisted: found=%v, err=%v", found, err)
+			}
+			if !r.At.Equal(clk.Now()) || !r.SourceAt.Equal(clk.Now().Add(-4*time.Second)) {
+				t.Fatalf("reading must use completion time: %+v, now=%s", r, clk.Now())
+			}
+		})
+	}
+}
