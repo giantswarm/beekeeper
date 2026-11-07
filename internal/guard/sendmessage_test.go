@@ -20,6 +20,20 @@ func decideSend(t *testing.T, h Hook, to string) *decision {
 	return decideEvent(t, h, ev)
 }
 
+func TestSendMessagePreservesUnconfirmedRelayOutcome(t *testing.T) {
+	for _, outcome := range []string{
+		"accepted by peer queue; recipient consumption unconfirmed",
+		"queued for a beekeeper hook; consumption unconfirmed",
+		"consumed by a beekeeper hook; recipient acknowledgement unconfirmed",
+	} {
+		h := Hook{Inbox: func(string, string, string) (string, error) { return outcome, nil }}
+		d := decideSend(t, h, "guide")
+		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, outcome) || strings.Contains(d.Reason, "Delivered") {
+			t.Fatalf("relay status overstated: %+v", d)
+		}
+	}
+}
+
 func TestSendMessageToARunningDesktopSessionGoesByName(t *testing.T) {
 	var asked string
 	h := Hook{Peer: func(host string) (string, error) { asked = host; return "gpm worker", nil }}
@@ -178,7 +192,7 @@ func TestSendMessageToAnInboxAgentIsDeliveredThere(t *testing.T) {
 	var ev map[string]any
 	_ = json.Unmarshal(raw, &ev)
 	d := decideEvent(t, h, ev)
-	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Delivered by beekeeper") || !strings.Contains(d.Reason, "codex inbox of codex worker") {
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Handled by beekeeper") || !strings.Contains(d.Reason, "codex inbox of codex worker") {
 		t.Fatalf("want the delivery said, got %+v", d)
 	}
 	if gotSession != "guide-session" || gotName != codexWorker || gotMsg != "go ahead" {
