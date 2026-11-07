@@ -260,7 +260,7 @@ func TestGuideReportsStartNowAndRetainBoundaryAcrossFeeds(t *testing.T) {
 		{ID: 1, Source: "old-a", Due: now.Add(-48 * time.Hour), Text: "historical problem alpha"},
 		{ID: 2, Source: "old-b", Due: now.Add(-48 * time.Hour), Text: "historical problem beta"},
 		{ID: 3, Due: now.Add(-48 * time.Hour), Text: "explicit guide task"},
-		{ID: 4, Source: "recent", Due: now.Add(-12 * time.Hour), Text: "recent problem gamma"},
+		{ID: 4, Source: "new-c", Due: now.Add(-12 * time.Hour), Text: "recent problem gamma"},
 	}
 	guideReportEvents(st, nil, now)
 	if len(st.GuideWork) != 3 || st.GuideWork[2].Kind != guideWorkBacklog || guideWorkBlocks(st.GuideWork[2], now) || !guideWorkBlocks(st.GuideWork[0], now) {
