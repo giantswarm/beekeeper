@@ -261,7 +261,7 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 			!slices.ContainsFunc(st.DeskReviews[:i], func(prev state.DeskReview) bool {
 				return strings.EqualFold(prev.Ref, round.Ref) && (prev.Head == review.Head || prev.Result != nil && prev.Result.Head == review.Head)
 			}) {
-			if pull, pullErr := readLoopPull(ctx, round.Ref); pullErr == nil && pull.State == superloop.Open && pull.Head == review.Head && pull.Green {
+			if pull, pullErr := readLoopPull(ctx, round.Ref); pullErr == nil && pull.State == superloop.Open && pull.Head == review.Head {
 				if descends, descErr := readReviewerFixedHead(ctx, round.Ref, round.Head, review.Head); descErr == nil && descends {
 					headOK = true
 				}
