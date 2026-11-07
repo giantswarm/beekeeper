@@ -69,7 +69,7 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 		var oldest time.Time
 		missingTimestamp := false
 		for _, p := range page {
-			missingTimestamp = missingTimestamp || p.CreatedAt.IsZero()
+			missingTimestamp = missingTimestamp || (!p.IsDraft && p.CreatedAt.IsZero())
 			if !p.CreatedAt.IsZero() && (oldest.IsZero() || p.CreatedAt.Before(oldest)) {
 				oldest = p.CreatedAt
 			}
@@ -86,10 +86,13 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 			all = append(all, p)
 			added++
 		}
+		if missingTimestamp {
+			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: creation timestamp missing", repo)
+		}
 		if len(page) < unmergedPullPageLimit {
 			return all, nil
 		}
-		if added == 0 || missingTimestamp || oldest.IsZero() {
+		if added == 0 || oldest.IsZero() {
 			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: timestamp pagination stalled", repo)
 		}
 		search = "draft:false sort:created-desc created:<=" + oldest.UTC().Format(time.RFC3339)

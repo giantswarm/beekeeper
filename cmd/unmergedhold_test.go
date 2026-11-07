@@ -618,7 +618,7 @@ func TestReview3325RepairSessionOwnership(t *testing.T) {
 }
 
 func TestReview3325InventoryCapsFailClosed(t *testing.T) {
-	for _, mode := range []string{"tie", "missing timestamp", "iteration cap"} {
+	for _, mode := range []string{"tie", "missing timestamp", "short missing timestamp", "iteration cap"} {
 		t.Run(mode, func(t *testing.T) {
 			calls := 0
 			gh := func(_ context.Context, args ...string) ([]byte, error) {
@@ -627,6 +627,9 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 					t.Fatal("draft filter missing")
 				}
 				page := make([]unmergedPull, 100)
+				if mode == "short missing timestamp" {
+					page = page[:1]
+				}
 				for i := range page {
 					page[i].Number = i + 1
 					page[i].CreatedAt = time.Unix(100000, 0)
@@ -634,7 +637,7 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 						page[i].Number += 100 * calls
 						page[i].CreatedAt = time.Unix(int64(100000-100*calls-i), 0)
 					}
-					if mode == "missing timestamp" {
+					if mode == "missing timestamp" || mode == "short missing timestamp" {
 						page[i].CreatedAt = time.Time{}
 					}
 				}
