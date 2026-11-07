@@ -77,6 +77,8 @@ func WorkflowEnv() []string {
 		"HOME=/work/home",
 		"TMPDIR=/tmp",
 		"LANG=C",
+		// Helpers are race-instrumented test binaries; do not sleep on every CLI exit.
+		"GORACE=atexit_sleep_ms=0",
 		"XDG_CONFIG_HOME=/work/home/config",
 		"XDG_STATE_HOME=/work/home/state",
 		"XDG_CACHE_HOME=/work/home/cache",

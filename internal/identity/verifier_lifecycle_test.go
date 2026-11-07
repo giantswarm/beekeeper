@@ -128,8 +128,8 @@ func TestNewBoundsIssuerDiscoveryRequests(t *testing.T) {
 					}
 				case <-time.After(time.Minute):
 					cancel()
-					<-result
-					t.Error("discovery did not bound the issuer request")
+					exitErr := <-result
+					t.Errorf("discovery did not bound the issuer request: %v", exitErr)
 				}
 				if tc.timeout > 0 && tc.timeout < time.Minute && time.Since(start) > tc.timeout {
 					t.Error("New extended the caller's shorter timeout")

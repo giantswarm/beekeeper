@@ -28,6 +28,7 @@ func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
 
 // idleSessions runs the desktop sessions in sub of each worktree.
 func idleSessions(t *testing.T, sub string) {
+	t.Setenv(litGitCommitterName, "Test")
 	for _, k := range []string{litGitAuthorEmail, litGitCommitterEmail} {
 		t.Setenv(k, "test@example.com")
 	}

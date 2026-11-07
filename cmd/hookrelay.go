@@ -3,10 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/peer"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func (a *app) relayHookCmd() *cobra.Command {
@@ -27,6 +29,29 @@ func (a *app) relayHookCmd() *cobra.Command {
 			}
 			if err := a.loadConfig(); err != nil {
 				return err
+			}
+			if ev.Event == guideStopEvent || ev.Event == "UserPromptSubmit" {
+				store, err := state.Open(a.cfg.StateDir)
+				if err != nil {
+					return err
+				}
+				st, err := store.Peek()
+				if err != nil {
+					return err
+				}
+				if ev.Event == "UserPromptSubmit" && st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(state.Party{Session: ev.Session}) {
+					if err := store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
+						if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(state.Party{Session: ev.Session}) {
+							st.Guide.WorkChecked = nil
+						}
+						return nil, nil
+					}); err != nil {
+						return err
+					}
+				}
+				if reason := guideStopReason(st, ev.Session, time.Now()); ev.Event == guideStopEvent && reason != "" {
+					return json.NewEncoder(a.out).Encode(map[string]string{"decision": "block", "reason": reason})
+				}
 			}
 			out, err := peer.InstructionHook(a.cfg.StateDir, ev.Session, ev.Event)
 			if err != nil {
