@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -23,6 +24,81 @@ const (
 	reviewFixServedRef = "o/r#15"
 	reviewFixServedURL = "https://github.com/o/r/issues/15"
 )
+
+// A failed SSH start leaves a roster entry even though no worker can read
+// its inbox yet. Retrying rework must recover that execution before waking it.
+func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase                   string
+		recoveryFails, closed, unread bool
+	}{
+		{name: "preparation deadline", phase: executionPending},
+		{name: "prepared", phase: execution.Prepared},
+		{name: "activation outcome unconfirmed", phase: execution.Activating},
+		{name: "host still unreachable", phase: execution.Prepared, recoveryFails: true},
+		{name: "active rework worker", phase: execution.Running},
+		{name: "closed pull", phase: execution.Prepared, closed: true},
+		{name: "unread pull", phase: execution.Prepared, unread: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			ref := execution.Ref{Host: paramHost, Execution: "rework-reservation", Generation: 1}
+			party := state.Party{Name: loopWorker}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: party, Execution: &ref})
+				st.Starts = append(st.Starts, state.Start{Party: party, Execution: &state.ExecutionRecord{
+					Handle: execution.Handle{Ref: ref}, Phase: tc.phase,
+				}})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				if tc.unread {
+					return superloop.Pull{}, errors.New("GitHub unavailable")
+				}
+				status := superloop.Open
+				if tc.closed {
+					status = superloop.Closed
+				}
+				return superloop.Pull{State: status}, nil
+			}
+			r.answer = func(args []string) (string, int) {
+				if args[1] == loopRecover && tc.recoveryFails {
+					return "execution host deadline exceeded", 1
+				}
+				return "", 0
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			act := superloop.Action{Kind: superloop.KindRework, Agent: loopWorker, Ref: loopPR, URL: loopURL, Key: "retry rework", Message: "current findings"}
+			err = l.wakeOrStartFixer(t.Context(), st, act)
+			waiting := tc.recoveryFails || tc.closed || tc.unread
+			if waiting && !errors.Is(err, errLoopLater) || !waiting && err != nil {
+				t.Fatalf("rework result: %v", err)
+			}
+			wantRecover := tc.phase != execution.Running && !tc.closed && !tc.unread
+			if got := r.called(agentsName, loopRecover, loopWorker) != nil; got != wantRecover {
+				t.Fatalf("recover = %t, want %t: %v", got, wantRecover, r.calls)
+			}
+			if got := r.called(agentsName, agentWakeName, loopWorker, act.Message) != nil; got == waiting {
+				t.Fatalf("wake = %t, waiting = %t: %v", got, waiting, r.calls)
+			}
+			if r.called(agentsName, agentStartName) != nil {
+				t.Fatalf("started a replacement: %v", r.calls)
+			}
+			if wantRecover && !waiting && (len(r.calls) != 2 || r.calls[0][1] != loopRecover || r.calls[1][1] != agentWakeName) {
+				t.Fatalf("must recover before delivering current findings: %v", r.calls)
+			}
+		})
+	}
+}
 
 func TestReviewFixTerminalParksWakeRemainingTasks(t *testing.T) {
 	for _, scenario := range []string{"merged with open issue", "merged with unread issue", "closed pull request"} {
