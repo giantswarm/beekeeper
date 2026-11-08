@@ -180,7 +180,7 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 			kept = append(kept, t)
 			continue
 		}
-		if t.Conditional() && t.PendingWakeReason != "" && !t.Checked.IsZero() && now.Sub(t.Checked) < cmp.Or(t.Every, timerEvery) {
+		if t.PendingWakeReason != "" && !t.Checked.IsZero() && now.Sub(t.Checked) < cmp.Or(t.Every, timerEvery) {
 			kept = append(kept, t)
 			continue
 		}
@@ -425,7 +425,7 @@ func (w *watcher) rearmTimer(f timerFire, held string) (bool, error) {
 		retry := f.t
 		retry.Checked, retry.Fired = time.Time{}, time.Time{}
 		retry.Held = held
-		// Space conditional retries even when the condition already holds.
+		// Space all delivery retries, including timers without a condition.
 		if held != "previous action interrupted" {
 			retry.Checked = w.now.UTC()
 			retry.PendingWakeReason, retry.PendingWakeTimedOut = f.reason, f.timedOut

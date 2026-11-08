@@ -412,3 +412,99 @@ func TestProbationPromotionInterruptionIsIdempotent(t *testing.T) {
 	}
 	assertRecoveryBytes(t, i.target, "new")
 }
+
+func TestRecoverOutdatedJudge(t *testing.T) {
+	const (
+		healthyCase      = "healthy"
+		incompatibleCase = "state incompatible"
+	)
+	for _, scenario := range []string{healthyCase, "crash before swap", "crash after swap", "probe fails", incompatibleCase, "wrong bytes", "real failure", "modified artifact"} {
+		t.Run(scenario, func(t *testing.T) {
+			i, dir := recoveryFixture(t)
+			passedRecovery(t, i, dir)
+			candidate := stageRecovery(t, dir, "candidate")
+			if err := i.replace(candidate, "v2.0.0"); err != nil {
+				t.Fatal(err)
+			}
+			j := readRecovery(t, i)
+			self := stageRecovery(t, dir, "candidate")
+			reason := outdatedJudgeProbeReason
+			if scenario == "real failure" {
+				reason = "no health heartbeat from candidate"
+			}
+			i.close()
+			guard := func(_, _ string, f func() error) error { return f() }
+			if err := Rollback(t.Context(), i.target, reason, guard); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(scenario, "crash ") {
+				interrupted := readRecovery(t, i)
+				interrupted.Probation = probationPrepared
+				interrupted.JudgeRecovery = reason
+				if err := i.write(interrupted); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "crash after swap" {
+					if err := durableFile(i.target, []byte("candidate"), 0750); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if scenario == "wrong bytes" {
+				self = stageRecovery(t, dir, "different")
+			}
+			if scenario == "modified artifact" {
+				p, err := i.artifact(j.Candidate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte("modified"), 0700); err != nil { //nolint:gosec // executable fixture
+					t.Fatal(err)
+				}
+			}
+			probes := 0
+			health := func(_ context.Context, path string) error {
+				probes++
+				assertRecoveryBytes(t, path, "candidate")
+				if scenario == "probe fails" {
+					return errors.New("broken workflow")
+				}
+				return nil
+			}
+			guarded := func(v, failed string, f func() error) error {
+				if v != "v2.0.0" || failed != v {
+					t.Fatal(v, failed)
+				}
+				if scenario == incompatibleCase {
+					return errors.New("incompatible")
+				}
+				return f()
+			}
+			err := RecoverOutdatedJudge(t.Context(), i.target, self, "v2.0.0", health, guarded)
+			if scenario != healthyCase && !strings.HasPrefix(scenario, "crash ") {
+				if err == nil {
+					t.Fatal("unsafe recovery succeeded")
+				}
+				assertRecoveryBytes(t, i.target, "good")
+				if got := readRecovery(t, i); got.Probation != probationRolledBack || got.Quarantine[j.Candidate.Digest] != reason {
+					t.Fatalf("mutated refused recovery: %+v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertRecoveryBytes(t, i.target, "candidate")
+			got := readRecovery(t, i)
+			if probes != 1 || got.Probation != probationPassed || got.JudgeRecovery != reason || len(got.Quarantine) != 0 || got.Previous.Digest != j.Previous.Digest {
+				t.Fatalf("recovery: %+v, probes %d", got, probes)
+			}
+			if err := RecoverOutdatedJudge(t.Context(), i.target, self, "v2.0.0", health, guarded); err != nil {
+				t.Fatal(err)
+			}
+			if probes != 1 {
+				t.Fatal("repeated committed recovery probe")
+			}
+		})
+	}
+}

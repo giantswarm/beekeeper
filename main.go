@@ -12,6 +12,9 @@ import (
 )
 
 func main() {
+	if code, served := loopworkflow.ServeProbe(); served {
+		os.Exit(code)
+	}
 	if code, served := loopworkflow.Serve(); served {
 		os.Exit(code)
 	}

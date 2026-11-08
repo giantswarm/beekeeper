@@ -21,19 +21,20 @@ const (
 	// controller's minute between evaluations.
 	ProbeTimeout = 25 * time.Second
 
-	gitAdd          = "add"
-	gitRemote       = "remote"
-	envLang         = "LANG=C.UTF-8"
-	envTZ           = "TZ=UTC"
-	envGitGlobal    = "GIT_CONFIG_GLOBAL=/dev/null"
-	envGitSystem    = "GIT_CONFIG_NOSYSTEM=1"
-	envGitPrompt    = "GIT_TERMINAL_PROMPT=0"
-	partyLoop       = "supervisor loop"
-	verbLoop        = "supervisor.loop"
-	verbBudgetState = "watch.budget-state"
-	detailStarted   = "started"
-	detailFalse     = "false"
-	successStatus   = "SUCCESS"
+	gitAdd                = "add"
+	gitRemote             = "remote"
+	envLang               = "LANG=C.UTF-8"
+	envTZ                 = "TZ=UTC"
+	envGitGlobal          = "GIT_CONFIG_GLOBAL=/dev/null"
+	envGitSystem          = "GIT_CONFIG_NOSYSTEM=1"
+	envGitPrompt          = "GIT_TERMINAL_PROMPT=0"
+	partyLoop             = "supervisor loop"
+	verbLoop              = "supervisor.loop"
+	verbBudgetState       = "watch.budget-state"
+	detailStarted         = "started"
+	detailFalse           = "false"
+	successStatus         = "SUCCESS"
+	installationProbeFlag = "--installation-probe"
 )
 
 // ErrInconclusive marks a probe that says nothing about the candidate: the
@@ -44,8 +45,8 @@ var ErrInconclusive = errors.New("probe inconclusive")
 // Probe drives the candidate at binary through a reviewed pull request of a
 // scratch origin: real loop passes, parser, merge validation and gate, with a
 // fixture GitHub only. server is the executable that plays that GitHub, a
-// binary that calls Serve first; the candidate's own bytes never judge
-// themselves. It needs no backlog, account or network, and leaves nothing
+// binary that calls Serve first. Candidate-owned probes use the same binary
+// for both roles. It needs no backlog, account or network, and leaves nothing
 // behind in scratch. Nil means the merge is proven in the origin.
 func Probe(parentCtx context.Context, binary, server, scratch string) error {
 	ctx, cancel := context.WithTimeout(parentCtx, ProbeTimeout)
@@ -78,6 +79,51 @@ func Probe(parentCtx context.Context, binary, server, scratch string) error {
 		}
 	}
 	return p.proven()
+}
+
+// CandidateProbe asks the candidate to run its own fixture and probe code.
+// A retained binary used as the control keeps its own legacy probe entrypoint.
+func CandidateProbe(ctx context.Context, binary, server, scratch string) error {
+	if binary == server {
+		return Probe(ctx, binary, binary, scratch)
+	}
+	parentCtx := ctx
+	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout+5*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, binary, "self-update", installationProbeFlag) //nolint:gosec // verified candidate
+	out, err := c.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if parentCtx.Err() != nil {
+		return fmt.Errorf("%w: %w", ErrInconclusive, parentCtx.Err())
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 75 {
+		return fmt.Errorf("%w: %s", ErrInconclusive, tail(out))
+	}
+	return fmt.Errorf("candidate installation probe: %w: %s", err, tail(out))
+}
+
+// ServeProbe is handled before CLI startup, so plugin sync and live desk state
+// cannot run. The probe constructs an isolated configuration and proves a merge.
+// Its scratch directory is generated locally, never supplied by CLI input.
+func ServeProbe() (int, bool) {
+	if len(os.Args) != 3 || os.Args[1] != "self-update" || os.Args[2] != installationProbeFlag {
+		return 0, false
+	}
+	self, err := os.Executable()
+	if err == nil {
+		err = Probe(context.Background(), self, self, "")
+	}
+	if err == nil {
+		return 0, true
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	if errors.Is(err, ErrInconclusive) {
+		return 75, true
+	}
+	return 1, true
 }
 
 type probe struct {
