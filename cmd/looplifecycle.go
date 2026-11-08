@@ -43,7 +43,7 @@ func (l *supervisorLoop) lifecyclePhase(phase string) {
 	if !l.dryRun && phase != loopPhaseBetween {
 		// Retained controllers understand this observation, even when they do
 		// not understand lifecycle records. No goroutine refreshes a stuck phase.
-		_ = l.checkpointThroughput(l.lifecycle.At)
+		_ = l.refreshThroughputHeartbeat(l.lifecycle.At)
 	}
 }
 

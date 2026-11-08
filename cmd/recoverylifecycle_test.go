@@ -105,14 +105,16 @@ func TestLoopPhasePublishesHeartbeatForRetainedController(t *testing.T) {
 	if obs.Candidate != recoveryBadVersion || !obs.At.Equal(l.lifecycle.At) || !obs.Unknown {
 		t.Fatalf("phase progress incompatible with retained controller: %+v", obs)
 	}
-	// Between-pass diagnostics must not erase a completed planner observation.
+	// Phase heartbeats must retain a completed planner observation.
 	obs.Unknown = false
 	if err := c.store.WriteFile(throughputObservationFile, obs); err != nil {
 		t.Fatal(err)
 	}
-	l.lifecyclePhase(loopPhaseBetween)
-	if _, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || obs.Unknown {
-		t.Fatalf("idle phase erased completed planning: %+v %v", obs, err)
+	for _, phase := range []string{"reload configuration", "watch conditions", "watch alerts", loopPhaseBetween} {
+		l.lifecyclePhase(phase)
+		if _, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || obs.Unknown {
+			t.Fatalf("phase %s erased completed planning: %+v %v", phase, obs, err)
+		}
 	}
 }
 
