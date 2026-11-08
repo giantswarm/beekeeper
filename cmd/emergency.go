@@ -41,8 +41,8 @@ func emergencySameSession(p, o state.Party) bool {
 		(p.HostSession != "" && p.HostSession == o.HostSession))
 }
 
-// emergencyGuide deliberately disallows --as: the grant belongs to a live
-// guide session, not to a caller who knows its display name.
+// emergencyGuide deliberately disallows --as: only the live holder of the
+// guide role can exercise its grant, not a caller who knows its display name.
 func (a *app) emergencyGuide(st *state.State) (state.Party, error) {
 	me, err := a.caller()
 	if err != nil {
@@ -104,11 +104,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 		if err != nil {
 			return err
 		}
-		if e := st.Emergency; e != nil && emergencyNow().Before(e.Until) {
-			_, err = fmt.Fprintf(a.out, "emergency until %s by %s: %q\n", e.Until.Format(time.RFC3339), e.By.Name, e.Reason)
-		} else {
-			_, err = fmt.Fprintln(a.out, "emergency off")
-		}
+		_, err = fmt.Fprintln(a.out, emergencyText(st, emergencyNow()))
 		if st.AutoInstallPaused {
 			_, err = fmt.Fprintln(a.out, "release auto-install paused")
 		}
@@ -386,4 +382,18 @@ func (a *app) emergencyMergePolicy(repo string, number int) error {
 		return refused("emergency merge is held on %s: %s; lift the hold explicitly", h.Target, h.Reason)
 	}
 	return nil
+}
+
+// The role holder is the grant holder; By remains the issuing guide for audit.
+// Reading it from the role also covers relays before the successor's first action.
+func emergencyText(st *state.State, now time.Time) string {
+	e := st.Emergency
+	if e == nil || !now.Before(e.Until) {
+		return "emergency off"
+	}
+	holder := "no current guide"
+	if h := st.GuideRole().Holder; h != nil {
+		holder = fmt.Sprintf("%q (session %q, host session %q)", h.Name, h.Session, h.HostSession)
+	}
+	return fmt.Sprintf("emergency until %s; issued by %q (session %q, host session %q); holder: %s; person's words: %q", e.Until.Format(time.RFC3339), e.By.Name, e.By.Session, e.By.HostSession, holder, e.Reason)
 }
