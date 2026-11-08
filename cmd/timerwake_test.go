@@ -308,7 +308,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 					}
 					t.Cleanup(func() { wakeOwner = old })
 					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-						p := &state.Park{At: relayNow, On: "#3", Waits: "answer"}
+						p := &state.Park{At: relayNow, On: "#3", Waits: verbAnswer}
 						if fail {
 							p.On, p.Waits = "", "Timer 42: proof running"
 						}
@@ -362,7 +362,7 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: "answer", At: relayNow}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 		st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Until: relayNow.Add(time.Minute), Expire: true}}
 		return nil, nil
 	}); err != nil {
@@ -411,7 +411,7 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 			woke := stubWakes(t)
 			var initial timerFire
 			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: "answer", At: relayNow}}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
 				st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Repeat: repeat}}
 				_, events, fires, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
 				if len(fires) != 1 {
