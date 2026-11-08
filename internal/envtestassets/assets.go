@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -56,7 +57,14 @@ func Ensure(ctx context.Context, stateDir string) (string, error) {
 			return string(data), nil
 		}
 	}
-	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", ".", "-p", "path", version)
+	// Reuse setup-envtest's default store before attempting a download.
+	if assets := defaultAssets(); valid(assets) {
+		if err := root.WriteFile(marker, []byte(assets), 0600); err != nil {
+			return "", err
+		}
+		return assets, nil
+	}
+	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", dir, "-p", "path", version) // #nosec G204 -- fixed tool and flags; absolute state directory is one argument, never shell input
 	// Provision independently of the target repository's module/workspace settings.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
@@ -92,4 +100,28 @@ func valid(dir string) bool {
 		}
 	}
 	return true
+}
+
+// defaultAssets follows setup-envtest's platform-specific default store.
+func defaultAssets() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	var base string
+	switch runtime.GOOS {
+	case "windows":
+		base = os.Getenv("LocalAppData")
+		if base == "" {
+			return ""
+		}
+	case "darwin":
+		base = filepath.Join(home, "Library", "Application Support")
+	default:
+		base = os.Getenv("XDG_DATA_HOME")
+		if base == "" {
+			base = filepath.Join(home, ".local", "share")
+		}
+	}
+	return filepath.Join(base, "kubebuilder-envtest", "k8s", version+"-"+runtime.GOOS+"-"+runtime.GOARCH)
 }

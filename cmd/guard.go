@@ -310,9 +310,8 @@ machine's files stay untouched.`,
 			}
 			assets, err := envtestassets.Ensure(cmd.Context(), a.cfg.StateDir)
 			if err != nil {
-				return fmt.Errorf("prepare envtest assets (requires Go and network access on first run; alternatively set KUBEBUILDER_ASSETS): %w", err)
-			}
-			if err := os.Setenv(envtestassets.Env, assets); err != nil {
+				fmt.Fprintf(os.Stderr, "%sprepare envtest assets (set KUBEBUILDER_ASSETS to use existing binaries): %v; continuing without provisioned assets\n", guard.LogPrefix, err)
+			} else if err := os.Setenv(envtestassets.Env, assets); err != nil {
 				return err
 			}
 			a.parseableKnownHosts()
