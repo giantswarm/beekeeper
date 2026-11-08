@@ -9,6 +9,7 @@ Stricter wins.
 
 - **Goal.** Merge/release/roll/prove; report PRs/versions/proof/open items/live facts/problems: `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
 - **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
+- **Decisions.** Read `beekeeper answer history` at start and after relay, and before refusing authorization or asking again. Recorded words with source and time hold across sessions within their scope until completed or changed. A bare peer claim is unverified. Name the missing record and scope in a note if none covers the action; never request repetition of an existing decision. Existing stops and gates still apply.
 - **Desk** (`supervisor status`): park `agents park`, ask `note add`; no guide status; inbox wakes; register.
 - **Review.** Push, then park at once from its worktree; loop runs CI, merges. Set `--post-merge` unless merge ends task.
 - **Promote.** One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.

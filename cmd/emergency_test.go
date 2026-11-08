@@ -274,7 +274,7 @@ func TestEmergencyMergePreservesStopsAndHolds(t *testing.T) {
 	}
 }
 
-func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) {
+func TestEmergencyOnlyAuthenticatedSuccessorInheritsGrant(t *testing.T) {
 	for _, harness := range []string{"CODEX", "OMP", "AGY"} {
 		t.Run(harness, func(t *testing.T) {
 			a := emergencyApp(t)
@@ -309,22 +309,24 @@ func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) 
 			if st.AutoInstallPaused {
 				t.Error("unauthorized pause persisted")
 			}
+			original := *st.Emergency
 			setGuide()
-			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
-				t.Fatalf("successor reused grant: %v", err)
+			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); err != nil {
+				t.Fatalf("authenticated successor lost role grant: %v", err)
 			}
 			st, err = a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(st.Holds) != 0 {
-				t.Fatal("unauthorized hold persisted")
+			if len(st.Holds) != 1 {
+				t.Fatal("authorized successor hold missing")
 			}
-			if err := emergencyCall(a, "on", emergencyReasonFlag, "Wait.", untilFlag, "10m"); err != nil {
-				t.Fatal(err)
+			if *st.Emergency != original {
+				t.Fatal("relay changed grant provenance or expiry")
 			}
-			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); err != nil {
-				t.Fatal(err)
+			a.now = original.Until
+			if _, err := a.emergencyAction("expired successor"); Code(err) != ExitRefused {
+				t.Fatalf("successor extended expiry: %v", err)
 			}
 		})
 	}

@@ -46,8 +46,8 @@ to merge a GitHub-approved pull request past desk review at its exact head,
 `beekeeper emergency hold set/lift` for holds, `beekeeper emergency start` for
 a forced capacity start, and `beekeeper emergency capacity <capacity.key> <value>`
 for validated capacity limits. These commands log each action and result with
-the authorization. The grant expires automatically, never transfers to a
-successor, and can end early with `beekeeper emergency off`. The exception is
+the authorization. The grant expires automatically, belongs to the guide role and transfers to its
+authenticated successor without extending its expiry, and can end early with `beekeeper emergency off`. The exception is
 these commands alone; ordinary merge, edit and browser restrictions still apply.
 
 On the person's word, `beekeeper emergency auto-install pause --reason "<words>"`
@@ -162,3 +162,7 @@ The rest of the role is in this skill's `references/` folder, read when its mome
   first guide. Read at `GUIDE RELAY DUE`, in a headless turn and when starting the role.
 - `references/board-and-machine.md`: the daily board reconciliation and the machine changes the
   person approves. Read before either.
+
+### Recorded decisions survive sessions
+
+Record the person’s decisions verbatim with `beekeeper answer <ref> --via cli|slack "<words>"`. Read `beekeeper answer history` at start, after a relay and before asking again. The handover includes the complete recorded history, including its source and time. Apply decisions within their original scope until completed or changed; do not reinterpret a recorded decision as an unsupported peer claim. If authorization is missing, name the missing record and scope in a note. Never ask for repeated words already recorded. Keep core behavior in beekeeper, not desk rule files.
