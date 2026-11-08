@@ -978,3 +978,93 @@ func TestRunExactReleaseRefusalsKeepBinary(t *testing.T) {
 		})
 	}
 }
+
+// A host follows a coordinator rollback without promoting the failed candidate.
+// The ordinary updater still waits for the recovery controller, and neither a
+// state incompatibility nor changed recovery bytes can be bypassed by the host.
+func TestHostFollowsCoordinatorRollbackDuringWatchedProbation(t *testing.T) {
+	const rollbackScenario = "rollback"
+	for _, scenario := range []string{rollbackScenario, "ordinary update", "incompatible state", "changed download", "changed recovery", "bad bundle", "other release"} {
+		t.Run(scenario, func(t *testing.T) {
+			acceptRelease(t, latestV, newBinary, running)
+			exe, _ := installed(t)
+			if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+				t.Fatal(err)
+			}
+			if err := CompleteProbation(context.Background(), exe, latestV); err != nil {
+				t.Fatal(err)
+			}
+			acceptRelease(t, thirdV, thirdBinary, latestV)
+			ctx := WithOptions(context.Background(), Options{Recovery: func(context.Context, Binary, string, string) error { return nil }})
+			if _, err := InstallVersion(ctx, io.Discard, thirdV); err != nil {
+				t.Fatal(err)
+			}
+			before := installJournal(t, exe)
+			if !before.Watched || !before.Pending() {
+				t.Fatalf("not in watched probation: %+v", before)
+			}
+			want, download := latestV, newBinary
+			if scenario == "changed download" {
+				download = "different signed bytes for the same tag"
+			}
+			if scenario == "other release" {
+				want = running
+			}
+			acceptRelease(t, want, download, thirdV)
+			if scenario == "bad bundle" {
+				newValidator = func() selfupdate.Validator { return &hostRollbackRejectingValidator{} }
+			}
+			if scenario == "changed recovery" {
+				if err := os.WriteFile(filepath.Join(exe+".update", before.Previous.Digest), []byte("tampered"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			guarded := false
+			opts := Options{HostRollback: func(previous, failed string, restore func() error) error {
+				guarded = true
+				if previous != latestV || failed != thirdV {
+					t.Fatalf("guard versions %s, %s", previous, failed)
+				}
+				if scenario == "incompatible state" {
+					return errors.New("incompatible live state")
+				}
+				return restore()
+			}}
+			if scenario == "ordinary update" {
+				opts.HostRollback = nil
+			}
+			ctx = WithOptions(context.Background(), opts)
+			res, err := InstallVersion(ctx, io.Discard, want)
+			if scenario != rollbackScenario {
+				if err == nil || res.Updated {
+					t.Fatalf("unsafe replacement accepted: %+v, %v", res, err)
+				}
+				assertRecoveryBytes(t, exe, thirdBinary)
+				if j := installJournal(t, exe); j.Probation == probationPassed || j.RolledBack() {
+					t.Fatalf("candidate promoted or restored: %+v", j)
+				}
+				return
+			}
+			if err != nil || !res.Updated || !guarded {
+				t.Fatalf("coordinator rollback: %+v, guarded %v, %v", res, guarded, err)
+			}
+			assertRecoveryBytes(t, exe, newBinary)
+			j := installJournal(t, exe)
+			if !j.RolledBack() || j.Previous.Version != latestV || j.Quarantine[before.Candidate.Digest] == "" {
+				t.Fatalf("rollback lost recovery or quarantine: %+v", j)
+			}
+			// An interrupted caller still on the candidate may repeat the request.
+			if _, err := InstallVersion(ctx, io.Discard, want); err != nil {
+				t.Fatal(err)
+			}
+			assertRecoveryBytes(t, exe, newBinary)
+		})
+	}
+}
+
+// hostRollbackRejectingValidator proves a failed signature check precedes recovery.
+type hostRollbackRejectingValidator struct{ acceptingValidator }
+
+func (*hostRollbackRejectingValidator) Validate(string, []byte, []byte) error {
+	return errors.New("invalid signature bundle")
+}
