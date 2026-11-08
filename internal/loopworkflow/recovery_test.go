@@ -632,3 +632,74 @@ func TestRecoveryProbeReleaseWorkflowDiscovery(t *testing.T) {
 		t.Fatalf("probe skipped release discovery: %s, %v", trace, err)
 	}
 }
+
+func TestCandidateProbeIgnoresRetainedFixture(t *testing.T) {
+	binary := buildCandidate(t, "")
+	// The retained adapter is deliberately unusable. The legacy path must fail,
+	// while the candidate-owned entrypoint must prepare and prove its own merge.
+	outdated := filepath.Join(t.TempDir(), "outdated-judge")
+	if err := os.WriteFile(outdated, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil { //nolint:gosec // executable fixture
+		t.Fatal(err)
+	}
+	if err := Probe(t.Context(), binary, outdated, t.TempDir()); err == nil {
+		t.Fatal("outdated fixture unexpectedly passed")
+	}
+	if err := CandidateProbe(t.Context(), binary, outdated, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoverOutdatedJudgeCommand(t *testing.T) {
+	for _, broken := range []bool{false, true} {
+		t.Run(fmt.Sprint("broken=", broken), func(t *testing.T) {
+			overlay := ""
+			if broken {
+				overlay = parserOverlay(t)
+			}
+			good, candidate := versioned(t, goodRelease, ""), versioned(t, nextRelease, overlay)
+			d := newDesk(t, good, candidate)
+			if err := update.Rollback(t.Context(), d.target, "isolated workflow probe failed 3 times", d.store.RecoverVersion); err != nil {
+				t.Fatal(err)
+			}
+			retainedCandidate := filepath.Join(d.target+".update", hexSum(candidate))
+			c := exec.CommandContext(t.Context(), retainedCandidate, "--config", d.config, "self-update", "--recover-outdated-judge", d.target) //nolint:gosec // verified fixture executable
+			c.Env, c.Dir = d.env, d.dir
+			out, err := c.CombinedOutput()
+			if broken {
+				if err == nil {
+					t.Fatal("promoted a broken candidate")
+				}
+				if j := d.journal(t); !j.RolledBack() || j.JudgeRecovery != "" {
+					t.Fatalf("%+v: %s", j, out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("recover: %v: %s", err, out)
+			}
+			j := d.journal(t)
+			if !j.Settled() || j.RolledBack() || j.JudgeRecovery == "" {
+				t.Fatalf("%+v", j)
+			}
+			if d, err := update.Digest(d.target); err != nil || d != hexSum(candidate) {
+				t.Fatalf("installed %s: %v", d, err)
+			}
+			writer, err := state.OpenVersion(filepath.Join(d.dir, "state"), nextRelease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Update(func(st *state.State) ([]state.Event, error) {
+				if len(st.Notes) != 1 || st.Notes[0].Text != "work in flight" {
+					t.Fatal("lost live work")
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var fence map[string]any
+			if found, err := writer.ReadFile("recovery-writer.json", &fence); err != nil || found {
+				t.Fatalf("fence remains: %v %v", found, err)
+			}
+		})
+	}
+}

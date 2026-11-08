@@ -61,7 +61,7 @@ type recoveryHold struct {
 
 // recoveryProbe drives the candidate through the isolated workflow; the tests
 // replace it.
-var recoveryProbe = loopworkflow.Probe
+var recoveryProbe = loopworkflow.CandidateProbe
 
 // recoveryGitHubUp says whether GitHub answers at all; the tests replace it. A
 // failure streak during an outage is GitHub's, not the candidate's.
