@@ -179,16 +179,40 @@ func TestPrepareStartWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	git(remote, "update-ref", "refs/pull/42/head", tip)
-	_, err = a.prepareStartWorktree(ctx, checkout, "", "Review https://github.com/example/repo/pull/42", true, false)
+	// A stale legacy review checkout, even with edits, must not block a start.
+	legacy := filepath.Join(a.cfg.StateDir, "worktrees", "repo", "review-42")
+	git(checkout, "worktree", "add", "--detach", legacy, tip)
+	if err := os.WriteFile(filepath.Join(legacy, "review-edits"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rules, err = a.prepareStartWorktree(ctx, checkout, "", "Review https://github.com/example/repo/pull/42", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	review := filepath.Join(a.cfg.StateDir, "worktrees", "repo", "review-42")
+	reviews, err := filepath.Glob(legacy + "-*")
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("review destinations: %v, %v", reviews, err)
+	}
+	review := reviews[0]
+	if !strings.Contains(rules, review) {
+		t.Fatalf("brief lacks checkout: %s", rules)
+	}
 	if got := git(review, "rev-parse", "HEAD"); got != tip {
 		t.Fatal(got)
 	}
 	if got := git(review, "branch", "--show-current"); got != "" {
 		t.Fatalf("review not detached: %s", got)
+	}
+	// A second attempt must also leave the previous attempt intact.
+	nextRules, err := a.prepareStartWorktree(ctx, checkout, "", "Review https://github.com/example/repo/pull/42", true, false)
+	if err != nil || nextRules == rules {
+		t.Fatalf("repeat review: %q, %v", nextRules, err)
+	}
+	if got := git(review, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("prior checkout changed: %s", got)
+	}
+	if data, err := os.ReadFile(filepath.Join(legacy, "review-edits")); err != nil || string(data) != "keep" {
+		t.Fatalf("legacy edits changed: %q, %v", data, err)
 	}
 	a.cfg.Agents.WorktreesDir = filepath.Join(root, "custom-worktrees")
 	rules, err = a.prepareStartWorktree(ctx, checkout, "custom/task", "task", false, false)
