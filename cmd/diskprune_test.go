@@ -388,3 +388,14 @@ func TestDiskPruneUnknownProcessKeepsRecheckedWorktree(t *testing.T) {
 		t.Fatalf("worktree of an unknown process: %s", r)
 	}
 }
+
+func TestDiskPressureIncludesDockerBelowCaps(t *testing.T) {
+	a, f := dockerApp(t)
+	f.images = 10 << 30 // Five distinct 2 GiB images, including the in-use node.
+	a.cfg.Doctor.DockerImagesMaxGiB = 100
+	a.cfg.Doctor.DockerBuildCacheMaxGiB = 100
+	r := a.pruneDisk(false, true, func() (diskMachine, error) { return diskMachine{}, nil })
+	if len(r.Errors) != 0 || r.Freed == 0 || len(f.removed) == 0 || len(f.builderRemoved) == 0 {
+		t.Fatalf("disk pressure did not reclaim Docker: %s", r)
+	}
+}

@@ -331,3 +331,51 @@ func TestPruneDockerDryRunUnderTheCapOrOff(t *testing.T) {
 		t.Errorf("no docker: %+v", r)
 	}
 }
+
+func TestDockerPressurePrunesBelowNormalCaps(t *testing.T) {
+	a, f := dockerApp(t)
+	f.images = 10 << 30 // Five distinct 2 GiB images, including the in-use node.
+	a.cfg.Doctor.DockerImagesMaxGiB = 100
+	a.cfg.Doctor.DockerBuildCacheMaxGiB = 100
+	if r := a.pruneDocker(false, func() string { return "" }); r.acted() {
+		t.Fatalf("normal prune below caps: %s", r)
+	}
+	r := a.pruneDockerForPressure(false, true, func() string { return "" })
+	if r.err != nil || len(f.removed) == 0 || len(f.builderRemoved) == 0 {
+		t.Fatalf("pressure failed to reclaim below caps: %s", r)
+	}
+}
+
+func TestDockerPressurePreservesHoldsAndDisabledCaches(t *testing.T) {
+	a, f := dockerApp(t)
+	r := a.pruneDockerForPressure(false, true, func() string { return "build running" })
+	if r.held != "build running" || len(f.removed) != 0 || len(f.builderRemoved) != 0 {
+		t.Fatalf("pressure ignored build hold: %s", r)
+	}
+	a.cfg.Doctor.DockerImagesMaxGiB = -1
+	a.cfg.Doctor.DockerBuildCacheMaxGiB = -1
+	if r := a.pruneDockerForPressure(false, true, func() string { return "" }); !r.off() {
+		t.Fatalf("pressure enabled disabled Docker caches: %s", r)
+	}
+}
+
+func TestDockerPressureKeepsRecentlyTaggedImagesAndDryRun(t *testing.T) {
+	a, f := dockerApp(t)
+	f.tagged["sha256:old"] = time.Now()
+	beforeImages, beforeCache := f.images, f.cache
+	if r := a.pruneDockerForPressure(true, true, func() string { return "" }); r.err != nil || r.acted() || f.images != beforeImages || f.cache != beforeCache {
+		t.Fatalf("pressure preview modified Docker: %s", r)
+	}
+	r := a.pruneDockerForPressure(false, true, func() string { return "" })
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	for _, args := range f.removed {
+		if slices.Contains(args, devOne) {
+			t.Fatal("pressure removed recently tagged image")
+		}
+	}
+	if len(f.removed) == 0 {
+		t.Fatal("pressure did not remove eligible older images")
+	}
+}

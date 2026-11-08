@@ -1199,11 +1199,12 @@ type GuideWork struct {
 
 // State is the whole document.
 type State struct {
-	Deliveries    []Delivery  `json:"deliveries,omitempty"`
-	DeliveriesAt  time.Time   `json:"deliveriesAt,omitempty"`
-	GuideReports  []string    `json:"guideReports,omitempty"`
-	GuideWork     []GuideWork `json:"guideWork,omitempty"`
-	NextGuideWork int         `json:"nextGuideWork,omitempty"`
+	Deliveries        []Delivery  `json:"deliveries,omitempty"`
+	DeliveriesAt      time.Time   `json:"deliveriesAt,omitempty"`
+	GuideReportsSince time.Time   `json:"guideReportsSince,omitempty"`
+	GuideReports      []string    `json:"guideReports,omitempty"`
+	GuideWork         []GuideWork `json:"guideWork,omitempty"`
+	NextGuideWork     int         `json:"nextGuideWork,omitempty"`
 	// EventOutbox retains the exact log append with the state it commits.
 	EventOutbox *EventOutbox `json:"eventOutbox,omitempty"`
 	// ProductionNotes are consumed authorities, retained across hook processes.

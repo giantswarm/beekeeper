@@ -65,11 +65,11 @@ func TestGitHubKeepsCandidateWhenPromotionIsUnpublished(t *testing.T) {
 }
 
 func TestGitHubPrefersStableAcrossBasesAtTheSameCommit(t *testing.T) {
-	const stable, next = "v1.0.0", "v1.1.0-rc.1"
+	const stable, next, promotedSHA = "v1.0.0", "v1.1.0-rc.1", "1111111"
 	var requested []string
 	stubGitHub(t, "v0.9.0-rc.1", func(r *http.Request) (int, string, http.Header) {
 		if strings.Contains(r.URL.Path, matchingRefsPath) {
-			return http.StatusOK, refsWithSHAJSON([][2]string{{stable, "1111111"}, {next, "1111111"}}), nil
+			return http.StatusOK, refsWithSHAJSON([][2]string{{stable, promotedSHA}, {next, promotedSHA}}), nil
 		}
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		requested = append(requested, tag)

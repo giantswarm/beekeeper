@@ -598,6 +598,13 @@ Every disk step prints one `DISK PRUNE` line with bytes freed, retained data
 and the reasons for keeping it. `beekeeper disk prune` previews the step;
 `beekeeper disk prune --apply` runs it explicitly.
 
+Under disk pressure, the step also reclaims unused Docker images and Docker
+build cache even when they are below the doctor size caps. Docker retains
+containers, images tagged recently, active builds and imports, and lab lease
+safeguards. Negative Docker caps disable the corresponding cleanup. The
+pressure report includes Docker reclamation and blockers; persistent low disk
+raises `GUIDE PROBLEM` with free space and the start floor.
+
 On healthy scheduled runs, the step trims only caches over their caps:
 `doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
 to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) trims sccache's

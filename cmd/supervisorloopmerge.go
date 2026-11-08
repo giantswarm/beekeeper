@@ -24,19 +24,19 @@ const loopWorkerMergeGo = "merge go given"
 const reviewedMergeQueued = "queued"
 
 func pullNeedsBranchRepair(p superloop.Pull) bool {
-	return p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND"
+	return p.Draft || p.Mergeable == "CONFLICTING"
 }
 
 func ghMergeNeedsBranchRepair(reason string) bool {
 	lower := strings.ToLower(reason)
-	return strings.Contains(lower, "conflict") || strings.Contains(lower, "behind") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "cannot be cleanly created")
+	return strings.Contains(lower, "conflict") || strings.Contains(lower, "cannot be cleanly created")
 }
 
 // A branch policy refusal belongs to the coordinator, even when GitHub's
 // merge state also says BEHIND. A branch edit cannot supply missing review.
 func ghMergePolicyRefused(reason string) bool {
 	lower := strings.ToLower(reason)
-	return strings.Contains(lower, "base branch policy") || strings.Contains(lower, "review_required") || strings.Contains(lower, "required approving review")
+	return strings.Contains(lower, "behind") || strings.Contains(lower, "up to date") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "base branch policy") || strings.Contains(lower, "review_required") || strings.Contains(lower, "required approving review")
 }
 
 // mergePull executes the planner's exact-head decision in the coordinator,
@@ -848,14 +848,9 @@ const (
 	mergeMethodRebase      = "rebase"
 )
 
-// reviewedMerge is the gate's mutation child. A branch behind its base it
-// merges at the reviewed head, as it stands. Only where the base requires
-// up-to-date branches and the desk merges without --admin does it update the
-// branch once, as the gate's --update-branch would, and merge the updated
-// head once its checks are green and the approval covers it
-// (updateReviewedBranch); it never waits for a head anyone else pushed, or
-// retries a mutation. The gate retains its
-// ordinary holds, queue, readiness, review and release settlement policy.
+// reviewedMerge merges the reviewed green head as it stands. A behind head
+// must pass the merge-result check against the current base. Repository
+// protection may refuse it, but the gate never updates the branch.
 func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head string) github.SquashDoc {
 	doc := github.SquashDoc{Repo: repo, Number: number, HeadSha: head, SchemaVersion: 1, Command: "pr merge", Route: reviewedMergeRoute, ExitCode: github.SquashNotApplicable}
 	method := a.cfg.Merge.Methods[repo]
@@ -897,18 +892,6 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	if p.Draft || p.Mergeable == mergeableConflicting {
 		doc.Reason = "branch is draft or conflicts with its base"
-		return doc
-	}
-	// A branch only behind its base merges as it stands: GitHub merges the
-	// reviewed head onto the current base, with no branch update and no
-	// second CI run. Only a base that requires up-to-date branches refuses
-	// that merge, which GitHub reports as the merge state BEHIND: the desk's
-	// admin merge (merge.admin) passes the requirement; without it the branch
-	// is brought up to date below, once the merge is authorized, by merging
-	// the base, which a rebase merge cannot take.
-	update := p.MergeState == mergeStateBehind && !a.cfg.Merge.AdminMerge(repo)
-	if update && method == mergeMethodRebase {
-		doc.Reason = "branch is behind a base that requires up-to-date branches"
 		return doc
 	}
 	st, err := a.store.Read()
@@ -1012,59 +995,18 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	merging := head
-	if update {
-		up, reason, code := updateReviewedBranch(ctx, p, head)
-		if code != github.SquashMerged {
-			doc.ExitCode, doc.Reason = code, reason
-			return doc
-		}
-		// The wait for the updated head's checks is long: a stop or a hold
-		// meanwhile still stops the merge.
-		if st, err = a.store.Read(); err != nil {
-			doc.Reason = err.Error()
-			return doc
-		}
-		if st.Stop != nil {
-			doc.ExitCode = github.SquashRefused
-			doc.Reason = reasonDeskStopped
-			return doc
-		}
-		if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
-			doc.ExitCode = github.SquashRefused
-			doc.Reason = reasonMergeHeld
-			return doc
-		}
-		if latestReviewRequestsChanges(up) {
-			doc.ExitCode = github.SquashRefused
-			doc.Reason = "a review requested changes; new supervisor approval required"
-			return doc
-		}
-		if slices.ContainsFunc(up.Reviews, func(r superloop.Review) bool { return r.Verdict == superloop.ChangesRequested }) {
-			if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, up, up.Head); authErr != nil {
-				doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
-				return doc
-			} else if why != "" {
-				doc.ExitCode, doc.Reason = github.SquashRefused, why
-				return doc
-			}
-		}
-		p, merging = up, up.Head
+	reason, code := a.checkReviewedMergeResult(ctx, p, head)
+	if code != 0 {
+		doc.ExitCode, doc.Reason = code, reason
+		return doc
 	}
-	var note string
-	if merging == head {
-		reason, code := a.checkReviewedMergeResult(ctx, p, head)
-		if code != 0 {
-			doc.ExitCode, doc.Reason = code, reason
-			return doc
-		}
-		note = reason
-	}
+	note := reason
 	queue, err := readReviewedMergeQueue(ctx, p)
 	if err != nil {
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
 	}
-	// Validation and branch-update waits can outlive the review that admitted
+	// Validation waits can outlive the review that admitted
 	// this run. Refresh authority after all checks, immediately before the
 	// mutation; --match-head-commit alone cannot detect a withdrawn approval.
 	p, err = readLoopPull(ctx, ref)
@@ -1152,11 +1094,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		}
 	case ghMergePolicyRefused(doc.Reason):
 		doc.ExitCode = github.SquashRefused
-		doc.Reason = fmt.Sprintf("repository merge policy refused (reviewDecision=%s): %s", p.ReviewDecision, doc.Reason)
+		doc.Reason = fmt.Sprintf("repository merge policy refused; branch updates are disabled; the repository owner must resolve any up-to-date requirement (reviewDecision=%s): %s", p.ReviewDecision, doc.Reason)
 	case pullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
 		doc.ExitCode = github.SquashNotApplicable
 		if doc.Reason == "" {
-			doc.Reason = "branch is draft, behind or conflicts with its base"
+			doc.Reason = "branch is draft or conflicts with its base"
 		}
 	default:
 		doc.ExitCode = github.SquashTooling
@@ -1167,10 +1109,8 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	return doc
 }
 
-// readReviewedBehind is how many commits of its base p's head lacks, read
-// from GitHub's comparison: the update of a branch whose base requires
-// up-to-date branches (updateReviewedBranch) reads it of the head it made,
-// whose merge state GitHub may not have computed yet.
+// readReviewedBehind reads how many commits of its base p's head lacks.
+// Emergency authority checks use this independently of the merge lane.
 var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error) {
 	if p.Base == "" {
 		return 0, nil

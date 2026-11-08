@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -25,6 +26,8 @@ func TestReviewedMergeMergesABehindBranchAsItStands(t *testing.T) {
 	}{
 		"admin configuration still uses queue": {admin: true, strict: true},
 		"no up-to-date requirement":            {},
+		"strict, no admin":                     {strict: true},
+		"strict rebase, no admin":              {strict: true, method: mergeMethodRebase},
 		"no up-to-date requirement, admin":     {admin: true},
 		"rebase, admin":                        {method: mergeMethodRebase, admin: true, strict: true},
 		"rebase, no up-to-date requirement":    {method: mergeMethodRebase},
@@ -89,5 +92,26 @@ func TestLoopMergesAnApprovedBehindHeadAsItStands(t *testing.T) {
 	}
 	if got := r.logged(t, "supervisor.merge"); len(got) != 1 || !strings.Contains(got[0].Detail, loopHead) {
 		t.Fatalf("merge records %v", got)
+	}
+}
+
+// Repository protection can refuse the unchanged head. It must never turn
+// that refusal into a branch update or a worker repair that restarts CI.
+func TestBehindProtectionRefusalDoesNotUpdateOrRepair(t *testing.T) {
+	b := newBehindRig(t)
+	b.claim(t)
+	b.command = func(argv []string) (string, int) {
+		if slices.Contains(argv, "--match-head-commit") {
+			return "pull request is behind its base; branch must be up to date", 1
+		}
+		t.Fatalf("unexpected command: %v", argv)
+		return "", 1
+	}
+	doc := b.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+	if doc.ExitCode != github.SquashRefused || !strings.Contains(doc.Reason, "repository owner") {
+		t.Fatalf("protection refusal: %+v", doc)
+	}
+	if b.pull.Head != loopHead || len(b.updates) != 0 || pullNeedsBranchRepair(b.pull) || ghMergeNeedsBranchRepair(doc.Reason) {
+		t.Fatalf("protection refusal changed the branch or requested repair: %+v", doc)
 	}
 }

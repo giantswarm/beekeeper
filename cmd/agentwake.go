@@ -54,6 +54,8 @@ conversation, and the message is its next turn. A parked one goes on for a
 settled wait too. That takes a claude, codex or agy execution, on the rules
 it ran under, that nobody stopped and no retirement reached; anything else
 is refused, and the refusal names its stored transcript.
+For an SSH worker off the roster, its full execution ID selects that worker
+even when a later worker reused its name.
 
 A message from a roster agent or a role's holder is headed with the name
 it is answered by ([from "<name>": reply by SendMessage to "<name>", …]):
