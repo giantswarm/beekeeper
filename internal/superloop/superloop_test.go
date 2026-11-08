@@ -220,7 +220,7 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	in := Input{Workers: parked(t0), Pulls: pull(head1, true, approved), Rounds: 1, Taken: tk, DevctlOwners: []string{"O"}}
 	a := only(t, Plan(in), KindGo)
-	if !strings.Contains(a.Message, "`devctl pr merge o/r 7 --update-branch`") || !strings.Contains(a.Message, "merging the base alone") || strings.Contains(a.Message, "--match-head-commit") {
+	if !strings.Contains(a.Message, "`devctl pr merge o/r 7`") || strings.Contains(a.Message, "--update-branch") || strings.Contains(a.Message, "--match-head-commit") {
 		t.Errorf("a devctl repository's go = %q", a.Message)
 	}
 	in.DevctlOwners = []string{"giantswarm"}
@@ -242,7 +242,7 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 	}
 	in.Admin = []string{"o/other"}
 	a = only(t, Plan(in), KindGo)
-	if !strings.Contains(a.Message, "`devctl pr merge o/r 7 --update-branch`") || strings.Contains(a.Message, "--admin") {
+	if !strings.Contains(a.Message, "`devctl pr merge o/r 7`") || strings.Contains(a.Message, "--admin") {
 		t.Errorf("a non-admin repository under devctlOwners go = %q", a.Message)
 	}
 }

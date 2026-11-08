@@ -92,7 +92,6 @@ func TestAMergeWhoseHeadGotNoRunsSaysHowToRetrigger(t *testing.T) {
 	fakeDevctl(t, `echo '`+doc+`'; exit 4`)
 	stubGitHub(t, "", "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	g.argv = append(g.argv, "--update-branch")
 	if err := g.runMerge(); Code(err) != 4 {
 		t.Fatalf("exit %d, want devctl's 4", Code(err))
 	}

@@ -517,9 +517,7 @@ its key first in the detail):
             acts for, or its reviewer; a saved review park and a worker
             waiting on it for another pull request are none. It gets a fixer
             (agents start under its worker's name) for a head that
-            conflicts, is red, carries an unfixed changes request, or is
-            behind a base its merge does not update (no devctl
-            --update-branch, no merge.admin); the merge go again for a green
+            conflicts, is red, or carries an unfixed changes request; the merge go again for a green
             head whose go was given and never carried out; a reviewer for
             a green head awaiting its review. Running checks wait; an open
             escalation or ownership question is the person's. One action per stretch,

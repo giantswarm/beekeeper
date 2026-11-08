@@ -423,6 +423,7 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 
 func TestPublishedParkHead(t *testing.T) {
 	const branch = "fix/example"
+	const repairBranch = "repair/pr-7"
 	const repo = "o/r"
 	for _, tc := range []struct {
 		name, localBranch, remoteBranch, localHead, remoteHead, remoteRepo string
@@ -430,7 +431,9 @@ func TestPublishedParkHead(t *testing.T) {
 		want                                                               string
 	}{
 		{name: "published branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
-		{name: "other branch same commit", localBranch: branch, remoteBranch: "another-feature", localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
+		{name: "repair branch same published commit", localBranch: repairBranch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
+		{name: "repair branch unpushed commit", localBranch: repairBranch, remoteBranch: branch, localHead: loopFixed, remoteHead: loopHead, remoteRepo: repo},
+		{name: "repair branch fork", localBranch: repairBranch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: "other/r"},
 		{name: "unpushed head", localBranch: branch, remoteBranch: branch, localHead: loopFixed, remoteHead: loopHead, remoteRepo: repo},
 		{name: "fork same branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: "other/r"},
 		{name: "detached", remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
