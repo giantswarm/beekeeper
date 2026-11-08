@@ -481,7 +481,7 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		"local note":             {"#787", "install chain ready", true},
 		"central note":           {"central#12", "gate ready", true},
 		"named person":           {parkedIssueRef, "operator's go on the install chain", true},
-		verbAnswer:                 {parkedIssueRef, "awaiting the person's answer", true},
+		verbAnswer:               {parkedIssueRef, "awaiting the person's answer", true},
 		"colleague review":       {parkedIssueRef, "a colleague's review", true},
 		"untargeted answer":      {"", "awaiting the person's answer", false},
 		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
