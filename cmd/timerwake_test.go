@@ -393,11 +393,58 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(fires) != 1 || !fires[0].timedOut {
+	if len(fires) != 1 || fires[0].timedOut {
 		t.Fatalf("expiry discarded fired wake: %+v", fires)
 	}
 	w.wakeTimer(t.Context(), fires[0])
 	if len(*woke) != 1 {
 		t.Fatalf("retry did not wake: %v", *woke)
+	}
+}
+
+// A one-shot probe may stop holding after its first successful observation.
+// Retry the fired wake, rather than waiting for that observation again.
+func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
+	for _, repeat := range []string{"", state.RepeatDaily} {
+		t.Run("repeat="+repeat, func(t *testing.T) {
+			w, _, _ := notifyingWatch(t, t.TempDir(), false)
+			woke := stubWakes(t)
+			var initial timerFire
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: "answer", At: relayNow}}}
+				st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Repeat: repeat}}
+				_, events, fires, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+				if len(fires) != 1 {
+					t.Fatalf("expected initial fire: %+v", fires)
+				}
+				initial = fires[0]
+				return events, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// The initial occurrence was claimed; delivery is rejected by the note park.
+			w.wakeTimer(t.Context(), initial)
+			w.now = relayNow.Add(timerEvery)
+			var fires []timerFire
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: w.now}
+				_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: false}}, w.now)
+				fires = f
+				return events, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(fires) != 1 || fires[0].reason != initial.reason || fires[0].timedOut {
+				t.Fatalf("lost the fired occurrence: %+v", fires)
+			}
+			w.wakeTimer(t.Context(), fires[0])
+			st, err := w.store.Read()
+			if err != nil || len(*woke) != 1 {
+				t.Fatalf("wake not delivered: %v, %v", *woke, err)
+			}
+			if repeat != "" && (len(st.Timers) != 1 || st.Timers[0].PendingWakeReason != "") {
+				t.Fatalf("retry leaked into next occurrence: %+v", st.Timers)
+			}
+		})
 	}
 }
