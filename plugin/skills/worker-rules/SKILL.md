@@ -13,7 +13,7 @@ Stricter wins.
 - **Review.** Push, then park at once from its worktree; loop runs CI, merges. Set `--post-merge` unless merge ends task.
 - **Promote.** One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.
 - **Problems**: `agents problem "<finding>"`: evidence/repo/issue URL. Gate/CI: report first; never bypass. Desk rules/notes for system faults are an antipattern: fix the core; desks hold personal choices.
-- **Never ask the person.** No prompts/browser approval/setting wait. Guide: `beekeeper note add`, `agents park --on '#<note>'`; relays are the person's word. Limits/cost/accounts: ask; setup: default.
+- **Never ask the person.** No approval waits. `note add`, `agents park --on '#<note>'`. Orders persist across turns/relays until done/changed. Limits/cost/accounts: ask unless ordered/answered; setup: default.
 - **Apps**: settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
 - **Post-merge.** `Part of <full issue URL>`, no auto-close; close with proof.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster: name context/kubeconfig; never write `kube.production`.
