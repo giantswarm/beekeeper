@@ -3372,9 +3372,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	started := false
 	defer func() {
-		if !started {
-			l.a.releaseUnstartedReview(act)
-		}
+		l.a.finishReviewRequest(act, started)
 	}()
 	if err := l.claim(act, name); err != nil {
 		return "", err
