@@ -144,6 +144,11 @@ func serveGitHub() int {
 		return 0
 	case starts("search", "prs"):
 		return emit([]any{})
+	case starts(ghAPI, "--include") && len(args) >= 3 && args[2] == "repos/fixture/project/pulls?state=all&sort=updated&direction=desc&per_page=1":
+		fmt.Print("HTTP/2.0 200 OK\r\nETag: fixture\r\nContent-Type: application/json\r\n\r\n[]")
+		return 0
+	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "pullRequests(states:OPEN,") }):
+		return emit(map[string]any{dataField: map[string]any{repositoryField: map[string]any{"pullRequests": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}}}})
 	case starts(ghPR, "list"):
 		return emit([]any{})
 	// This fixture repository has a readable main branch and no release

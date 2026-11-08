@@ -17,7 +17,7 @@ var readRepoPullRevision = func(ctx context.Context, repo, etag string) (string,
 }
 
 func readRepoPullRevisionWithGH(ctx context.Context, run github.GH, repo, etag string) (string, bool, error) {
-	args := []string{"api", "--include", "repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=1"}
+	args := []string{workerGitHubAPIGroup, "--include", "repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=1"}
 	if etag != "" {
 		args = append(args, "-H", "If-None-Match: "+etag)
 	}

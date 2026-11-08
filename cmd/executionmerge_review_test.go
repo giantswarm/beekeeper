@@ -84,7 +84,7 @@ func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 		{name: "excepted PR", hold: state.Hold{Target: holdMerges, Except: "giantswarm/beekeeper#7"}},
 		{name: "excepted session", hold: state.Hold{Target: holdMerges, ExceptSession: "assigned-worker-session"}},
 		{name: "global", hold: state.Hold{Target: holdMerges}, deny: true},
-		{name: "repository", hold: state.Hold{Target: sshTestRepository}, deny: true},
+		{name: probeRepositoryCommand, hold: state.Hold{Target: sshTestRepository}, deny: true},
 		{name: "selected lane", hold: state.Hold{Target: merge.LanePrefix + "selected"}, deny: true},
 		{name: "selected upgrade", hold: state.Hold{Target: "upgrade:installation-a/cluster"}, deny: true},
 	}

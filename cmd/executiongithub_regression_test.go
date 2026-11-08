@@ -50,7 +50,7 @@ func TestExecutionGitHubWorkerReadsWithScopedCredential(t *testing.T) {
 		Token   string    `json:"token"`
 		Expires time.Time `json:"expires_at"`
 	}
-	if err := coordinatorTestCall(t, a, r, "github-token", map[string]any{"repository": r.Repository, "write": false}, &result, false); err != nil {
+	if err := coordinatorTestCall(t, a, r, "github-token", map[string]any{probeRepositoryCommand: r.Repository, "write": false}, &result, false); err != nil {
 		t.Fatalf("worker cannot obtain its scoped GitHub credential: %v", err)
 	}
 	if result.Token != "fixture-scoped-worker-credential" {

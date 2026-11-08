@@ -42,6 +42,8 @@ type unmergedPull struct {
 	} `json:"closingIssuesReferences"`
 }
 
+const inventoryGraphQLCommand = "graphql"
+
 const (
 	unmergedPullPageLimit = 100
 	unmergedPullFields    = "number,url,state,createdAt,isDraft,headRefName,title,body,closingIssuesReferences"
@@ -60,7 +62,7 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 	var all []unmergedPull
 	for range 20 {
 		query := `query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,after:$after){nodes{number url state createdAt isDraft headRefName title body closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}}`
-		args := []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name}
+		args := []string{workerGitHubAPIGroup, inventoryGraphQLCommand, "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name}
 		if cursor != "" {
 			args = append(args, "-f", "after="+cursor)
 		}

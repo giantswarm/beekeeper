@@ -40,7 +40,7 @@ func TestInventoryCursorDoesNotSkipTimestampTies(t *testing.T) {
 	now := time.Now()
 	calls := 0
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
-		if github.Repo(ctx) != "o/r" || !slices.Equal(args[:2], []string{"api", "graphql"}) {
+		if github.Repo(ctx) != repo || !slices.Equal(args[:2], []string{workerGitHubAPIGroup, inventoryGraphQLCommand}) {
 			t.Fatalf("routing: %v %s", args, github.Repo(ctx))
 		}
 		calls++
@@ -53,25 +53,25 @@ func TestInventoryCursorDoesNotSkipTimestampTies(t *testing.T) {
 		}
 		pulls := make([]unmergedPull, 100)
 		for i := range pulls {
-			pulls[i] = unmergedPull{Number: start + i, CreatedAt: now, State: "OPEN"}
+			pulls[i] = unmergedPull{Number: start + i, CreatedAt: now, State: emergencyOpenState}
 		}
 		if calls == 2 {
 			pulls[99].Body = "Closes https://github.com/o/r/issues/55"
 		}
-		return inventoryPage(t, pulls, calls == 1, "next"), nil
+		return inventoryPage(t, pulls, calls == 1, deliveryNextCommand), nil
 	}
-	pulls, err := readRepoOpenPullsWithGH(context.Background(), run, "o/r")
+	pulls, err := readRepoOpenPullsWithGH(context.Background(), run, repo)
 	if err != nil || len(pulls) != 200 || calls != 2 {
 		t.Fatalf("inventory: %d calls=%d err=%v", len(pulls), calls, err)
 	}
-	if issue, _ := openPullClosingIssue("o/r", pulls, "", []string{"o/r#55"}, nil); issue == "" {
+	if issue, _ := openPullClosingIssue(repo, pulls, "", []string{"o/r#55"}, nil); issue == "" {
 		t.Fatal("tie hid duplicate")
 	}
 }
 
 func TestInventoryGraphQLFailureNeverMeansEmpty(t *testing.T) {
 	for _, raw := range []string{`{"errors":[{"message":"unavailable"}],"data":{"repository":null}}`, `{"data":{"repository":null}}`, `{"data":{"repository":{"pullRequests":null}}}`, `{}`} {
-		_, err := readRepoOpenPullsWithGH(context.Background(), func(context.Context, ...string) ([]byte, error) { return []byte(raw), nil }, "o/r")
+		_, err := readRepoOpenPullsWithGH(context.Background(), func(context.Context, ...string) ([]byte, error) { return []byte(raw), nil }, repo)
 		if err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
@@ -87,7 +87,7 @@ func TestInventoryConditionalReuseAndFailure(t *testing.T) {
 	reads := 0
 	readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) {
 		reads++
-		return []unmergedPull{{Number: 1, State: "OPEN", CreatedAt: r.a.timeNow()}}, nil
+		return []unmergedPull{{Number: 1, State: emergencyOpenState, CreatedAt: r.a.timeNow()}}, nil
 	}
 	revision := 0
 	failed := false
@@ -99,7 +99,7 @@ func TestInventoryConditionalReuseAndFailure(t *testing.T) {
 		return `"v1"`, etag == `"v1"`, nil
 	}
 	for i := range 3 {
-		if _, _, err := l.repoRecentUnmerged(context.Background(), "o/r"); err != nil {
+		if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
@@ -113,12 +113,12 @@ func TestInventoryConditionalReuseAndFailure(t *testing.T) {
 		t.Fatalf("unchanged inventory: reads=%d probes=%d", reads, revision)
 	}
 	failed = true
-	if _, _, err := l.repoRecentUnmerged(context.Background(), "o/r"); err == nil {
+	if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err == nil {
 		t.Fatal("failed revision served stale inventory")
 	}
 	failed = false
 	r.a.now = r.a.now.Add(time.Hour)
-	if _, _, err := l.repoRecentUnmerged(context.Background(), "o/r"); err != nil {
+	if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err != nil {
 		t.Fatal(err)
 	}
 	if reads != 2 {
@@ -135,7 +135,7 @@ func TestInventoryHonorsLoopBudget(t *testing.T) {
 	}
 	calls := 0
 	readRepoPullRevision = func(context.Context, string, string) (string, bool, error) { calls++; return "", false, nil }
-	if _, _, err := l.repoRecentUnmerged(context.Background(), "o/r"); err == nil || calls != 0 {
+	if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err == nil || calls != 0 {
 		t.Fatalf("unbudgeted inventory calls=%d err=%v", calls, err)
 	}
 }
@@ -143,7 +143,7 @@ func TestInventoryHonorsLoopBudget(t *testing.T) {
 func TestInventoryRejectsTruncatedClosingReferences(t *testing.T) {
 	raw := inventoryPage(t, []unmergedPull{{Number: 1, CreatedAt: time.Now()}}, false, "")
 	raw = []byte(strings.ReplaceAll(string(raw), `"hasNextPage":false`, `"hasNextPage":true`))
-	_, err := readRepoOpenPullsWithGH(context.Background(), func(context.Context, ...string) ([]byte, error) { return raw, nil }, "o/r")
+	_, err := readRepoOpenPullsWithGH(context.Background(), func(context.Context, ...string) ([]byte, error) { return raw, nil }, repo)
 	if err == nil {
 		t.Fatal("truncated linked issues accepted")
 	}
@@ -188,12 +188,12 @@ func TestLoopRESTAllowancePersistsAndLeavesFloor(t *testing.T) {
 func TestPullRevisionUsesConditionalAllStateUpdates(t *testing.T) {
 	for _, status := range []int{200, 304, 403} {
 		run := func(ctx context.Context, args ...string) ([]byte, error) {
-			if github.Repo(ctx) != "o/r" || !slices.Contains(args, "If-None-Match: previous") || !slices.Contains(args, "repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=1") {
+			if github.Repo(ctx) != repo || !slices.Contains(args, "If-None-Match: inventory-etag-old") || !slices.Contains(args, "repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=1") {
 				t.Fatalf("revision route %v", args)
 			}
 			return []byte(fmt.Sprintf("HTTP/2.0 %d response\r\nETag: next\r\nContent-Length: 2\r\n\r\n{}", status)), nil
 		}
-		etag, unchanged, err := readRepoPullRevisionWithGH(context.Background(), run, "o/r", "previous")
+		etag, unchanged, err := readRepoPullRevisionWithGH(context.Background(), run, repo, "inventory-etag-old")
 		if status == 403 {
 			if err == nil {
 				t.Fatal("refusal accepted")
@@ -203,7 +203,7 @@ func TestPullRevisionUsesConditionalAllStateUpdates(t *testing.T) {
 		if err != nil || unchanged != (status == 304) {
 			t.Fatalf("status %d unchanged=%t err=%v", status, unchanged, err)
 		}
-		if status == 304 && etag != "previous" || status == 200 && etag != "next" {
+		if status == 304 && etag != "inventory-etag-old" || status == 200 && etag != deliveryNextCommand {
 			t.Fatalf("wrong validator %s", etag)
 		}
 	}

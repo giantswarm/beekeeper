@@ -432,7 +432,7 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 			t.Fatalf("expected repository GraphQL connection: %v", args)
 		}
 		if strings.Contains(cmdLine, "after=next") {
-			return inventoryPage(t, []unmergedPull{{Number: 140, URL: "https://github.com/o/r/pull/140", State: "OPEN", CreatedAt: now.Add(-400 * time.Hour), HeadRefName: "worker-140", Body: "Closes " + issueURL}}, false, ""), nil
+			return inventoryPage(t, []unmergedPull{{Number: 140, URL: "https://github.com/o/r/pull/140", State: emergencyOpenState, CreatedAt: now.Add(-400 * time.Hour), HeadRefName: "worker-140", Body: "Closes " + issueURL}}, false, ""), nil
 		}
 		var page strings.Builder
 		page.WriteByte('[')
@@ -448,7 +448,7 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 		if err := json.Unmarshal([]byte(page.String()), &pulls); err != nil {
 			t.Fatal(err)
 		}
-		return inventoryPage(t, pulls, true, "next"), nil
+		return inventoryPage(t, pulls, true, deliveryNextCommand), nil
 	}
 	unmergedGH = mockGH
 	readRepoOpenPulls = func(ctx context.Context, targetRepo string) ([]unmergedPull, error) {
@@ -591,6 +591,8 @@ func TestReview3325PaginationStalls(t *testing.T) {
 	}
 }
 
+const review3325IterationCap = "iteration cap"
+
 const review3325ShortMissingTimestamp = "short missing timestamp"
 
 func TestReview3325RepairSessionOwnership(t *testing.T) {
@@ -622,7 +624,7 @@ func TestReview3325RepairSessionOwnership(t *testing.T) {
 }
 
 func TestReview3325InventoryCapsFailClosed(t *testing.T) {
-	for _, mode := range []string{"tie", "missing timestamp", review3325ShortMissingTimestamp, "iteration cap"} {
+	for _, mode := range []string{"tie", "missing timestamp", review3325ShortMissingTimestamp, review3325IterationCap} {
 		t.Run(mode, func(t *testing.T) {
 			calls := 0
 			gh := func(_ context.Context, args ...string) ([]byte, error) {
@@ -637,7 +639,7 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 				for i := range page {
 					page[i].Number = i + 1
 					page[i].CreatedAt = time.Unix(100000, 0)
-					if mode == "iteration cap" {
+					if mode == review3325IterationCap {
 						page[i].Number += 100 * calls
 						page[i].CreatedAt = time.Unix(int64(100000-100*calls-i), 0)
 					}
@@ -646,7 +648,7 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 					}
 				}
 				cursor := "tie"
-				if mode == "iteration cap" {
+				if mode == review3325IterationCap {
 					cursor = fmt.Sprint(calls)
 				}
 				return inventoryPage(t, page, true, cursor), nil
