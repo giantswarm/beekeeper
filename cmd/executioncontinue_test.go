@@ -64,7 +64,7 @@ func TestParkedExecutionResumesAfterItsProcessExited(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	by := state.Party{Session: "sender-session", Name: sshMessageSender, Host: sshTestCoordinator}
+	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
 	err := a.resumeParkedOpts(context.Background(), by, r.Name, false)
 	var pending *executionDeliveryPending
 	if !errors.As(err, &pending) {
@@ -106,7 +106,7 @@ func TestEndedExecutionComesBackOnTheRosterByName(t *testing.T) {
 
 func TestUnparkedExitedExecutionResumesByName(t *testing.T) {
 	a, r, _, continued := exitedExecutionApp(t)
-	by := state.Party{Session: "sender-session", Name: sshMessageSender, Host: sshTestCoordinator}
+	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
 	err := a.resumeParkedOpts(context.Background(), by, r.Name, false)
 	var pending *executionDeliveryPending
 	if !errors.As(err, &pending) {
