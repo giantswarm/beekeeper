@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const deliveryIntakeReserved = "reserved"
 const deliveryIntakeFill = "fill"
 const deliveryIntakeExistingAgent = "existing delivery"
 const deliveryIntakeOtherRepo = "other/repository"
@@ -443,7 +444,7 @@ func TestReview3366PreviewUsesScopedIntake(t *testing.T) {
 // An intentional admission wait must end an older refill-stall episode:
 // otherwise the newer watchdog reports a board-start fault at a full limit.
 func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
-	for _, mode := range []string{servingModeFull, kindStale, "reserved"} {
+	for _, mode := range []string{servingModeFull, kindStale, deliveryIntakeReserved} {
 		t.Run(mode, func(t *testing.T) {
 			r, busy := fillRig(t)
 			r.a.cfg.Delivery.WIPLimit = 1
@@ -461,7 +462,7 @@ func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
 					st.DeliveriesAt = now.Add(-4 * r.a.cfg.Supervisor.LoopInterval.Duration)
 				} else {
 					st.StartDelivery(deliveryControlPendingRef, deliveryIntakeExistingAgent, "", now)
-					if mode == "reserved" {
+					if mode == deliveryIntakeReserved {
 						st.Deliveries[0].Step = state.DeliveryReviewQueued
 						r.a.cfg.Delivery.WIPLimit = 0
 					}

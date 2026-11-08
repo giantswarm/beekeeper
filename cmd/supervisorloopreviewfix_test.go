@@ -36,13 +36,13 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 		{name: "prepared", phase: execution.Prepared},
 		{name: "activation outcome unconfirmed", phase: execution.Activating},
 		{name: "host still unreachable", phase: execution.Prepared, recoveryFails: true},
-		{name: "running worker", phase: execution.Running},
+		{name: "active rework worker", phase: execution.Running},
 		{name: "closed pull", phase: execution.Prepared, closed: true},
 		{name: "unread pull", phase: execution.Prepared, unread: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
-			ref := execution.Ref{Host: "host", Execution: "reserved", Generation: 1}
+			ref := execution.Ref{Host: paramHost, Execution: "rework-reservation", Generation: 1}
 			party := state.Party{Name: loopWorker}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = append(st.Agents, state.Agent{Party: party, Execution: &ref})
