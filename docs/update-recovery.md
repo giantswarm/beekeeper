@@ -58,7 +58,13 @@ origin and a fixture GitHub played by the controller's bytes, and proves the mer
 in the origin. It repeats every five minutes after a pass, and at once after a
 failure or inconclusive run. A probe that cannot be built is inconclusive and
 clears the current pass while retaining prior pass history, so a candidate cannot
-promote on a stale probe pass. A failed or timed-out candidate probe is repeated on
+promote on a stale probe pass. A counted probe failure retains a bounded, single-line cause in the installation
+journal and includes it in the rollback notification and quarantine reason. A
+passing probe clears that cause. Older journals without the field keep their
+original generic failure wording. This diagnostic is supplied by the controller,
+so updating a candidate alone does not upgrade a retained controller.
+
+A failed or timed-out candidate probe is repeated on
 the last known good as a control: what that cannot do either is the machine's fault,
 and counts against no candidate.
 

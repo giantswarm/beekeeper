@@ -264,6 +264,7 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 	switch {
 	case err == nil:
 		o.ProbePassed, o.ProbeFailures, o.LastPassAt = true, 0, o.Elapsed
+		o.ProbeFailure = ""
 	case errors.Is(err, loopworkflow.ErrInconclusive):
 		o.ProbePassed = false
 		_, _ = fmt.Fprintf(c.w, "probe of %s: %v\n", j.Candidate.Version, err)
@@ -276,6 +277,13 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 			return
 		}
 		o.ProbeFailures++
+		// Probe runs with isolated fixture configuration and no credentials. Keep
+		// enough of its cause for the durable rollback line, without log growth.
+		o.ProbeFailure = strings.Join(strings.Fields(err.Error()), " ")
+		const failureLimit = 512
+		if len(o.ProbeFailure) > failureLimit {
+			o.ProbeFailure = o.ProbeFailure[:failureLimit] + "..."
+		}
 		_, _ = fmt.Fprintf(c.w, "probe of %s failed: %v\n", j.Candidate.Version, err)
 	}
 }

@@ -172,6 +172,14 @@ func TestRecoveryRollsBackAFailedProbeOnAnIdleDesk(t *testing.T) {
 	if got := installed(t, c); got != recoveryGoodBytes {
 		t.Fatalf("installed %q", got)
 	}
+	j := journal(t, c)
+	want := "isolated workflow probe failed 3 times: the origin does not show the reviewed merge"
+	if j.Observed.Reason != want || j.Quarantine[j.Candidate.Digest] != want {
+		t.Fatalf("rollback lost probe cause: %+v", j)
+	}
+	if reports := c.filedReports(t); len(reports) != 1 || !strings.Contains(reports[0], want) {
+		t.Fatalf("rollback report lost probe cause: %q", reports)
+	}
 }
 
 // What the last known good cannot do either is this machine's fault: a rollback
@@ -435,5 +443,27 @@ func TestRecoveryInconclusiveProbeDoesNotPromoteWithStalePass(t *testing.T) {
 				t.Fatal("fresh passing probe after window did not promote")
 			}
 		})
+	}
+}
+
+func TestRecoveryProbeFailureEvidenceIsBoundedAndCleared(t *testing.T) {
+	c, _ := recoveryRig(t)
+	c.server = c.target + ".control"
+	recoveryProbe = func(_ context.Context, binary, _, _ string) error {
+		if binary == c.server {
+			return nil
+		}
+		return errors.New("fixture failure\n" + strings.Repeat("x", 1000))
+	}
+	c.mustTick(t)
+	o := journal(t, c).Observed
+	if len(o.ProbeFailure) > 515 || strings.Contains(o.ProbeFailure, "\n") || !strings.HasPrefix(o.ProbeFailure, "fixture failure ") {
+		t.Fatalf("unbounded or multiline cause: %q", o.ProbeFailure)
+	}
+	recoveryProbe = func(context.Context, string, string, string) error { return nil }
+	c.mustTick(t)
+	o = journal(t, c).Observed
+	if o.ProbeFailure != "" || o.ProbeFailures != 0 || !o.ProbePassed {
+		t.Fatalf("passing probe kept stale cause: %+v", o)
 	}
 }

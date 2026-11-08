@@ -259,7 +259,7 @@ func serveGitHub() int {
 		// Retain unknown calls separately: production may intentionally handle a
 		// tooling failure, but the harness must never silently accept one.
 		raw, _ := json.Marshal(args)
-		_ = os.WriteFile(filepath.Join(root, "unknown-call"), raw, 0600) //nolint:gosec // scratch fixture state
+		recordUnknownCall(root, raw)
 		fmt.Fprintln(os.Stderr, "unknown fixture command: "+string(raw))
 		return 1
 	}
@@ -377,7 +377,7 @@ func serveClaude() int {
 		return 0
 	default:
 		raw, _ := json.Marshal(append([]string{claudeCmd}, args...))
-		_ = os.WriteFile(filepath.Join(root, "unknown-call"), raw, 0600) //nolint:gosec // scratch fixture state
+		recordUnknownCall(root, raw)
 		fmt.Fprintln(os.Stderr, "unknown fixture claude command: "+string(raw))
 		return 1
 	}
@@ -392,4 +392,15 @@ func fixtureWorkflowRead(endpoint string) bool {
 	}
 	name, ok = strings.CutSuffix(name, "?ref=main")
 	return ok && name != "" && !strings.ContainsAny(name, "/?%") && name != "." && name != ".."
+}
+
+// recordUnknownCall preserves the first unsupported operation: follow-up calls
+// while handling that failure must not overwrite its cause.
+func recordUnknownCall(root string, raw []byte) {
+	f, err := os.OpenFile(filepath.Join(root, "unknown-call"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600) //nolint:gosec // scratch fixture state
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.Write(raw)
 }

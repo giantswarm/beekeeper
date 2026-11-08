@@ -39,6 +39,8 @@ type Observed struct {
 	Elapsed       time.Duration `json:"elapsed"`
 	ProbePassed   bool          `json:"probePassed,omitempty"`
 	ProbeFailures int           `json:"probeFailures,omitempty"`
+	// ProbeFailure is the bounded cause of the latest counted candidate failure.
+	ProbeFailure string `json:"probeFailure,omitempty"`
 	// ProbedAt is the Elapsed of the last probe; LastPassAt is the Elapsed of
 	// the last passed probe, kept as history when a later probe is inconclusive.
 	ProbedAt   time.Duration `json:"probedAt,omitempty"`
@@ -109,7 +111,11 @@ func Decide(o Observed, s Signals) (verdict, reason string) {
 	case s.Failure != "":
 		return RollBack, s.Failure
 	case o.ProbeFailures >= ProbeFailures:
-		return RollBack, fmt.Sprintf("isolated workflow probe failed %d times", o.ProbeFailures)
+		reason := fmt.Sprintf("isolated workflow probe failed %d times", o.ProbeFailures)
+		if o.ProbeFailure != "" {
+			reason += ": " + o.ProbeFailure
+		}
+		return RollBack, reason
 	case s.HeartbeatRequired && !s.Heartbeat && heartbeatOverdue(o, s):
 		return RollBack, "no health heartbeat from the candidate's loop"
 	case o.Elapsed < ProbationWindow:
