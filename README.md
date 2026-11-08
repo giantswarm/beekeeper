@@ -2287,6 +2287,25 @@ The release verdict and tag survive removal of the merge from its lane.
 This foundation does not refuse starts, reserve slots or change `capacity` or its JSON.
 New-start enforcement, review/fix priority and stall handling are separate work.
 
+#### Checking the live projection
+
+Capture `beekeeper delivery --json` and `gh pr list --repo <owner/repo> --state open
+--limit 100 --json number,url,author` close together. Compare the distinct pull
+references in active deliveries with the repository's open pulls after applying
+the supervisor's existing ownership policy. Bot pulls need an explicit review
+request; author, team and excluded-path policies still apply. A delivery can
+contain several pulls, and several issues can share a pull, so compare references
+rather than row counts. Check `completeAt` before relying on a snapshot; an
+incomplete observation retains the previous timestamp and unread deliveries.
+
+The full active list also includes work without a pull request and merged pulls
+waiting for release. A closed pull can remain linked while its worker continues
+implementation. These rows are not additional open pull requests. Do not delete
+state or change the configured limit to make the two counts equal. Keep raw
+snapshots local; public proof should contain only repository-scoped pull links,
+version, observation time, comparison totals and unresolved differences. Take
+`beekeeper alerts snapshot` after the proof and report its findings separately.
+
 ### The supervisor loop down
 
 The supervisor is the supervisor loop; no session holds its role. While the loop does not run,
