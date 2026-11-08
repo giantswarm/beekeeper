@@ -281,6 +281,14 @@ func (w *watcher) actTimers(ctx context.Context, fires []timerFire) {
 // is a line, so the supervisor's watch still has the text.
 func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	original := f
+	delivered := false
+	defer func() {
+		if !delivered {
+			if _, err := w.rearmTimer(original, "wake not delivered; retrying"); err != nil {
+				w.emitNow("timer", "TIMER WAKE RETRY FAILED: #%d: %v", original.t.ID, err)
+			}
+		}
+	}()
 	// A timer may have fired before the agent replaced its wait. Read the
 	// current park at delivery, including parks off the roster; a stale
 	// repeating timer must never turn a session waiting on a person.
@@ -303,6 +311,7 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	if !f.t.WakeParkAt.IsZero() {
 		p := wakeTargetPark(st, f.t.Wake)
 		if p == nil || !p.Checks || !p.At.Equal(f.t.WakeParkAt) || !p.By.Is(f.t.By) {
+			delivered = true
 			w.closeCIWakeTimer(f.t)
 			return // The worker has already left or replaced this CI wait.
 		}
@@ -329,18 +338,15 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	if err := wakeErr; err != nil {
 		var pending *executionDeliveryPending
 		if errors.As(err, &pending) {
+			delivered = true
 			w.closeCIWakeTimer(f.t)
 			w.emitNow("timer", "TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200))
 			return
 		}
-		if ctx.Err() != nil {
-			if _, err := w.rearmInterruptedTimer(original); err != nil {
-				w.emitNow("timer", "TIMER WAKE RETRY FAILED: #%d: %v", f.t.ID, err)
-			}
-		}
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200))
 		return
 	}
+	delivered = true
 	w.closeCIWakeTimer(f.t)
 }
 
@@ -402,11 +408,22 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 
 // Retain the interrupted occurrence without overwriting a changed timer.
 func (w *watcher) rearmInterruptedTimer(f timerFire) (bool, error) {
+	return w.rearmTimer(f, "previous action interrupted")
+}
+
+// rearmTimer restores an undelivered occurrence without replacing a newer edit.
+func (w *watcher) rearmTimer(f timerFire, held string) (bool, error) {
 	rearmed := false
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		retry := f.t
 		retry.Checked, retry.Fired = time.Time{}, time.Time{}
-		retry.Held = "previous action interrupted"
+		retry.Held = held
+		// Space conditional retries even when the condition already holds.
+		if held != "previous action interrupted" {
+			retry.Checked = w.now.UTC()
+			// This occurrence already fired; expiry must not discard its retry.
+			retry.Expire = false
+		}
 		for i, t := range st.Timers {
 			if t.ID != retry.ID {
 				continue
@@ -415,11 +432,11 @@ func (w *watcher) rearmInterruptedTimer(f timerFire) (bool, error) {
 				st.Timers[i] = retry
 				rearmed = true
 			}
-			return []state.Event{event(watchParty, "timer.failed", "#%d interrupted: %s", retry.ID, retry.Run)}, nil
+			return []state.Event{event(watchParty, "timer.failed", "#%d %s: %s", retry.ID, held, retry.What)}, nil
 		}
 		st.Timers = append(st.Timers, retry)
 		rearmed = true
-		return []state.Event{event(watchParty, "timer.failed", "#%d interrupted; re-armed: %s", retry.ID, retry.Run)}, nil
+		return []state.Event{event(watchParty, "timer.failed", "#%d %s; re-armed: %s", retry.ID, held, retry.What)}, nil
 	})
 	return rearmed, err
 }
