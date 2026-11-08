@@ -18,8 +18,8 @@ var budgetCredentials = github.BudgetCredentials
 
 const unlabelledIdentity = "unlabelled"
 
-func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
 	// Every producer (watch, loop and CLI) shares this lock. Hold it from
 	// the initial cache read through publication so a delayed high response
@@ -109,7 +109,17 @@ func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
 		minimum.GraphQL = storedGraphQL(b.GraphQL, saved[b.GraphQL.Identity].GraphQL.At)
 	}
 	minimum.Identities = saved
-	if err := a.store.UpdateWithin(100*time.Millisecond, func(st *state.State) ([]state.Event, error) {
+	// Publication waits like an ordinary state writer, bounded by the caller's
+	// deadline. A short network-probe deadline must not turn routine lock
+	// contention into a failed pre-install canary.
+	wait := 2 * time.Minute
+	if deadline, ok := parentCtx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline))
+	}
+	if err := parentCtx.Err(); err != nil {
+		return b, errors.Join(append(failures, err)...)
+	}
+	if err := a.store.UpdateWithin(wait, func(st *state.State) ([]state.Event, error) {
 		st.BudgetETag, st.Budget = minimum.ETag, &minimum
 		return nil, nil
 	}); err != nil {

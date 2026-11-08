@@ -233,3 +233,22 @@ protocol does not claim durable installation on filesystems without them.
     binary within the 30-minute probation window, quarantining the broken digest,
     recording `RELEASE ROLLED BACK`, and passing the post-rollback workflow merge
     probe.
+
+### Workflow fixture compatibility and updater contention
+
+The retained recovery controller supplies the isolated GitHub adapter. Raw
+workflow reads in the fixture repository at its main ref return a normal GitHub
+404 when no workflow exists; they must not become unknown-command failures.
+Reads outside that repository and ref remain unrecognized. The isolated probe
+creates its own configuration and does not inherit the live desk configuration.
+
+Updating the candidate does not replace an older retained controller's adapter.
+If that controller predates the required fixture response, the transition needs
+a reviewed, signed compatible bridge through the normal updater; do not edit the
+installation journal, disable probation or clear its fence manually.
+
+Budget sampling serializes producers and bounds network work separately from
+publishing the observation. Publication waits for the ordinary state lock, up to
+two minutes or the caller's remaining deadline, whichever is shorter. Transient
+state contention therefore does not immediately reject a healthy update canary;
+short caller deadlines and real GitHub budget failures still fail closed.

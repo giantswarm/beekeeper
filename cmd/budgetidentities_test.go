@@ -383,3 +383,28 @@ func TestForcedGraphQLSamplesShareRESTCache(t *testing.T) {
 		t.Fatal("expired REST sample was reused")
 	}
 }
+
+// Pre-install canaries must survive ordinary state contention, while the
+// short-deadline regression above must still fail promptly.
+func TestBudgetPublishesAfterTransientStateContention(t *testing.T) {
+	a, _ := budgetApp(t)
+	refuse := false
+	refusingGitHub(t, &refuse)
+	lock := flock.New(filepath.Join(a.store.Dir(), "state.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan error, 1)
+	time.AfterFunc(350*time.Millisecond, func() { released <- lock.Unlock() })
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	b, err := a.probeBudget(ctx)
+	unlockErr := <-released
+	if err != nil || unlockErr != nil {
+		t.Fatalf("transient contention rejected healthy budget: %v; unlock: %v", err, unlockErr)
+	}
+	st, err := a.store.Read()
+	if err != nil || st.Budget == nil || st.Budget.Remaining != b.Remaining {
+		t.Fatalf("budget not published: %+v, %v", st, err)
+	}
+}

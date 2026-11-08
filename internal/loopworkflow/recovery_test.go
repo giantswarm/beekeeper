@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -593,5 +594,41 @@ func TestRetainedRecoveryController(t *testing.T) {
 	}
 	if fenced || fenceErr != nil || writeErr != nil {
 		t.Fatalf("normal probation did not clear writer fence: fence=%v, %v, write=%v", fenced, fenceErr, writeErr)
+	}
+}
+
+// This runs the actual isolated probe and verifies release discovery reaches
+// the retained adapter. Ambient desk configuration and credentials stay out.
+func TestRecoveryProbeReleaseWorkflowDiscovery(t *testing.T) {
+	binary := os.Getenv("BEEKEEPER_TEST_LOOP_BINARY")
+	if binary == "" {
+		binary = buildCandidate(t, "")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), ProbeTimeout)
+	defer cancel()
+	p := probe{ctx: ctx, dir: t.TempDir()}
+	if err := p.prepare(self); err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(http.HandlerFunc(p.serveAPI))
+	defer api.Close()
+	p.env = append(p.env, "BEEKEEPER_GITHUB_API="+api.URL)
+	for range 2 {
+		c := exec.CommandContext(ctx, binary, "supervisor", "loop", "--once") //nolint:gosec // explicit integration candidate
+		c.Env, c.Dir = p.env, p.dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("probe loop: %v: %s", err, out)
+		}
+	}
+	if err := p.proven(); err != nil {
+		t.Fatal(err)
+	}
+	trace, err := os.ReadFile(p.path("trace.jsonl"))
+	if err != nil || !strings.Contains(string(trace), "contents/.github/workflows/zz_generated.auto_release.yaml?ref=main") {
+		t.Fatalf("probe skipped release discovery: %s, %v", trace, err)
 	}
 }
