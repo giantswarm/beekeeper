@@ -4167,3 +4167,62 @@ func TestLoopTellsABusyStateLock(t *testing.T) {
 		t.Fatal("another failure was told a busy lock")
 	}
 }
+
+func TestLoopDoesNotReexecDuringShutdown(t *testing.T) {
+	for _, duringGate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("duringGate=%v", duringGate), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.replaced = true
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if duringGate {
+				r.answer = func(args []string) (string, int) {
+					if slices.Equal(args, budgetGateArgs) {
+						cancel()
+					}
+					return "", 0
+				}
+			} else {
+				cancel()
+			}
+			if reexec, err := l.reexec(ctx); err != nil || reexec {
+				t.Fatalf("shutdown reexec = %v, %v", reexec, err)
+			}
+			if r.execs != 0 {
+				t.Fatal("re-executed during shutdown")
+			}
+			if ctx.Err() == nil {
+				t.Fatal("shutdown was not exercised")
+			}
+		})
+	}
+}
+
+func TestLoopDoesNotReexecWhenShutdownBeginsWhileWatchDrains(t *testing.T) {
+	r := newLoopRig(t)
+	r.replaced = true
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := false
+	l.stopWatch = func() {
+		stopped = true
+		cancel()
+	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		t.Fatalf("shutdown reexec = %v, %v", reexec, err)
+	}
+	if !stopped || ctx.Err() == nil {
+		t.Fatal("shutdown while stopping watch was not exercised")
+	}
+	if r.execs != 0 {
+		t.Fatal("re-executed during shutdown")
+	}
+}

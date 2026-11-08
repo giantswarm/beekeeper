@@ -1073,7 +1073,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 // quiet point (no claim in flight). It returns true when the replacement
 // binary was executed, so the caller ends the pass on the old binary.
 func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
-	if l == nil || l.dryRun || l.reexecuted || l.reexecFailed {
+	if l == nil || ctx.Err() != nil || l.dryRun || l.reexecuted || l.reexecFailed {
 		return false, nil
 	}
 	b := l.bin
@@ -1101,10 +1101,18 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
 	}
 	l.timerActs.Wait()
+	// Shutdown wins over an update, including cancellation while actions drain.
+	if ctx.Err() != nil {
+		return false, nil
+	}
 	wasWatching := l.stopWatch != nil
 	if wasWatching {
 		l.stopWatch()
 		l.stopWatch = nil
+	}
+	// The watch also drains asynchronous work, so shutdown can begin there.
+	if ctx.Err() != nil {
+		return false, nil
 	}
 	if err := b.Exec(); err != nil {
 		l.mu.Lock()
