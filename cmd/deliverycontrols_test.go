@@ -225,7 +225,7 @@ func TestDeliveryStallsRestartTwoWatchesRecoveryAndFull(t *testing.T) {
 	a.cfg.Delivery.WIPLimit = 1
 	a.cfg.Delivery.StallAfter.Duration = time.Hour
 	seed(t, a, func(st *state.State) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: "live-worker"}, Task: "delivery"}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: "live-worker"}, Task: deliveryTestTask}}
 		st.Deliveries = []state.Delivery{{Ref: deliveryControlPendingRef, Agent: "live-worker", Step: state.DeliveryCI, Since: now.Add(-2 * time.Hour), Started: now.Add(-3 * time.Hour), Waits: deliveryControlChecks}}
 	})
 	var wg sync.WaitGroup

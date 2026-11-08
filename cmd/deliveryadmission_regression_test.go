@@ -7,6 +7,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const deliveryTestIssue = "example/project#1"
+const deliveryTestPull = "example/project#2"
+const deliveryTestTask = "delivery"
+
 func TestDeliveryWIPInFlightBounds(t *testing.T) {
 	now := time.Now().UTC()
 	policy := deliveryPolicy{stallAfter: 2 * time.Hour, reserveFor: 10 * time.Minute}
@@ -26,10 +30,10 @@ func TestDeliveryWIPInFlightBounds(t *testing.T) {
 		{name: "released", step: state.DeliveryDone, age: time.Minute, live: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := state.Delivery{Ref: "example/project#1", Step: tc.step, Since: now.Add(-tc.age), Agent: workerRole, OutsideDesk: tc.outside}
+			d := state.Delivery{Ref: deliveryTestIssue, Step: tc.step, Since: now.Add(-tc.age), Agent: workerRole, OutsideDesk: tc.outside}
 			st := &state.State{DeliveriesAt: now.Add(-5 * time.Minute), Deliveries: []state.Delivery{d}}
 			if tc.live {
-				st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: "delivery", Done: tc.done}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryTestTask, Done: tc.done}}
 			}
 			v := readDeliveryWIP(st, 2, time.Second, now, policy)
 			if (v.Count == 1) != tc.want || v.Reason != "" {
@@ -45,12 +49,12 @@ func TestDeliveryWIPInFlightBounds(t *testing.T) {
 func TestDeliveryPartialObservationRetainsCountAndStarts(t *testing.T) {
 	now := time.Now().UTC()
 	st := &state.State{DeliveriesAt: now.Add(-5 * time.Minute)}
-	st.StartDelivery("example/project#1", workerRole, "", now.Add(-time.Hour))
+	st.StartDelivery(deliveryTestIssue, workerRole, "", now.Add(-time.Hour))
 	if v := readDeliveryWIP(st, 2, time.Second, now); v.Count != 1 || v.Reason != "" {
 		t.Fatal(v)
 	}
 	// A local start during a partial sweep must consume the remaining place.
-	st.StartDelivery("example/project#2", "second", "", now)
+	st.StartDelivery(deliveryTestPull, "second", "", now)
 	if v := readDeliveryWIP(st, 2, time.Second, now); v.Count != 2 || v.Reason == "" {
 		t.Fatal(v)
 	}
@@ -65,7 +69,7 @@ func TestAbandonedDeliveryEscalatesWithoutHoldingWIP(t *testing.T) {
 	a.cfg.Delivery.WIPLimit = 1
 	seed(t, a, func(st *state.State) {
 		st.DeliveriesAt = now
-		st.StartDelivery("example/project#1", "gone", "", now.Add(-48*time.Hour))
+		st.StartDelivery(deliveryTestIssue, "gone", "", now.Add(-48*time.Hour))
 	})
 	if line, err := a.checkDeliveries(now); err != nil || line == "" {
 		t.Fatalf("%s %v", line, err)
@@ -86,13 +90,13 @@ func TestDeliveryWIPLiveAgentServingLinkedPull(t *testing.T) {
 	now := time.Now().UTC()
 	for _, step := range []string{state.DeliveryReviewing, state.DeliveryFixing} {
 		t.Run(step, func(t *testing.T) {
-			ag := state.Agent{Party: state.Party{Name: "linked-pull-agent", Session: "linked-pull-session"}, Task: "delivery"}
+			ag := state.Agent{Party: state.Party{Name: "linked-pull-agent", Session: "linked-pull-session"}, Task: deliveryTestTask}
 			st := &state.State{
 				DeliveriesAt: now,
 				Agents:       []state.Agent{ag},
-				Records:      []state.Record{{Session: ag.Party, Issue: "example/project#2"}},
+				Records:      []state.Record{{Session: ag.Party, Issue: deliveryTestPull}},
 				Deliveries: []state.Delivery{{
-					Ref: "example/project#1", Pulls: []string{"example/project#2"},
+					Ref: deliveryTestIssue, Pulls: []string{deliveryTestPull},
 					Agent: "original-worker", Step: step, Since: now.Add(-48 * time.Hour),
 				}},
 			}
