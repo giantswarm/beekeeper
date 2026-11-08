@@ -42,9 +42,9 @@ func TestVisibilityPolicy(t *testing.T) {
 
 func TestRepositoryVisibilityRequiresExplicitMetadata(t *testing.T) {
 	for _, tc := range []struct{ raw, want string }{
-		{`{"visibility":VisibilityPublic}`, VisibilityPublic},
-		{`{"visibility":VisibilityPrivate}`, VisibilityPrivate},
-		{`{"visibility":VisibilityInternal}`, VisibilityInternal},
+		{`{"visibility":"public"}`, VisibilityPublic},
+		{`{"visibility":"private"}`, VisibilityPrivate},
+		{`{"visibility":"internal"}`, VisibilityInternal},
 		{`{VisibilityPrivate:false}`, ""},
 		{`{}`, ""},
 		{nullResponseFixture, ""},
