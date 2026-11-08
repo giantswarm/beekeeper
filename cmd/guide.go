@@ -602,7 +602,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			}
 			relay := a.relayLine(guideRole, r)
 			unbacked := a.unbackedPersonItems(st, q, s)
-			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
+			facts := append(textFacts("guide", head+"\n"+relay+"\n"+emergencyText(st, a.now)), a.queueFacts(q)...)
 			facts = append(facts, textFacts("decisions", decisionHistoryText(decisions))...)
 			facts = append(facts, textFacts("guide-work", guideWorkText(st))...)
 			facts = append(facts, textFacts("standing", a.capture(func() { a.printStanding(s) }))...)
@@ -614,6 +614,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				if relay != "" {
 					_, _ = fmt.Fprintln(a.out, relay)
 				}
+				_, _ = fmt.Fprintln(a.out, "\n## Emergency grant\n"+emergencyText(st, a.now))
 				_, _ = fmt.Fprintln(a.out, "\n## Standing instructions")
 				a.printStanding(s)
 				_, _ = fmt.Fprintln(a.out, "\n## Recorded decisions\n"+decisionHistoryText(decisions))
@@ -666,9 +667,8 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 	}
 	p("%s\n", intro)
 	p("## Recorded decisions\n\n%s", decisionHistoryText(decisions))
-	if e := st.Emergency; e != nil && a.now.Before(e.Until) {
-		p("Guide-role grant until %s; original issuer %s; original words: %q. Use the existing grant; its expiry is unchanged.\n", e.Until.Format(time.RFC3339), e.By.Name, e.Reason)
-	}
+	p("## Emergency grant\n\n%s\n", emergencyText(st, a.now))
+	p("Use a covering active grant immediately to unblock a system standstill and report the action. Relay needs no new words from the person; never extend its deadline implicitly.\n")
 	p("## Pending state, %s\n", a.stamp(a.now))
 	if s != "" {
 		section(p, "Standing instructions", false, "")

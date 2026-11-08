@@ -47,7 +47,12 @@ to merge a GitHub-approved pull request past desk review at its exact head,
 a forced capacity start, and `beekeeper emergency capacity <capacity.key> <value>`
 for validated capacity limits. These commands log each action and result with
 the authorization. The grant expires automatically, belongs to the guide role and transfers to its
-authenticated successor without extending its expiry, and can end early with `beekeeper emergency off`. The exception is
+authenticated successor without extending its expiry, and can end early with `beekeeper emergency off`.
+Read `beekeeper emergency` and the handover for its issuer, current holder and expiry.
+Use a covering active grant immediately to unblock a system standstill and report
+what you did; a successor needs no new words from the person. Never extend the
+deadline implicitly. Ask only if no grant covers the action, with a push notification.
+The exception is
 these commands alone; ordinary merge, edit and browser restrictions still apply.
 
 On the person's word, `beekeeper emergency auto-install pause --reason "<words>"`

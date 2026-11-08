@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -503,5 +504,69 @@ func TestEmergencyAdminRefusesAbsentRequiredScan(t *testing.T) {
 	err := emergencyCall(a, gitMerge, emergencyTestRepo, "7", "--admin", "--head", emergencyAdminHead)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "security-scan") || !requiredRead || merged {
 		t.Fatalf("err %v; requirements read %v; merged %v", err, requiredRead, merged)
+	}
+}
+
+func TestEmergencyRelayHandoverAndRevocation(t *testing.T) {
+	a := emergencyApp(t)
+	const words = "Unblock the system now."
+	if err := emergencyCall(a, "on", emergencyReasonFlag, words, untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	original, err := a.caller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor := state.Party{Name: "Successor guide", Session: "successor-guide"}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Holder.Party = successor
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.emergencyAction("relieved guide"); Code(err) != ExitRefused {
+		t.Fatalf("outgoing guide authorized: %v", err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", successor.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", successor.Name)
+	grant, err := a.emergencyAction("successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.By != original || grant.Reason != words || !grant.Until.Equal(a.now.Add(10*time.Minute)) {
+		t.Fatalf("grant changed: %+v", grant)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.Guide.Skill = guideName
+	if err := a.printGuidePrompt(st.GuideRole(), nil, "", nil, st); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyCall(a); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{emergencyText(st, a.now), words, original.Session, successor.Session, successor.Name, grant.Until.Format(time.RFC3339)} {
+		if !strings.Contains(a.out.(*bytes.Buffer).String(), want) {
+			t.Fatalf("handover missing %q: %s", want, a.out)
+		}
+	}
+	if err := emergencyCall(a, "off"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.emergencyAction("revoked"); Code(err) != ExitRefused {
+		t.Fatalf("revoked grant authorized: %v", err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Holder.Party = original
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", original.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", original.Name)
+	if _, err := a.emergencyAction("revoked predecessor"); Code(err) != ExitRefused {
+		t.Fatalf("revoked grant restored: %v", err)
 	}
 }
