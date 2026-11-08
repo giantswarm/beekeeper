@@ -50,3 +50,12 @@ func TestGitHubCallsFormats(t *testing.T) {
 		t.Fatal(calls)
 	}
 }
+
+func TestRESTCallsExcludePrivateArgumentsAndGraphQL(t *testing.T) {
+	command := `env gh -R private/repo api -H 'Authorization: private' repos/private/repo/issues --paginate; gh api --paginate graphql -f query=private; gh run view 123; gh release view secret; gh pr diff 1; echo gh api private`
+	got := restCalls(command)
+	want := []GitHubCall{{"gh api REST", true}, {"gh run view", false}, {"gh release view", false}, {"gh pr diff", false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("REST classes: %+v, want %+v", got, want)
+	}
+}

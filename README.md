@@ -113,14 +113,18 @@ On the person's explicit emergency authorization, the current guide can run
 and matches the observed head; it bypasses desk review and the merge lane while
 GitHub branch protection still applies. `emergency merge owner/repo 123 --admin
 --head <sha>` is the person's exception for a pull request GitHub keeps at
-REVIEW_REQUIRED: their quoted words name it, and it must be green, mergeable and
-up to date with its base at that exact head, with an approved desk review or the
+REVIEW_REQUIRED: the current guide interprets the verbatim authorization, including
+a general merge order, and selects one PR and head per invocation. It must be
+green, mergeable and up to date with its base at that exact head, with an approved desk review or the
 loop's go. It reads the base's effective rules and requires every required
 context on that head, including any required App identity. It refuses unreadable
 requirements, classic protection, and non-review rules it cannot verify.
 `emergency hold set/lift`, `emergency
 start` (forced capacity admission), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.
+Under an active grant, admin merge attempts and results also name the full PR URL and exact head,
+including refused or failed attempts; a moved head requires a new invocation
+and approval or loop go for that head.
 `beekeeper emergency off` ends it early; a successor guide needs a new grant.
 Direct merge commands and other guide work remain guarded.
 
@@ -2379,6 +2383,25 @@ still stand or resolved themselves. The intended use is the guide's: `sim foreca
 check, `sim check` at the next one, acting on the problems and on the items behind forecast,
 and the gap between the two says how far the model is from the desk.
 
+#### Checking the live projection
+
+Capture `beekeeper delivery --json` and `gh pr list --repo <owner/repo> --state open
+--limit 100 --json number,url,author` close together. Compare the distinct pull
+references in active deliveries with the repository's open pulls after applying
+the supervisor's existing ownership policy. Bot pulls need an explicit review
+request; author, team and excluded-path policies still apply. A delivery can
+contain several pulls, and several issues can share a pull, so compare references
+rather than row counts. Check `completeAt` before relying on a snapshot; an
+incomplete observation retains the previous timestamp and unread deliveries.
+
+The full active list also includes work without a pull request and merged pulls
+waiting for release. A closed pull can remain linked while its worker continues
+implementation. These rows are not additional open pull requests. Do not delete
+state or change the configured limit to make the two counts equal. Keep raw
+snapshots local; public proof should contain only repository-scoped pull links,
+version, observation time, comparison totals and unresolved differences. Take
+`beekeeper alerts snapshot` after the proof and report its findings separately.
+
 ### The supervisor loop down
 
 The supervisor is the supervisor loop; no session holds its role. While the loop does not run,
@@ -3768,7 +3791,10 @@ starts, `agents start` stops the unit, removes its inbox and log files, marks th
 
 The isolated `CODEX_HOME` (`<stateDir>/codex/home`) links `auth.json` to `codex.authFile`
 (`~/.codex/auth.json`) when present, `AGENTS.md` to `~/.codex/AGENTS.md` when present, and `skills`
-to `<stateDir>/skills`, and writes `config.toml`, `hooks.json` and `zsh/.zshenv` + `zsh/.zprofile`.
+to `<stateDir>/skills`, and writes `config.toml` and `zsh/.zshenv` + `zsh/.zprofile`.
+Only `beekeeper install` manages `hooks.json`; worker starts preserve it and never recreate
+it after `beekeeper uninstall`. Uninstall also removes the unmodified legacy worker hook
+file created by older worker starts, even without an install manifest.
 The `zsh/` shim sets `ZDOTDIR="$HOME"` before sourcing the user's `~/.zshenv` and `~/.zprofile` and
 restores `ZDOTDIR` only while a login shell proceeds from `.zshenv` to `.zprofile`, then applies
 `agents.shell` (`agents.shell.path`, `agents.shell.unalias`, `setopt nonomatch`), so every `codex`
@@ -3786,7 +3812,9 @@ delivers queued messages through `hook pretooluse --format codex` as model-visib
 decisions and consumes only pending wakes, never the runner’s inflight prompt. If there is no
 further tool call, delivery waits until the turn ends (whose remaining duration is unknown);
 `codex-run` then starts a `codex exec resume` turn with the queued message, or does so at once
-when idle. `agents wake` states this fallback explicitly. Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
+when idle. With hooks uninstalled, wakes stay queued until the current turn ends; an idle
+runner still starts its next turn immediately. `agents wake` reports when the mid-turn hook
+is unavailable and states this fallback explicitly. Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
 `beekeeper-codex-<id[:8]>` unit and removes its inbox, queue, lock, state, stream log and thread link
 files.
 

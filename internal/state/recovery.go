@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 
 	"github.com/Masterminds/semver/v3"
 )
@@ -77,10 +78,14 @@ type recoveryFence struct {
 	// Failed is the rolled-back release. A release past it is a later one, whose
 	// processes the fence must not stop: it would never pass its probation.
 	Failed string `json:"failed,omitempty"`
+	// Recovered lifts the general ceiling after a verified restoration. Keep
+	// Maximum and Failed for older processes, which must still reject writes.
+	Recovered bool     `json:"recovered,omitempty"`
+	Rejected  []string `json:"rejected,omitempty"`
 }
 
 // ErrRecoveryWriterFenced identifies a refused state write after rollback.
-var ErrRecoveryWriterFenced = errors.New("state writes fenced after binary recovery; complete probation of a compatible signed release before resuming newer writers")
+var ErrRecoveryWriterFenced = errors.New("state writes fenced after binary recovery; use the installed restored release or a later compatible signed release")
 
 func (s *FileStore) checkRecoveryFence() error {
 	var fence recoveryFence
@@ -96,6 +101,12 @@ func (s *FileStore) checkRecoveryFence() error {
 		return errors.New("invalid recovery writer fence")
 	}
 	own, ok := fenceVersion(s.version)
+	if ok && slices.Contains(fence.Rejected, own.String()) {
+		return ErrRecoveryWriterFenced
+	}
+	if fence.Recovered && ok {
+		return nil
+	}
 	if ok && !own.GreaterThan(maximum) {
 		return nil
 	}
@@ -106,7 +117,11 @@ func (s *FileStore) checkRecoveryFence() error {
 }
 
 func (s *FileStore) writeRecoveryFence(version, failed string) error {
-	raw, err := json.Marshal(recoveryFence{Maximum: version, Failed: failed})
+	var previous recoveryFence
+	if _, err := s.ReadFile(recoveryFenceFile, &previous); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(recoveryFence{Maximum: version, Failed: failed, Rejected: previous.Rejected})
 	if err != nil {
 		return err
 	}
@@ -135,6 +150,52 @@ func (s *FileStore) writeRecoveryFence(version, failed string) error {
 	}
 	defer func() { _ = dir.Close() }()
 	return dir.Sync()
+}
+
+// CompleteRollback automatically releases the broad recovery ceiling after the
+// journal confirms restoration. The failed version stays quarantined, including
+// in older processes that only understand Maximum and Failed. No state, writer
+// stamp, execution generation or lease is reset.
+func (s *FileStore) CompleteRollback(version, failed string) error {
+	unlock, err := s.lock(false, lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	commitUnlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer commitUnlock()
+	var fence recoveryFence
+	found, err := s.ReadFile(recoveryFenceFile, &fence)
+	if err != nil || !found {
+		return err
+	}
+	own, valid := fenceVersion(version)
+	bad, known := fenceVersion(failed)
+	if !valid || !known || fence.Maximum != version || fence.Failed != failed {
+		return errors.New("rollback does not match the recovery writer fence")
+	}
+	if fence.Recovered && slices.Contains(fence.Rejected, bad.String()) {
+		return nil
+	}
+	reader := &FileStore{dir: s.dir, version: version}
+	st, err := reader.load()
+	if err != nil {
+		return err
+	}
+	if st.Writer != nil {
+		writer, ok := release(st.Writer.Version)
+		if !ok || own.LessThan(writer) {
+			return errors.New("restored release cannot write live state")
+		}
+	}
+	fence.Recovered = true
+	if !slices.Contains(fence.Rejected, bad.String()) {
+		fence.Rejected = append(fence.Rejected, bad.String())
+	}
+	return s.WriteFile(recoveryFenceFile, fence)
 }
 
 // ResumeRecoveredWrites removes the recovery ceiling after an operator has

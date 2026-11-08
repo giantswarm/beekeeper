@@ -179,8 +179,9 @@ func HooksJSON(exe string) ([]byte, error) {
 
 // EnsureHome prepares an isolated CODEX_HOME directory for a beekeeper codex
 // worker: symlinks authFile to auth.json when present, generates config.toml
-// keeping only [projects.*] from userConfigFile, writes hooks.json, and writes
-// zsh/.zshenv and zsh/.zprofile for non-interactive tool shells.
+// keeping only [projects.*] from userConfigFile, and writes
+// zsh/.zshenv and zsh/.zprofile for non-interactive tool shells. Hooks belong
+// exclusively to install/uninstall; starting a worker must not restore them.
 func EnsureHome(codexHome, authFile, userConfigFile, exe, prelude string) error {
 	zshDir := ZshDir(codexHome)
 	for _, dir := range []string{codexHome, filepath.Join(codexHome, "sessions"), zshDir} {
@@ -230,13 +231,6 @@ func EnsureHome(codexHome, authFile, userConfigFile, exe, prelude string) error 
 		return err
 	}
 	if err := writeAtomic(filepath.Join(codexHome, "config.toml"), cfgBytes); err != nil {
-		return err
-	}
-	hooksBytes, err := HooksJSON(exe)
-	if err != nil {
-		return err
-	}
-	if err := writeAtomic(filepath.Join(codexHome, "hooks.json"), hooksBytes); err != nil {
 		return err
 	}
 	body := "setopt nonomatch 2>/dev/null || true\n" +

@@ -19,6 +19,8 @@ var budgetCredentials = github.BudgetCredentials
 const unlabelledIdentity = "unlabelled"
 
 func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	// Every producer (watch, loop and CLI) shares this lock. Hold it from
 	// the initial cache read through publication so a delayed high response
 	// cannot overwrite a concurrent low reading or return it to admission.
@@ -31,7 +33,7 @@ func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
 		return github.Budget{}, errors.New("budget probe lock unavailable")
 	}
 	defer func() { _ = lock.Unlock() }()
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return github.Budget{}, err
 	}
@@ -107,7 +109,7 @@ func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
 		minimum.GraphQL = storedGraphQL(b.GraphQL, saved[b.GraphQL.Identity].GraphQL.At)
 	}
 	minimum.Identities = saved
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := a.store.UpdateWithin(100*time.Millisecond, func(st *state.State) ([]state.Event, error) {
 		st.BudgetETag, st.Budget = minimum.ETag, &minimum
 		return nil, nil
 	}); err != nil {
@@ -135,7 +137,16 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 	if id == github.IdentityApp {
 		repo = github.BudgetAppRepo
 	}
-	b, etag, err := github.Probe(ctx, client, credential.Value, repo, previous.ETag)
+	// GraphQL spend is sampled before and after every loop step. Those
+	// forced samples must not force another REST probe for each identity.
+	// Share a short REST cache across all producers, including spent windows.
+	b := github.Budget{Identity: id, Resource: "core", Limit: previous.Limit,
+		Remaining: previous.Remaining, Used: previous.Limit - previous.Remaining, Reset: previous.Reset}
+	etag := previous.ETag
+	var err error
+	if previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset) {
+		b, etag, err = github.Probe(ctx, client, credential.Value, repo, previous.ETag)
+	}
 	if err != nil {
 		return unknown(err)
 	}
@@ -152,7 +163,11 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 	for key, window := range windows {
 		b.Windows[key] = *graphqlOf(&window)
 	}
-	cached := state.Budget{Identity: id, Login: b.Login, ETag: etag, At: now,
+	restAt := previous.At
+	if previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset) {
+		restAt = now
+	}
+	cached := state.Budget{Identity: id, Login: b.Login, ETag: etag, At: restAt,
 		Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, GraphQL: g, Windows: windows}
 	if g.Err != "" {
 		return b, cached, errors.New(g.Err)

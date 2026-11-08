@@ -257,7 +257,7 @@ func (h Hook) parseAgy(input []byte) (ev event, origCmd, errReason string) {
 			ev.ToolName = manageTaskTool
 			ev.ToolInput = args
 			return ev, "", ""
-		case "list":
+		case verbList:
 			ev.ToolName = manageTaskTool
 			ev.ToolInput = args
 			return ev, "", ""

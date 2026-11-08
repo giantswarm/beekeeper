@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +66,9 @@ var RunGH = Retrying(execGH, ReadBackoff)
 
 // execGH is one run of the gh binary.
 func execGH(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) > 1 && (args[0] == "api" && !slices.Contains(args, "graphql") || args[0] == "run" || args[0] == "workflow" || args[0] == "release" && args[1] != "list" || args[0] == "pr" && args[1] == "diff") {
+		observeREST()
+	}
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number
 	c.Env = ghEnv(os.Environ(), Repo(ctx))

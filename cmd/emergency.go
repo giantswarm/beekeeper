@@ -162,7 +162,11 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 		if admin != (adminHead != "") {
 			return usageErr("--admin and --head go together: the exception holds for one exact head")
 		}
-		return a.runEmergency(fmt.Sprintf("merge https://github.com/%s/pull/%d", args[0], n), func() error {
+		action := fmt.Sprintf("merge https://github.com/%s/pull/%d", args[0], n)
+		if admin {
+			action = fmt.Sprintf("admin %s at %s", action, adminHead)
+		}
+		return a.runEmergency(action, func() error {
 			if err := a.emergencyMergePolicy(args[0], n); err != nil {
 				return err
 			}

@@ -867,7 +867,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
-	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: time.Now().UTC(), Phase: "startup"}
+	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: time.Now().UTC(), Phase: loopPhaseStartup}
 	life.At = life.Started
 	_ = a.store.WriteFile(loopLifecycleFile, life)
 	defer func() {
@@ -953,7 +953,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			continue
 		}
 		l.clearSaid("state lock busy")
-		l.lifecyclePhase("between passes")
+		l.lifecyclePhase(loopPhaseBetween)
 		if _, rerr := l.reexec(ctx); rerr != nil {
 			return rerr
 		}
@@ -1344,7 +1344,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	l.lifecyclePhase("observe workers and pull requests")
+	l.lifecyclePhase(loopPhaseObserve)
 	own := a.cfg.Supervisor.Ownership
 	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
@@ -3067,7 +3067,7 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 	if l.unreadRepo(act.Ref) != "" {
 		return errLoopLater
 	}
-	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
 			p, err := readLoopPull(ctx, act.Ref)
 			if err != nil {
@@ -3076,6 +3076,17 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 			l.cachePull(act.Ref, p)
 			if p.State != superloop.Open {
 				return errLoopLater
+			}
+		}
+		// A timed-out remote start registers the worker before its first
+		// task is accepted. A wake only queues another message; it cannot
+		// activate that execution. Recover the original start before telling
+		// it the current findings, and keep the action pending on failure.
+		if ref := st.Agents[i].Execution; ref != nil {
+			if rec, _ := executionRecord(st, *ref); rec != nil && unactivated(rec) {
+				if _, err := l.remoteStartRefused(ctx, act.Agent); err != nil {
+					return err
+				}
 			}
 		}
 		return l.wake(ctx, act)

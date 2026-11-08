@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
@@ -30,6 +31,8 @@ const (
 )
 
 const replacementExe = "/new/bin/beekeeper"
+
+const dryRunMode = "dry-run"
 
 // fakeSetup is a service manager whose service is a unit file in the
 // home's unit directory and a guard file beside it.
@@ -1908,5 +1911,100 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCodexStartPreservesInstallLifecycle(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, _ := env(t, home, f, f.run)
+	e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+	workerHome := codex.HomeDir(e.StateDir)
+	start := func() {
+		t.Helper()
+		if err := codex.EnsureHome(workerHome, "", "", e.Exe, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start()
+	if exists(CodexWorkerHooks(e.StateDir)) {
+		t.Fatal("start installed hooks without install")
+	}
+	for range 2 {
+		write(t, e.CodexHooks, priorCodexHooks)
+		write(t, CodexWorkerHooks(e.StateDir), priorCodexHooks)
+		if err := Install(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(CodexWorkerHooks(e.StateDir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		start()
+		after, err := os.ReadFile(CodexWorkerHooks(e.StateDir))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("start modified installed/custom hooks: %v", err)
+		}
+		if err := Uninstall(context.Background(), e, false); err != nil {
+			t.Fatal(err)
+		}
+		start()
+		for _, path := range []string{e.CodexHooks, CodexWorkerHooks(e.StateDir)} {
+			raw, err := os.ReadFile(path) //nolint:gosec // synthetic hook fixtures inside t.TempDir()
+			if err != nil || string(raw) != priorCodexHooks {
+				t.Fatalf("uninstall/start did not preserve unrelated hooks: %v: %s", err, raw)
+			}
+		}
+	}
+}
+
+func TestUninstallLegacyCodexWorkerHook(t *testing.T) {
+	for _, mode := range []string{"generated", "customized", "symlink", dryRunMode} {
+		t.Run(mode, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			path := CodexWorkerHooks(e.StateDir)
+			raw, err := codex.HooksJSON(e.Exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "customized" {
+				raw = bytes.Replace(raw, []byte(`"timeout": 30`), []byte(`"timeout": 60`), 1)
+			}
+			if mode == "symlink" {
+				target := filepath.Join(home, "user-hooks.json")
+				write(t, target, string(raw))
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				write(t, path, string(raw))
+			}
+			e.DryRun = mode == dryRunMode
+			// No manifest and no user Codex path: legacy starts alone created it.
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "generated" {
+				if exists(path) {
+					t.Fatal("legacy worker hook survived uninstall")
+				}
+				if err := codex.EnsureHome(codex.HomeDir(e.StateDir), "", "", e.Exe, ""); err != nil {
+					t.Fatal(err)
+				}
+				if exists(path) {
+					t.Fatal("worker start restored legacy hook")
+				}
+			} else {
+				got, err := os.ReadFile(path) //nolint:gosec // synthetic hook fixtures inside t.TempDir()
+				if err != nil || !bytes.Equal(raw, got) {
+					t.Fatalf("uninstall changed protected file: %v", err)
+				}
+			}
+		})
 	}
 }

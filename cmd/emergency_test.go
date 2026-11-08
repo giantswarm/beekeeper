@@ -391,6 +391,18 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 		}
 	}
 	err := emergencyCall(a, gitMerge, emergencyTestRepo, "7", "--admin", "--head", emergencyAdminHead)
+	results, logErr := a.store.Events(0, func(e state.Event) bool { return e.Verb == "emergency.result" })
+	if logErr != nil {
+		t.Fatal(logErr)
+	}
+	if len(results) != 1 {
+		t.Fatalf("want one audited outcome, got %v", results)
+	}
+	for _, detail := range []string{"https://github.com/o/r/pull/7", emergencyAdminHead, words} {
+		if !strings.Contains(results[0].Detail, detail) {
+			t.Fatalf("outcome missing %q: %s", detail, results[0].Detail)
+		}
+	}
 	return calls, err
 }
 
