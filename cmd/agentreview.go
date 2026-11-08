@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -158,7 +159,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		round = max(round, r.Round+1)
 	}
 	for _, r := range st.ReviewRequests {
-		if !strings.EqualFold(r.Ref, p.Ref) {
+		if !reviewRequestActive(st, r) || !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
 		if sameCommit(r.Head, p.Head) {
@@ -341,7 +342,7 @@ func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
 func (a *app) reserveReview(act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for _, request := range st.ReviewRequests {
-			if strings.EqualFold(request.Ref, act.Ref) && (request.Head == act.Head || request.Round == act.Round) {
+			if reviewRequestActive(st, request) && strings.EqualFold(request.Ref, act.Ref) && (request.Head == act.Head || request.Round == act.Round) {
 				return nil, refused("%s already requested this head or review round", act.Ref)
 			}
 		}
@@ -350,21 +351,62 @@ func (a *app) reserveReview(act superloop.Action) error {
 				return nil, refused("%s already assigned review of this head", act.Ref)
 			}
 		}
-		st.ReviewRequests = append(st.ReviewRequests, state.ReviewRequest{Ref: act.Ref, Head: act.Head, Round: act.Round})
+		st.ReviewRequests = slices.DeleteFunc(st.ReviewRequests, func(r state.ReviewRequest) bool {
+			return strings.EqualFold(r.Ref, act.Ref) && (r.Head == act.Head || r.Round == act.Round)
+		})
+		st.ReviewRequests = append(st.ReviewRequests, state.ReviewRequest{Ref: act.Ref, Head: act.Head, Round: act.Round, PID: os.Getpid()})
 		return nil, nil
 	})
 }
 
-func (a *app) releaseUnstartedReview(act superloop.Action) {
-	// A launched process may still exist if assignment/report delivery failed.
-	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == verbStart && strings.HasPrefix(e.Detail, superloop.ReviewerName(act.Ref, act.Round)+":")
-	})
-	if err != nil || len(evs) > 0 {
-		return
+// reviewRequestActive distinguishes a start in progress from historical intent.
+// Legacy requests have no PID and can be retried when no reviewer owns them.
+func reviewRequestActive(st *state.State, r state.ReviewRequest) bool {
+	if r.PID > 0 && proc.Alive(r.PID) {
+		return true
 	}
+	return reviewRequestOwned(st, r)
+}
+
+func reviewRequestOwned(st *state.State, r state.ReviewRequest) bool {
+	name := superloop.ReviewerName(r.Ref, r.Round)
+	for _, ag := range st.Agents {
+		if strings.EqualFold(ag.Name, name) && !ag.Done {
+			if ag.Execution != nil {
+				rec, _ := executionRecord(st, *ag.Execution)
+				if rec != nil && rec.Terminal() {
+					continue
+				}
+			}
+			return true
+		}
+	}
+	// Execution reservations survive roster pruning; missing termination evidence
+	// must never cause a second remote launch.
+	for _, start := range st.Starts {
+		if strings.EqualFold(start.Name, name) && start.Execution != nil && !start.Execution.Terminal() {
+			return true
+		}
+	}
+	for _, round := range st.DeskReviews {
+		if strings.EqualFold(round.Ref, r.Ref) && (round.Head == r.Head || round.Round == r.Round) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *app) finishReviewRequest(act superloop.Action, started bool) {
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.ReviewRequests = slices.DeleteFunc(st.ReviewRequests, func(r state.ReviewRequest) bool { return r.Ref == act.Ref && r.Head == act.Head })
+		st.ReviewRequests = slices.DeleteFunc(st.ReviewRequests, func(r state.ReviewRequest) bool {
+			return strings.EqualFold(r.Ref, act.Ref) && r.Head == act.Head && r.PID == os.Getpid() && !started && !reviewRequestOwned(st, r)
+		})
+		for i := range st.ReviewRequests {
+			r := &st.ReviewRequests[i]
+			if strings.EqualFold(r.Ref, act.Ref) && r.Head == act.Head && r.PID == os.Getpid() {
+				r.PID = 0
+			}
+		}
 		return nil, nil
 	})
 }

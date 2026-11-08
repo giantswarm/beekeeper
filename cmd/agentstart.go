@@ -205,7 +205,8 @@ refused with the available checkout paths. The session starts in the checkout
 so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
 created from the freshly fetched origin default branch. A --review start
 instead requires a pull request URL in its brief and creates a detached
-<state>/worktrees/<repo>/review-<number>. Existing destinations are refused.
+<state>/worktrees/<repo>/review-<number>-<unique-id>. Old review worktrees
+are preserved; each review start gets its own detached checkout.
 A brief spanning repositories must be split into one task per repository.
 The supervisor loop's starts are outside these rules: it knows a repository,
 not a checkout, so they run in agents.dir and their briefs say where to work.
