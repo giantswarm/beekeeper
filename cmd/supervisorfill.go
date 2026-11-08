@@ -335,7 +335,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			l.stallClear() // no admitted slot: nothing waits on the refill
 			return nil
 		}
-		ordinary := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow()).Reason == ""
+		ordinary := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy()).Reason == ""
 		capacity, alive := fillCapacityKey(cap), fillLive(live)
 		l.mu.Lock()
 		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {

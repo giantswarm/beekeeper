@@ -44,9 +44,11 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			if !d.Active() {
 				continue
 			}
-			active = append(active, d)
+			if deliveryInFlight(st, d, now, a.deliveryPolicy()) {
+				active = append(active, d)
+			}
 			failed := d.Step == state.DeliveryReleasing && (d.Verdict == state.DeliveryReleaseFailed || d.Verdict == verdictUnconfirmed)
-			if !failed && (d.Since.IsZero() || now.Sub(d.Since) < after) {
+			if !failed && deliveryInFlight(st, d, now, a.deliveryPolicy()) && (d.Since.IsZero() || now.Sub(d.Since) < after) {
 				continue
 			}
 			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))

@@ -157,7 +157,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 	if err != nil {
 		return err
 	}
-	delivery := readDelivery(st, a.cfg.Delivery.WIPLimit, a.timeNow())
+	delivery := readDelivery(st, a.cfg.Delivery.WIPLimit, a.timeNow(), a.deliveryPolicy())
 	if a.json {
 		return a.printJSON(supervisorView{Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}

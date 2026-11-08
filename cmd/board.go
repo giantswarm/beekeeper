@@ -202,7 +202,7 @@ next_skip): a scan walks every free candidate by repeating that call
 alone, until exit 3 says none is left.
 
 With delivery.wipLimit set, new issues wait at the limit or when the last
-complete delivery observation is older than three supervisor.loopInterval
+complete delivery observation is older than the greater of ten minutes and three supervisor.loopInterval
 passes. Zero disables this gate. JSON adds wip (limit, count, items, reason)
 and would_pick (the first otherwise free candidate). The skipped and
 after_pick lists remain the ordinary walk preview; pick alone is admitted.
@@ -250,7 +250,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 					return err
 				}
 				if !a.deliveryExemptIntake(st) {
-					return a.printNext(nextResult{WIP: readDeliveryWIP(st, a.cfg.Delivery.WIPLimit, a.cfg.Supervisor.LoopInterval.Duration, a.timeNow())}, 0, view)
+					return a.printNext(nextResult{WIP: readDeliveryWIP(st, a.cfg.Delivery.WIPLimit, a.cfg.Supervisor.LoopInterval.Duration, a.timeNow(), a.deliveryPolicy())}, 0, view)
 				}
 			}
 			cl := a.boardClient()
@@ -278,7 +278,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 			if err != nil {
 				return err
 			}
-			sc := pickScope{exemptOnly: exemptOnly, wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+			sc := pickScope{exemptOnly: exemptOnly, wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, wipPolicy: a.deliveryPolicy(), me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
 				gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
 				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
 			if exemptOnly {
@@ -560,6 +560,7 @@ type pickScope struct {
 	works        []sessionWork
 	wipLimit     int
 	loopInterval time.Duration
+	wipPolicy    deliveryPolicy
 	wipNow       func() time.Time
 }
 
@@ -727,7 +728,7 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		cands = slices.DeleteFunc(slices.Clone(cands), func(c board.Candidate) bool { return !deliveryExempt(st, now, c.Ref, c.WIPExempt) })
 	}
 	res := nextFreePreview(st, cands, sc)
-	res.WIP = readDeliveryWIP(st, sc.wipLimit, sc.loopInterval, now)
+	res.WIP = readDeliveryWIP(st, sc.wipLimit, sc.loopInterval, now, sc.wipPolicy)
 	res.WouldPick = res.Pick
 	if res.WIP.Reason == "" {
 		return res

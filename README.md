@@ -2288,7 +2288,7 @@ The release verdict and tag survive removal of the merge from its lane.
 
 `delivery.wipLimit` defaults to `0` (off), accepts nonnegative values through
 `beekeeper config set delivery.wipLimit <n>`. When set, it holds new issues until
-a place is free. A delivery observation older than three loop intervals also holds
+a place is free. A delivery observation older than the greater of ten minutes and three loop intervals also holds
 new starts. `board next --json` includes `wip` (limit, count, items, freshness and
 reason) and `would_pick`, the first otherwise free item. Its `pick` is null and exit
 status is 3 when no item is admitted; `skipped` and `after_pick` still preview the
@@ -2321,7 +2321,11 @@ dry-run applies the same reservation. Capacity ceilings, review headroom,
 verdict and JSON stay unchanged.
 
 `delivery.stallAfter` defaults to `24h` (a positive duration). A stalled delivery
-keeps its place. Both watches share durable episode state: a step lasting that long,
+keeps its record but leaves the count when no live agent remains and its step
+has exceeded the bound. Review and fix steps use `supervisor.reserveFor`; other
+steps use `delivery.stallAfter`. Deliveries confirmed outside desk ownership do
+not count. Partial observations retain previous delivery records and reuse them
+within the freshness window, including concurrent local starts. Both watches share durable episode state: a step lasting that long,
 or a failed/unconfirmed release, files once to the guide with its reference and
 wait; recovery is filed once. `WIP FULL` names the oldest deliveries when the limit
 has stayed full without a step change for that duration. Restarts and concurrent

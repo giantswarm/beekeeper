@@ -28,11 +28,15 @@ type deliveryView struct {
 
 // readDelivery is the component's one state-only reading, shared by status and
 // report. Capacity deliberately has no dependency on this observation.
-func readDelivery(st *state.State, limit int, now time.Time) deliveryView {
+func readDelivery(st *state.State, limit int, now time.Time, policies ...deliveryPolicy) deliveryView {
+	p := deliveryPolicy{}
+	if len(policies) > 0 {
+		p = policies[0]
+	}
 	v := deliveryView{Deliveries: []deliveryRow{}, Limit: limit, CompleteAt: st.DeliveriesAt}
 	for _, d := range st.Deliveries {
 		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
-		if d.Active() {
+		if deliveryInFlight(st, d, now, p) {
 			v.InDelivery++
 		}
 	}
@@ -76,7 +80,7 @@ func (a *app) deliveryCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		v := readDelivery(st, a.cfg.Delivery.WIPLimit, a.timeNow())
+		v := readDelivery(st, a.cfg.Delivery.WIPLimit, a.timeNow(), a.deliveryPolicy())
 		if a.json {
 			return a.printJSON(v)
 		}

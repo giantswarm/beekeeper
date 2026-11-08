@@ -2536,7 +2536,7 @@ func (a *app) recordStart(st *state.State, s state.Start, task, serves string, l
 		return reg, err
 	}
 	if limit := a.cfg.Delivery.WIPLimit; limit > 0 {
-		v := readDeliveryWIP(st, limit, a.cfg.Supervisor.LoopInterval.Duration, s.At)
+		v := readDeliveryWIP(st, limit, a.cfg.Supervisor.LoopInterval.Duration, s.At, a.deliveryPolicy())
 		if v.Count > limit {
 			_, _ = fmt.Fprintf(a.out, "warning: %d of %d in delivery after manual start; delivery limit does not refuse agents start\n", v.Count, limit)
 		}

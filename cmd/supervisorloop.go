@@ -3876,7 +3876,7 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	if l.dryRun && l.fillPreview != nil {
 		st = l.fillPreview
 	}
-	v := readDeliveryWIP(st, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow())
+	v := readDeliveryWIP(st, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy())
 	exemptOnly := v.Reason != ""
 	if exemptOnly && !l.a.deliveryExemptIntake(st) {
 		return nil, errLoopLater

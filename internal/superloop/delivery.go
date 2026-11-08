@@ -98,6 +98,31 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		d := &out[i]
 		d.Pulls = slices.Clone(d.Pulls)
 		before := d.Step
+		// Preserve unknown ownership on partial reads; positive exclusion applies
+		// to linked issue deliveries as well as temporary PR seeds.
+		if reason, _ := in.Desk.unread(d.Ref); reason != "" {
+			d.OutsideDesk = true
+		}
+		owned, excluded := false, len(d.Pulls) > 0
+		for _, ref := range d.Pulls {
+			p, ok := in.Pulls[ref]
+			if !ok {
+				excluded = false
+				continue
+			}
+			o, _, _ := in.Desk.owner(p, l.overridden[ref])
+			if o == ours {
+				owned = true
+			}
+			if o != nobodys && o != theirs {
+				excluded = false
+			}
+		}
+		if owned {
+			d.OutsideDesk = false
+		} else if excluded {
+			d.OutsideDesk = true
+		}
 		if d.Since.After(in.Now) {
 			continue
 		}

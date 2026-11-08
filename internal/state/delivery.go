@@ -27,6 +27,7 @@ const (
 // Delivery is one issue (or an issue-less desk pull request) from start to release.
 // Ref and Pulls use the same canonical references as serve records.
 type Delivery struct {
+	OutsideDesk    bool              `json:"outsideDesk,omitempty"`
 	Heads          map[string]string `json:"heads,omitempty"`
 	DroppedHeads   map[string]string `json:"droppedHeads,omitempty"`
 	DropReason     string            `json:"dropReason,omitempty"`

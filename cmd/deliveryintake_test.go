@@ -459,7 +459,7 @@ func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
 			seed(t, r.a, func(st *state.State) {
 				st.DeliveriesAt = now
 				if mode == kindStale {
-					st.DeliveriesAt = now.Add(-4 * r.a.cfg.Supervisor.LoopInterval.Duration)
+					st.DeliveriesAt = now.Add(-max(11*time.Minute, 4*r.a.cfg.Supervisor.LoopInterval.Duration))
 				} else {
 					st.StartDelivery(deliveryControlPendingRef, deliveryIntakeExistingAgent, "", now)
 				}
