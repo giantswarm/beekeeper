@@ -81,3 +81,28 @@ func TestAbandonedDeliveryEscalatesWithoutHoldingWIP(t *testing.T) {
 		t.Fatal("stalled delivery lost its record")
 	}
 }
+
+func TestDeliveryWIPLiveAgentServingLinkedPull(t *testing.T) {
+	now := time.Now().UTC()
+	for _, step := range []string{state.DeliveryReviewing, state.DeliveryFixing} {
+		t.Run(step, func(t *testing.T) {
+			ag := state.Agent{Party: state.Party{Name: "linked-pull-agent", Session: "linked-pull-session"}, Task: "delivery"}
+			st := &state.State{
+				DeliveriesAt: now,
+				Agents:       []state.Agent{ag},
+				Records:      []state.Record{{Session: ag.Party, Issue: "example/project#2"}},
+				Deliveries: []state.Delivery{{
+					Ref: "example/project#1", Pulls: []string{"example/project#2"},
+					Agent: "original-worker", Step: step, Since: now.Add(-48 * time.Hour),
+				}},
+			}
+			if v := readDeliveryWIP(st, 2, time.Second, now); v.Count != 1 {
+				t.Fatalf("live agent serving linked pull lost its delivery: %+v", v)
+			}
+			st.Agents[0].Done = true
+			if v := readDeliveryWIP(st, 2, time.Second, now); v.Count != 0 {
+				t.Fatalf("ended agent retained abandoned delivery: %+v", v)
+			}
+		})
+	}
+}

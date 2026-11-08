@@ -46,8 +46,10 @@ func deliveryInFlight(st *state.State, d state.Delivery, now time.Time, p delive
 		return false
 	}
 	for _, ag := range st.Agents {
+		serves := loopServes(st, ag)
 		if !ag.Done && ag.Task != "" && (strings.EqualFold(ag.Name, d.Agent) && d.Agent != "" ||
-			strings.EqualFold(loopServes(st, ag), d.Ref) ||
+			strings.EqualFold(serves, d.Ref) ||
+			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) }) ||
 			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) })) {
 			return true
 		}
