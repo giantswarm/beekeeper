@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-const gatedCommand = "devctl pr merge giantswarm/project 7 --update-branch"
+const gatedCommand = "devctl pr merge giantswarm/project 7"
 
 // gatedHook is a desk whose giantswarm merges are the gate's and whose
 // supervisor go is recorded for every merge it is asked about.
@@ -61,7 +61,7 @@ func TestGatedRepositoryMergeIsTheGates(t *testing.T) {
 				return d.Reason
 			}(),
 		} {
-			if !strings.Contains(reason, gatedCommand) && !strings.Contains(reason, "devctl pr merge GiantSwarm/project 7 --update-branch") {
+			if !strings.Contains(reason, gatedCommand) && !strings.Contains(reason, "devctl pr merge GiantSwarm/project 7") {
 				t.Errorf("%s: %s: want a refusal naming %q, got %q", harness, command, gatedCommand, reason)
 			}
 		}

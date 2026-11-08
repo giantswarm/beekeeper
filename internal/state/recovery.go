@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -25,6 +26,11 @@ func (s *FileStore) RecoverVersion(version, failed string, restore func() error)
 		return err
 	}
 	defer unlock()
+	commitUnlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer commitUnlock()
 	reader := &FileStore{dir: s.dir, version: version}
 	st, err := reader.load()
 	if err != nil {

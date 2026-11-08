@@ -598,6 +598,13 @@ Every disk step prints one `DISK PRUNE` line with bytes freed, retained data
 and the reasons for keeping it. `beekeeper disk prune` previews the step;
 `beekeeper disk prune --apply` runs it explicitly.
 
+Under disk pressure, the step also reclaims unused Docker images and Docker
+build cache even when they are below the doctor size caps. Docker retains
+containers, images tagged recently, active builds and imports, and lab lease
+safeguards. Negative Docker caps disable the corresponding cleanup. The
+pressure report includes Docker reclamation and blockers; persistent low disk
+raises `GUIDE PROBLEM` with free space and the start floor.
+
 On healthy scheduled runs, the step trims only caches over their caps:
 `doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
 to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) trims sccache's
@@ -1150,6 +1157,36 @@ must inspect/recover after an error rather than assume the callback was undone.
 `Read`, `Update`, `Log` and `Record` recover under the exclusive state lock;
 `Peek` stays nonblocking and exposes any retained outbox. An unrelated log edit
 refuses recovery without deleting evidence.
+
+Lease renewal uses `state.commit.lock`, a short transaction lock shared by all
+state commits and outbox recovery. It reads and changes the authoritative
+`state.json` under that lock, without waiting for desk readers or slow
+`Update` callbacks under `state.lock`. An ordinary update carries forward any
+newer lease for the same generation and registration at commit, so it cannot
+undo a concurrent renewal. Stop, revocation and registration changes linearize
+at that same commit boundary. `Exclusive` and binary recovery hold both locks.
+The lock order is always desk lock then commit lock; renewal never acquires the
+desk lock or appends events. Commit-lock acquisition is bounded to five seconds
+and callback deadlines remain in force. Lease lifetime and replay rules are
+unchanged.
+
+This lock protocol requires restarting **all coordinator state writers** when
+installing this change; a running older writer does not take the commit lock.
+Do not run a mixed-version coordinator or roll back its binary with writers
+still running. The host journal retains the last renewal failure's time,
+elapsed duration, stage, fixed failure category, last sequence and failure
+count. It retains no callback error text, SSH output, control keys or routes;
+a successful retry does not erase the earlier failure. Failure diagnostics
+make one nonblocking journal-lock attempt even when the callback context has
+expired; a busy journal may drop the diagnostic rather than delay expiry.
+
+For the live proof, park a remote worker, retain its execution/generation and
+thread identities, exercise concurrent desk reads and updates for longer than
+90 seconds, and verify advancing lease sequences without a stop request.
+Resume it and verify the same thread. Record only those identities and lease
+metadata, then take the required alert snapshot; never attach raw transcripts
+or host routes. Deterministic tests cover the lock overlap separately from this
+post-release proof.
 
 The outbox fault-injection suite covers failed and partial writes, sync and close
 errors, both sides of the append, reopen and duplicate prevention. The actual

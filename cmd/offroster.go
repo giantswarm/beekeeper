@@ -78,11 +78,19 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 	return state.Party{}, false
 }
 
-// endedWorker is the latest worker named q exactly that a wake cannot
+// endedWorker is the SSH execution identified by q, or the latest worker
+// named q exactly, that a wake cannot
 // reach otherwise: off the roster, parked nowhere, its session no role's. Only
 // a command naming it on purpose (agents wake, agents resume) looks here: a
 // timer or a settled wait for a finished worker must not bring it back.
 func (a *app) endedWorker(st *state.State, q string) (state.Start, bool) {
+	// An execution identity is unambiguous even after another worker reused
+	// its name. Resolve it before the generic UUID/local-session fallback.
+	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
+		if s.Execution != nil && string(s.Execution.Request.Ref.Execution) == strings.TrimSpace(q) {
+			return s, !onRoster(st, s.Party)
+		}
+	}
 	if _, _, err := a.wakeParty(st, q); err == nil {
 		return state.Start{}, false
 	}

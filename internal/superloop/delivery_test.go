@@ -283,3 +283,17 @@ func TestDeliveryDroppedPRSeedPreservesTombstoneWhenLinked(t *testing.T) {
 		t.Fatalf("link resurrected dropped seed: %+v", got)
 	}
 }
+
+func TestReviewerPublishedFixesCountAsCIWithoutAnotherWorkerPark(t *testing.T) {
+	in := deliveryInput()
+	in.Workers[0].ReviewRequested = true
+	in.Taken = []Taken{{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliveryFirstHead), At: in.Now}}
+	p := in.Pulls[deliveryPR]
+	p.Head = "reviewer-fix"
+	p.Reviews = []Review{{Head: p.Head, Verdict: Approved, At: in.Now.Add(time.Minute)}}
+	in.Pulls[deliveryPR] = p
+	got := Deliveries(in, nil)
+	if len(got) != 1 || got[0].Step != state.DeliveryCI {
+		t.Fatalf("reviewer fixes with pending CI: %+v", got)
+	}
+}

@@ -309,3 +309,83 @@ func TestFatalTimersDetectMissedTicksNotUnsatisfiedConditions(t *testing.T) {
 		})
 	}
 }
+
+// A temporary lock refusal must not terminate the long-running scheduler.
+// --once still reports it to its caller instead of claiming a successful pass.
+type timerBusyStore struct{ state.Store }
+
+func (s timerBusyStore) Read() (*state.State, error) {
+	return nil, fmt.Errorf("timer read: %w", &state.LockBusyError{})
+}
+
+type timerCancelWriter struct {
+	cancel context.CancelFunc
+	wrote  bool
+}
+
+func (w *timerCancelWriter) Write(p []byte) (int, error) {
+	w.wrote = true
+	w.cancel()
+	return len(p), nil
+}
+func TestTimerDispatcherBusyLockKeepsServiceAlive(t *testing.T) {
+	for _, once := range []bool{false, true} {
+		t.Run(fmt.Sprint(once), func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.loadedCfg = filepath.Join(a.store.Dir(), "config.yaml")
+			a.store = timerBusyStore{a.store}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			out := &timerCancelWriter{cancel: cancel}
+			a.out = out
+			err := a.runTimerDispatcher(ctx, once)
+			var busy *state.LockBusyError
+			if once {
+				if !errors.As(err, &busy) || out.wrote {
+					t.Fatalf("once: err=%v logged=%v", err, out.wrote)
+				}
+			} else if err != nil || !out.wrote {
+				t.Fatalf("service exited instead of retrying: err=%v logged=%v", err, out.wrote)
+			}
+		})
+	}
+}
+
+// Simulate a writer that prevents locked reads. Stop is already committed
+// in the atomic snapshot and must cancel dispatch without waiting for it.
+type timerStopSnapshotStore struct {
+	state.Store
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *timerStopSnapshotStore) Read() (*state.State, error) {
+	<-s.release
+	return nil, &state.LockBusyError{}
+}
+func (s *timerStopSnapshotStore) Peek() (*state.State, error) {
+	s.once.Do(func() { close(s.release) })
+	return &state.State{Stop: &state.Stop{At: time.Now()}}, nil
+}
+func TestTimerDispatcherObservesStopWithoutStateLock(t *testing.T) {
+	a, _ := stubApp(t)
+	a.loadedCfg = filepath.Join(a.store.Dir(), "config.yaml")
+	store := &timerStopSnapshotStore{Store: a.store, release: make(chan struct{})}
+	a.store = store
+	a.out = io.Discard
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.runTimerDispatcher(ctx, false) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		cancel()
+		store.once.Do(func() { close(store.release) })
+		<-done
+		t.Fatal("stop monitor waited for the state lock")
+	}
+}

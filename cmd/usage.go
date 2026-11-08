@@ -268,6 +268,7 @@ type usageBucket struct {
 type usageReading struct {
 	At            time.Time              `json:"at"`
 	Fallback      string                 `json:"fallback,omitempty"`
+	Stop          string                 `json:"stop,omitempty"`
 	SourceAt      time.Time              `json:"sourceAt,omitzero"`
 	AgeMinutes    *float64               `json:"ageMinutes,omitempty"`
 	Stale         bool                   `json:"stale,omitempty"`
@@ -611,6 +612,9 @@ func parseAgyBuiltinUsage(raw []byte) (usageReading, error) {
 }
 
 func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
+	if r.Stop != "" {
+		return codex.UsageStoppedError(r.Stop)
+	}
 	maxAge := u.EffectiveStaleAfter()
 	if r.Stale {
 		return errors.New("usage reading is stale")
@@ -977,6 +981,9 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	if stopped {
 		return usageReading{}, codex.ErrUsageStopped
 	}
+	if codex.QuotaStop(err) {
+		return usageReading{}, err
+	}
 	if haveCached && !snapshot.Stopped && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
 		cached.At = now.UTC()
 		if validateReadingAt(cached, u, now) == nil {
@@ -1070,25 +1077,15 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			subDerivedCeiling += p.Ceiling
 			continue
 		}
-		if providerErrs[name] != "" && slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
-			errs = append(errs, name+": "+providerErrs[name])
+		var cause error
+		if providerErrs[name] != "" {
+			cause = errors.New(providerErrs[name])
+		}
+		r, err := a.cachedUsageReading(usageProviderFile(name), p.Usage, now, cause)
+		if err != nil {
+			errs = append(errs, name+": "+err.Error())
 			continue
 		}
-		if a.store == nil {
-			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
-			continue
-		}
-		var r usageReading
-		found, err := a.store.ReadFile(usageProviderFile(name), &r)
-		if err != nil || !found {
-			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
-			continue
-		}
-		if verr := validateReadingAt(r, p.Usage, now); verr != nil {
-			errs = append(errs, name+": "+verr.Error())
-			continue
-		}
-		applyQuotaForUsageFile(a.store, usageProviderFile(name), &r, now)
 		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
 		anySubscription = true
 		subDerivedCeiling += pv.Ceiling
@@ -1128,7 +1125,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	started := time.Now()
 	now := a.now
 	if now.IsZero() {
-		now = time.Now()
+		now = started
 	}
 	var cached usageReading
 	var haveCached bool
@@ -1142,15 +1139,20 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		}
 	}
 	r, err := a.execUsage(ctx, u)
+	now = now.Add(max(0, time.Since(started)))
+	if !a.now.IsZero() {
+		a.now = now
+	}
 	if err == nil {
 		r.At = now.UTC()
 		err = validateReadingAt(r, u, now)
 	}
 	if err != nil {
-		// The built-in Codex reader consumes authoritative local events, including
-		// explicit spend/rate-limit stops. Never mask those with an older event.
-		if haveCached && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) &&
-			validateReadingAt(cached, u, now.Add(time.Since(started))) == nil {
+		if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
+			a.retainUsageStop(file, err)
+			return a.cachedUsageReading(file, u, now, err)
+		}
+		if haveCached && validateReadingAt(cached, u, now) == nil {
 			cached.Fallback = err.Error()
 			applyQuotaForUsageFile(a.store, file, &cached, now)
 			return cached, nil
@@ -1162,6 +1164,82 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	}
 	applyQuotaForUsageFile(a.store, file, &r, now)
 	return r, nil
+}
+
+// retainUsageStop replaces an older good reading with an explicit stop. An
+// ordinary failure cannot reopen capacity until a successful read clears it.
+func (a *app) retainUsageStop(file string, err error) {
+	if a.store != nil && codex.QuotaStop(err) {
+		_ = a.store.WriteFile(file, usageReading{Stop: err.Error()})
+	}
+}
+
+// cachedUsageReading preserves a valid last good reading, including its limits.
+// Built-in Codex read/validation failures without one use the configured ceiling;
+// this in-memory fallback is never saved as a successful observation.
+func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cause error) (usageReading, error) {
+	var r usageReading
+	found := false
+	if a.store != nil {
+		var err error
+		found, err = a.store.ReadFile(file, &r)
+		if err != nil && cause == nil {
+			cause = err
+		}
+	}
+	if found && r.Stop != "" {
+		return usageReading{}, codex.UsageStoppedError(r.Stop)
+	}
+	if codex.QuotaStop(cause) {
+		return usageReading{}, cause
+	}
+	if found {
+		err := validateReadingAt(r, u, now)
+		// A known window still constrains starts until its reset even if the
+		// observation is old. Keep its original timestamp for the warning.
+		if err != nil && slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !r.At.After(now) {
+			check := r
+			check.At = now
+			if validateReadingAt(check, u, now) == nil {
+				if cause == nil {
+					cause = err
+				}
+				err = nil
+			}
+		}
+		if err == nil {
+			if cause != nil {
+				r.Fallback = keptReadingFallback(u, cause.Error())
+			}
+			applyQuotaForUsageFile(a.store, file, &r, now)
+			return r, nil
+		} else if cause == nil || !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
+			cause = err
+		}
+	}
+	if cause == nil {
+		cause = errors.New("usage not read")
+	}
+	if !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
+		return usageReading{}, cause
+	}
+	r = usageReading{Fallback: configuredCeilingFallback(cause.Error())}
+	applyQuotaForUsageFile(a.store, file, &r, now)
+	return r, nil
+}
+
+// usageUnreadable labels Codex failures that retain windows or the ceiling.
+const usageUnreadable = "usage unreadable; "
+
+func keptReadingFallback(u config.Usage, msg string) string {
+	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(errors.New(msg)) {
+		return usageUnreadable + "kept last good reading: " + msg
+	}
+	return msg
+}
+
+func configuredCeilingFallback(msg string) string {
+	return usageUnreadable + "using configured ceiling: " + msg
 }
 
 // usageHighBlockForAgent returns the USAGE HIGH block reason for ag if USAGE
@@ -1182,12 +1260,13 @@ func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessi
 	if u.High {
 		return u.highBlock(a.now)
 	}
-	if u.Error != "" && a.store != nil {
+	noReading := u.Error != "" || (u.At.IsZero() && strings.HasPrefix(u.Fallback, usageUnreadable))
+	if noReading && a.store != nil {
 		var l usageHighLedger
 		if found, err := a.store.ReadFile(usageHighFile, &l); err == nil && found &&
 			l.Episode != "" && !l.ResetsAt.IsZero() && a.now.Before(l.ResetsAt) {
 			return fmt.Sprintf("usage high until %s (in %s); usage unreadable (%s)",
-				clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(u.Error, 80))
+				clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(cmp.Or(u.Error, u.Fallback), 80))
 		}
 	}
 	return ""
@@ -1302,18 +1381,30 @@ func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
 }
 
 func (u *usageView) windowsLine(now time.Time) string {
-	s := windowsPairLine(u.FiveHour, u.SevenDay, now)
-	if u.Fallback != "" {
-		s += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(u.At)), truncate(u.Fallback, 120))
+	return withFallback(windowsPairLine(u.FiveHour, u.SevenDay, now), u.Fallback, u.At, now)
+}
+
+func withFallback(s, fallback string, at, now time.Time) string {
+	switch {
+	case fallback == "":
+		return s
+	case at.IsZero() && s == "":
+		return truncate(fallback, 120)
+	case at.IsZero():
+		return s + "; " + truncate(fallback, 120)
 	}
-	return s
+	return s + fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(at)), truncate(fallback, 120))
 }
 
 func (u *usageView) capacitySuffix(now time.Time) string {
 	if u.Error != "" {
 		return "usage unknown (" + truncate(u.Error, 120) + ")"
 	}
-	return "usage " + u.windowsLine(now)
+	line := u.windowsLine(now)
+	if strings.HasPrefix(line, usageUnreadable) {
+		return line
+	}
+	return "usage " + line
 }
 
 func (u *usageView) watchLine(now time.Time) string {
@@ -1407,12 +1498,39 @@ func usageRefreshTimeout(k config.Capacity) time.Duration {
 	return max(timeout, k.Usage.EffectiveTimeout())
 }
 
-func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.Time) {
-	if now.IsZero() {
+func (w *watcher) usageNow() time.Time {
+	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+		return w.clk().Now()
+	}
+	return w.now
+}
+
+// execUsageNow gives each provider its own observation time, then validates at
+// completion. A refresh can spend minutes on earlier providers; its scheduling
+// time must not make a newly written Codex event appear to be in the future.
+func (w *watcher) execUsageNow(ctx context.Context, u config.Usage) (usageReading, error) {
+	started := w.clk().Now()
+	obs := w.usageNow()
+	reader := w.snapshotAtNow()
+	reader.now = obs
+	r, err := reader.execUsage(ctx, u)
+	if err != nil {
+		return usageReading{}, err
+	}
+	now := obs.Add(max(0, w.clk().Now().Sub(started)))
+	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
 		now = w.clk().Now()
 	}
+	r.At = now.UTC()
+	return r, validateReadingAt(r, u, now)
+}
+
+// refreshUsage stamps every provider read with its own observation time: a
+// slow earlier provider must not age the schedule of the next one.
+func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
+			now := w.usageNow()
 			p := k.Providers[name]
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
@@ -1423,11 +1541,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 			}
 			w.providerLastUsage[name] = now
 			w.mu.Unlock()
-			r, err := w.execUsage(ctx, p.Usage)
-			if err == nil {
-				r.At = now.UTC()
-				err = validateReadingAt(r, p.Usage, now)
-			}
+			r, err := w.execUsageNow(ctx, p.Usage)
 			w.mu.Lock()
 			if w.providerUsageErr == nil {
 				w.providerUsageErr = map[string]string{}
@@ -1435,6 +1549,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 			if err != nil {
 				w.providerUsageErr[name] = err.Error()
 				w.mu.Unlock()
+				w.retainUsageStop(usageProviderFile(name), err)
 				continue
 			}
 			w.providerUsageErr[name] = ""
@@ -1443,18 +1558,16 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 		}
 		return
 	}
+	now := w.usageNow()
 	w.mu.Lock()
 	w.lastUsage = now
 	w.mu.Unlock()
-	r, err := w.execUsage(ctx, k.Usage)
-	if err == nil {
-		r.At = now.UTC()
-		err = validateReadingAt(r, k.Usage, now)
-	}
+	r, err := w.execUsageNow(ctx, k.Usage)
 	if err != nil {
 		w.mu.Lock()
 		w.usageErr = err.Error()
 		w.mu.Unlock()
+		w.retainUsageStop(usageFile, err)
 		return
 	}
 	_ = w.store.WriteFile(usageFile, r)
@@ -1476,18 +1589,38 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 	w.mu.Lock()
 	uerr := w.usageErr
 	w.mu.Unlock()
-	if uerr != "" && slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
-		return errorUsageView(k, errors.New(uerr))
-	}
-	var r usageReading
-	if found, err := w.store.ReadFile(usageFile, &r); err == nil && found && validateReadingAt(r, k.Usage, now) == nil {
-		r.Fallback = cmp.Or(uerr, r.Fallback)
-		return deriveUsageView(r, k, now)
-	}
+	var cause error
 	if uerr != "" {
-		return errorUsageView(k, errors.New(uerr))
+		cause = errors.New(uerr)
 	}
-	return k, nil
+	r, err := w.cachedUsageReading(usageFile, k.Usage, now, cause)
+	if err != nil {
+		if uerr == "" && !slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
+			return k, nil
+		}
+		return errorUsageView(k, err)
+	}
+	return deriveUsageView(r, k, now)
+}
+
+// reportUsageFallback keeps unreadability visible even when starts can continue.
+// The keyed report feeds the guide's existing durable problem queue.
+func (w *watcher) reportUsageFallback(key, provider, failure string) {
+	if failure == "" {
+		w.clear(key)
+		return
+	}
+	label := "USAGE"
+	if provider != "" {
+		label += " " + provider
+	}
+	line := w.fail(key, "%s unreadable: %s", label, failure)
+	if line != "" && w.chores && w.store != nil {
+		detail := fmt.Sprintf("[%s %s] usage reader failure%s%s", key, w.now.UTC().Format(time.RFC3339Nano), fileReportSeparator, line)
+		if err := w.store.Record(state.Event{At: w.now, By: watchParty, Verb: loopFileVerb, Detail: detail}); err != nil {
+			w.fail(key+"-guide", "cannot retain usage failure for guide: %v", err)
+		}
+	}
 }
 
 // watchUsage refreshes subscription usage when due, prints USAGE lines, tracks
@@ -1510,29 +1643,32 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 			return nil
 		}
 		if u.Error != "" {
-			w.fail("usage-error", "USAGE unreadable: %s", u.Error)
+			w.reportUsageFallback("usage-error", "", u.Error)
 			return u
 		}
-		w.clear("usage-error")
+		w.reportUsageFallback("usage-error", "", u.Fallback)
 		w.emitNow("usage", "USAGE: %s", u.watchLine(w.now))
 		w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
 		return u
 	}
-	now := w.now
+	now := w.usageNow()
+	w.now = now
 	if w.usageNeedsRefresh(k, now) {
 		w.inFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
-			w.refreshUsage(ctx, k, now)
+			w.refreshUsage(ctx, k)
 		})
+		now = w.usageNow()
+		w.now = now
 	}
 	_, u := w.currentUsage(k, w.now)
 	if u == nil {
 		return nil
 	}
 	if u.Error != "" {
-		w.fail("usage-error", "USAGE unreadable: %s", u.Error)
+		w.reportUsageFallback("usage-error", "", u.Error)
 		return u
 	}
-	w.clear("usage-error")
+	w.reportUsageFallback("usage-error", "", u.Fallback)
 	if rep := k.Usage.ReportEvery.Duration; rep > 0 {
 		w.mu.Lock()
 		due := w.usageReported.IsZero() || w.now.Sub(w.usageReported) >= rep
@@ -1579,11 +1715,14 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			readings[name] = providerReadingResult{reading: r, ok: true}
 		}
 	} else {
-		now := w.now
+		now := w.usageNow()
+		w.now = now
 		if w.usageNeedsRefresh(k, now) {
 			w.inFlight(ctx, usageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
-				w.refreshUsage(ctx, k, now)
+				w.refreshUsage(ctx, k)
 			})
+			now = w.usageNow()
+			w.now = now
 		}
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
@@ -1593,24 +1732,12 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.mu.Lock()
 			uerr := w.providerUsageErr[name]
 			w.mu.Unlock()
+			var cause error
 			if uerr != "" {
-				readings[name] = providerReadingResult{err: errors.New(uerr)}
-				if slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
-					continue
-				}
+				cause = errors.New(uerr)
 			}
-			if w.store != nil {
-				var r usageReading
-				if found, err := w.store.ReadFile(usageProviderFile(name), &r); err == nil && found {
-					if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
-						readings[name] = providerReadingResult{err: verr}
-					} else {
-						r.Fallback = cmp.Or(uerr, r.Fallback)
-						applyQuotaForUsageFile(w.store, usageProviderFile(name), &r, w.now)
-						readings[name] = providerReadingResult{reading: r, ok: true}
-					}
-				}
-			}
+			r, err := w.cachedUsageReading(usageProviderFile(name), p.Usage, w.now, cause)
+			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
 		}
 	}
 
@@ -1661,9 +1788,9 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			continue
 		}
 		if pv.Error != "" {
-			w.fail("usage-error-"+name, "USAGE %s unreadable: %s", name, pv.Error)
+			w.reportUsageFallback("usage-error-"+name, name, pv.Error)
 		} else {
-			w.clear("usage-error-" + name)
+			w.reportUsageFallback("usage-error-"+name, name, pv.Fallback)
 		}
 		parts = append(parts, name+": "+pv.watchSummary(w.now))
 		if len(pv.Buckets) > 0 && !pv.supplementalBuckets {

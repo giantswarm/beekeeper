@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,13 +31,18 @@ import (
 )
 
 const (
-	loopPR           = "o/r#7"
-	loopURL          = "https://github.com/o/r/pull/7"
-	loopHead         = "1111111111111111111111111111111111111111"
-	loopFixed        = "2222222222222222222222222222222222222222"
-	loopWorker       = "worker one"
-	loopSecondWorker = "worker two"
-	loopPerson       = "pat"
+	loopOverlapWait        = "overlapping PR"
+	loopWaitingIssueWorker = "waiting issue worker"
+	loopOverlapSession     = "overlap-session"
+	loopClosingIssue       = "o/r#70"
+	loopUnblock            = "unblock"
+	loopPR                 = "o/r#7"
+	loopURL                = "https://github.com/o/r/pull/7"
+	loopHead               = "1111111111111111111111111111111111111111"
+	loopFixed              = "2222222222222222222222222222222222222222"
+	loopWorker             = "worker one"
+	loopSecondWorker       = "worker two"
+	loopPerson             = "pat"
 	// loopLocal is a self-hosted provider.
 	loopLocal = "local"
 	// loopQwen is a self-hosted model, loopPostInstall a post-install
@@ -1314,6 +1320,13 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 				// A long finding with bare issue shorthand must arrive intact, too.
 				finding := "queue refused #42, owning repository o/r:\n" + strings.Repeat("evidence ", 400)
 				now := time.Now()
+				// The guide has already started its feed before this new finding.
+				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.GuideReportsSince = now.Add(-time.Minute)
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 				var evs []state.Event
 				if done {
 					d := event(state.Party{Name: loopWorker}, "agents.done", "%s done: maintain the desk", loopWorker)
@@ -3446,6 +3459,7 @@ func TestLoopSaysAFailedReleaseLookup(t *testing.T) {
 
 func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 	r := newLoopRig(t)
+	r.pull.Closes = []string{loopClosingIssue}
 	r.a.cfg.Board.Owner = "o"
 	r.a.cfg.Board.Project = 1
 	oldRefStates, oldHead := refStates, parkReviewHead
@@ -3462,7 +3476,7 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 	me := state.Party{Name: "worker A", Session: "session-a"}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReviewParks = []state.ReviewPark{
-			{On: loopPR, Agent: "worker B", ReviewHead: loopHead, Serves: "o/r#70", At: r.a.now.Add(-5 * time.Minute)},
+			{On: loopPR, Agent: "worker B", ReviewHead: loopHead, Serves: loopClosingIssue, At: r.a.now.Add(-5 * time.Minute)},
 		}
 		st.Agents = []state.Agent{{
 			Party: me,
@@ -3485,7 +3499,7 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 		t.Fatalf("plain waiter overwrote ReviewParks[%s]: %+v", loopPR, st.ReviewParks)
 	}
 	// PR B's owner is now gone: next loop pass sees worker A waiting on PR B,
-	// records o/r#10 blocked by o/r#7 and starts an owner for PR B.
+	// records o/r#10 blocked by closing issue o/r#70 and starts an owner for PR B.
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReviewParks = nil
 		return nil, nil
@@ -3493,8 +3507,11 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if c := r.called("board", "block", "o/r#10", "--by", loopPR); c == nil {
-		t.Fatalf("expected board block o/r#10 --by %s, got calls %v\n%s", loopPR, r.calls, r.out)
+	if c := r.called("board", "block", "o/r#10", "--by", loopClosingIssue); c == nil {
+		t.Fatalf("expected board block o/r#10 --by o/r#70, got calls %v\n%s", r.calls, r.out)
+	}
+	if r.called(loopBoard, loopUnblock, loopClosingIssue, "--by", "o/r#10") == nil {
+		t.Fatalf("inverse dependency must use closing issue: %v", r.calls)
 	}
 	owner := superloop.PullWorkerName(loopPR)
 	if start := r.called(agentsName, agentStartName, owner); start == nil {
@@ -3502,6 +3519,34 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.owner"); len(evs) != 1 || !strings.Contains(evs[0].Detail, loopURL) {
 		t.Fatalf("expected supervisor.owner logged, got %+v", evs)
+	}
+}
+
+// Issue-less PRs must not trap owner assignment in board unblock retries.
+func TestLoopOverlapWithoutClosingIssueAssignsOwner(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Name: loopWaitingIssueWorker, Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: loopOverlapWait}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopBoard && (args[1] == loopUnblock || args[1] == "block") {
+			return "is a pull request: a hold is recorded on an issue", 3
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if r.called(loopBoard, loopUnblock) != nil || r.called(loopBoard, "block") != nil {
+		t.Fatalf("attempted issue dependency for issue-less PR: %v", r.calls)
+	}
+	if r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil || len(r.logged(t, "supervisor.owner")) != 1 {
+		t.Fatalf("owner not assigned: %v\n%s", r.calls, r.out)
+	}
+	if len(r.logged(t, loopFailureVerb)) != 0 {
+		t.Fatalf("owner failed: %s", r.out)
 	}
 }
 
@@ -3513,12 +3558,13 @@ func TestParseLoopPullClosingIssueAliases(t *testing.T) {
 }
 
 func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
-	for _, operation := range []string{"unblock", "block"} {
+	for _, operation := range []string{loopUnblock, "block"} {
 		t.Run(operation, func(t *testing.T) {
 			r := newLoopRig(t)
+			r.pull.Closes = []string{loopClosingIssue}
 			r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: loopWaitingIssueWorker, Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: loopOverlapWait}}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -3539,12 +3585,12 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 			if r.called(agentsName, agentStartName) != nil || r.called(agentsName, agentWakeName) != nil {
 				t.Fatalf("assigned owner before dependency confirmation: %v", r.calls)
 			}
-			if operation == "unblock" && r.called(loopBoard, "block") != nil {
+			if operation == loopUnblock && r.called(loopBoard, "block") != nil {
 				t.Fatalf("continued after failed unblock: %v", r.calls)
 			}
 			r.answer = func([]string) (string, int) { return "", 0 }
 			r.pass(t)
-			if r.called(loopBoard, "block", "o/r#10", "--by", loopPR) == nil || r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil {
+			if r.called(loopBoard, "block", "o/r#10", "--by", loopClosingIssue) == nil || r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil {
 				t.Fatalf("retry did not record dependency then assign owner: %v", r.calls)
 			}
 			if got := r.logged(t, "supervisor.owner"); len(got) != 1 {
@@ -3654,10 +3700,11 @@ func TestLoopStuckEpisodeUsesRunningClock(t *testing.T) {
 // capacity (errLoopLater), the next pass must not repeat board unblock/block.
 func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	r := newLoopRig(t)
+	r.pull.Closes = []string{loopClosingIssue}
 	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 	r.sshLoopHost(t, true)
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: loopWaitingIssueWorker, Session: loopOverlapSession}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: loopOverlapWait}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -4068,5 +4115,55 @@ func TestReview3325MissingClosureStatesSurviveReplay(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A step the stopping loop cancels is no failure of the step: recorded, it
+// would back off for up to an hour, across the restart
+// (https://github.com/giantswarm/beekeeper/issues/3390).
+func TestLoopStepCanceledByTheLoopIsNoFailure(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, inTurn := beekeeperRun, loopInTurn
+	t.Cleanup(func() { beekeeperRun, loopInTurn = run, inTurn })
+	beekeeperRun = func(ctx context.Context, _ ...string) (string, int, error) {
+		return "", 0, cmp.Or(ctx.Err(), errors.New("unavailable"))
+	}
+	loopInTurn = func(*app, state.Party) bool { return false }
+	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "w1"}}}}
+	act := superloop.Action{Kind: superloop.KindDone, Key: "done w1", Agent: "w1"}
+	failures := map[string]loopFailure{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := l.execAction(ctx, st, nil, failures, act); err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 0 {
+		t.Fatalf("a canceled step was recorded as failed: %+v", failures)
+	}
+	if evs := r.logged(t, loopFailureVerb); len(evs) != 0 {
+		t.Fatalf("a canceled step logged a failure: %+v", evs)
+	}
+	// The same error while the loop runs is the step's own failure.
+	if err := l.execAction(context.Background(), st, nil, failures, act); err != nil {
+		t.Fatal(err)
+	}
+	if failures[act.Key].Count != 1 {
+		t.Fatalf("a failing step was not recorded: %+v", failures)
+	}
+}
+
+// A busy state lock is told apart from other pass failures, wrapped or not:
+// the loop skips the pass instead of exiting on it.
+func TestLoopTellsABusyStateLock(t *testing.T) {
+	busy := &state.LockBusyError{PID: 1, Command: "beekeeper guide watch", Since: time.Now(), Waited: 2 * time.Minute}
+	if !lockBusy(busy) || !lockBusy(fmt.Errorf("reading the state: %w", busy)) {
+		t.Fatal("a busy state lock was not told")
+	}
+	if lockBusy(errors.New("disk full")) || lockBusy(nil) {
+		t.Fatal("another failure was told a busy lock")
 	}
 }

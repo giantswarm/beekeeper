@@ -310,9 +310,8 @@ machine's files stay untouched.`,
 			}
 			assets, err := envtestassets.Ensure(cmd.Context(), a.cfg.StateDir)
 			if err != nil {
-				return fmt.Errorf("prepare envtest assets (requires Go and network access on first run; alternatively set KUBEBUILDER_ASSETS): %w", err)
-			}
-			if err := os.Setenv(envtestassets.Env, assets); err != nil {
+				fmt.Fprintf(os.Stderr, "%sprepare envtest assets (set KUBEBUILDER_ASSETS to use existing binaries): %v; continuing without provisioned assets\n", guard.LogPrefix, err)
+			} else if err := os.Setenv(envtestassets.Env, assets); err != nil {
 				return err
 			}
 			a.parseableKnownHosts()
@@ -667,6 +666,24 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			cfgErr := a.loadConfig()
+			if cfgErr == nil && !a.cfg.Hooks.GuardsEnabled() {
+				// Keep instruction delivery independent of enforcement. Result
+				// redaction, sessionstart and worktree hooks are separate commands.
+				var out []byte
+				switch {
+				case isCodex:
+					out = codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), guard.PassCodex())
+				case isAgy:
+					out = guard.PassAgy()
+				default:
+					out = peer.WithInstructionContext(a.cfg.StateDir, raw, nil)
+				}
+				a.recordGitHubCalls(raw, formatFlag, out)
+				if len(out) > 0 {
+					_, _ = w.Write(out)
+				}
+				return nil
+			}
 			if isCodex {
 				if reason := guard.ValidateCodexInput(raw); reason != "" {
 					_, _ = w.Write(guard.DenyCodex(reason))
@@ -852,7 +869,7 @@ context instead. beekeeper install registers it in
 			if a.loadConfig() != nil {
 				return nil // a broken configuration must not block a session's start
 			}
-			if !held && a.cfg.Sandbox.Required {
+			if !held && a.cfg.Sandbox.Required && a.cfg.Hooks.GuardsEnabled() {
 				_, _ = a.out.Write(guard.UnsandboxedStart())
 				return nil
 			}
@@ -1289,6 +1306,7 @@ func (a *app) modelServer() guard.ModelServer {
 // heldLabs lists the held leases of kind labs.
 func (a *app) heldLabs() []lease.Holder {
 	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	a.resolveCodexHolders(hs)
 	return slices.DeleteFunc(hs, func(h lease.Holder) bool { return a.cfg.LabCluster(h.Env) == "" })
 }
 
@@ -1297,11 +1315,24 @@ func (a *app) heldLeases() []lease.Holder {
 		return nil
 	}
 	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	a.resolveCodexHolders(hs)
 	var sessions []*claude.Session
 	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, time.Now())
 	}
 	return a.namedHolders(sessions, hs)
+}
+
+// Claims made before the runner's thread was known still carry its stable
+// host ID. Match that ID to the conversation ID supplied by Codex hooks.
+func (a *app) resolveCodexHolders(hs []lease.Holder) {
+	for i := range hs {
+		if id, ok := strings.CutPrefix(hs[i].HostSession, codex.HostPrefix); ok {
+			if thread := codex.ReadThread(a.cfg.StateDir, codex.InboxPath(a.cfg.StateDir, id)); thread != "" {
+				hs[i].Session = thread
+			}
+		}
+	}
 }
 
 // namedHolders sets each holder's name to the one `lease list` shows: the

@@ -517,9 +517,7 @@ its key first in the detail):
             acts for, or its reviewer; a saved review park and a worker
             waiting on it for another pull request are none. It gets a fixer
             (agents start under its worker's name) for a head that
-            conflicts, is red, carries an unfixed changes request, or is
-            behind a base its merge does not update (no devctl
-            --update-branch, no merge.admin); the merge go again for a green
+            conflicts, is red, or carries an unfixed changes request; the merge go again for a green
             head whose go was given and never carried out; a reviewer for
             a green head awaiting its review. Running checks wait; an open
             escalation or ownership question is the person's. One action per stretch,
@@ -702,6 +700,13 @@ type supervisorLoop struct {
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
+	// stall is the refill's flow: when it last ran and since when a start
+	// waits with room (checkStall alarms on it).
+	stall     startStall
+	flowWaits map[string]flowWait
+	// reviewWaits are the review requests this loop planned and has not
+	// started, by pull request (checkStall alarms on the oldest).
+	reviewWaits map[string]reviewWait
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// inFlight tracks actions and ordered streams across passes.
@@ -934,8 +939,20 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 				}
 				continue
 			}
-			return err
+			if !lockBusy(err) || once {
+				return err
+			}
+			// A busy state lock fails this pass, not the loop: exiting
+			// would cancel every action still running (each then fails
+			// with context canceled and backs off for up to an hour), and
+			// the next pass reads the state afresh.
+			l.sayOnce("state lock busy", "SUPERVISOR LOOP pass skipped, retrying next pass: %v", err)
+			if !l.waitNextPass(ctx) {
+				return nil
+			}
+			continue
 		}
+		l.clearSaid("state lock busy")
 		l.lifecyclePhase("between passes")
 		if _, rerr := l.reexec(ctx); rerr != nil {
 			return rerr
@@ -950,6 +967,13 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			return nil
 		}
 	}
+}
+
+// lockBusy says err is a wait for the state lock that ended before its
+// holder released it.
+func lockBusy(err error) bool {
+	var busy *state.LockBusyError
+	return errors.As(err, &busy)
 }
 
 // waitNextPass waits for LoopInterval, ctx.Done(), or a replaced binary so
@@ -1695,6 +1719,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
 		}
+		if err := l.checkFlowWaits(in, actions, failures); err != nil {
+			return err
+		}
+		if err := l.checkStall(); err != nil {
+			return err
+		}
 		if err := l.checkUnmergedBacklogs(ctx, in); err != nil {
 			return err
 		}
@@ -1776,6 +1806,11 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	what, err := l.act(ctx, st, act, reserved...)
 	switch {
 	case errors.Is(err, errLoopLater):
+		return nil
+	case err != nil && ctx.Err() != nil:
+		// The loop is stopping: its cancellation is no failure of the
+		// step, and a recorded one would back the step off across the
+		// restart.
 		return nil
 	case err != nil:
 		return l.failed(act, failures, err)
@@ -1879,9 +1914,12 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
+	l.reviewsPlanned(reviewActs)
 	for _, act := range reviewActs {
 		launch("review:"+act.Ref, func() error {
-			return l.execAction(ctx, st, claims, failures, act)
+			err := l.execAction(ctx, st, claims, failures, act)
+			l.reviewTried(act, failures)
+			return err
 		})
 	}
 
@@ -1926,6 +1964,14 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		for _, act := range nextActs {
 			if err := l.execAction(ctx, st, claims, failures, act, reservations); err != nil {
 				return err
+			}
+			// Every next action asks for the same thing, the board's next
+			// item: once one did not settle (its start waits, failed or
+			// backs off), the rest cannot either this pass. Walking the
+			// board for each of them kept a backlog of done events from
+			// ever reaching the refill (https://github.com/giantswarm/beekeeper/issues/3388).
+			if !l.isCompleted(act.Key) {
+				break
 			}
 		}
 		return l.fill(ctx, st, claims, taken, reservations)
@@ -2103,6 +2149,12 @@ func (l *supervisorLoop) rememberAction(act superloop.Action) {
 	}
 	l.completed[act.Key] = true
 	l.mu.Unlock()
+}
+
+func (l *supervisorLoop) isCompleted(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.completed[key]
 }
 
 // loopClaim is a claim read back: when, and what its side effect names
@@ -2609,6 +2661,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
 	case superloop.KindRed:
+		act = attachRedLogs(ctx, act)
 		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
@@ -3014,7 +3067,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately hand CI and review to the loop with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -3022,7 +3075,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately park from the worktree so the loop owns CI:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
 `
@@ -3198,16 +3251,14 @@ narrowed or deferred without a linked follow-up allowed by the issue. Check beha
 including failure paths; dead paths; unsupported claims in code, docs and the PR; and changes
 that a later epic sub-issue would need to undo.
 
-Trust green CI on the exact reviewed head. Do not repeat its full gate. Build only for your
-own probes (new or mutated tests, or a benchmark touched by the diff); in later rounds probe
-only what the fixes touch. For a full review use your own worktree at the pinned head, read
-repository rules and inspect tests and lints. For a light review read the diff, issue and CI
-without checkout or build. Never merge.
+Trust green CI on the exact reviewed head. Do not run local tests, lints, builds or probes.
+Inspect the code and tests. For a full review use your own worktree at the pinned head;
+for a light review read the diff, issue and CI. Never merge.
 
 Every finding is blocking or a nit to fix in this round; drop anything else. When you find
 blocking issues or nits that can be fixed in code, tests or docs, apply your own findings
-directly on the pull request branch ({{.Branch}}), run focused checks on what you touched,
-push once (never force-push), wait for green CI (devctl pr wait), and approve the fixed head
+directly on the pull request branch ({{.Branch}}), push once (never force-push), and approve
+the published fixed head immediately. Do not wait for CI; the loop waits for green before merging,
 so one review round suffices without bouncing back to the worker. Request changes only when a
 finding requires a product or design decision or cannot be fixed on the branch. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
@@ -3218,7 +3269,7 @@ start another independent review for it. Other changes require review of the new
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
 regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or the
-new head SHA in backticks when you pushed fixes and waited for green CI).
+new published head SHA in backticks when you pushed fixes, even while CI is pending).
 Each finding: <file>:<line>: <what is wrong> → <what would be right>.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
@@ -3985,6 +4036,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 					return "", saveErr
 				}
+				l.stallClear()
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {
@@ -4010,6 +4062,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.a.monitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
+	l.stallClear()
 	if place.remote() {
 		return fmt.Sprintf("%q started on %s on %s at %s", name, next.URL, place.Selector, place.Ref), nil
 	}
@@ -4216,11 +4269,11 @@ func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act su
 	l.mu.Lock()
 	blocked := l.stages[blockStage]
 	l.mu.Unlock()
-	if act.Block != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
-		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
+	if act.OwnerIssue != "" && act.BlockIssue != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+		if _, err := l.run(ctx, loopBoard, "unblock", act.OwnerIssue, "--by", act.BlockIssue); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
-		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
+		if _, err := l.run(ctx, loopBoard, "block", act.BlockIssue, "--by", act.OwnerIssue); err != nil {
 			return "", fmt.Errorf("record overlap dependency: %w", err)
 		}
 		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
@@ -4233,7 +4286,7 @@ func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act su
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err
 	}
-	if act.Block != "" {
+	if act.BlockIssue != "" {
 		return fmt.Sprintf("owner %q assigned to %s (%s blocked by %s)", act.Agent, cmp.Or(act.URL, act.Ref), act.Block, act.Ref), nil
 	}
 	return fmt.Sprintf("owner %q assigned to %s", act.Agent, cmp.Or(act.URL, act.Ref)), nil

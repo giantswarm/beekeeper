@@ -319,7 +319,7 @@ type Input struct {
 	Now             time.Time
 	PostMergeWindow time.Duration
 	// DevctlOwners is merge.devctlOwners: a go on their repositories names
-	// the gate's devctl pr merge --update-branch, on any other gh pr merge
+	// the gate's devctl pr merge, on any other gh pr merge
 	// --match-head-commit.
 	DevctlOwners []string
 	// Admin is merge.admin: the repositories (owner/repo) whose go names
@@ -416,11 +416,15 @@ type Action struct {
 	Key   string
 	Kind  string
 	Ref   string // the pull request, when there is one
-	Block string // the overlapping pull request or issue recorded blocked by Ref
-	URL   string
-	Agent string // the worker it concerns
-	Head  string
-	Round int
+	Block string // the overlapping pull request or issue waiting for Ref
+	// OwnerIssue and BlockIssue are the issue endpoints of an overlap hold.
+	// Empty when either PR closes no issue or both resolve to the same issue.
+	OwnerIssue string
+	BlockIssue string
+	URL        string
+	Agent      string // the worker it concerns
+	Head       string
+	Round      int
 	// The verdict the merge decision observed. A newer change request must
 	// force replanning before the loop records its exact-head authorization.
 	ReviewID      string
@@ -1263,14 +1267,24 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			a := base
 			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
 			a.Kind = KindRework
-			a.Message = fmt.Sprintf("%s at head %s conflicts with its base. Fetch origin, merge the base into the branch, resolve the conflicts, run focused checks and push, then wait for green CI and park again for desk review. Never force-push.", p.URL, short(p.Head))
+			a.Message = fmt.Sprintf("%s at head %s conflicts with its base. Fetch origin, merge the base into the branch, resolve the conflicts without local tests or lints and push, then immediately park again for the loop to run CI and review. Never force-push.", p.URL, short(p.Head))
 			if !l.has(a.Key) {
 				add(a)
 			}
 		}
 		return
 	}
-	planRed(l, p, w, isParked, add)
+	// A reviewer publishes fixes and reports approval before CI completes.
+	// The author's saved park still names the original head. Route failures
+	// of the authenticated round verdict's current head back to that worker,
+	// using the verdict time as a stable, deduplicated CI handoff boundary.
+	ciWorker := w
+	if isParked && !sameHead(w.ParkedHead, p.Head) && len(rs) > 0 {
+		if v := p.verdict(rs[len(rs)-1], l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) {
+			ciWorker.ParkedHead, ciWorker.ParkedAt = p.Head, v.At
+		}
+	}
+	planRed(l, p, ciWorker, isParked, add)
 	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && !slices.ContainsFunc(p.Reviews, func(r Review) bool {
 		return r.Verdict == ChangesRequested && (sameHead(r.Head, p.Head) || !r.At.Before(l.keys[goKey(ref, head)].At))
 	}) && in.baseMerged(p, head) {
@@ -1366,8 +1380,8 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return
 		}
 		// The head moved past the approval. The approval covers a head
-		// that only brings the base into the approved one (the gate's
-		// --update-branch, the worker's merge of the base and its
+		// that only brings the base into the approved one (a
+		// worker's merge of the base and its
 		// conflicts' resolution, a rebase onto it); any other change
 		// gets a review while one of MaxReviews is left, else the go.
 		// A base merge needs no new park: it brings no
@@ -1478,6 +1492,26 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		}
 		return r
 	}
+	// GitHub dependencies connect issues only. PRs without a closing issue
+	// still need an owner, but cannot participate in a board dependency.
+	issueRef := func(r string) string {
+		for key, pull := range in.Pulls {
+			if strings.EqualFold(key, r) {
+				if len(pull.Closes) > 0 {
+					return pull.Closes[0]
+				}
+				return ""
+			}
+		}
+		return r
+	}
+	addOwner := func(a Action) {
+		owner, blocked := issueRef(a.Ref), issueRef(a.Block)
+		if owner != "" && blocked != "" && !strings.EqualFold(owner, blocked) {
+			a.OwnerIssue, a.BlockIssue = owner, blocked
+		}
+		add(a)
+	}
 	w, isParked := parked[ref]
 	if !isParked {
 		for k, parkedWorker := range parked {
@@ -1518,7 +1552,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 				if o, _, _ := in.Desk.owner(sp, l.overridden[serves]); o != ours {
 					continue
 				}
-				add(Action{
+				addOwner(Action{
 					Key:     ownerKey(serves, sp.Head, waiter.ParkedAt),
 					Kind:    KindOwner,
 					Ref:     serves,
@@ -1526,7 +1560,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 					URL:     sp.URL,
 					Agent:   waiter.Name,
 					Head:    sp.Head,
-					Message: fmt.Sprintf("%s goes ahead of %s: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
+					Message: fmt.Sprintf("%s goes ahead of %s: %s waits for %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
 				})
 				continue
 			}
@@ -1579,7 +1613,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		if !ownerGone && !stalled {
 			continue
 		}
-		add(Action{
+		addOwner(Action{
 			Key:     ownerKey(ref, p.Head, waiter.ParkedAt),
 			Kind:    KindOwner,
 			Ref:     ref,
@@ -1619,7 +1653,7 @@ func ownerMessage(p Pull, waiter Worker, blocked string, stalled bool) string {
 		why = fmt.Sprintf("%s has waited on %s for %s with no progress", waiter.Name, p.URL, OverlapWait)
 	}
 	if blocked != "" {
-		why += fmt.Sprintf(" (%s is blocked by %s)", blocked, p.Ref)
+		why += fmt.Sprintf(" (%s waits for %s)", blocked, p.Ref)
 	}
 	return fmt.Sprintf("%s: take ownership of %s at head %s, bring it to green CI and request its review (or merge it once approved) so the waiting work can proceed.", why, p.URL, short(p.Head))
 }
@@ -2207,8 +2241,8 @@ func EventAgent(verb, detail, by string) string {
 }
 
 // goAction is the merge go for base's head, naming the merge command of
-// its repository's path: the gate's devctl pr merge --update-branch where
-// devctl serves it, whose base update the go covers, else gh pr merge
+// its repository's path: the gate's devctl pr merge where
+// devctl serves it, else gh pr merge
 // --match-head-commit (--admin included where merge.admin lists the
 // repository).
 func goAction(in Input, base Action, why string) Action {
@@ -2227,7 +2261,7 @@ func goAction(in Input, base Action, why string) Action {
 	}
 	repo, n, _ := strings.Cut(base.Ref, "#")
 	if in.gated(repo) {
-		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s --update-branch`, once `gh pr view` shows head %s. This go covers a head the gate's --update-branch moves on by merging the base alone: let that merge run to its end, then report.",
+		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s`, once `gh pr view` shows head %s. Merge only this green head after the merge-result check passes; never update the branch.",
 			base.URL, base.Head, why, repo, n, short(base.Head))
 		return a
 	}

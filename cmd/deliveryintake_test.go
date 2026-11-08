@@ -439,3 +439,52 @@ func TestReview3366PreviewUsesScopedIntake(t *testing.T) {
 		t.Fatalf("real pass disagreed with preview: %d", *busy)
 	}
 }
+
+// An intentional admission wait must end an older refill-stall episode:
+// otherwise the newer watchdog reports a board-start fault at a full limit.
+func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
+	for _, mode := range []string{"full", "stale", "reserved"} {
+		t.Run(mode, func(t *testing.T) {
+			r, busy := fillRig(t)
+			r.a.cfg.Delivery.WIPLimit = 1
+			now := r.a.timeNow()
+			old := r.answer
+			r.answer = func(args []string) (string, int) {
+				if args[0] == loopCapacity {
+					return deliveryControlCapacity, 0
+				}
+				return old(args)
+			}
+			seed(t, r.a, func(st *state.State) {
+				st.DeliveriesAt = now
+				if mode == "stale" {
+					st.DeliveriesAt = now.Add(-4 * r.a.cfg.Supervisor.LoopInterval.Duration)
+				} else {
+					st.StartDelivery(deliveryControlPendingRef, deliveryIntakeExistingAgent, "", now)
+					if mode == "reserved" {
+						st.Deliveries[0].Step = state.DeliveryReviewQueued
+						r.a.cfg.Delivery.WIPLimit = 0
+					}
+				}
+			})
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.stallWait("", "an earlier start failed")
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.fill(t.Context(), st, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if *busy != 0 || r.called(loopBoard) != nil {
+				t.Fatalf("held admission read the board or started work: busy=%d calls=%v", *busy, r.calls)
+			}
+			if !l.stall.since.IsZero() || !l.fillPause.until.IsZero() {
+				t.Fatalf("intentional wait retained a refill alarm or pause: stall=%+v pause=%+v", l.stall, l.fillPause)
+			}
+		})
+	}
+}

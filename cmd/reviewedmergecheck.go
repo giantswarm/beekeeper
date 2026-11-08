@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -243,7 +244,9 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
 	}
 	// Keep the fast diagnostic, but it never substitutes for configured lint.
-	diffOut, err := runGit(ctx, worktreeDir, "diff", "--name-only", mergeBase+"..HEAD")
+	// It covers only the PR's own changes (merge base..head): files only the
+	// base changed are not the PR's to fix.
+	diffOut, err := runGit(ctx, worktreeDir, "diff", "--name-only", mergeBase+".."+head)
 	if err != nil {
 		return "reading merge diff: " + err.Error(), github.SquashTooling
 	}
@@ -349,7 +352,7 @@ func checkFilesGoConst(worktreeDir, absDir string, entries []os.DirEntry, testPa
 		ast.Inspect(f, func(n ast.Node) bool {
 			for _, lit := range goconstLiterals(n, ignore) {
 				s, err := strconv.Unquote(lit.Value)
-				if err != nil || len(s) < 3 {
+				if err != nil || utf8.RuneCountInString(s) < 3 || goconstIgnoresNumber(s) {
 					continue
 				}
 				occ, exists := counts[s]
@@ -378,6 +381,13 @@ func checkFilesGoConst(worktreeDir, absDir string, entries []os.DirEntry, testPa
 		return fmt.Sprintf("%s:%d:%d: string %q has %d occurrences, make it a constant (goconst)", filepath.ToSlash(rel), occ.pos.Line, occ.pos.Column, s, occ.count)
 	}
 	return ""
+}
+
+// goconstIgnoresNumber mirrors golangci-lint's goconst defaults
+// (numbers.min = numbers.max = 3): an integer string outside [3, 3] is skipped.
+func goconstIgnoresNumber(s string) bool {
+	i, err := strconv.ParseInt(s, 0, 0)
+	return err == nil && i != 3
 }
 
 // goconstLiterals extracts string literals from the AST node types that

@@ -21,25 +21,26 @@ import (
 )
 
 type Journal struct {
-	RetainedAt          time.Time     `json:"retainedAt,omitzero"`
-	RevocationFailed    bool          `json:"revocationFailed,omitempty"`
-	Lease               *LeaseGrant   `json:"lease,omitempty"`
-	LeasePending        *LeaseRequest `json:"leasePending,omitempty"`
-	Completed           bool          `json:"completed,omitempty"`
-	Messages            MessageLedger `json:"messages,omitempty"`
-	ActivationAttempted bool          `json:"activationAttempted"`
-	RunnerPID           int           `json:"runnerPID,omitempty"`
-	RunnerStarted       time.Time     `json:"runnerStarted,omitempty"`
-	LastActive          time.Time     `json:"lastActive,omitzero"`
-	Request             StartRequest  `json:"request"`
-	Digest              string        `json:"digest"`
-	Handle              Handle        `json:"handle"`
-	Phase               string        `json:"phase"`
-	Ready               bool          `json:"ready"`
-	InTurn              bool          `json:"inTurn,omitempty"`
-	StopRequest         *StopRequest  `json:"stopRequest,omitempty"`
-	StopAcknowledged    bool          `json:"stopAcknowledged"`
-	LastError           string        `json:"lastError,omitempty"`
+	RetainedAt          time.Time            `json:"retainedAt,omitzero"`
+	RevocationFailed    bool                 `json:"revocationFailed,omitempty"`
+	Lease               *LeaseGrant          `json:"lease,omitempty"`
+	LeaseFailure        *LeaseRenewalFailure `json:"leaseFailure,omitempty"`
+	LeasePending        *LeaseRequest        `json:"leasePending,omitempty"`
+	Completed           bool                 `json:"completed,omitempty"`
+	Messages            MessageLedger        `json:"messages,omitempty"`
+	ActivationAttempted bool                 `json:"activationAttempted"`
+	RunnerPID           int                  `json:"runnerPID,omitempty"`
+	RunnerStarted       time.Time            `json:"runnerStarted,omitempty"`
+	LastActive          time.Time            `json:"lastActive,omitzero"`
+	Request             StartRequest         `json:"request"`
+	Digest              string               `json:"digest"`
+	Handle              Handle               `json:"handle"`
+	Phase               string               `json:"phase"`
+	Ready               bool                 `json:"ready"`
+	InTurn              bool                 `json:"inTurn,omitempty"`
+	StopRequest         *StopRequest         `json:"stopRequest,omitempty"`
+	StopAcknowledged    bool                 `json:"stopAcknowledged"`
+	LastError           string               `json:"lastError,omitempty"`
 	// Thread is the codex thread the first turn created; every later turn
 	// resumes it and the codex guard binds tool calls to it. Claude's
 	// conversation is the request's own identity and leaves it empty.

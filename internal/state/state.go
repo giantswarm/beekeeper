@@ -1199,12 +1199,13 @@ type GuideWork struct {
 
 // State is the whole document.
 type State struct {
-	DeliveryHealth DeliveryHealth `json:"deliveryHealth,omitempty"`
-	Deliveries     []Delivery     `json:"deliveries,omitempty"`
-	DeliveriesAt   time.Time      `json:"deliveriesAt,omitempty"`
-	GuideReports   []string       `json:"guideReports,omitempty"`
-	GuideWork      []GuideWork    `json:"guideWork,omitempty"`
-	NextGuideWork  int            `json:"nextGuideWork,omitempty"`
+	DeliveryHealth    DeliveryHealth `json:"deliveryHealth,omitempty"`
+	Deliveries        []Delivery     `json:"deliveries,omitempty"`
+	DeliveriesAt      time.Time      `json:"deliveriesAt,omitempty"`
+	GuideReportsSince time.Time      `json:"guideReportsSince,omitempty"`
+	GuideReports      []string       `json:"guideReports,omitempty"`
+	GuideWork         []GuideWork    `json:"guideWork,omitempty"`
+	NextGuideWork     int            `json:"nextGuideWork,omitempty"`
 	// EventOutbox retains the exact log append with the state it commits.
 	EventOutbox *EventOutbox `json:"eventOutbox,omitempty"`
 	// ProductionNotes are consumed authorities, retained across hook processes.
@@ -1770,6 +1771,8 @@ type Event struct {
 	Subject string `json:"subject,omitempty"`
 	// NoteTeam identifies the note owner independently of the event actor.
 	NoteTeam string `json:"noteTeam,omitempty"`
+	// NoteSnapshot retains the complete note for file-backed reopen after closure.
+	NoteSnapshot *Note `json:"noteSnapshot,omitempty"`
 }
 
 // NoteLookup is the optional complete history of a store that retains closed notes.
@@ -1983,6 +1986,12 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.checkWriter(st, time.Now()); err != nil {
 		return err
 	}
+	leasesBefore := make(map[execution.Ref]execution.LeaseGrant)
+	for _, start := range st.Starts {
+		if r := start.Execution; r != nil && r.Lease != nil {
+			leasesBefore[r.Request.Ref] = *r.Lease
+		}
+	}
 	events, err := fn(st)
 	if err != nil {
 		return err
@@ -1990,7 +1999,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
-	return s.commitEvents(st, events)
+	return s.commitEvents(st, events, leasesBefore)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -2040,6 +2049,11 @@ func (s *FileStore) Exclusive(fn func() error) error {
 		return err
 	}
 	defer unlock()
+	commitUnlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer commitUnlock()
 	return fn()
 }
 

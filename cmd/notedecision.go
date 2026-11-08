@@ -237,6 +237,9 @@ func defaultDue(st *state.State, now time.Time) []state.Note {
 		if n.Due.IsZero() || now.Before(n.Due) || n.Kind != noteDecision {
 			return false
 		}
+		if u, _, ok := noteDeferral(&n); ok && now.Before(u.Add(defaultedKeep)) {
+			return false
+		}
 		due = append(due, n)
 		return true
 	})
@@ -289,6 +292,51 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 		return true, true
 	}
 	return false, false
+}
+
+// keepAnsweredOpen keeps note id open in st.Notes (restoring it from
+// st.Defaulted if needed) and applies an optional deferral.
+func keepAnsweredOpen(st *state.State, id int, now, deferAt time.Time, reason string) (found, defaulted bool) {
+	is := func(o state.Note) bool { return o.ID == id }
+	i := slices.IndexFunc(st.Notes, is)
+	if i < 0 {
+		j := slices.IndexFunc(st.Defaulted, is)
+		if j < 0 {
+			return false, false
+		}
+		n := st.Defaulted[j]
+		st.Defaulted = slices.Delete(st.Defaulted, j, j+1)
+		st.Notes = append(st.Notes, n)
+		slices.SortFunc(st.Notes, func(a, b state.Note) int { return cmp.Compare(a.ID, b.ID) })
+		i = slices.IndexFunc(st.Notes, is)
+		defaulted = true
+	}
+	// A kept-open reply must give an overdue decision a fresh answer window,
+	// otherwise the next watch immediately applies its default again.
+	if deferAt.IsZero() && st.Notes[i].Kind == noteDecision && !st.Notes[i].Due.IsZero() && !st.Notes[i].Due.After(now) {
+		st.Notes[i].Due = now.Add(defaultedKeep).UTC()
+		st.Notes[i].Fired = time.Time{}
+	}
+	if !deferAt.IsZero() {
+		setNoteDeferral(&st.Notes[i], deferAt, reason)
+		r := guideRole.get(st)
+		if r.Asking == id && r.AskingFrom == "" {
+			r.Asking, r.AskingFrom = 0, ""
+			guideRole.set(st, r)
+		}
+	}
+	return true, defaulted
+}
+
+// deferEvent is the note.deferred event of n deferred until until.
+func deferEvent(by state.Party, n *state.Note, until time.Time, reason string) state.Event {
+	why := ""
+	if r := strings.TrimSpace(reason); r != "" {
+		why = fmt.Sprintf(" (%s)", oneLine(r))
+	}
+	e := event(by, noteDeferred, "#%d deferred until %s%s: %s", n.ID, until.UTC().Format(time.RFC3339), why, n.Text)
+	e.NoteTeam = n.By.Team
+	return e
 }
 
 // tellFiler delivers line from by to the session that filed n, on the roster

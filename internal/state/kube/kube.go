@@ -1175,8 +1175,9 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		switch {
 		case i >= defaulted:
 			note.Status.State = noteDefaulted
-		case note.Status.State == "" || note.Status.State == noteDefaulted:
+		default:
 			note.Status.State = noteOpen
+			note.Status.Closure, note.Status.Answer, note.Status.AnsweredBy, note.Status.AnsweredAt = nil, "", "", nil
 		}
 		want.notes[k] = note
 		want.issued = max(want.issued, n.ID)

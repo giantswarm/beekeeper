@@ -494,6 +494,8 @@ type BoardStep struct {
 
 // Hooks configures where beekeeper's Claude Code hooks act.
 type Hooks struct {
+	// Guards enables PreToolUse refusals and rewrites. Unset, enabled.
+	Guards *bool `yaml:"guards"`
 	// GuardPersonalSearch refuses cross-repository issue searches in personal sessions too.
 	GuardPersonalSearch bool `yaml:"guardPersonalSearch"`
 	// Scope is the desk's part of the machine; out of it the hooks are
@@ -509,6 +511,9 @@ type Hooks struct {
 	// one; scratch files go in the session's scratchpad. Empty, off.
 	PersonFolders []string `yaml:"personFolders"`
 }
+
+// GuardsEnabled preserves enforcement unless explicitly disabled.
+func (h Hooks) GuardsEnabled() bool { return h.Guards == nil || *h.Guards }
 
 // HookScope is where the hooks act: in a session beekeeper started or
 // knows (an agents start, a role holder, an agent on the roster), and in a
@@ -3076,8 +3081,13 @@ func (w Watch) GTTMax(ramMiB int) int { return atMost(w.GTTMaxMiB, DefaultGTTMax
 // TmpMax is the TMPFS threshold on a /tmp of tmpMiB.
 func (w Watch) TmpMax(tmpMiB int) int { return atMost(w.TmpMaxMiB, DefaultTmpMax, tmpMiB) }
 
-// DiskMin is the LOW DISK threshold on a / of diskMiB.
-func (w Watch) DiskMin(diskMiB int) int { return atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB) }
+// DiskMin is the LOW DISK threshold on a / of diskMiB. Negative disables it.
+func (w Watch) DiskMin(diskMiB int) int {
+	if w.DiskMinMiB < 0 {
+		return 0
+	}
+	return atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB)
+}
 
 // DiskCritical is the DISK NEARLY FULL threshold on a / of diskMiB.
 func (w Watch) DiskCritical(diskMiB int) int {

@@ -53,6 +53,7 @@ const (
 // dockerRun is one look at Docker's images and build cache.
 type dockerRun struct {
 	imagesMax, cacheMax int64
+	pressure            bool
 	before, after       dockerprune.Usage
 	// removed are the images removed; pruned says the build cache was
 	// pruned.
@@ -110,6 +111,9 @@ func (r dockerRun) String() string {
 	}
 	head := fmt.Sprintf("Docker: images %s, cap %s; build cache %s, cap %s (doctor.dockerImagesMaxGiB, doctor.dockerBuildCacheMaxGiB)",
 		gibStr(r.before.Images), capStr(r.imagesMax), gibStr(r.before.BuildCache), capStr(r.cacheMax))
+	if r.pressure {
+		head = fmt.Sprintf("Docker under disk pressure: images %s; build cache %s; reclaim eligible entries in enabled caches", gibStr(r.before.Images), gibStr(r.before.BuildCache))
+	}
 	var did []string
 	if len(r.removed) > 0 {
 		did = append(did, fmt.Sprintf("%d unused images removed (%s freed), images now %s", len(r.removed), gibStr(r.before.Images-r.after.Images), gibStr(r.after.Images)))
@@ -255,7 +259,23 @@ func freshLab(labs []lease.Holder, now time.Time) string {
 // unless dryRun, prunes each over its cap under the lock while nothing
 // holds it back (holds), logging what it freed.
 func (a *app) pruneDocker(dryRun bool, holds func() string) dockerRun {
-	r := dockerRun{imagesMax: a.cfg.Doctor.DockerImagesMax(), cacheMax: a.cfg.Doctor.DockerBuildCacheMax()}
+	return a.pruneDockerForPressure(dryRun, false, holds)
+}
+
+// Under disk pressure, enabled caches are trimmed even below their normal caps.
+// Keep the same container, build, lab and recent-image safety checks.
+func (a *app) pruneDockerForPressure(dryRun, pressure bool, holds func() string) dockerRun {
+	r := dockerRun{imagesMax: a.cfg.Doctor.DockerImagesMax(), cacheMax: a.cfg.Doctor.DockerBuildCacheMax(), pressure: pressure}
+	// Positive caps enable a cache; one byte keeps it enabled while its
+	// three-quarter target becomes zero, reclaiming every eligible entry.
+	if pressure {
+		if r.imagesMax > 0 {
+			r.imagesMax = 1
+		}
+		if r.cacheMax > 0 {
+			r.cacheMax = 1
+		}
+	}
 	d := dockerCLI
 	if d == nil {
 		r.imagesMax, r.cacheMax = 0, 0

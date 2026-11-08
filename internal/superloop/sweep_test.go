@@ -123,7 +123,6 @@ func TestTheSweepGivesAFixerToABrokenHead(t *testing.T) {
 		"conflicting": {func(p *Pull) { p.Mergeable = mergeableConflicting }, "conflicts with"},
 		"dirty":       {func(p *Pull) { p.MergeState = mergeStateDirty; p.Green = false }, "conflicts with"},
 		"red":         {func(p *Pull) { p.Green = false; p.Red = []Check{{Name: lintCheck, URL: lintURL}} }, lintCheck + " " + lintURL},
-		"behind":      {func(p *Pull) { p.MergeState = "BEHIND" }, "is behind"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := sweepInput(with(pull(head1, true), tc.f), OrphanWait)
@@ -134,7 +133,6 @@ func TestTheSweepGivesAFixerToABrokenHead(t *testing.T) {
 		})
 	}
 	in := sweepInput(with(pull(head1, true), func(p *Pull) { p.MergeState = "BEHIND" }), OrphanWait)
-	in.DevctlOwners = []string{"o"}
 	if a := only(t, Plan(in), KindReview); a.Key != reviewKey(pr, head1) {
 		t.Errorf("behind, gated: %+v", a)
 	}

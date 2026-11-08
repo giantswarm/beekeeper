@@ -219,24 +219,32 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 }
 
 func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
-	r := newLoopRig(t)
-	r.park(t, loopPR, time.Now())
-	r.pass(t)
-	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.answer = func(args []string) (string, int) {
-		if len(args) == 0 || args[0] != gateCmdName {
-			return "", 0
-		}
-		raw, err := json.Marshal(github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, ExitCode: github.SquashNotApplicable, Reason: "branch behind its base"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw) + "\n" + GatePrefix + "nothing merged; repair needed\n", github.SquashNotApplicable
-	}
-	r.pass(t)
-	call := r.called(agentsName, agentWakeName, loopWorker)
-	if call == nil || !strings.Contains(call[3], "branch behind its base") {
-		t.Fatalf("gate diagnostics hid the mutation result: %v\n%s", r.calls, r.out)
+	for _, reason := range []string{"branch conflicts with base", "branch behind its base"} {
+		t.Run(reason, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			r.answer = func(args []string) (string, int) {
+				if len(args) == 0 || args[0] != gateCmdName {
+					return "", 0
+				}
+				raw, err := json.Marshal(github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, ExitCode: github.SquashNotApplicable, Reason: reason})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(raw) + "\n" + GatePrefix + "nothing merged; repair needed\n", github.SquashNotApplicable
+			}
+			r.pass(t)
+			call := r.called(agentsName, agentWakeName, loopWorker)
+			if reason == "branch behind its base" {
+				if call != nil || !strings.Contains(r.out.String(), "SUPERVISOR MERGE POLICY REFUSED") || !strings.Contains(r.out.String(), reason) {
+					t.Fatalf("policy refusal requested repair or lost its reason: %v\n%s", r.calls, r.out)
+				}
+			} else if call == nil || !strings.Contains(call[3], reason) {
+				t.Fatalf("gate diagnostics hid the mutation result: %v\n%s", r.calls, r.out)
+			}
+		})
 	}
 }
 

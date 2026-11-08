@@ -2,12 +2,15 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
 // EventOutbox is an append committed atomically with state.json. Offset and
@@ -17,7 +20,16 @@ type EventOutbox struct {
 	Data   []byte `json:"data"`
 }
 
-func (s *FileStore) commitEvents(st *State, events []Event) error {
+func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[execution.Ref]execution.LeaseGrant) error {
+	unlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := s.preserveRenewals(st, leasesBefore); err != nil {
+		return err
+	}
+
 	if len(events) == 0 {
 		return writeJSON(s.path("state.json"), st)
 	}
@@ -56,6 +68,12 @@ func (s *FileStore) commitEvents(st *State, events []Event) error {
 // recoverEvents runs under the exclusive state lock. A failure keeps the
 // durable outbox; another command can retry after the underlying fault is fixed.
 func (s *FileStore) recoverEvents() (*State, error) {
+	unlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	st, err := s.load()
 	if err != nil || st.EventOutbox == nil {
 		return st, err
