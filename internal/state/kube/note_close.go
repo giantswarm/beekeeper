@@ -33,7 +33,7 @@ var answerNoteDetail = regexp.MustCompile(`(?s), note #(\d+) asked by "(?:[^"\\]
 func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID func(time.Time) (string, error)) error {
 	for _, k := range sortedKeys(snap.notes) {
 		old := snap.notes[k]
-		if old.Status.State == noteClosed || old.Status.State == noteAnswered {
+		if (old.Status.State == noteClosed || old.Status.State == noteAnswered) && want.notes[k] == nil {
 			want.notes[k] = old.DeepCopy()
 			continue
 		}

@@ -166,8 +166,8 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 			if err != nil {
 				return err
 			}
-			if a.managedExecutionID() != "" && (foldArg != "" || holds || draft.Kind == noteLogin) {
-				return refused("remote notes support ordinary decisions only; use the coordinating component for holds, logins and folds")
+			if a.managedExecutionID() != "" && (foldArg != "" || holds || draft.Kind == noteLogin || draft.Kind == noteTodo) {
+				return refused("remote notes support ordinary decisions only; use the coordinating component for holds, logins, todos and folds")
 			}
 			var into noteID
 			if foldArg != "" {
@@ -203,6 +203,9 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				return usageErr("--until is a login's: --kind login")
 			}
 			n.Kind, draft.Due = draft.Kind, due
+			if n.Kind == noteTodo && len(n.Refs) == 0 {
+				parseNoteTextParts(&n)
+			}
 			if a.managedExecutionID() == "" {
 				if forWho, err = a.noteAddressee(forWho, into.Central || a.centralNote(&n, holds, foldInto)); err != nil {
 					return err
@@ -353,7 +356,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 	add.Flags().StringArrayVar(&draft.Options, "option", nil, `a choice and its consequence, "<choice>: <consequence>" (repeatable)`)
 	add.Flags().IntVar(&draft.Recommend, "recommend", 0, "the option recommended, 1-based (why goes into --status-quo)")
 	add.Flags().StringVar(&draft.Checked, "checked", "", "where a state claim (merged, green, released, rolled, closed) was checked")
-	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default) or "login" (a sign-in, closed once --until passes)`)
+	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default), "login" (a sign-in, closed once --until passes) or "todo" (a person-owned action item)`)
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
 	add.Flags().StringVar(&foldArg, "fold-into", "", "an open note for the same person this one folds into, whatever it asks (<n>, or <context>#<n> for a central instance's): that note's default and recommendation stand")
 	add.Flags().BoolVar(&holds, "holds", false, "the decision holds every --ref: its board Status is Blocked / Waiting until the decision closes, then set back")
@@ -451,6 +454,7 @@ notes' only.`,
 	var choiceLabel string
 	var via string
 	var post bool
+	var answerOpts answerNoteOpts
 	answer := &cobra.Command{
 		Use:   "answer <id> [<answer>]",
 		Short: "Record a person's answer to a note, word for word, and close it",
@@ -458,7 +462,10 @@ notes' only.`,
 answer is --choice <label|n>, one of its stored labels or options (1-based), the person's own
 words (at most 3000 characters), or both, with the way it came (--via, cli unless it came from
 Slack). It is logged as answer.recorded and the note closed; the session
-that filed it is told at once. A decision its default closed within the
+that filed it is told at once. When the person's reply asks a side question
+or defers deciding the options, --keep-open or --defer <due> records the
+words verbatim in answer.recorded and tells the filer while keeping the note
+open in the queue. A decision its default closed within the
 last day is answered all the same: the answer replaces the default.
 Nothing is posted to GitHub unless --post (as beekeeper answer says). A note a role's run filed (the
 supervisor's, the guide's) goes to the role's holder now; while none holds
@@ -495,6 +502,9 @@ naming both. --post is the machine's notes' only.`,
 				ids[0].Central = true
 			}
 			if ids[0].Central {
+				if answerOpts.keepOpen || answerOpts.deferDue != "" {
+					return usageErr("--keep-open and --defer are for this machine's notes")
+				}
 				var centralNote *state.Note
 				if _, numericErr := strconv.Atoi(choiceLabel); choiceLabel != "" && numericErr != nil {
 					notes, err := a.listCentralNotes()
@@ -526,19 +536,27 @@ naming both. --post is the machine's notes' only.`,
 				}
 				return refused("note #%d is not open, nor closed by its default within %s", ids[0].ID, shortDur(defaultedKeep))
 			}
-			if len(n.Refs) == 0 {
+			about := ""
+			if len(n.Refs) > 0 {
+				about = n.Refs[0]
+			} else if n.Kind == noteTodo && !post {
+				about = fmt.Sprintf("note#%d", n.ID)
+			} else {
 				return refused("note #%d links no issue or pull request (--ref) for its answer's thread: beekeeper answer <owner/repo#n> --note %d", n.ID, n.ID)
 			}
 			choice, err := resolveNoteChoice(n, choiceLabel)
 			if err != nil {
 				return err
 			}
-			return a.recordAnswer(cmd.Context(), n.Refs[0], n.ID, choice, via, strings.Join(args[1:], " "), post)
+			return a.recordAnswerWithOptions(cmd.Context(), about, n.ID, choice, via, strings.Join(args[1:], " "), post, answerOpts)
 		},
 	}
 	answer.Flags().StringVar(&choiceLabel, "choice", "", "the stored option label or its number, 1-based")
 	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack")
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
+	answer.Flags().BoolVar(&answerOpts.keepOpen, "keep-open", false, "record the person's reply verbatim while leaving the note open")
+	answer.Flags().StringVar(&answerOpts.deferDue, "defer", "", "record the person's reply verbatim and defer the note until this time (22:55 or 3h)")
+	answer.Flags().StringVar(&answerOpts.deferReason, "reason", "", "with --defer, why the note is deferred")
 	var listFor string
 	var full bool
 	list := &cobra.Command{Use: "list", Short: "List the open notes", Args: cobra.NoArgs}
@@ -555,7 +573,153 @@ machine's, each named <context>#<n> (in JSON its "central"); with the
 central instance unreachable, the list fails after the machine's notes.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
-	c.AddCommand(add, answer, done, list, a.noteShowCmd())
+	c.AddCommand(add, answer, done, a.noteDeferCmd(), a.noteReopenCmd(), list, a.noteShowCmd())
+	return c
+}
+
+func (a *app) noteDeferCmd() *cobra.Command {
+	var due, reason string
+	c := &cobra.Command{
+		Use:   "defer <id>",
+		Short: "Defer an open note until a future due time while keeping it in the queue",
+		Long: `Defer an open note until --due <time> (a clock time like 22:55 or a duration
+like 2h). The note stays open in the state and in beekeeper guide queue so
+nothing waiting on the person is hidden, while beekeeper guide next advances
+to other due decisions until the deferral time arrives. Logs note.deferred.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if strings.TrimSpace(due) == "" {
+				return usageErr("--due is required: when the deferred note becomes due again (22:55 or 3h)")
+			}
+			d, err := untilTime(a.now, due)
+			if err != nil {
+				return err
+			}
+			if !d.After(a.now) {
+				return usageErr("--due %q must be in the future", due)
+			}
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			ids, err := parseIDs(args, "note")
+			if err != nil {
+				return err
+			}
+			id := ids[0]
+			var deferred *state.Note
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == id })
+				if i < 0 {
+					return nil, refused("note #%d is not open: use `beekeeper note reopen %d --due %s` to reopen a closed note", id, id, due)
+				}
+				setNoteDeferral(&st.Notes[i], d, reason)
+				r := guideRole.get(st)
+				if r.Asking == id && r.AskingFrom == "" {
+					r.Asking, r.AskingFrom = 0, ""
+					guideRole.set(st, r)
+				}
+				cp := st.Notes[i]
+				deferred = &cp
+				return []state.Event{deferEvent(me, &st.Notes[i], d, reason)}, nil
+			})
+			if err != nil {
+				return err
+			}
+			if a.json {
+				return a.printJSON(deferred)
+			}
+			_, err = fmt.Fprintf(a.out, "note #%d deferred until %s\n", id, clock(a.now, d))
+			return err
+		},
+	}
+	c.Flags().StringVar(&due, "due", "", "when the deferred note becomes due again: a time (22:55) or a duration (3h)")
+	c.Flags().StringVar(&reason, "reason", "", "why the note is deferred")
+	return c
+}
+
+func (a *app) noteReopenCmd() *cobra.Command {
+	var due, reason string
+	c := &cobra.Command{
+		Use:   "reopen <id>",
+		Short: "Reopen a closed, answered or defaulted note back into the open queue",
+		Long: `Reopen a closed, answered or defaulted note from retained history back into
+the open notes queue while preserving all prior answer.recorded and closure
+events in the audit log. Logs note.reopened.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			d, err := untilTime(a.now, due)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(due) != "" && !d.After(a.now) {
+				return usageErr("--due %q must be in the future", due)
+			}
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			ids, err := parseIDs(args, "note")
+			if err != nil {
+				return err
+			}
+			id := ids[0]
+			shown, err := a.retainedNote(id)
+			if err != nil {
+				return err
+			}
+			if shown == nil {
+				return refused("note #%d was not found in open notes or retained history", id)
+			}
+			if shown.Status == noteStatusOpen {
+				return refused("note #%d is already open; use `beekeeper note defer %d --due <time>` to defer it", id, id)
+			}
+			var reopened state.Note
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
+					return nil, refused("note #%d is already open", id)
+				}
+				n := shown.Note
+				parseNoteTextParts(&n)
+				if n.Kind == "" {
+					n.Kind = noteDecision
+				}
+				clearNoteDeferral(&n)
+				n.Fired = d.UTC()
+				n.Fired = n.Fired.Truncate(0)
+				n.Fired = state.Note{}.Fired
+				switch {
+				case !d.IsZero():
+					n.Due = d.UTC()
+				case !n.Due.IsZero() && !n.Due.After(a.now):
+					n.Due = a.now.Add(defaultedKeep).UTC()
+				case n.Due.IsZero() && n.Kind == noteDecision:
+					n.Due = a.now.Add(defaultedKeep).UTC()
+				}
+				st.Defaulted = slices.DeleteFunc(st.Defaulted, func(o state.Note) bool { return o.ID == id })
+				st.Notes = append(st.Notes, n)
+				slices.SortFunc(st.Notes, func(a, b state.Note) int { return cmp.Compare(a.ID, b.ID) })
+				reopened = n
+				why := ""
+				if r := strings.TrimSpace(reason); r != "" {
+					why = fmt.Sprintf(" (%s)", oneLine(r))
+				}
+				ev := event(me, noteReopened, "#%d reopened%s: %s", n.ID, why, n.Text)
+				ev.NoteTeam = n.By.Team
+				return []state.Event{ev}, nil
+			})
+			if err != nil {
+				return err
+			}
+			if a.json {
+				return a.printJSON(reopened)
+			}
+			_, err = fmt.Fprintf(a.out, "note #%d reopened\n", id)
+			return err
+		},
+	}
+	c.Flags().StringVar(&due, "due", "", "new due time for the reopened note: a time (22:55) or a duration (3h)")
+	c.Flags().StringVar(&reason, "reason", "", "why the note is reopened")
 	return c
 }
 
@@ -705,13 +869,22 @@ func (a *app) printNotesFull(notes []state.Note) {
 // noteTag is n's tags, " [for …, by …, due …]", or "".
 func (a *app) noteTag(n *state.Note) string {
 	var tags []string
+	if n.Kind == noteTodo {
+		tags = append(tags, noteTodo)
+	}
 	if n.For != "" {
 		tags = append(tags, "for "+n.For)
 	}
 	if n.By.Owner() != "" {
 		tags = append(tags, "by "+quotedOwner(n.By))
 	}
-	if !n.Due.IsZero() {
+	if u, why, ok := noteDeferral(n); ok && a.now.Before(u) {
+		tag := "deferred until " + clock(a.now, u)
+		if why != "" {
+			tag += " (" + why + ")"
+		}
+		tags = append(tags, tag)
+	} else if !n.Due.IsZero() {
 		tags = append(tags, "due "+clock(a.now, n.Due))
 		if n.Due.Before(a.now) {
 			tags[len(tags)-1] += " (overdue)"

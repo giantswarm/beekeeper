@@ -46,7 +46,7 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 	r := state.Role{
 		Run:      3,
 		Holder:   &state.Supervisor{Party: state.Party{Name: supA.Name}},
-		Relieved: []state.Relief{{Party: state.Party{Name: guideRole.runName(12)}, By: state.Party{Name: "Agent nine"}}},
+		Relieved: []state.Relief{{Party: state.Party{Name: guideRole.runName(12)}, By: state.Party{Name: uiAgentName}}},
 	}
 	if got := guideRole.lastRun(r); got != 12 {
 		t.Errorf("lastRun = %d, want 12", got)

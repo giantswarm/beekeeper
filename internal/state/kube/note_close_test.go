@@ -287,3 +287,39 @@ func TestQualifiedNoteEventWaitsForItsTeam(t *testing.T) {
 		}
 	}
 }
+
+func TestReopenedNoteReturnsToOpenState(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNamespace}}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: teamNamespace(team)}}).Build()
+	s := New(c)
+	if err := s.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = append(st.Notes, state.Note{ID: 1, By: ana, At: now, Text: asked, Kind: state.NoteDecision})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = nil
+		return []state.Event{{At: now, By: pia, Verb: noteAnsweredEvent, Detail: `acme/app#999 answered by "display name" via cli, note #1 asked by "ana": "ship?": what if hooks are on?`}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	note, closure, err := s.LookupNote(1)
+	if err != nil || note == nil || closure == nil {
+		t.Fatalf("lookup closed note: %+v %+v %v", note, closure, err)
+	}
+	if err := s.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = append(st.Notes, *note)
+		return []state.Event{{At: now.Add(time.Minute), By: ana, Verb: "note.reopened", Detail: "#1 reopened: ship?"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Read()
+	if err != nil || len(st.Notes) != 1 || st.Notes[0].ID != 1 {
+		t.Fatalf("reopened note not in open state: %+v %v", st, err)
+	}
+}

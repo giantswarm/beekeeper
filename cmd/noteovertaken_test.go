@@ -253,7 +253,7 @@ func TestAnsweredNoteIsNeverOvertaken(t *testing.T) {
 		state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: "asked now", Refs: []string{refOne}},
 	)
 	c := w.noteCmd()
-	c.SetArgs([]string{"answer", "1", "yes"})
+	c.SetArgs([]string{verbAnswer, "1", "yes"})
 	c.SetOut(w.out)
 	c.SilenceUsage = true
 	if err := c.Execute(); err != nil {
@@ -372,7 +372,7 @@ func TestNoteAddRefAndDoneOvertaken(t *testing.T) {
 	}
 	done := func(args ...string) error {
 		c := a.noteCmd()
-		c.SetArgs(append([]string{"done"}, args...))
+		c.SetArgs(append([]string{paramDone}, args...))
 		c.SetOut(a.out)
 		c.SetErr(a.out)
 		c.SilenceUsage, c.SilenceErrors = true, true
