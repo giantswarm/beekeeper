@@ -149,7 +149,7 @@ func TestSupervisorWorkflowDeliveryLimit(t *testing.T) {
 	must(err)
 	must(p.runAll(rel, []string{gitPush, originRemote, head + ":refs/pull/1/head"}))
 	editPull(func(pull map[string]any) { pull["headRefOid"] = head })
-	must(run(checkout, "--as", "project 2", "agents", "park", "--on", "fixture/project#1", "desk review"))
+	must(run(checkout, "--as", "project 2", "agents", "park", "--on", "fixture/project#1", "--post-merge", "fixture post-release proof", "desk review"))
 	must(p.runAll(rel, []string{gitCheckout, mainBranch}))
 	pass()
 	pass()
@@ -183,6 +183,11 @@ func TestSupervisorWorkflowDeliveryLimit(t *testing.T) {
 		if !strings.Contains(string(events), `\"step\":\"`+step+`\"`) {
 			t.Fatalf("missing delivery.step evidence for %s", step)
 		}
+	}
+	base, err := p.run(serverDir, "--git-dir="+p.path("origin.git"), gitRevParse, "refs/heads/main")
+	must(err)
+	if base == p.base {
+		t.Fatal("workflow did not merge the corrected head into the Git origin")
 	}
 	if unknown, err := os.ReadFile(p.path("unknown-call")); err == nil {
 		t.Fatalf("unknown fixture boundary: %s", unknown)
