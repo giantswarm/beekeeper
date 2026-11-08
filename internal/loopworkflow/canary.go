@@ -819,7 +819,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	}
 
 	// Verify the candidate passes isolated command checks without touching live config/state.
-	for _, args := range [][]string{{"version"}, {"supervisor", "status"}} {
+	for _, args := range [][]string{{"version"}, {"supervisor", statusField}} {
 		if _, err := runCmd(dir, candidatePath, args...); err != nil {
 			return "", fmt.Errorf("candidate %s: %w", strings.Join(args, " "), err)
 		}
@@ -1095,11 +1095,11 @@ func serveCanaryClaude() int {
 		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
 		sessionID := short + "-0000-0000-0000-000000000001"
 		rows = append(rows, map[string]any{
-			"id":        short,
-			"sessionId": sessionID,
-			nameField:   name,
-			"kind":      "bg",
-			"pid":       1,
+			"id":           short,
+			sessionIDField: sessionID,
+			nameField:      name,
+			"kind":         "bg",
+			"pid":          1,
 		})
 		if err := writeSessions(rows); err != nil {
 			fmt.Fprintln(os.Stderr, err)

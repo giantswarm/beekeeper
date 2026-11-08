@@ -11,6 +11,7 @@ import (
 )
 
 const sshMessageSender = "sender"
+const sshMessageSenderSession = "sender-session"
 
 func TestExecutionMessagesRetainParkUntilHarnessAcceptance(t *testing.T) {
 	a, r := executionTestApp(t)
@@ -22,7 +23,7 @@ func TestExecutionMessagesRetainParkUntilHarnessAcceptance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	by := state.Party{Session: "sender-session", Name: sshMessageSender, Host: sshTestCoordinator}
+	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
 	stage := execution.Stored
 	calls := 0
 	fake := &testExecutionTransport{message: func(_ context.Context, ref execution.Ref, m execution.Envelope) (execution.Ack, error) {

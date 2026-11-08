@@ -47,6 +47,13 @@ const (
 	ghAPI            = "api"
 	ghGraphQL        = "graphql"
 	ghPR             = "pr"
+	deliveryScenario = "delivery"
+	dataField        = "data"
+	statusField      = "status"
+	numberField      = "number"
+	repositoryField  = "repository"
+	sessionIDField   = "sessionId"
+	fixtureRepo      = "fixture/project"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -111,6 +118,9 @@ func serveGitHub() int {
 	args := os.Args[1:]
 	trace(append([]string{ghCmd}, args...))
 	root := os.Getenv("FIXTURE_DIR")
+	if code, handled := deliveryGitHub(args); handled {
+		return code
+	}
 	raw, err := os.ReadFile(filepath.Join(root, pullJSONFile)) //nolint:gosec // scratch fixture state
 	if err != nil {
 		panic(err)
@@ -139,12 +149,7 @@ func serveGitHub() int {
 	// This fixture repository has a readable main branch and no release
 	// workflows. Delivery recovery must observe that explicitly, without
 	// allowing unrelated or unrecognized external requests.
-	case starts(ghAPI, "-H", "Accept: application/vnd.github.raw") && len(args) == 4 && slices.Contains([]string{
-		"repos/fixture/project/contents/.github/workflows/zz_generated.auto_release.yaml?ref=main",
-		"repos/fixture/project/contents/.github/workflows/auto-release.yaml?ref=main",
-		"repos/fixture/project/contents/.github/workflows/zz_generated.create_release_pr.yaml?ref=main",
-		"repos/fixture/project/contents/.github/workflows/zz_generated.create_release.yaml?ref=main",
-	}, args[3]):
+	case starts(ghAPI, "-H", "Accept: application/vnd.github.raw") && len(args) == 4 && fixtureWorkflowRead(args[3]):
 		fmt.Fprintln(os.Stderr, "gh: Not Found (HTTP 404)")
 		return 1
 	case starts(ghAPI, "repos/fixture/project/branches/main", "--jq", ".name") && len(args) == 4:
@@ -154,9 +159,9 @@ func serveGitHub() int {
 		fmt.Println(fixtureBot)
 		return 0
 	case starts(ghAPI, "repos/fixture/project/pulls/1"):
-		return emit(map[string]any{"head": map[string]any{"sha": p["headRefOid"], "ref": p["headRefName"], "repo": map[string]any{"full_name": "fixture/project"}}, "user": map[string]any{loginField: fixtureBot}})
+		return emit(map[string]any{"head": map[string]any{"sha": p["headRefOid"], "ref": p["headRefName"], "repo": map[string]any{"full_name": fixtureRepo}}, "user": map[string]any{loginField: fixtureBot}})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "issueOrPullRequest(number:") }):
-		return emit(map[string]any{"data": map[string]any{"r0": map[string]any{"issueOrPullRequest": map[string]any{"__typename": "PullRequest", stateField: p[stateField]}}}})
+		return emit(map[string]any{dataField: map[string]any{"r0": map[string]any{"issueOrPullRequest": map[string]any{"__typename": "PullRequest", stateField: p[stateField]}}}})
 	case starts(ghPR, "review"):
 		head, _ := p["headRefOid"].(string)
 		body := "Desk review (opus): approved\nHead reviewed: `" + head + "`"
@@ -216,7 +221,7 @@ func serveGitHub() int {
 		if os.Getenv("FIXTURE_CASE") == "unreadable-queue" {
 			return emit(map[string]any{"errors": []any{map[string]any{"message": "fixture unavailable"}}})
 		}
-		return emit(map[string]any{"data": map[string]any{"repository": map[string]any{"mergeQueue": nil}}})
+		return emit(map[string]any{dataField: map[string]any{repositoryField: map[string]any{"mergeQueue": nil}}})
 	case starts(ghPR, "merge"):
 		pin := slices.Index(args, "--match-head-commit")
 		if pin < 0 || pin+1 >= len(args) || args[pin+1] != p["headRefOid"] {
@@ -284,6 +289,11 @@ func serveClaude() int {
 		}
 	}
 	switch {
+	case os.Getenv("FIXTURE_CASE") == deliveryScenario && slices.Contains(args, "SendMessage"):
+		// The fixture worker accepts the supervisor's findings notification;
+		// the integration test then drives that worker's deterministic turn.
+		fmt.Println(`{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}`)
+		return 0
 	case len(args) > 0 && args[0] == "plugin":
 		fmt.Println("[]")
 		return 0
@@ -302,6 +312,14 @@ func serveClaude() int {
 			writeSessions(rows)
 		}
 		return 0
+	case os.Getenv("FIXTURE_CASE") == deliveryScenario && slices.Contains(args, "--bg") && slices.Contains(args, "--resume"):
+		idx := slices.Index(args, "--resume")
+		if idx+1 >= len(args) {
+			panic("fixture resume lacks session")
+		}
+		id := args[idx+1]
+		fmt.Printf("backgrounded · %s · fixture resumed worker\n", id[:min(8, len(id))])
+		return 0
 	case slices.Contains(args, "--bg"):
 		name := "worker"
 		if idx := slices.Index(args, "-n"); idx >= 0 && idx+1 < len(args) {
@@ -310,14 +328,33 @@ func serveClaude() int {
 		rows := readSessions()
 		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
 		rows = append(rows, map[string]any{
-			"id":        short,
-			"sessionId": short + "-0000-0000-0000-000000000001",
-			nameField:   name,
-			"kind":      "bg",
-			"pid":       1,
+			"id":           short,
+			sessionIDField: short + "-0000-0000-0000-000000000001",
+			nameField:      name,
+			"kind":         "bg",
+			"pid":          1,
 		})
 		writeSessions(rows)
-		if strings.HasPrefix(name, "Review ") {
+		if os.Getenv("FIXTURE_CASE") == deliveryScenario {
+			// Real starts write a transcript before a parked session can resume.
+			// Keep it in the fixture's isolated Claude project tree.
+			dir := filepath.Join(root, "home", ".claude", "projects", "fixture")
+			if err := os.MkdirAll(dir, 0700); err != nil { //nolint:gosec // isolated scratch fixture
+				panic(err)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				panic(err)
+			}
+			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: short + "-0000-0000-0000-000000000001", "type": "assistant"})
+			if err != nil {
+				panic(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, short+"-0000-0000-0000-000000000001.jsonl"), append(raw, '\n'), 0600); err != nil { //nolint:gosec // isolated scratch fixture transcript
+				panic(err)
+			}
+		}
+		if strings.HasPrefix(name, "Review ") && os.Getenv("FIXTURE_CASE") != deliveryScenario {
 			raw, err := os.ReadFile(filepath.Join(root, pullJSONFile)) //nolint:gosec // scratch fixture state
 			if err != nil {
 				panic(err)
@@ -330,7 +367,7 @@ func serveClaude() int {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			body := "Desk review (opus): approved\nHead reviewed: `" + head + "`"
-			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", "fixture/project", "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
+			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", fixtureRepo, "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
 			c.Env = append(os.Environ(), "FIXTURE_DIR="+root)
 			if out, err := c.CombinedOutput(); err != nil {
 				panic(fmt.Sprintf("fixture reviewer gh pr review: %v: %s", err, out))
@@ -344,4 +381,15 @@ func serveClaude() int {
 		fmt.Fprintln(os.Stderr, "unknown fixture claude command: "+string(raw))
 		return 1
 	}
+}
+
+// fixtureWorkflowRead recognizes raw workflow reads only in the isolated
+// repository at its main ref. Unknown endpoints still fail closed.
+func fixtureWorkflowRead(endpoint string) bool {
+	name, ok := strings.CutPrefix(endpoint, "repos/fixture/project/contents/.github/workflows/")
+	if !ok {
+		return false
+	}
+	name, ok = strings.CutSuffix(name, "?ref=main")
+	return ok && name != "" && !strings.ContainsAny(name, "/?%") && name != "." && name != ".."
 }

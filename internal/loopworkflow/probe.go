@@ -176,7 +176,7 @@ func pullPayload(head string, reviews []any) ([]byte, error) {
 		stateField: openState, "url": "https://github.com/fixture/project/pull/1", "baseRefName": mainBranch, "headRefName": changeBranch, "headRefOid": head,
 		authorField: map[string]any{loginField: fixtureBot}, "title": fixtureChangeMsg, "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": cleanStatus,
 		"changedFiles": 1, "files": []any{map[string]any{"path": readmeFile}},
-		"statusCheckRollup": []any{map[string]any{nameField: "test", "status": completedStatus, "conclusion": successStatus}},
+		"statusCheckRollup": []any{map[string]any{nameField: "test", statusField: completedStatus, "conclusion": successStatus}},
 		reviewsField:        reviews,
 	})
 }

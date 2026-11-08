@@ -24,7 +24,7 @@ func TestModelBreaches(t *testing.T) {
 	resources := []string{labOne, labTwo}
 	lab1 := machine.HostModel{Name: bigModel, SizeMiB: 18000, Client: labOneNode}
 	lab2 := machine.HostModel{Name: "mid", SizeMiB: 6000, Client: "172.21.0.2 agentlab-2-control-plane"}
-	host := machine.HostModel{Name: "host", SizeMiB: 3000, Client: "127.0.0.1"}
+	host := machine.HostModel{Name: paramHost, SizeMiB: 3000, Client: "127.0.0.1"}
 	a := lease.Holder{Env: labOne, Session: "a", Name: "Agent A"}
 	b := lease.Holder{Env: labTwo, Session: "b", Name: "Agent B"}
 	msA := func(gib int) lease.Holder {
@@ -38,7 +38,7 @@ func TestModelBreaches(t *testing.T) {
 	}{
 		"no lease: a lab load is unloaded, a host load named": {
 			[]machine.HostModel{lab1, host}, []lease.Holder{a},
-			map[string]bool{bigModel: true, "host": false}, "nobody holds the model-server lease",
+			map[string]bool{bigModel: true, paramHost: false}, "nobody holds the model-server lease",
 		},
 		"the holder's lab within its budget": {
 			[]machine.HostModel{lab1}, []lease.Holder{a, msA(24)}, map[string]bool{}, "",

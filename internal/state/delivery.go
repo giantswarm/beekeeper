@@ -69,6 +69,14 @@ func (s *State) StartDelivery(ref, agent, waits string, at time.Time) {
 	if ref == "" {
 		return
 	}
+	// A reviewer or fixer may serve the pull rather than its linked issue.
+	// Reuse its active issue deliveries instead of temporarily counting the
+	// same work again until the next supervisor observation absorbs the seed.
+	if slices.ContainsFunc(s.Deliveries, func(d Delivery) bool {
+		return d.Active() && slices.ContainsFunc(d.Pulls, func(p string) bool { return strings.EqualFold(p, ref) })
+	}) {
+		return
+	}
 	i := slices.IndexFunc(s.Deliveries, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) })
 	if i >= 0 && (s.Deliveries[i].Active() || s.Deliveries[i].DropReason != "" && len(s.Deliveries[i].Pulls) > 0) {
 		return

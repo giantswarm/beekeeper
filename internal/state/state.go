@@ -1174,7 +1174,8 @@ func (st *State) Knows(p Party) bool {
 	return false
 }
 
-// Emergency is a guide-session emergency grant; expiry is checked on every action.
+// Emergency is a guide-role grant; By records its issuer, not its owner.
+// Only the authenticated current guide may act; expiry is checked every time.
 type Emergency struct {
 	By     Party     `json:"by"`
 	Reason string    `json:"reason"`

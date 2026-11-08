@@ -69,7 +69,7 @@ func (a *app) deliveryCmd() *cobra.Command {
 					return err
 				}
 			}
-			_, err = fmt.Fprintf(a.out, "%d released, %.2f released per day since %s\n", v.Released, v.ReleasedPerDay, v.Since.Format(time.RFC3339))
+			_, err = fmt.Fprintf(a.out, "%d released, %.2f released per day since %s; mean start to released %s (%d complete cycles)\n", v.Released, v.ReleasedPerDay, v.Since.Format(time.RFC3339), v.MeanCycleTime, v.CycleSamples)
 			return err
 		}
 		st, err := a.store.Read()
@@ -127,6 +127,8 @@ type deliveryStats struct {
 	Steps          []deliveryStepStats `json:"steps"`
 	Released       int                 `json:"released"`
 	ReleasedPerDay float64             `json:"releasedPerDay"`
+	MeanCycleTime  time.Duration       `json:"meanCycleTime"`
+	CycleSamples   int                 `json:"cycleSamples"`
 }
 
 // Intervals crossing the window boundary are clipped. End states have no
@@ -159,6 +161,13 @@ func deliveryStatistics(events []state.Event, since, until time.Time) deliverySt
 		}
 		if d.Step == state.DeliveryDone && !e.At.Before(since) {
 			v.Released++
+			// Completed cycles keep their full age, even if their start precedes
+			// the statistics window. Unknown start times cannot size a limit.
+			if !d.Started.IsZero() && !d.Started.After(e.At) {
+				cycle := e.At.Sub(d.Started)
+				v.CycleSamples++
+				v.MeanCycleTime += (cycle - v.MeanCycleTime) / time.Duration(v.CycleSamples)
+			}
 		}
 		last[d.Ref] = d
 	}

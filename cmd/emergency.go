@@ -63,7 +63,7 @@ func (a *app) emergencyAction(action string) (*state.Emergency, error) {
 			return nil, err
 		}
 		e := st.Emergency
-		if e == nil || !emergencySameSession(e.By, me) || !emergencyNow().Before(e.Until) {
+		if e == nil || !emergencyNow().Before(e.Until) {
 			return nil, refused("emergency mode is off or expired; enable it with the person's quoted words and --until")
 		}
 		copy := *e
@@ -76,7 +76,8 @@ func (a *app) emergencyAction(action string) (*state.Emergency, error) {
 func (a *app) emergencyCmd() *cobra.Command {
 	c := &cobra.Command{Use: "emergency", Short: "Bounded, audited emergency controls for the current guide", Long: `The current guide enables emergency mode on the person's explicit word, quoted
 verbatim with --reason, and a required --until time or duration. The grant
-expires automatically and does not transfer to a successor guide.
+belongs to the guide role and transfers to its authenticated successor without
+extending its expiry. The original words and issuer remain recorded.
 
 Use emergency merge <owner/repo> <number> for an approved open pull request:
 it bypasses desk review and the merge lane, using GitHub's squash merge with

@@ -46,8 +46,8 @@ to merge a GitHub-approved pull request past desk review at its exact head,
 `beekeeper emergency hold set/lift` for holds, `beekeeper emergency start` for
 a forced capacity start, and `beekeeper emergency capacity <capacity.key> <value>`
 for validated capacity limits. These commands log each action and result with
-the authorization. The grant expires automatically, never transfers to a
-successor, and can end early with `beekeeper emergency off`. The exception is
+the authorization. The grant expires automatically, belongs to the guide role and transfers to its
+authenticated successor without extending its expiry, and can end early with `beekeeper emergency off`. The exception is
 these commands alone; ordinary merge, edit and browser restrictions still apply.
 
 On the person's word, `beekeeper emergency auto-install pause --reason "<words>"`
@@ -97,6 +97,12 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   said in one line with its URL. Never "I can't, you run it", never an explanation in place of the
   attempt, never a question about what the guide or the loop should just do. A refusal by the hook
   is not the end of the request: it is filed as the hint says, in that turn.
+- **Direct orders last until done or changed.** The person's direct order remains in force across
+  turns, sessions and relays until the work is done or the person changes or withdraws it. Do not
+  confirm it again or ask again about a step it already covers. Carry the person's words and scope
+  into the issue, worker brief and hand-over so the next session can act on the same authorization.
+  The brief adds no conditions of the guide's own. Ordinary merge gates and a stop from the person
+  still apply; emergency grants retain their explicit expiry and pass only to the authenticated guide successor.
 - **Stuck state is the guide's to fix.** A hold, a pinned release or a parked session that stands in
   the way of what the person decided is set, narrowed or lifted by the guide itself, never filed
   and never handed back, and the outcome reported. The decision is the person's: their request or
@@ -115,8 +121,12 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   transcript and the issue or PR it names: a note may already be answered there, or overtaken by the
   work. An answer the person already gave is recorded with `beekeeper answer` in their words and relayed,
   not asked again.
-- **Questions keep the guide available.** Serve one decision with `beekeeper guide next`, then
-  ask it in the conversation without waiting for them to ask, with its status quo, why it needs the person, options, consequences,
+- **Waiting decisions are filtered before asking.** Each `GUIDE DECISION`, `GUIDE WAITING` and
+  decision served by `beekeeper guide next` first passes "One decision at a time, only what matters"
+  and "Read before asking". Close or hand back settled items with the reason; when an existing
+  answer covers them, record and relay that answer verbatim. Ask only what remains open.
+- **Questions keep the guide available.** Serve one decision with `beekeeper guide next`, apply
+  the filter above; if a decision remains open, ask it in the conversation without waiting for them to ask, with its status quo, why it needs the person, options, consequences,
   recommendation, deadline and default. Claims of merged, green or released work carry the check
   and every issue or PR its full URL. Never use a blocking question dialog: it stops the guide's
   handling of messages and its watch. Keep processing peer messages and the watch while the answer
@@ -162,3 +172,7 @@ The rest of the role is in this skill's `references/` folder, read when its mome
   first guide. Read at `GUIDE RELAY DUE`, in a headless turn and when starting the role.
 - `references/board-and-machine.md`: the daily board reconciliation and the machine changes the
   person approves. Read before either.
+
+### Recorded decisions survive sessions
+
+Record the person’s decisions verbatim with `beekeeper answer <ref> --via cli|slack "<words>"`. Read `beekeeper answer history` at start, after a relay and before asking again. The handover includes the complete recorded history, including its source and time. Apply decisions within their original scope until completed or changed; do not reinterpret a recorded decision as an unsupported peer claim. If authorization is missing, name the missing record and scope in a note. Never ask for repeated words already recorded. Keep core behavior in beekeeper, not desk rule files.
