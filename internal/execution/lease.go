@@ -7,11 +7,16 @@ import (
 	"errors"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 )
 
 const LeaseDuration = 90 * time.Second
 const LeaseRenewal = 20 * time.Second
+
+// ErrCoordinatorBusy crosses the callback boundary as a fixed diagnostic;
+// host journals never retain arbitrary coordinator errors or SSH output.
+var ErrCoordinatorBusy = errors.New("coordinator lease state commit busy")
 
 type LeaseRequest struct {
 	Previous uint64 `json:"previous"`
@@ -78,7 +83,49 @@ func VerifyLease(grant LeaseGrant, request LeaseRequest, ref Ref, coordinator, k
 // its signed response before granting runtime. The caller measures deadlines
 // from BEFORE the request with a monotonic clock; host wall-clock skew never
 // extends authority. An uncertain retry keeps the original challenge and time.
-func (s *Server) renewLease(ctx context.Context, ref Ref) (*LeaseGrant, error) {
+// LeaseRenewalFailure retains only bounded metadata, never callback stderr,
+// control keys, signatures, transcripts or host routes.
+type LeaseRenewalFailure struct {
+	At       time.Time     `json:"at"`
+	Duration time.Duration `json:"duration"`
+	Stage    string        `json:"stage"`
+	Kind     string        `json:"kind"`
+	Sequence uint64        `json:"sequence"`
+	Count    uint64        `json:"count"`
+}
+
+func (s *Server) renewLease(ctx context.Context, ref Ref) (result *LeaseGrant, resultErr error) {
+	started := time.Now()
+	stage := "prepare"
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		kind := "refused"
+		var unreachable *UnreachableError
+		switch {
+		case errors.Is(resultErr, ErrCoordinatorBusy):
+			kind = "coordinator-busy"
+		case errors.Is(resultErr, context.DeadlineExceeded):
+			kind = "deadline"
+		case errors.Is(resultErr, context.Canceled):
+			kind = "canceled"
+		case errors.As(resultErr, &unreachable):
+			kind = "unreachable"
+		}
+		_ = s.recordLeaseFailure(ref, func(j *Journal) error {
+			failure := &LeaseRenewalFailure{At: started.UTC(), Duration: time.Since(started), Stage: stage, Kind: kind, Count: 1}
+			if j.Lease != nil {
+				failure.Sequence = j.Lease.Sequence
+			}
+			if j.LeaseFailure != nil {
+				failure.Count += j.LeaseFailure.Count
+			}
+			j.LeaseFailure = failure
+			return nil
+		})
+	}()
+
 	if err := s.update(ctx, ref, func(j *Journal) error {
 		if j.StopRequest != nil {
 			return errors.New("lease renewal revoked by stop")
@@ -100,12 +147,15 @@ func (s *Server) renewLease(ctx context.Context, ref Ref) (*LeaseGrant, error) {
 	}
 	co := s.Config.Coordinators[j.Request.Coordinator]
 	var grant LeaseGrant
+	stage = "callback"
 	if err := CoordinatorCall(ctx, co.Callback, string(ref.Host), "renew-lease", ref, j.LeasePending, j.Request.ControlKey, &grant, s.Callback); err != nil {
 		return nil, err
 	}
+	stage = "verify"
 	if err := VerifyLease(grant, *j.LeasePending, ref, j.Request.Coordinator, co.PublicKey); err != nil {
 		return nil, err
 	}
+	stage = "persist"
 	err = s.update(ctx, ref, func(current *Journal) error {
 		if current.StopRequest != nil || current.LeasePending == nil || *current.LeasePending != *j.LeasePending {
 			return errors.New("lease renewal superseded")
@@ -114,6 +164,29 @@ func (s *Server) renewLease(ctx context.Context, ref Ref) (*LeaseGrant, error) {
 		return nil
 	})
 	return &grant, err
+}
+
+// recordLeaseFailure makes one nonblocking lock attempt, independently of the
+// failed request's context. An exhausted callback deadline must not suppress its
+// own diagnostic, and diagnostics must never queue ahead of lease expiry.
+func (s *Server) recordLeaseFailure(ref Ref, record func(*Journal) error) error {
+	p, err := s.journalPath(ref)
+	if err != nil {
+		return err
+	}
+	l := flock.New(p + ".lock")
+	if ok, err := l.TryLock(); err != nil || !ok {
+		return errors.New("execution journal is busy")
+	}
+	defer func() { _ = l.Unlock() }()
+	j, err := s.Read(ref)
+	if err != nil {
+		return err
+	}
+	if err := record(&j); err != nil {
+		return err
+	}
+	return atomicFile(p, mustJSON(j))
 }
 
 // maintainLease runs only inside the owned runner. Expiry durably records stop

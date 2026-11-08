@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -158,6 +157,21 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		}
 		return json.NewEncoder(output).Encode(reply)
 	}
+	if req.Operation == "renew-lease" {
+		grant, callErr := a.renewExecutionLease(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+			if errors.Is(callErr, execution.ErrCoordinatorBusy) {
+				reply.Error = execution.ErrCoordinatorBusy.Error()
+			}
+		} else {
+			reply.Payload, err = json.Marshal(grant)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r, i := executionRecord(st, req.Ref)
 		if r == nil || req.Protocol != execution.Protocol || req.RequestID == "" || req.Ref.Validate() != nil || string(req.Ref.Host) != host || !execution.VerifyCallback(req, r.Request.ControlKey) {
@@ -186,24 +200,6 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				return nil, errors.New("live coordinator activation refused")
 			}
 			value = execution.ActivationDecision{Allowed: true}
-		case "renew-lease":
-			if !r.Request.LeaseRequired || r.StopRequest != nil || r.Terminal() || st.Stop != nil || r.Request.Coordinator != a.cfg.Identity.Host {
-				return nil, errors.New("coordinator lease renewal revoked")
-			}
-			var request execution.LeaseRequest
-			if execution.Decode(req.Payload, &request) != nil {
-				return nil, errors.New("invalid lease request")
-			}
-			key, keyErr := execution.SigningKey(filepath.Join(a.cfg.StateDir, "execution-coordinator"))
-			if keyErr != nil {
-				return nil, keyErr
-			}
-			grant, grantErr := execution.IssueLease(req.Ref, r.Request.Coordinator, r.Lease, request, key, time.Now())
-			if grantErr != nil {
-				return nil, grantErr
-			}
-			r.Lease = &grant
-			value = grant
 		case publicationTransfer:
 			var chunk publicationChunk
 			if execution.Decode(req.Payload, &chunk) != nil {

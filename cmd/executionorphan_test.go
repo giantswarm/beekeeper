@@ -130,7 +130,7 @@ func TestMissingJournalSettlesPendingStopWithoutAcknowledgement(t *testing.T) {
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				switch mode {
 				case "pending-stop":
-					st.Starts[0].Execution.StopRequest = &execution.StopRequest{ID: "stop-missing", Reason: "stop"}
+					st.Starts[0].Execution.StopRequest = &execution.StopRequest{ID: "stop-missing", Reason: "pending stop fixture"}
 				case "desk-stop":
 					st.Stop = &state.Stop{Reason: "operator desk stop"}
 				}

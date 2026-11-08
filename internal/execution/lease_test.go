@@ -79,6 +79,10 @@ func TestLeaseLostReplyRetriesOriginalGrantAndStopsRevokeRenewal(t *testing.T) {
 	if _, err := f.s.renewLease(ctx, f.r.Ref); err == nil {
 		t.Fatal("lost reply reported success")
 	}
+	failed, err := f.s.Read(f.r.Ref)
+	if err != nil || failed.LeaseFailure == nil || failed.LeaseFailure.Stage != "callback" || failed.LeaseFailure.Kind != "unreachable" || failed.LeaseFailure.Count != 1 {
+		t.Fatal("bounded renewal failure context missing", err)
+	}
 	grant, err := f.s.renewLease(ctx, f.r.Ref)
 	if err != nil || grant == nil || grant.Sequence != 1 {
 		t.Fatal("lost reply created another grant", err)
@@ -162,5 +166,29 @@ func TestLeaseWatchUsesElapsedClockAndNeverRenewsExpiredAuthority(t *testing.T) 
 	}
 	if len(f.launcher.stops) != 1 || f.launcher.stops[0] != UnitName(f.r.Ref) {
 		t.Fatal("wrong owned unit stopped")
+	}
+}
+
+func TestLeaseFailureRetainedAfterCallbackCancelsContext(t *testing.T) {
+	f := testFixture(t)
+	f.r.LeaseRequired = true
+	if _, err := f.s.Start(context.Background(), f.r); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.s.Callback = func(context.Context, []string, []byte) ([]byte, error) {
+		cancel()
+		return nil, context.Canceled
+	}
+	if _, err := f.s.renewLease(ctx, f.r.Ref); err == nil {
+		t.Fatal("canceled callback reported success")
+	}
+	j, err := f.s.Read(f.r.Ref)
+	if err != nil || j.LeaseFailure == nil || j.LeaseFailure.Kind != "canceled" || j.LeaseFailure.Stage != "callback" {
+		t.Fatal("canceled callback lost failure metadata", err)
+	}
+	if j.Lease != nil || j.LeasePending == nil {
+		t.Fatal("failed callback changed lease authority")
 	}
 }

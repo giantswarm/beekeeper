@@ -346,7 +346,7 @@ func TestExecutionStopPersistsIntentBeforeSSHAndKeepsTask(t *testing.T) {
 			t.Fatal("SSH stop preceded durable coordinator intent")
 		}
 		if calls == 1 {
-			return execution.Ack{}, &execution.UnreachableError{Operation: "stop", Cause: errors.New("fixture disconnection")}
+			return execution.Ack{}, &execution.UnreachableError{Operation: bgStopCmd, Cause: errors.New("fixture disconnection")}
 		}
 		return execution.Ack{ID: q.ID, Stage: execution.Applied}, nil
 	}

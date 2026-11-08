@@ -1982,6 +1982,12 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.checkWriter(st, time.Now()); err != nil {
 		return err
 	}
+	leasesBefore := make(map[execution.Ref]execution.LeaseGrant)
+	for _, start := range st.Starts {
+		if r := start.Execution; r != nil && r.Lease != nil {
+			leasesBefore[r.Request.Ref] = *r.Lease
+		}
+	}
 	events, err := fn(st)
 	if err != nil {
 		return err
@@ -1989,7 +1995,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
-	return s.commitEvents(st, events)
+	return s.commitEvents(st, events, leasesBefore)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -2039,6 +2045,11 @@ func (s *FileStore) Exclusive(fn func() error) error {
 		return err
 	}
 	defer unlock()
+	commitUnlock, err := s.commitLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer commitUnlock()
 	return fn()
 }
 

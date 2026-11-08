@@ -90,6 +90,9 @@ func CoordinatorCall(ctx context.Context, endpoint Endpoint, host, op string, re
 		return errors.New("invalid coordinator callback response")
 	}
 	if reply.Error != "" {
+		if reply.Error == ErrCoordinatorBusy.Error() {
+			return ErrCoordinatorBusy
+		}
 		return errors.New(reply.Error)
 	}
 	return Decode(reply.Payload, result)
