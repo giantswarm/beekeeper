@@ -10,13 +10,14 @@ import (
 
 func TestDecisionHistorySurvivesAgeAndIncludesVerbatimSource(t *testing.T) {
 	a, out := noteApp(t)
+	const decisionAuthor = "decision-author"
 	words := "Proceed.\nKeep the existing limit."
-	e := answerEvent(state.Party{Name: "recorder"}, &recordedAnswer{About: "o/r#1", By: "owner", Via: viaCLI, Answer: words}, nil)
+	e := answerEvent(state.Party{Name: "recorder"}, &recordedAnswer{About: "o/r#1", By: decisionAuthor, Via: viaCLI, Answer: words}, nil)
 	e.At = a.now.Add(-365 * 24 * time.Hour)
 	if err := a.store.Log(e); err != nil {
 		t.Fatal(err)
 	}
-	other := answerEvent(state.Party{Name: "peer"}, &recordedAnswer{About: "o/r#2", By: "owner", Via: viaSlack, Answer: "Wait."}, nil)
+	other := answerEvent(state.Party{Name: "peer"}, &recordedAnswer{About: idleRef, By: decisionAuthor, Via: viaSlack, Answer: "Wait."}, nil)
 	other.At = a.now
 	if err := a.store.Log(other); err != nil {
 		t.Fatal(err)
@@ -26,7 +27,7 @@ func TestDecisionHistorySurvivesAgeAndIncludesVerbatimSource(t *testing.T) {
 		t.Fatalf("history: %v, %v", events, err)
 	}
 	text := decisionHistoryText(events)
-	for _, want := range []string{words, "recorder", "owner", "via cli", e.At.Format(time.RFC3339)} {
+	for _, want := range []string{words, "recorder", decisionAuthor, "via cli", e.At.Format(time.RFC3339)} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %s", want, text)
 		}

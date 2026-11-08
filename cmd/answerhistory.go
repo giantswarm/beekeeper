@@ -33,9 +33,9 @@ func decisionHistoryText(events []state.Event) string {
 
 func (a *app) answerHistoryCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "history [<owner/repo#n|URL>]",
+		Use:   "history [<owner/repo#n|URL>]",
 		Short: "Read recorded decisions with their verbatim words and source, without an age cutoff",
-		Args: cobra.MaximumNArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			ref := ""
 			if len(args) != 0 {
