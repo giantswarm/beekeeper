@@ -1845,7 +1845,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	}
 	// Freeze reservations before independent streams can register their starts.
 	// A capacity read and a roster read are not one atomic observation.
-	reservations := deliveryReservations(current)
+	reservations, _ := l.deliveryReservations(current)
 
 	planned := map[string]bool{}
 	var (

@@ -2445,6 +2445,10 @@ type Supervisor struct {
 	// capacity's ceiling stays unchanged and no agent is done or removed
 	// (5m), doubled for each further one in a row up to four times.
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
+	// ReserveFor is how long after its step began a review-queued or
+	// fixing delivery still reserves a start slot ahead of new work (1h);
+	// an older one is a stalled delivery, not a slot held from new starts.
+	ReserveFor Duration `yaml:"reserveFor"`
 	// UnmergedLimit holds back new board starts on a repository once it has
 	// this many open pull requests opened within UnmergedWindow, escalating
 	// the backlog to the guide (default 10; negative disables).
@@ -2461,6 +2465,8 @@ const (
 	DefaultUnmergedLimit = 10
 	// DefaultUnmergedWindow is supervisor.unmergedWindow when unset.
 	DefaultUnmergedWindow = 7 * 24 * time.Hour
+	// DefaultReserveFor is supervisor.reserveFor when unset.
+	DefaultReserveFor = time.Hour
 )
 
 // DefaultTeamFiles is supervisor.ownership.teamFiles unless the
@@ -3618,6 +3624,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
 	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
 	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
+	setDur(&c.Supervisor.ReserveFor, DefaultReserveFor)
 	setDur(&c.Supervisor.UnmergedWindow, DefaultUnmergedWindow)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {

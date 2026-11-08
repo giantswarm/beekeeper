@@ -2307,9 +2307,17 @@ admission rules. An active incident hold's named repair and a `board.order` step
 with `wipExempt: true` pass the WIP gate and still count. A manual `agents start`
 is counted and warns above the limit. Slots needed by `review-queued` deliveries
 and fixes without a live worker are reserved before every new issue start,
-including done-event `KindNext` starts and work waiting from earlier passes. Each worker stream carries its frozen
+including done-event `KindNext` starts and work waiting from earlier passes. Only a
+start the loop will make reserves one: a delivery in a repository the desk works
+on (inside `github.allowedOrgs`, not in `supervisor.ownership.never`) that no hold
+of its repository stops, whose review is not already requested or assigned at its
+current head, and whose step began within `supervisor.reserveFor` (default `1h`);
+an older one is a stalled delivery, not a slot held from new work. The reserved
+slots are at most half the room, rounded down, so a pile of deliveries never stops
+every new start. Each worker stream carries its frozen
 reservations through discovery and the fresh dispatch check. The log names the
-reserving deliveries once per episode; dry-run applies the same reservation. Capacity ceilings, review headroom,
+reserving deliveries, and how many were not reserved and why, once per episode;
+dry-run applies the same reservation. Capacity ceilings, review headroom,
 verdict and JSON stay unchanged.
 
 `delivery.stallAfter` defaults to `24h` (a positive duration). A stalled delivery
