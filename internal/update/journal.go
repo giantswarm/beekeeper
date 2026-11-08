@@ -536,6 +536,11 @@ func Rollback(ctx context.Context, path, reason string, guard func(previous, fai
 	if err != nil {
 		return err
 	}
+	return i.rollback(j, reason, guard)
+}
+
+// rollback holds the installation lock while the state guard restores verified bytes.
+func (i *installation) rollback(j *Journal, reason string, guard func(previous, failed string, restore func() error) error) error {
 	if j == nil || j.Previous == nil {
 		return errors.New("no verified recovery target; install a compatible signed release")
 	}

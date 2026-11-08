@@ -521,9 +521,11 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 			b := busy
 			r.mu.Unlock()
 			if b > 0 {
-				return `{"ceiling":1,"room":0}`, 0
+				return `{"ceiling":3,"room":0}`, 0
 			}
-			return `{"ceiling":1,"room":1}`, 0
+			// Two existing delivery observations reserve room before their actions
+			// settle. A third place permits unrelated board work during the merge.
+			return `{"ceiling":3,"room":3}`, 0
 		case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
 			return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
 		case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
@@ -617,6 +619,10 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 					}
 					if busy.Load() > 0 {
 						return `{"ceiling":1,"room":0}`, 0
+					}
+					if slow == workerRole {
+						// Keep a place beyond the pending review reservation.
+						return `{"ceiling":2,"room":2}`, 0
 					}
 					return `{"ceiling":1,"room":1}`, 0
 				case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:

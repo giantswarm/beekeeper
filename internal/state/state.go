@@ -585,6 +585,9 @@ type Timer struct {
 	// or closes unfired when Expire is set.
 	Until  time.Time `json:"until,omitzero"`
 	Expire bool      `json:"expire,omitempty"`
+	// PendingWakeReason retains an already fired occurrence until delivery.
+	PendingWakeReason   string `json:"pendingWakeReason,omitempty"`
+	PendingWakeTimedOut bool   `json:"pendingWakeTimedOut,omitempty"`
 	// Wake is the agent the firing wakes with What; Run a shell command it
 	// runs, its exit code logged. Without either the watch's line says it.
 	Wake string `json:"wake,omitempty"`
@@ -1199,12 +1202,13 @@ type GuideWork struct {
 
 // State is the whole document.
 type State struct {
-	Deliveries        []Delivery  `json:"deliveries,omitempty"`
-	DeliveriesAt      time.Time   `json:"deliveriesAt,omitempty"`
-	GuideReportsSince time.Time   `json:"guideReportsSince,omitempty"`
-	GuideReports      []string    `json:"guideReports,omitempty"`
-	GuideWork         []GuideWork `json:"guideWork,omitempty"`
-	NextGuideWork     int         `json:"nextGuideWork,omitempty"`
+	DeliveryHealth    DeliveryHealth `json:"deliveryHealth,omitempty"`
+	Deliveries        []Delivery     `json:"deliveries,omitempty"`
+	DeliveriesAt      time.Time      `json:"deliveriesAt,omitempty"`
+	GuideReportsSince time.Time      `json:"guideReportsSince,omitempty"`
+	GuideReports      []string       `json:"guideReports,omitempty"`
+	GuideWork         []GuideWork    `json:"guideWork,omitempty"`
+	NextGuideWork     int            `json:"nextGuideWork,omitempty"`
 	// EventOutbox retains the exact log append with the state it commits.
 	EventOutbox *EventOutbox `json:"eventOutbox,omitempty"`
 	// ProductionNotes are consumed authorities, retained across hook processes.

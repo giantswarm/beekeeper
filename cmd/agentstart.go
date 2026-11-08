@@ -205,7 +205,8 @@ refused with the available checkout paths. The session starts in the checkout
 so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
 created from the freshly fetched origin default branch. A --review start
 instead requires a pull request URL in its brief and creates a detached
-<state>/worktrees/<repo>/review-<number>. Existing destinations are refused.
+<state>/worktrees/<repo>/review-<number>-<unique-id>. Old review worktrees
+are preserved; each review start gets its own detached checkout.
 A brief spanning repositories must be split into one task per repository.
 The supervisor loop's starts are outside these rules: it knows a repository,
 not a checkout, so they run in agents.dir and their briefs say where to work.
@@ -2533,6 +2534,12 @@ func (a *app) recordStart(st *state.State, s state.Start, task, serves string, l
 	reg, err := recordStart(st, s, task, serves, live)
 	if err != nil {
 		return reg, err
+	}
+	if limit := a.cfg.Delivery.WIPLimit; limit > 0 {
+		v := readDeliveryWIP(st, limit, a.cfg.Supervisor.LoopInterval.Duration, s.At)
+		if v.Count > limit {
+			_, _ = fmt.Fprintf(a.out, "warning: %d of %d in delivery after manual start; delivery limit does not refuse agents start\n", v.Count, limit)
+		}
 	}
 	return reg, a.handRegistration(st, reg, s.Party)
 }

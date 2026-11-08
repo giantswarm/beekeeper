@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -96,6 +97,7 @@ func (a *app) deliveryCmd() *cobra.Command {
 		_, err = fmt.Fprintln(a.out, v.line())
 		return err
 	}}
+	c.AddCommand(a.deliveryDropCmd())
 	c.Flags().BoolVar(&stats, "stats", false, "Show step durations and releases per day from delivery.step events")
 	c.Flags().DurationVar(&since, "since", 7*24*time.Hour, "Statistics window")
 	return c
@@ -184,4 +186,79 @@ func deliveryStatistics(events []state.Event, since, until time.Time) deliverySt
 		v.ReleasedPerDay = float64(v.Released) / days
 	}
 	return v
+}
+
+func (a *app) deliveryDropCmd() *cobra.Command {
+	var reason string
+	c := &cobra.Command{Use: "drop <ref> --reason <why>", Short: "End only a delivery, keeping its pull requests and workers", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return usageErr("delivery drop requires a nonempty --reason")
+		}
+		refs, err := skipRefs(args)
+		if err != nil {
+			return usageErr("%v", err)
+		}
+		by, err := a.caller()
+		if err != nil {
+			return err
+		}
+		snapshot, err := a.store.Read()
+		if err != nil {
+			return err
+		}
+		idx := slices.IndexFunc(snapshot.Deliveries, func(d state.Delivery) bool { return strings.EqualFold(d.Ref, refs[0]) })
+		if idx < 0 {
+			return refused("delivery not found: %s", refs[0])
+		}
+		observed := snapshot.Deliveries[idx]
+		if observed.DropReason != "" && observed.Step == state.DeliveryDropped {
+			return nil
+		}
+		heads := map[string]string{}
+		// Bind to the actual GitHub head, which may have moved since the last
+		// supervisor observation. A failed read cannot produce an unbound drop.
+		for _, ref := range observed.Pulls {
+			p, err := readLoopPull(c.Context(), ref)
+			if err != nil {
+				return err
+			}
+			if p.Head == "" {
+				return refused("delivery head not observed for %s; cannot bind drop", ref)
+			}
+			heads[ref] = p.Head
+		}
+
+		return a.store.Update(func(st *state.State) ([]state.Event, error) {
+			i := slices.IndexFunc(st.Deliveries, func(d state.Delivery) bool { return strings.EqualFold(d.Ref, refs[0]) })
+			if i < 0 {
+				return nil, refused("delivery not found: %s", refs[0])
+			}
+			d := &st.Deliveries[i]
+			if d.DropReason != "" && d.Step == state.DeliveryDropped {
+				return nil, nil
+			}
+			if !d.Active() {
+				return nil, refused("delivery already ended: %s", refs[0])
+			}
+			if !d.Started.Equal(observed.Started) || !slices.Equal(d.Pulls, observed.Pulls) || !maps.Equal(d.Heads, observed.Heads) {
+				return nil, refused("delivery changed while reading its head; retry drop")
+			}
+
+			prev := slices.Clone(st.Deliveries)
+			d.Heads = heads
+			d.DroppedHeads = maps.Clone(heads)
+			// The CLI clock was captured before the network reads. Commit time
+			// prevents a cached read from during those reads undoing this drop.
+			at := time.Now().UTC()
+			if logical := a.timeNow(); logical.After(at) {
+				at = logical
+			}
+			d.Step, d.Since, d.DropAt, d.DropBy, d.DropReason = state.DeliveryDropped, at, at, by, reason
+			events := state.DeliveryEvents(prev, st.Deliveries, by)
+			return append(events, about(event(by, "delivery.drop", "%s: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), reason), d.Ref)), nil
+		})
+	}}
+	c.Flags().StringVar(&reason, "reason", "", "Why the delivery is ended (required); does not close a PR or stop a worker")
+	return c
 }

@@ -142,6 +142,7 @@ func (snap *Snapshot) Parent(ref string) string {
 
 // Candidate is an item the order offers, in its place.
 type Candidate struct {
+	WIPExempt bool `json:"wip_exempt,omitempty"`
 	Item
 	// Step is the name of the step that offers it; Epic the epic whose
 	// sub-issue it is.
@@ -200,7 +201,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 		byRef[strings.ToLower(it.Ref)] = it
 	}
 	var out []Candidate
-	offer := func(it Item, step, match, epic, skip string) {
+	offer := func(it Item, step config.BoardStep, match, epic, skip string) {
 		if seen[it.Ref] {
 			return
 		}
@@ -211,12 +212,12 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			return snap.Parent(ref)
 		}
-		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now), assignedAbove(it.Ref, up, byRef, b.People))})
+		out = append(out, Candidate{Item: it, Step: step.Name, WIPExempt: step.WIPExempt, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now), assignedAbove(it.Ref, up, byRef, b.People))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
 			for _, it := range snap.Search[i] {
-				offer(it, st.Name, "search", "", "")
+				offer(it, st, "search", "", "")
 			}
 			continue
 		}
@@ -226,11 +227,11 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			m := matched(st, it)
 			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 || len(assignedOutside(it, b.People)) > 0 || assignedAbove(it.Ref, snap.Parent, byRef, b.People) != "" {
-				offer(it, st.Name, m, "", "")
+				offer(it, st, m, "", "")
 				continue
 			}
 			if len(it.SubIssues) == 0 && len(it.Missing) > 0 {
-				offer(it, st.Name, m, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
+				offer(it, st, m, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
 				continue
 			}
 			seen[it.Ref] = true
@@ -254,7 +255,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				case sub.OnBoard:
 					skip = Unoffered(snap.Order, sub, now)
 				}
-				offer(sub, st.Name, m, it.Ref, skip)
+				offer(sub, st, m, it.Ref, skip)
 			}
 		}
 	}

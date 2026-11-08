@@ -2283,9 +2283,101 @@ without a pull request, or work closed unmerged without a continuing worker, is 
 The release verdict and tag survive removal of the merge from its lane.
 
 `delivery.wipLimit` defaults to `0` (off), accepts nonnegative values through
-`beekeeper config set delivery.wipLimit <n>`, and is displayed for observation only.
-This foundation does not refuse starts, reserve slots or change `capacity` or its JSON.
-New-start enforcement, review/fix priority and stall handling are separate work.
+`beekeeper config set delivery.wipLimit <n>`. When set, it holds new issues until
+a place is free. A delivery observation older than three loop intervals also holds
+new starts. `board next --json` includes `wip` (limit, count, items, freshness and
+reason) and `would_pick`, the first otherwise free item. Its `pick` is null and exit
+status is 3 when no item is admitted; `skipped` and `after_pick` still preview the
+ordinary walk. Claims count and record under one lock.
+
+The loop checks before ordinary board or monitored queue reads. With no known
+exemption route, full/stale intake makes no read. Configured exempt steps and
+active named incident repairs instead allow exemption-only board discovery
+(`board next --wip-exempt-only`), retaining the existing ranking and admission
+checks, skipping the monitored queue, and never falling back to ordinary picks.
+The held limit sets no refill pause, so a completed release frees the next pass.
+It checks again immediately before dispatch.
+
+Reviews, forwards, fixes, wakes, rework, merges and repairs keep their existing
+admission rules. An active incident hold's named repair and a `board.order` step
+with `wipExempt: true` pass the WIP gate and still count. A manual `agents start`
+is counted and warns above the limit. Slots needed by `review-queued` deliveries
+and fixes without a live worker are reserved before every new issue start,
+including done-event `KindNext` starts and work waiting from earlier passes. Each worker stream carries its frozen
+reservations through discovery and the fresh dispatch check. The log names the
+reserving deliveries once per episode; dry-run applies the same reservation. Capacity ceilings, review headroom,
+verdict and JSON stay unchanged.
+
+`delivery.stallAfter` defaults to `24h` (a positive duration). A stalled delivery
+keeps its place. Both watches share durable episode state: a step lasting that long,
+or a failed/unconfirmed release, files once to the guide with its reference and
+wait; recovery is filed once. `WIP FULL` names the oldest deliveries when the limit
+has stayed full without a step change for that duration. Restarts and concurrent
+watches do not duplicate the reports.
+
+`beekeeper delivery drop <ref> --reason "<why>"` ends only a delivery. It closes no
+pull request and stops no worker. The caller and reason are logged. The drop is
+bound to the actual observed pull-request heads (an unknown head is refused), so
+observing the same head after a restart does not bring it back. A new head opens a
+new delivery episode. No delivery is automatically dropped for being stalled.
+
+The separate `supervisor.unmergedLimit` / `supervisor.unmergedWindow` policy still
+holds new work per repository (defaults: 10 non-draft open pulls created in seven
+days), escalating its own backlog episode. Desk delivery WIP does not replace those
+per-repository semantics. Selecting a managed WIP value and an installed end-to-end
+proof remain separate work.
+
+### The flow simulated and measured
+
+`beekeeper sim` holds the model of how an issue is meant to flow and compares it with the
+event log. The model: a worker starts when a busy slot is free (`capacity.ceiling`, reviewers
+up to `capacity.reviewHeadroom` more) and pushes a pull request; CI runs; once it is green the
+loop starts a reviewer, which fixes its own findings on the branch or asks for changes; the
+repository's lane merges one pull request at a time (`devctl pr merge` with the merge-result
+check); the release rolls out. The loop drives every step but the worker's and the reviewer's
+turns, so while it is down nothing starts, is reviewed or merges. Each stage has a median
+service time with a lognormal spread, and the model has chances for red CI, a change request
+and a started issue dropped without a pull request.
+
+`beekeeper sim model` prints the model with this desk's slots. `beekeeper sim run` simulates it
+over `--days` with one parameter changed at a time (`--workers`, `--lanes`, `--uptime`,
+`--stage merging=40m`, `--update-branch`, `--backlog`, `--arrivals`, `--dropped`, …) and prints
+the released issues a day, the cycle time, each stage's wait and service and how busy the slots
+and lanes were; the same `--seed` gives the same run. `beekeeper sim observe --since 7d`
+measures the real flow from the log: each delivery step's residence (`delivery.step`), the
+loop's silences (no `supervisor.*` event for 15 minutes counts as down), the busy agents
+against the ceiling (the `USAGE` lines, time-weighted), the worker and reviewer starts, the
+loop's failures by step and reason, the merges' exit codes, what the workers parked on and the
+releases rolled back. `beekeeper sim compare` (the default) puts both side by side: per stage
+the model's median against the log's with the causes the log names, the loop's uptime, the
+busy agents, the released issues a day; then the model fitted to the log (the log's stage
+times, uptime, drop share, lanes and start rate) is run with one change at a time back towards
+the model, and the changes are ranked by the released issues a day each would gain. That
+ranking is the order to fix things in, and the fitted run beside the observed rate says
+whether the model still holds. `--json` returns every figure.
+
+`beekeeper sim forecast --horizon 24h` runs the desk as it is forward through the model. Its
+snapshot is the live state: the active deliveries with the state of each one's agent on the
+roster (busy, parked, idle), the parked agents and what they wait on, the timers, holds,
+lanes, failed merges and review requests, and two verdicts that are the implementation's own
+rather than the model's, run in process: `capacity` (the room for a start, what blocks one, a
+standing stop, each provider's ceiling) and `board next` (the free items in the order the loop
+would take them, and the held ones with their reasons; `--no-board` skips that GitHub read).
+Before the run the snapshot is read for `PROBLEMS`: a `stop` line is what will not move at
+all (the loop down, a stop, no room while free items wait, a review recorded as requested
+while no reviewer runs, a parked worker on a timer that is gone), a `slow` line what moves
+late (a failed merge in its backoff, items long in a step with a parked worker or none, idle
+agents beside free items). Then every item in flight gets
+the steps it enters and when it is released, or why it is stuck; the free board items the time
+a slot takes them; and the totals by 6, 12 and 24 hours. `--from-log 7d` fits the stage times
+to that window's log medians first; the `--stage`, `--workers` and other `run` flags apply. The
+forecast is saved (`--save=false` only prints) and `beekeeper sim check` compares it with the
+desk later: for each item the step the forecast had it in now against the step it is in (on
+track, ahead, behind by how long with its agent and what it waits on, stuck as forecast,
+gone), the starts and releases expected by now against the real ones, and which problems
+still stand or resolved themselves. The intended use is the guide's: `sim forecast` at a
+check, `sim check` at the next one, acting on the problems and on the items behind forecast,
+and the gap between the two says how far the model is from the desk.
 
 #### Checking the live projection
 
@@ -2494,7 +2586,7 @@ messages and `agents resume` remain available to the person.
 | Source | When it can deliver a turn |
 |---|---|
 | Park settlement (`watch`, `agents.autoResume`) | Only after the named note, issue, PR, hold or lease settles. |
-| Timers and probes | A failed probe stays in the watch; no model checks it. At delivery, the current park is read again. A person/note park gets `TIMER WAKE SKIPPED`; another named park accepts only a typed GitHub condition on its own reference. A plain external wait accepts its timer, including its explicit timeout. Skipped fires keep their watch/log record and normal close/repeat behavior. |
+| Timers and probes | A failed probe stays in the watch; no model checks it. At delivery, the current park is read again. A person/note park gets `TIMER WAKE SKIPPED`; another named park accepts only a typed GitHub condition on its own reference. A plain external wait accepts its timer, including its explicit timeout. An explicit `Timer <id>: …` wait accepts that timer, including probe completion and timeout. Skipped or failed wakes keep their timer open for retry until delivery succeeds or a durable delivery is queued. |
 | Command outcomes (`devctl.unheard`) | A person park keeps the outcome owed until the park ends, within the existing 24-hour outcome retention window. A plain PR wait still receives its own command result, including red CI. |
 | Automatic note/default and hold-release notifications | A parked session gets its own park settlement instead, for local and central defaults. Other note outcomes stay in the log. A person's explicit answer/message still reaches it. |
 | Supervisor loop | Verified review findings, red CI, merge go, completed release proof and matching alerts settle their corresponding waits; a note park gets no idle wake. |

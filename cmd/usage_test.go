@@ -385,6 +385,17 @@ capacity:
 		t.Fatal(err)
 	}
 
+	// pending may notify the guide asynchronously. Drain every watch's
+	// deliveries before the shared state directory and globals are restored,
+	// just as the production watch drains them on shutdown.
+	drainWatch := func(w *watcher) {
+		t.Cleanup(func() {
+			w.bg.Wait()
+			w.stand.inflight.Wait()
+			w.timerActs.Wait()
+		})
+	}
+
 	t0 := keepNow
 	sup := tasked("Supervisor run 1")
 	parkedAuto := tasked("ParkedAuto")
@@ -441,6 +452,7 @@ capacity:
 	var onceErrOut bytes.Buffer
 	aOnceErr := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &onceErrOut, as: usageCaller, readUsage: reader}
 	wOnceErr := aOnceErr.newWatcher(false, false)
+	drainWatch(wOnceErr)
 	wOnceErr.now = t0
 	wOnceErr.pending(context.Background(), sessionsAt(t0, false))
 	if wOnceErr.onceErr() == nil || !strings.Contains(onceErrOut.String(), "USAGE unreadable: reader offline") {
@@ -451,6 +463,7 @@ capacity:
 	var onceOut bytes.Buffer
 	aOnce := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &onceOut, as: usageCaller, readUsage: reader}
 	wOnce := aOnce.newWatcher(false, false)
+	drainWatch(wOnce)
 	wOnce.now = t0
 	wOnce.pending(context.Background(), sessionsAt(t0, false))
 	if err := wOnce.onceErr(); err != nil || !strings.Contains(onceOut.String(), "USAGE: 5h 40%") || !strings.Contains(onceOut.String(), "target ceiling 8") {
@@ -467,7 +480,7 @@ capacity:
 		w.clock = &fakeClock{now: now}
 		w.doctoring.Store(true) // the doctor is not under test
 		w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
-		t.Cleanup(func() { w.bg.Wait() })
+		drainWatch(w)
 		return w, &out
 	}
 

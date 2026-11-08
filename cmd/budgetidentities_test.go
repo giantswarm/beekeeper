@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -303,5 +305,81 @@ func TestBudgetMetadataFallbackRetainsKnownLowWindow(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "WARNING:") {
 		t.Fatal("missing fallback warning")
+	}
+}
+
+// A busy state writer used to stall budget for the state's two-minute lock
+// wait even when its caller supplied a short deadline.
+func TestBudgetDoesNotWaitForStateWriter(t *testing.T) {
+	a, _ := budgetApp(t)
+	refuse := false
+	refusingGitHub(t, &refuse)
+	lock := flock.New(filepath.Join(a.store.Dir(), "state.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := a.probeBudget(ctx)
+	if err == nil || time.Since(start) > time.Second {
+		t.Fatalf("budget did not fail promptly on a busy state writer: %v (%s)", err, time.Since(start))
+	}
+}
+
+// The loop forces GraphQL samples before and after each step. That must
+// not multiply REST probes, nor advance the REST cache's sampling time.
+func TestForcedGraphQLSamplesShareRESTCache(t *testing.T) {
+	a, _ := budgetApp(t)
+	a.cfg.Merge.BudgetFresh.Duration = -time.Second
+	var rest, graph atomic.Int32
+	reset := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Remaining", "4800")
+		w.Header().Set("X-RateLimit-Reset", fmt.Sprint(reset.Unix()))
+		if r.URL.Path == budgetGraphQLPath {
+			graph.Add(1)
+			_, _ = fmt.Fprintf(w, `{"data":{"rateLimit":{"limit":5000,"remaining":4800,"resetAt":%q}}}`, reset.Format(time.RFC3339))
+		} else {
+			rest.Add(1)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
+	var sampled time.Time
+	for i := range 6 {
+		if _, err := a.probeBudget(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			sampled = st.Budget.Identities["gh"].At
+		} else if !st.Budget.Identities["gh"].At.Equal(sampled) {
+			t.Fatal("GraphQL sample extended the REST cache lifetime")
+		}
+	}
+	if rest.Load() != 1 || graph.Load() != 6 {
+		t.Fatalf("REST %d GraphQL %d, want 1 and 6", rest.Load(), graph.Load())
+	}
+	// Expiry forces a real REST read despite continuing GraphQL traffic.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		b := st.Budget.Identities["gh"]
+		b.At = time.Now().Add(-time.Minute)
+		st.Budget.Identities["gh"] = b
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.probeBudget(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rest.Load() != 2 {
+		t.Fatal("expired REST sample was reused")
 	}
 }
