@@ -218,6 +218,12 @@ with central configured), 125 a newer release (self-update --check).`,
 			if err := a.checkExecutionCommand(cmd); err != nil {
 				return err
 			}
+			// Admission must never wait for the first-run plugin sync (which
+			// may fetch GitHub and take two minutes). The next ordinary command
+			// still performs it.
+			if cmd.Name() == "budget" {
+				return nil
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)
 			defer cancel()
 			if syncsUnder(a.explicitConfig()) {
@@ -295,6 +301,7 @@ func (a *app) load() error {
 		return err
 	}
 	a.now = time.Now()
+	a.observeREST()
 	return nil
 }
 

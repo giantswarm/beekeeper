@@ -558,7 +558,8 @@ comment, or gh issue create, edit or comment, whose --body or --body-file
 names a bare #n or owner/repo#n without its full GitHub URL is refused
 naming the full URL.
 
-Admitted GraphQL shell invocations are recorded locally as github.call events,
+Admitted GraphQL and REST shell invocations are recorded locally as github.call
+and github.rest.call events,
 with the session, command class and a heavy flag for project item-list or
 --paginate. Recording makes no GitHub request; beekeeper budget and the watch
 use the records to name callers after their processes exit.
