@@ -346,3 +346,36 @@ func TestLoopReviewStartLaunchFailedAfterRegistering(t *testing.T) {
 		t.Fatalf("outcome %+v", o)
 	}
 }
+
+func TestThroughputCheckpointPreservesEligibility(t *testing.T) {
+	r := newLoopRig(t)
+	now := r.a.timeNow()
+	wait := eligibleWait{Head: loopHead, URL: loopURL, Since: now.Add(-time.Hour)}
+	old := throughputObservation{At: now.Add(-10 * time.Minute), Candidate: testLoopOldVer, Eligible: map[string]eligibleWait{loopPR: wait}}
+	if err := r.a.store.WriteFile(throughputObservationFile, old); err != nil {
+		t.Fatal(err)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.checkpointThroughput(now); err != nil {
+		t.Fatal(err)
+	}
+	var got throughputObservation
+	if found, err := r.a.store.ReadFile(throughputObservationFile, &got); err != nil || !found {
+		t.Fatalf("checkpoint missing: %v", err)
+	}
+	if !got.At.Equal(now) || got.Candidate != normalizeLoopVersion(loopRunningVersion()) || !got.Unknown {
+		t.Fatalf("checkpoint lost progress: %+v", got)
+	}
+	if saved, ok := got.Eligible[loopPR]; !ok || saved.Head != wait.Head || saved.URL != wait.URL || !saved.Since.Equal(wait.Since) {
+		t.Fatalf("checkpoint lost eligibility: %+v", got.Eligible)
+	}
+	if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.a.store.ReadFile(throughputObservationFile, &got); err != nil || got.Unknown {
+		t.Fatalf("completed observation remained unknown: %+v, %v", got, err)
+	}
+}

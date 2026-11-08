@@ -294,7 +294,8 @@ type Taken struct {
 
 // Input is everything a pass plans from.
 type Input struct {
-	OpenPulls []string
+	PullReadAt map[string]time.Time
+	OpenPulls  []string
 	// ClosedIssues contains only successfully read, closed issues.
 	ClosedIssues map[string]bool
 	Workers      []Worker

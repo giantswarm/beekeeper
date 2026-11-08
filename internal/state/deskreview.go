@@ -94,8 +94,10 @@ func (st *State) UpsertReviewPark(rp ReviewPark) {
 }
 
 // ReviewRequest reserves a review before its session starts.
-// It survives roster pruning and prevents duplicate starts on an unchanged head.
+// Live sessions and assignments keep it active after the starting process exits.
 type ReviewRequest struct {
+	// PID owns the reservation only while the start command is in progress.
+	PID   int    `json:"pid,omitempty"`
 	Ref   string `json:"ref"`
 	Head  string `json:"head"`
 	Round int    `json:"round"`

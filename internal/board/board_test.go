@@ -1077,3 +1077,13 @@ func TestFollowUpNeverBecomesBoardCandidate(t *testing.T) {
 		t.Fatalf("follow-up not skipped: %+v", candidates)
 	}
 }
+
+func TestRankCarriesWIPExemptionFromActualStep(t *testing.T) {
+	b := deskBoard()
+	b.Order = []config.BoardStep{{Name: bugStep, Kind: []string{bug}}, {Name: bugStep, Status: []string{upNext}, WIPExempt: true}}
+	snap := &Snapshot{Order: b.Order, Items: []Item{{Ref: "o/r#401", Kind: bug, Updated: now}, {Ref: "o/r#402", Status: upNext, Updated: now}}}
+	got := Rank(snap, b, now)
+	if len(got) != 2 || got[0].WIPExempt || !got[1].WIPExempt {
+		t.Fatalf("step names confused exemption: %+v", got)
+	}
+}

@@ -36,6 +36,7 @@ const (
 	litOperator            = "operator"
 	litPlain               = "plain"
 	litPodrestarting       = "PodRestarting"
+	litPrune               = "prune"
 	litReviewer            = "reviewer"
 	litShared              = "shared"
 	litSmall               = "small"

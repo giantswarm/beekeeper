@@ -31,15 +31,23 @@ HELM_UNITTEST_TGZ := helm-unittest-$(HELM_UNITTEST_PLATFORM)-$(HELM_UNITTEST_VER
 
 .PHONY: helm-unittest-install
 helm-unittest-install: ## Install the pinned helm-unittest plugin from its release tarball, verified against the checksum pinned above (no-op when installed).
-	@helm plugin list | grep -q '^unittest' && exit 0; \
+	@have=$$(helm plugin list 2>/dev/null | awk '$$1 == "unittest" {print $$2}'); \
+	[ "$$have" = "$(HELM_UNITTEST_VERSION)" ] && exit 0; \
+	[ -z "$$have" ] || helm plugin uninstall unittest || exit 1; \
 	sha="$(HELM_UNITTEST_SHA256_$(HELM_UNITTEST_PLATFORM))"; \
 	test -n "$$sha" || { echo "helm-unittest: no pinned checksum for $(HELM_UNITTEST_PLATFORM)"; exit 1; }; \
 	tmp="$$(mktemp -d)" && trap 'rm -rf "$$tmp"' EXIT; \
 	curl -sSfL --retry 3 --retry-all-errors -o "$$tmp/$(HELM_UNITTEST_TGZ)" \
 		"https://github.com/helm-unittest/helm-unittest/releases/download/v$(HELM_UNITTEST_VERSION)/$(HELM_UNITTEST_TGZ)" && \
-	(cd "$$tmp" && echo "$$sha  $(HELM_UNITTEST_TGZ)" | shasum -a 256 -c -) && \
+	(cd "$$tmp" && echo "$$sha  $(HELM_UNITTEST_TGZ)" | \
+		if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi) && \
 	dir="$$(helm env HELM_PLUGINS)/unittest" && mkdir -p "$$dir" && tar -xzf "$$tmp/$(HELM_UNITTEST_TGZ)" -C "$$dir" && \
 	helm plugin list | grep -q '^unittest'
+
+# The generated helm-test target also requires install-helm-unittest.
+# Run our pinned installer first, so that target sees the exact version
+# already installed and never runs the upstream hook/checksum downloader.
+install-helm-unittest: helm-unittest-install
 
 .PHONY: helm-test
 helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest suites (what CI's chart-test job runs).
