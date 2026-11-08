@@ -196,7 +196,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	prunes := 0
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == loopDiskKind && args[1] == "prune" {
+		if len(args) > 1 && args[0] == loopDiskKind && args[1] == litPrune {
 			prunes++
 			return "partial prune failed", 1
 		}
@@ -242,7 +242,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	r := newLoopRig(t)
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == loopDiskKind && args[1] == "prune" {
+		if len(args) > 1 && args[0] == loopDiskKind && args[1] == litPrune {
 			return "cleanup unavailable", 1
 		}
 		return "", 0
