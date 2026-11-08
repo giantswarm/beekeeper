@@ -45,7 +45,7 @@ func TestRepositoryVisibilityRequiresExplicitMetadata(t *testing.T) {
 		{`{"visibility":"public"}`, VisibilityPublic},
 		{`{"visibility":"private"}`, VisibilityPrivate},
 		{`{"visibility":"internal"}`, VisibilityInternal},
-		{`{VisibilityPrivate:false}`, ""},
+		{`{"private":false}`, ""},
 		{`{}`, ""},
 		{nullResponseFixture, ""},
 		{`{"visibility":"unknown"}`, ""},
