@@ -64,7 +64,7 @@ func TestParkedExecutionResumesAfterItsProcessExited(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	by := state.Party{Session: "sender-session", Name: sshMessageSender, Host: sshTestCoordinator}
+	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
 	err := a.resumeParkedOpts(context.Background(), by, r.Name, false)
 	var pending *executionDeliveryPending
 	if !errors.As(err, &pending) {
@@ -101,6 +101,72 @@ func TestEndedExecutionComesBackOnTheRosterByName(t *testing.T) {
 	st, _ = a.store.Read()
 	if *continued != 1 || len(st.Agents) != 1 || st.Agents[0].Execution == nil || st.Agents[0].Task != r.Task {
 		t.Fatalf("continued %d, roster %+v", *continued, st.Agents)
+	}
+}
+
+func TestUnparkedExitedExecutionResumesByName(t *testing.T) {
+	a, r, _, continued := exitedExecutionApp(t)
+	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
+	err := a.resumeParkedOpts(context.Background(), by, r.Name, false)
+	var pending *executionDeliveryPending
+	if !errors.As(err, &pending) {
+		t.Fatalf("resume = %v", err)
+	}
+	st, _ := a.store.Read()
+	x := st.Starts[0].Execution
+	if *continued != 1 || len(x.Messages) != 1 || x.Request.ConversationID != r.ConversationID || *st.Agents[0].Execution != r.Ref {
+		t.Fatalf("continued %d, execution %+v, agent %+v", *continued, x, st.Agents[0])
+	}
+}
+
+func TestUnparkedExecutionResumeWaitsForItsLastTurn(t *testing.T) {
+	a, r, fake, continued := exitedExecutionApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		x := st.Starts[0].Execution
+		x.Phase, x.Observation.ProcessState = execution.Running, execution.Running
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		return execution.Observation{Handle: execution.Handle{Ref: r.Ref, ConversationID: r.ConversationID, Repository: r.Repository, Unit: execution.UnitName(r.Ref)}, ProcessState: execution.Running, Ready: true}, nil
+	}
+	err := a.resumeParkedOpts(context.Background(), state.Party{Name: sshMessageSender}, r.Name, false)
+	if err == nil || !strings.Contains(err.Error(), "last turn") || *continued != 0 {
+		t.Fatalf("resume = %v, continued %d", err, *continued)
+	}
+	st, _ := a.store.Read()
+	if len(st.Starts[0].Execution.Messages) != 0 {
+		t.Fatal("resume queued a message while the completed runner was still ending")
+	}
+}
+
+func TestActiveUnparkedExecutionIsNotResumed(t *testing.T) {
+	a, r, _, continued := exitedExecutionApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		x := st.Starts[0].Execution
+		x.Completed, x.Phase, x.Observation.ProcessState = false, execution.Running, execution.Running
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := a.resumeParkedOpts(context.Background(), state.Party{Name: sshMessageSender}, r.Name, false)
+	if err == nil || !strings.Contains(err.Error(), "is not parked") || *continued != 0 {
+		t.Fatalf("active worker resume = %v, continued %d", err, *continued)
+	}
+}
+
+func TestUnparkedRetiredExecutionResumeNamesItsTranscript(t *testing.T) {
+	a, r, _, continued := exitedExecutionApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Retirement = &state.ExecutionRetirement{Trigger: execution.RetireTriggerReport}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := a.resumeParkedOpts(context.Background(), state.Party{Name: sshMessageSender}, r.Name, false)
+	if !errors.Is(err, errGone) || !strings.Contains(err.Error(), "transcript") || *continued != 0 {
+		t.Fatalf("resume = %v, continued %d", err, *continued)
 	}
 }
 
