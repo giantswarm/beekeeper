@@ -2316,6 +2316,29 @@ the model, and the changes are ranked by the released issues a day each would ga
 ranking is the order to fix things in, and the fitted run beside the observed rate says
 whether the model still holds. `--json` returns every figure.
 
+`beekeeper sim forecast --horizon 24h` runs the desk as it is forward through the model. Its
+snapshot is the live state: the active deliveries with the state of each one's agent on the
+roster (busy, parked, idle), the parked agents and what they wait on, the timers, holds,
+lanes, failed merges and review requests, and two verdicts that are the implementation's own
+rather than the model's, run in process: `capacity` (the room for a start, what blocks one, a
+standing stop, each provider's ceiling) and `board next` (the free items in the order the loop
+would take them, and the held ones with their reasons; `--no-board` skips that GitHub read).
+Before the run the snapshot is read for `PROBLEMS`: a `stop` line is what will not move at
+all (the loop down, a stop, no room while free items wait, a review recorded as requested
+while no reviewer runs, a parked worker on a timer that is gone), a `slow` line what moves
+late (a failed merge in its backoff, items long in a step with a parked worker or none, idle
+agents beside free items). Then every item in flight gets
+the steps it enters and when it is released, or why it is stuck; the free board items the time
+a slot takes them; and the totals by 6, 12 and 24 hours. `--from-log 7d` fits the stage times
+to that window's log medians first; the `--stage`, `--workers` and other `run` flags apply. The
+forecast is saved (`--save=false` only prints) and `beekeeper sim check` compares it with the
+desk later: for each item the step the forecast had it in now against the step it is in (on
+track, ahead, behind by how long with its agent and what it waits on, stuck as forecast,
+gone), the starts and releases expected by now against the real ones, and which problems
+still stand or resolved themselves. The intended use is the guide's: `sim forecast` at a
+check, `sim check` at the next one, acting on the problems and on the items behind forecast,
+and the gap between the two says how far the model is from the desk.
+
 ### The supervisor loop down
 
 The supervisor is the supervisor loop; no session holds its role. While the loop does not run,

@@ -6,6 +6,8 @@ import (
 	"math/rand/v2"
 	"slices"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // Quantiles summarise a set of durations.
@@ -84,6 +86,7 @@ func (h *eventHeap) next() *event { return heap.Pop(h).(*event) }
 // stage's draws and leaves every other draw as it was: two runs that differ
 // in one parameter differ in that parameter alone, not in their luck.
 type issue struct {
+	ref      string
 	lane     int
 	started  time.Duration
 	readyAt  time.Duration
@@ -120,6 +123,16 @@ type engine struct {
 	started   int
 	released  int
 	dropped   int
+
+	// A forecast names its issues: backlogRefs are the board items in
+	// order, paths the steps each named issue enters at a wall-clock time
+	// from forecastAt.
+	forecastAt  time.Time
+	stopped     string
+	backlogRefs []string
+	nextRef     int
+	paths       map[string][]Transition
+	lanes       map[string]int
 }
 
 func newEngine(m Model) *engine {
@@ -139,20 +152,25 @@ func newEngine(m Model) *engine {
 		m.LoopOutage = time.Hour
 	}
 	e := &engine{
-		m:          m,
-		rng:        rand.New(rand.NewPCG(uint64(m.Seed), uint64(m.Seed)+1)), //nolint:gosec // a deterministic simulation needs a seeded source, not a secure one
-		laneBusy:   make([]bool, m.Lanes),
-		laneAt:     make([]time.Duration, m.Lanes),
-		laneQueues: make([][]*issue, m.Lanes),
-		loopUp:     true,
-		backlog:    m.Backlog,
-		byStage:    map[string]*samples{},
+		m:       m,
+		rng:     rand.New(rand.NewPCG(uint64(m.Seed), uint64(m.Seed)+1)), //nolint:gosec // a deterministic simulation needs a seeded source, not a secure one
+		loopUp:  true,
+		backlog: m.Backlog,
+		byStage: map[string]*samples{},
 	}
+	e.resizeLanes(m.Lanes)
 	for _, s := range Stages {
 		e.byStage[s] = &samples{}
 	}
 	e.byStage[StageDecision] = &samples{}
 	return e
+}
+
+func (e *engine) resizeLanes(n int) {
+	e.m.Lanes = n
+	e.laneBusy = make([]bool, n)
+	e.laneAt = make([]time.Duration, n)
+	e.laneQueues = make([][]*issue, n)
 }
 
 func (e *engine) schedule(after time.Duration, fn func()) {
@@ -181,6 +199,14 @@ func (e *engine) exponential(mean time.Duration) time.Duration {
 // p is, so that the streams stay aligned between runs.
 func (e *engine) chance(i *issue, p float64) bool { return i.rng.Float64() < p }
 
+// enter notes that a named issue enters a step now.
+func (e *engine) enter(i *issue, step string) {
+	if e.paths == nil || i.ref == "" {
+		return
+	}
+	e.paths[i.ref] = append(e.paths[i.ref], Transition{Step: step, At: e.forecastAt.Add(e.now)})
+}
+
 func (e *engine) run() {
 	if e.m.ArrivalsPerDay > 0 {
 		e.schedule(e.exponential(time.Duration(float64(24*time.Hour)/e.m.ArrivalsPerDay)), e.arrive)
@@ -189,6 +215,9 @@ func (e *engine) run() {
 		e.schedule(e.exponential(e.upLength()), e.loopGoesDown)
 	}
 	e.admit()
+	for lane := range e.laneQueues {
+		e.mergeNext(lane)
+	}
 	for !e.events.empty() && e.events.peek().at <= e.m.Horizon {
 		ev := e.events.next()
 		e.now = ev.at
@@ -272,29 +301,50 @@ func (e *engine) startIssue() {
 	e.started++
 	n := uint64(e.started)                                                                                    //nolint:gosec // a non-negative count
 	i := &issue{lane: e.started % e.m.Lanes, started: e.now, rng: rand.New(rand.NewPCG(uint64(e.m.Seed), n))} //nolint:gosec // a deterministic simulation needs a seeded source, not a secure one
+	if e.nextRef < len(e.backlogRefs) {
+		i.ref = e.backlogRefs[e.nextRef]
+		i.lane = e.laneOf(i.ref)
+		e.nextRef++
+	}
 	e.backwaits = append(e.backwaits, 0)
 	e.take()
+	e.enter(i, StageImplementing)
 	d := e.sample(i, StageImplementing)
 	e.record(StageImplementing, 0, d)
 	e.schedule(d, func() { e.implemented(i) })
+}
+
+// laneOf is the lane of a named issue: a forecast sets laneRefs.
+func (e *engine) laneOf(ref string) int {
+	if e.lanes == nil {
+		return 0
+	}
+	repo := repoOf(ref)
+	if l, ok := e.lanes[repo]; ok {
+		return l
+	}
+	return 0
 }
 
 func (e *engine) implemented(i *issue) {
 	if e.chance(i, e.m.Dropped) {
 		e.dropped++
 		e.free()
+		e.enter(i, state.DeliveryDropped)
 		return
 	}
 	e.free()
 	if e.chance(i, e.m.DecisionShare) {
 		d := e.sample(i, StageDecision)
 		e.record(StageDecision, 0, d)
-		e.schedule(d, func() { e.runCI(i) })
+		e.schedule(d, func() { e.enter(i, StageCI); e.runCI(i) })
 		return
 	}
+	e.enter(i, StageCI)
 	e.runCI(i)
 }
 
+// runCI runs CI on the issue's head and then afterCI.
 func (e *engine) runCI(i *issue) {
 	d := e.sample(i, StageCI)
 	if e.m.UpdateBranch && i.approved {
@@ -302,21 +352,27 @@ func (e *engine) runCI(i *issue) {
 		d = 0
 	}
 	e.record(StageCI, 0, d)
-	e.schedule(d, func() {
-		if e.chance(i, e.m.RedCI) {
-			i.readyAt = e.now
-			e.fixQueue = append(e.fixQueue, i)
-			e.admit()
-			return
-		}
-		if i.approved {
-			e.queueMerge(i)
-			return
-		}
+	e.schedule(d, func() { e.afterCI(i) })
+}
+
+// afterCI sends a red head to a fixer, an approved green one to the lane
+// and any other green one to a reviewer.
+func (e *engine) afterCI(i *issue) {
+	if e.chance(i, e.m.RedCI) {
 		i.readyAt = e.now
-		e.revQueue = append(e.revQueue, i)
+		e.enter(i, StageFixing)
+		e.fixQueue = append(e.fixQueue, i)
 		e.admit()
-	})
+		return
+	}
+	if i.approved {
+		e.queueMerge(i)
+		return
+	}
+	i.readyAt = e.now
+	e.enter(i, StageReviewQueued)
+	e.revQueue = append(e.revQueue, i)
+	e.admit()
 }
 
 func (e *engine) startReview(i *issue) {
@@ -326,20 +382,26 @@ func (e *engine) startReview(i *issue) {
 	e.record(StageReviewQueued, wait, d)
 	e.take()
 	e.schedule(d, func() {
+		e.enter(i, StageReviewing)
 		s := e.sample(i, StageReviewing)
 		e.record(StageReviewing, 0, s)
-		e.schedule(s, func() {
-			i.approved = true
-			e.free()
-			if e.chance(i, e.m.ChangesRequested) {
-				i.readyAt = e.now
-				e.fixQueue = append(e.fixQueue, i)
-				e.admit()
-				return
-			}
-			e.queueMerge(i)
-		})
+		e.schedule(s, func() { e.reviewed(i) })
 	})
+}
+
+// reviewed frees the reviewer: a change request goes to a fixer, else the
+// head goes to the lane.
+func (e *engine) reviewed(i *issue) {
+	i.approved = true
+	e.free()
+	if e.chance(i, e.m.ChangesRequested) {
+		i.readyAt = e.now
+		e.enter(i, StageFixing)
+		e.fixQueue = append(e.fixQueue, i)
+		e.admit()
+		return
+	}
+	e.queueMerge(i)
 }
 
 func (e *engine) startFix(i *issue) {
@@ -349,12 +411,14 @@ func (e *engine) startFix(i *issue) {
 	e.take()
 	e.schedule(d, func() {
 		e.free()
+		e.enter(i, StageCI)
 		e.runCI(i)
 	})
 }
 
 func (e *engine) queueMerge(i *issue) {
 	i.readyAt = e.now
+	e.enter(i, StageMerging)
 	e.laneQueues[i.lane] = append(e.laneQueues[i.lane], i)
 	e.mergeNext(i.lane)
 }
@@ -377,13 +441,18 @@ func (e *engine) mergeNext(lane int) {
 		e.account()
 		e.laneBusy[lane] = false
 		e.mergeNext(lane)
+		e.enter(i, StageReleasing)
 		r := e.sample(i, StageReleasing)
 		e.record(StageReleasing, 0, r)
-		e.schedule(r, func() {
-			e.released++
-			e.cycles = append(e.cycles, e.now-i.started)
-		})
+		e.schedule(r, func() { e.release(i) })
 	})
+}
+
+// release ends the issue's cycle.
+func (e *engine) release(i *issue) {
+	e.released++
+	e.cycles = append(e.cycles, e.now-i.started)
+	e.enter(i, state.DeliveryDone)
 }
 
 func (e *engine) record(stage string, wait, service time.Duration) {

@@ -44,15 +44,23 @@ type Comparison struct {
 	Findings []string `json:"findings"`
 }
 
-// Fit returns m with the observed values: the stages' medians, the loop's
-// uptime, the share of dropped work and the rate at which issues were
-// started, so that a run of it replays the week as the log shows it.
-func Fit(m Model, o Observed) Model {
+// FitStages returns m with the log's stage medians alone, where the log
+// has at least three residences of a stage; the capacities, chances and
+// the board stay as they were.
+func FitStages(m Model, o Observed) Model {
 	for _, s := range o.Stages {
 		if s.Residence.Count >= 3 && s.Residence.Median > 0 {
 			m = m.With(s.Stage, s.Residence.Median)
 		}
 	}
+	return m
+}
+
+// Fit returns m with the observed values: the stages' medians, the loop's
+// uptime, the share of dropped work and the rate at which issues were
+// started, so that a run of it replays the week as the log shows it.
+func Fit(m Model, o Observed) Model {
+	m = FitStages(m, o)
 	if o.LoopUptime > 0 && o.LoopUptime < 1 {
 		m.LoopUptime = o.LoopUptime
 		var sum time.Duration

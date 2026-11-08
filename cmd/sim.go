@@ -1,14 +1,28 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sim"
 	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+// simForecastFile is the side file sim forecast saves for sim check.
+const (
+	simForecastFile = "sim-forecast.json"
+	simCheckVerb    = "check"
 )
 
 // simFlags are the model's parameters a run may override.
@@ -228,8 +242,409 @@ The ranking is the order to fix things in.`,
 	}
 	window(compare)
 	flags.bind(compare)
-	c.AddCommand(model, run, obs, compare)
+	c.AddCommand(model, run, obs, compare, a.simForecastCmd(&flags), a.simCheckCmd())
 	return c
+}
+
+func (a *app) simForecastCmd(flags *simFlags) *cobra.Command {
+	var horizon, fromLog string
+	var noBoard bool
+	save := true
+	c := &cobra.Command{
+		Use:   "forecast [--horizon 24h] [--from-log 7d] [--no-board] [--save]",
+		Short: "Forecast the flow from the live state: what releases when, what starts, what will not move",
+		Long: `Reads the desk as it is (the deliveries with their agents' states, the
+roster, the timers, holds, lanes, failed merges and review requests, the
+capacity verdict and board next, each the implementation's own) and runs
+it forward through the model over --horizon: for every item in flight the
+steps it enters and when it is released, for the free board items when a
+slot takes them, and the totals by 6h, 12h and 24h. Before the run the
+snapshot is read for PROBLEMS: stop is what will not move at all (the loop
+down, a stop, no room while free items wait, a review recorded as requested
+while no reviewer runs, a parked worker on a timer that is gone), slow what
+moves late (a failed merge in backoff, items long in a step, idle agents
+beside free items). --from-log fits the stage times to the log's medians of
+that window; --no-board skips the GitHub read. The forecast is saved for
+sim check unless --save=false. Nothing else is written.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			h, err := time.ParseDuration(horizon)
+			if err != nil || h <= 0 {
+				return usageErr("--horizon %q: want a duration such as 24h", horizon)
+			}
+			m, err := flags.apply(a.simModel())
+			if err != nil {
+				return err
+			}
+			if fromLog != "" {
+				to := a.timeNow()
+				from, err := reportTime(to, fromLog, time.Local)
+				if err != nil {
+					return err
+				}
+				events, err := a.store.Events(0, func(e state.Event) bool { return sim.Verbs(e.Verb) })
+				if err != nil {
+					return err
+				}
+				m = sim.FitStages(m, sim.Observe(events, from, to))
+			}
+			snap, err := a.simSnapshot(cmd.Context(), cmd.ErrOrStderr(), !noBoard)
+			if err != nil {
+				return err
+			}
+			f := sim.Forecasting(m, snap, h)
+			if save {
+				if err := a.store.WriteFile(simForecastFile, f); err != nil {
+					return err
+				}
+			}
+			if a.json {
+				return a.printJSON(f)
+			}
+			return a.printForecast(f)
+		},
+	}
+	c.Flags().StringVar(&horizon, "horizon", "24h", "how far to forecast")
+	c.Flags().StringVar(&fromLog, "from-log", "", "fit the stage times to the log's medians of this window before now (7d, 24h)")
+	c.Flags().BoolVar(&noBoard, "no-board", false, "forecast the items in flight alone, without reading the board")
+	c.Flags().BoolVar(&save, "save", true, "save the forecast for sim check")
+	flags.bind(c)
+	return c
+}
+
+func (a *app) simCheckCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   simCheckVerb,
+		Short: "Compare the saved forecast with the desk now",
+		Long: `Reads the forecast sim forecast saved and the deliveries now, and says
+for every forecast item where the forecast had it and where it is: on
+track, ahead, behind (by how long, with its agent and what it waits on),
+stuck as forecast, or gone; then the starts and releases the forecast
+expected by now against the real ones, and which of the forecast's
+problems still stand.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			var f sim.Forecast
+			found, err := a.store.ReadFile(simForecastFile, &f)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return fmt.Errorf("no forecast saved: run beekeeper sim forecast first")
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			now := a.timeNow()
+			items, _, _ := a.simItems(st)
+			var released, started []string
+			for _, d := range st.Deliveries {
+				if d.Step == state.DeliveryDone && !d.Since.Before(f.At) {
+					released = append(released, d.Ref)
+				}
+				if !d.Started.Before(f.At) && !d.Started.After(now) {
+					started = append(started, d.Ref)
+				}
+			}
+			c := sim.Check(f, now, items, released, started)
+			if a.json {
+				return a.printJSON(c)
+			}
+			return a.printChecked(c)
+		},
+	}
+}
+
+// simItems is the active deliveries with their agents' states, and the
+// roster's count and reviewers.
+func (a *app) simItems(st *state.State) ([]sim.Item, agentCount, []string) {
+	sessions, _, err := a.sessions()
+	if err != nil && !platform.Missing(err) {
+		sessions = nil
+	}
+	c := countAgents(st, sessions, a.now, a.cfg)
+	states := map[string]string{}
+	var reviewers []string
+	for _, lists := range []struct {
+		names []string
+		state string
+	}{{c.Busy, sim.AgentBusy}, {c.Waiting, sim.AgentBusy}, {c.Parked, sim.AgentParked}, {c.Idle, sim.AgentIdle}, {c.Gone, ""}} {
+		for _, n := range lists.names {
+			name, _, _ := strings.Cut(n, " (")
+			states[name] = lists.state
+			if lists.state == sim.AgentBusy && strings.HasPrefix(name, "Review ") {
+				reviewers = append(reviewers, name)
+			}
+		}
+	}
+	var items []sim.Item
+	for _, d := range st.Deliveries {
+		if !d.Active() || d.Step == state.DeliveryUnknown {
+			continue
+		}
+		items = append(items, sim.Item{Ref: d.Ref, Pulls: d.Pulls, Step: d.Step, Since: d.Since, Agent: d.Agent, AgentState: states[d.Agent], Waits: d.Waits})
+	}
+	return items, c, reviewers
+}
+
+// simSnapshot reads the desk for a forecast: the state, the roster and
+// the implementation's own verdicts, capacity and board next, run in
+// process with their JSON output.
+func (a *app) simSnapshot(ctx context.Context, stderr io.Writer, withBoard bool) (sim.Snapshot, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return sim.Snapshot{}, err
+	}
+	s := sim.Snapshot{At: a.timeNow(), LoopRunning: a.loopPID() != 0}
+	var c agentCount
+	s.Items, c, s.Reviewers = a.simItems(st)
+	s.Busy, s.Parked, s.Idle = len(c.Busy), len(c.Parked), len(c.Idle)
+	for _, ag := range st.Agents {
+		if ag.Park != nil {
+			s.ParkedAgents = append(s.ParkedAgents, sim.ParkedAgent{Name: ag.Name, On: ag.Park.On, Waits: ag.Park.Waits})
+		}
+	}
+	for _, t := range st.Timers {
+		s.Timers = append(s.Timers, t.ID)
+	}
+	for _, h := range st.Holds {
+		line := h.Target + ": " + h.Reason
+		if !h.Until.IsZero() {
+			line += " (until " + clock(a.now, h.Until) + ")"
+		}
+		s.Holds = append(s.Holds, line)
+	}
+	for _, m := range st.Merges {
+		since := m.Started
+		if since.IsZero() {
+			since = m.Joined
+		}
+		s.Lanes = append(s.Lanes, sim.LaneState{Lane: m.Lane, Ref: fmt.Sprintf("%s#%d", m.Repo, m.PR), Phase: m.Phase, Since: since})
+	}
+	for _, f := range st.Failed {
+		s.FailedMerges = append(s.FailedMerges, sim.FailedMerge{Ref: fmt.Sprintf("%s#%d", f.Repo, f.PR), At: f.At, Exit: f.Exit, Reason: f.Reason})
+	}
+	s.ReviewRequests = st.ReviewRequests
+	s.UnmergedLimit, _ = a.unmergedPolicy()
+	var capacity struct {
+		Room      int      `json:"room"`
+		Blocks    []string `json:"blocks"`
+		Stopped   string   `json:"stopped"`
+		Providers map[string]struct {
+			Busy    []string `json:"busy"`
+			Ceiling int      `json:"ceiling"`
+			Room    int      `json:"room"`
+		} `json:"providers"`
+	}
+	if err := a.simRunJSON(ctx, func(child *app) *cobra.Command { return child.capacityCmd() }, nil, &capacity); err != nil {
+		return sim.Snapshot{}, fmt.Errorf("capacity: %w", err)
+	}
+	s.Room, s.Blocks, s.Stopped = capacity.Room, capacity.Blocks, capacity.Stopped
+	for _, name := range slices.Sorted(maps.Keys(capacity.Providers)) {
+		p := capacity.Providers[name]
+		s.Providers = append(s.Providers, sim.ProviderRoom{Name: name, Busy: len(p.Busy), Ceiling: p.Ceiling, Room: p.Room})
+	}
+	if !withBoard {
+		return s, nil
+	}
+	var next struct {
+		Pick      *board.Candidate  `json:"pick"`
+		Skipped   []board.Candidate `json:"skipped"`
+		AfterPick []board.Candidate `json:"after_pick"`
+	}
+	if err := a.simRunJSON(ctx, func(child *app) *cobra.Command { return child.boardNextCmd() }, nil, &next); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: the board could not be read, the forecast is of the items in flight alone: %v\n", err)
+		return s, nil
+	}
+	s.BoardRead = true
+	add := func(c board.Candidate) {
+		s.Board = append(s.Board, sim.BoardItem{Ref: c.Ref, Status: c.Status, Skip: c.Skip})
+	}
+	if next.Pick != nil {
+		add(*next.Pick)
+	}
+	for _, c := range next.AfterPick {
+		add(c)
+	}
+	for _, c := range next.Skipped {
+		add(c)
+	}
+	return s, nil
+}
+
+// simRunJSON runs one of this app's commands in process with --json and
+// decodes its output into v: the verdict is the implementation's own.
+func (a *app) simRunJSON(ctx context.Context, cmd func(*app) *cobra.Command, args []string, v any) error {
+	var buf bytes.Buffer
+	child := *a
+	child.out = &buf
+	child.json = true
+	c := cmd(&child)
+	if args == nil {
+		// nil would hand cobra this process's own arguments.
+		args = []string{}
+	}
+	c.SetArgs(args)
+	c.SetContext(ctx)
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	if err := c.Execute(); err != nil {
+		return err
+	}
+	return json.Unmarshal(buf.Bytes(), v)
+}
+
+func (a *app) printForecast(f sim.Forecast) error {
+	s := f.Snapshot
+	loop := "loop running"
+	if !s.LoopRunning {
+		loop = "loop NOT running"
+	}
+	if s.Stopped != "" {
+		loop += ", stopped: " + s.Stopped
+	}
+	boardLine := "board not read"
+	if s.BoardRead {
+		free := len(s.Free())
+		boardLine = fmt.Sprintf("board: %d free items, %d held or in delivery", free, len(s.Board)-free)
+	}
+	_, _ = fmt.Fprintf(a.out, "Forecast from %s over %s: %s, %d busy of %d slots (room %d), %d parked, %d idle; %s\n", clock(a.now, f.At), dur(f.Horizon), loop, s.Busy, s.Busy+s.Room, s.Room, s.Parked, s.Idle, boardLine)
+	if len(f.Problems) > 0 {
+		_, _ = fmt.Fprintf(a.out, "PROBLEMS (what will not move)\n")
+		for _, p := range f.Problems {
+			refs := ""
+			if len(p.Refs) > 0 {
+				refs = "  " + strings.Join(p.Refs, ", ")
+			}
+			_, _ = fmt.Fprintf(a.out, "  %-4s  %s%s\n", p.Severity, p.What, refs)
+		}
+	}
+	w := a.table()
+	_, _ = fmt.Fprintf(w, "EXPECTED\n")
+	for _, t := range f.Totals {
+		_, _ = fmt.Fprintf(w, "  by +%s\t%d released, %d started\n", dur(t.After), t.Released, t.Started)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	items := slices.Clone(f.Items)
+	items = slices.DeleteFunc(items, func(it sim.ItemForecast) bool { return it.Step == sim.StepBoard })
+	slices.SortStableFunc(items, forecastOrder)
+	w = a.table()
+	_, _ = fmt.Fprintf(w, "ITEMS\tNOW\tNEXT\tRELEASE\n")
+	for _, it := range items {
+		now := it.Step
+		if !it.Since.IsZero() {
+			now += " " + dur(f.At.Sub(it.Since).Truncate(time.Minute))
+		}
+		switch {
+		case it.Stuck != "":
+			_, _ = fmt.Fprintf(w, "%s\t%s\tstuck: %s\t\n", it.Ref, now, truncate(it.Stuck, 80))
+		case len(it.Timeline) == 0:
+			_, _ = fmt.Fprintf(w, "%s\t%s\t-\tpast the horizon\n", it.Ref, now)
+		default:
+			next := it.Timeline[0]
+			release := "past the horizon"
+			if !it.ReleaseAt.IsZero() {
+				release = clock(a.now, it.ReleaseAt)
+			}
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s %s\t%s\n", it.Ref, now, next.Step, clock(a.now, next.At), release)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if len(f.Starts) > 0 {
+		w = a.table()
+		_, _ = fmt.Fprintf(w, "STARTS (board items the slots take)\n")
+		for _, st := range f.Starts {
+			_, _ = fmt.Fprintf(w, "  %s\t%s\n", st.Ref, clock(a.now, st.At))
+		}
+		return w.Flush()
+	}
+	return nil
+}
+
+// forecastOrder puts the stuck items first, by step, then the rest by
+// their release.
+func forecastOrder(a, b sim.ItemForecast) int {
+	if (a.Stuck != "") != (b.Stuck != "") {
+		if a.Stuck != "" {
+			return -1
+		}
+		return 1
+	}
+	if a.Stuck != "" {
+		return slices.Index(sim.Stages, a.Step) - slices.Index(sim.Stages, b.Step)
+	}
+	switch {
+	case a.ReleaseAt.IsZero() && b.ReleaseAt.IsZero():
+		return 0
+	case a.ReleaseAt.IsZero():
+		return 1
+	case b.ReleaseAt.IsZero():
+		return -1
+	}
+	return a.ReleaseAt.Compare(b.ReleaseAt)
+}
+
+func (a *app) printChecked(c sim.Checked) error {
+	_, _ = fmt.Fprintf(a.out, "The forecast from %s against the desk at %s (%s later)\n", clock(a.now, c.ForecastAt), clock(a.now, c.At), dur(c.At.Sub(c.ForecastAt)))
+	w := a.table()
+	for _, it := range c.Items {
+		if it.Verdict != sim.VerdictBehind {
+			continue
+		}
+		agent := "no agent"
+		if it.Agent != "" {
+			agent = it.Agent
+			if it.AgentState != "" {
+				agent += " (" + it.AgentState + ")"
+			}
+		}
+		if it.Waits != "" {
+			agent += ": " + truncate(it.Waits, 80)
+		}
+		_, _ = fmt.Fprintf(w, "  %s\tbehind %s\tforecast %s, still %s\t%s\n", it.Ref, dur(it.Behind), it.Expected, it.Actual, agent)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(a.out, "by now: forecast %d started, %d released; real %d started, %d released\n", c.Forecast.Started, c.Forecast.Released, c.Actual.Started, c.Actual.Released)
+	_, _ = fmt.Fprintf(a.out, "%s\n", c.Summary())
+	w = a.table()
+	for _, it := range c.Items {
+		if it.Verdict != sim.VerdictAhead && it.Verdict != sim.VerdictGone {
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "  %s\t%s\tforecast %s, now %s\n", it.Ref, it.Verdict, it.Expected, it.Actual)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	for _, outcome := range []string{sim.ProblemStanding, sim.ProblemUnchecked, sim.ProblemResolved} {
+		first := true
+		for _, p := range c.Problems {
+			if p.Outcome != outcome {
+				continue
+			}
+			if first {
+				_, _ = fmt.Fprintf(a.out, "PROBLEMS %s\n", strings.ToUpper(outcome))
+				first = false
+			}
+			refs := ""
+			if len(p.Still) > 0 {
+				refs = "  still: " + strings.Join(p.Still, ", ")
+			}
+			if len(p.Moved) > 0 {
+				refs += "  moved: " + strings.Join(p.Moved, ", ")
+			}
+			_, _ = fmt.Fprintf(a.out, "  %-4s  %s%s\n", p.Severity, p.What, refs)
+		}
+	}
+	return nil
 }
 
 func (a *app) printModel(m sim.Model) error {

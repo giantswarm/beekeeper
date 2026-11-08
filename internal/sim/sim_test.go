@@ -3,6 +3,8 @@ package sim
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,16 +279,226 @@ func TestFailureClassAndParkReason(t *testing.T) {
 		}
 	}
 	for in, want := range map[string]string{
-		"w: parked on o/r#1: desk review":                   "desk review",
-		"w: parked: Timer 88: natural SSH failure":          "timer",
-		"w: parked: CI for https://x/pull/1 head abc":       "ci",
-		"w: parked on o/r#1: awaiting loop merge":           "merge",
-		"w: parked: Waiting until teemow is home; note 371": "person",
-		"w: parked: Build capacity wait; timer 369 retries": "timer",
-		"w: parked on o/r#1: something nobody classified":   "other",
+		"w: parked on o/r#1: desk review":                      "desk review",
+		"w: parked: Timer 88: natural SSH failure":             "timer",
+		"w: parked: CI for https://x/pull/1 head abc":          "ci",
+		"w: parked on o/r#1: awaiting loop merge":              "merge",
+		"w: parked: Waiting until the owner is home; note 371": "person",
+		"w: parked: Build capacity wait; timer 369 retries":    "timer",
+		"w: parked on o/r#1: something nobody classified":      "other",
 	} {
 		if got := parkReason(in); got != want {
 			t.Errorf("parkReason(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Refs of the forecast and check tests.
+const (
+	refTwo       = "o/r#2"
+	refThree     = "o/r#3"
+	refFour      = "o/r#4"
+	refFive      = "o/r#5"
+	refTwenty    = "o/r#20"
+	refTwentyOne = "o/r#21"
+)
+
+// TestForecasting: a snapshot with the loop running runs its items forward
+// through the model, names what will not move and starts the free board
+// items as the slots allow.
+func TestForecasting(t *testing.T) {
+	now := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	s := Snapshot{
+		At: now, LoopRunning: true, Room: 3, Busy: 2, Parked: 1, Idle: 1, BoardRead: true,
+		Reviewers: []string{"Review r 9 r1"},
+		Items: []Item{
+			{Ref: testRef, Step: StageImplementing, Since: now.Add(-20 * time.Minute), Agent: "Agent one", AgentState: AgentBusy},
+			{Ref: refTwo, Step: StageImplementing, Since: now.Add(-7 * time.Hour), Agent: "Agent two", AgentState: AgentParked, Waits: "note 5"},
+			{Ref: refThree, Pulls: []string{"o/r#13"}, Step: StageReviewQueued, Since: now.Add(-2 * time.Hour)},
+			{Ref: refFour, Pulls: []string{"o/r#14"}, Step: StageMerging, Since: now.Add(-10 * time.Minute)},
+			{Ref: refFive, Pulls: []string{"o/r#15"}, Step: StageReleasing, Since: now.Add(-5 * time.Minute)},
+			{Ref: "o/r#9", Pulls: []string{"o/r#19"}, Step: StageReviewing, Since: now.Add(-5 * time.Minute), Agent: "Review r 9 r1", AgentState: AgentBusy},
+		},
+		Board:          []BoardItem{{Ref: refTwenty, Status: "Up Next"}, {Ref: "o/s#21", Status: "Backlog"}, {Ref: "o/r#22", Skip: "blocked"}, {Ref: testRef, Status: "In Progress"}},
+		ReviewRequests: []state.ReviewRequest{{Ref: "o/r#13", Head: "abc", Round: 1}},
+		FailedMerges:   []FailedMerge{{Ref: "o/r#14", At: now.Add(-30 * time.Minute), Exit: 5, Reason: "refused"}},
+		ParkedAgents:   []ParkedAgent{{Name: "Agent two", On: refTwo, Waits: "note 5"}, {Name: "Agent six", Waits: "timer 88"}},
+		Timers:         []int{3},
+		UnmergedLimit:  5,
+	}
+	f := Forecasting(Default(), s, 48*time.Hour)
+	wantProblem := func(sev, what string, refs ...string) {
+		t.Helper()
+		for _, p := range f.Problems {
+			if p.Severity == sev && strings.Contains(p.What, what) {
+				for _, r := range refs {
+					if !slices.Contains(p.Refs, r) {
+						t.Errorf("problem %q lacks %s: %v", what, r, p.Refs)
+					}
+				}
+				return
+			}
+		}
+		t.Errorf("no %s problem %q in %+v", sev, what, f.Problems)
+	}
+	wantProblem(SeverityStop, "a review is recorded as requested", refThree)
+	wantProblem(SeveritySlow, "merge of o/r#14 failed", refFour)
+	wantProblem(SeveritySlow, "1 item in implementing for over 6h00m with its worker parked", refTwo)
+	wantProblem(SeveritySlow, "1 item in review-queued for over 1h00m", refThree)
+	wantProblem(SeverityStop, "parked on a timer that no longer exists", "Agent six")
+	wantProblem(SeveritySlow, "1 idle agent while 2 free board items wait")
+	item := func(ref string) ItemForecast {
+		t.Helper()
+		for _, it := range f.Items {
+			if it.Ref == ref {
+				return it
+			}
+		}
+		t.Fatalf("no forecast of %s", ref)
+		return ItemForecast{}
+	}
+	if it := item(refTwo); !strings.Contains(it.Stuck, "parked") || !strings.Contains(it.Stuck, "note 5") || len(it.Timeline) != 0 {
+		t.Errorf("parked worker: %+v", it)
+	}
+	if it := item(refThree); !strings.Contains(it.Stuck, "requested") {
+		t.Errorf("stale review request: %+v", it)
+	}
+	one := item(testRef)
+	var steps []string
+	for _, tr := range one.Timeline {
+		steps = append(steps, tr.Step)
+	}
+	for _, want := range []string{StageCI, StageReviewQueued, StageReviewing, StageMerging, StageReleasing, state.DeliveryDone} {
+		if !slices.Contains(steps, want) {
+			t.Errorf("o/r#1 never enters %s: %v", want, steps)
+		}
+	}
+	if one.ReleaseAt.IsZero() || one.ReleaseAt.After(now.Add(48*time.Hour)) || one.Timeline[0].At.Before(now) {
+		t.Errorf("o/r#1 release %s, first step %s", one.ReleaseAt, one.Timeline[0].At)
+	}
+	for _, ref := range []string{refFour, refFive, "o/r#9"} {
+		if it := item(ref); it.ReleaseAt.IsZero() || it.Stuck != "" {
+			t.Errorf("%s: %+v", ref, it)
+		}
+	}
+	// The item in delivery that the board also lists is no start.
+	if len(f.Starts) != 2 || f.Starts[0].Ref != refTwenty || f.Starts[1].Ref != "o/s#21" || f.Starts[0].At.After(f.Starts[1].At) {
+		t.Fatalf("starts: %+v", f.Starts)
+	}
+	if item(refTwenty).Step != StepBoard {
+		t.Errorf("a started board item is not a board item: %+v", item(refTwenty))
+	}
+	if len(f.Totals) != 4 {
+		t.Fatalf("totals: %+v", f.Totals)
+	}
+	for i := 1; i < len(f.Totals); i++ {
+		a, b := f.Totals[i-1], f.Totals[i]
+		if b.After <= a.After || b.Started < a.Started || b.Released < a.Released {
+			t.Errorf("totals not monotone: %+v", f.Totals)
+		}
+	}
+	if last := f.Totals[len(f.Totals)-1]; last.Started != 2 || last.Released < 4 {
+		t.Errorf("after the horizon: %+v", last)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Forecast
+	if err := json.Unmarshal(raw, &back); err != nil || len(back.Items) != len(f.Items) || back.Items[0].Stuck != f.Items[0].Stuck {
+		t.Fatalf("round trip: %v", err)
+	}
+
+	// The loop down: nothing moves.
+	down := s
+	down.LoopRunning = false
+	f = Forecasting(Default(), down, 24*time.Hour)
+	if len(f.Problems) == 0 || f.Problems[0].Severity != SeverityStop || !strings.Contains(f.Problems[0].What, "loop is not running") {
+		t.Fatalf("loop down: %+v", f.Problems)
+	}
+	for _, it := range f.Items {
+		if it.Stuck == "" || len(it.Timeline) > 0 {
+			t.Errorf("loop down, %s moves: %+v", it.Ref, it)
+		}
+	}
+	if len(f.Starts) != 0 || len(f.Totals) != 3 || f.Totals[2].Released != 0 {
+		t.Errorf("loop down: starts %v totals %v", f.Starts, f.Totals)
+	}
+
+	// No room: the items in flight move, the board waits.
+	full := s
+	full.Room, full.Blocks = 0, []string{"12 busy at capacity.ceiling 12"}
+	f = Forecasting(Default(), full, 24*time.Hour)
+	wantProblem(SeverityStop, "no start while 2 free board items wait", refTwenty, "o/s#21")
+	if len(f.Starts) != 0 {
+		t.Errorf("no room, starts: %+v", f.Starts)
+	}
+	if it := item(testRef); it.ReleaseAt.IsZero() {
+		t.Errorf("no room stops an item in flight: %+v", it)
+	}
+}
+
+// TestCheck: the forecast against the desk later, item by item.
+func TestCheck(t *testing.T) {
+	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	now := at.Add(3 * time.Hour)
+	h := func(d time.Duration) time.Time { return at.Add(d) }
+	f := Forecast{At: at, Horizon: 24 * time.Hour,
+		Items: []ItemForecast{
+			// on track: forecast in reviewing by now, there.
+			{Ref: testRef, Step: StageImplementing, Timeline: []Transition{{StageCI, h(time.Hour)}, {StageReviewQueued, h(90 * time.Minute)}, {StageReviewing, h(2 * time.Hour)}, {StageMerging, h(5 * time.Hour)}}},
+			// ahead: forecast in ci, already merging.
+			{Ref: refTwo, Step: StageImplementing, Timeline: []Transition{{StageCI, h(2 * time.Hour)}, {StageReviewQueued, h(4 * time.Hour)}}},
+			// behind: forecast in ci since +1h, still implementing.
+			{Ref: refThree, Step: StageImplementing, Timeline: []Transition{{StageCI, h(time.Hour)}, {StageReviewQueued, h(4 * time.Hour)}}},
+			// stuck as forecast.
+			{Ref: refFour, Step: StageImplementing, Stuck: "its worker is parked"},
+			// done as forecast.
+			{Ref: refFive, Step: StageReleasing, Timeline: []Transition{{state.DeliveryDone, h(time.Hour)}}, ReleaseAt: h(time.Hour)},
+			// gone: forecast releasing, no delivery left.
+			{Ref: "o/r#6", Step: StageMerging, Timeline: []Transition{{StageReleasing, h(time.Hour)}, {state.DeliveryDone, h(6 * time.Hour)}}, ReleaseAt: h(6 * time.Hour)},
+			// a board item forecast to start at +1h that did not.
+			{Ref: refTwenty, Step: StepBoard, Timeline: []Transition{{StageImplementing, h(time.Hour)}, {StageCI, h(5 * time.Hour)}}},
+			// a board item forecast to start at +5h, started early.
+			{Ref: refTwentyOne, Step: StepBoard, Timeline: []Transition{{StageImplementing, h(5 * time.Hour)}}},
+		},
+		Starts:   []StartForecast{{Ref: refTwenty, At: h(time.Hour)}, {Ref: refTwentyOne, At: h(5 * time.Hour)}},
+		Problems: []Problem{{Severity: SeverityStop, What: "stale", Refs: []string{refFour}}, {Severity: SeveritySlow, What: "slow", Refs: []string{refTwo, refThree}}, {Severity: SeverityStop, What: "loop"}},
+	}
+	items := []Item{
+		{Ref: testRef, Step: StageReviewing},
+		{Ref: refTwo, Step: StageMerging},
+		{Ref: refThree, Step: StageImplementing, Agent: "Agent three", AgentState: AgentParked, Waits: "note 7"},
+		{Ref: refFour, Step: StageImplementing, Agent: "Agent four", AgentState: AgentParked},
+		{Ref: refTwentyOne, Step: StageImplementing},
+	}
+	c := Check(f, now, items, []string{refFive}, []string{refTwentyOne})
+	want := map[string]string{testRef: VerdictOnTrack, refTwo: VerdictAhead, refThree: VerdictBehind, refFour: VerdictStuck, refFive: VerdictOnTrack, "o/r#6": VerdictGone, refTwenty: VerdictBehind, refTwentyOne: VerdictAhead}
+	got := map[string]CheckedItem{}
+	for _, it := range c.Items {
+		got[it.Ref] = it
+	}
+	for ref, v := range want {
+		if got[ref].Verdict != v {
+			t.Errorf("%s: %+v, want %s", ref, got[ref], v)
+		}
+	}
+	if got[refThree].Behind != 2*time.Hour || got[refThree].Waits != "note 7" || got[refTwenty].Behind != 2*time.Hour || got[refTwenty].Actual != StepBoard {
+		t.Errorf("behind: %+v %+v", got[refThree], got[refTwenty])
+	}
+	if got[refFive].Expected != state.DeliveryDone || got[refFive].Actual != state.DeliveryDone {
+		t.Errorf("done: %+v", got[refFive])
+	}
+	if c.Items[0].Verdict != VerdictBehind || c.Items[1].Verdict != VerdictBehind {
+		t.Errorf("behind items first: %+v", c.Items)
+	}
+	if c.Forecast != (Tally{Started: 1, Released: 1}) || c.Actual != (Tally{Started: 1, Released: 1}) {
+		t.Errorf("tallies: %+v %+v", c.Forecast, c.Actual)
+	}
+	if len(c.Problems) != 3 || c.Problems[0].Outcome != ProblemStanding || c.Problems[1].Outcome != ProblemStanding || c.Problems[1].Moved[0] != refTwo || c.Problems[1].Still[0] != refThree || c.Problems[2].Outcome != ProblemUnchecked {
+		t.Errorf("problems: %+v", c.Problems)
+	}
+	if s := c.Summary(); !strings.HasPrefix(s, "2 of 8 items where the forecast said (2 ahead, 2 behind, 1 stuck as forecast, 1 gone)") {
+		t.Errorf("summary: %s", s)
 	}
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,115 @@ func TestSimCommands(t *testing.T) {
 		c.SetArgs(simArgs(simObserveVerb, bad...))
 		if err := c.Execute(); err == nil {
 			t.Fatalf("%v accepted", bad)
+		}
+	}
+}
+
+// TestSimForecastAndCheck: forecast reads the deliveries, the roster and
+// the capacity verdict in process, names the stuck items, saves the
+// forecast, and check compares it with the desk.
+func TestSimForecastAndCheck(t *testing.T) {
+	a, out := supervisorApp(t)
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	a.now = now
+	a.cfg.Capacity.Ceiling = 7
+	a.kindClusters = func() ([]string, error) { return nil, nil }
+	t.Setenv("PATH", t.TempDir())
+	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	const stuckRef, staleRef, stalePull = "o/r#2", "o/r#3", "o/r#13"
+	seed(t, a, func(st *state.State) {
+		st.Deliveries = []state.Delivery{
+			{Ref: simTestRef, Pulls: []string{}, Step: state.DeliveryImplementing, Since: now.Add(-20 * time.Minute), Started: now.Add(-20 * time.Minute), Agent: agentOne},
+			{Ref: stuckRef, Pulls: []string{}, Step: state.DeliveryImplementing, Since: now.Add(-7 * time.Hour), Started: now.Add(-7 * time.Hour), Agent: agentTwo, Waits: "note 5"},
+			{Ref: staleRef, Pulls: []string{stalePull}, Step: state.DeliveryReviewQueued, Since: now.Add(-2 * time.Hour), Started: now.Add(-3 * time.Hour)},
+			{Ref: "o/r#71", Pulls: []string{"o/r#25"}, Step: state.DeliveryDone, Since: now.Add(-time.Hour), Started: now.Add(-5 * time.Hour)},
+		}
+		st.Agents = []state.Agent{
+			{Party: state.Party{Name: agentOne, Session: "sim-one"}, Task: "work on " + simTestRef, AssignedAt: now.Add(-20 * time.Minute)},
+			{Party: state.Party{Name: agentTwo, Session: "sim-two"}, Task: "work on " + stuckRef, AssignedAt: now.Add(-7 * time.Hour), Park: &state.Park{On: stuckRef, Waits: "note 5", At: now.Add(-6 * time.Hour)}},
+		}
+		st.ReviewRequests = []state.ReviewRequest{{Ref: stalePull, Head: "head-a", Round: 1}}
+	})
+
+	c := a.simCmd()
+	c.SetArgs(simArgs(simCheckVerb))
+	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "no forecast saved") {
+		t.Fatalf("check without a forecast: %v", err)
+	}
+	c = a.simCmd()
+	c.SetArgs(simArgs("forecast", "--no-board", "--save=false"))
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"Forecast from " + clock(now, now) + " over 24h00m: loop running, 1 busy of 7 slots (room 6), 1 parked, 0 idle; board not read", "PROBLEMS", "stop  a review is recorded as requested", staleRef, "slow  1 item in implementing for over 6h00m with its worker parked", "EXPECTED", "by +6h00m", "ITEMS", "implementing 7h00m", "stuck: its worker is parked: note 5", "implementing 20m", "  ci "} {
+		if !strings.Contains(got, want) {
+			t.Errorf("forecast lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "o/r#71") {
+		t.Errorf("a done delivery is forecast:\n%s", got)
+	}
+	c = a.simCmd()
+	c.SetArgs(simArgs(simCheckVerb))
+	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "no forecast saved") {
+		t.Fatalf("check after --save=false: %v", err)
+	}
+
+	out.Reset()
+	a.json = true
+	c = a.simCmd()
+	c.SetArgs(simArgs("forecast", "--no-board", "--horizon", "12h"))
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var f sim.Forecast
+	if err := json.Unmarshal(out.Bytes(), &f); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Snapshot.LoopRunning || f.Snapshot.Room != 6 || f.Snapshot.Busy != 1 || len(f.Snapshot.Items) != 3 || f.Horizon != 12*time.Hour || len(f.Totals) != 2 {
+		t.Fatalf("forecast json: %+v", f.Snapshot)
+	}
+	var saved sim.Forecast
+	if found, err := a.store.ReadFile(simForecastFile, &saved); err != nil || !found || !saved.At.Equal(f.At) {
+		t.Fatalf("saved forecast: %v %v", found, err)
+	}
+
+	// Two hours on: the worked item is merged, the parked one still parked.
+	a.now = now.Add(2 * time.Hour)
+	seed(t, a, func(st *state.State) {
+		st.Deliveries[0].Step, st.Deliveries[0].Since = state.DeliveryMerging, a.now.Add(-5*time.Minute)
+		st.Deliveries = append(st.Deliveries, state.Delivery{Ref: "o/r#81", Pulls: []string{}, Step: state.DeliveryImplementing, Since: a.now.Add(-time.Hour), Started: a.now.Add(-time.Hour), Agent: agentC.Name})
+	})
+	out.Reset()
+	c = a.simCmd()
+	c.SetArgs(simArgs(simCheckVerb))
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var checked sim.Checked
+	if err := json.Unmarshal(out.Bytes(), &checked); err != nil {
+		t.Fatal(err)
+	}
+	// The worked item was forecast released within the two hours: merging
+	// is behind.
+	if checked.Actual.Started != 1 || checked.Counts[sim.VerdictStuck] != 2 || checked.Counts[sim.VerdictBehind] != 1 || checked.Items[0].Ref != simTestRef || checked.Items[0].Actual != state.DeliveryMerging {
+		t.Fatalf("check json: %+v %+v", checked.Counts, checked.Items)
+	}
+
+	out.Reset()
+	a.json = false
+	c = a.simCmd()
+	c.SetArgs(simArgs(simCheckVerb))
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got = out.String()
+	for _, want := range []string{"The forecast from " + clock(now, now) + " against the desk at " + clock(a.now, a.now) + " (2h00m later)", simTestRef + "  behind ", "forecast done, still merging", agentOne + " (busy)", "by now: forecast 0 started, 1 released; real 1 started, 0 released", "0 of 3 items where the forecast said (1 behind, 2 stuck as forecast)", "PROBLEMS STANDING", "stop  a review is recorded as requested"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("check lacks %q:\n%s", want, got)
 		}
 	}
 }
