@@ -249,19 +249,26 @@ func TestSimForecastAndCheck(t *testing.T) {
 }
 
 func TestSimSnapshotMergeHolds(t *testing.T) {
+	const (
+		repo       = "o/r"
+		heldPull   = "o/r#12"
+		exceptPull = "o/r#13"
+		secondRef  = "o/r#2"
+		thirdRef   = "o/r#3"
+	)
 	a, _ := supervisorApp(t)
 	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
-	st := &state.State{Holds: []state.Hold{{Target: "o/r", Reason: "proof", At: at, Except: "o/r#13"}}}
+	st := &state.State{Holds: []state.Hold{{Target: repo, Reason: "proof", At: at, Except: exceptPull}}}
 	s := sim.Snapshot{At: at, Items: []sim.Item{
-		{Ref: simTestRef, Pulls: []string{"o/r#12"}, Step: sim.StageMerging},
-		{Ref: "o/r#2", Pulls: []string{"o/r#13"}, Step: sim.StageMerging},
-		{Ref: "o/r#3", Pulls: []string{"o/r#14"}, Step: sim.StageReleasing},
-	}, Board: []sim.BoardItem{{Ref: "o/r#13"}}}
+		{Ref: simTestRef, Pulls: []string{heldPull}, Step: sim.StageMerging},
+		{Ref: secondRef, Pulls: []string{exceptPull}, Step: sim.StageMerging},
+		{Ref: thirdRef, Pulls: []string{"o/r#14"}, Step: sim.StageReleasing},
+	}, Board: []sim.BoardItem{{Ref: exceptPull}}}
 	a.simMergeBlocks(st, &s)
-	if s.MergeBlocks[simTestRef] == "" || s.MergeBlocks["o/r#13"] == "" {
+	if s.MergeBlocks[simTestRef] == "" || s.MergeBlocks[exceptPull] == "" {
 		t.Fatalf("held merges not blocked: %v", s.MergeBlocks)
 	}
-	if s.MergeBlocks["o/r#2"] != "" || s.MergeBlocks["o/r#3"] != "" {
+	if s.MergeBlocks[secondRef] != "" || s.MergeBlocks[thirdRef] != "" {
 		t.Fatalf("exception or merged release blocked: %v", s.MergeBlocks)
 	}
 }
