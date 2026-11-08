@@ -867,7 +867,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
-	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: time.Now().UTC(), Phase: "startup"}
+	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: time.Now().UTC(), Phase: loopPhaseStartup}
 	life.At = life.Started
 	_ = a.store.WriteFile(loopLifecycleFile, life)
 	defer func() {
@@ -953,7 +953,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			continue
 		}
 		l.clearSaid("state lock busy")
-		l.lifecyclePhase("between passes")
+		l.lifecyclePhase(loopPhaseBetween)
 		if _, rerr := l.reexec(ctx); rerr != nil {
 			return rerr
 		}
@@ -1344,7 +1344,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	l.lifecyclePhase("observe workers and pull requests")
+	l.lifecyclePhase(loopPhaseObserve)
 	own := a.cfg.Supervisor.Ownership
 	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,

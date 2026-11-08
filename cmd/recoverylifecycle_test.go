@@ -15,6 +15,7 @@ import (
 )
 
 const lifecycleFirstPass = "first pass"
+const lifecycleWatchAlerts = "watch alerts"
 
 func TestRecoveryReportsCandidateExitInsteadOfBareSilence(t *testing.T) {
 	c, now := recoveryRig(t)
@@ -35,14 +36,14 @@ func TestRecoveryReportsCandidateExitInsteadOfBareSilence(t *testing.T) {
 	}
 }
 
-func TestRecoveryLifecycleNeverSubstitutesForHeartbeat(t *testing.T) {
+func TestRecoveryRejectsStaleOrMismatchedPhaseProgress(t *testing.T) {
 	for _, tc := range []struct {
 		name, version, phase string
 		age                  time.Duration
 		exited               bool
 		want                 string
 	}{
-		{"stalled first pass", recoveryBadVersion, "watch alerts", 0, false, "last reached watch alerts"},
+		{"stalled first pass", recoveryBadVersion, lifecycleWatchAlerts, 0, false, "last reached watch alerts"},
 		{"old binary", recoveryGoodVersion, lifecycleFirstPass, 0, true, "no matching candidate"},
 		{"before install", recoveryBadVersion, lifecycleFirstPass, -time.Minute, true, "no matching candidate"},
 	} {
@@ -57,12 +58,95 @@ func TestRecoveryLifecycleNeverSubstitutesForHeartbeat(t *testing.T) {
 			}
 			for range int(update.HeartbeatGrace/time.Minute) + 1 {
 				c.mustTick(t)
+				*now = now.Add(time.Minute)
 			}
 			j := journal(t, c)
 			if !j.RolledBack() || !strings.Contains(j.Observed.Reason, tc.want) {
 				t.Fatalf("lifecycle changed verdict or hid phase: %+v", j)
 			}
 		})
+	}
+}
+
+func TestRecoveryProgressingFirstPassPassesProbation(t *testing.T) {
+	c, now := recoveryRig(t)
+	started := *now
+	// No completed-pass observation exists. Progress through the first pass
+	// continues beyond both the heartbeat grace and the probation window.
+	for i := range int(update.ProbationWindow / time.Minute) {
+		*now = now.Add(time.Minute)
+		phase := loopPhaseObserve
+		if i%2 == 0 {
+			phase = "read event history"
+		}
+		if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: started, At: now.Add(-4 * time.Second), Phase: phase}); err != nil {
+			t.Fatal(err)
+		}
+		settled := c.mustTick(t)
+		if settled != (i == int(update.ProbationWindow/time.Minute)-1) {
+			t.Fatalf("unexpected verdict at minute %d: %+v", i+1, journal(t, c))
+		}
+	}
+	if installed(t, c) != recoveryBadBytes || journal(t, c).Pending() {
+		t.Fatal("a progressing first pass was rolled back or left unproven")
+	}
+}
+
+func TestLoopPhasePublishesHeartbeatForRetainedController(t *testing.T) {
+	c, _ := recoveryRig(t)
+	previous := loopRunningVersion
+	t.Cleanup(func() { loopRunningVersion = previous })
+	loopRunningVersion = func() string { return recoveryBadVersion }
+	l := &supervisorLoop{a: c.a, lifecycle: &loopLifecycle{Version: recoveryBadVersion, Started: time.Now().UTC()}}
+	l.lifecyclePhase(loopPhaseObserve)
+	var obs throughputObservation
+	if found, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || !found {
+		t.Fatalf("phase heartbeat missing: %v", err)
+	}
+	if obs.Candidate != recoveryBadVersion || !obs.At.Equal(l.lifecycle.At) || !obs.Unknown {
+		t.Fatalf("phase progress incompatible with retained controller: %+v", obs)
+	}
+	// Phase heartbeats must retain a completed planner observation.
+	obs.Unknown = false
+	if err := c.store.WriteFile(throughputObservationFile, obs); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []string{"reload configuration", "watch conditions", lifecycleWatchAlerts, loopPhaseBetween} {
+		l.lifecyclePhase(phase)
+		if _, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || obs.Unknown {
+			t.Fatalf("phase %s erased completed planning: %+v %v", phase, obs, err)
+		}
+	}
+}
+
+func TestRecoveryFailedExitOverridesFreshPhaseHeartbeat(t *testing.T) {
+	c, now := recoveryRig(t)
+	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: *now, Candidate: recoveryBadVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass, Exited: true, Code: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if s := c.signals(t.Context(), journal(t, c)); s.Heartbeat || !s.HeartbeatRequired {
+		t.Fatalf("a failed exit was counted as progress: %+v", s)
+	}
+}
+
+func TestRecoveryRollbackAutomaticallyReleasesBroadFence(t *testing.T) {
+	c, now := recoveryRig(t)
+	c.failMerges(t, 3, *now)
+	if !c.mustTick(t) || !journal(t, c).RolledBack() {
+		t.Fatal("rollback did not finish")
+	}
+	var fence struct {
+		Recovered bool `json:"recovered"`
+	}
+	if found, err := c.store.ReadFile("recovery-writer.json", &fence); err != nil || !found || !fence.Recovered {
+		t.Fatalf("rollback needs manual recovery: %+v %v", fence, err)
+	}
+	// A new controller must also reconcile an already-settled rollback.
+	if !c.mustTick(t) {
+		t.Fatal("settled rollback was not idempotent")
 	}
 }
 
@@ -96,6 +180,7 @@ func TestRecoveryGraceStartsWithALateCandidateLoop(t *testing.T) {
 		if installed(t, c) != recoveryBadBytes {
 			t.Fatalf("rolled back within the candidate loop's grace: %s", journal(t, c).Observed.Reason)
 		}
+		*now = now.Add(time.Minute)
 	}
 	c.mustTick(t)
 	j := journal(t, c)
@@ -169,7 +254,7 @@ func TestLoopExitPersistsDiagnosticWithoutErrorContents(t *testing.T) {
 	}
 	var life loopLifecycle
 	found, err := r.a.store.ReadFile(loopLifecycleFile, &life)
-	if err != nil || !found || !life.Exited || life.Code != 1 || life.Phase != "startup" {
+	if err != nil || !found || !life.Exited || life.Code != 1 || life.Phase != loopPhaseStartup {
 		t.Fatalf("lost startup exit: %+v, %v", life, err)
 	}
 	if strings.Contains(life.Failure, "disk full") {
@@ -219,7 +304,7 @@ func TestLoopFailureClassificationDoesNotExposePrivateErrorText(t *testing.T) {
 
 func TestSecondLoopCannotReplaceOwnerLifecycle(t *testing.T) {
 	r := newLoopRig(t)
-	owner := loopLifecycle{Version: recoveryBadVersion, Started: time.Now(), Phase: "watch alerts"}
+	owner := loopLifecycle{Version: recoveryBadVersion, Started: time.Now(), Phase: lifecycleWatchAlerts}
 	if err := r.a.store.WriteFile(loopLifecycleFile, owner); err != nil {
 		t.Fatal(err)
 	}

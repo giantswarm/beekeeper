@@ -111,6 +111,23 @@ func (l *supervisorLoop) startRegistered(name string, begin time.Time) bool {
 	})
 }
 
+// Phase progress refreshes liveness without invalidating the last planner
+// observation before the next pass's health check reads it. The planner's
+// checkpoint below still marks eligibility unknown while gathering inputs.
+func (l *supervisorLoop) refreshThroughputHeartbeat(now time.Time) error {
+	var obs throughputObservation
+	found, err := l.a.store.ReadFile(throughputObservationFile, &obs)
+	if err != nil {
+		return err
+	}
+	candidate := normalizeLoopVersion(loopRunningVersion())
+	if !found || obs.Candidate != candidate {
+		obs.Unknown = true
+	}
+	obs.At, obs.Candidate = now, candidate
+	return l.a.store.WriteFile(throughputObservationFile, obs)
+}
+
 // checkpointThroughput reports bounded pass progress before expensive history
 // loading. Keep eligibility ages intact until planning can observe them afresh.
 // Use wall time: the pass snapshot can already be minutes old after handover.
@@ -256,7 +273,12 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 		}
 		var obs throughputObservation
 		found, err := a.store.ReadFile(throughputObservationFile, &obs)
-		initializing := !found && err == nil && prev.At.IsZero()
+		// A phase checkpoint can precede the first planning observation. It
+		// establishes liveness, not a throughput incident on an otherwise idle
+		// desk. Keep stale observations and retained eligibility diagnostic.
+		freshCheckpoint := obs.Unknown && len(obs.Eligible) == 0 && !obs.At.IsZero() &&
+			now.Sub(obs.At) >= -throughputCadence && now.Sub(obs.At) <= 3*throughputCadence
+		initializing := err == nil && prev.At.IsZero() && (!found || freshCheckpoint)
 		if err != nil || !found {
 			obs.Unknown = true
 		}

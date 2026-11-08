@@ -15,6 +15,47 @@ import (
 
 const testMergeExit1Reason = "merge-command-exit-1"
 
+const testFresh = "fresh"
+const testFuture = "future"
+
+func TestThroughputInitialPhaseCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		age     time.Duration
+		waiting bool
+		failure bool
+		want    bool
+	}{
+		{name: testFresh},
+		{name: "pass snapshot precedes checkpoint", age: -time.Millisecond},
+		{name: "stale", age: 4 * time.Minute, want: true},
+		{name: testFuture, age: -4 * time.Minute, want: true},
+		{name: "retained eligibility", waiting: true, want: true},
+		{name: "recorded failure", failure: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			now := r.a.timeNow()
+			obs := throughputObservation{At: now.Add(-tc.age), Unknown: true}
+			if tc.waiting {
+				obs.Eligible = map[string]eligibleWait{loopPR: {Head: loopHead, URL: loopURL, Since: now.Add(-time.Hour)}}
+			}
+			if err := r.a.store.WriteFile(throughputObservationFile, obs); err != nil {
+				t.Fatal(err)
+			}
+			if tc.failure {
+				if err := r.a.operationOutcome(runMerge, testMergeExit1Reason, loopURL, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			line, err := r.a.checkThroughput(now, false)
+			if err != nil || (line != "") != tc.want {
+				t.Fatalf("initial checkpoint: line %q, error %v; want diagnostic %v", line, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestThroughputStreaksAndSuccesses(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	obs := throughputObservation{At: now}

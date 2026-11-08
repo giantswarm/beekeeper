@@ -176,3 +176,57 @@ func TestRecoveryFenceLetsALaterReleaseWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestCompleteRollbackResumesCompatibleWritersWithoutUnfencingFailedBinary(t *testing.T) {
+	dir := t.TempDir()
+	restored, _ := OpenVersion(dir, recoveryRelease)
+	noop := func(*State) ([]Event, error) { return nil, nil }
+	if err := restored.Update(noop); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.RecoverVersion(recoveryRelease, recoveryNewer, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.CompleteRollback(recoveryRelease, recoveryNewer); err != nil {
+		t.Fatal(err)
+	}
+	// Restarted services on a compatible intermediate version need no manual
+	// probation completion. Neither failed writers nor unknown builds resume.
+	for _, tc := range []struct {
+		version string
+		allowed bool
+	}{{recoveryRelease, true}, {recoveryCandidate, true}, {recoveryNewer, false}, {recoveryDevBuild, false}} {
+		writer, _ := OpenVersion(dir, tc.version)
+		if err := writer.Update(noop); (err == nil) != tc.allowed {
+			t.Fatalf("%s: allowed %v, got %v", tc.version, tc.allowed, err)
+		}
+	}
+	var fence recoveryFence
+	if _, err := restored.ReadFile(recoveryFenceFile, &fence); err != nil {
+		t.Fatal(err)
+	}
+	// Preserve the fields understood by the rolled-back binary. Removing the
+	// file would allow its still-running processes to write again.
+	if !fence.Recovered || fence.Maximum != recoveryRelease || fence.Failed != recoveryNewer {
+		t.Fatalf("lost legacy process fence: %+v", fence)
+	}
+	if err := restored.CompleteRollback(recoveryRelease, recoveryNewer); err != nil {
+		t.Fatalf("completion not idempotent: %v", err)
+	}
+	if err := restored.CompleteRollback(recoveryRelease, recoveryFailed); err == nil {
+		t.Fatal("completed a different rollback")
+	}
+}
+
+func TestCompleteRollbackRefusesIncompatibleLiveWriter(t *testing.T) {
+	s, _ := OpenVersion(t.TempDir(), recoveryRelease)
+	if err := s.RecoverVersion(recoveryRelease, recoveryNewer, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.path("state.json"), []byte(`{"writer":{"version":"`+recoveryNewer+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteRollback(recoveryRelease, recoveryNewer); err == nil {
+		t.Fatal("lifted the ceiling over an incompatible writer")
+	}
+}
