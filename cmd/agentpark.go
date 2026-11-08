@@ -520,7 +520,12 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		cp := st.Agents[i]
 		if cp.Park == nil {
 			_, gone = goneAgent(a.cfg, st, nil, cp, a.cfg.Agents.StaleAfter.Duration, a.now)
-			if gone {
+			if cp.Execution != nil {
+				// SSH workers do not use local transcript staleness. A finished
+				// round can still own its next task after its runner exited.
+				r, _ := executionRecord(st, *cp.Execution)
+				gone = r != nil && (r.Terminal() || r.Completed)
+			} else if gone {
 				sessions, _, err := a.sessions()
 				if err != nil {
 					return err
@@ -541,6 +546,13 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		return refused("no resume: %s (--force resumes anyway)", block)
 	}
 	if gone {
+		if target.Execution != nil {
+			// This is an explicit by-name resume, like agents wake. Keep
+			// automatic wakes from restarting an unparked finished worker.
+			if err := a.continueExecution(ctx, by, *target); err != nil {
+				return err
+			}
+		}
 		if err := wakeOwner(a, ctx, by, target.Name, resumeMessage, ""); err != nil {
 			return err
 		}
