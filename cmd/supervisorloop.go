@@ -1917,6 +1917,18 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
+	// Retirement can wait on a remote stop or session archive. It must not
+	// own the start stream: free capacity exists even when no retirement
+	// finishes. Keep starts serialized separately across ticks.
+	launch("stream:worker-retirement", func() error {
+		for _, act := range doneActs {
+			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
 	launch("stream:workers", func() error {
 		if intakeBeforeFill {
 			if !l.beginInFlight("stream:intake") {
@@ -1932,11 +1944,6 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 				return nil
 			}()
 			if err != nil {
-				return err
-			}
-		}
-		for _, act := range doneActs {
-			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
 				return err
 			}
 		}
