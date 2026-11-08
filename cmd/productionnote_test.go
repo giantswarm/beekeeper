@@ -26,7 +26,7 @@ func TestProductionNoteAuthority(t *testing.T) {
 		{name: "declined", channel: viaCLI, answer: "no", want: "does not explicitly approve"},
 		{name: "different object", channel: viaCLI, answer: noteApproval, question: strings.ReplaceAll(productionDelete, "stale", "other"), want: "exact command"},
 		{name: "expired", channel: viaCLI, answer: noteApproval, age: 25 * time.Hour, want: "older"},
-		{name: "future", channel: viaCLI, answer: noteApproval, age: -time.Hour, want: "future"},
+		{name: testFuture, channel: viaCLI, answer: noteApproval, age: -time.Hour, want: testFuture},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := noteApp(t)

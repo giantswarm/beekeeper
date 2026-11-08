@@ -82,7 +82,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Child: hung, Phase: state.Running, Started: long},
 			{Repo: nextRepo, PR: 4, Lane: hungLane, By: four, Phase: state.Waiting, Joined: relayNow, Seen: relayNow},
 			{Repo: openRepo, PR: 2, Lane: openLane, By: four, Child: open, Phase: state.Running, Started: long},
-			{Repo: freshRepo, PR: 3, Lane: "fresh", By: four, Child: fresh, Phase: state.Running, Started: long},
+			{Repo: freshRepo, PR: 3, Lane: testFresh, By: four, Child: fresh, Phase: state.Running, Started: long},
 		}
 		return nil, nil
 	})

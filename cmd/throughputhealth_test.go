@@ -15,6 +15,9 @@ import (
 
 const testMergeExit1Reason = "merge-command-exit-1"
 
+const testFresh = "fresh"
+const testFuture = "future"
+
 func TestThroughputInitialPhaseCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -23,10 +26,10 @@ func TestThroughputInitialPhaseCheckpoint(t *testing.T) {
 		failure bool
 		want    bool
 	}{
-		{name: "fresh"},
+		{name: testFresh},
 		{name: "pass snapshot precedes checkpoint", age: -time.Millisecond},
 		{name: "stale", age: 4 * time.Minute, want: true},
-		{name: "future", age: -4 * time.Minute, want: true},
+		{name: testFuture, age: -4 * time.Minute, want: true},
 		{name: "retained eligibility", waiting: true, want: true},
 		{name: "recorded failure", failure: true, want: true},
 	} {

@@ -29,7 +29,7 @@ func TestRoomFor(t *testing.T) {
 	// tasked is idle on its task; watcher supervises.
 	sessions := []*claude.Session{
 		session(1, "own", 90*time.Hour),
-		session(2, "fresh", 2*time.Hour),
+		session(2, testFresh, 2*time.Hour),
 		session(3, kindStale, 5*time.Hour),
 		session(4, "tasked", 9*time.Hour),
 		session(5, "watcher", 8*time.Hour),
@@ -40,7 +40,7 @@ func TestRoomFor(t *testing.T) {
 		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktopArgs}
 	}
 	st := &state.State{}
-	for _, id := range []string{"fresh", kindStale, "tasked", "watcher", onhold} {
+	for _, id := range []string{testFresh, kindStale, "tasked", "watcher", onhold} {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
 	}
 	st.Agents = []state.Agent{

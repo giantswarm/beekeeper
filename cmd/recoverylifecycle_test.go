@@ -15,6 +15,7 @@ import (
 )
 
 const lifecycleFirstPass = "first pass"
+const lifecycleWatchAlerts = "watch alerts"
 
 func TestRecoveryReportsCandidateExitInsteadOfBareSilence(t *testing.T) {
 	c, now := recoveryRig(t)
@@ -42,7 +43,7 @@ func TestRecoveryRejectsStaleOrMismatchedPhaseProgress(t *testing.T) {
 		exited               bool
 		want                 string
 	}{
-		{"stalled first pass", recoveryBadVersion, "watch alerts", 0, false, "last reached watch alerts"},
+		{"stalled first pass", recoveryBadVersion, lifecycleWatchAlerts, 0, false, "last reached watch alerts"},
 		{"old binary", recoveryGoodVersion, lifecycleFirstPass, 0, true, "no matching candidate"},
 		{"before install", recoveryBadVersion, lifecycleFirstPass, -time.Minute, true, "no matching candidate"},
 	} {
@@ -110,7 +111,7 @@ func TestLoopPhasePublishesHeartbeatForRetainedController(t *testing.T) {
 	if err := c.store.WriteFile(throughputObservationFile, obs); err != nil {
 		t.Fatal(err)
 	}
-	for _, phase := range []string{"reload configuration", "watch conditions", "watch alerts", loopPhaseBetween} {
+	for _, phase := range []string{"reload configuration", "watch conditions", lifecycleWatchAlerts, loopPhaseBetween} {
 		l.lifecyclePhase(phase)
 		if _, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || obs.Unknown {
 			t.Fatalf("phase %s erased completed planning: %+v %v", phase, obs, err)
@@ -303,7 +304,7 @@ func TestLoopFailureClassificationDoesNotExposePrivateErrorText(t *testing.T) {
 
 func TestSecondLoopCannotReplaceOwnerLifecycle(t *testing.T) {
 	r := newLoopRig(t)
-	owner := loopLifecycle{Version: recoveryBadVersion, Started: time.Now(), Phase: "watch alerts"}
+	owner := loopLifecycle{Version: recoveryBadVersion, Started: time.Now(), Phase: lifecycleWatchAlerts}
 	if err := r.a.store.WriteFile(loopLifecycleFile, owner); err != nil {
 		t.Fatal(err)
 	}
