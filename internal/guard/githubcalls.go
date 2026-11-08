@@ -96,10 +96,10 @@ func graphQLCalls(command string) []GitHubCall {
 			if tool == "gh" && len(args) >= 2 {
 				switch args[0] {
 				case "project":
-					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", verbList, ghViewSub, "create", verbEdit, "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", unlinkCmd, "mark-template"}, args[1]) {
+					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", verbList, ghViewSub, verbCreate, verbEdit, "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", unlinkCmd, "mark-template"}, args[1]) {
 						class = "gh project " + args[1]
 					}
-				case "api":
+				case ghAPISub:
 					if args[1] == executionGraphQL {
 						class = "gh api graphql"
 					}
@@ -147,17 +147,17 @@ func restCalls(command string) []GitHubCall {
 		}
 		class := ""
 		switch args[0] {
-		case "api":
+		case ghAPISub:
 			// graphql may follow flags; never retain endpoint arguments.
 			if !slices.Contains(args, executionGraphQL) {
 				class = "gh api REST"
 			}
 		case "run", "workflow", "release":
-			if slices.Contains([]string{"view", "list", "download", "watch", "create", "delete", "edit", "upload", "rerun", "cancel", "enable", "disable"}, args[1]) && !(args[0] == "release" && args[1] == "list") {
+			if slices.Contains([]string{"view", verbList, "download", "watch", verbCreate, verbDelete, "edit", "upload", "rerun", "cancel", "enable", "disable"}, args[1]) && !(args[0] == "release" && args[1] == verbList) {
 				class = "gh " + args[0] + " " + args[1]
 			}
 		case "issue":
-			if slices.Contains([]string{"create", "comment", "edit", "close", "reopen", "delete"}, args[1]) {
+			if slices.Contains([]string{verbCreate, "comment", "edit", "close", "reopen", verbDelete}, args[1]) {
 				class = "gh issue " + args[1]
 			}
 		case "pr":
