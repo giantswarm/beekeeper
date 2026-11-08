@@ -3,5 +3,7 @@
   "until": "2026-01-02T00:00:00Z",
   "steps": [],
   "released": 0,
-  "releasedPerDay": 0
+  "releasedPerDay": 0,
+  "meanCycleTime": 0,
+  "cycleSamples": 0
 }
