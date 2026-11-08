@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	guideWorkGoal  = "goal"
-	guideWorkCheck = "check"
-	guideStopEvent = "Stop"
+	guideWorkGoal      = "goal"
+	guideWorkBacklog   = "backlog"
+	guideWorkCheck     = "check"
+	guideStopEvent     = "Stop"
+	guideBacklogPrefix = "Historical worker problem backlog (close together with guide work done):\n"
 )
 
 func guideWorkText(st *state.State) string {
@@ -141,7 +143,7 @@ func (a *app) guideWorkCmd() *cobra.Command {
 				return nil, refused("only the current guide checks its work")
 			}
 			for _, work := range st.GuideWork {
-				if work.Kind != guideWorkGoal && !work.Due.After(a.now) {
+				if guideWorkBlocks(work, a.now) {
 					return nil, refused("guide work %d is due: finish, file or schedule it before checking the turn", work.ID)
 				}
 			}
@@ -158,4 +160,61 @@ func overrideRestoration(o state.Override) string {
 		return "when " + issueURL(o.Ref) + " closes"
 	}
 	return o.Until.Format("2006-01-02 15:04:05 MST")
+}
+
+// guideReportEvents shares a durable delivery boundary between both guide feeds.
+// On upgrade, start at the first observation instead of replaying the event log.
+func guideReportEvents(st *state.State, events []state.Event, now time.Time) []state.Event {
+	if st.GuideReportsSince.IsZero() {
+		st.GuideReportsSince = now.UTC()
+	}
+	since := st.GuideReportsSince
+	var fresh []state.Event
+	oldSources := map[string]bool{}
+	for _, e := range events {
+		key, text, ok := keyed(e.Detail)
+		if !ok || !strings.Contains(text, fileReportSeparator) {
+			continue
+		}
+		if e.At.Before(now.Add(-24 * time.Hour)) {
+			oldSources[key] = true
+		}
+		if e.At.Before(since) || oldSources[key] {
+			continue
+		}
+		fresh = append(fresh, e)
+	}
+	// Repair reports already imported by older versions. Preserve their text
+	// in one explicitly marked backlog, closable with the ordinary done command.
+	var kept []state.GuideWork
+	var backlog *state.GuideWork
+	migrated := false
+	for _, work := range st.GuideWork {
+		if work.Kind == guideWorkBacklog || work.Source != "" && (oldSources[work.Source] || work.Due.Before(now.Add(-24*time.Hour))) {
+			if work.Kind != guideWorkBacklog {
+				migrated = true
+			}
+			body := strings.TrimPrefix(work.Text, guideBacklogPrefix)
+			if backlog == nil {
+				copy := work
+				copy.Kind = guideWorkBacklog
+				copy.Source = ""
+				copy.Text = guideBacklogPrefix + body
+				backlog = &copy
+			} else {
+				migrated = true
+				backlog.Text += "\n" + body
+			}
+			continue
+		}
+		kept = append(kept, work)
+	}
+	if migrated && backlog != nil {
+		st.GuideWork = append(kept, *backlog)
+	}
+	return fresh
+}
+
+func guideWorkBlocks(work state.GuideWork, now time.Time) bool {
+	return work.Kind != guideWorkGoal && work.Kind != guideWorkBacklog && !work.Due.After(now)
 }

@@ -1320,6 +1320,13 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 				// A long finding with bare issue shorthand must arrive intact, too.
 				finding := "queue refused #42, owning repository o/r:\n" + strings.Repeat("evidence ", 400)
 				now := time.Now()
+				// The guide has already started its feed before this new finding.
+				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.GuideReportsSince = now.Add(-time.Minute)
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 				var evs []state.Event
 				if done {
 					d := event(state.Party{Name: loopWorker}, "agents.done", "%s done: maintain the desk", loopWorker)
