@@ -160,7 +160,7 @@ func nextBesideARelease(t *testing.T, warmed func(g *gateRun)) *gateRun {
 	t.Helper()
 	stubGitHub(t, github.Open, "")
 	g := runningMerge(t, scratchRepo, localLane)
-	g.pr, g.argv = 8, append(mergeArgv(scratchRepo), "--update-branch")
+	g.pr, g.argv = 8, mergeArgv(scratchRepo)
 	g.cfg.Merge.CITimeout.Duration = time.Minute
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{

@@ -277,7 +277,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			// channel to the guide, which files it in its owning
 			// repository. The hold stays while free space stays under the
 			// floor; it lifts on its own once the watch reports recovery.
-			text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
+			text := fmt.Sprintf("Disk remains low after pruning; every worker start is held: free disk / %d MiB (floor %d MiB). Writers: %s", disk.FreeMiB, disk.MinMiB, disk.Writers)
 			var holding diskHolding
 			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.timeNow().Sub(holding.At) < time.Hour {
 				text += ". Holding the space: " + holding.Text

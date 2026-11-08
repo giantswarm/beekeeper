@@ -27,7 +27,7 @@ func (h Hook) gatedMerge(repo, number string) string {
 	if number == "" {
 		number = "<n>"
 	}
-	return fmt.Sprintf("Refused: %s's merges belong to the gate (its lane, protection check and release wait); a raw merge bypasses it. Run `devctl pr merge %s %s --update-branch` on the loop's go; the hook puts the gate in front of it.", repo, repo, number)
+	return fmt.Sprintf("Refused: %s's merges belong to the gate (its lane, protection check and release wait); a raw merge bypasses it. Run `devctl pr merge %s %s` on the loop's go; the hook puts the gate in front of it.", repo, repo, number)
 }
 
 // gatedHint names the gated command for a merge whose repository the guard
@@ -36,7 +36,7 @@ func (h Hook) gatedHint() string {
 	if len(h.GatedOwners) == 0 {
 		return ""
 	}
-	return " On a repository of " + strings.Join(h.GatedOwners, ", ") + " the merge is `devctl pr merge <owner/repo> <n> --update-branch` through the gate."
+	return " On a repository of " + strings.Join(h.GatedOwners, ", ") + " the merge is `devctl pr merge <owner/repo> <n>` through the gate."
 }
 
 // Only a component-recorded go is authority. The head must also be enforced

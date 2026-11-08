@@ -116,6 +116,11 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 		!strings.Contains(evs[0].Detail, fileReportSeparator) {
 		t.Fatalf("persistent low disk finding: %q", evs[0].Detail)
 	}
+	lines, changed := guideProblemLines(&state.State{}, evs)
+	if !changed || len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE PROBLEM: ") || !strings.Contains(lines[0], "every worker start is held") || !strings.Contains(lines[0], "floor") {
+		t.Fatalf("low disk did not raise a guide alarm: %v", lines)
+	}
+
 	r.pass(t)
 	evs, err = r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
 	if err != nil || len(evs) != 1 {
@@ -285,5 +290,24 @@ func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	st, _ := r.a.store.Read()
 	if len(st.Notes) != 0 {
 		t.Fatalf("low disk filed a note for the person: %+v", st.Notes)
+	}
+}
+
+func TestLoopWatchDiskRecoveryAfterPruneDoesNotAlarm(t *testing.T) {
+	r := newLoopRig(t)
+	w := r.a.newWatcher(false, false)
+	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+	r.pass(t)
+	if r.called(loopDiskKind, "prune", "--apply") == nil {
+		t.Fatal("disk floor did not trigger cleanup")
+	}
+	w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
+	r.pass(t)
+	events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	if err != nil || len(events) != 0 {
+		t.Fatalf("recovered disk raised an alarm: %+v %v", events, err)
+	}
+	if reading := r.a.watchDisk(); reading == nil || reading.Low {
+		t.Fatalf("recovered disk still blocks capacity: %+v", reading)
 	}
 }
