@@ -16,5 +16,7 @@
     }
   ],
   "released": 1,
-  "releasedPerDay": 1
+  "releasedPerDay": 1,
+  "meanCycleTime": 10800000000000,
+  "cycleSamples": 1
 }
