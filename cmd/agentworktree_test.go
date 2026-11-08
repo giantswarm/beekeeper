@@ -212,7 +212,7 @@ func TestPrepareStartWorktree(t *testing.T) {
 	if got := git(review, "rev-parse", "HEAD"); got != tip {
 		t.Fatalf("prior checkout changed: %s", got)
 	}
-	if data, err := os.ReadFile(filepath.Join(legacy, "review-edits")); err != nil || string(data) != preservedContents {
+	if data, err := os.ReadFile(filepath.Join(legacy, "review-edits")); err != nil || string(data) != preservedContents { //nolint:gosec // fixture path constructed entirely under t.TempDir
 		t.Fatalf("legacy edits changed: %q, %v", data, err)
 	}
 	a.cfg.Agents.WorktreesDir = filepath.Join(root, "custom-worktrees")
