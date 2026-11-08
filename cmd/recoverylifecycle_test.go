@@ -278,3 +278,31 @@ func TestLoopPanicIsRecordedAndPropagated(t *testing.T) {
 		t.Fatalf("panic recorded incorrectly: %+v %v", life, err)
 	}
 }
+
+// Model the retained controller's install-based grace: a late first pass must
+// report progress without waiting for event history or a completed plan.
+func TestRecoveryAcceptsHistoryCheckpointAndRejectsStalledReader(t *testing.T) {
+	c, now := recoveryRig(t)
+	oldVersion := loopRunningVersion
+	t.Cleanup(func() { loopRunningVersion = oldVersion })
+	loopRunningVersion = func() string { return recoveryBadVersion }
+	j := journal(t, c)
+	*now = now.Add(update.HeartbeatGrace)
+	l := &supervisorLoop{a: c.a}
+	if err := l.checkpointThroughput(*now); err != nil {
+		t.Fatal(err)
+	}
+	o := update.Observed{Elapsed: update.HeartbeatGrace, ProbePassed: true}
+	s := c.signals(t.Context(), j)
+	if !s.Heartbeat || !s.HeartbeatRequired || s.Unproven != "" {
+		t.Fatalf("checkpoint not recognized: %+v", s)
+	}
+	if verdict, reason := update.Decide(o, s); verdict != update.Wait {
+		t.Fatalf("late history load: %s: %s", verdict, reason)
+	}
+	*now = now.Add(4 * time.Minute)
+	s = c.signals(t.Context(), j)
+	if verdict, reason := update.Decide(o, s); verdict != update.RollBack {
+		t.Fatalf("stalled history reader: %s: %s", verdict, reason)
+	}
+}

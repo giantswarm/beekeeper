@@ -27,16 +27,21 @@ const (
 // Delivery is one issue (or an issue-less desk pull request) from start to release.
 // Ref and Pulls use the same canonical references as serve records.
 type Delivery struct {
-	Ref            string    `json:"ref"`
-	Pulls          []string  `json:"pulls"`
-	Step           string    `json:"step"`
-	Since          time.Time `json:"since"`
-	Started        time.Time `json:"started"`
-	Agent          string    `json:"agent,omitempty"`
-	Waits          string    `json:"waits,omitempty"`
-	Release        string    `json:"release,omitempty"`
-	ReleaseChecked time.Time `json:"releaseChecked,omitempty"`
-	Verdict        string    `json:"verdict,omitempty"`
+	Heads          map[string]string `json:"heads,omitempty"`
+	DroppedHeads   map[string]string `json:"droppedHeads,omitempty"`
+	DropReason     string            `json:"dropReason,omitempty"`
+	DropBy         Party             `json:"dropBy,omitempty"`
+	DropAt         time.Time         `json:"dropAt,omitempty"`
+	Ref            string            `json:"ref"`
+	Pulls          []string          `json:"pulls"`
+	Step           string            `json:"step"`
+	Since          time.Time         `json:"since"`
+	Started        time.Time         `json:"started"`
+	Agent          string            `json:"agent,omitempty"`
+	Waits          string            `json:"waits,omitempty"`
+	Release        string            `json:"release,omitempty"`
+	ReleaseChecked time.Time         `json:"releaseChecked,omitempty"`
+	Verdict        string            `json:"verdict,omitempty"`
 }
 
 // Active includes unknown observations: an unreadable pull never frees its place.
@@ -65,7 +70,7 @@ func (s *State) StartDelivery(ref, agent, waits string, at time.Time) {
 		return
 	}
 	i := slices.IndexFunc(s.Deliveries, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) })
-	if i >= 0 && s.Deliveries[i].Active() {
+	if i >= 0 && (s.Deliveries[i].Active() || s.Deliveries[i].DropReason != "" && len(s.Deliveries[i].Pulls) > 0) {
 		return
 	}
 	d := Delivery{Ref: ref, Pulls: []string{}, Step: DeliveryImplementing, Since: at, Started: at, Agent: agent, Waits: waits}
@@ -74,4 +79,13 @@ func (s *State) StartDelivery(ref, agent, waits string, at time.Time) {
 	} else {
 		s.Deliveries[i] = d
 	}
+}
+
+// DeliveryHealth is committed with alert events, shared by both watches.
+type DeliveryHealth struct {
+	At            time.Time         `json:"at,omitempty"`
+	Episodes      map[string]string `json:"episodes,omitempty"`
+	FullSignature string            `json:"fullSignature,omitempty"`
+	FullSince     time.Time         `json:"fullSince,omitempty"`
+	FullRaised    bool              `json:"fullRaised,omitempty"`
 }

@@ -88,7 +88,7 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 			out = fmt.Appendf(out, `{"ID":%q,"Size":%q,"Reclaimable":%t,"LastUsedAt":%q}`+"\n", id, bytesStr(rec.size), rec.free, rec.usedAgo)
 		}
 		return out, nil
-	case args[0] == "builder" && args[1] == "prune":
+	case args[0] == "builder" && args[1] == litPrune:
 		f.pruned = args[2:]
 		if len(args) == 5 && args[2] == pruneForceFlag && args[3] == "--filter" && strings.HasPrefix(args[4], "id=") {
 			id := strings.TrimPrefix(args[4], "id=")

@@ -1,0 +1,94 @@
+package cmd
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+// Evaluation and filing share the state transaction. Neither a restart nor
+// simultaneous standby and supervisor watches can file an episode twice.
+func (a *app) checkDeliveries(now time.Time) (string, error) {
+	if a.store == nil {
+		return "", fmt.Errorf("durable delivery health unavailable")
+	}
+	var lines []string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		after := a.cfg.Delivery.StallAfter.Duration
+		if after <= 0 {
+			after = 24 * time.Hour
+		}
+		old := st.DeliveryHealth
+		// Watches capture their tick before taking the lock. A slower older tick
+		// must not recover an episode a newer tick has just raised.
+		if now.Before(old.At) {
+			return nil, nil
+		}
+		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}}
+		var events []state.Event
+		file := func(key, detail string) {
+			lines = append(lines, detail)
+			events = append(events, event(loopParty, loopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail))
+		}
+		var active []state.Delivery
+		var signature []string
+		latest := time.Time{}
+		for _, d := range st.Deliveries {
+			signature = append(signature, fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano)))
+			if d.Since.After(latest) {
+				latest = d.Since
+			}
+			if !d.Active() {
+				continue
+			}
+			active = append(active, d)
+			failed := d.Step == state.DeliveryReleasing && (d.Verdict == state.DeliveryReleaseFailed || d.Verdict == verdictUnconfirmed)
+			if !failed && (d.Since.IsZero() || now.Sub(d.Since) < after) {
+				continue
+			}
+			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))
+			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, now.Sub(d.Since)).Round(time.Second), strings.TrimSpace(d.Waits+" "+d.Verdict+" "+d.Release))
+			next.Episodes[key] = detail
+			if _, ok := old.Episodes[key]; !ok {
+				file(key, detail)
+			}
+		}
+		for key, detail := range old.Episodes {
+			if _, ok := next.Episodes[key]; !ok {
+				file("recovered "+key, "RECOVERED: "+detail)
+			}
+		}
+		limit := a.cfg.Delivery.WIPLimit
+		if limit > 0 && len(active) >= limit {
+			slices.Sort(signature)
+			next.FullSignature = fmt.Sprintf("%d: %s", limit, strings.Join(signature, ";"))
+			next.FullSince = latest
+			if next.FullSince.IsZero() || next.FullSince.After(now) {
+				next.FullSince = now
+			}
+			if next.FullSignature == old.FullSignature {
+				next.FullSince, next.FullRaised = old.FullSince, old.FullRaised
+			} else if old.FullSignature != "" {
+				next.FullSince = now
+			}
+			if now.Sub(next.FullSince) >= after && !next.FullRaised {
+				slices.SortFunc(active, func(a, b state.Delivery) int { return a.Since.Compare(b.Since) })
+				var refs []string
+				for _, d := range active[:min(5, len(active))] {
+					refs = append(refs, fmt.Sprintf("%s (%s, %s; %s %s)", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, now.Sub(d.Since).Round(time.Second), d.Waits, d.Verdict))
+				}
+				file("full "+next.FullSignature, fmt.Sprintf("WIP FULL: %d of %d in delivery with no step change for %s; oldest: %s", len(active), limit, now.Sub(next.FullSince).Round(time.Second), strings.Join(refs, ", ")))
+				next.FullRaised = true
+			}
+		}
+		if old.FullRaised && (next.FullSignature != old.FullSignature) {
+			file("full recovered "+old.FullSignature, "RECOVERED: WIP FULL episode ended: delivery step or limit changed")
+		}
+		st.DeliveryHealth = next
+		return events, nil
+	})
+	return strings.Join(lines, "\n"), err
+}

@@ -8,6 +8,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const deliveryDropReason = "manual end"
+
 const deliveryFirstHead = "aaa"
 const deliveryDeskAuthor = "desk"
 const deliveryCombinedPR = "o/r#30"
@@ -212,6 +214,73 @@ func TestDeliveryDoneRosterDropsResearchWithoutEventHistory(t *testing.T) {
 	got := Deliveries(in, prev)
 	if got[0].Step != state.DeliveryDropped {
 		t.Fatal(got)
+	}
+}
+
+func TestDeliveryManualDropSurvivesSameHeadRestartAndResumesNewHead(t *testing.T) {
+	in := deliveryInput()
+	prev := Deliveries(in, nil)
+	prev[0].Step = state.DeliveryDropped
+	prev[0].DropReason = deliveryDropReason
+	prev[0].DroppedHeads = map[string]string{deliveryPR: deliveryFirstHead}
+	for range 2 {
+		prev = Deliveries(in, prev)
+		if prev[0].Active() {
+			t.Fatalf("same head reopened: %+v", prev)
+		}
+	}
+	saved := in.Pulls
+	in.Pulls = nil
+	prev = Deliveries(in, prev)
+	if prev[0].Active() {
+		t.Fatal("unread reopened")
+	}
+	in.Pulls = saved
+	p := in.Pulls[deliveryPR]
+	p.Head = "new"
+	in.Pulls[deliveryPR] = p
+	in.Now = in.Now.Add(time.Hour)
+	got := Deliveries(in, prev)
+	if !got[0].Active() || got[0].DropReason != "" || !got[0].Started.Equal(in.Now) || got[0].Heads[deliveryPR] != "new" {
+		t.Fatalf("new head did not reopen: %+v", got)
+	}
+	if prev[0].Heads[deliveryPR] != deliveryFirstHead {
+		t.Fatal("derivation mutated previous snapshot")
+	}
+}
+
+func TestDeliveryDropIgnoresPreDropObservations(t *testing.T) {
+	in := deliveryInput()
+	prev := Deliveries(in, nil)
+	prev[0].Step = state.DeliveryDropped
+	prev[0].DropReason = deliveryDropReason
+	prev[0].DropAt = in.Now.Add(time.Minute)
+	prev[0].Since = prev[0].DropAt
+	prev[0].DroppedHeads = map[string]string{deliveryPR: "new-actual-head"}
+	// An old pass finishing after the command may not resurrect its old head.
+	got := Deliveries(in, prev)
+	if got[0].Active() {
+		t.Fatal("old pass reopened drop")
+	}
+	in.PullReadAt = map[string]time.Time{deliveryPR: in.Now}
+	in.Now = in.Now.Add(2 * time.Minute)
+	got = Deliveries(in, prev)
+	if got[0].Active() {
+		t.Fatal("old cached read reopened drop")
+	}
+	in.PullReadAt[deliveryPR] = in.Now
+	got = Deliveries(in, prev)
+	if !got[0].Active() {
+		t.Fatal("new observation did not resume changed head")
+	}
+}
+
+func TestDeliveryDroppedPRSeedPreservesTombstoneWhenLinked(t *testing.T) {
+	in := deliveryInput()
+	prev := []Delivery{{Ref: deliveryPR, Pulls: []string{deliveryPR}, Step: state.DeliveryDropped, Since: in.Now, Started: in.Now, DropReason: deliveryDropReason, DroppedHeads: map[string]string{deliveryPR: deliveryFirstHead}}}
+	got := Deliveries(in, prev)
+	if len(got) != 1 || got[0].Ref != deliveryIssue || got[0].Active() {
+		t.Fatalf("link resurrected dropped seed: %+v", got)
 	}
 }
 
