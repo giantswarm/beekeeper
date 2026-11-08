@@ -12,11 +12,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
+const visibilityAdmissionRepo = "team/repo"
+
 func TestTaskAdmissionRepositoryVisibility(t *testing.T) {
 	old := repositoryVisibilityGH
 	t.Cleanup(func() { repositoryVisibilityGH = old })
 	a, _ := executionTestApp(t)
-	a.cfg.GitHub.PublicOnlyOwners = []string{"team"}
+	a.cfg.GitHub.PublicOnlyOwners = []string{scopeTeam}
 	for _, tc := range []struct {
 		name, body    string
 		fail, allowed bool
@@ -24,15 +26,15 @@ func TestTaskAdmissionRepositoryVisibility(t *testing.T) {
 		{"public", `{"visibility":"public"}`, false, true},
 		{"private", `{"visibility":"private"}`, false, false},
 		{"missing field", `{}`, false, false},
-		{"unreadable", ``, true, false},
+		{"lookup failure", ``, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repositoryVisibilityGH = func(ctx context.Context, args ...string) ([]byte, error) {
-				if github.Repo(ctx) != "team/repo" {
+				if github.Repo(ctx) != visibilityAdmissionRepo {
 					t.Fatalf("wrong repository: %s", github.Repo(ctx))
 				}
 				if tc.fail {
-					return nil, errors.New("unreadable")
+					return nil, errors.New("fixture visibility lookup failed")
 				}
 				return []byte(tc.body), nil
 			}
@@ -76,12 +78,12 @@ func TestRemoteAndGateAdmissionRefusePrivateRepository(t *testing.T) {
 	old := repositoryVisibilityGH
 	t.Cleanup(func() { repositoryVisibilityGH = old })
 	a, _ := executionTestApp(t)
-	a.cfg.GitHub.PublicOnlyOwners = []string{"team"}
+	a.cfg.GitHub.PublicOnlyOwners = []string{scopeTeam}
 	repositoryVisibilityGH = func(context.Context, ...string) ([]byte, error) { return []byte(`{"visibility":"private"}`), nil }
-	if err := a.startSSHExecution(context.Background(), "worker", "", executionStartOptions{Repository: "team/repo"}); err == nil || !strings.Contains(err.Error(), "publicOnlyOwners") {
+	if err := a.startSSHExecution(context.Background(), "worker", "", executionStartOptions{Repository: visibilityAdmissionRepo}); err == nil || !strings.Contains(err.Error(), "publicOnlyOwners") {
 		t.Fatalf("SSH admission did not refuse visibility: %v", err)
 	}
-	if err := a.gate(context.Background(), []string{"devctl", "pr", "merge", "team/repo", "1"}, time.Minute, time.Minute, false); err == nil || !strings.Contains(err.Error(), "publicOnlyOwners") {
+	if err := a.gate(context.Background(), []string{devctlBinary, "pr", gitMerge, visibilityAdmissionRepo, "1"}, time.Minute, time.Minute, false); err == nil || Code(err) != 77 {
 		t.Fatalf("gate admission did not refuse visibility: %v", err)
 	}
 }

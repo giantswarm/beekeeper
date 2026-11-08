@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	upstreamAPIHost = "api.github.com"
-	upstreamGitHost = "github.com"
+	upstreamAPIHost     = "api.github.com"
+	upstreamGitHost     = "github.com"
+	upstreamUploadsHost = "uploads.github.com"
 )
 
 // githubWrite checks the actual request before any broker token is attached.
@@ -68,7 +69,7 @@ func (e *Egress) githubWrite(r *http.Request, host string) error {
 	}
 	owner, repo := "", ""
 	switch host {
-	case upstreamAPIHost, "uploads.github.com":
+	case upstreamAPIHost, upstreamUploadsHost:
 		if len(parts) >= 2 && (parts[0] == "repos" || parts[0] == "orgs") {
 			owner = parts[1]
 			if parts[0] == "repos" && len(parts) >= 3 {

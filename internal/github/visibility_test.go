@@ -6,16 +6,19 @@ import (
 	"testing"
 )
 
+const visibilityFixtureRepo = "team/repo"
+const nullResponseFixture = "null"
+
 func TestVisibilityPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name, repo, visibility string
 		unreadable, want       bool
 	}{
 		{VisibilityPublic, "TEAM/repo", VisibilityPublic, false, true},
-		{VisibilityPrivate, "team/repo", VisibilityPrivate, false, false},
-		{VisibilityInternal, "team/repo", VisibilityInternal, false, false},
-		{"unknown", "team/repo", "", false, false},
-		{"unreadable", "team/repo", VisibilityPublic, true, false},
+		{VisibilityPrivate, visibilityFixtureRepo, VisibilityPrivate, false, false},
+		{VisibilityInternal, visibilityFixtureRepo, VisibilityInternal, false, false},
+		{"unknown", visibilityFixtureRepo, "", false, false},
+		{"unreadable", visibilityFixtureRepo, VisibilityPublic, true, false},
 		{"unresolved", "team/*", VisibilityPublic, false, false},
 		{"organization", "team/", VisibilityPublic, false, false},
 		{"other owner", "other/repo", VisibilityPrivate, false, true},
@@ -32,7 +35,7 @@ func TestVisibilityPolicy(t *testing.T) {
 			}
 		})
 	}
-	if (VisibilityPolicy{PublicOnlyOwners: []string{"team"}}).Check("team/repo") == nil {
+	if (VisibilityPolicy{PublicOnlyOwners: []string{"team"}}).Check(visibilityFixtureRepo) == nil {
 		t.Fatal("missing reader allowed restricted repository")
 	}
 }
@@ -44,17 +47,17 @@ func TestRepositoryVisibilityRequiresExplicitMetadata(t *testing.T) {
 		{`{"visibility":VisibilityInternal}`, VisibilityInternal},
 		{`{VisibilityPrivate:false}`, ""},
 		{`{}`, ""},
-		{`null`, ""},
+		{nullResponseFixture, ""},
 		{`{"visibility":"unknown"}`, ""},
 		{`invalid`, ""},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			got, err := RepositoryVisibility(context.Background(), func(ctx context.Context, args ...string) ([]byte, error) {
-				if Repo(ctx) != "team/repo" || len(args) != 2 || args[0] != "api" || args[1] != "repos/team/repo" {
+				if Repo(ctx) != visibilityFixtureRepo || len(args) != 2 || args[0] != ghAPI || args[1] != "repos/team/repo" {
 					t.Fatalf("incorrect routing or arguments: %v", args)
 				}
 				return []byte(tc.raw), nil
-			}, "team/repo")
+			}, visibilityFixtureRepo)
 			if got != tc.want || (err == nil) != (tc.want != "") {
 				t.Errorf("visibility = %q, error = %v", got, err)
 			}

@@ -17,7 +17,7 @@ func TestEgressRepositoryVisibility(t *testing.T) {
 				resolved   bool
 			}{
 				{upstreamAPIHost, "/repos/team/repo/issues", true},
-				{"uploads.github.com", "/repos/team/repo/releases/1/assets", true},
+				{upstreamUploadsHost, "/repos/team/repo/releases/1/assets", true},
 				{upstreamGitHost, "/team/repo.git/git-receive-pack", true},
 				{upstreamAPIHost, "/orgs/team", false},
 			} {

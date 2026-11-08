@@ -8,12 +8,12 @@ import (
 )
 
 func TestUpstreamRepositoryVisibility(t *testing.T) {
-	for _, visibility := range []string{"public", "private", "internal", "unreadable"} {
+	for _, visibility := range []string{github.VisibilityPublic, github.VisibilityPrivate, github.VisibilityInternal, "visibility lookup error"} {
 		t.Run(visibility, func(t *testing.T) {
-			u := Upstream{Orgs: []string{"giantswarm"}, Git: fakeGit, Visibility: github.VisibilityPolicy{
+			u := Upstream{Orgs: []string{allowedOrg}, Git: fakeGit, Visibility: github.VisibilityPolicy{
 				PublicOnlyOwners: []string{"GIANTSWARM"}, Read: func(string) (string, error) {
-					if visibility == "unreadable" {
-						return "", errors.New("unreadable")
+					if visibility == "visibility lookup error" {
+						return "", errors.New("fixture visibility lookup failed")
 					}
 					return visibility, nil
 				},
@@ -24,11 +24,11 @@ func TestUpstreamRepositoryVisibility(t *testing.T) {
 				"curl -X POST https://api.github.com/repos/giantswarm/beekeeper/issues",
 				"git push origin fix",
 			} {
-				if got := u.bashWrite(command, oursDir); (got == nil) != (visibility == "public") {
+				if got := u.bashWrite(command, oursDir); (got == nil) != (visibility == github.VisibilityPublic) {
 					t.Errorf("%s: refused = %v", command, got)
 				}
 			}
-			if got := u.connectorWrite("mcp__github__issue_write", map[string]any{"owner": "giantswarm", "repo": "beekeeper"}); (got == nil) != (visibility == "public") {
+			if got := u.connectorWrite("mcp__github__issue_write", map[string]any{ownerKey: allowedOrg, repoKey: "beekeeper"}); (got == nil) != (visibility == github.VisibilityPublic) {
 				t.Errorf("connector refused = %v", got)
 			}
 			if u.bashWrite("gh api -X PATCH orgs/giantswarm", oursDir) == nil {

@@ -51,7 +51,7 @@ func (p VisibilityPolicy) Check(repo string) error {
 // RepositoryVisibility reads fresh metadata. A missing visibility field is not
 // public; in particular a zero-valued private boolean cannot grant access.
 func RepositoryVisibility(ctx context.Context, run GH, repo string) (string, error) {
-	raw, err := run(ActingOn(ctx, repo), "api", "repos/"+repo)
+	raw, err := run(ActingOn(ctx, repo), ghAPI, "repos/"+repo)
 	if err != nil {
 		return "", err
 	}
