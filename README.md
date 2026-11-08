@@ -2287,6 +2287,35 @@ The release verdict and tag survive removal of the merge from its lane.
 This foundation does not refuse starts, reserve slots or change `capacity` or its JSON.
 New-start enforcement, review/fix priority and stall handling are separate work.
 
+### The flow simulated and measured
+
+`beekeeper sim` holds the model of how an issue is meant to flow and compares it with the
+event log. The model: a worker starts when a busy slot is free (`capacity.ceiling`, reviewers
+up to `capacity.reviewHeadroom` more) and pushes a pull request; CI runs; once it is green the
+loop starts a reviewer, which fixes its own findings on the branch or asks for changes; the
+repository's lane merges one pull request at a time (`devctl pr merge` with the merge-result
+check); the release rolls out. The loop drives every step but the worker's and the reviewer's
+turns, so while it is down nothing starts, is reviewed or merges. Each stage has a median
+service time with a lognormal spread, and the model has chances for red CI, a change request
+and a started issue dropped without a pull request.
+
+`beekeeper sim model` prints the model with this desk's slots. `beekeeper sim run` simulates it
+over `--days` with one parameter changed at a time (`--workers`, `--lanes`, `--uptime`,
+`--stage merging=40m`, `--update-branch`, `--backlog`, `--arrivals`, `--dropped`, …) and prints
+the released issues a day, the cycle time, each stage's wait and service and how busy the slots
+and lanes were; the same `--seed` gives the same run. `beekeeper sim observe --since 7d`
+measures the real flow from the log: each delivery step's residence (`delivery.step`), the
+loop's silences (no `supervisor.*` event for 15 minutes counts as down), the busy agents
+against the ceiling (the `USAGE` lines, time-weighted), the worker and reviewer starts, the
+loop's failures by step and reason, the merges' exit codes, what the workers parked on and the
+releases rolled back. `beekeeper sim compare` (the default) puts both side by side: per stage
+the model's median against the log's with the causes the log names, the loop's uptime, the
+busy agents, the released issues a day; then the model fitted to the log (the log's stage
+times, uptime, drop share, lanes and start rate) is run with one change at a time back towards
+the model, and the changes are ranked by the released issues a day each would gain. That
+ranking is the order to fix things in, and the fitted run beside the observed rate says
+whether the model still holds. `--json` returns every figure.
+
 ### The supervisor loop down
 
 The supervisor is the supervisor loop; no session holds its role. While the loop does not run,
