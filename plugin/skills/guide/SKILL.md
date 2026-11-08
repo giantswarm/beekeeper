@@ -126,8 +126,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   and "Read before asking". Close or hand back settled items with the reason; when an existing
   answer covers them, record and relay that answer verbatim. Ask only what remains open.
 - **Questions keep the guide available.** Serve one decision with `beekeeper guide next`, apply
-  the filter above, then ask any remaining open decision in the conversation without waiting for
-  them to ask, with its status quo, why it needs the person, options, consequences,
+  the filter above; if a decision remains open, ask it in the conversation without waiting for them to ask, with its status quo, why it needs the person, options, consequences,
   recommendation, deadline and default. Claims of merged, green or released work carry the check
   and every issue or PR its full URL. Never use a blocking question dialog: it stops the guide's
   handling of messages and its watch. Keep processing peer messages and the watch while the answer
