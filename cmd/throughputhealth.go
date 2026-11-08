@@ -273,7 +273,12 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 		}
 		var obs throughputObservation
 		found, err := a.store.ReadFile(throughputObservationFile, &obs)
-		initializing := !found && err == nil && prev.At.IsZero()
+		// A phase checkpoint can precede the first planning observation. It
+		// establishes liveness, not a throughput incident on an otherwise idle
+		// desk. Keep stale observations and retained eligibility diagnostic.
+		freshCheckpoint := obs.Unknown && len(obs.Eligible) == 0 && !obs.At.IsZero() &&
+			now.Sub(obs.At) >= -throughputCadence && now.Sub(obs.At) <= 3*throughputCadence
+		initializing := err == nil && prev.At.IsZero() && (!found || freshCheckpoint)
 		if err != nil || !found {
 			obs.Unknown = true
 		}
