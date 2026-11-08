@@ -550,9 +550,21 @@ its key first in the detail):
             and stopping finished or relieved
             background sessions). A session its person started is never
             retired
+  delivery  track each issue from implementing through CI, review, fixing,
+            merging and releasing to done (available tag, including an RC,
+            or confirmed no_release). A merge alone does not free its place.
+            delivery.wipLimit (0: off) bounds issues in flight independently
+            of capacity; stale observations hold ordinary new starts.
+            Pending reviews and fixes reserve room before new issues, and
+            proceed even at the limit. Incident repairs, board.order steps
+            with wipExempt, and manual starts remain exempt but counted.
+            delivery --stats reports throughput and mean cycle time; choose
+            the first limit as floor(released/day * mean cycle time in days).
+            delivery drop --reason ends tracking only, without closing PRs
+            or stopping workers. Stalled work keeps its place and is raised.
   next      after a done, and every pass below capacity.ceiling while capacity
-            has room: the next item of board
-            next starts (agents start, --harness auto with
+            has room and delivery.wipLimit permits a new issue: the next
+            item of board next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
             configured, none starts. With supervisor.hosts (execution
             hosts, agents.hosts) the start goes to the first host whose

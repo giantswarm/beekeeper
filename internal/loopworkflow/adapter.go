@@ -111,6 +111,9 @@ func serveGitHub() int {
 	args := os.Args[1:]
 	trace(append([]string{ghCmd}, args...))
 	root := os.Getenv("FIXTURE_DIR")
+	if code, handled := deliveryGitHub(args); handled {
+		return code
+	}
 	raw, err := os.ReadFile(filepath.Join(root, pullJSONFile)) //nolint:gosec // scratch fixture state
 	if err != nil {
 		panic(err)
@@ -284,6 +287,11 @@ func serveClaude() int {
 		}
 	}
 	switch {
+	case os.Getenv("FIXTURE_CASE") == "delivery" && slices.Contains(args, "SendMessage"):
+		// The fixture worker accepts the supervisor's findings notification;
+		// the integration test then drives that worker's deterministic turn.
+		fmt.Println(`{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}`)
+		return 0
 	case len(args) > 0 && args[0] == "plugin":
 		fmt.Println("[]")
 		return 0
@@ -317,7 +325,7 @@ func serveClaude() int {
 			"pid":       1,
 		})
 		writeSessions(rows)
-		if strings.HasPrefix(name, "Review ") {
+		if strings.HasPrefix(name, "Review ") && os.Getenv("FIXTURE_CASE") != "delivery" {
 			raw, err := os.ReadFile(filepath.Join(root, pullJSONFile)) //nolint:gosec // scratch fixture state
 			if err != nil {
 				panic(err)
