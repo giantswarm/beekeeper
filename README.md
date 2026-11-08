@@ -104,6 +104,19 @@ Loop spend tracks each identity's counter separately; selecting another
 minimum or a GitHub window resetting never replenishes its own hourly allowance.
 Unchanged PR observations last five minutes; a new park, a report from that
 PR's reviewer or an answer on its thread invalidates them immediately.
+Repository backlog inventories use paged GraphQL connections instead of REST
+search. The loop reuses each inventory for five minutes, then checks the latest
+updated pull in all states with an ETag: an unchanged response costs no REST
+core points and skips the GraphQL inventory. A full refresh runs at least hourly;
+missing validators and failed or incomplete reads never certify an empty backlog.
+With budget admission enabled, background inventory and orphan scans share a
+separate durable allowance of 1,000 REST points per window, reserving 50 points
+before a batch and preserving `github.floor` for other work. Fresh conditional
+budget samples settle the reservation; an interrupted or unreadable sample keeps
+it. Concurrent callers' spending during a batch counts conservatively. Exhausting
+this allowance holds background scans until reset; tracked PR reads, reviews and
+merges retain their own admission. Supervisor status names the scan hold.
+
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 

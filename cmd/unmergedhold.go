@@ -47,55 +47,80 @@ const (
 	unmergedPullFields    = "number,url,state,createdAt,isDraft,headRefName,title,body,closingIssuesReferences"
 )
 
-// readRepoOpenPullsWithGH lists open non-draft pull requests in repo
-// (owner/name) through gh, paginating by createdAt when a page hits the
-// 100-item limit. A stalled or exhausted inventory is an explicit read
-// failure; a strict timestamp cursor would skip unseen ties.
+// readRepoOpenPullsWithGH uses repository connections rather than search:
+// search-backed gh pr list spends REST and cannot page timestamp ties safely.
 func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]unmergedPull, error) {
-	search := "draft:false sort:created-desc"
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || owner == "" || name == "" || strings.ContainsAny(name, "/#") {
+		return nil, fmt.Errorf("invalid repository %q", repo)
+	}
+	ctx = github.ActingOn(ctx, repo)
+	cursor := ""
 	seen := map[string]bool{}
 	var all []unmergedPull
-	limitArg := strconv.Itoa(unmergedPullPageLimit)
 	for range 20 {
-		out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", search, "--limit", limitArg, "--json", unmergedPullFields)
+		query := `query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,after:$after){nodes{number url state createdAt isDraft headRefName title body closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}}`
+		args := []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name}
+		if cursor != "" {
+			args = append(args, "-f", "after="+cursor)
+		}
+		out, err := gh(ctx, args...)
 		if err != nil {
 			return nil, err
 		}
-		var page []unmergedPull
-		if err := json.Unmarshal(out, &page); err != nil {
-			return nil, fmt.Errorf("gh pr list %s: %w", repo, err)
+		var doc struct {
+			Data struct {
+				Repository *struct {
+					Pulls *struct {
+						Nodes []struct {
+							unmergedPull
+							ClosingConnection struct {
+								Nodes []struct {
+									Number     int `json:"number"`
+									Repository struct {
+										NameWithOwner string `json:"nameWithOwner"`
+									} `json:"repository"`
+								} `json:"nodes"`
+								PageInfo struct {
+									More bool `json:"hasNextPage"`
+								} `json:"pageInfo"`
+							} `json:"closingIssuesReferences"`
+						} `json:"nodes"`
+						PageInfo struct {
+							More   bool   `json:"hasNextPage"`
+							Cursor string `json:"endCursor"`
+						} `json:"pageInfo"`
+					} `json:"pullRequests"`
+				} `json:"repository"`
+			} `json:"data"`
+			Errors []json.RawMessage `json:"errors"`
 		}
-		added := 0
-		var oldest time.Time
-		missingTimestamp := false
-		for _, p := range page {
-			missingTimestamp = missingTimestamp || (!p.IsDraft && p.CreatedAt.IsZero())
-			if !p.CreatedAt.IsZero() && (oldest.IsZero() || p.CreatedAt.Before(oldest)) {
-				oldest = p.CreatedAt
-			}
-			key := p.URL
-			if p.Number > 0 {
-				key = fmt.Sprintf("%s#%d", strings.ToLower(repo), p.Number)
-			}
-			if key != "" {
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-			}
-			all = append(all, p)
-			added++
+		if err := json.Unmarshal(out, &doc); err != nil {
+			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: %w", repo, err)
 		}
-		if missingTimestamp {
-			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: creation timestamp missing", repo)
+		if len(doc.Errors) > 0 || doc.Data.Repository == nil || doc.Data.Repository.Pulls == nil {
+			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: GraphQL repository unavailable", repo)
 		}
-		if len(page) < unmergedPullPageLimit {
+		page := doc.Data.Repository.Pulls
+		for _, node := range page.Nodes {
+			if node.Number <= 0 || node.CreatedAt.IsZero() || node.ClosingConnection.PageInfo.More {
+				return nil, fmt.Errorf("open pull request inventory for %s is incomplete: missing identity, timestamp or closing references", repo)
+			}
+			p := node.unmergedPull
+			p.Closing = node.ClosingConnection.Nodes
+			if !p.IsDraft {
+				all = append(all, p)
+			}
+		}
+		if !page.PageInfo.More {
 			return all, nil
 		}
-		if added == 0 || oldest.IsZero() {
-			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: timestamp pagination stalled", repo)
+		next := page.PageInfo.Cursor
+		if next == "" || seen[next] || len(page.Nodes) == 0 {
+			return nil, fmt.Errorf("open pull request inventory for %s is incomplete: cursor pagination stalled", repo)
 		}
-		search = "draft:false sort:created-desc created:<=" + oldest.UTC().Format(time.RFC3339)
+		seen[next] = true
+		cursor = next
 	}
 	return nil, fmt.Errorf("open pull request inventory for %s is incomplete: pagination limit reached", repo)
 }
@@ -421,16 +446,7 @@ func (a *app) openPullStartGate(ctx context.Context, name, brief string, issues 
 		if skipDup {
 			continue
 		}
-		matched, prURL, findErr := findOpenPullClosingIssues(ctx, unmergedGH, r.Repo, pulls, "", []string{target}, exemptPulls)
-		if findErr != nil {
-			if !force {
-				return refused("open pull requests for %s cannot be read (%v); retry once GitHub is readable (--force starts anyway)", r.Repo, findErr)
-			}
-			if dryRun {
-				_, _ = fmt.Fprintf(a.out, "dry run over unreadable open pull requests for %s: %v (--force)\n", r.Repo, findErr)
-			}
-			continue
-		}
+		matched, prURL := openPullClosingIssue(r.Repo, pulls, "", []string{target}, exemptPulls)
 		if matched != "" {
 			if !force {
 				return refused("%s already has an open pull request %s; update %s or combine with it instead of starting a second worker (--force starts anyway)", issue, prURL, prURL)
@@ -476,10 +492,7 @@ func (a *app) hookPRCreate(session, repo, head, title, body string) string {
 			}
 			byRepo[key] = pulls
 		}
-		matched, prURL, err := findOpenPullClosingIssues(ctx, unmergedGH, r.Repo, pulls, ownBranch, []string{refName(r)}, absorbs)
-		if err != nil {
-			return fmt.Sprintf("open pull requests for %s cannot be read (%v); retry once GitHub is readable", r.Repo, err)
-		}
+		matched, prURL := openPullClosingIssue(r.Repo, pulls, ownBranch, []string{refName(r)}, absorbs)
 		if matched != "" {
 			return fmt.Sprintf("%s already has an open pull request %s; update %s or combine with it instead of opening a duplicate PR", matched, prURL, prURL)
 		}
@@ -655,8 +668,10 @@ func (a *app) skipUnmergedBacklog(ctx context.Context, warn io.Writer, cands []b
 const unmergedCacheTTL = 5 * time.Minute
 
 type loopUnmergedObservation struct {
-	recent []unmergedPull
+	pulls  []unmergedPull
+	etag   string
 	at     time.Time
+	fullAt time.Time
 }
 
 func (l *supervisorLoop) repoRecentUnmerged(ctx context.Context, repo string) ([]unmergedPull, string, error) {
@@ -670,12 +685,29 @@ func (l *supervisorLoop) repoRecentUnmerged(ctx context.Context, repo string) ([
 	obs, ok := l.unmerged[key]
 	l.mu.Unlock()
 	if !ok || now.Sub(obs.at) >= unmergedCacheTTL {
-		pulls, err := readRepoOpenPulls(ctx, repo)
+		next := obs
+		err := l.a.loopGitHub(ctx, "inventory", func() error {
+			// A conditional read of the most recently updated pull (all states)
+			// also notices closures and edits to old pulls. A periodic full refresh
+			// bounds reuse even if GitHub omits a validator or a change races us.
+			etag, unchanged, err := readRepoPullRevision(ctx, repo, obs.etag)
+			if err != nil {
+				return err
+			}
+			if !ok || !unchanged || now.Sub(obs.fullAt) >= time.Hour {
+				pulls, err := readRepoOpenPulls(ctx, repo)
+				if err != nil {
+					return err
+				}
+				next.pulls, next.fullAt = pulls, now
+			}
+			next.etag, next.at = etag, now
+			return nil
+		})
 		if err != nil {
 			return nil, "", err
 		}
-		recent := recentUnmergedPulls(repo, pulls, now, window)
-		obs = loopUnmergedObservation{recent: recent, at: now}
+		obs = next
 		l.mu.Lock()
 		if l.unmerged == nil {
 			l.unmerged = map[string]loopUnmergedObservation{}
@@ -683,7 +715,9 @@ func (l *supervisorLoop) repoRecentUnmerged(ctx context.Context, repo string) ([
 		l.unmerged[key] = obs
 		l.mu.Unlock()
 	}
-	return obs.recent, unmergedHoldReason(repo, obs.recent, limit, window), nil
+	// Re-filter against today's window even when the inventory is unchanged.
+	recent := recentUnmergedPulls(repo, obs.pulls, now, window)
+	return recent, unmergedHoldReason(repo, recent, limit, window), nil
 }
 
 // escalateUnmergedBacklog files a guide problem once per backlog episode when

@@ -113,9 +113,13 @@ func (a *app) heldLine(s loopGraphQLSpend) string {
 	if err != nil {
 		return ""
 	}
+	var rest loopRESTSpend
+	_, restErr := a.store.ReadFile(loopRESTFile, &rest)
 	switch {
 	case s.floorHeld(now, a.cfg.GitHub.Floor):
 		return fmt.Sprintf("loop GitHub held: GraphQL under github.floor %d, no loop read until it recovers", a.cfg.GitHub.Floor)
+	case restErr == nil && now.Before(rest.Reset) && rest.Spent+loopRESTReserve > loopRESTLimit:
+		return fmt.Sprintf("loop background scans held: REST %d of %d spent until %s; pull reads, reviews and merges go on", rest.Spent, loopRESTLimit, clock(a.now, rest.Reset))
 	case s.boardHeld(st.Budget, loopBoard, a.cfg.GitHub.Floor, now, a.loopGraphQLCap()):
 		return fmt.Sprintf("loop GitHub held: board reads wait until %s (%d of %d spent, supervisor.graphQLLimit); pull reads, reviews and merges go on", clock(a.now, s.Reset), s.Spent, a.loopGraphQLCap())
 	}
@@ -175,6 +179,10 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.timeNow(), limit) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
+	scan := step == "inventory" || step == "sweep"
+	if scan {
+		ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
+	}
 	b, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
 		return fmt.Errorf("loop GitHub budget unavailable: %w", errLoopLater)
@@ -203,6 +211,13 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		}
 		return fmt.Errorf("loop GitHub held: %d points spent, %d remaining (floor %d): %w", spend.Spent, g.Remaining, a.cfg.GitHub.Floor, errLoopLater)
 	}
+	var restSpend loopRESTSpend
+	if scan {
+		restSpend, err = a.reserveLoopREST(b, step)
+		if err != nil {
+			return err
+		}
+	}
 	spend.HeldAt = time.Time{}
 	spend.Spent += loopGraphQLReserve
 	spend.Steps[step] += loopGraphQLReserve
@@ -213,6 +228,11 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	after, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
 		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", errLoopLater)
+	}
+	if scan {
+		if err := a.settleLoopREST(b, after, restSpend, step); err != nil {
+			return err
+		}
 	}
 	afterAccounts := graphQLAccounts(after)
 	cost := 0

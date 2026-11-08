@@ -428,15 +428,11 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 	mockGH := func(_ context.Context, args ...string) ([]byte, error) {
 		calls++
 		cmdLine := strings.Join(args, " ")
-		if strings.Contains(cmdLine, "draft:false 56") {
-			return []byte(`[]`), nil
+		if !strings.HasPrefix(cmdLine, "api graphql ") || !strings.Contains(cmdLine, "states:OPEN") {
+			t.Fatalf("expected repository GraphQL connection: %v", args)
 		}
-		if !strings.Contains(cmdLine, "draft:false") {
-			t.Fatalf("expected draft:false filter in gh pr list args: %v", args)
-		}
-		if strings.Contains(cmdLine, "created:<=") {
-			return []byte(fmt.Sprintf(`[{"number":140,"url":"https://github.com/o/r/pull/140","state":"OPEN","createdAt":%q,"headRefName":"worker-140","body":"Closes %s"}]`,
-				now.Add(-400*time.Hour).UTC().Format(time.RFC3339), issueURL)), nil
+		if strings.Contains(cmdLine, "after=next") {
+			return inventoryPage(t, []unmergedPull{{Number: 140, URL: "https://github.com/o/r/pull/140", State: "OPEN", CreatedAt: now.Add(-400 * time.Hour), HeadRefName: "worker-140", Body: "Closes " + issueURL}}, false, ""), nil
 		}
 		var page strings.Builder
 		page.WriteByte('[')
@@ -448,7 +444,11 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 			fmt.Fprintf(&page, `{"number":%d,"url":"https://github.com/o/r/pull/%d","state":"OPEN","createdAt":%q,"headRefName":"worker-%d","body":""}`, i, i, ts, i)
 		}
 		page.WriteByte(']')
-		return []byte(page.String()), nil
+		var pulls []unmergedPull
+		if err := json.Unmarshal([]byte(page.String()), &pulls); err != nil {
+			t.Fatal(err)
+		}
+		return inventoryPage(t, pulls, true, "next"), nil
 	}
 	unmergedGH = mockGH
 	readRepoOpenPulls = func(ctx context.Context, targetRepo string) ([]unmergedPull, error) {
@@ -573,15 +573,11 @@ func TestReview3325PaginationStalls(t *testing.T) {
 	// inventory rather than using a strict cursor that silently skips unseen ties.
 	// The refusal must propagate to both start admission and raw creation.
 	unmergedGH = func(_ context.Context, args ...string) ([]byte, error) {
-		cmdLine := strings.Join(args, " ")
-		if strings.Contains(cmdLine, "draft:false 55") {
-			return []byte(fmt.Sprintf(`[{"number":140,"url":"https://github.com/o/r/pull/140","state":"OPEN","createdAt":%q,"headRefName":"worker-140","body":"Closes %s"}]`,
-				sameTS, issueURL)), nil
+		var pulls []unmergedPull
+		if err := json.Unmarshal([]byte(fullSameTSPage.String()), &pulls); err != nil {
+			t.Fatal(err)
 		}
-		if strings.Contains(cmdLine, "created:<") && !strings.Contains(cmdLine, "created:<=") {
-			t.Fatal("strict timestamp cursor skipped unseen ties")
-		}
-		return []byte(fullSameTSPage.String()), nil
+		return inventoryPage(t, pulls, true, "stalled"), nil
 	}
 	readRepoOpenPulls = func(ctx context.Context, targetRepo string) ([]unmergedPull, error) {
 		return readRepoOpenPullsWithGH(ctx, unmergedGH, targetRepo)
@@ -631,8 +627,8 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 			calls := 0
 			gh := func(_ context.Context, args ...string) ([]byte, error) {
 				calls++
-				if !strings.Contains(strings.Join(args, " "), "draft:false") {
-					t.Fatal("draft filter missing")
+				if !strings.Contains(strings.Join(args, " "), "states:OPEN") {
+					t.Fatal("open filter missing")
 				}
 				page := make([]unmergedPull, 100)
 				if mode == review3325ShortMissingTimestamp {
@@ -649,7 +645,11 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 						page[i].CreatedAt = time.Time{}
 					}
 				}
-				return json.Marshal(page)
+				cursor := "tie"
+				if mode == "iteration cap" {
+					cursor = fmt.Sprint(calls)
+				}
+				return inventoryPage(t, page, true, cursor), nil
 			}
 			if _, err := readRepoOpenPullsWithGH(context.Background(), gh, repo); err == nil {
 				t.Fatal("certified incomplete inventory")
