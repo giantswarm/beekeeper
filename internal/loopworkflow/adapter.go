@@ -52,6 +52,7 @@ const (
 	statusField      = "status"
 	repositoryField  = "repository"
 	sessionIDField   = "sessionId"
+	fixtureRepo      = "fixture/project"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -162,7 +163,7 @@ func serveGitHub() int {
 		fmt.Println(fixtureBot)
 		return 0
 	case starts(ghAPI, "repos/fixture/project/pulls/1"):
-		return emit(map[string]any{"head": map[string]any{"sha": p["headRefOid"], "ref": p["headRefName"], "repo": map[string]any{"full_name": "fixture/project"}}, "user": map[string]any{loginField: fixtureBot}})
+		return emit(map[string]any{"head": map[string]any{"sha": p["headRefOid"], "ref": p["headRefName"], "repo": map[string]any{"full_name": fixtureRepo}}, "user": map[string]any{loginField: fixtureBot}})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "issueOrPullRequest(number:") }):
 		return emit(map[string]any{dataField: map[string]any{"r0": map[string]any{"issueOrPullRequest": map[string]any{"__typename": "PullRequest", stateField: p[stateField]}}}})
 	case starts(ghPR, "review"):
@@ -370,7 +371,7 @@ func serveClaude() int {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			body := "Desk review (opus): approved\nHead reviewed: `" + head + "`"
-			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", "fixture/project", "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
+			c := exec.CommandContext(ctx, filepath.Join(root, "bin", ghCmd), ghPR, "review", "1", "--repo", fixtureRepo, "--comment", "--body", body) //nolint:gosec // scratch fixture reviewer command
 			c.Env = append(os.Environ(), "FIXTURE_DIR="+root)
 			if out, err := c.CombinedOutput(); err != nil {
 				panic(fmt.Sprintf("fixture reviewer gh pr review: %v: %s", err, out))

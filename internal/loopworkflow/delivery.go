@@ -25,7 +25,7 @@ func deliveryGitHub(args []string) (int, bool) {
 	}
 	query := strings.Join(args, " ")
 	switch {
-	case len(args) == 9 && slices.Equal(args[:7], []string{"issue", "close", "2", "--repo", "fixture/project", "--reason", "completed"}) && args[7] == "--comment":
+	case len(args) == 9 && slices.Equal(args[:7], []string{"issue", "close", "2", "--repo", fixtureRepo, "--reason", "completed"}) && args[7] == "--comment":
 		if err := os.WriteFile(filepath.Join(os.Getenv("FIXTURE_DIR"), deliveryClosedIssueFile), []byte("closed\n"), 0600); err != nil { //nolint:gosec // isolated scratch issue observation
 			panic(err)
 		}
@@ -43,13 +43,13 @@ func deliveryGitHub(args []string) (int, bool) {
 		var nodes []any
 		for n := 2; n <= 5; n++ {
 			if n == 2 {
-				if _, err := os.Stat(filepath.Join(os.Getenv("FIXTURE_DIR"), deliveryClosedIssueFile)); err == nil {
+				if _, err := os.Stat(filepath.Join(os.Getenv("FIXTURE_DIR"), deliveryClosedIssueFile)); err == nil { //nolint:gosec // isolated scratch issue observation
 					continue
-				} //nolint:gosec // isolated scratch issue observation
+				}
 			}
 			nodes = append(nodes, map[string]any{"id": fmt.Sprintf("I%d", n), statusField: map[string]any{"name": "Ready"}, "content": map[string]any{
 				"number": n, "url": fmt.Sprintf("https://github.com/fixture/project/issues/%d", n), "title": fmt.Sprintf("fixture task %d", n), "state": "OPEN",
-				"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", repositoryField: map[string]any{"nameWithOwner": "fixture/project"},
+				"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", repositoryField: map[string]any{"nameWithOwner": fixtureRepo},
 				"blockedBy": map[string]any{"totalCount": 0, "nodes": []any{}}, "subIssuesSummary": map[string]any{"total": 0, "completed": 0},
 			}})
 		}
@@ -67,9 +67,9 @@ func deliveryGitHub(args []string) (int, bool) {
 			part := query[pos:]
 			kind, status := "Issue", "OPEN"
 			if strings.Contains(strings.SplitN(part, "}", 2)[0], "number:2)") {
-				if _, err := os.Stat(filepath.Join(os.Getenv("FIXTURE_DIR"), deliveryClosedIssueFile)); err == nil {
+				if _, err := os.Stat(filepath.Join(os.Getenv("FIXTURE_DIR"), deliveryClosedIssueFile)); err == nil { //nolint:gosec // isolated scratch issue observation
 					status = "CLOSED"
-				} //nolint:gosec // isolated scratch issue observation
+				}
 			}
 			if strings.Contains(strings.SplitN(part, "}", 2)[0], "number:1)") {
 				kind = "PullRequest"
