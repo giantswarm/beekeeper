@@ -25,6 +25,9 @@ const (
 	deliveryControlChecks     = "checks"
 	deliveryControlDrop       = "drop"
 	deliveryControlCapacity   = `{"ceiling":1,"room":1}`
+	// deliveryControlCapacityTwo has room for one reservation: the
+	// reserved slots are at most half the room.
+	deliveryControlCapacityTwo = `{"ceiling":2,"room":2}`
 )
 
 func TestDeliveryAdmissionPreviewAndExceptions(t *testing.T) {
@@ -166,7 +169,7 @@ func TestDeliveryReservationsRealPreviewAndEpisode(t *testing.T) {
 			old := r.answer
 			r.answer = func(args []string) (string, int) {
 				if args[0] == fillCapacityCommand {
-					return deliveryControlCapacity, 0
+					return deliveryControlCapacityTwo, 0
 				}
 				return old(args)
 			}
@@ -178,7 +181,8 @@ func TestDeliveryReservationsRealPreviewAndEpisode(t *testing.T) {
 			if err := l.previewFill(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if *busy != 0 || r.called(loopBoard) != nil || strings.Count(r.out.String(), "NEXT RESERVES") != 1 {
+			// Of two slots the delivery holds one: one new start, not two.
+			if *busy != 1 || strings.Count(r.out.String(), "NEXT RESERVES") != 1 {
 				t.Fatalf("%s %v", r.out, r.calls)
 			}
 			// Resolving and recurring is a new reservation episode.
@@ -199,15 +203,15 @@ func TestDeliveryReservationsFrozenBeforeConcurrentStarts(t *testing.T) {
 	r, busy := fillRig(t)
 	now := r.a.timeNow()
 	seed(t, r.a, func(st *state.State) {
-		st.Deliveries = []state.Delivery{{Ref: deliveryControlPendingRef, Step: state.DeliveryFixing, Since: now, Agent: "fixer"}}
+		st.Deliveries = []state.Delivery{{Ref: deliveryControlPendingRef, Step: state.DeliveryFixing, Since: now, Agent: reserveFixer}}
 	})
 	st, _ := r.a.store.Read()
-	reservations := deliveryReservations(st)
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
-	r.started(t, "fixer", "fixer-session")
+	reservations, _ := l.deliveryReservations(st)
+	r.started(t, reserveFixer, "fixer-session")
 	// The capacity result was read just before the other stream registered.
 	current, _ := r.a.store.Read()
-	if room := l.deliveryRoom(1, current, reservations); room != 0 {
+	if room := l.deliveryRoom(2, current, reservations); room != 1 {
 		t.Fatalf("race gave room %d", room)
 	}
 	if *busy != 0 {
@@ -367,7 +371,9 @@ func TestDeliveryDropReasonActorHeadAndReplay(t *testing.T) {
 }
 
 // Run with -race -count repeatedly: capacity always reports the same last
-// slot, even while review/transition and worker streams race each other.
+// slot, even while review/transition and worker streams race each other. The
+// reserved slots are at most half the room, so new work may take the last
+// slot; the delivery's review and fix still start.
 func TestDeliveryPriorityAcrossConcurrentStreams(t *testing.T) {
 	r := newLoopRig(t)
 	brief := filepath.Join(t.TempDir(), "worker.md")
@@ -392,23 +398,18 @@ func TestDeliveryPriorityAcrossConcurrentStreams(t *testing.T) {
 	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if r.called(loopBoard) != nil || r.called(agentsName, agentStartName) != nil {
-		t.Fatalf("preview did not reserve review slot: %v", r.calls)
+	if r.called(agentsName, agentStartName) != nil {
+		t.Fatalf("preview started: %v", r.calls)
 	}
 
 	r.pass(t)
-	if r.called(agentsName, agentStartName, loopReviewer) == nil || r.called(loopBoard) != nil {
-		t.Fatalf("review lost reserved slot: %v %s", r.calls, r.out)
+	if r.called(agentsName, agentStartName, loopReviewer) == nil {
+		t.Fatalf("review did not start: %v %s", r.calls, r.out)
 	}
 	r.verdict("priority-R1", loopHead, superloop.ChangesRequested, "fix the bug")
 	r.pass(t)
-	if r.called(agentsName, agentStartName, loopWorker) == nil || r.called(loopBoard) != nil {
-		t.Fatalf("fixer lost reserved slot: %v %s", r.calls, r.out)
-	}
-	// A fixer still waiting from this pass reserves the next pass as well.
-	r.pass(t)
-	if r.called(loopBoard) != nil {
-		t.Fatalf("earlier-pass fixer lost reservation: %v %s", r.calls, r.out)
+	if r.called(agentsName, agentStartName, loopWorker) == nil {
+		t.Fatalf("fixer did not start: %v %s", r.calls, r.out)
 	}
 }
 

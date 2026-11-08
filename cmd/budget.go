@@ -92,7 +92,7 @@ unread core budget:
 				return err
 			}
 			b, err := readBudget(a, ctx)
-			if err != nil {
+			if err = unsavedBudget(err); err != nil {
 				if a.json {
 					_ = a.printJSON(b)
 				}

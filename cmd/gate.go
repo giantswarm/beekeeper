@@ -2662,9 +2662,11 @@ func publishedCandidates(ctx context.Context, st *state.State, pulls map[int]git
 // gateBudget is the last budget reading when it is younger than
 // merge.budgetFresh and its reset has not come, else a fresh one (a
 // conditional request, free on 304): a merge queued for the reset reads
-// the new window at once.
+// the new window at once. Neither needs the state lock: the last reading
+// is read without it (a write replaces the state in one rename), and a
+// fresh reading that only lost its save to a busy lock stands (#3411).
 func (g *gateRun) gateBudget() (state.Budget, error) {
-	st, err := g.store.Read()
+	st, err := g.store.Peek()
 	if err != nil {
 		return state.Budget{}, err
 	}
@@ -2676,7 +2678,7 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 		ctx, cancel := context.WithTimeout(g.ctx, 30*time.Second)
 		defer cancel()
 		b, err = readBudget(g.app, ctx)
-		return err
+		return unsavedBudget(err)
 	})
 	if err != nil {
 		return state.Budget{}, err
@@ -2712,6 +2714,38 @@ func graphQLSpentUntil(b state.Budget, now time.Time) bool {
 // readBudget reads the GitHub budget afresh (probeBudget); a seam for the
 // tests.
 var readBudget = (*app).probeBudget
+
+// unsavedBudget is a budget read's error without the failures to save the
+// reading: when every failure in err is the state lock being busy, GitHub
+// answered and only keeping the reading lost to another beekeeper process
+// holding the lock for a moment. The reading is known and stands, and the
+// next read saves it; any other failure keeps the budget unknown (#3411).
+func unsavedBudget(err error) error {
+	if err != nil && onlyLockBusy(err) {
+		return nil
+	}
+	return err
+}
+
+// onlyLockBusy says every leaf of err, through wrapping and joining, is a
+// LockBusyError.
+func onlyLockBusy(err error) bool {
+	switch e := err.(type) {
+	case *state.LockBusyError:
+		return true
+	case interface{ Unwrap() []error }:
+		errs := e.Unwrap()
+		for _, inner := range errs {
+			if !onlyLockBusy(inner) {
+				return false
+			}
+		}
+		return len(errs) > 0
+	case interface{ Unwrap() error }:
+		return onlyLockBusy(e.Unwrap())
+	}
+	return false
+}
 
 // capRuns counts the machine's devctl merges and promotes, a running
 // merge's own once even before its devctl started; the waits only poll and

@@ -76,7 +76,7 @@ func (l *supervisorLoop) deliveryPriority(ctx context.Context, reserved ...[]str
 	if err != nil {
 		return err
 	}
-	refs := deliveryReservedRefs(st, reserved...)
+	refs, _ := l.deliveryReservedRefs(st, reserved...)
 	if len(refs) == 0 {
 		return nil
 	}

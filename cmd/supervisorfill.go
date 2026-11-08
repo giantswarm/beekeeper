@@ -10,11 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const loopFillKey = "next capacity "
+const (
+	loopFillKey             = "next capacity "
+	deliveryReservationsKey = "delivery reservations "
+)
 
 // fillPause holds the refill's board reads after an unproductive one: the
 // capacity limits it saw and the agents then live (on the roster, not done).
@@ -50,26 +54,98 @@ func (l *supervisorLoop) fillRoom(cap *capacityView) int {
 	return room
 }
 
+// deliverySkips counts the deliveries in a reserving step that reserve no
+// slot, by why: the loop makes no start for them in the next pass.
+type deliverySkips struct {
+	outside, held, requested, old int
+	reserveFor                    time.Duration
+}
+
+// String is the skips as the reservation line names them, "" for none.
+func (s deliverySkips) String() string {
+	var parts []string
+	for _, p := range []struct {
+		n   int
+		why string
+	}{
+		{s.outside, "outside the desk"},
+		{s.held, "under a hold"},
+		{s.requested, "review already requested"},
+		{s.old, "older than " + shortDur(s.reserveFor)},
+	} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.why))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 // deliveryReservations identifies existing deliveries before new work competes with the
 // independent review and transition streams. Read durable observations so a
-// pending start from an earlier pass reserves room too.
-func deliveryReservations(st *state.State) []string {
+// pending start from an earlier pass reserves room too. A delivery reserves
+// only a start the loop will make: in a repository the desk works on and no
+// hold stops, for a review not yet requested at its head, and only for
+// supervisor.reserveFor after its step began. Older ones are stalled
+// deliveries, not slots held from new work.
+func (l *supervisorLoop) deliveryReservations(st *state.State) ([]string, deliverySkips) {
+	now := l.a.timeNow()
+	skips := deliverySkips{reserveFor: l.a.cfg.Supervisor.ReserveFor.Duration}
+	if skips.reserveFor <= 0 {
+		skips.reserveFor = config.DefaultReserveFor
+	}
 	refs := []string{}
 	for _, d := range st.Deliveries {
 		live := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
 			return !ag.Done && ag.Task != "" && strings.EqualFold(ag.Name, d.Agent)
 		})
-		if d.Step == state.DeliveryReviewQueued || d.Step == state.DeliveryFixing && !live {
+		if d.Step != state.DeliveryReviewQueued && (d.Step != state.DeliveryFixing || live) {
+			continue
+		}
+		repos := append([]string{d.Ref}, d.Pulls...)
+		switch {
+		case slices.ContainsFunc(repos, func(ref string) bool { return l.unreadRepo(ref) != "" }):
+			skips.outside++
+		case slices.ContainsFunc(repos, func(ref string) bool { return deliveryRepoHeld(st, ref, now) }):
+			skips.held++
+		case d.Step == state.DeliveryReviewQueued && deliveryReviewAsked(st, d):
+			skips.requested++
+		case now.Sub(d.Since) > skips.reserveFor:
+			skips.old++
+		default:
 			refs = append(refs, deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)))
 		}
 	}
-	return refs
+	return refs, skips
+}
+
+// deliveryRepoHeld says whether an active hold of ref's repository is in st.
+func deliveryRepoHeld(st *state.State, ref string, now time.Time) bool {
+	r, ok := parseRef(ref)
+	return ok && slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return strings.EqualFold(h.Target, r.Repo) && h.Active(now) })
+}
+
+// deliveryReviewAsked says whether every pull of d already has a review
+// request or a desk review at its current head (at any head when its head is
+// unknown): the loop starts no reviewer for it.
+func deliveryReviewAsked(st *state.State, d state.Delivery) bool {
+	if len(d.Pulls) == 0 {
+		return false
+	}
+	for _, pull := range d.Pulls {
+		head := d.Heads[pull]
+		at := func(ref, h string) bool { return strings.EqualFold(ref, pull) && (head == "" || h == head) }
+		if !slices.ContainsFunc(st.ReviewRequests, func(r state.ReviewRequest) bool { return at(r.Ref, r.Head) }) &&
+			!slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool { return at(r.Ref, r.Head) }) {
+			return false
+		}
+	}
+	return true
 }
 
 // Keep earlier reservations even after their starts register, and include
 // observations committed by an older stream since this pass was planned.
-func deliveryReservedRefs(st *state.State, reserved ...[]string) []string {
-	refs := deliveryReservations(st)
+func (l *supervisorLoop) deliveryReservedRefs(st *state.State, reserved ...[]string) ([]string, deliverySkips) {
+	refs, skips := l.deliveryReservations(st)
 	if len(reserved) > 0 {
 		for _, ref := range reserved[0] {
 			if !slices.Contains(refs, ref) {
@@ -77,25 +153,35 @@ func deliveryReservedRefs(st *state.State, reserved ...[]string) []string {
 			}
 		}
 	}
-	return refs
+	return refs, skips
 }
 
+// deliveryRoom is room less the slots the deliveries reserve, which are at
+// most half of room: a pile of deliveries never stops every new start.
 func (l *supervisorLoop) deliveryRoom(room int, st *state.State, reserved ...[]string) int {
-	refs := deliveryReservedRefs(st, reserved...)
+	refs, skips := l.deliveryReservedRefs(st, reserved...)
 
 	slices.Sort(refs)
-	key := "delivery reservations " + strings.Join(refs, ",")
+	skipped := skips.String()
+	key := deliveryReservationsKey + strings.Join(refs, ",") + "; " + skipped
 	l.mu.Lock()
 	for k := range l.said {
-		if strings.HasPrefix(k, "delivery reservations ") && k != key {
+		if strings.HasPrefix(k, deliveryReservationsKey) && k != key {
 			delete(l.said, k)
 		}
 	}
 	l.mu.Unlock()
-	if len(refs) > 0 {
-		l.sayOnce(key, "SUPERVISOR NEXT RESERVES %d slots for deliveries: %s", len(refs), strings.Join(refs, ", "))
+	if len(refs) > 0 || skipped != "" {
+		line := fmt.Sprintf("SUPERVISOR NEXT RESERVES %d slots for deliveries, at most half the room", len(refs))
+		if len(refs) > 0 {
+			line += ": " + strings.Join(refs, ", ")
+		}
+		if skipped != "" {
+			line += "; not reserved: " + skipped
+		}
+		l.sayOnce(key, "%s", line)
 	}
-	return max(0, room-len(refs))
+	return max(0, room-min(len(refs), room/2))
 }
 
 // fillLive is the names of the roster's agents not done. A park, a resume,

@@ -104,10 +104,12 @@ func (s loopGraphQLSpend) overAllowance(limit int) bool {
 }
 
 // heldLine says what the loop holds on s, "" when nothing: what whoever
-// waits on the loop reads in budget and supervisor status.
+// waits on the loop reads in budget and supervisor status. It reads the
+// saved budget without the state lock, so a busy lock never stalls budget
+// --gate behind a line it only prints (#3411).
 func (a *app) heldLine(s loopGraphQLSpend) string {
 	now := a.timeNow()
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return ""
 	}
