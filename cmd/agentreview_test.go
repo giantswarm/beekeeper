@@ -48,7 +48,7 @@ func TestLightReview(t *testing.T) {
 func TestReviewRoundPinsHeadAcrossRestarts(t *testing.T) {
 	p := superloop.Pull{Ref: loopPR, Head: loopHead}
 	for _, st := range []*state.State{
-		{ReviewRequests: []state.ReviewRequest{{Ref: p.Ref, Head: p.Head, Round: 1}}},
+		{ReviewRequests: []state.ReviewRequest{{Ref: p.Ref, Head: p.Head, Round: 1, PID: os.Getpid()}}},
 		{DeskReviews: []state.DeskReview{{Ref: p.Ref, Head: p.Head, Round: 1}}},
 	} {
 		if _, _, err := reviewRound(st, p); Code(err) != ExitRefused {
@@ -81,7 +81,7 @@ func TestAgentsReviewRefusesBeforeStarting(t *testing.T) {
 				r.pull.Reviews = []superloop.Review{{Head: r.pull.Head, Verdict: superloop.Approved, Member: true}}
 			case "requested":
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.ReviewRequests = []state.ReviewRequest{{Ref: r.pull.Ref, Head: r.pull.Head, Round: 1}}
+					st.ReviewRequests = []state.ReviewRequest{{Ref: r.pull.Ref, Head: r.pull.Head, Round: 1, PID: os.Getpid()}}
 					return nil, nil
 				}); err != nil {
 					t.Fatal(err)
@@ -265,5 +265,76 @@ func TestReviewReservationIsSharedWithAutomaticLoop(t *testing.T) {
 	act.Round = 2
 	if err := r.a.reserveReview(act); err != nil {
 		t.Fatalf("new head and round refused: %v", err)
+	}
+}
+
+// A request alone is intent, not evidence that a reviewer ever launched.
+func TestReviewReservationRecoversOrphan(t *testing.T) {
+	for _, round := range []int{1, 2} {
+		t.Run(superloop.ReviewerName(loopPR, round), func(t *testing.T) {
+			r := newLoopRig(t)
+			act := superloop.Action{Ref: loopPR, Head: loopHead, Round: 1}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.ReviewRequests = []state.ReviewRequest{{Ref: loopPR, Head: loopHead, Round: round}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _, err := reviewRound(st, r.pull); err != nil || got != 1 {
+				t.Fatalf("orphan influenced round: %d %v", got, err)
+			}
+			if err := r.a.reserveReview(act); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.a.reserveReview(act); Code(err) != ExitRefused {
+				t.Fatalf("concurrent start allowed: %v", err)
+			}
+			// A historical start event must not keep this failed attempt reserved.
+			if err := r.a.store.Record(event(loopParty, verbStart, "%s: old failed start", superloop.ReviewerName(loopPR, 1))); err != nil {
+				t.Fatal(err)
+			}
+			r.a.finishReviewRequest(act, false)
+			st, err = r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.ReviewRequests) != 0 {
+				t.Fatalf("orphan retained: %+v", st.ReviewRequests)
+			}
+		})
+	}
+}
+
+func TestReviewReservationKeepsRegisteredReviewer(t *testing.T) {
+	r := newLoopRig(t)
+	act := superloop.Action{Ref: loopPR, Head: loopHead, Round: 1}
+	if err := r.a.reserveReview(act); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: superloop.ReviewerName(loopPR, 1)}})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Delivery can fail after launch: retain the registered reviewer's request.
+	r.a.finishReviewRequest(act, false)
+	if err := r.a.reserveReview(act); Code(err) != ExitRefused {
+		t.Fatalf("registered reviewer duplicated: %v", err)
+	}
+}
+
+func TestReviewRequestFromExitedStarterIsInactive(t *testing.T) {
+	request := state.ReviewRequest{Ref: loopPR, Head: loopHead, Round: 1, PID: 1 << 30}
+	if reviewRequestActive(&state.State{}, request) {
+		t.Fatal("exited starter still owns request")
+	}
+	st := &state.State{DeskReviews: []state.DeskReview{{Ref: loopPR, Head: loopHead, Round: 1}}}
+	if !reviewRequestActive(st, request) {
+		t.Fatal("assigned review lost its reservation")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var taskRepositoryReference = regexp.MustCompile(`(?:^|[\s(])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+`)
@@ -85,7 +87,9 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 	if review {
 		for _, m := range taskRepository.FindAllStringSubmatch(brief, -1) {
 			if m[2] == "pull" {
-				branch = "review-" + m[3]
+				// Each attempt owns its checkout. Old review rounds may still
+				// have worktrees, including edits that must be preserved.
+				branch = "review-" + m[3] + "-" + uuid.NewString()
 				ref = "refs/pull/" + m[3] + "/head"
 				break
 			}
