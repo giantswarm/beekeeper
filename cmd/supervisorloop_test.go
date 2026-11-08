@@ -4143,3 +4143,28 @@ func TestLoopDoesNotReexecDuringShutdown(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopDoesNotReexecWhenShutdownBeginsWhileWatchDrains(t *testing.T) {
+	r := newLoopRig(t)
+	r.replaced = true
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := false
+	l.stopWatch = func() {
+		stopped = true
+		cancel()
+	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		t.Fatalf("shutdown reexec = %v, %v", reexec, err)
+	}
+	if !stopped || ctx.Err() == nil {
+		t.Fatal("shutdown while stopping watch was not exercised")
+	}
+	if r.execs != 0 {
+		t.Fatal("re-executed during shutdown")
+	}
+}

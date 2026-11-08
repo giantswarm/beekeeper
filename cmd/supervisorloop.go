@@ -1093,6 +1093,10 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.stopWatch()
 		l.stopWatch = nil
 	}
+	// The watch also drains asynchronous work, so shutdown can begin there.
+	if ctx.Err() != nil {
+		return false, nil
+	}
 	if err := b.Exec(); err != nil {
 		l.mu.Lock()
 		l.reexecFailed = true
