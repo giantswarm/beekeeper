@@ -29,7 +29,7 @@ func TestDeliveryWIPInFlightBounds(t *testing.T) {
 			d := state.Delivery{Ref: "example/project#1", Step: tc.step, Since: now.Add(-tc.age), Agent: workerRole, OutsideDesk: tc.outside}
 			st := &state.State{DeliveriesAt: now.Add(-5 * time.Minute), Deliveries: []state.Delivery{d}}
 			if tc.live {
-				st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: task, Done: tc.done}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: "delivery", Done: tc.done}}
 			}
 			v := readDeliveryWIP(st, 2, time.Second, now, policy)
 			if (v.Count == 1) != tc.want || v.Reason != "" {
