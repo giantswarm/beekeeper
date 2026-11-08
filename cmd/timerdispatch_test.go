@@ -19,6 +19,7 @@ import (
 const (
 	timerDispatchRepairWorker = "repair worker"
 	timerProofFinished        = "proof finished"
+	timerDueEarlier           = "due earlier"
 )
 
 func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
@@ -290,8 +291,8 @@ func TestFatalTimersDetectMissedTicksNotUnsatisfiedConditions(t *testing.T) {
 		timer   state.Timer
 		overdue bool
 	}{
-		{"plain wake retry on schedule", state.Timer{Due: now.Add(-time.Hour), Checked: now.Add(-time.Minute), PendingWakeReason: "due earlier", Wake: workerRole}, false},
-		{"plain wake retry missed", state.Timer{Due: now.Add(-time.Hour), Checked: now.Add(-10 * time.Minute), PendingWakeReason: "due earlier", Wake: workerRole}, true},
+		{"plain wake retry on schedule", state.Timer{Due: now.Add(-time.Hour), Checked: now.Add(-time.Minute), PendingWakeReason: timerDueEarlier, Wake: workerRole}, false},
+		{"plain wake retry missed", state.Timer{Due: now.Add(-time.Hour), Checked: now.Add(-10 * time.Minute), PendingWakeReason: timerDueEarlier, Wake: workerRole}, true},
 		{"conditional retry past expiry", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Checked: now.Add(-time.Minute), Until: now.Add(-10 * time.Minute), PendingWakeReason: "timed out", Wake: workerRole}, false},
 		{"wake overdue", state.Timer{Due: now.Add(-time.Hour), Wake: workerRole}, true},
 		{"not due yet", state.Timer{Due: now.Add(time.Minute), Wake: workerRole}, false},
@@ -400,7 +401,7 @@ func TestTimerDispatcherObservesStopWithoutStateLock(t *testing.T) {
 // wakes, without losing the original occurrence or its delivery reason.
 func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
 	now := time.Now().UTC()
-	timer := state.Timer{ID: 1, Due: now.Add(-time.Hour), Checked: now, Wake: workerRole, PendingWakeReason: "due earlier", Every: time.Minute}
+	timer := state.Timer{ID: 1, Due: now.Add(-time.Hour), Checked: now, Wake: workerRole, PendingWakeReason: timerDueEarlier, Every: time.Minute}
 	st := &state.State{Timers: []state.Timer{timer}}
 	_, _, fires, changed := settleTimers(st, nil, now.Add(30*time.Second))
 	if changed || len(fires) != 0 || len(st.Timers) != 1 {
