@@ -16,7 +16,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const timerDispatchRepairWorker = "repair worker"
+const (
+	timerDispatchRepairWorker = "repair worker"
+	timerProofFinished        = "proof finished"
+)
 
 func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
@@ -92,7 +95,7 @@ func TestTimerDispatcherWorksWithoutWatchOrLoopAndClaimsOnce(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: "proof finished"}}
+		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: timerProofFinished}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -178,7 +181,7 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	var batches []*watcher
 	for id := 1; id <= 2; id++ {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Timers = append(st.Timers, state.Timer{ID: id, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: "proof finished"})
+			st.Timers = append(st.Timers, state.Timer{ID: id, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: timerProofFinished})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
