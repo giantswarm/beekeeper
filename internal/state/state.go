@@ -585,6 +585,9 @@ type Timer struct {
 	// or closes unfired when Expire is set.
 	Until  time.Time `json:"until,omitzero"`
 	Expire bool      `json:"expire,omitempty"`
+	// PendingWakeReason retains an already fired occurrence until delivery.
+	PendingWakeReason   string `json:"pendingWakeReason,omitempty"`
+	PendingWakeTimedOut bool   `json:"pendingWakeTimedOut,omitempty"`
 	// Wake is the agent the firing wakes with What; Run a shell command it
 	// runs, its exit code logged. Without either the watch's line says it.
 	Wake string `json:"wake,omitempty"`
