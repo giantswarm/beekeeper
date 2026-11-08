@@ -414,7 +414,11 @@ func TestProbationPromotionInterruptionIsIdempotent(t *testing.T) {
 }
 
 func TestRecoverOutdatedJudge(t *testing.T) {
-	for _, scenario := range []string{"healthy", "crash before swap", "crash after swap", "probe fails", "state incompatible", "wrong bytes", "real failure", "modified artifact"} {
+	const (
+		healthyCase      = "healthy"
+		incompatibleCase = "state incompatible"
+	)
+	for _, scenario := range []string{healthyCase, "crash before swap", "crash after swap", "probe fails", incompatibleCase, "wrong bytes", "real failure", "modified artifact"} {
 		t.Run(scenario, func(t *testing.T) {
 			i, dir := recoveryFixture(t)
 			passedRecovery(t, i, dir)
@@ -471,13 +475,13 @@ func TestRecoverOutdatedJudge(t *testing.T) {
 				if v != "v2.0.0" || failed != v {
 					t.Fatal(v, failed)
 				}
-				if scenario == "state incompatible" {
+				if scenario == incompatibleCase {
 					return errors.New("incompatible")
 				}
 				return f()
 			}
 			err := RecoverOutdatedJudge(t.Context(), i.target, self, "v2.0.0", health, guarded)
-			if scenario != "healthy" && !strings.HasPrefix(scenario, "crash ") {
+			if scenario != healthyCase && !strings.HasPrefix(scenario, "crash ") {
 				if err == nil {
 					t.Fatal("unsafe recovery succeeded")
 				}

@@ -324,7 +324,7 @@ reset. A development build (version dev) is refused.`,
 		_ = c.Flags().MarkHidden(hidden)
 	}
 	c.MarkFlagsRequiredTogether(recoveryControllerFlag, recoveryTargetFlag)
-	for _, flag := range []string{"check", "complete-probation", "rollback", syncPluginsFlag, "stage-canary", hostVersionFlag, recoveryControllerFlag, "clear-recovery-hold"} {
+	for _, flag := range []string{guideWorkCheck, "complete-probation", "rollback", syncPluginsFlag, "stage-canary", hostVersionFlag, recoveryControllerFlag, "clear-recovery-hold"} {
 		c.MarkFlagsMutuallyExclusive(recoverOutdatedJudgeFlag, flag)
 	}
 	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag, "stage-canary")

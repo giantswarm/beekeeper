@@ -19,6 +19,8 @@ import (
 )
 
 const (
+	selfUpdateCompleteFlag = "--complete-probation"
+	selfUpdateJudgeFlag    = "--" + recoverOutdatedJudgeFlag
 	selfUpdateCheckFlag    = "--check"
 	selfUpdateRollbackFlag = "--rollback"
 	selfUpdateReasonFlag   = "--rollback-reason"
@@ -180,11 +182,11 @@ func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
 	for _, args := range [][]string{
 		{selfUpdateRollbackFlag},
 		{selfUpdateReasonFlag, selfUpdateReason},
-		{selfUpdateCheckFlag, "--complete-probation"},
-		{"--recover-outdated-judge", "/tmp/installed", selfUpdateCheckFlag},
-		{"--recover-outdated-judge", "/tmp/installed", "--complete-probation"},
-		{"--recover-outdated-judge", "/tmp/installed", selfUpdateVersionArg, "v0.4.0"},
-		{"--complete-probation", selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, selfUpdateCompleteFlag},
+		{selfUpdateJudgeFlag, "/tmp/installed", selfUpdateCheckFlag},
+		{selfUpdateJudgeFlag, "/tmp/installed", selfUpdateCompleteFlag},
+		{selfUpdateJudgeFlag, "/tmp/installed", selfUpdateVersionArg, "v0.4.0"},
+		{selfUpdateCompleteFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateStageFlag, "/tmp/candidate"},
 		{selfUpdateVersionArg, "v0.4.0", selfUpdateStageFlag, "/tmp/candidate"},

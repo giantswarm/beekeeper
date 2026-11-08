@@ -87,7 +87,7 @@ func CandidateProbe(ctx context.Context, binary, server, scratch string) error {
 	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout+5*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, binary, "self-update", installationProbeFlag, scratch) //nolint:gosec // verified candidate
+	c := exec.CommandContext(ctx, binary, "self-update", installationProbeFlag) //nolint:gosec // verified candidate
 	out, err := c.CombinedOutput()
 	if err == nil {
 		return nil
@@ -104,13 +104,14 @@ func CandidateProbe(ctx context.Context, binary, server, scratch string) error {
 
 // ServeProbe is handled before CLI startup, so plugin sync and live desk state
 // cannot run. The probe constructs an isolated configuration and proves a merge.
+// Its scratch directory is generated locally, never supplied by CLI input.
 func ServeProbe() (int, bool) {
-	if len(os.Args) != 4 || os.Args[1] != "self-update" || os.Args[2] != installationProbeFlag {
+	if len(os.Args) != 3 || os.Args[1] != "self-update" || os.Args[2] != installationProbeFlag {
 		return 0, false
 	}
 	self, err := os.Executable()
 	if err == nil {
-		err = Probe(context.Background(), self, self, os.Args[3])
+		err = Probe(context.Background(), self, self, "")
 	}
 	if err == nil {
 		return 0, true
