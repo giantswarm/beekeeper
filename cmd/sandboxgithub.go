@@ -94,6 +94,7 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 	}, say)
 	e := &sandbox.Egress{
 		AllowedOrgs: a.cfg.GitHub.AllowedOrgs,
+		Visibility:  a.repositoryVisibilityPolicy(ctx),
 		Allow:       a.sandboxPolicy().Domains, Inject: config.GitHubHosts, Token: tok.Get, CA: ca,
 		Peer: sandbox.SameUser("/proc"), Say: say,
 	}

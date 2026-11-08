@@ -364,6 +364,9 @@ func (a *app) executionPublicationRecoverable(st *state.State, ref execution.Ref
 	if !publicationCommit(r.Handle.Commit) {
 		return nil, refused("execution has no pinned source commit")
 	}
+	if err := a.checkRepositoryVisibility(context.Background(), r.Request.Repository); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 

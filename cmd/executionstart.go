@@ -29,6 +29,9 @@ type executionStartOptions struct {
 }
 
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
+	if err := a.checkRepositoryVisibility(ctx, o.Repository); err != nil {
+		return err
+	}
 	if err := a.cfg.GitHub.WorkerApp.Validate(); err != nil {
 		return err
 	}
@@ -63,6 +66,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	if len(guard.CredentialShapes(brief)) > 0 {
 		return refused("brief contains credential-shaped data; provision credentials independently on the execution host")
+	}
+	if err := a.admitTaskVisibility(ctx, brief+"\n"+o.Task, ""); err != nil {
+		return err
 	}
 	issues := briefIssues(brief)
 	for _, iss := range issues {

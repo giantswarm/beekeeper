@@ -1546,6 +1546,8 @@ The repository is the one the command names: `--repo`/`-R` (`OWNER/REPO`, `HOST/
 
 The refusal is one line: `Refused: a human decides what goes upstream: patches land on our fork and as a row on <github.upstreamReview>. `<verb>` writes to <owner/repo>, outside github.allowedOrgs (<orgs>).` Each refusal is a `hook.refused` event in `beekeeper log` with the session, the repository and the command (a command a token pattern matches is withheld, naming the rule), and the supervisor's watch says it once: `REFUSED <session>: upstream write to <owner/repo>: <command>`. `github.allowedOrgs: []` turns the guard off.
 
+`github.publicOnlyOwners: [example-org]` restricts the listed owners to verified public repositories. It defaults to `[]` and is independent of the owner allowlist: an allowed owner can still be restricted, and disabling the owner guard does not disable visibility checks. Worker admission (local and SSH), hook and connector writes, sandbox egress, and execution write credentials, publication and merge routes reject private or internal repositories and unreadable or missing visibility metadata. Each boundary reads fresh GitHub metadata; an unresolved repository target under a restricted owner is refused, including owner-only API writes and opaque GraphQL mutations. Public repositories remain subject to the existing owner policy.
+
 The sandbox broker also checks writes before attaching its App token. REST writes, release uploads and Git pushes must name an allowed owner; reads and Git fetches remain available for other owners. Unknown write targets and GraphQL mutations are refused because an opaque node ID does not establish an allowed owner; use an owner-scoped REST endpoint for those writes. GraphQL reads are inspected within a 1 MiB body limit and forwarded unchanged. The hook recognizes repository flags in short-flag clusters, including an attached or separate value after `-R`.
 
 ## What leaves the machine
@@ -3996,6 +3998,7 @@ The organisation and desk keys, and their defaults:
 | `github.floor` | `2500` | The budget under which GitHub work stops |
 | `github.urgentBound` | `200` | The budget an urgent merge (`lanes urgent`) keeps for itself under the floor |
 | `github.allowedOrgs` | `[giantswarm]` | The organizations and accounts an agent writes to; the hook refuses every GitHub write to any other repository, `[]` turns it off ([Writes outside the allowed organizations](#writes-outside-the-allowed-organizations)) |
+| `github.publicOnlyOwners` | `[]` | Owners restricted to verified public repositories at task admission and GitHub write boundaries; unreadable visibility refuses access |
 | `github.upstreamReview` | unset: "the team's upstream review list" | Where a change meant for upstream is queued (`owner/repo#n`), named in the refusal |
 | `merge.devctlOwners` | none: every merge is the plain squash merge | The owners whose repositories `devctl pr merge` serves |
 | `merge.admin` | none | The repositories (`owner/repo`) the desk merges with `--admin` past their branch ruleset after the approved desk review; only their merge go names `--admin --match-head-commit <head>` |

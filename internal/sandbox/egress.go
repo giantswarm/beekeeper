@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 // The egress proxy is the agent sandbox's only way out. The policy points
@@ -39,6 +40,7 @@ type Egress struct {
 	// AllowedOrgs are the owners whose repositories may receive writes.
 	// Empty disables the write policy, as for the session hook.
 	AllowedOrgs []string
+	Visibility  github.VisibilityPolicy
 	// Allow are the hosts commands reach (the policy's Domains).
 	Allow []string
 	// Inject are the hosts whose requests get the token on port 443.

@@ -757,7 +757,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
-				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
+				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Visibility: a.repositoryVisibilityPolicy(context.Background()), Review: a.cfg.GitHub.UpstreamReview}
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
 				h.LiveDirs = a.hookLiveDirs
