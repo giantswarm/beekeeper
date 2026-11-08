@@ -126,9 +126,9 @@ func TestEndedExecutionRefusalNamesWhyAndItsTranscript(t *testing.T) {
 				t.Fatal(err)
 			}
 			st, _ := a.store.Read()
-			s, ok := a.endedWorker(st, r.Name)
+			s, ok := a.endedWorker(st, string(r.Ref.Execution))
 			if !ok {
-				t.Fatal("not found by name")
+				t.Fatal("not found by execution identity")
 			}
 			err := a.wakeEnded(context.Background(), state.Party{Name: sshMessageSender}, s, "go on", "")
 			if !errors.Is(err, errGone) || !strings.Contains(err.Error(), "transcript") {
@@ -139,6 +139,36 @@ func TestEndedExecutionRefusalNamesWhyAndItsTranscript(t *testing.T) {
 				t.Fatalf("continued %d, roster %+v", *continued, st.Agents)
 			}
 		})
+	}
+}
+
+func TestEndedExecutionIdentitySurvivesReusedWorkerName(t *testing.T) {
+	a, r, _, continued := exitedExecutionApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		removeAgent(st, 0)
+		st.Records = nil
+		st.Starts = append(st.Starts, state.Start{
+			Party:   state.Party{Name: r.Name, Session: offID},
+			At:      time.Now().UTC().Add(time.Minute),
+			Harness: execution.HarnessCodex,
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := a.store.Read()
+	s, ok := a.endedWorker(st, string(r.Ref.Execution))
+	if !ok || s.Execution == nil || s.Execution.Request.Ref != r.Ref {
+		t.Fatalf("execution identity resolved to another worker: %+v, %v", s, ok)
+	}
+	err := a.wakeEnded(context.Background(), state.Party{Name: sshMessageSender}, s, "finish the proof", "")
+	var pending *executionDeliveryPending
+	if !errors.As(err, &pending) {
+		t.Fatalf("wake = %v", err)
+	}
+	st, _ = a.store.Read()
+	if *continued != 1 || len(st.Agents) != 1 || st.Agents[0].Execution == nil || *st.Agents[0].Execution != r.Ref {
+		t.Fatalf("continued %d, roster %+v", *continued, st.Agents)
 	}
 }
 
