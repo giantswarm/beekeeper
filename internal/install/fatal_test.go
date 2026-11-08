@@ -78,12 +78,12 @@ func TestFatalRecoveryOnlyInstallLeavesDisabledComponentsAlone(t *testing.T) {
 
 func TestRecoveryAdmissionPrecedesServices(t *testing.T) {
 	const admissionFailure = "failure"
-	for _, mode := range []string{"success", admissionFailure, "dry-run"} {
+	for _, mode := range []string{"success", admissionFailure, dryRunMode} {
 		t.Run(mode, func(t *testing.T) {
 			f := &fakeSetup{}
 			e, _ := env(t, t.TempDir(), fatalOnlySetup{f}, f.run)
 			e.RecoveryOnly = true
-			e.DryRun = mode == "dry-run"
+			e.DryRun = mode == dryRunMode
 			t.Setenv("HOME", e.Spec.Home)
 			t.Setenv("XDG_STATE_HOME", filepath.Dir(e.StateDir))
 			t.Setenv("BEEKEEPER_CONFIG", "")

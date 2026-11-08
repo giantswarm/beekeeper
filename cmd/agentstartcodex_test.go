@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -54,6 +55,13 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	if err := codex.RecordThread(dir, inbox, "thread-wake-1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(codex.HomeDir(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"hooks":{"PreToolUse":[` + string(install.CodexHook("beekeeper")) + `]}}`)
+	if err := os.WriteFile(install.CodexWorkerHooks(dir), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.wakeCodex(by, ag, id, "next-turn wake message"); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +90,21 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	msgs, err := codex.Drain(inbox)
 	if err != nil || len(msgs) != 0 {
 		t.Fatalf("Drain(inbox) = (%v, %v), want empty after hook delivery", msgs, err)
+	}
+	if err := os.Remove(install.CodexWorkerHooks(dir)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	const hooklessWake = "hookless wake"
+	if err := a.wakeCodex(by, ag, id, hooklessWake); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "mid-turn hook unavailable") {
+		t.Fatalf("hookless output %q", out.String())
+	}
+	msgs, err = codex.Drain(inbox)
+	if err != nil || len(msgs) != 1 || msgs[0] != hooklessWake {
+		t.Fatalf("hookless wake lost: %v, %v", msgs, err)
 	}
 }
 
@@ -221,8 +244,8 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wantCodexHome, "config.toml")); err != nil {
 		t.Errorf("missing isolated config.toml: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(wantCodexHome, "hooks.json")); err != nil {
-		t.Errorf("missing isolated hooks.json: %v", err)
+	if _, err := os.Stat(filepath.Join(wantCodexHome, "hooks.json")); !os.IsNotExist(err) {
+		t.Errorf("start created isolated hooks.json: %v", err)
 	}
 	if target, err := os.Readlink(filepath.Join(wantCodexHome, "auth.json")); err != nil || target != authFile {
 		t.Errorf("auth.json symlink = %q (%v), want %q", target, err, authFile)

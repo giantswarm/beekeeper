@@ -3772,7 +3772,10 @@ starts, `agents start` stops the unit, removes its inbox and log files, marks th
 
 The isolated `CODEX_HOME` (`<stateDir>/codex/home`) links `auth.json` to `codex.authFile`
 (`~/.codex/auth.json`) when present, `AGENTS.md` to `~/.codex/AGENTS.md` when present, and `skills`
-to `<stateDir>/skills`, and writes `config.toml`, `hooks.json` and `zsh/.zshenv` + `zsh/.zprofile`.
+to `<stateDir>/skills`, and writes `config.toml` and `zsh/.zshenv` + `zsh/.zprofile`.
+Only `beekeeper install` manages `hooks.json`; worker starts preserve it and never recreate
+it after `beekeeper uninstall`. Uninstall also removes the unmodified legacy worker hook
+file created by older worker starts, even without an install manifest.
 The `zsh/` shim sets `ZDOTDIR="$HOME"` before sourcing the user's `~/.zshenv` and `~/.zprofile` and
 restores `ZDOTDIR` only while a login shell proceeds from `.zshenv` to `.zprofile`, then applies
 `agents.shell` (`agents.shell.path`, `agents.shell.unalias`, `setopt nonomatch`), so every `codex`
@@ -3790,7 +3793,9 @@ delivers queued messages through `hook pretooluse --format codex` as model-visib
 decisions and consumes only pending wakes, never the runner’s inflight prompt. If there is no
 further tool call, delivery waits until the turn ends (whose remaining duration is unknown);
 `codex-run` then starts a `codex exec resume` turn with the queued message, or does so at once
-when idle. `agents wake` states this fallback explicitly. Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
+when idle. With hooks uninstalled, wakes stay queued until the current turn ends; an idle
+runner still starts its next turn immediately. `agents wake` reports when the mid-turn hook
+is unavailable and states this fallback explicitly. Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
 `beekeeper-codex-<id[:8]>` unit and removes its inbox, queue, lock, state, stream log and thread link
 files.
 
