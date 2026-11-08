@@ -152,16 +152,16 @@ func restCalls(command string) []GitHubCall {
 			if !slices.Contains(args, executionGraphQL) {
 				class = "gh api REST"
 			}
-		case "run", "workflow", "release":
-			if slices.Contains([]string{"view", verbList, "download", "watch", verbCreate, verbDelete, "edit", "upload", "rerun", "cancel", "enable", "disable"}, args[1]) && !(args[0] == "release" && args[1] == verbList) {
+		case "run", "workflow", ghReleaseSub:
+			if slices.Contains([]string{"view", verbList, "download", "watch", verbCreate, verbDelete, verbEdit, "upload", "rerun", "cancel", "enable", "disable"}, args[1]) && (args[0] != ghReleaseSub || args[1] != verbList) {
 				class = "gh " + args[0] + " " + args[1]
 			}
-		case "issue":
-			if slices.Contains([]string{verbCreate, "comment", "edit", "close", "reopen", verbDelete}, args[1]) {
+		case ghIssueSub:
+			if slices.Contains([]string{verbCreate, "comment", verbEdit, "close", verbReopen, verbDelete}, args[1]) {
 				class = "gh issue " + args[1]
 			}
 		case "pr":
-			if slices.Contains([]string{"diff", "comment", "review"}, args[1]) {
+			if slices.Contains([]string{verbDiff, "comment", verbReview}, args[1]) {
 				class = "gh pr " + args[1]
 			}
 		}

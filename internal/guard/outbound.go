@@ -497,13 +497,13 @@ func (o Outbound) storeRefusal(words []string) string {
 		switch path.Base(w) {
 		case "op":
 			sub := nonFlags(args)
-			if len(sub) < 2 || (sub[0] != "item" && sub[0] != "document") || (sub[1] != "create" && sub[1] != "edit") {
+			if len(sub) < 2 || (sub[0] != "item" && sub[0] != "document") || (sub[1] != "create" && sub[1] != verbEdit) {
 				continue
 			}
 			what = "op " + sub[0] + " " + sub[1]
 			vault, known = flagValue(args, "--vault")
 			item, _ = flagValue(args, "--title")
-			if sub[1] == "edit" && len(sub) > 2 {
+			if sub[1] == verbEdit && len(sub) > 2 {
 				item = sub[2]
 			}
 		case "vault":
