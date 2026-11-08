@@ -4187,11 +4187,11 @@ func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act su
 	l.mu.Lock()
 	blocked := l.stages[blockStage]
 	l.mu.Unlock()
-	if act.Block != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
-		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
+	if act.OwnerIssue != "" && act.BlockIssue != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+		if _, err := l.run(ctx, loopBoard, "unblock", act.OwnerIssue, "--by", act.BlockIssue); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
-		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
+		if _, err := l.run(ctx, loopBoard, "block", act.BlockIssue, "--by", act.OwnerIssue); err != nil {
 			return "", fmt.Errorf("record overlap dependency: %w", err)
 		}
 		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
@@ -4204,7 +4204,7 @@ func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act su
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err
 	}
-	if act.Block != "" {
+	if act.BlockIssue != "" {
 		return fmt.Sprintf("owner %q assigned to %s (%s blocked by %s)", act.Agent, cmp.Or(act.URL, act.Ref), act.Block, act.Ref), nil
 	}
 	return fmt.Sprintf("owner %q assigned to %s", act.Agent, cmp.Or(act.URL, act.Ref)), nil
