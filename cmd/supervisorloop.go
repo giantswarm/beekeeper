@@ -739,6 +739,8 @@ type supervisorLoop struct {
 	// pulls reuses unchanged PR observations between passes. A new park,
 	// answer or reviewer report invalidates them before planning.
 	pulls map[string]loopPullObservation
+	// fillPreview is the dry-run projection, used only by synchronous previews.
+	fillPreview *state.State
 	// openPulls are the desk's open pull requests the sweep last listed,
 	// at openPullsAt.
 	openPulls       []string
@@ -1390,6 +1392,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	l.lifecyclePhase("read event history")
+	if !l.dryRun {
+		if err := l.checkpointThroughput(time.Now().UTC()); err != nil {
+			return err
+		}
+	}
 	taken, err := a.store.Follow("supervisor-loop-taken", func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
 	if err != nil {
 		return err
@@ -1506,6 +1513,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	in.Pulls = map[string]superloop.Pull{}
+	in.PullReadAt = map[string]time.Time{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
 	for _, d := range st.Deliveries {
 		if d.Active() {
@@ -1574,6 +1582,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
+		l.mu.Lock()
+		in.PullReadAt[ref] = l.pulls[ref].at
+		l.mu.Unlock()
 		if (p.State == superloop.Merged || p.State == superloop.Closed) && !hasLoopRound(in.Taken, ref) {
 			unreviewedEnded[strings.ToLower(ref)] = true
 		}
@@ -1732,6 +1743,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	if l.dryRun {
+		preview := *st
+		preview.Deliveries = superloop.Deliveries(in, st.Deliveries)
+		if len(unread) == 0 && !l.sweepIncomplete {
+			preview.DeliveriesAt = in.Now
+		}
+		l.fillPreview = &preview
+		defer func() { l.fillPreview = nil }()
 		for _, act := range actions {
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
 				return err
@@ -1761,7 +1779,7 @@ func (l *supervisorLoop) endInFlight(key string) {
 	l.mu.Unlock()
 }
 
-func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action) error {
+func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action, reserved ...[]string) error {
 	if l.pauseForReexec() {
 		return nil
 	}
@@ -1798,7 +1816,7 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 		l.mu.Unlock()
 		return nil
 	}
-	what, err := l.act(ctx, st, act)
+	what, err := l.act(ctx, st, act, reserved...)
 	switch {
 	case errors.Is(err, errLoopLater):
 		return nil
@@ -1821,6 +1839,14 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 // transitions independently so a merge waiting on CI or in a lane queue never
 // delays a review or worker start, and the reverse.
 func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+	current, readErr := l.a.store.Read()
+	if readErr != nil {
+		return readErr
+	}
+	// Freeze reservations before independent streams can register their starts.
+	// A capacity read and a roster read are not one atomic observation.
+	reservations := deliveryReservations(current)
+
 	planned := map[string]bool{}
 	var (
 		laneOrder  []string
@@ -1949,7 +1975,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 			}
 		}
 		for _, act := range nextActs {
-			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+			if err := l.execAction(ctx, st, claims, failures, act, reservations); err != nil {
 				return err
 			}
 			// Every next action asks for the same thing, the board's next
@@ -1961,7 +1987,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 				break
 			}
 		}
-		return l.fill(ctx, st, claims, taken)
+		return l.fill(ctx, st, claims, taken, reservations)
 	})
 
 	// Keep transitions for one worker ordered, without making a stalled
@@ -2635,7 +2661,7 @@ func (l *supervisorLoop) remove(ctx context.Context, name, reason string) error 
 }
 
 // act takes one transition and says what it did.
-func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop.Action, reserved ...[]string) (string, error) {
 	a := l.a
 	switch act.Kind {
 	case superloop.KindReview:
@@ -2714,7 +2740,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		}
 		return "off the roster", nil
 	case superloop.KindNext:
-		return l.startNext(ctx, act)
+		return l.startNext(ctx, act, reserved...)
 	case superloop.KindRelease:
 		return l.install(ctx, act)
 	case superloop.KindClassify:
@@ -3775,13 +3801,16 @@ func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (s
 // capacity has room — on an execution host when supervisor.hosts names one
 // with room (and the board item's repository is mapped there), else on the
 // coordinator's own machine.
-func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
+func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action, reserved ...[]string) (string, error) {
 	if l.holdingStarts() || l.a.recoveryHeld() != "" {
 		return "", errLoopLater
 	}
 	k := l.a.cfg.Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
+	}
+	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+		return "", err
 	}
 	if !l.placesRemotely() {
 		// The room check as before: a machine with no room reads no board.
@@ -3796,12 +3825,15 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	if next == nil {
 		return "the board offers nothing: no worker starts", nil
 	}
-	return l.startItem(ctx, act, *next)
+	return l.startItem(ctx, act, *next, reserved...)
 }
 
 // loopBoardNone is a board next answer without a pick: nothing free, or
 // the error that kept the board from answering.
-type loopBoardNone struct{ err error }
+type loopBoardNone struct {
+	err        error
+	exemptOnly bool
+}
 
 // nextItem is the board's first free ranked item, or nil when none is free.
 // A walk costs a large share of the GraphQL budget: an empty or failed one
@@ -3809,29 +3841,42 @@ type loopBoardNone struct{ err error }
 // No walk runs while the GitHub budget is under github.floor: the pass
 // answers errLoopLater, so a done event waits unsettled and costs nothing.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	if l.dryRun && l.fillPreview != nil {
+		st = l.fillPreview
+	}
+	v := readDeliveryWIP(st, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow())
+	exemptOnly := v.Reason != ""
+	if exemptOnly && !l.a.deliveryExemptIntake(st) {
+		return nil, errLoopLater
+	}
 	l.mu.Lock()
-	if l.boardNone != nil {
+	if l.boardNone != nil && l.boardNone.exemptOnly == exemptOnly {
 		err := l.boardNone.err
 		l.mu.Unlock()
 		return nil, err
 	}
 	l.mu.Unlock()
-	st, err := l.a.store.Read()
-	if err != nil {
-		return nil, err
-	}
 	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.timeNow()) {
 		l.mu.Lock()
-		l.boardNone = &loopBoardNone{err: errLoopLater}
+		l.boardNone = &loopBoardNone{err: errLoopLater, exemptOnly: exemptOnly}
 		l.mu.Unlock()
 		l.sayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.a.cfg.GitHub.Floor)
 		return nil, errLoopLater
 	}
 	l.clearSaid("board budget")
-	next, err := l.readNextItem(ctx)
+	next, err := l.readNextItem(ctx, exemptOnly)
+	// A scoped read can never fall back to ordinary work, even if the
+	// observation becomes fresh or a delivery ends while the read runs.
+	if next != nil && exemptOnly && !deliveryExempt(st, l.a.timeNow(), next.Ref, next.WIPExempt) {
+		return nil, errLoopLater
+	}
 	if next == nil {
 		l.mu.Lock()
-		l.boardNone = &loopBoardNone{err: err}
+		l.boardNone = &loopBoardNone{err: err, exemptOnly: exemptOnly}
 		l.mu.Unlock()
 	}
 	return next, err
@@ -3864,11 +3909,18 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 // readNextItem reads board next --json. With nothing free board next exits
 // 3 after printing its document with no pick: that is the board's answer,
 // nothing free, never a failure to retry.
-func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
-	if next, err := l.a.nextMonitoredIssue(ctx); next != nil || err != nil {
-		return next, err
+func (l *supervisorLoop) readNextItem(ctx context.Context, onlyExempt ...bool) (*loopBoardItem, error) {
+	exemptOnly := len(onlyExempt) > 0 && onlyExempt[0]
+	if !exemptOnly {
+		if next, err := l.a.nextMonitoredIssue(ctx); next != nil || err != nil {
+			return next, err
+		}
 	}
-	out, code, err := beekeeperRun(ctx, l.as(loopBoard, "next", "--json")...)
+	args := []string{loopBoard, deliveryNextCommand, deliveryJSONFlag}
+	if exemptOnly {
+		args = append(args, deliveryExemptOnlyFlag)
+	}
+	out, code, err := beekeeperRun(ctx, l.as(args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -3913,11 +3965,18 @@ func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, erro
 }
 
 type loopBoardItem struct {
-	Ref string `json:"ref"`
-	URL string `json:"url"`
+	WIPExempt bool   `json:"wip_exempt,omitempty"`
+	Ref       string `json:"ref"`
+	URL       string `json:"url"`
 }
 
-func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem, reserved ...[]string) (string, error) {
+	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+		return "", err
+	}
+	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
+		return "", err
+	}
 	if l.unreadRepo(next.Ref) != "" {
 		return "", errLoopLater
 	}
@@ -3961,11 +4020,17 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
-	// Placement and preparation may block while an incident hold is set.
+	// Placement and preparation may block while admission changes.
 	if err := l.incidentStart(next.Ref); err != nil {
 		return "", err
 	}
 	if err := l.unmergedStart(ctx, next.Ref); err != nil {
+		return "", err
+	}
+	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+		return "", err
+	}
+	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
 		return "", err
 	}
 	if err := l.claim(act, name); err != nil {

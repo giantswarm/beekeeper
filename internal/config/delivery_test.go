@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeliveryLimitConfig(t *testing.T) {
@@ -74,5 +75,44 @@ func TestDeliveryExampleConfig(t *testing.T) {
 	}
 	if findings, err := Check(example); err != nil || len(findings) != 0 {
 		t.Fatalf("example config check: %v %v", findings, err)
+	}
+}
+
+func TestDeliveryStallAfter(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	for _, tc := range []struct {
+		raw  string
+		want time.Duration
+		bad  bool
+	}{
+		{"", 24 * time.Hour, false},
+		{"delivery: {stallAfter: 2h}", 2 * time.Hour, false},
+		{"delivery: {stallAfter: -1h}", 0, true},
+		{"delivery: {stallAfter: nonsense}", 0, true},
+	} {
+		if err := os.WriteFile(p, []byte(tc.raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(p)
+		if (err != nil) != tc.bad {
+			t.Fatalf("%s: %v", tc.raw, err)
+		}
+		if err == nil && c.Delivery.StallAfter.Duration != tc.want {
+			t.Fatal(c.Delivery)
+		}
+	}
+}
+
+func TestDeliveryExemptBoardStepConfig(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("board:\n  order:\n    - name: emergency\n      labels: [page]\n      wipExempt: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Board.Order) != 1 || !c.Board.Order[0].WIPExempt {
+		t.Fatal(c.Board.Order)
 	}
 }

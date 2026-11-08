@@ -70,7 +70,7 @@ loop runs every board.tidyEvery.`,
 }
 
 func (a *app) boardNextCmd() *cobra.Command {
-	var claim, replace bool
+	var claim, replace, exemptOnly bool
 	var waits string
 	var skip []string
 	var view nextView
@@ -199,7 +199,26 @@ pick; a name no candidate carries changes nothing. Without --claim the
 pick is followed by the call that offers the candidate after it, "next
 candidate: board next --skip <the skips and the pick>" (--json
 next_skip): a scan walks every free candidate by repeating that call
-alone, until exit 3 says none is left.`,
+alone, until exit 3 says none is left.
+
+With delivery.wipLimit set, new issues wait at the limit or when the last
+complete delivery observation is older than three supervisor.loopInterval
+passes. Zero disables this gate. JSON adds wip (limit, count, items, reason)
+and would_pick (the first otherwise free candidate). The skipped and
+after_pick lists remain the ordinary walk preview; pick alone is admitted.
+Exit 3 means no admitted pick. --claim counts and records under one lock.
+The active incident hold's named repair and board.order steps with
+wipExempt: true pass this gate and still count. Manual agents start counts
+and warns above the limit. Reviews, fixes, wakes, rework and merges continue.
+The loop checks before ordinary board or monitored queue reads. At a full or
+stale limit it makes no read when no exempt route is configured. With an
+exempt step or active named incident repair, it uses --wip-exempt-only:
+the existing board ranking, ownership, blockers and other eligibility checks
+still apply, only exempt candidates are considered, and the monitored queue
+is not read. This mode never falls back to ordinary work even if a delivery
+ends during the read. A held limit sets no refill pause, so a release frees
+a place on the next pass. Every new start also respects slots reserved for
+pending reviews and fixes; those existing-work routes have no WIP gate.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if view.limit < 0 {
@@ -224,6 +243,15 @@ alone, until exit 3 says none is left.`,
 				return usageErr("--replace replaces the record of a --claim: pass --claim too")
 			} else {
 				me, _ = a.caller()
+			}
+			if exemptOnly {
+				st, err := a.store.Read()
+				if err != nil {
+					return err
+				}
+				if !a.deliveryExemptIntake(st) {
+					return a.printNext(nextResult{WIP: readDeliveryWIP(st, a.cfg.Delivery.WIPLimit, a.cfg.Supervisor.LoopInterval.Duration, a.timeNow())}, 0, view)
+				}
 			}
 			cl := a.boardClient()
 			snap, err := cl.Read(cmd.Context(), a.now)
@@ -250,17 +278,20 @@ alone, until exit 3 says none is left.`,
 			if err != nil {
 				return err
 			}
-			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+			sc := pickScope{exemptOnly: exemptOnly, wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
 				gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
 				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
+			if exemptOnly {
+				cands = slices.DeleteFunc(cands, func(c board.Candidate) bool { return !deliveryExempt(st, a.timeNow(), c.Ref, c.WIPExempt) })
+			}
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
 			if sc.prReferences, err = sessionPRReferences(cmd.Context(), cl.GH, st, sessions, me); err != nil {
 				return err
 			}
-			a.skipUnmergedBacklog(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
-			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
+			a.skipUnmergedBacklog(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFreePreview(st, cands, sc).Pick })
+			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFreePreview(st, cands, sc).Pick })
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -284,6 +315,7 @@ alone, until exit 3 says none is left.`,
 			return a.printNext(res, len(cands), view)
 		},
 	}
+	c.Flags().BoolVar(&exemptOnly, strings.TrimPrefix(deliveryExemptOnlyFlag, "--"), false, "Only consider configured WIP exemptions and active named incident repairs; retain all ordinary eligibility checks")
 	c.Flags().BoolVar(&claim, "claim", false, "record the item as the calling session's (sessions serve), atomically")
 	c.Flags().BoolVar(&replace, "replace", false, "with --claim: replace the session's record even while the item it serves is open")
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on, for the record")
@@ -397,6 +429,11 @@ func nextJSON(res nextResult, view nextView) (any, error) {
 			ps = append(ps, p)
 		}
 		return ps, nil
+	}
+	if res.WouldPick != nil {
+		if out["would_pick"], err = projectFields(*res.WouldPick, view.fields); err != nil {
+			return nil, err
+		}
 	}
 	if res.Pick != nil {
 		if out["pick"], err = projectFields(*res.Pick, view.fields); err != nil {
@@ -512,6 +549,7 @@ func nextSkip(skip []string, pick *board.Candidate) []string {
 // task or note names belongs to, and what the running sessions work on
 // (servingWork).
 type pickScope struct {
+	exemptOnly   bool
 	me           state.Party
 	alive        func(state.Party) bool
 	gone         func(state.Agent) bool
@@ -520,6 +558,9 @@ type pickScope struct {
 	prReferences map[string]string
 	owner        string
 	works        []sessionWork
+	wipLimit     int
+	loopInterval time.Duration
+	wipNow       func() time.Time
 }
 
 // sessionWork is the issues and pull requests a running session works on
@@ -578,8 +619,10 @@ func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
 // its skip reason, or free (an empty skip) and next in line, and the
 // skipped candidates counted by the kind of their reason (skipKind).
 type nextResult struct {
-	Pick    *board.Candidate `json:"pick"`
-	Claimed bool             `json:"claimed,omitempty"`
+	Pick      *board.Candidate `json:"pick"`
+	WouldPick *board.Candidate `json:"would_pick,omitempty"`
+	WIP       *deliveryWIP     `json:"wip,omitempty"`
+	Claimed   bool             `json:"claimed,omitempty"`
 	// Held is the record a claim was refused for: the open item the
 	// session serves.
 	Held      *state.Record     `json:"held,omitempty"`
@@ -676,6 +719,38 @@ func heldByDecision(notes []state.Note, it board.Item) string {
 // the pull request, and a sub-issue offered through an epic by whatever owns
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
+	now := sc.listed
+	if sc.wipNow != nil {
+		now = sc.wipNow()
+	}
+	if sc.exemptOnly {
+		cands = slices.DeleteFunc(slices.Clone(cands), func(c board.Candidate) bool { return !deliveryExempt(st, now, c.Ref, c.WIPExempt) })
+	}
+	res := nextFreePreview(st, cands, sc)
+	res.WIP = readDeliveryWIP(st, sc.wipLimit, sc.loopInterval, now)
+	res.WouldPick = res.Pick
+	if res.WIP.Reason == "" {
+		return res
+	}
+	// Preserve the walk as a preview, including the lists relative to would_pick.
+	res.Pick = nil
+	var preview []board.Candidate
+	if res.WouldPick != nil {
+		preview = append(preview, *res.WouldPick)
+	}
+	preview = append(preview, res.AfterPick...)
+	for _, c := range preview {
+		if c.Skip == "" && deliveryExempt(st, now, c.Ref, c.WIPExempt) {
+			cp := c
+			res.Pick = &cp
+			break
+		}
+	}
+
+	return res
+}
+
+func nextFreePreview(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
 	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
 	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
@@ -736,7 +811,9 @@ func claimNext(store state.Store, cands []board.Candidate, sc pickScope, waits s
 			res.Held = &st.Records[i]
 			return nil, nil
 		}
-		res = nextFree(st, cands, sc)
+		fresh := sc
+		fresh.wipNow = time.Now
+		res = nextFree(st, cands, fresh)
 		if res.Pick == nil {
 			return nil, nil
 		}
@@ -1036,6 +1113,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			return err
 		}
 	} else {
+		if res.WIP != nil && res.WIP.Reason != "" {
+			_, _ = fmt.Fprintln(a.out, res.WIP.Reason)
+		}
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
 		}
@@ -1089,6 +1169,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 		for _, m := range res.Missing {
 			_, _ = fmt.Fprintf(a.out, "unknown, GitHub answered with an error: %s\n", m)
 		}
+	}
+	if res.Pick == nil && res.WIP != nil && res.WIP.Reason != "" {
+		return refused("%s", res.WIP.Reason)
 	}
 	if h := res.Held; h != nil {
 		return refused("no claim: this session serves %s, still open", h.Issue)

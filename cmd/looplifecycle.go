@@ -100,5 +100,5 @@ func (c *recoveryController) loopSilence(jVersion string, installed time.Time) s
 	case life.Exited:
 		return fmt.Sprintf("candidate loop exited during %s (exit %d; %s)", life.Phase, life.Code, life.Failure)
 	}
-	return fmt.Sprintf("candidate loop last reached %s; no completed-pass heartbeat for %s", life.Phase, c.now().Sub(life.At).Round(time.Second))
+	return fmt.Sprintf("candidate loop last reached %s; no health checkpoint for %s", life.Phase, c.now().Sub(life.At).Round(time.Second))
 }
