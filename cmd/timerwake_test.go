@@ -313,7 +313,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 							p.On, p.Waits = "", "Timer 42: proof running"
 						}
 						st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: p}}
-						st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Repeat: repeat, What: "proof finished"}}
+						st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Repeat: repeat, What: timerProofFinished}}
 						return nil, nil
 					}); err != nil {
 						t.Fatal(err)
