@@ -111,6 +111,19 @@ func (l *supervisorLoop) startRegistered(name string, begin time.Time) bool {
 	})
 }
 
+// checkpointThroughput reports bounded pass progress before expensive history
+// loading. Keep eligibility ages intact until planning can observe them afresh.
+// Use wall time: the pass snapshot can already be minutes old after handover.
+// This is not a background keepalive; a stuck pass stops refreshing it.
+func (l *supervisorLoop) checkpointThroughput(now time.Time) error {
+	var obs throughputObservation
+	if _, err := l.a.store.ReadFile(throughputObservationFile, &obs); err != nil {
+		return err
+	}
+	obs.At, obs.Candidate, obs.Unknown = now, normalizeLoopVersion(loopRunningVersion()), true
+	return l.a.store.WriteFile(throughputObservationFile, obs)
+}
+
 func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superloop.Action, unknown bool) error {
 	var old throughputObservation
 	_, err := l.a.store.ReadFile(throughputObservationFile, &old)
@@ -120,6 +133,10 @@ func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superlo
 	}
 	now := l.a.timeNow()
 	next := throughputObservation{At: now, Candidate: normalizeLoopVersion(loopRunningVersion()), Unknown: unknown, Eligible: map[string]eligibleWait{}}
+	if l.lifecycle != nil {
+		// Liveness uses completion time, not the frozen planning snapshot.
+		next.At = time.Now().UTC()
+	}
 	if unknown {
 		for ref, wait := range old.Eligible {
 			if _, observed := in.Pulls[ref]; !observed {

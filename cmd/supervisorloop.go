@@ -1390,6 +1390,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	l.lifecyclePhase("read event history")
+	if !l.dryRun {
+		if err := l.checkpointThroughput(time.Now().UTC()); err != nil {
+			return err
+		}
+	}
 	taken, err := a.store.Follow("supervisor-loop-taken", func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
 	if err != nil {
 		return err
