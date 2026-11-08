@@ -19,14 +19,15 @@ import (
 )
 
 const (
-	selfUpdateCompleteFlag = "--complete-probation"
-	selfUpdateJudgeFlag    = "--" + recoverOutdatedJudgeFlag
-	selfUpdateCheckFlag    = "--check"
-	selfUpdateRollbackFlag = "--rollback"
-	selfUpdateReasonFlag   = "--rollback-reason"
-	selfUpdateReason       = "candidate unhealthy"
-	selfUpdateStageFlag    = "--stage-canary"
-	selfUpdateVersionArg   = "--" + hostVersionFlag
+	selfUpdateCompleteFlag  = "--complete-probation"
+	selfUpdateJudgeFlag     = "--" + recoverOutdatedJudgeFlag
+	selfUpdateInstalledPath = "/tmp/installed"
+	selfUpdateCheckFlag     = "--check"
+	selfUpdateRollbackFlag  = "--rollback"
+	selfUpdateReasonFlag    = "--rollback-reason"
+	selfUpdateReason        = "candidate unhealthy"
+	selfUpdateStageFlag     = "--stage-canary"
+	selfUpdateVersionArg    = "--" + hostVersionFlag
 )
 
 // An update names the beekeeper processes it leaves on the old binary, pid
@@ -183,9 +184,9 @@ func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
 		{selfUpdateRollbackFlag},
 		{selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateCompleteFlag},
-		{selfUpdateJudgeFlag, "/tmp/installed", selfUpdateCheckFlag},
-		{selfUpdateJudgeFlag, "/tmp/installed", selfUpdateCompleteFlag},
-		{selfUpdateJudgeFlag, "/tmp/installed", selfUpdateVersionArg, "v0.4.0"},
+		{selfUpdateJudgeFlag, selfUpdateInstalledPath, selfUpdateCheckFlag},
+		{selfUpdateJudgeFlag, selfUpdateInstalledPath, selfUpdateCompleteFlag},
+		{selfUpdateJudgeFlag, selfUpdateInstalledPath, selfUpdateVersionArg, "v0.4.0"},
 		{selfUpdateCompleteFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateStageFlag, "/tmp/candidate"},
