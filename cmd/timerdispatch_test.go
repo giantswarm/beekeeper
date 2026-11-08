@@ -19,6 +19,7 @@ import (
 const (
 	timerDispatchRepairWorker = "repair worker"
 	timerProofFinished        = "proof finished"
+	timerDueEarlier           = "due earlier"
 )
 
 func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
@@ -290,6 +291,9 @@ func TestFatalTimersDetectMissedTicksNotUnsatisfiedConditions(t *testing.T) {
 		timer   state.Timer
 		overdue bool
 	}{
+		{"plain wake retry on schedule", state.Timer{Due: now.Add(-time.Hour), Checked: now.Add(-time.Minute), PendingWakeReason: timerDueEarlier, Wake: workerRole}, false},
+		{"plain wake retry missed", state.Timer{Due: now.Add(-time.Hour), Checked: now.Add(-10 * time.Minute), PendingWakeReason: timerDueEarlier, Wake: workerRole}, true},
+		{"conditional retry past expiry", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Checked: now.Add(-time.Minute), Until: now.Add(-10 * time.Minute), PendingWakeReason: "timed out", Wake: workerRole}, false},
 		{"wake overdue", state.Timer{Due: now.Add(-time.Hour), Wake: workerRole}, true},
 		{"not due yet", state.Timer{Due: now.Add(time.Minute), Wake: workerRole}, false},
 		{"grace", state.Timer{Due: now.Add(-time.Minute), Wake: workerRole}, false},
@@ -390,5 +394,21 @@ func TestTimerDispatcherObservesStopWithoutStateLock(t *testing.T) {
 		store.once.Do(func() { close(store.release) })
 		<-done
 		t.Fatal("stop monitor waited for the state lock")
+	}
+}
+
+// Rejected plain wakes must wait between delivery attempts just like conditional
+// wakes, without losing the original occurrence or its delivery reason.
+func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
+	now := time.Now().UTC()
+	timer := state.Timer{ID: 1, Due: now.Add(-time.Hour), Checked: now, Wake: workerRole, PendingWakeReason: timerDueEarlier, Every: time.Minute}
+	st := &state.State{Timers: []state.Timer{timer}}
+	_, _, fires, changed := settleTimers(st, nil, now.Add(30*time.Second))
+	if changed || len(fires) != 0 || len(st.Timers) != 1 {
+		t.Fatal("plain wake retried before its interval", fires, st.Timers)
+	}
+	_, _, fires, _ = settleTimers(st, nil, now.Add(time.Minute))
+	if len(fires) != 1 || fires[0].reason != timer.PendingWakeReason || !fires[0].t.Due.Equal(timer.Due) {
+		t.Fatal("retry lost its due occurrence", fires)
 	}
 }

@@ -240,14 +240,16 @@ func fatalTimers(st *state.State, now time.Time) fatalTimerFinding {
 			continue
 		}
 		deadline := t.Due
-		if t.Conditional() && !t.Checked.IsZero() {
+		if (t.Conditional() || t.PendingWakeReason != "") && !t.Checked.IsZero() {
 			every := t.Every
 			if every <= 0 {
 				every = timerEvery
 			}
 			deadline = t.Checked.Add(every)
 		}
-		if !t.Until.IsZero() && t.Until.Before(deadline) {
+		// An already fired occurrence waits for delivery, not its old condition
+		// expiry; settlement retains it after Until until delivery succeeds.
+		if t.PendingWakeReason == "" && !t.Until.IsZero() && t.Until.Before(deadline) {
 			deadline = t.Until
 		}
 		if now.Sub(deadline) > 2*time.Minute {
