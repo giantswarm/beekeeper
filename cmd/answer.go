@@ -80,6 +80,7 @@ The hand-over's answers and note add's re-ask warning read answer.recorded
 	c.Flags().BoolVar(&opts.keepOpen, "keep-open", false, "record the person's reply verbatim while leaving the note open")
 	c.Flags().StringVar(&opts.deferDue, "defer", "", "record the person's reply verbatim and defer the note until this time (22:55 or 3h)")
 	c.Flags().StringVar(&opts.deferReason, "reason", "", "with --defer, why the note is deferred")
+	c.AddCommand(a.answerHistoryCmd())
 	return c
 }
 

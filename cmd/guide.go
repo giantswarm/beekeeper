@@ -585,6 +585,10 @@ the hand-over before gets only what changed; --full prints everything.`,
 			if err != nil {
 				return err
 			}
+			decisions, err := a.decisionHistory("")
+			if err != nil {
+				return err
+			}
 			if prompt {
 				return a.printGuidePrompt(r, q, s, a.boardHoldsHandover(cmd.Context(), st.Notes), st)
 			}
@@ -599,6 +603,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			relay := a.relayLine(guideRole, r)
 			unbacked := a.unbackedPersonItems(st, q, s)
 			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
+			facts = append(facts, textFacts("decisions", decisionHistoryText(decisions))...)
 			facts = append(facts, textFacts("guide-work", guideWorkText(st))...)
 			facts = append(facts, textFacts("standing", a.capture(func() { a.printStanding(s) }))...)
 			if len(unbacked) > 0 {
@@ -611,6 +616,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				}
 				_, _ = fmt.Fprintln(a.out, "\n## Standing instructions")
 				a.printStanding(s)
+				_, _ = fmt.Fprintln(a.out, "\n## Recorded decisions\n"+decisionHistoryText(decisions))
 				_, _ = fmt.Fprintln(a.out, "\n## Queue")
 				a.printQueue(q)
 				if len(unbacked) > 0 {
@@ -654,7 +660,15 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 		return err
 	}
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
+	decisions, err := a.decisionHistory("")
+	if err != nil {
+		return err
+	}
 	p("%s\n", intro)
+	p("## Recorded decisions\n\n%s", decisionHistoryText(decisions))
+	if e := st.Emergency; e != nil && a.now.Before(e.Until) {
+		p("Guide-role grant until %s; original issuer %s; original words: %q. Use the existing grant; its expiry is unchanged.\n", e.Until.Format(time.RFC3339), e.By.Name, e.Reason)
+	}
 	p("## Pending state, %s\n", a.stamp(a.now))
 	if s != "" {
 		section(p, "Standing instructions", false, "")
