@@ -13,6 +13,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const deliveryGoldenEmpty = "empty"
+const deliveryGoldenJSON = ".json"
+const deliveryGoldenWait = "checks"
+
 // Exercise the command, not just its view helper: JSON keys, empty arrays,
 // durations, event statistics and text formatting are public output.
 func TestDeliveryOutputGoldens(t *testing.T) {
@@ -30,7 +34,7 @@ func TestDeliveryOutputGoldens(t *testing.T) {
 			for _, asJSON := range []bool{false, true} {
 				name := "populated"
 				if empty {
-					name = "empty"
+					name = deliveryGoldenEmpty
 				}
 				if stats {
 					name += "-stats"
@@ -39,7 +43,7 @@ func TestDeliveryOutputGoldens(t *testing.T) {
 				}
 				ext := ".txt"
 				if asJSON {
-					ext = ".json"
+					ext = deliveryGoldenJSON
 				}
 				t.Run(name+ext, func(t *testing.T) {
 					a, out := supervisorApp(t)
@@ -47,7 +51,7 @@ func TestDeliveryOutputGoldens(t *testing.T) {
 					// Zero/off and a configured limit both have fixed output.
 					if !empty {
 						a.cfg.Delivery.WIPLimit = 4
-						active := state.Delivery{Ref: "example/project#1", Pulls: []string{"example/project#11"}, Step: state.DeliveryCI, Since: start.Add(22 * time.Hour), Started: start.Add(20 * time.Hour), Agent: "worker", Waits: "checks"}
+						active := state.Delivery{Ref: "example/project#1", Pulls: []string{"example/project#11"}, Step: state.DeliveryCI, Since: start.Add(22 * time.Hour), Started: start.Add(20 * time.Hour), Agent: workerRole, Waits: deliveryGoldenWait}
 						done := state.Delivery{Ref: "example/project#2", Pulls: []string{"example/project#12"}, Step: state.DeliveryDone, Since: start.Add(3 * time.Hour), Started: start, Verdict: state.DeliveryNoRelease}
 						seed(t, a, func(st *state.State) {
 							// Deliberately reversed: output must sort by reference.
