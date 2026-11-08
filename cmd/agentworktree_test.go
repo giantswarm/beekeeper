@@ -125,6 +125,7 @@ func TestLoopStartKeepsAgentsDir(t *testing.T) {
 }
 
 func TestPrepareStartWorktree(t *testing.T) {
+	const preservedContents = "keep"
 	ctx := context.Background()
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote")
@@ -146,7 +147,7 @@ func TestPrepareStartWorktree(t *testing.T) {
 	// Advance the remote after cloning: work must start from the fetched tip.
 	git(remote, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "new tip")
 	tip := git(remote, "rev-parse", "HEAD")
-	if err := os.WriteFile(filepath.Join(checkout, "personal-edit"), []byte("keep"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(checkout, "personal-edit"), []byte(preservedContents), 0600); err != nil {
 		t.Fatal(err)
 	}
 	a := &app{cfg: &config.Config{}}
@@ -182,7 +183,7 @@ func TestPrepareStartWorktree(t *testing.T) {
 	// A stale legacy review checkout, even with edits, must not block a start.
 	legacy := filepath.Join(a.cfg.StateDir, "worktrees", "repo", "review-42")
 	git(checkout, "worktree", "add", "--detach", legacy, tip)
-	if err := os.WriteFile(filepath.Join(legacy, "review-edits"), []byte("keep"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(legacy, "review-edits"), []byte(preservedContents), 0600); err != nil {
 		t.Fatal(err)
 	}
 	rules, err = a.prepareStartWorktree(ctx, checkout, "", "Review https://github.com/example/repo/pull/42", true, false)
@@ -211,7 +212,7 @@ func TestPrepareStartWorktree(t *testing.T) {
 	if got := git(review, "rev-parse", "HEAD"); got != tip {
 		t.Fatalf("prior checkout changed: %s", got)
 	}
-	if data, err := os.ReadFile(filepath.Join(legacy, "review-edits")); err != nil || string(data) != "keep" {
+	if data, err := os.ReadFile(filepath.Join(legacy, "review-edits")); err != nil || string(data) != preservedContents {
 		t.Fatalf("legacy edits changed: %q, %v", data, err)
 	}
 	a.cfg.Agents.WorktreesDir = filepath.Join(root, "custom-worktrees")
