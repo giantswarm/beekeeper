@@ -1,0 +1,20 @@
+{
+  "since": "2026-01-01T00:00:00Z",
+  "until": "2026-01-02T00:00:00Z",
+  "steps": [
+    {
+      "step": "ci",
+      "median": 7200000000000,
+      "worst": 7200000000000,
+      "samples": 1
+    },
+    {
+      "step": "implementing",
+      "median": 9000000000000,
+      "worst": 10800000000000,
+      "samples": 2
+    }
+  ],
+  "released": 1,
+  "releasedPerDay": 1
+}
