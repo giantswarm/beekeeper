@@ -367,3 +367,39 @@ func TestSelfUpdateStageCanaryFlag(t *testing.T) {
 		t.Fatalf("unexpected canary output:\nfile=%s\nstdout=%s", written, out.String())
 	}
 }
+
+// Live checks can be unavailable without diagnosing a defective candidate.
+func TestProbationHealthClassifiesCanaryFailures(t *testing.T) {
+	prev := runCanaryCheck
+	t.Cleanup(func() { runCanaryCheck = prev })
+	for _, check := range canaryChecks {
+		name := strings.Join(check, " ")
+		t.Run(name, func(t *testing.T) {
+			runCanaryCheck = func(_ context.Context, _ string, args ...string) (string, error) {
+				if slices.Equal(args, check) {
+					return "check unavailable", errors.New("exit status 1")
+				}
+				return "ok", nil
+			}
+			err := probationHealth(context.Background(), "", "candidate")
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("lost failed check: %v", err)
+			}
+			if got, want := errors.Is(err, update.ErrHealthUnproven), name != hostVersionFlag; got != want {
+				t.Fatalf("unproven = %v, want %v: %v", got, want, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runCanaryCheck = func(ctx context.Context, _ string, _ ...string) (string, error) {
+		return "", ctx.Err()
+	}
+	if err := probationHealth(ctx, "", "candidate"); !errors.Is(err, update.ErrHealthUnproven) {
+		t.Fatalf("cancellation diagnosed a broken candidate: %v", err)
+	}
+	runCanaryCheck = func(context.Context, string, ...string) (string, error) { return "ok", nil }
+	if err := probationHealth(context.Background(), "", "candidate"); err != nil {
+		t.Fatalf("healthy candidate: %v", err)
+	}
+}

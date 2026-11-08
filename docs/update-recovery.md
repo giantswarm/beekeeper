@@ -135,7 +135,12 @@ to the new verified release, and the recovery target stays the last known good.
 A process of another version proves nothing about the candidate, so its update is
 refused while probation is pending; run the installed binary instead.
 `beekeeper self-update --complete-probation` ends probation at once, with the same
-checks. No elapsed timeout or plugin sync alone counts as successful probation.
+checks. Live budget, supervisor status and capacity failures leave probation
+pending and return their cause, so completion can be retried when evidence is
+available. Cancellation also leaves probation pending. Only a failed offline
+version probe quarantines the candidate during these local checks. The same
+rule applies when a later unsupervised update settles probation. No elapsed
+timeout or plugin sync alone counts as successful probation.
 
 A completed automatic rollback lifts the broad writer ceiling after rechecking
 restored-version compatibility under the state and commit locks. The durable

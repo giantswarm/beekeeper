@@ -385,6 +385,9 @@ func (i *installation) settleProbation(ctx context.Context, health Health) error
 	}
 	if health != nil {
 		if err := health(ctx, i.target, j.Candidate.Version); err != nil {
+			if errors.Is(err, ErrHealthUnproven) || ctx.Err() != nil {
+				return err
+			}
 			if j.Quarantine == nil {
 				j.Quarantine = map[string]string{}
 			}
