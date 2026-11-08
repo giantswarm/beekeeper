@@ -21,15 +21,15 @@ func TestDeliveryWIPInFlightBounds(t *testing.T) {
 		{name: "abandoned review", step: state.DeliveryReviewQueued, age: 10 * time.Minute},
 		{name: "abandoned fixer", step: state.DeliveryFixing, age: time.Hour},
 		{name: "live reviewer", step: state.DeliveryReviewing, age: 24 * time.Hour, live: true, want: true},
-		{name: "ended worker", step: state.DeliveryCI, age: 24 * time.Hour, live: true, done: true},
+		{name: endedName, step: state.DeliveryCI, age: 24 * time.Hour, live: true, done: true},
 		{name: "outside ownership", step: state.DeliveryCI, age: time.Minute, live: true, outside: true},
 		{name: "released", step: state.DeliveryDone, age: time.Minute, live: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := state.Delivery{Ref: "example/project#1", Step: tc.step, Since: now.Add(-tc.age), Agent: "worker", OutsideDesk: tc.outside}
+			d := state.Delivery{Ref: "example/project#1", Step: tc.step, Since: now.Add(-tc.age), Agent: workerRole, OutsideDesk: tc.outside}
 			st := &state.State{DeliveriesAt: now.Add(-5 * time.Minute), Deliveries: []state.Delivery{d}}
 			if tc.live {
-				st.Agents = []state.Agent{{Party: state.Party{Name: "worker"}, Task: "work", Done: tc.done}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: task, Done: tc.done}}
 			}
 			v := readDeliveryWIP(st, 2, time.Second, now, policy)
 			if (v.Count == 1) != tc.want || v.Reason != "" {
@@ -45,7 +45,7 @@ func TestDeliveryWIPInFlightBounds(t *testing.T) {
 func TestDeliveryPartialObservationRetainsCountAndStarts(t *testing.T) {
 	now := time.Now().UTC()
 	st := &state.State{DeliveriesAt: now.Add(-5 * time.Minute)}
-	st.StartDelivery("example/project#1", "worker", "", now.Add(-time.Hour))
+	st.StartDelivery("example/project#1", workerRole, "", now.Add(-time.Hour))
 	if v := readDeliveryWIP(st, 2, time.Second, now); v.Count != 1 || v.Reason != "" {
 		t.Fatal(v)
 	}

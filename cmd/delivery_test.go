@@ -263,7 +263,7 @@ func TestDeliveryStatsWindowAndDuplicates(t *testing.T) {
 func TestDeliverySharedStatusAndReportReading(t *testing.T) {
 	a, out := supervisorApp(t)
 	seed(t, a, func(st *state.State) {
-		st.Deliveries = []state.Delivery{{Ref: refOne, Step: state.DeliveryUnknown}, {Ref: idleRef, Step: state.DeliveryDone}}
+		st.Deliveries = []state.Delivery{{Ref: refOne, Step: state.DeliveryUnknown, Since: a.timeNow()}, {Ref: idleRef, Step: state.DeliveryDone}}
 	})
 	a.cfg.Delivery.WIPLimit = 5
 	if err := a.supervisorStatus(); err != nil {
