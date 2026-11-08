@@ -221,7 +221,7 @@ with central configured), 125 a newer release (self-update --check).`,
 			// Admission must never wait for the first-run plugin sync (which
 			// may fetch GitHub and take two minutes). The next ordinary command
 			// still performs it.
-			if cmd.Name() == "budget" {
+			if cmd.Name() == fatalBudgetCommand {
 				return nil
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)

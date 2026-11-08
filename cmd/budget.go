@@ -29,7 +29,7 @@ func (a *app) budgetCmd() *cobra.Command {
 	var floor int
 	var buckets []string
 	c := &cobra.Command{
-		Use:   "budget",
+		Use:   fatalBudgetCommand,
 		Short: "The GitHub REST, GraphQL and search budget every session draws from, and who is drawing",
 		Long: `Read the stored gh login and the configured devctl App login explicitly,
 independent of the working directory or a gh link. Name both identities and
