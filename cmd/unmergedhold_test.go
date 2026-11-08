@@ -96,8 +96,14 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 		return nil, nil
 	}
 
+	// Leave one slot beyond the pending review reservation so this test
+	// exercises the repository backlog gate and its recovery.
+	const backlogCapacity = `{"ceiling":2,"room":2}`
 	var starts []string
 	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity {
+			return backlogCapacity, 0
+		}
 		if len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName {
 			starts = append(starts, args[2])
 		}
