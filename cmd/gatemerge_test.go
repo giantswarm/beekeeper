@@ -588,34 +588,35 @@ func TestSquashArgv(t *testing.T) {
 	}
 }
 
-func TestNonDevctlUpdateBranchRefused(t *testing.T) {
+func TestUpdateBranchRefused(t *testing.T) {
 	for _, flag := range []string{"--update-branch", "--update-branch=true"} {
 		t.Run(flag, func(t *testing.T) {
 			a := busyLaneApp(t)
-			const repo = "other/project"
-			var err error
-			stderr := gateStderr(t, func() {
-				err = a.gate(context.Background(), mergeArgv(repo, flag), 0, 0, false)
-			})
-			if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") ||
-				!strings.Contains(stderr, "outside merge.devctlOwners") || !strings.Contains(stderr, "cannot update the branch") {
-				t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
-			}
-			if placeOf(t, a) >= 0 {
-				t.Fatal("refused merge took a lane place")
-			}
-
-			// A queued run from an older version must not launch a squash merge.
-			g := &gateRun{app: a, repo: repo, pr: 7, argv: mergeArgv(repo, flag)}
-			stderr = gateStderr(t, func() {
-				argv, routeErr := g.mergeArgv()
-				err = routeErr
-				if len(argv) != 0 {
-					t.Errorf("refused route produced argv %v", argv)
+			for _, repo := range []string{"other/project", scratchRepo} {
+				var err error
+				stderr := gateStderr(t, func() {
+					err = a.gate(context.Background(), mergeArgv(repo, flag), 0, 0, false)
+				})
+				if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") ||
+					!strings.Contains(stderr, "disabled") || !strings.Contains(stderr, "cannot update the branch") {
+					t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
 				}
-			})
-			if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") {
-				t.Fatalf("launch exit %d (%v), stderr %q", Code(err), err, stderr)
+				if placeOf(t, a) >= 0 {
+					t.Fatal("refused merge took a lane place")
+				}
+
+				// A queued run from an older version must not update either route.
+				g := &gateRun{app: a, repo: repo, pr: 7, argv: mergeArgv(repo, flag)}
+				stderr = gateStderr(t, func() {
+					argv, routeErr := g.mergeArgv()
+					err = routeErr
+					if len(argv) != 0 {
+						t.Errorf("refused route produced argv %v", argv)
+					}
+				})
+				if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") {
+					t.Fatalf("launch exit %d (%v), stderr %q", Code(err), err, stderr)
+				}
 			}
 		})
 	}
@@ -1110,7 +1111,7 @@ func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 }
 
 // The gate gives devctl pr merge merge.ciTimeout as its --timeout, which a
-// CI restarted by --update-branch fits into; a --timeout the command names
+// CI wait fits into; a --timeout the command names
 // is the caller's and stays the only one.
 func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 	for _, c := range []struct {
@@ -1119,7 +1120,7 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 		want     string
 		override time.Duration
 	}{
-		{"90 minute pipeline", []string{"--update-branch"}, "--timeout 2h0m0s", 0},
+		{"90 minute pipeline", nil, "--timeout 2h0m0s", 0},
 		{"repository override", nil, "--timeout 3h0m0s", 3 * time.Hour},
 		{"named", []string{"--timeout", "9m"}, "--timeout 9m", 3 * time.Hour},
 	} {

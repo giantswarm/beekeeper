@@ -223,18 +223,15 @@ func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 	}
 }
 
-func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
+func TestReviewedRebaseMergeKeepsABehindHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	// The base requires up-to-date branches and the desk merges without
-	// --admin: only a base merge would bring the branch up to date, which a
-	// rebase merge cannot take.
 	r.pull.MergeState = mergeStateBehind
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
-	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
+	if doc.ExitCode != 0 || r.lastMerged != loopHead {
 		t.Fatalf("behind rebase merge: %+v %v", doc, r.cmds)
 	}
 }

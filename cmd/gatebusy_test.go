@@ -5,13 +5,11 @@ package cmd
 import (
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
-	"github.com/giantswarm/beekeeper/internal/merge"
 )
 
 // busyDoc is devctl's document of a head whose base moved during every one
@@ -42,79 +40,6 @@ func busyGate(t *testing.T, budget, pause time.Duration) *gateRun {
 	g.argv = mergeArgv(scratchRepo, "--update-branch")
 	g.cfg.Merge.BusyBudget = config.Duration{Duration: budget}
 	return g
-}
-
-// A merge whose base moved during every one of devctl's update waits keeps
-// its lane place, so no other gated merge of the repository moves its base,
-// and devctl runs again after a pause until it lands: the caller reads one
-// document, the merge's, and the budget spent is reported.
-func TestABusyBaseRunsDevctlAgainInItsLanePlace(t *testing.T) {
-	count := busyDevctl(t, 2)
-	g := busyGate(t, time.Hour, 400*time.Millisecond)
-	stdout := gateStdout(t)
-	done, output := make(chan error, 1), make(chan string, 1)
-	go func() {
-		var err error
-		output <- gateStderr(t, func() { err = g.runMerge() })
-		done <- err
-	}()
-	for runs(t, count) < 1 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	time.Sleep(100 * time.Millisecond) // in the pause after the first run
-	if q := merge.Queue(gateState(t, g), scratchRepo); q.Running == nil || q.Running.PR != 7 {
-		t.Errorf("during the pause lane %s runs %+v, want o/r#7 holding its place", scratchRepo, q.Running)
-	}
-	stderr := <-output
-	if err := <-done; err != nil {
-		t.Fatalf("the merge after two busy runs: %v", err)
-	}
-	if n := runs(t, count); n != 3 {
-		t.Errorf("devctl ran %d times, want 3", n)
-	}
-	if got := stdout(); got != mergedDoc {
-		t.Errorf("the caller read %q, want the merge's document alone", got)
-	}
-	for _, want := range []string{
-		"the base moved during every wait of devctl run 1 (", "of the busy-base budget 1h0m0s spent): the merge keeps its lane place, and devctl runs again in 400ms",
-		"devctl run 3 landed the merge on the busy base",
-	} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("stderr lacks %q:\n%s", want, stderr)
-		}
-	}
-	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
-		t.Errorf("merged event: %q", d)
-	}
-}
-
-// A base still busy once merge.busyBudget is spent ends the run with
-// devctl's exit 3, its reason naming the spent budget, and the merge leaves
-// its lane.
-func TestABusyBaseEndsOnceItsBudgetIsSpent(t *testing.T) {
-	count := busyDevctl(t, 99)
-	g := busyGate(t, 300*time.Millisecond, 100*time.Millisecond)
-	stdout := gateStdout(t)
-	var err error
-	stderr := gateStderr(t, func() { err = g.runMerge() })
-	if Code(err) != 3 {
-		t.Fatalf("exit %d, want devctl's 3", Code(err))
-	}
-	if n := runs(t, count); n < 2 || n > 4 {
-		t.Errorf("devctl ran %d times, want the runs the budget fits", n)
-	}
-	if got := stdout(); got != busyDoc {
-		t.Errorf("the caller read %q, want the last document alone", got)
-	}
-	if !strings.Contains(stderr, busySpent+": ") || !strings.Contains(stderr, "merge.busyBudget 300ms; nothing merged") {
-		t.Errorf("stderr names no spent budget:\n%s", stderr)
-	}
-	if d := lastEvent(t, g, "merge.failed"); !strings.Contains(d, busySpent) {
-		t.Errorf("merge.failed event names no spent budget: %q", d)
-	}
-	if st := gateState(t, g); len(st.Merges) != 0 {
-		t.Errorf("a run with nothing merged keeps a place: %+v", st.Merges)
-	}
 }
 
 // Without --update-branch devctl's exit 3 is the caller's: devctl runs once.
