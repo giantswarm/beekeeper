@@ -351,7 +351,7 @@ func TestThroughputCheckpointPreservesEligibility(t *testing.T) {
 	r := newLoopRig(t)
 	now := r.a.timeNow()
 	wait := eligibleWait{Head: loopHead, URL: loopURL, Since: now.Add(-time.Hour)}
-	old := throughputObservation{At: now.Add(-10 * time.Minute), Candidate: "previous", Eligible: map[string]eligibleWait{loopPR: wait}}
+	old := throughputObservation{At: now.Add(-10 * time.Minute), Candidate: testLoopOldVer, Eligible: map[string]eligibleWait{loopPR: wait}}
 	if err := r.a.store.WriteFile(throughputObservationFile, old); err != nil {
 		t.Fatal(err)
 	}
@@ -366,8 +366,11 @@ func TestThroughputCheckpointPreservesEligibility(t *testing.T) {
 	if found, err := r.a.store.ReadFile(throughputObservationFile, &got); err != nil || !found {
 		t.Fatalf("checkpoint missing: %v", err)
 	}
-	if !got.At.Equal(now) || got.Candidate != normalizeLoopVersion(loopRunningVersion()) || !got.Unknown || got.Eligible[loopPR] != wait {
-		t.Fatalf("checkpoint lost progress or eligibility: %+v", got)
+	if !got.At.Equal(now) || got.Candidate != normalizeLoopVersion(loopRunningVersion()) || !got.Unknown {
+		t.Fatalf("checkpoint lost progress: %+v", got)
+	}
+	if saved, ok := got.Eligible[loopPR]; !ok || saved.Head != wait.Head || saved.URL != wait.URL || !saved.Since.Equal(wait.Since) {
+		t.Fatalf("checkpoint lost eligibility: %+v", got.Eligible)
 	}
 	if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
 		t.Fatal(err)
