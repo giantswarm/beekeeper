@@ -1061,13 +1061,15 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 	}
 	var p struct {
 		Head struct {
-			Ref, SHA string
-			Repo     struct {
+			SHA  string
+			Repo struct {
 				FullName string `json:"full_name"`
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Head.Ref != branch || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
+	// Repair worktrees can publish to a PR from a differently named branch.
+	// The exact published commit and repository establish the match.
+	if json.Unmarshal(out, &p) != nil || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
 		return ""
 	}
 	return head
