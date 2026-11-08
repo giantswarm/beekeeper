@@ -128,6 +128,7 @@ type engine struct {
 	// order, paths the steps each named issue enters at a wall-clock time
 	// from forecastAt.
 	forecastAt  time.Time
+	mergeBlocks map[string]string
 	stopped     string
 	backlogRefs []string
 	nextRef     int
@@ -419,6 +420,9 @@ func (e *engine) startFix(i *issue) {
 func (e *engine) queueMerge(i *issue) {
 	i.readyAt = e.now
 	e.enter(i, StageMerging)
+	if e.mergeBlocks[i.ref] != "" {
+		return
+	}
 	e.laneQueues[i.lane] = append(e.laneQueues[i.lane], i)
 	e.mergeNext(i.lane)
 }

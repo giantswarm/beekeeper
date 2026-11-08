@@ -77,12 +77,15 @@ type Snapshot struct {
 	// Stopped names a standing stop or starts hold.
 	Stopped string `json:"stopped,omitempty"`
 	// Room and Blocks are capacity's verdict for a worker start.
-	Room      int            `json:"room"`
-	Blocks    []string       `json:"blocks,omitempty"`
-	Busy      int            `json:"busy"`
-	Parked    int            `json:"parked"`
-	Idle      int            `json:"idle"`
-	Providers []ProviderRoom `json:"providers,omitempty"`
+	Room int `json:"room"`
+	// StartBlocked excludes temporary occupancy of worker slots.
+	StartBlocked bool              `json:"startBlocked,omitempty"`
+	MergeBlocks  map[string]string `json:"mergeBlocks,omitempty"`
+	Blocks       []string          `json:"blocks,omitempty"`
+	Busy         int               `json:"busy"`
+	Parked       int               `json:"parked"`
+	Idle         int               `json:"idle"`
+	Providers    []ProviderRoom    `json:"providers,omitempty"`
 	// Reviewers names the busy review agents.
 	Reviewers      []string              `json:"reviewers,omitempty"`
 	Items          []Item                `json:"items"`
@@ -202,6 +205,7 @@ func Forecasting(m Model, s Snapshot, horizon time.Duration) Forecast {
 		return f
 	}
 	e.paths = map[string][]Transition{}
+	e.mergeBlocks = s.MergeBlocks
 	lanes := map[string]int{}
 	lane := func(ref string) int {
 		repo := repoOf(ref)
@@ -235,7 +239,7 @@ func Forecasting(m Model, s Snapshot, horizon time.Duration) Forecast {
 	}
 	// The free board items start as the slots allow, in the board's order.
 	free := s.Free()
-	if s.Room == 0 && len(s.Blocks) > 0 {
+	if s.StartBlocked {
 		free = nil
 	}
 	e.backlogRefs = append(e.backlogRefs, free...)
@@ -251,7 +255,10 @@ func Forecasting(m Model, s Snapshot, horizon time.Duration) Forecast {
 		if n := len(path); n > 0 && path[n-1].Step == state.DeliveryDone {
 			fc.ReleaseAt = path[n-1].At
 		}
-		if len(path) == 0 {
+		if why := s.MergeBlocks[it.Ref]; why != "" && fc.ReleaseAt.IsZero() {
+			fc.Stuck = why
+		}
+		if len(path) == 0 && fc.Stuck == "" {
 			fc.Stuck = e.whyStill(it)
 		}
 		f.Items = append(f.Items, fc)
@@ -262,6 +269,9 @@ func Forecasting(m Model, s Snapshot, horizon time.Duration) Forecast {
 			fc := ItemForecast{Ref: ref, Step: StepBoard, Since: s.At, Timeline: path}
 			if n := len(path); path[n-1].Step == state.DeliveryDone {
 				fc.ReleaseAt = path[n-1].At
+			}
+			if why := s.MergeBlocks[ref]; why != "" && fc.ReleaseAt.IsZero() {
+				fc.Stuck = why
 			}
 			f.Items = append(f.Items, fc)
 		}
@@ -328,7 +338,7 @@ func problems(s Snapshot) []Problem {
 		add(SeverityStop, "starts are stopped: "+s.Stopped)
 	}
 	free := s.Free()
-	if s.Room == 0 && len(s.Blocks) > 0 {
+	if s.StartBlocked {
 		add(SeverityStop, fmt.Sprintf("no start while %s wait: %s", plural(len(free), "free board item"), strings.Join(s.Blocks, "; ")), free...)
 	}
 	for _, p := range s.Providers {
@@ -529,6 +539,9 @@ func (e *engine) seed(it Item, lane int) {
 		e.take()
 		e.schedule(remaining(StageReviewing), func() { e.reviewed(i) })
 	case StageMerging:
+		if e.mergeBlocks[it.Ref] != "" {
+			return
+		}
 		i.approved = true
 		i.readyAt = -elapsed
 		e.laneQueues[lane] = append(e.laneQueues[lane], i)

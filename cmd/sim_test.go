@@ -247,3 +247,21 @@ func TestSimForecastAndCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestSimSnapshotMergeHolds(t *testing.T) {
+	a, _ := supervisorApp(t)
+	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	st := &state.State{Holds: []state.Hold{{Target: "o/r", Reason: "proof", At: at, Except: "o/r#13"}}}
+	s := sim.Snapshot{At: at, Items: []sim.Item{
+		{Ref: simTestRef, Pulls: []string{"o/r#12"}, Step: sim.StageMerging},
+		{Ref: "o/r#2", Pulls: []string{"o/r#13"}, Step: sim.StageMerging},
+		{Ref: "o/r#3", Pulls: []string{"o/r#14"}, Step: sim.StageReleasing},
+	}, Board: []sim.BoardItem{{Ref: "o/r#13"}}}
+	a.simMergeBlocks(st, &s)
+	if s.MergeBlocks[simTestRef] == "" || s.MergeBlocks["o/r#13"] == "" {
+		t.Fatalf("held merges not blocked: %v", s.MergeBlocks)
+	}
+	if s.MergeBlocks["o/r#2"] != "" || s.MergeBlocks["o/r#3"] != "" {
+		t.Fatalf("exception or merged release blocked: %v", s.MergeBlocks)
+	}
+}

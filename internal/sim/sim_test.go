@@ -427,6 +427,7 @@ func TestForecasting(t *testing.T) {
 
 	// No room: the items in flight move, the board waits.
 	full := s
+	full.StartBlocked = true
 	full.Room, full.Blocks = 0, []string{"12 busy at capacity.ceiling 12"}
 	f = Forecasting(Default(), full, 24*time.Hour)
 	wantProblem(SeverityStop, "no start while 2 free board items wait", refTwenty, "o/s#21")
@@ -500,5 +501,33 @@ func TestCheck(t *testing.T) {
 	}
 	if s := c.Summary(); !strings.HasPrefix(s, "2 of 8 items where the forecast said (2 ahead, 2 behind, 1 stuck as forecast, 1 gone)") {
 		t.Errorf("summary: %s", s)
+	}
+}
+
+// A pool that is full now makes room during the forecast. It is not a
+// standing capacity refusal. A held merge cannot release through the hold.
+func TestForecastOccupancyAndMergeHold(t *testing.T) {
+	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	s := Snapshot{At: at, LoopRunning: true, Busy: 1, Room: 0,
+		Blocks:      []string{"1 busy at the ceiling of 1"},
+		Items:       []Item{{Ref: testRef, Step: StageImplementing, Since: at, AgentState: AgentBusy}},
+		Board:       []BoardItem{{Ref: refTwo}},
+		MergeBlocks: map[string]string{testRef: "merge held: o/r"},
+	}
+	m := Default()
+	m.RedCI, m.ChangesRequested = 0, 0
+	f := Forecasting(m, s, 18*time.Hour)
+	if len(f.Starts) != 1 || !f.Starts[0].At.After(at) {
+		t.Fatalf("full pool never admits waiting board item: %+v", f.Starts)
+	}
+	for _, it := range f.Items {
+		if it.Ref == testRef && (!it.ReleaseAt.IsZero() || it.Stuck == "") {
+			t.Fatalf("held item released: %+v", it)
+		}
+	}
+	for i := 1; i < len(f.Totals); i++ {
+		if f.Totals[i].After <= f.Totals[i-1].After {
+			t.Fatalf("totals out of order: %+v", f.Totals)
+		}
 	}
 }

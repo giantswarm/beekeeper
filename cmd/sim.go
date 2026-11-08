@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sim"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -441,10 +442,16 @@ func (a *app) simSnapshot(ctx context.Context, stderr io.Writer, withBoard bool)
 		return sim.Snapshot{}, fmt.Errorf("capacity: %w", err)
 	}
 	s.Room, s.Blocks, s.Stopped = capacity.Room, capacity.Blocks, capacity.Stopped
+	for _, block := range s.Blocks {
+		if !strings.Contains(block, "busy") || !strings.Contains(block, "ceiling") {
+			s.StartBlocked = true
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(capacity.Providers)) {
 		p := capacity.Providers[name]
 		s.Providers = append(s.Providers, sim.ProviderRoom{Name: name, Busy: len(p.Busy), Ceiling: p.Ceiling, Room: p.Room})
 	}
+	a.simMergeBlocks(st, &s)
 	if !withBoard {
 		return s, nil
 	}
@@ -470,7 +477,45 @@ func (a *app) simSnapshot(ctx context.Context, stderr io.Writer, withBoard bool)
 	for _, c := range next.Skipped {
 		add(c)
 	}
+	a.simMergeBlocks(st, &s)
 	return s, nil
+}
+
+// simMergeBlocks uses the gate's hold verdict, including lane and PR exceptions.
+func (a *app) simMergeBlocks(st *state.State, s *sim.Snapshot) {
+	if s.MergeBlocks == nil {
+		s.MergeBlocks = map[string]string{}
+	}
+	check := func(ref string, pulls []string) {
+		if len(pulls) == 0 {
+			repo, _, _ := strings.Cut(ref, "#")
+			if h, held := merge.Blocking(st, s.At, repo, -1, a.cfg.LaneOf(repo)); held {
+				s.MergeBlocks[ref] = "merge held: " + h.Target + ": " + h.Reason
+			}
+			return
+		}
+		for _, pull := range pulls {
+			repo, pr, ok := splitPR(pull)
+			if !ok {
+				continue
+			}
+			if h, held := merge.Blocking(st, s.At, repo, pr, a.cfg.LaneOf(repo)); held {
+				s.MergeBlocks[ref] = "merge held: " + h.Target + ": " + h.Reason
+			}
+		}
+	}
+	for _, it := range s.Items {
+		if it.Step != sim.StageReleasing {
+			check(it.Ref, it.Pulls)
+		}
+	}
+	for _, it := range s.Board {
+		// A board issue has no PR yet; do not treat its issue number as a PR exception.
+		repo, _, _ := strings.Cut(it.Ref, "#")
+		if h, held := merge.Blocking(st, s.At, repo, -1, a.cfg.LaneOf(repo)); held {
+			s.MergeBlocks[it.Ref] = "merge held: " + h.Target + ": " + h.Reason
+		}
+	}
 }
 
 // simRunJSON runs one of this app's commands in process with --json and
