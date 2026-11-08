@@ -32,6 +32,8 @@ const (
 
 const replacementExe = "/new/bin/beekeeper"
 
+const dryRunMode = "dry-run"
+
 // fakeSetup is a service manager whose service is a unit file in the
 // home's unit directory and a guard file beside it.
 type fakeSetup struct {
@@ -1948,7 +1950,7 @@ func TestCodexStartPreservesInstallLifecycle(t *testing.T) {
 		}
 		start()
 		for _, path := range []string{e.CodexHooks, CodexWorkerHooks(e.StateDir)} {
-			raw, err := os.ReadFile(path)
+			raw, err := os.ReadFile(path) //nolint:gosec // synthetic hook fixtures inside t.TempDir()
 			if err != nil || string(raw) != priorCodexHooks {
 				t.Fatalf("uninstall/start did not preserve unrelated hooks: %v: %s", err, raw)
 			}
@@ -1957,7 +1959,7 @@ func TestCodexStartPreservesInstallLifecycle(t *testing.T) {
 }
 
 func TestUninstallLegacyCodexWorkerHook(t *testing.T) {
-	for _, mode := range []string{"generated", "customized", "symlink", "dry-run"} {
+	for _, mode := range []string{"generated", "customized", "symlink", dryRunMode} {
 		t.Run(mode, func(t *testing.T) {
 			home := t.TempDir()
 			f := &fakeSetup{}
@@ -1982,7 +1984,7 @@ func TestUninstallLegacyCodexWorkerHook(t *testing.T) {
 			} else {
 				write(t, path, string(raw))
 			}
-			e.DryRun = mode == "dry-run"
+			e.DryRun = mode == dryRunMode
 			// No manifest and no user Codex path: legacy starts alone created it.
 			if err := Uninstall(context.Background(), e, false); err != nil {
 				t.Fatal(err)
@@ -1998,7 +2000,7 @@ func TestUninstallLegacyCodexWorkerHook(t *testing.T) {
 					t.Fatal("worker start restored legacy hook")
 				}
 			} else {
-				got, err := os.ReadFile(path)
+				got, err := os.ReadFile(path) //nolint:gosec // synthetic hook fixtures inside t.TempDir()
 				if err != nil || !bytes.Equal(raw, got) {
 					t.Fatalf("uninstall changed protected file: %v", err)
 				}
