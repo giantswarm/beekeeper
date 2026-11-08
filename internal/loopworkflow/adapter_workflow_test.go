@@ -49,3 +49,14 @@ func TestFixtureWorkflowReadScope(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownFixtureCallPreservesFirstFailure(t *testing.T) {
+	dir := t.TempDir()
+	first := []byte(`["api","unsupported-first-operation"]`)
+	recordUnknownCall(dir, first)
+	recordUnknownCall(dir, []byte(`["api","follow-up-operation"]`))
+	got, err := os.ReadFile(filepath.Join(dir, "unknown-call")) //nolint:gosec // isolated temporary fixture
+	if err != nil || string(got) != string(first) {
+		t.Fatalf("first failure overwritten: %s, %v", got, err)
+	}
+}

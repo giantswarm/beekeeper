@@ -72,6 +72,9 @@ func Probe(parentCtx context.Context, binary, server, scratch string) error {
 			if parentCtx.Err() != nil {
 				return fmt.Errorf("%w: %w", ErrInconclusive, parentCtx.Err())
 			}
+			if unknown, readErr := os.ReadFile(p.path("unknown-call")); readErr == nil {
+				return fmt.Errorf("unrecognized external command: %s", unknown)
+			}
 			return fmt.Errorf("supervisor loop --once: %w: %s", err, tail(out))
 		}
 	}
