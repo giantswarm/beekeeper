@@ -32,6 +32,9 @@ const (
 	verbSet      = "set"
 	verbCreate   = "create"
 	verbEdit     = "edit"
+	verbReopen   = "reopen"
+	verbReview   = "review"
+	verbDiff     = "diff"
 	verbList     = "list"
 	verbClose    = "close"
 	verbComment  = "comment"
@@ -164,7 +167,7 @@ var (
 	dataWord = regexp.MustCompile(`(?i)\b(?:string)?data\b`)
 	shells   = map[string]bool{"sh": true, bashCmd: true, "zsh": true, litKsh: true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
 	hashCmds = map[string]bool{"sha256sum": true, "sha1sum": true, "sha224sum": true, "sha384sum": true, "sha512sum": true, "md5sum": true, "b2sum": true, "cksum": true, "shasum": true}
-	diffCmds = map[string]bool{"diff": true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
+	diffCmds = map[string]bool{verbDiff: true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
 	// wrapperValues: the options of wrappers that take a value.
 	wrapperValues = map[string]bool{"-u": true, "-g": true, "-n": true, "-s": true, "-k": true, "-C": true, "-P": true, "-L": true, "-I": true, "-E": true, "-d": true, "-a": true, userFlag: true, groupFlag: true, "--signal": true, "--kill-after": true, chdirFlag: true, "--unset": true}
 )
@@ -1641,7 +1644,7 @@ func (g secretGuard) toolLeak(words []string, copied map[string]string) *leak {
 		if f := secretFileArg(args); f != "" {
 			return &leak{what: "a hash of " + f + ", which a guess can be checked against", safe: fileSafe, never: true}
 		}
-	case diffCmds[name], name == gitCmd && len(sub) > 0 && sub[0] == "diff" && hasAny(args, "--no-index"):
+	case diffCmds[name], name == gitCmd && len(sub) > 0 && sub[0] == verbDiff && hasAny(args, "--no-index"):
 		if f := secretFileArg(args); f != "" {
 			return &leak{what: "a diff of " + f + ", which prints its values", safe: fileSafe, never: true}
 		}

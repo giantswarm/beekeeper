@@ -1006,6 +1006,9 @@ func githubSend(ctx context.Context, method, target, accept, auth string, form u
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
+	if strings.HasPrefix(target, githubAPI+"/") {
+		github.ObserveRESTCall("cmd.githubSend")
+	}
 	return githubClient.Do(req)
 }
 

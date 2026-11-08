@@ -114,3 +114,17 @@ func TestBudgetAndWatchNameFinishedGitHubCaller(t *testing.T) {
 		t.Fatal(out.String())
 	}
 }
+
+func TestRESTAttributionSeparatesResources(t *testing.T) {
+	a, _ := budgetApp(t)
+	reset := a.now.Add(time.Minute)
+	for _, verb := range []string{verbGitHubCall, verbGitHubRESTCall} {
+		if err := a.store.Record(state.Event{At: a.now.Add(-time.Second), By: state.Party{Name: "beekeeper loop"}, Verb: verb, Detail: `{"class":"internal/github.Probe"}`}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	callers, err := githubResourceCallers(a, reset, verbGitHubRESTCall)
+	if err != nil || len(callers) != 1 || callers[0].Session != "beekeeper loop" || callers[0].Calls != 1 {
+		t.Fatalf("REST callers %+v: %v", callers, err)
+	}
+}

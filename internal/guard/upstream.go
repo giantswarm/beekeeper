@@ -42,13 +42,13 @@ const (
 
 // ghWrites are the gh subcommands and verbs that write to a repository.
 var ghWrites = map[string]map[string]bool{
-	"pr": {verbCreate: true, verbComment: true, "review": true, verbClose: true, verbEdit: true, "ready": true, "merge": true,
-		"reopen": true, "lock": true, verbUnlock: true, "update-branch": true},
-	"issue": {verbCreate: true, verbComment: true, verbClose: true, verbEdit: true, "reopen": true, "lock": true, verbUnlock: true,
+	"pr": {verbCreate: true, verbComment: true, verbReview: true, verbClose: true, verbEdit: true, "ready": true, "merge": true,
+		verbReopen: true, "lock": true, verbUnlock: true, "update-branch": true},
+	ghIssueSub: {verbCreate: true, verbComment: true, verbClose: true, verbEdit: true, verbReopen: true, "lock": true, verbUnlock: true,
 		verbDelete: true, "transfer": true, "pin": true, "unpin": true, "develop": true},
-	"release":  {verbCreate: true, verbEdit: true, verbDelete: true, "upload": true, "delete-asset": true},
-	"label":    {verbCreate: true, verbEdit: true, verbDelete: true, litClone: true},
-	ghRepoVerb: {verbEdit: true, verbDelete: true, "archive": true, "unarchive": true, "rename": true},
+	ghReleaseSub: {verbCreate: true, verbEdit: true, verbDelete: true, "upload": true, "delete-asset": true},
+	"label":      {verbCreate: true, verbEdit: true, verbDelete: true, litClone: true},
+	ghRepoVerb:   {verbEdit: true, verbDelete: true, "archive": true, "unarchive": true, "rename": true},
 }
 
 // ghValued are the flags of gh's pr, issue, release, label and repo verbs

@@ -38,6 +38,8 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	if err != nil {
 		return []BudgetCredential{{Identity: IdentityGH, Err: err}}
 	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
 	env := budgetEnv(os.Environ())
 	personal := budgetCredential(ctx, IdentityGH, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
 	result := []BudgetCredential{personal}
@@ -47,6 +49,7 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	}
 	status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
 	status.Env = env
+	status.WaitDelay = 100 * time.Millisecond
 	// The overall exit status covers other providers too (for example CircleCI).
 	// Its stdout can still contain usable GitHub metadata.
 	raw, _ := status.Output()
@@ -99,6 +102,7 @@ func budgetDevctl() (string, error) {
 func budgetCredential(ctx context.Context, identity, bin string, args, env []string) BudgetCredential {
 	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // fixed auth commands and executable resolved on PATH
 	c.Env = env
+	c.WaitDelay = 100 * time.Millisecond
 	raw, err := c.Output()
 	if err != nil {
 		return BudgetCredential{Identity: identity, Err: fmt.Errorf("%s credential unavailable: %w", identity, err)}

@@ -135,6 +135,7 @@ func (s *tagSource) ListReleases(ctx context.Context, repository selfupdate.Repo
 	if err != nil {
 		return nil, err
 	}
+	deskgithub.ObserveRESTCall("update.tagSource.ListReleases")
 	release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, s.tag)
 	if response != nil && response.StatusCode == http.StatusNotFound {
 		return nil, nil
@@ -161,6 +162,7 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 			return nil, err
 		}
 		var response *github.Response
+		deskgithub.ObserveRESTCall("update.githubSource.ListReleases.refs")
 		refs, response, err = s.api.Git.ListMatchingRefs(ctx, owner, repo, "tags/v")
 		if err != nil {
 			if response != nil && response.StatusCode == http.StatusNotFound {
@@ -219,6 +221,7 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 			skipped = append(skipped, candidate.tag+": "+stale)
 			continue
 		}
+		deskgithub.ObserveRESTCall("update.githubSource.ListReleases.release")
 		release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, candidate.tag)
 		if response != nil && response.StatusCode == http.StatusNotFound {
 			skipped = append(skipped, candidate.tag+": no release")
@@ -436,6 +439,7 @@ func (s *githubSource) isBehind(ctx context.Context, owner, repo, base, head str
 	if base == "" || head == "" || sameCommit(base, head) {
 		return false, nil
 	}
+	deskgithub.ObserveRESTCall("update.githubSource.compare")
 	comp, resp, err := s.api.Repositories.CompareCommits(ctx, owner, repo, base, head, nil)
 	if resp != nil && resp.StatusCode == http.StatusNotFound {
 		return false, nil
