@@ -170,7 +170,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	} else if line != "" {
 		_, _ = fmt.Fprintln(l.a.out, line)
 	}
-	evs, err := l.a.store.Events(0, func(e state.Event) bool {
+	evs, err := l.a.store.Follow("supervisor-watch-conditions", func(e state.Event) bool {
 		return strings.HasPrefix(e.Verb, "watch.") || e.Verb == "supervisor.disk" || e.Verb == loopFileVerb || e.Verb == loopClaimVerb || e.Verb == "disk.prune"
 	})
 	if err != nil {

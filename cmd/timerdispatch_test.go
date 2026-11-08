@@ -412,3 +412,27 @@ func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
 		t.Fatal("retry lost its due occurrence", fires)
 	}
 }
+
+type timerWriteCountingStore struct {
+	state.Store
+	updates int
+}
+
+func (s *timerWriteCountingStore) Update(fn func(*state.State) ([]state.Event, error)) error {
+	s.updates++
+	return s.Store.Update(fn)
+}
+
+func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
+	a, _ := stubApp(t)
+	store := &timerWriteCountingStore{Store: a.store}
+	a.store = store
+	w, err := a.dispatchTimerPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.timerActs.Wait()
+	if store.updates != 0 {
+		t.Fatalf("idle timer dispatch rewrote state %d times", store.updates)
+	}
+}
