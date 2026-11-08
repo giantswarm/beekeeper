@@ -50,6 +50,7 @@ const (
 	deliveryScenario = "delivery"
 	dataField        = "data"
 	statusField      = "status"
+	numberField      = "number"
 	repositoryField  = "repository"
 	sessionIDField   = "sessionId"
 	fixtureRepo      = "fixture/project"

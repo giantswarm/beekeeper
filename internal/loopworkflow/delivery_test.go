@@ -106,7 +106,7 @@ func TestSupervisorWorkflowDeliveryLimit(t *testing.T) {
 		must(err)
 		var pull map[string]any
 		must(json.Unmarshal(raw, &pull))
-		pull["closingIssuesReferences"] = []any{map[string]any{"number": 2, "url": "https://github.com/fixture/project/issues/2", "repository": map[string]any{"nameWithOwner": "fixture/project"}}}
+		pull["closingIssuesReferences"] = []any{map[string]any{numberField: 2, "url": "https://github.com/fixture/project/issues/2", "repository": map[string]any{"nameWithOwner": "fixture/project"}}}
 		edit(pull)
 		raw, err = json.Marshal(pull)
 		must(err)
