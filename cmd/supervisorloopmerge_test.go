@@ -225,6 +225,7 @@ func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 
 func TestReviewedRebaseMergeKeepsABehindHead(t *testing.T) {
 	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
