@@ -819,7 +819,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	}
 
 	// Verify the candidate passes isolated command checks without touching live config/state.
-	for _, args := range [][]string{{"version"}, {"supervisor", "status"}} {
+	for _, args := range [][]string{{"version"}, {"supervisor", statusField}} {
 		if _, err := runCmd(dir, candidatePath, args...); err != nil {
 			return "", fmt.Errorf("candidate %s: %w", strings.Join(args, " "), err)
 		}
