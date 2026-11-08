@@ -17,6 +17,8 @@ import (
 
 const loopDiskKind = "disk"
 
+const loopDiskPruneFailed = "prune failed: "
+
 // The installed loop owns a watch for its entire lifetime. Use a separate
 // app value: both loops update their clock and transcript cache.
 var runLoopWatch = func(ctx context.Context, w *watcher) error { return w.run(ctx, false) }
@@ -176,6 +178,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	var diskKey string
 	var diskAt time.Time
 	pruned := map[string]time.Time{}
+	pruneFailures := map[string]string{}
 	filed := map[string]bool{}
 	claims := map[string]time.Time{}
 	var lastPrune time.Time
@@ -199,8 +202,11 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			}
 		case "supervisor.disk":
 			key, what, ok := keyed(e.Detail)
-			if ok && what == "pruned" {
+			if ok && (what == "pruned" || strings.HasPrefix(what, loopDiskPruneFailed)) {
 				pruned[key] = e.At
+				if reason, failed := strings.CutPrefix(what, loopDiskPruneFailed); failed {
+					pruneFailures[key] = reason
+				}
 			}
 			// "noted" is the verb of the person notes an older loop filed
 			// for an episode; it counts as filed, so an upgrade does not
@@ -258,6 +264,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 		active[loopDiskKind] = disk.Writers
 		act := superloop.Action{Kind: loopDiskKind, Key: diskKey}
 		if at, ok := pruned[diskKey]; !ok {
+			outcome := "pruned"
 			claim, claimed := claims[diskKey]
 			if !claimed || lastPrune.Before(claim) {
 				if err := l.claim(act, "disk prune"); err != nil {
@@ -265,9 +272,10 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 				}
 				if _, err := l.run(ctx, loopDiskKind, "prune", "--apply"); err != nil {
 					l.sayOnce(diskKey+" prune", "SUPERVISOR DISK prune failed; starts remain held: %v", err)
+					outcome = loopDiskPruneFailed + oneLine(err.Error())
 				}
 			}
-			if err := l.record(act, "pruned"); err != nil {
+			if err := l.record(act, outcome); err != nil {
 				return err
 			}
 		} else if diskAt.After(at) && !filed[diskKey] {
@@ -277,7 +285,10 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			// channel to the guide, which files it in its owning
 			// repository. The hold stays while free space stays under the
 			// floor; it lifts on its own once the watch reports recovery.
-			text := fmt.Sprintf("Disk remains low after pruning; every worker start is held: free disk / %d MiB (floor %d MiB). Writers: %s", disk.FreeMiB, disk.MinMiB, disk.Writers)
+			text := fmt.Sprintf("P1: Disk remains low after pruning; every worker start is held: free disk / %d MiB (floor %d MiB). Writers: %s", disk.FreeMiB, disk.MinMiB, disk.Writers)
+			if reason := pruneFailures[diskKey]; reason != "" {
+				text += ". Cleanup failed: " + reason
+			}
 			var holding diskHolding
 			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.timeNow().Sub(holding.At) < time.Hour {
 				text += ". Holding the space: " + holding.Text
