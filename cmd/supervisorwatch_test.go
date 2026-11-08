@@ -196,7 +196,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	prunes := 0
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == loopDiskKind && args[1] == "prune" {
+		if len(args) > 1 && args[0] == loopDiskKind && args[1] == litPrune {
 			prunes++
 			return "partial prune failed", 1
 		}
@@ -234,6 +234,55 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR DISK") {
 		t.Fatal("maintenance failure not reported")
+	}
+}
+
+// A failed cleanup's cause must survive the loop restarting before the next
+// disk sample: the guide needs the cause, not just the usage-level hold.
+func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
+	r := newLoopRig(t)
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == loopDiskKind && args[1] == litPrune {
+			return "cleanup unavailable", 1
+		}
+		return "", 0
+	}
+	w := r.a.newWatcher(false, false)
+	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+	r.pass(t)
+	if findings := r.logged(t, loopFileVerb); len(findings) != 0 {
+		t.Fatalf("alarm before a post-cleanup sample: %+v", findings)
+	}
+	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 2, MinMiB: 100})
+	r.pass(t) // Each rig pass creates a fresh supervisor loop.
+	findings := r.logged(t, loopFileVerb)
+	if len(findings) != 1 {
+		t.Fatalf("disk findings: %+v", findings)
+	}
+	for _, want := range []string{"P1:", "every worker start is held", "2 MiB (floor 100 MiB)", "Cleanup failed:", "cleanup unavailable"} {
+		if !strings.Contains(findings[0].Detail, want) {
+			t.Errorf("finding missing %q: %s", want, findings[0].Detail)
+		}
+	}
+	lines, changed := guideProblemLines(&state.State{}, findings)
+	if !changed || len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE PROBLEM: ") || !strings.Contains(lines[0], "cleanup unavailable") {
+		t.Fatalf("cleanup failure did not reach guide: %v", lines)
+	}
+	r.pass(t)
+	if findings := r.logged(t, loopFileVerb); len(findings) != 1 {
+		t.Fatalf("duplicate failure alarm: %+v", findings)
+	}
+	w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if l.startsHeld {
+		t.Fatal("cleanup failure prevented automatic recovery")
 	}
 }
 
