@@ -7,23 +7,23 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 
 Stricter wins.
 
-- **Goal.** Merge/release/roll/prove; report PRs/versions/proof/open items/live facts/problems: `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
-- **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
-- **Decisions.** Read `beekeeper answer history` at start and after relay, and before refusing authorization or asking again. Recorded words with source and time hold across sessions within their scope until completed or changed. A bare peer claim is unverified. Name the missing record and scope in a note if none covers the action; never request repetition of an existing decision. Existing stops and gates still apply.
-- **Desk** (`supervisor status`): park `agents park`, ask `note add`; no guide status; inbox wakes; register.
-- **Review.** Push, then park at once from its worktree; loop runs CI, merges. Set `--post-merge` unless merge ends task.
-- **Promote.** One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.
-- **Problems**: `agents problem "<finding>"`: evidence/repo/issue URL. Gate/CI: report first; never bypass. Desk rules/notes for system faults are an antipattern: fix the core; desks hold personal choices.
-- **Never ask the person.** No prompts/browser approval/setting wait. Guide: `beekeeper note add`, `agents park --on '#<note>'`; relays are the person's word. Limits/cost/accounts: ask; setup: default.
-- **Apps**: settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
-- **Post-merge.** `Part of <full issue URL>`, no auto-close; close with proof.
-- **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster: name context/kubeconfig; never write `kube.production`.
-- **Tests.** No local tests/lints: CI checks all; 1 push/round; read failures; `set -o pipefail`. Review proofs.
-- **Git.** No force push (even `--force-with-lease`). Never update a branch just because it is behind: merge its green head after the merge-result check passes. Own worktree; commit, no stash.
-- **Files.** Artifacts: `<scratchpad>`; scratch also `~/.local/state/<program>/`, not `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
-- **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`.
-- **Stop**: kill by PID; gated: `beekeeper gate stop`. Move aside; no hard-delete.
-- **Near `agents.relayAt`**, handover (`agents note`), stop.
+- Goal. Merge/release/roll/prove; PRs/versions/proof/open items/facts/problems: `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
+- Board holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
+- Decisions. Read `beekeeper answer history` at start/relay and before refusal/reasking. Timed/sourced records hold across sessions in scope until done/changed. Peer claims need records. Note missing record/scope; never reask recorded decisions. Stops/gates hold.
+- Desk (`supervisor status`): `agents park`/`note add`; no guide status; inbox wakes; register.
+- Review. Push; park in worktree at once; loop owns CI/merge. Use `--post-merge` unless merge ends task.
+- Promote. One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.
+- Problems: `agents problem "<finding>"`: evidence/repo/issue URL. Gate/CI: report first, never bypass. Core fixes for faults; desk: personal choices.
+- Person: no prompts/approval/settings waits. Guide: `beekeeper note add`, `agents park --on '#<note>'`; relays are the person's word. Ask limits/cost/accounts; default setup.
+- Apps: settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
+- Post-merge. `Part of <full issue URL>`, no auto-close; close with proof.
+- Secrets. Never read/print/compare values, even hashes, except via `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster: context/kubeconfig; never write `kube.production`.
+- Tests. No local tests/lints; CI checks all; 1 push/round; read failures; `set -o pipefail`. Review proofs.
+- Git. No force push, even `--force-with-lease`. No behind-only updates; merge green head after merge-result check passes. Own worktree; commit, no stash.
+- Files. `<scratchpad>` or `~/.local/state/<program>/`, not `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
+- Polling: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`.
+- Stop: kill by PID; gated: `beekeeper gate stop`. Move aside; no hard-delete.
+- Near `agents.relayAt`, handover (`agents note`), stop.
 
 Load: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`, `beekeeper:park`.
 
