@@ -67,7 +67,7 @@ func noteCmdRun(t *testing.T, a *app, args ...string) {
 func TestGuideNextServesOneDecisionAtATime(t *testing.T) {
 	a := guideNextApp(t)
 	id, out, err := serveNext(t, a)
-	if err != nil || id != 3 || !strings.HasPrefix(out, `asking #3 for Pat from uiAgentName, due `) || !strings.Contains(out, "beekeeper note answer 3") {
+	if err != nil || id != 3 || !strings.HasPrefix(out, `asking #3 for Pat from "Agent nine", due `) || !strings.Contains(out, "beekeeper note answer 3") {
 		t.Fatalf("first: want #3, due first, got %d %q %v", id, out, err)
 	}
 	if id, out, _ = serveNext(t, a); id != 3 || !strings.HasPrefix(out, "still asking #3") {
