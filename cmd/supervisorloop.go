@@ -3067,7 +3067,7 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 	if l.unreadRepo(act.Ref) != "" {
 		return errLoopLater
 	}
-	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
 			p, err := readLoopPull(ctx, act.Ref)
 			if err != nil {
@@ -3076,6 +3076,17 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 			l.cachePull(act.Ref, p)
 			if p.State != superloop.Open {
 				return errLoopLater
+			}
+		}
+		// A timed-out remote start registers the worker before its first
+		// task is accepted. A wake only queues another message; it cannot
+		// activate that execution. Recover the original start before telling
+		// it the current findings, and keep the action pending on failure.
+		if ref := st.Agents[i].Execution; ref != nil {
+			if rec, _ := executionRecord(st, *ref); rec != nil && unactivated(rec) {
+				if _, err := l.remoteStartRefused(ctx, act.Agent); err != nil {
+					return err
+				}
 			}
 		}
 		return l.wake(ctx, act)
