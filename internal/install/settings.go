@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/agyhooks"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/pkg/project"
 	"github.com/giantswarm/beekeeper/plugin"
 )
@@ -1005,16 +1006,42 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, previousHook json.RawMessa
 // planCodexUnhooks removes the PreToolUse entry install added to Codex's
 // hooks.json files, leaving any other hooks in place.
 func (e Env) planCodexUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.CodexHook) == 0 || e.CodexHooks == "" {
-		return nil
-	}
-	if err := planCodexUnhooksFile(p, m, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
-		return err
-	}
-	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
-		if err := planCodexUnhooksFile(p, m, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
+	if len(m.CodexHook) > 0 {
+		if err := planCodexUnhooksFile(p, m, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
 			return err
 		}
+	}
+	workerHooks := CodexWorkerHooks(e.StateDir)
+	if workerHooks == "" || filepath.Clean(workerHooks) == filepath.Clean(e.CodexHooks) {
+		return nil
+	}
+	// Older worker starts wrote this exact file without install ownership.
+	// Recognize only that generated shape, leaving customized files alone.
+	if !symlink(workerHooks) {
+		raw, err := os.ReadFile(filepath.Clean(workerHooks))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		var hf struct {
+			Hooks map[string][]json.RawMessage `json:"hooks"`
+		}
+		if json.Unmarshal(raw, &hf) == nil && len(hf.Hooks["PreToolUse"]) == 1 {
+			bin, _, _ := codexHookBinary(hf.Hooks["PreToolUse"][0])
+			if bin != "" && (bin == e.Exe || filepath.Base(bin) == project.Name) {
+				generated, err := codex.HooksJSON(bin)
+				if err != nil {
+					return err
+				}
+				if sameJSON(raw, generated) {
+					removed[workerHooks] = true
+					p.add("remove", workerHooks, "legacy worker hook", func() error { return os.Remove(workerHooks) })
+					return nil
+				}
+			}
+		}
+	}
+	if len(m.CodexHook) > 0 {
+		return planCodexUnhooksFile(p, m, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed)
 	}
 	return nil
 }

@@ -146,13 +146,8 @@ func TestEnsureHome(t *testing.T) {
 	if err != nil || skillsTarget != wantSkills {
 		t.Errorf("skills symlink = %q (err %v), want %q", skillsTarget, err, wantSkills)
 	}
-	hooksRaw, err := os.ReadFile(filepath.Join(codexHome, "hooks.json")) //nolint:gosec // test file
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(hooksRaw), "/usr/local/bin/beekeeper hook pretooluse --format codex") ||
-		!strings.Contains(string(hooksRaw), `"matcher": ".*"`) {
-		t.Errorf("unexpected hooks.json: %s", string(hooksRaw))
+	if _, err := os.Stat(filepath.Join(codexHome, "hooks.json")); !os.IsNotExist(err) {
+		t.Fatalf("worker start created hooks.json: %v", err)
 	}
 	zshenvRaw, err := os.ReadFile(filepath.Join(ZshDir(codexHome), ".zshenv")) //nolint:gosec // test file
 	if err != nil {

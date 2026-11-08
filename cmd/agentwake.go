@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -529,6 +530,10 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 		return err
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
+	if install.CheckCodexHooks(install.CodexWorkerHooks(a.cfg.StateDir), "", "") != "" {
+		_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): mid-turn hook unavailable; queued for its next turn, after the current turn ends (remaining duration unknown)\n", ag.Name)
+		return err
+	}
 	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
 	return err
 }
