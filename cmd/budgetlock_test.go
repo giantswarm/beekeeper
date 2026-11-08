@@ -32,7 +32,11 @@ func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 	refuse := false
 	queries := refusingGitHub(t, &refuse)
 	holdStateLock(t, a)
-	g := &gateRun{app: a, ctx: t.Context()}
+	// The probe waits for the lock to save its reading only as long as its
+	// caller's deadline allows; a short one keeps the test fast.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	g := &gateRun{app: a, ctx: ctx}
 	start := time.Now()
 	b, err := g.gateBudget()
 	if err != nil || b.Remaining != 4800 {
@@ -83,7 +87,9 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 	refuse := true
 	refusingGitHub(t, &refuse)
 	holdStateLock(t, a)
-	g := &gateRun{app: a, ctx: t.Context()}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	g := &gateRun{app: a, ctx: ctx}
 	if b, err := g.gateBudget(); err == nil {
 		t.Fatalf("merge gate passed a refused GraphQL budget: %+v", b)
 	}
