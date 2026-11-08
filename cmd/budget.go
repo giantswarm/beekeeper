@@ -29,7 +29,7 @@ func (a *app) budgetCmd() *cobra.Command {
 	var floor int
 	var buckets []string
 	c := &cobra.Command{
-		Use:   "budget",
+		Use:   fatalBudgetCommand,
 		Short: "The GitHub REST, GraphQL and search budget every session draws from, and who is drawing",
 		Long: `Read the stored gh login and the configured devctl App login explicitly,
 independent of the working directory or a gh link. Name both identities and
@@ -40,11 +40,16 @@ login with a warning, retaining known unexpired App observations. Unreadable
 credentials or GitHub probes hold the gate, as does any refusal.
 
 Read each identity's GitHub core budget from the rate-limit headers of a real,
-conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
+conditional request, shared for 30 seconds across loop samples and commands
+(a 304 costs nothing; /rate_limit is exempt and lies),
 and the GraphQL limit from a real rateLimit query (one point per identity, read again
 after merge.budgetFresh), the search and code-search limits from
 /rate_limit (free; a spent one names its reset), and list the gh and devctl processes on the
-machine with the session each runs under: the callers drawing on it. Recorded
+machine with the session each runs under: the callers drawing on it. REST
+window callers include admitted worker shell calls and native beekeeper calls
+by source function, retained after processes exit. Counts are invocations,
+not measured requests (pagination and retries can spend more); arguments,
+endpoints and credentials are never recorded. Recorded
 GraphQL invocations name sessions and command classes in the current limit
 window (reset minus one hour), heavy calls first, even after a process exits.
 With no active reset known, show the last hour. Counts are invocations, not
@@ -62,7 +67,9 @@ For merge.resetFirst (5m) after the budget's reset, the merges queued under
 the floor for it go first: a line names them, and the gated waits and the
 watch's GitHub timer checks start after them.
 
---gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
+--gate bounds probes and credential discovery to seconds and skips plugin
+synchronization and caller diagnostics. It exits 3 when GitHub refuses
+GraphQL calls, the budget is under the
 floor (github.floor, default 2500), merges queued for the reset go first or
 a "github" hold is set:
 ` + "`beekeeper budget --gate && gh …`" + `. --bucket names the search
@@ -73,8 +80,10 @@ unread core budget:
 ` + "`beekeeper budget --gate --bucket code_search && gh search code …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			defer cancel()
 			if a.managedExecutionID() != "" {
-				return a.remoteGitHubBudget(cmd.Context(), workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
+				return a.remoteGitHubBudget(ctx, workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
 			}
 			if floor > 0 {
 				a.cfg.GitHub.Floor = floor
@@ -82,24 +91,35 @@ unread core budget:
 			if err := checkBuckets(gate, buckets); err != nil {
 				return err
 			}
-			b, err := readBudget(a, cmd.Context())
+			b, err := readBudget(a, ctx)
 			if err != nil {
 				if a.json {
 					_ = a.printJSON(b)
 				}
 				return err
 			}
-			b.Search = probeSearch(cmd.Context())
-			st, err := a.store.Read()
+			if !gate || len(buckets) > 0 {
+				b.Search = probeSearch(ctx)
+			}
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
 			var pollers []poller
-			sessions, t, callersErr := a.sessions()
-			if callersErr == nil {
-				pollers = githubCallers(a, t, sessions)
+			var callersErr error
+			if !gate {
+				sessions, t, err := a.sessions()
+				callersErr = err
+				if err == nil {
+					pollers = githubCallers(a, t, sessions)
+				}
 			}
-			callers, callsErr := githubWindowCallers(a, b.GraphQL)
+			var callers, restCallers []githubCaller
+			var callsErr, restErr error
+			if !gate {
+				callers, callsErr = githubWindowCallers(a, b.GraphQL)
+				restCallers, restErr = githubResourceCallers(a, b.Reset, verbGitHubRESTCall)
+			}
 			hold, held := activeHold(st, a, "github")
 			urgent := urgentLines(a, st)
 			gated := gatedMerges(st, proc.Alive)
@@ -115,14 +135,15 @@ unread core budget:
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
-					Callers []githubCaller    `json:"callers"`
-					Loop    *loopGraphQLSpend `json:"loop,omitempty"`
-					Floor   int               `json:"floor"`
-					Held    bool              `json:"held"`
-					Urgent  []state.Urgent    `json:"urgent,omitempty"`
-					Gated   []gatedParty      `json:"gated,omitempty"`
-					Pollers []poller          `json:"pollers"`
-				}{b, callers, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+					Callers     []githubCaller    `json:"callers"`
+					RESTCallers []githubCaller    `json:"rest_callers"`
+					Loop        *loopGraphQLSpend `json:"loop,omitempty"`
+					Floor       int               `json:"floor"`
+					Held        bool              `json:"held"`
+					Urgent      []state.Urgent    `json:"urgent,omitempty"`
+					Gated       []gatedParty      `json:"gated,omitempty"`
+					Pollers     []poller          `json:"pollers"`
+				}{b, callers, restCallers, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				for _, warning := range b.Warnings {
 					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
@@ -157,6 +178,11 @@ unread core budget:
 				}
 				if held {
 					_, _ = fmt.Fprintf(a.out, "GitHub is held by %q until %s: %s\n", hold.By.Name, untilText(a, hold), hold.Reason)
+				}
+				if restErr != nil {
+					_, _ = fmt.Fprintf(a.out, "REST window callers unknown: %v\n", restErr)
+				} else if len(restCallers) > 0 {
+					_, _ = fmt.Fprintf(a.out, "REST window callers (invocations, not measured requests): %s\n", githubCallersText(restCallers))
 				}
 				if callsErr != nil {
 					_, _ = fmt.Fprintf(a.out, "GraphQL window callers unknown: %v\n", callsErr)
@@ -265,6 +291,9 @@ func probeSearch(ctx context.Context) *github.Searches {
 		return old
 	}
 	for _, credential := range budgetCredentials(ctx) {
+		if credential.Skip {
+			continue
+		}
 		if credential.Err != nil {
 			return &github.Searches{Err: fmt.Sprintf("identity %s: %v", credential.Identity, credential.Err)}
 		}

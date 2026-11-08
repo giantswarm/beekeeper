@@ -218,6 +218,12 @@ with central configured), 125 a newer release (self-update --check).`,
 			if err := a.checkExecutionCommand(cmd); err != nil {
 				return err
 			}
+			// Admission must never wait for the first-run plugin sync (which
+			// may fetch GitHub and take two minutes). The next ordinary command
+			// still performs it.
+			if cmd.Name() == fatalBudgetCommand {
+				return nil
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)
 			defer cancel()
 			if syncsUnder(a.explicitConfig()) {
@@ -239,7 +245,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorGroup, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.deliveryCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.transcriptsCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.claudeLoginCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.deliveryCmd(), a.simCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.transcriptsCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.claudeLoginCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
@@ -295,6 +301,7 @@ func (a *app) load() error {
 		return err
 	}
 	a.now = time.Now()
+	a.observeREST()
 	return nil
 }
 

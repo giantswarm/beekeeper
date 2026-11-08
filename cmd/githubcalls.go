@@ -15,6 +15,7 @@ import (
 
 // verbGitHubCall is the event of one admitted GraphQL invocation.
 const verbGitHubCall = "github.call"
+const verbGitHubRESTCall = "github.rest.call"
 
 // Only admitted invocations are recorded. PreToolUse cannot prove execution
 // or measure points, but retains callers after their processes have exited.
@@ -30,7 +31,8 @@ func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
 		return
 	}
 	session, calls := guard.GitHubCalls(raw, format)
-	if session == "" || len(calls) == 0 {
+	_, restCalls := guard.GitHubRESTCalls(raw, format)
+	if session == "" || len(calls)+len(restCalls) == 0 {
 		return
 	}
 	store, err := state.Open(a.cfg.StateDir)
@@ -42,6 +44,10 @@ func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
 	for _, call := range calls {
 		detail, _ := json.Marshal(call)
 		events = append(events, state.Event{At: time.Now(), By: who, Verb: verbGitHubCall, Detail: string(detail)})
+	}
+	for _, call := range restCalls {
+		detail, _ := json.Marshal(call)
+		events = append(events, state.Event{At: time.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail)})
 	}
 	_ = store.RecordWithin(100*time.Millisecond, events...)
 }
@@ -57,13 +63,16 @@ func githubWindowCallers(a *app, g *github.GraphQL) ([]githubCaller, error) {
 	if g == nil {
 		return nil, nil
 	}
-	reset := g.Reset
+	return githubResourceCallers(a, g.Reset, verbGitHubCall)
+}
+
+func githubResourceCallers(a *app, reset time.Time, verb string) ([]githubCaller, error) {
 	if reset.IsZero() || !reset.After(a.now) {
 		reset = a.now
 	}
 	since := reset.Add(-time.Hour)
 	events, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == verbGitHubCall && !e.At.Before(since) && !e.At.After(a.now)
+		return e.Verb == verb && !e.At.Before(since) && !e.At.After(a.now)
 	})
 	if err != nil {
 		return nil, err
@@ -77,6 +86,9 @@ func githubWindowCallers(a *app, g *github.GraphQL) ([]githubCaller, error) {
 		session := e.By.Session
 		if session == "" {
 			session = e.By.HostSession
+		}
+		if session == "" {
+			session = e.By.Name
 		}
 		i := slices.IndexFunc(callers, func(c githubCaller) bool { return c.Session == session && c.Class == call.Class })
 		if i < 0 {
@@ -109,4 +121,19 @@ func githubCallersText(callers []githubCaller) string {
 		parts = append(parts, fmt.Sprintf("%s: %s (%d calls, %d heavy)", c.Session, c.Class, c.Calls, c.Heavy))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// Internal calls survive short-lived gh processes too. The observer receives
+// only a source function name, never endpoints, tokens or command arguments.
+func (a *app) observeREST() {
+	github.RESTObserver = func(class string) {
+		detail, _ := json.Marshal(guard.GitHubCall{Class: class})
+		who := envParty(os.Getenv)
+		if who.Session == "" && who.HostSession == "" {
+			who.Name = "beekeeper"
+		}
+		_ = a.store.RecordWithin(10*time.Millisecond, state.Event{
+			At: time.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail),
+		})
+	}
 }

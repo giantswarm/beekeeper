@@ -23,7 +23,7 @@ var mentionTools = []string{
 
 // ghPosts are the gh subcommands that post text: issue and pr comment,
 // create, edit and review, and api (a comments or reviews endpoint).
-var ghPosts = map[string]bool{verbComment: true, verbCreate: true, verbEdit: true, "review": true, verbClose: true}
+var ghPosts = map[string]bool{verbComment: true, verbCreate: true, verbEdit: true, verbReview: true, verbClose: true}
 
 // mentionHead is what may stand before an @-mention: the start, a space,
 // an opening bracket or punctuation; not a word, path, address or option
@@ -144,7 +144,7 @@ func ghPost(words []string) bool {
 		return false
 	}
 	switch words[1] {
-	case "issue", "pr":
+	case ghIssueSub, "pr":
 		return ghPosts[words[2]]
 	case ghAPISub:
 		if !writeMethods[ghAPIMethod(words[1:])] {

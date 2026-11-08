@@ -92,7 +92,10 @@ recover does). An update that
 fails holds the host: it takes no start until an update succeeds (exit 3),
 and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
-once the coordinator runs a newer release, and retries a held host hourly.
+whenever its release differs from the coordinator's, and retries a held host
+hourly. If the coordinator rolls back during a host's probation, the host
+restores its matching verified recovery release under the live state
+compatibility guard, quarantining the candidate without promoting it.
 A development build pins no release.
 
 The coordinator looks the release up on GitHub itself, with the gh login
@@ -173,7 +176,16 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 	if !releaseVersion(version) {
 		return fail(fmt.Errorf("%q is no release version", version))
 	}
-	ctx = update.WithOptions(ctx, update.Options{Recovery: a.launchRecovery})
+	ctx = update.WithOptions(ctx, update.Options{
+		Recovery: a.launchRecovery,
+		HostRollback: func(previous, failed string, restore func() error) error {
+			store, err := state.Open(a.cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			return store.RecoverVersion(previous, failed, restore)
+		},
+	})
 	install := func(ctx context.Context) (update.Result, error) { return installVersion(ctx, io.Discard, version) }
 	if len(given) > 0 {
 		// Not strict: the host runs the older release while it updates,

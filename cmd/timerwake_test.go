@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -88,6 +89,12 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 	}{
 		{name: "guide note", on: "#3", guide: true},
 		{name: "guide external wait", guide: true, wantWake: true},
+		{name: "own timer probe review", waits: "Timer 1: proof review running", wantWake: true},
+		{name: "own timer hash", waits: "timer #1: running", wantWake: true},
+		{name: "other timer", waits: "Timer 10: running"},
+		{name: "timer cannot override note", on: "#3", waits: "Timer 1: running"},
+		{name: "timer cannot override pull", on: claimIssue, waits: "Timer 1: running"},
+		{name: "off roster own timer", waits: "Timer 1: review proof running", offRoster: true, wantWake: true},
 		{name: "plain external wait", waits: "deployment ready", wantWake: true},
 		{name: "person without note", waits: "Alex's answer"},
 		{name: "local note", on: "#3"},
@@ -277,5 +284,167 @@ func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: "due"})
 	if len(*woke) != 0 {
 		t.Fatalf("woke without a holder: %v", *woke)
+	}
+}
+
+// A skip or harness failure must leave another attempt, rather than a park
+// with its only timer gone. Run settlement as well as delivery to cover the
+// claim removing the timer before the park is checked again.
+func TestTimerUndeliveredWakeRetries(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint("harness failure=", fail), func(t *testing.T) {
+			for _, repeat := range []string{"", state.RepeatDaily} {
+				t.Run("repeat="+repeat, func(t *testing.T) {
+					w, _, _ := notifyingWatch(t, t.TempDir(), false)
+					w.cfg.Guide.Person = personTimo
+					old := wakeOwner
+					calls := 0
+					wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
+						calls++
+						if fail && calls == 1 {
+							return errors.New("harness unavailable")
+						}
+						return nil
+					}
+					t.Cleanup(func() { wakeOwner = old })
+					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+						p := &state.Park{At: relayNow, On: "#3", Waits: verbAnswer}
+						if fail {
+							p.On, p.Waits = "", "Timer 42: proof running"
+						}
+						st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: p}}
+						st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Repeat: repeat, What: timerProofFinished}}
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					fire := func() {
+						t.Helper()
+						var fires []timerFire
+						if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+							_, events, f, _ := settleTimers(st, nil, w.now)
+							fires = f
+							return events, nil
+						}); err != nil {
+							t.Fatal(err)
+						}
+						for _, f := range fires {
+							w.wakeTimer(t.Context(), f)
+						}
+					}
+					fire()
+					st, err := w.store.Read()
+					if err != nil || len(st.Timers) != 1 || !st.Timers[0].Due.Equal(relayNow) {
+						t.Fatalf("undelivered occurrence lost: %+v, %v", st, err)
+					}
+					if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+						st.Agents[0].Park.On, st.Agents[0].Park.Waits = "", "Timer 42: proof running"
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					fire()
+					st, err = w.store.Read()
+					wantCalls := 1
+					if fail {
+						wantCalls++
+					}
+					if err != nil || calls != wantCalls || repeat == "" && len(st.Timers) != 0 || repeat != "" && (len(st.Timers) != 1 || !st.Timers[0].Due.After(relayNow)) {
+						t.Fatalf("retry did not deliver and settle: calls=%d state=%+v error=%v", calls, st, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	woke := stubWakes(t)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
+		st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Until: relayNow.Add(time.Minute), Expire: true}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var fires []timerFire
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+		fires = f
+		return events, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fires) != 1 {
+		t.Fatalf("expected one fire: %+v", fires)
+	}
+	w.wakeTimer(t.Context(), fires[0])
+	st, err := w.store.Read()
+	if err != nil || len(st.Timers) != 1 || st.Timers[0].Expire || !st.Timers[0].Checked.Equal(w.now) || len(*woke) != 0 {
+		t.Fatalf("skip lost retry: %+v error=%v wakes=%v", st, err, *woke)
+	}
+	w.now = relayNow.Add(timerEvery)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{Waits: "Timer 42: review proof running", At: w.now}
+		_, events, f, _ := settleTimers(st, nil, w.now)
+		fires = f
+		return events, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fires) != 1 || fires[0].timedOut {
+		t.Fatalf("expiry discarded fired wake: %+v", fires)
+	}
+	w.wakeTimer(t.Context(), fires[0])
+	if len(*woke) != 1 {
+		t.Fatalf("retry did not wake: %v", *woke)
+	}
+}
+
+// A one-shot probe may stop holding after its first successful observation.
+// Retry the fired wake, rather than waiting for that observation again.
+func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
+	for _, repeat := range []string{"", state.RepeatDaily} {
+		t.Run("repeat="+repeat, func(t *testing.T) {
+			w, _, _ := notifyingWatch(t, t.TempDir(), false)
+			woke := stubWakes(t)
+			var initial timerFire
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
+				st.Timers = []state.Timer{{ID: 42, Due: relayNow, Wake: agentOne, Probe: probeHolds, Repeat: repeat}}
+				_, events, fires, _ := settleTimers(st, map[int]checkResult{42: {holds: true}}, w.now)
+				if len(fires) != 1 {
+					t.Fatalf("expected initial fire: %+v", fires)
+				}
+				initial = fires[0]
+				return events, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// The initial occurrence was claimed; delivery is rejected by the note park.
+			w.wakeTimer(t.Context(), initial)
+			w.now = relayNow.Add(timerEvery)
+			var fires []timerFire
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents[0].Park = &state.Park{Waits: "Timer 42: running", At: w.now}
+				_, events, f, _ := settleTimers(st, map[int]checkResult{42: {holds: false}}, w.now)
+				fires = f
+				return events, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(fires) != 1 || fires[0].reason != initial.reason || fires[0].timedOut {
+				t.Fatalf("lost the fired occurrence: %+v", fires)
+			}
+			w.wakeTimer(t.Context(), fires[0])
+			st, err := w.store.Read()
+			if err != nil || len(*woke) != 1 {
+				t.Fatalf("wake not delivered: %v, %v", *woke, err)
+			}
+			if repeat != "" && (len(st.Timers) != 1 || st.Timers[0].PendingWakeReason != "") {
+				t.Fatalf("retry leaked into next occurrence: %+v", st.Timers)
+			}
+		})
 	}
 }

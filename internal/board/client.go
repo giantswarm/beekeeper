@@ -1270,10 +1270,11 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 }
 
 // unarchivedPredecessor walks board order only when an after anchor has
-// been archived. Archived items cannot be used in a position mutation.
+// been archived. Archived items cannot be used in a position mutation and
+// may be omitted from board order. If the anchor is absent, use the last
+// live item, or the top of an empty board.
 func (c *Client) unarchivedPredecessor(ctx context.Context, project, anchor, moving string) (string, error) {
 	previous := ""
-	found := false
 	for cursor := ""; ; {
 		var r struct {
 			Node struct {
@@ -1301,17 +1302,13 @@ func (c *Client) unarchivedPredecessor(ctx context.Context, project, anchor, mov
 				if previous != "" {
 					return previous, nil
 				}
-				found = true
 			}
 			if !item.Archived && item.ID != moving {
 				previous = item.ID
 			}
 		}
 		if !r.Node.Items.PageInfo.HasNextPage {
-			if found {
-				return previous, nil
-			}
-			return "", fmt.Errorf("archived position anchor %s is no longer on the board", anchor)
+			return previous, nil
 		}
 		cursor = r.Node.Items.PageInfo.EndCursor
 	}

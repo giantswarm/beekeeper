@@ -96,6 +96,65 @@ func TestLoopFillOnStartupAndAfterRosterLoss(t *testing.T) {
 	}
 }
 
+// A remote retirement may remain in flight across ticks. Parked workers
+// still occupy the roster, but their free busy slots must be filled without
+// another done event or a roster removal.
+func TestLoopFillWhileRetirementIsInFlight(t *testing.T) {
+	r, busy := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	*busy = 3
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.runPassActions(t.Context(), st, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r.called(agentsName, agentStartName) != nil {
+		t.Fatal("started above ceiling")
+	}
+
+	entered, release, filled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	r.inTurn = func(state.Party) bool {
+		close(entered)
+		<-release
+		return true
+	}
+	t.Cleanup(func() {
+		close(release)
+		l.passActions.Wait()
+	})
+	original := r.answer
+	r.answer = func(args []string) (string, int) {
+		out, code := original(args)
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName && *busy == 3 {
+			close(filled)
+		}
+		return out, code
+	}
+	*busy = 1 // workers parked; no agents.done or roster removal
+	l.once = false
+	st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "slow retirement"}})
+	acts := []superloop.Action{{Kind: superloop.KindDone, Key: "done slow retirement", Agent: "slow retirement"}}
+	if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retirement did not enter")
+	}
+	select {
+	case <-filled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("idle tick did not fill both free slots while retirement waited")
+	}
+}
+
 func TestLoopFillFillsEveryFreeSlotToCeiling(t *testing.T) {
 	r, busy := fillRig(t)
 	original := r.answer

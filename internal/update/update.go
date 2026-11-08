@@ -82,6 +82,11 @@ type Options struct {
 	// before the replacement: a candidate that never starts cannot prevent it.
 	// Nil or an error leaves the candidate unwatched, promoted by its next update.
 	Recovery Recovery
+	// HostRollback authorizes an execution host to follow its coordinator back
+	// to the verified previous release during probation. The guard checks live
+	// state compatibility and fences candidate writers under the state lock.
+	// Ordinary self-updates leave this nil and wait for the controller verdict.
+	HostRollback func(previous, failed string, restore func() error) error
 }
 
 // Recovery launches a recovery controller; see Options.Recovery.

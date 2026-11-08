@@ -103,6 +103,16 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	if afterCanary != verifiedDigest {
 		return errors.New("verified candidate changed during canary checks")
 	}
+	// A coordinator rollback is an explicit recovery request, not evidence
+	// that this host's candidate passed probation. Only the identical verified
+	// recovery release can end a watched probation this way. Verification of
+	// the download and retained artifact both remain mandatory.
+	if guard := optionsFrom(ctx).HostRollback; guard != nil && j != nil && j.Previous != nil && j.Previous.Version == version && (j.Pending() || j.RolledBack()) {
+		if verifiedDigest != j.Previous.Digest {
+			return errors.New("coordinator release differs from the verified recovery target")
+		}
+		return i.rollback(j, "execution host follows coordinator rollback", guard)
+	}
 	if err := i.settleProbation(ctx, optionsFrom(ctx).Health); err != nil {
 		return err
 	}

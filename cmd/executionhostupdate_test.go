@@ -734,3 +734,22 @@ func TestHostReleaseInputReadsWhatTheCoordinatorSends(t *testing.T) {
 		}
 	}
 }
+
+func TestHostSelfUpdateFollowsCoordinatorBackToRecoveryRelease(t *testing.T) {
+	a, _ := executionTestApp(t)
+	hostUpdateServer(t, a, hostNewRelease)
+	want := execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostOldRelease, PolicyDigest: execution.Digest([]byte("recovery release policy"))}
+	h := &hostInstall{answer: want}
+	stubHostInstall(t, h)
+	install := installVersion
+	installVersion = func(ctx context.Context, w io.Writer, version string) (update.Result, error) {
+		if update.OptionsFrom(ctx).HostRollback == nil {
+			t.Fatal("coordinator downgrade did not supply the state compatibility guard")
+		}
+		return install(ctx, w, version)
+	}
+	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostOldRelease, nil)
+	if !reflect.DeepEqual(got, want) || !slices.Equal(h.installs, []string{hostOldRelease}) || len(h.restarts) != 1 {
+		t.Fatalf("coordinator downgrade: %+v, installs %v, restarts %v", got, h.installs, h.restarts)
+	}
+}
