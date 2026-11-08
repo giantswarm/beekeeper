@@ -443,7 +443,7 @@ func TestReview3366PreviewUsesScopedIntake(t *testing.T) {
 // An intentional admission wait must end an older refill-stall episode:
 // otherwise the newer watchdog reports a board-start fault at a full limit.
 func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
-	for _, mode := range []string{"full", "stale", "reserved"} {
+	for _, mode := range []string{servingModeFull, kindStale, "reserved"} {
 		t.Run(mode, func(t *testing.T) {
 			r, busy := fillRig(t)
 			r.a.cfg.Delivery.WIPLimit = 1
@@ -457,7 +457,7 @@ func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
 			}
 			seed(t, r.a, func(st *state.State) {
 				st.DeliveriesAt = now
-				if mode == "stale" {
+				if mode == kindStale {
 					st.DeliveriesAt = now.Add(-4 * r.a.cfg.Supervisor.LoopInterval.Duration)
 				} else {
 					st.StartDelivery(deliveryControlPendingRef, deliveryIntakeExistingAgent, "", now)
