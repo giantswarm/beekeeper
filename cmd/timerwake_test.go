@@ -343,6 +343,8 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 					}); err != nil {
 						t.Fatal(err)
 					}
+					// Delivery retries retain the occurrence but wait one interval.
+					w.now = relayNow.Add(timerEvery)
 					fire()
 					st, err = w.store.Read()
 					wantCalls := 1
