@@ -22,6 +22,9 @@ func TestEnsurePreservesOverride(t *testing.T) {
 
 func TestEnsureCachesAndRepairs(t *testing.T) {
 	t.Setenv(Env, "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("LocalAppData", t.TempDir())
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	if err := os.Mkdir(bin, 0700); err != nil {
@@ -34,6 +37,7 @@ set -eu
 [ "$2" = '` + tool + `' ]
 [ "$3" = use ]
 [ "$4" = --bin-dir ]
+[ "$5" = "$PWD" ]
 [ "$6" = -p ]
 [ "$7" = path ]
 [ "$8" = '` + version + `' ]
@@ -95,6 +99,9 @@ printf '%s/binaries\n' "$PWD"
 
 func TestEnsureFailure(t *testing.T) {
 	t.Setenv(Env, "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("LocalAppData", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 	_, err := Ensure(context.Background(), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "setup-envtest") {
@@ -107,6 +114,9 @@ func TestProvisionedEnvtest(t *testing.T) {
 		t.Skip("set BEEKEEPER_TEST_PROVISION_ENVTEST=1 to download and start envtest")
 	}
 	t.Setenv(Env, "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("LocalAppData", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	assets, err := Ensure(ctx, t.TempDir())
@@ -123,4 +133,43 @@ func TestProvisionedEnvtest(t *testing.T) {
 			t.Error(err)
 		}
 	})
+}
+
+func TestEnsureReusesDefaultStore(t *testing.T) {
+	t.Setenv(Env, "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("LocalAppData", t.TempDir())
+	t.Setenv("PATH", t.TempDir()) // No provisioning tool is available.
+	assets := defaultAssets()
+	if err := os.MkdirAll(assets, 0700); err != nil {
+		t.Fatal(err)
+	}
+	assetsRoot, err := os.OpenRoot(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = assetsRoot.Close() }()
+	for _, name := range []string{"etcd", "kube-apiserver"} {
+		if err := assetsRoot.WriteFile(name, []byte("#!/bin/sh\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := assetsRoot.Chmod(name, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := t.TempDir()
+	got, err := Ensure(context.Background(), state)
+	if err != nil || got != assets {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	stateRoot, err := os.OpenRoot(filepath.Join(state, "envtest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stateRoot.Close() }()
+	data, err := stateRoot.ReadFile("assets-" + version)
+	if err != nil || string(data) != assets {
+		t.Fatalf("marker %q, %v", data, err)
+	}
 }

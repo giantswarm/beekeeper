@@ -96,6 +96,47 @@ func HasRollouts(stateDir, sessionsDir string, extraDirs ...string) bool {
 // event.
 var ErrNoUsage = errors.New("no codex usage event")
 
+// ErrQuotaReached marks an explicit spend-control or rate-limit stop in a
+// Codex event. With ErrUsageStopped it is the only Codex outcome that says the
+// quota is exhausted; every other read failure says only that usage is
+// unknown.
+var ErrQuotaReached = errors.New("codex quota reached")
+
+// UsageStoppedError restores a persisted stop without losing its classification.
+type UsageStoppedError string
+
+func (e UsageStoppedError) Error() string { return string(e) }
+func (e UsageStoppedError) Unwrap() error { return ErrUsageStopped }
+
+type quotaError string
+
+func (e quotaError) Error() string { return string(e) }
+
+func (quotaError) Is(target error) bool { return target == ErrQuotaReached }
+
+// quotaStopTexts are the messages of the quota stops. A watch keeps a reader's
+// error as text only, so QuotaStop recognises those too.
+var quotaStopTexts = []string{"codex spend control reached", "codex rate limit reached", "codex account usage stopped"}
+
+// QuotaStop reports whether err says the Codex quota is exhausted (an explicit
+// spend-control, rate-limit or account stop), not merely that usage could not
+// be read.
+func QuotaStop(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrQuotaReached) || errors.Is(err, ErrUsageStopped) {
+		return true
+	}
+	msg := err.Error()
+	for _, t := range quotaStopTexts {
+		if strings.Contains(msg, t) {
+			return true
+		}
+	}
+	return false
+}
+
 func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading, error) {
 	files := rolloutFiles(sessionDirs(stateDir, sessionsDir, extraDirs...))
 	if len(files) == 0 {
@@ -436,15 +477,15 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 	}
 
 	if rl.SpendControlReached {
-		return UsageReading{}, errors.New("codex spend control reached")
+		return UsageReading{}, quotaError("codex spend control reached")
 	}
 	if rl.RateLimitReachedType != nil {
 		if kind := strings.TrimSpace(*rl.RateLimitReachedType); kind != "" {
-			return UsageReading{}, fmt.Errorf("codex rate limit reached (%s)", kind)
+			return UsageReading{}, quotaError(fmt.Sprintf("codex rate limit reached (%s)", kind))
 		}
 	}
 	if rl.RateLimitReached {
-		return UsageReading{}, errors.New("codex rate limit reached")
+		return UsageReading{}, quotaError("codex rate limit reached")
 	}
 
 	prim, err := parseRateLimitWindow(slotPrimary, rl.Primary, at)

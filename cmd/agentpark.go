@@ -146,7 +146,9 @@ The coordinator records a pr-checks wake timer with the park, without requesting
 review. End the turn; green or red CI wakes you to fix or request desk review.
 
 A park from the pull request's own worktree at its published HEAD records
-an independent review request, retained per pull request. Park from each
+a CI and independent review request, retained per pull request. Push and park
+immediately without local tests or lints or waiting for CI; the loop returns
+CI failures to the worker and starts review only on green. Park from each
 PR worktree in turn; another park does not replace earlier review requests.
 A worker on an SSH execution host parks from
 its workspace: the coordinator checks the pull request against the

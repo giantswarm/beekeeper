@@ -464,6 +464,7 @@ capacity:
 		a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: now, out: &out, as: usageCaller, readUsage: reader}
 		w := a.newWatcher(false, true)
 		w.now = now
+		w.clock = &fakeClock{now: now}
 		w.doctoring.Store(true) // the doctor is not under test
 		w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
 		t.Cleanup(func() { w.bg.Wait() })
@@ -500,6 +501,7 @@ capacity:
 	}
 	woke = nil
 	w2.now = t31
+	w2.clock.(*fakeClock).advance(w2.now.Sub(w2.clk().Now()))
 	out2.Reset()
 	w2.pending(context.Background(), sessionsAt(t31, false))
 	w2.saveMark()
@@ -562,6 +564,7 @@ capacity:
 	cur.FiveHour = &usageWindow{UsedPercent: 3, ResetsAt: reset5h.Add(5 * time.Hour)}
 	woke = nil
 	w3.now = tAfterReset
+	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
 	w3.pending(context.Background(), sessionsAt(tAfterReset, true))
 	w3.saveMark()
@@ -583,6 +586,7 @@ capacity:
 	tSecondHigh := tAfterReset.Add(10 * time.Minute)
 	cur.FiveHour = &usageWindow{UsedPercent: 98, ResetsAt: reset5h.Add(5 * time.Hour)}
 	w3.now = tSecondHigh
+	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
 	w3.pending(context.Background(), sessionsAt(tSecondHigh, false))
 	if !strings.Contains(out3.String(), "USAGE HIGH: 5h 98%") {
@@ -592,6 +596,7 @@ capacity:
 		t.Fatal(err)
 	}
 	w3.now = tSecondHigh.Add(time.Minute)
+	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
 	w3.pending(context.Background(), sessionsAt(w3.now, false))
 	if !strings.Contains(out3.String(), "ENDED USAGE HIGH") {
@@ -1047,6 +1052,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	aWatch.out = &watchOut
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
+	w.clock = &fakeClock{now: t0}
 	w.doctoring.Store(true)
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
 	t.Cleanup(func() { w.bg.Wait() })
@@ -1969,6 +1975,7 @@ capacity:
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut, as: usageCaller, readUsage: reader}
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
+	w.clock = &fakeClock{now: t0}
 	w.doctoring.Store(true)
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
 	t.Cleanup(func() { w.bg.Wait() })
@@ -2259,15 +2266,15 @@ capacity:
 		}
 	}
 
-	// 1. No rollout files yet -> codex fails closed (ceiling 0, room 0).
+	// 1. No rollout files yet -> keep Codex's configured ceiling and warn.
 	var capOut bytes.Buffer
 	aCap := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &capOut, as: usageCaller}
 	capCmd := aCap.capacityCmd()
 	if err := capCmd.Execute(); err != nil {
 		t.Fatalf("capacity with no codex rollouts: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 0; usage unknown (") {
-		t.Fatalf("expected codex fail-closed when no rollouts exist, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 2") || !strings.Contains(capOut.String(), "using configured ceiling:") {
+		t.Fatalf("expected configured Codex ceiling with unreadable warning, got:\n%s", capOut.String())
 	}
 
 	// 2. Session A has a valid dual-window reading (5h 18%, 7d 40% vs pace 50%), while newer Session B
@@ -2419,7 +2426,7 @@ capacity:
 		t.Fatalf("expected stale codex reading fallback to allow starts, got:\n%s", capOut.String())
 	}
 
-	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt and fails closed.
+	// 6. Future SourceAt is rejected; the saved good reading still bounds starts.
 	tFuture := t0.Add(10 * time.Minute)
 	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-e-future.jsonl", tFuture,
 		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
@@ -2430,8 +2437,8 @@ capacity:
 	if err := aFuture.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on future codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
-		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 2: AutoCodexWorker") || !strings.Contains(capOut.String(), "is in the future") {
+		t.Fatalf("expected last good Codex reading with future timestamp warning, got:\n%s", capOut.String())
 	}
 }
 
@@ -3810,6 +3817,10 @@ read -r keepalive
 	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err == nil {
 		t.Fatal("fresh stop must block starts")
 	}
+	a.now = a.now.Add(2 * time.Hour)
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); !codex.QuotaStop(err) {
+		t.Fatalf("failed probe must preserve an old local stop: %v", err)
+	}
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
 		t.Fatal(err)
 	}
@@ -3897,5 +3908,147 @@ func TestCodexAccountStopSurvivesProbeFailure(t *testing.T) {
 	reply(healthy)
 	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err != nil {
 		t.Fatalf("successful refresh must recover: %v", err)
+	}
+}
+
+func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
+	for _, providers := range []bool{false, true} {
+		t.Run(fmt.Sprintf("providers=%t", providers), func(t *testing.T) {
+			_, cfgPath := isolateUsageTestEnv(t)
+			if err := os.WriteFile(cfgPath, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := state.OpenVersion(cfg.StateDir, "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			clk := newFakeClock(t)
+			start := clk.Now()
+			u := config.Usage{Command: config.DefaultCodexUsageCommand}
+			k := config.Capacity{Ceiling: 4, Usage: u}
+			file := usageFile
+			if providers {
+				k = config.Capacity{Ceiling: 4, Providers: map[string]config.Provider{
+					config.ClaudeHarness: {Ceiling: 2, Usage: config.Usage{Command: []string{"slow"}}},
+					codex.Harness:        {Ceiling: 2, Usage: u},
+				}}
+				file = usageProviderFile(codex.Harness)
+			}
+			cfg.Capacity = k
+			var out bytes.Buffer
+			a := &app{cfg: cfg, store: store, now: start, out: &out}
+			a.readUsage = func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
+				// Earlier providers and the current command both take time.
+				clk.advance(2 * time.Minute)
+				return usageReading{SourceAt: clk.Now().Add(-4 * time.Second), SingleWindow: true,
+					SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
+			}
+			w := a.newWatcher(false, true)
+			w.now = start
+			w.clock = clk
+			w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+			view := w.watchUsage(context.Background(), &state.State{}, nil)
+			if view == nil || view.Error != "" || view.Ceiling == 0 || strings.Contains(out.String(), "unreadable") ||
+				w.usageErr != "" || w.providerUsageErr[codex.Harness] != "" {
+				t.Fatalf("fresh reading refused: view=%+v, out=%s, usageErr=%q, providerErr=%v",
+					view, out.String(), w.usageErr, w.providerUsageErr)
+			}
+			var r usageReading
+			if found, err := store.ReadFile(file, &r); err != nil || !found {
+				t.Fatalf("reading not persisted: found=%v, err=%v", found, err)
+			}
+			if !r.At.Equal(clk.Now()) || !r.SourceAt.Equal(clk.Now().Add(-4*time.Second)) {
+				t.Fatalf("reading must use completion time: %+v, now=%s", r, clk.Now())
+			}
+		})
+	}
+}
+
+// An unreadable Codex reading keeps the last good reading, or the configured
+// ceiling when none is saved, and is raised to the guide; only an explicit
+// quota stop holds Codex starts.
+func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
+	unreadable := errors.New("usage reading timestamp 2026-11-07T12:00:00Z is in the future")
+	stop := errors.New("codex spend control reached")
+	for _, providers := range []bool{false, true} {
+		for _, tc := range []struct {
+			name     string
+			err      error
+			saved    bool
+			wantLine string
+			wantOpen bool
+		}{
+			{"unreadable/no saved reading", unreadable, false, "usage unreadable; using configured ceiling: " + unreadable.Error(), true},
+			{"unreadable/saved reading", unreadable, true, "usage unreadable; kept last good reading: " + unreadable.Error(), true},
+			{"quota stop/saved reading", stop, true, "unreadable: " + stop.Error(), false},
+		} {
+			t.Run(fmt.Sprintf("providers=%t/%s", providers, tc.name), func(t *testing.T) {
+				_, cfgPath := isolateUsageTestEnv(t)
+				if err := os.WriteFile(cfgPath, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := config.Load(cfgPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				store, err := state.OpenVersion(cfg.StateDir, "dev")
+				if err != nil {
+					t.Fatal(err)
+				}
+				clk := newFakeClock(t)
+				start := clk.Now()
+				u := config.Usage{Command: config.DefaultCodexUsageCommand,
+					Every: config.Duration{Duration: time.Minute}, StaleAfter: config.Duration{Duration: time.Hour}}
+				k := config.Capacity{Ceiling: 4, Usage: u}
+				file, codexCeiling := usageFile, 4
+				if providers {
+					k = config.Capacity{Ceiling: 4, Providers: map[string]config.Provider{
+						config.ClaudeHarness: {Ceiling: 2, Usage: config.Usage{Command: []string{"claude-usage"}}},
+						codex.Harness:        {Ceiling: 2, Usage: u},
+					}}
+					file, codexCeiling = usageProviderFile(codex.Harness), 2
+				}
+				cfg.Capacity = k
+				good := func(at time.Time) usageReading {
+					return usageReading{At: at, SourceAt: at, SingleWindow: true,
+						SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}
+				}
+				if tc.saved {
+					if err := store.WriteFile(file, good(start.Add(-5*time.Minute))); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var out bytes.Buffer
+				a := &app{cfg: cfg, store: store, now: start, out: &out}
+				a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+					if slices.Equal(cmd, config.DefaultCodexUsageCommand) {
+						return usageReading{}, tc.err
+					}
+					return good(clk.Now()), nil
+				}
+				w := a.newWatcher(false, true)
+				w.now = start
+				w.clock = clk
+				w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+				view := w.watchUsage(context.Background(), &state.State{}, nil)
+				if view == nil || !strings.Contains(out.String(), tc.wantLine) {
+					t.Fatalf("want watch line %q, view=%+v, out=%s", tc.wantLine, view, out.String())
+				}
+				wantCeiling := 0
+				if providers {
+					wantCeiling = 2 // the Claude provider's
+				}
+				if tc.wantOpen {
+					wantCeiling += codexCeiling
+				}
+				if view.Ceiling != wantCeiling || (view.Error == "") != (tc.wantOpen || providers) {
+					t.Fatalf("ceiling %d, error %q; want ceiling %d, open=%t", view.Ceiling, view.Error, wantCeiling, tc.wantOpen)
+				}
+			})
+		}
 	}
 }

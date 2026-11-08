@@ -234,9 +234,7 @@ func (p *providerView) findBucket(name string) *bucketView {
 
 func (p *providerView) windowsSummary(now time.Time) (summary string) {
 	defer func() {
-		if p.Fallback != "" {
-			summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
-		}
+		summary = withFallback(summary, p.Fallback, p.At, now)
 	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
@@ -1725,6 +1723,9 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 			continue
 		}
 		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
+		if !a.now.IsZero() {
+			now = a.now
+		}
 		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
 	}
 	for _, name := range k.ProviderNames() {
@@ -1906,6 +1907,10 @@ its reset (remaining percent / hours to reset), breaking ties by
 capacity.choices order, with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and at or under the even pace of its 7-day window.
+If built-in Codex usage is unreadable, its last good windows still bound starts;
+without valid saved windows, its configured ceiling applies. The watch reports
+the failure to the guide. Explicit account, spend and rate-limit stops remain
+blocking until a successful reading clears them.
 Every start is decided alike: --review marks a review start, which skips no
 gate (capacity.reviewSkipPace, a choice's skipPace and a positive paceMargin
 no longer let a start run ahead of the pace), and --review-of-self-hosted
@@ -2034,7 +2039,8 @@ nothing; it makes no GitHub call.`,
 				return a.printJSON(struct {
 					*capacityView
 					Verdict string `json:"verdict"`
-				}{v, v.verdict()})
+					Guards  bool   `json:"guards"`
+				}{v, v.verdict(), a.cfg.Hooks.GuardsEnabled()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 			capLine := v.line(config.Capacity{Ceiling: v.Ceiling})
@@ -2042,6 +2048,9 @@ nothing; it makes no GitHub call.`,
 				capLine += "; " + v.Usage.capacitySuffix(a.now)
 			}
 			p("capacity: %s", capLine)
+			if !a.cfg.Hooks.GuardsEnabled() {
+				p("guards: off (hooks.guards=false; relay and result redaction remain active)")
+			}
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
 			if v.Local != nil {
 				p("local: %s", v.Local.line())
