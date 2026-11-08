@@ -458,7 +458,7 @@ func newSandboxHarness(t *testing.T, repo string) *sandboxHarness {
 	// reuse historical search results or touch unrelated open PRs.
 	initialPRs := []map[string]any{
 		{
-			"number":      1,
+			numberField:   1,
 			"state":       "MERGED",
 			"headRefName": "canary/run-fresh/cand-historical",
 			"headRefOid":  "1111111111111111111111111111111111111111",
@@ -470,7 +470,7 @@ func newSandboxHarness(t *testing.T, repo string) *sandboxHarness {
 			},
 		},
 		{
-			"number":      2,
+			numberField:   2,
 			"state":       "OPEN",
 			"headRefName": "canary/run-420/cand-other",
 			"headRefOid":  "3333333333333333333333333333333333333333",

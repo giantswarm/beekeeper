@@ -254,7 +254,7 @@ func TestDeliveryStatsWindowAndDuplicates(t *testing.T) {
 	add(idleRef, state.DeliveryDone, since.Add(3*time.Hour))
 	add("o/r#3", state.DeliveryCI, now.Add(time.Hour))
 	got := deliveryStatistics(events, since, now)
-	want := deliveryStats{Since: since, Until: now, Released: 2, ReleasedPerDay: 2, Steps: []deliveryStepStats{{Step: state.DeliveryCI, Median: 2 * time.Hour, Worst: 2 * time.Hour, Samples: 1}, {Step: state.DeliveryImplementing, Median: 2 * time.Hour, Worst: 3 * time.Hour, Samples: 2}}}
+	want := deliveryStats{Since: since, Until: now, Released: 2, ReleasedPerDay: 2, MeanCycleTime: 3 * time.Hour, CycleSamples: 2, Steps: []deliveryStepStats{{Step: state.DeliveryCI, Median: 2 * time.Hour, Worst: 2 * time.Hour, Samples: 1}, {Step: state.DeliveryImplementing, Median: 2 * time.Hour, Worst: 3 * time.Hour, Samples: 2}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v != %+v", got, want)
 	}
@@ -528,5 +528,29 @@ func TestDeliveryGeneralTagCheckKeepsSelfUpdateWakesScoped(t *testing.T) {
 	contains, err = loopReleaseContains(t.Context(), ref, loopFixed, "v3.0.0")
 	if err != nil || contains || calls != 1 {
 		t.Fatalf("self-update crossed repositories: %v %v calls %d", contains, err, calls)
+	}
+}
+
+func TestDeliveryMeanCycleTimeUsesFullCompletedAges(t *testing.T) {
+	now := time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)
+	since := now.Add(-24 * time.Hour)
+	event := func(ref string, started, released time.Time) state.Event {
+		raw, err := json.Marshal(state.Delivery{Ref: ref, Step: state.DeliveryDone, Started: started, Since: released})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Event{Verb: state.DeliveryStepVerb, At: released, Detail: string(raw)}
+	}
+	first := event("o/r#1", since.Add(-48*time.Hour), since.Add(time.Hour))
+	got := deliveryStatistics([]state.Event{
+		first, first,
+		event("o/r#2", now.Add(-time.Hour), now),
+		event("o/r#3", time.Time{}, now),
+		event("o/r#4", now.Add(time.Hour), now),
+		event("o/r#5", since.Add(-3*time.Hour), since.Add(-time.Hour)),
+		event("o/r#6", now, now.Add(time.Hour)),
+	}, since, now)
+	if got.Released != 4 || got.CycleSamples != 2 || got.MeanCycleTime != 25*time.Hour {
+		t.Fatalf("full completed cycle statistics: %+v", got)
 	}
 }

@@ -54,3 +54,25 @@ func TestDeliveryAndEventCommitTogetherAcrossRestart(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestStartDeliveryForLinkedPullKeepsIssueDeliveries(t *testing.T) {
+	now := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	st := &State{}
+	for _, ref := range []string{"review/repo#2", "review/repo#3"} {
+		st.StartDelivery(ref, "implementer", "", now)
+	}
+	for i := range st.Deliveries {
+		st.Deliveries[i].Pulls = []string{"review/repo#1"}
+		st.Deliveries[i].Step = DeliveryReviewQueued
+	}
+	st.StartDelivery("REVIEW/REPO#1", "reviewer", "", now.Add(time.Hour))
+	st.StartDelivery("review/repo#1", "fixer", "", now.Add(2*time.Hour))
+	if len(st.Deliveries) != 2 {
+		t.Fatalf("linked pull duplicated issue deliveries: %+v", st.Deliveries)
+	}
+	for _, d := range st.Deliveries {
+		if d.Agent != "implementer" || !d.Started.Equal(now) || d.Step != DeliveryReviewQueued {
+			t.Fatalf("review/fix start changed original delivery: %+v", d)
+		}
+	}
+}
