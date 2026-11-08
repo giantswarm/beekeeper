@@ -16,7 +16,7 @@ import (
 func guideNextApp(t *testing.T) *app {
 	t.Helper()
 	a, _ := noteApp(t)
-	by := state.Party{Name: "Agent nine"}
+	by := state.Party{Name: uiAgentName}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: agentOne}}}
 		st.Notes = []state.Note{
@@ -67,7 +67,7 @@ func noteCmdRun(t *testing.T, a *app, args ...string) {
 func TestGuideNextServesOneDecisionAtATime(t *testing.T) {
 	a := guideNextApp(t)
 	id, out, err := serveNext(t, a)
-	if err != nil || id != 3 || !strings.HasPrefix(out, `asking #3 for Pat from "Agent nine", due `) || !strings.Contains(out, "beekeeper note answer 3") {
+	if err != nil || id != 3 || !strings.HasPrefix(out, `asking #3 for Pat from uiAgentName, due `) || !strings.Contains(out, "beekeeper note answer 3") {
 		t.Fatalf("first: want #3, due first, got %d %q %v", id, out, err)
 	}
 	if id, out, _ = serveNext(t, a); id != 3 || !strings.HasPrefix(out, "still asking #3") {
@@ -77,15 +77,15 @@ func TestGuideNextServesOneDecisionAtATime(t *testing.T) {
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("guide.asking events: want one, got %v %v", evs, err)
 	}
-	noteCmdRun(t, a, "answer", "3", "yes, merge it")
+	noteCmdRun(t, a, verbAnswer, "3", "yes, merge it")
 	if id, _, _ = serveNext(t, a); id != 2 {
 		t.Fatalf("after the answer: want #2, got %d", id)
 	}
-	noteCmdRun(t, a, "done", "2", flagNoteReason, withdrawalReason)
+	noteCmdRun(t, a, paramDone, "2", flagNoteReason, withdrawalReason)
 	if id, _, _ = serveNext(t, a); id != 1 {
 		t.Fatalf("after done: want the undated #1, got %d", id)
 	}
-	noteCmdRun(t, a, "answer", "1", "agentlab-2")
+	noteCmdRun(t, a, verbAnswer, "1", "agentlab-2")
 	id, out, _ = serveNext(t, a)
 	if id != 0 || out != "no open decision for Pat" {
 		t.Fatalf("with no decision left: got %d %q", id, out)
@@ -196,7 +196,7 @@ func TestGuideQueueAndNextKeepDeferredAndTodoItemsInQueue(t *testing.T) {
 	}
 
 	// Person asks a side question instead of picking Option 1 or 2; guide records it with --defer.
-	noteCmdRun(t, a, "answer", "1", "--defer", "2h", "--reason", "ask with the hooks test result", "what happens if we turn hooks back on?")
+	noteCmdRun(t, a, verbAnswer, "1", "--defer", "2h", "--reason", "ask with the hooks test result", "what happens if we turn hooks back on?")
 
 	// Both answer.recorded and note.deferred must be in the audit log, and note #1 stays open.
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded || e.Verb == noteDeferred })
@@ -228,13 +228,13 @@ func TestGuideQueueAndNextKeepDeferredAndTodoItemsInQueue(t *testing.T) {
 	if id, _, err = serveNext(t, a); err != nil || id != 2 {
 		t.Fatalf("after deferring #1, want #2 next, got %d (%v)", id, err)
 	}
-	noteCmdRun(t, a, "answer", "2", "yes, turn hooks back on")
+	noteCmdRun(t, a, verbAnswer, "2", "yes, turn hooks back on")
 
 	// Next is #3 (the person todo), which can be answered or closed when done.
 	if id, _, err = serveNext(t, a); err != nil || id != 3 {
 		t.Fatalf("after #2, want todo #3 next, got %d (%v)", id, err)
 	}
-	noteCmdRun(t, a, "answer", "3", "reviewed and approved")
+	noteCmdRun(t, a, verbAnswer, "3", "reviewed and approved")
 
 	// Now only deferred note #1 remains. Queue must STILL list #1, while guide next
 	// distinguishes "no decision currently due" from "no open decision".
@@ -252,7 +252,7 @@ func TestGuideQueueAndNextKeepDeferredAndTodoItemsInQueue(t *testing.T) {
 	if id, _, err = serveNext(t, a); err != nil || id != 1 {
 		t.Fatalf("after deferral time, want #1 served again, got %d (%v)", id, err)
 	}
-	noteCmdRun(t, a, "answer", "1", "--choice", "1", "ship today")
+	noteCmdRun(t, a, verbAnswer, "1", "--choice", "1", "ship today")
 	if qOut = runGuideSubcmd(t, a, "queue", "--full"); strings.TrimSpace(qOut) != "nothing waits on the person" {
 		t.Fatalf("after all items settled, want empty queue, got:\n%s", qOut)
 	}
@@ -290,7 +290,7 @@ func TestNoteReopenAndHandoverUnbackedProseWarning(t *testing.T) {
 
 	// Simulate the incident: note #1 was closed by a plain `note answer` without --choice,
 	// and the guide wrote prose items under "## Open with Pat" in handover-guide-run-27.md.
-	noteCmdRun(t, a, "answer", "1", "what happens if we turn hooks back on?")
+	noteCmdRun(t, a, verbAnswer, "1", "what happens if we turn hooks back on?")
 	writeFile(t, deskDir+"/notes/handover-guide-run-27.md", strings.Join([]string{
 		"# Hand-over — Guide run 27",
 		"",
@@ -332,19 +332,19 @@ func TestNoteReopenAndHandoverUnbackedProseWarning(t *testing.T) {
 	}
 
 	// Reopened note #1 retains its options and refs, so answering with --choice 1 succeeds.
-	noteCmdRun(t, a, "answer", "1", "--choice", "1", "merge")
+	noteCmdRun(t, a, verbAnswer, "1", "--choice", "1", "merge")
 }
 
 func TestKeptOpenReplyRetainsWordsAndRenewsExpiredDecision(t *testing.T) {
 	a := guideNextApp(t)
 	words := "Ship (Recommended) — can we discuss this first?"
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = []state.Note{{ID: 1, Kind: noteDecision, For: notePerson, By: state.Party{Name: "Agent nine"}, Text: "Ship?", Options: []string{"Ship: release today", "Wait: release later"}, Refs: []string{refOne}, Due: a.now.Add(-time.Hour)}}
+		st.Notes = []state.Note{{ID: 1, Kind: noteDecision, For: notePerson, By: state.Party{Name: uiAgentName}, Text: "Ship?", Options: []string{"Ship: release today", "Wait: release later"}, Refs: []string{refOne}, Due: a.now.Add(-time.Hour)}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	noteCmdRun(t, a, "answer", "1", "--keep-open", words)
+	noteCmdRun(t, a, verbAnswer, "1", "--keep-open", words)
 	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == answerRecorded })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("answer event: %v %v", evs, err)
@@ -363,10 +363,10 @@ func TestKeptOpenReplyRetainsWordsAndRenewsExpiredDecision(t *testing.T) {
 }
 
 func TestReopenRetainsTodoKindAndFiler(t *testing.T) {
-	for _, closeWith := range []string{"answer", "done"} {
+	for _, closeWith := range []string{verbAnswer, paramDone} {
 		t.Run(closeWith, func(t *testing.T) {
 			a, _ := noteApp(t)
-			by := state.Party{Name: "Agent nine", Session: "original-filer"}
+			by := state.Party{Name: uiAgentName, Session: "original-filer"}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Notes = []state.Note{{ID: 1, Kind: noteTodo, For: notePerson, By: by, Text: "Review the proposal"}}
 				st.NextNote = 1
@@ -374,10 +374,10 @@ func TestReopenRetainsTodoKindAndFiler(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if closeWith == "answer" {
-				noteCmdRun(t, a, "answer", "1", "done")
+			if closeWith == verbAnswer {
+				noteCmdRun(t, a, verbAnswer, "1", paramDone)
 			} else {
-				noteCmdRun(t, a, "done", "1", "--reason", "withdrawn")
+				noteCmdRun(t, a, paramDone, "1", "--reason", "withdrawn")
 			}
 			noteCmdRun(t, a, "reopen", "1")
 			st, err := a.store.Read()

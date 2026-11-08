@@ -97,7 +97,7 @@ func TestPlanChores(t *testing.T) {
 	agent := func(id string, idle time.Duration) state.Agent {
 		return state.Agent{Party: state.Party{Session: id, Name: "test: " + id}, IdleSince: now.Add(-idle)}
 	}
-	done, doneBusy := agent("done", time.Minute), agent("done-busy", time.Minute)
+	done, doneBusy := agent(paramDone, time.Minute), agent("done-busy", time.Minute)
 	done.Done, doneBusy.Done = true, true
 	task, doneTask := agent("task", 48*time.Hour), agent("done-task", time.Minute)
 	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
@@ -111,7 +111,7 @@ func TestPlanChores(t *testing.T) {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
 	}
 	// done's CLI still runs, idle: the desktop keeps the session warm.
-	sessions := []*claude.Session{{ID: "done"}, {ID: "done-busy"}, {ID: "done-task"}, {ID: "stale-live"}, {ID: "untitled"}, {ID: "titled"}, {ID: "own"}}
+	sessions := []*claude.Session{{ID: paramDone}, {ID: "done-busy"}, {ID: "done-task"}, {ID: "stale-live"}, {ID: "untitled"}, {ID: "titled"}, {ID: "own"}}
 	record := func(host string) (*claude.Record, bool) {
 		switch host {
 		case "local_untitled":
@@ -481,7 +481,7 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		"local note":             {"#787", "install chain ready", true},
 		"central note":           {"central#12", "gate ready", true},
 		"named person":           {parkedIssueRef, "operator's go on the install chain", true},
-		"answer":                 {parkedIssueRef, "awaiting the person's answer", true},
+		verbAnswer:                 {parkedIssueRef, "awaiting the person's answer", true},
 		"colleague review":       {parkedIssueRef, "a colleague's review", true},
 		"untargeted answer":      {"", "awaiting the person's answer", false},
 		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
