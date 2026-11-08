@@ -89,6 +89,12 @@ history cannot be recovered.`,
 				if local.Closure != nil {
 					m["closure"] = local.Closure
 				}
+				if u, why, ok := noteDeferral(&local.Note); ok {
+					m["deferredUntil"] = u.Format("2006-01-02T15:04:05Z07:00")
+					if why != "" {
+						m["deferReason"] = why
+					}
+				}
 				return a.printJSON(m)
 			}
 			audience := local.For
@@ -97,6 +103,15 @@ history cannot be recovered.`,
 			}
 			if _, err := fmt.Fprintf(a.out, "%s [status: %s] [for %s]\n%s\n", noteRef(&local.Note), local.Status, audience, local.Text); err != nil {
 				return err
+			}
+			if u, why, ok := noteDeferral(&local.Note); ok {
+				line := u.Format("2006-01-02T15:04:05Z07:00")
+				if why != "" {
+					line += " (" + why + ")"
+				}
+				if _, err := fmt.Fprintf(a.out, "deferred until: %s\n", line); err != nil {
+					return err
+				}
 			}
 			if local.Delivery != nil {
 				line := local.Delivery.Status
@@ -191,10 +206,19 @@ func (a *app) retainedNote(id int) (*shownNote, error) {
 	if len(evs) > 0 {
 		e := evs[len(evs)-1]
 		if withdrawn := withdrawnNote(e); withdrawn != nil {
+			parseNoteTextParts(&withdrawn.Note)
 			return withdrawn, nil
 		}
 		an, _ := parseAnswered(e)
-		return &shownNote{Note: state.Note{ID: id, Text: an.Question, For: an.Audience, By: state.Party{Name: an.Asker}}, Status: closedAnswered, Answer: an.Answer, Closure: &e}, nil
+		n := state.Note{ID: id, Text: an.Question, For: an.Audience, By: state.Party{Name: an.Asker}}
+		if an.About != "" && !strings.HasPrefix(an.About, "note#") {
+			n.Refs = []string{an.About}
+		}
+		if e.NoteSnapshot != nil {
+			n = *e.NoteSnapshot
+		}
+		parseNoteTextParts(&n)
+		return &shownNote{Note: n, Status: closedAnswered, Answer: an.Answer, Closure: &e}, nil
 	}
 	return shown, nil
 }

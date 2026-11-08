@@ -18,14 +18,16 @@ import (
 
 // The kinds of a note. A decision waits on a person, who answers it by its
 // due time or lets its default run; a login asks its person to sign in, and
-// the watch closes it once its --until probe passes.
+// the watch closes it once its --until probe passes; a todo tracks a
+// person-owned action item or follow-up without an automatic default.
 const (
 	noteDecision = state.NoteDecision
 	noteLogin    = state.NoteLogin
+	noteTodo     = "todo"
 )
 
 // noteKinds are the kinds `note add --kind` takes.
-var noteKinds = []string{noteDecision, noteLogin}
+var noteKinds = []string{noteDecision, noteLogin, noteTodo}
 
 // probeTimeout bounds one run of a probe: a login note's, a timer's.
 const probeTimeout = 10 * time.Second
@@ -100,8 +102,12 @@ func (d noteDraft) missing() []string {
 }
 
 // unanswered names what d lacks for when nobody answers: a default that
-// is an action and, for a decision, its due time.
+// is an action and, for a decision, its due time. A todo has no automatic
+// default.
 func (d noteDraft) unanswered() []string {
+	if d.Kind == noteTodo {
+		return nil
+	}
 	var out []string
 	if !isAction(d.Default) {
 		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
@@ -115,17 +121,23 @@ func (d noteDraft) unanswered() []string {
 // lacks names what the question d puts to its person lacks, a note's or
 // the guide's own (AskUserQuestion): that it asks, the status quo, the why,
 // every option's consequence, the full URL of every issue and PR, and where
-// a state claim was checked.
+// a state claim was checked. A todo tracks a person-owned action item or
+// follow-up without requiring decision framing, while still requiring full
+// URLs for any issue or PR it names.
 func (d noteDraft) lacks() []string {
 	var out []string
-	if !d.asks() {
-		out = append(out, "a question: it asks nothing (no ?, no --option, no request verb); a status line goes to `beekeeper log add \"<text>\"`")
-	}
-	if strings.TrimSpace(d.StatusQuo) == "" {
-		out = append(out, `--status-quo "<what is true now>"`)
-	}
-	if strings.TrimSpace(d.Why) == "" {
-		out = append(out, `--why "<why it needs the person>"`)
+	if d.Kind != noteTodo {
+		if !d.asks() {
+			out = append(out, "a question: it asks nothing (no ?, no --option, no request verb); a status line goes to `beekeeper log add \"<text>\"`")
+		}
+		if strings.TrimSpace(d.StatusQuo) == "" {
+			out = append(out, `--status-quo "<what is true now>"`)
+		}
+		if strings.TrimSpace(d.Why) == "" {
+			out = append(out, `--why "<why it needs the person>"`)
+		}
+	} else if strings.TrimSpace(d.Question) == "" {
+		out = append(out, "a todo description")
 	}
 	for _, o := range d.Options {
 		if label, cons, ok := strings.Cut(o, ":"); !ok || strings.TrimSpace(label) == "" || strings.TrimSpace(cons) == "" {
@@ -134,7 +146,7 @@ func (d noteDraft) lacks() []string {
 	}
 	all := d.text() + " " + d.Default
 	out = append(out, post.Unlinked(all, d.Here)...)
-	if d.Checked == "" {
+	if d.Kind != noteTodo && d.Checked == "" {
 		claims := stateClaim.FindAllString(d.Question+" "+d.StatusQuo+" "+d.Why, -1)
 		if len(claims) > 0 {
 			out = append(out, fmt.Sprintf("%q without --checked \"<where it was checked>\"", strings.ToLower(claims[0])))
@@ -357,4 +369,109 @@ func closeProbed(st *state.State, passed []int) ([]string, []state.Event) {
 		return true
 	})
 	return lines, evs
+}
+
+const (
+	noteDeferPrefix = "defer:"
+	noteDeferred    = "note.deferred"
+	noteReopened    = "note.reopened"
+)
+
+// setNoteDeferral marks n deferred until until (with an optional reason),
+// updates its Due, and clears Fired so the watch reports it again when due.
+func setNoteDeferral(n *state.Note, until time.Time, reason string) {
+	u := until.UTC()
+	val := noteDeferPrefix + u.Format(time.RFC3339)
+	if r := strings.TrimSpace(reason); r != "" {
+		val += " " + oneLine(r)
+	}
+	if n.Kind == noteLogin {
+		n.Kept = val
+	} else {
+		n.Until = val
+	}
+	n.Due = u
+	n.Fired = time.Time{}
+}
+
+// clearNoteDeferral removes any deferral marker from n.
+func clearNoteDeferral(n *state.Note) {
+	if n == nil {
+		return
+	}
+	if n.Kind == noteLogin {
+		if strings.HasPrefix(n.Kept, noteDeferPrefix) {
+			n.Kept = ""
+		}
+	} else if strings.HasPrefix(n.Until, noteDeferPrefix) {
+		n.Until = ""
+	}
+}
+
+// noteDeferral returns the deferral timestamp and reason on n when n was
+// explicitly deferred.
+func noteDeferral(n *state.Note) (until time.Time, reason string, ok bool) {
+	if n == nil {
+		return time.Time{}, "", false
+	}
+	raw := n.Until
+	if n.Kind == noteLogin {
+		raw = n.Kept
+	}
+	rest, found := strings.CutPrefix(raw, noteDeferPrefix)
+	if !found {
+		return time.Time{}, "", false
+	}
+	ts, why, _ := strings.Cut(rest, " ")
+	u, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	return u, strings.TrimSpace(why), true
+}
+
+// noteDeferredAt reports whether n is deferred to a time after now.
+func noteDeferredAt(n *state.Note, now time.Time) bool {
+	u, _, ok := noteDeferral(n)
+	return ok && now.Before(u)
+}
+
+var notePartLabel = regexp.MustCompile(`\s+(Status quo|Why|Option|Checked):\s+`)
+
+// parseNoteTextParts restores Question, StatusQuo, Options and Refs from
+// n.Text when a closed note is reconstructed from file-backed event history.
+func parseNoteTextParts(n *state.Note) {
+	if n == nil {
+		return
+	}
+	if len(n.Refs) == 0 && n.Text != "" {
+		n.Refs = refs(n.Text)
+	}
+	if n.Question != "" || len(n.Options) > 0 || n.Text == "" {
+		return
+	}
+	matches := notePartLabel.FindAllStringSubmatchIndex(n.Text, -1)
+	if len(matches) == 0 {
+		n.Question = strings.TrimSpace(n.Text)
+		return
+	}
+	n.Question = strings.TrimSpace(n.Text[:matches[0][0]])
+	for i, m := range matches {
+		label := n.Text[m[2]:m[3]]
+		end := len(n.Text)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		val := strings.TrimRight(strings.TrimSpace(n.Text[m[1]:end]), ". ")
+		switch label {
+		case "Status quo":
+			if n.StatusQuo == "" {
+				n.StatusQuo = val
+			}
+		case "Option":
+			if val != "" {
+				n.Options = append(n.Options, val)
+			}
+		}
+	}
 }

@@ -116,6 +116,7 @@ func TestNoteShowAnsweredAudience(t *testing.T) {
 				n := state.Note{ID: 1, For: audience, Text: laneQuestion, By: state.Party{Name: agentOne}}
 				e := answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Via: viaCLI, Answer: words}, &n)
 				if legacy {
+					e.NoteSnapshot = nil // Older events retained only the textual detail.
 					e.Detail = strings.Replace(e.Detail, ` for "team:ops"`, "", 1)
 				}
 				if err := a.store.Log(state.Event{Verb: "note-show.unrelated", Detail: strings.Repeat("z", 1_100_000)}, e); err != nil {
