@@ -1095,11 +1095,11 @@ func serveCanaryClaude() int {
 		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
 		sessionID := short + "-0000-0000-0000-000000000001"
 		rows = append(rows, map[string]any{
-			"id":        short,
-			"sessionId": sessionID,
-			nameField:   name,
-			"kind":      "bg",
-			"pid":       1,
+			"id":           short,
+			sessionIDField: sessionID,
+			nameField:      name,
+			"kind":         "bg",
+			"pid":          1,
 		})
 		if err := writeSessions(rows); err != nil {
 			fmt.Fprintln(os.Stderr, err)

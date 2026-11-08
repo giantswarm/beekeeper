@@ -50,6 +50,8 @@ const (
 	deliveryScenario = "delivery"
 	dataField        = "data"
 	statusField      = "status"
+	repositoryField  = "repository"
+	sessionIDField   = "sessionId"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -222,7 +224,7 @@ func serveGitHub() int {
 		if os.Getenv("FIXTURE_CASE") == "unreadable-queue" {
 			return emit(map[string]any{"errors": []any{map[string]any{"message": "fixture unavailable"}}})
 		}
-		return emit(map[string]any{dataField: map[string]any{"repository": map[string]any{"mergeQueue": nil}}})
+		return emit(map[string]any{dataField: map[string]any{repositoryField: map[string]any{"mergeQueue": nil}}})
 	case starts(ghPR, "merge"):
 		pin := slices.Index(args, "--match-head-commit")
 		if pin < 0 || pin+1 >= len(args) || args[pin+1] != p["headRefOid"] {
@@ -329,11 +331,11 @@ func serveClaude() int {
 		rows := readSessions()
 		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
 		rows = append(rows, map[string]any{
-			"id":        short,
-			"sessionId": short + "-0000-0000-0000-000000000001",
-			nameField:   name,
-			"kind":      "bg",
-			"pid":       1,
+			"id":           short,
+			sessionIDField: short + "-0000-0000-0000-000000000001",
+			nameField:      name,
+			"kind":         "bg",
+			"pid":          1,
 		})
 		writeSessions(rows)
 		if os.Getenv("FIXTURE_CASE") == deliveryScenario {
@@ -347,7 +349,7 @@ func serveClaude() int {
 			if err != nil {
 				panic(err)
 			}
-			raw, err := json.Marshal(map[string]any{"cwd": cwd, "sessionId": short + "-0000-0000-0000-000000000001", "type": "assistant"})
+			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: short + "-0000-0000-0000-000000000001", "type": "assistant"})
 			if err != nil {
 				panic(err)
 			}
