@@ -76,12 +76,16 @@ loop lock and at pass boundaries. It retains the candidate version, startup time
 last phase, and an exit code with a bounded error classification. It contains no
 command output or configuration. The missing-heartbeat rollback reason includes
 this evidence only when its version and timestamps match the installed candidate.
-The lifecycle marker alone never counts as a heartbeat. Before loading event
-history, the loop checkpoints `throughput-observation.json` with current wall time
+Startup alone never counts as a heartbeat. At each pass phase transition,
+the loop checkpoints `throughput-observation.json` with current wall time
 and its candidate version, preserving eligible-PR ages and marking throughput
 unknown until planning finishes. Retained controllers recognize this progress too.
-There is no background keepalive: a stalled reader's checkpoint expires after
-three minutes. A competing loop cannot overwrite the owner's record.
+Controllers also accept fresh, matching post-startup lifecycle progress, so a
+first pass longer than ten minutes is healthy while it advances through phases.
+Failed exits override a fresh checkpoint. There is no background keepalive:
+a stalled phase's checkpoint expires after three minutes. Between-pass markers
+preserve completed planning evidence. A competing loop cannot overwrite the
+owner's record.
 
 For a failed rollout, collect the installation and recovery evaluation timestamps,
 the loop service's result and exit status, its bounded startup/exit journal, and
@@ -127,8 +131,15 @@ refused while probation is pending; run the installed binary instead.
 `beekeeper self-update --complete-probation` ends probation at once, with the same
 checks. No elapsed timeout or plugin sync alone counts as successful probation.
 
-A recovery fence is lifted by `--complete-probation` or a controller's promotion; an
-unsupervised update's promotion leaves it in place.
+A completed automatic rollback lifts the broad writer ceiling after rechecking
+restored-version compatibility under the state and commit locks. The durable
+record retains `maximum` and `failed` for older processes and marks `recovered`,
+with rejected versions quarantined: surviving failed binaries still cannot
+write. Compatible restored services resume without manual probation completion;
+execution generations, leases, work and writer stamps are preserved. Completion
+is retried even for a journal already settled by an older controller.
+`--complete-probation` or a controller's promotion removes the recovery record;
+an unsupervised update's promotion leaves it in place.
 
 The first protected installation cannot authenticate a pre-existing executable's
 provenance. Its digest and version are recorded as displaced, but it is not

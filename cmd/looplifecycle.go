@@ -12,9 +12,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const loopLifecycleFile = "supervisor-loop-lifecycle.json"
+const (
+	loopLifecycleFile = "supervisor-loop-lifecycle.json"
+	loopPhaseStartup  = "startup"
+	loopPhaseBetween  = "between passes"
+	loopPhaseObserve  = "observe workers and pull requests"
+)
 
-// Lifecycle is diagnostic evidence, never a heartbeat. Only the loop holding
+// Phase transitions are bounded progress evidence. Only the loop holding
 // the exclusive loop lock writes it; failed contenders cannot overwrite it.
 // No command output, paths, configuration or lock-holder identities are saved.
 type loopLifecycle struct {
@@ -35,6 +40,11 @@ func (l *supervisorLoop) lifecyclePhase(phase string) {
 	// Diagnostics must not change loop admission or turn a successful pass
 	// into a failure. Recovery reports missing evidence when this write fails.
 	_ = l.a.store.WriteFile(loopLifecycleFile, l.lifecycle)
+	if !l.dryRun && phase != loopPhaseBetween {
+		// Retained controllers understand this observation, even when they do
+		// not understand lifecycle records. No goroutine refreshes a stuck phase.
+		_ = l.checkpointThroughput(l.lifecycle.At)
+	}
 }
 
 func loopFailureKind(err error) string {

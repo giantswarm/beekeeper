@@ -217,10 +217,10 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 		return true, c.hold(ctx, "", err)
 	}
 	switch {
-	case j.Settled():
-		return true, nil
 	case j.RolledBack():
 		return c.finish(ctx, j)
+	case j.Settled():
+		return true, nil
 	case !j.Pending():
 		// A crash between the rename and its journal write reconciles here.
 		c.prepared++
@@ -317,6 +317,12 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 			// after sleep or controller downtime. Only this tick was observed;
 			// never subtract that gap from the candidate's observed grace.
 			s.LoopStarted, s.LoopStartedAgo = true, min(now.Sub(life.Started), c.step)
+			s.HeartbeatRequired = true
+			if life.Exited && life.Code != 0 {
+				s.Heartbeat = false
+			} else if !life.Exited && life.Phase != "" && life.Phase != loopPhaseStartup && now.Sub(life.At) <= 3*throughputCadence {
+				s.Heartbeat = true
+			}
 		}
 		s.LoopPending = otherAlive
 	}
@@ -395,6 +401,12 @@ func (c *recoveryController) finish(ctx context.Context, j *update.Journal) (boo
 	if !o.Restarted {
 		o.Restarts++
 		o.Restarted = c.moveProcesses(ctx, o.Restarts)
+	}
+	// Restoration already verified compatibility under the state lock. End the
+	// broad writer ceiling automatically, retaining a durable rejection of the
+	// failed version so its surviving processes cannot resume writes.
+	if err := c.store.CompleteRollback(j.Previous.Version, j.Candidate.Version); err != nil {
+		return false, err
 	}
 	if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
 		return false, err
