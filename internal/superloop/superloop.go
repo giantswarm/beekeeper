@@ -318,7 +318,7 @@ type Input struct {
 	Now             time.Time
 	PostMergeWindow time.Duration
 	// DevctlOwners is merge.devctlOwners: a go on their repositories names
-	// the gate's devctl pr merge --update-branch, on any other gh pr merge
+	// the gate's devctl pr merge, on any other gh pr merge
 	// --match-head-commit.
 	DevctlOwners []string
 	// Admin is merge.admin: the repositories (owner/repo) whose go names
@@ -1379,8 +1379,8 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return
 		}
 		// The head moved past the approval. The approval covers a head
-		// that only brings the base into the approved one (the gate's
-		// --update-branch, the worker's merge of the base and its
+		// that only brings the base into the approved one (a
+		// worker's merge of the base and its
 		// conflicts' resolution, a rebase onto it); any other change
 		// gets a review while one of MaxReviews is left, else the go.
 		// A base merge needs no new park: it brings no
@@ -2240,8 +2240,8 @@ func EventAgent(verb, detail, by string) string {
 }
 
 // goAction is the merge go for base's head, naming the merge command of
-// its repository's path: the gate's devctl pr merge --update-branch where
-// devctl serves it, whose base update the go covers, else gh pr merge
+// its repository's path: the gate's devctl pr merge where
+// devctl serves it, else gh pr merge
 // --match-head-commit (--admin included where merge.admin lists the
 // repository).
 func goAction(in Input, base Action, why string) Action {
@@ -2260,7 +2260,7 @@ func goAction(in Input, base Action, why string) Action {
 	}
 	repo, n, _ := strings.Cut(base.Ref, "#")
 	if in.gated(repo) {
-		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s --update-branch`, once `gh pr view` shows head %s. This go covers a head the gate's --update-branch moves on by merging the base alone: let that merge run to its end, then report.",
+		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s`, once `gh pr view` shows head %s. Merge only this green head after the merge-result check passes; never update the branch.",
 			base.URL, base.Head, why, repo, n, short(base.Head))
 		return a
 	}

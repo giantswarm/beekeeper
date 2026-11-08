@@ -329,6 +329,9 @@ func (r diskRun) uncoveredText() string {
 // holding the most and the uncovered directories.
 func (r diskRun) holdingText() string {
 	var parts []string
+	if r.docker != nil {
+		parts = append(parts, r.docker.String())
+	}
 	if h := r.holding(3); h != "" {
 		parts = append(parts, "caches "+h)
 	}

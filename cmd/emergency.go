@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -84,12 +83,13 @@ it bypasses desk review and the merge lane, using GitHub's squash merge with
 an exact head match. GitHub branch protection still applies. Every attempted
 action and its result is logged with the person's words.
 
-With --admin --head <sha> it is the person's exception for one pull request
-GitHub keeps at REVIEW_REQUIRED, as when the author and the desk review share
-an account: the grant's quoted words must name it (owner/repo#n or its URL),
-and it must be open, green, mergeable and up to date with its base at exactly
-that head, with an approved desk review or the loop's go for it. Only then does
-the squash merge send --admin, which waives nothing but the review requirement.
+With --admin --head <sha> the current guide can act on the person's general
+merge order without asking them to name each pull request. The guide must
+quote the authorization verbatim when enabling the bounded grant. A pull
+request GitHub keeps at REVIEW_REQUIRED must still be open, green, mergeable
+and up to date with its base at exactly that head, with an approved desk
+review or the loop's go for it. Only then does the squash merge send --admin,
+which waives nothing but the review requirement.
 
 Other controls are
 emergency hold set/lift, emergency start (capacity --force), and emergency
@@ -192,7 +192,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			return err
 		})
 	}}
-	merge.Flags().BoolVar(&admin, "admin", false, "merge past REVIEW_REQUIRED, on the person's quoted words naming this pull request")
+	merge.Flags().BoolVar(&admin, "admin", false, "merge past REVIEW_REQUIRED under the current guide's bounded emergency grant")
 	merge.Flags().StringVar(&adminHead, "head", "", "with --admin: the exact head the decision is for")
 	hold := a.holdCmd()
 	for _, sub := range hold.Commands() {
@@ -289,18 +289,16 @@ func emergencyCommandText(cmd *cobra.Command, args []string) string {
 	return text
 }
 
-// emergencyAdminMerge is the person's admin exception for one pull request
-// at head: their quoted words name it, and everything but GitHub's review
-// requirement already says go. The attempt is logged before the merge runs.
+// emergencyAdminMerge applies the current guide's bounded emergency grant
+// to one exact head. The guide interprets the person's verbatim authorization;
+// no per-pull naming round is required. Everything but GitHub's review
+// requirement must already say go. The attempt is logged before mutation.
 func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, head string) error {
 	ref := fmt.Sprintf("%s#%d", repo, number)
 	url := fmt.Sprintf("https://github.com/%s/pull/%d", repo, number)
 	st, err := a.store.Read()
 	if err != nil {
 		return err
-	}
-	if st.Emergency == nil || !namesPull(st.Emergency.Reason, ref, url) {
-		return refused("the person's quoted words do not name %s: an admin merge is their decision for that pull request", ref)
 	}
 	p, err := readLoopPull(ctx, ref)
 	if err != nil {
@@ -355,18 +353,6 @@ func adminMergeBlock(p superloop.Pull) string {
 		return "its merge state is " + cmp.Or(p.MergeState, "unknown")
 	}
 	return ""
-}
-
-// namesPull says whether words name a pull request by ref or url as a whole
-// token, so that o/r#12 does not read as o/r#123.
-func namesPull(words, ref, url string) bool {
-	for _, field := range strings.FieldsFunc(strings.ToLower(words), func(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune(",;()<>\"'", r) }) {
-		field = strings.TrimRight(field, ".:!?")
-		if field == strings.ToLower(ref) || field == strings.ToLower(url) {
-			return true
-		}
-	}
-	return false
 }
 
 // emergencyMergePolicy preserves standing stops and holds; emergency control

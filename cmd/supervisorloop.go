@@ -517,9 +517,7 @@ its key first in the detail):
             acts for, or its reviewer; a saved review park and a worker
             waiting on it for another pull request are none. It gets a fixer
             (agents start under its worker's name) for a head that
-            conflicts, is red, carries an unfixed changes request, or is
-            behind a base its merge does not update (no devctl
-            --update-branch, no merge.admin); the merge go again for a green
+            conflicts, is red, or carries an unfixed changes request; the merge go again for a green
             head whose go was given and never carried out; a reviewer for
             a green head awaiting its review. Running checks wait; an open
             escalation or ownership question is the person's. One action per stretch,
@@ -1075,7 +1073,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 // quiet point (no claim in flight). It returns true when the replacement
 // binary was executed, so the caller ends the pass on the old binary.
 func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
-	if l == nil || l.dryRun || l.reexecuted || l.reexecFailed {
+	if l == nil || ctx.Err() != nil || l.dryRun || l.reexecuted || l.reexecFailed {
 		return false, nil
 	}
 	b := l.bin
@@ -1103,10 +1101,18 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
 	}
 	l.timerActs.Wait()
+	// Shutdown wins over an update, including cancellation while actions drain.
+	if ctx.Err() != nil {
+		return false, nil
+	}
 	wasWatching := l.stopWatch != nil
 	if wasWatching {
 		l.stopWatch()
 		l.stopWatch = nil
+	}
+	// The watch also drains asynchronous work, so shutdown can begin there.
+	if ctx.Err() != nil {
+		return false, nil
 	}
 	if err := b.Exec(); err != nil {
 		l.mu.Lock()

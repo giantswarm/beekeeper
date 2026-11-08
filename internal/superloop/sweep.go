@@ -196,7 +196,6 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		a.Key, a.Kind, a.Round = key, KindReview, len(l.rounds[ref])+1
 		add(a)
 	}
-	repo := repoOf(ref)
 	rs := l.rounds[ref]
 	var v *Review
 	if len(rs) > 0 {
@@ -216,8 +215,6 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		fix(fmt.Sprintf("review round %d asked for changes on head %s and nobody fixed them: %s, word for word:\n\n%s\n\nFix every finding", len(rs), short(p.Head), v.URL, v.Body))
 	case len(rs) == 0 && ownerChangesRequested(p):
 		fix(fmt.Sprintf("a review asked for changes on head %s and nobody fixed them: answer and fix its findings", short(p.Head)))
-	case p.MergeState == "BEHIND" && !in.gated(repo) && !in.admin(repo):
-		fix(fmt.Sprintf("head %s is behind %s, and its merge does not update the branch: merge %s into it", short(p.Head), baseName(p), baseName(p)))
 	case !p.Green:
 		// Its checks run, or have not reported yet: nothing to own yet.
 	case l.has(goKey(ref, p.Head)):

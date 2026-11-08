@@ -179,23 +179,11 @@ func (g *gateRun) stopWaiting(s os.Signal) error {
 	return exitCode(code)
 }
 
-// warmUp brings the pull request's head up to its base when the merge
-// updates its branch (--update-branch; a rebase line by rebase) and waits
-// for its CI, within the CI timeout and ctx: devctl's own run then finds the
-// head current and judged, and merges at once. Its outcome is devctl's to
-// judge, never the warm-up's.
+// warmUp waits for the existing head's CI within the configured timeout.
+// It never updates the branch; the merge judges the wait's outcome.
 func (g *gateRun) warmUp(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.TimeoutFor(g.repo))
 	defer cancel()
-	if merge.UpdatesBranch(g.argv) {
-		update := updateBranch
-		if merge.Rebase(g.argv) {
-			update = updateRebase
-		}
-		if err := update(ctx, g.repo, g.pr); err != nil {
-			gateLine("%s's branch is not updated ahead of its merge (%v): devctl updates it at its turn", g.key(), err)
-		}
-	}
 	prWarmWait(ctx, g.repo, g.pr)
 }
 

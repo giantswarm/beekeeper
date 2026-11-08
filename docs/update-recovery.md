@@ -47,7 +47,7 @@ wall-clock time: a machine that slept proves nothing and fails nothing meanwhile
 | --- | --- |
 | Three consecutive same-reason merge or start failures of this candidate | Roll back at once |
 | Three consecutive failed isolated workflow probes | Roll back at once |
-| A machine whose loop ran lately, no heartbeat from the candidate's loop after 10 minutes | Roll back |
+| A machine whose loop ran lately, no heartbeat from the candidate's loop 10 minutes after that loop started (the old loop hands over only at its next quiet pass; one that never hands over is judged at the window's end) | Roll back |
 | A stop | Nothing counts |
 | GitHub unavailable, or heartbeat, outcome or state evidence unreadable | Stays unproven: no rollback, no promotion |
 | 30 observed minutes, a current passed probe, the heartbeat where one is owed | Promote to last known good |

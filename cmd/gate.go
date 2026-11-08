@@ -103,13 +103,10 @@ unread, …") naming the failed read; the same command runs again once
 GitHub answers. A rebase merge (--rebase) GitHub reports
 not rebaseable or conflicting with its base is refused (77) before it takes
 a lane place, the way out a replacement PR; GitHub not answering whether it
-rebases refuses too. At its turn a rebase merge is read again: one only
-behind a base that requires branches to be up to date (the merge ahead of
-it landed) is rebased onto its base on GitHub's side (Update with rebase,
-never a base merge into the branch), the new head awaited, and devctl runs
-on it, waiting for its checks; one that conflicts by then, or that GitHub
-does not rebase, is refused (77) with nothing merged, naming the
-replacement PR. A one-PR merge keeps a reserve of 200 GitHub calls and
+rebases refuses too. At its turn a rebase merge is read again for conflicts
+and merge commits; a head only behind its base runs as it stands. The gate
+never updates a branch or restarts CI to catch up. A protection requirement
+for up-to-date branches is the repository owner's decision. A one-PR merge keeps a reserve of 200 GitHub calls and
 can run below the budget floor while that reserve remains. Other work and
 merges below that reserve are queued for the reset (exit 76, as below):
 a run of its own waits for the budget and merges as below, and for
@@ -1355,16 +1352,8 @@ func (g *gateRun) checkReviews(refuse func(code int, format string, args ...any)
 	return nil
 }
 
-// catchUp brings a rebase merge whose turn came onto its base when it is
-// only behind it: the merge ahead of it in the lane landed, and a base that
-// requires branches to be up to date refuses the merge until it is updated
-// (devctl's exit 3, "behind"). GitHub rebases the head (Update with rebase,
-// which keeps the line's linear history; devctl's --update-branch merges the
-// base in), the gate awaits the new head, and devctl, the only merger, runs
-// on it and waits for its checks. A merge that conflicts by now, or that
-// GitHub does not rebase, is refused with nothing merged; one GitHub does
-// not answer for runs as it stands, devctl judging it. A head that carries
-// a merge commit by now is refused too.
+// catchUp rechecks conflicts and merge commits when a rebase merge's turn
+// arrives. A head only behind its base is never updated.
 func (g *gateRun) catchUp() error {
 	if merges, err := g.readMergeCommits(); err != nil {
 		gateLine("whether %s carries a merge commit cannot be read (%v): devctl judges it as it stands", g.key(), err)
@@ -1381,43 +1370,8 @@ func (g *gateRun) catchUp() error {
 	case !r.Behind():
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-	err = updateRebase(ctx, g.repo, g.pr)
-	cancel()
-	if err != nil {
-		return g.refuseRunning("its turn came, and %s is behind its base, which GitHub does not rebase it onto (%v); nothing merged. %s", g.key(), err, replacementPR)
-	}
-	head := g.awaitHead(r.Head)
-	why := fmt.Sprintf("%s was behind its base at its turn: GitHub rebased it onto the base (head %s), devctl waits for that head's checks", g.key(), shortSHA(head))
-	if head == "" {
-		why = fmt.Sprintf("%s was behind its base at its turn: GitHub rebases it onto the base, its new head not reported yet; devctl judges the head it reads", g.key())
-	}
-	gateLine("%s", why)
-	_ = g.store.Log(event(g.me, "merge.rebased", "%s", why))
+	// Behind alone is no repair: merge the existing head without restarting CI.
 	return nil
-}
-
-// headReads is how often the gate reads a rebased pull request for its new
-// head, rebaseRetry apart.
-const headReads = 10
-
-// awaitHead is the pull request's head once it is no longer was, "" when
-// GitHub reports none other within headReads reads.
-func (g *gateRun) awaitHead(was string) string {
-	for try := 1; try <= headReads; try++ {
-		select {
-		case <-g.ctx.Done():
-			return ""
-		case <-time.After(rebaseRetry):
-		}
-		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-		r, err := pullRebase(ctx, g.repo, g.pr)
-		cancel()
-		if err == nil && r.Head != "" && r.Head != was {
-			return r.Head
-		}
-	}
-	return ""
 }
 
 // shortSHA is a commit's short form.
@@ -2374,11 +2328,11 @@ func (g *gateRun) toolMerge() bool { return strings.EqualFold(g.repo, merge.Tool
 // squash merge.
 func (g *gateRun) runsDevctl() bool { return g.pr == 0 || g.cfg.Merge.DevctlServes(g.repo) }
 
-// checkMergeRoute refuses flags the plain squash route cannot honor, before
+// checkMergeRoute refuses branch updates on every merge route, before
 // queuing and again before launch for runs resumed from an earlier version.
 func (g *gateRun) checkMergeRoute() error {
-	if !g.runsDevctl() && merge.UpdatesBranch(g.argv) {
-		return gateRefused("--update-branch is unsupported for repositories outside merge.devctlOwners: the squash merge route cannot update the branch; nothing merged")
+	if merge.UpdatesBranch(g.argv) {
+		return gateRefused("--update-branch is disabled: merge the green PR head after merge-result validation; the gate cannot update the branch; nothing merged")
 	}
 	return nil
 }

@@ -255,11 +255,8 @@ func TestGitHubSkillRoutesMultiRepositoryCodeSearchToClones(t *testing.T) {
 	}
 }
 
-// Every gated merge line a shipped skill shows passes --update-branch: from
-// devctl 8.140.0 a head behind its base is exit 3 without it, strict
-// protection or not. The merge skill says what an exit 3 that still says
-// behind gets: the behind rule.
-func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
+// Shipped merge commands preserve the reviewed head instead of updating it.
+func TestGatedMergeLinesPreserveTheHead(t *testing.T) {
 	line := regexp.MustCompile("`devctl pr merge [^`]+`")
 	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -270,8 +267,8 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 			return err
 		}
 		for _, m := range line.FindAllString(string(raw), -1) {
-			if !strings.Contains(m, "--update-branch") {
-				t.Errorf("%s shows %s without --update-branch", path, m)
+			if strings.Contains(m, "--update-branch") {
+				t.Errorf("%s shows head-mutating command %s", path, m)
 			}
 		}
 		return nil
@@ -281,9 +278,10 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	}
 	merge := strings.Join(strings.Fields(Skill("merge")), " ")
 	for _, want := range []string{
-		"`devctl pr merge <owner/repo> <n> --update-branch`",
-		"`--rebase --update-branch`",
-		`3 still "behind": as below, then the same merge again`,
+		"`devctl pr merge <owner/repo> <n>`",
+		"`--rebase`",
+		"report the repository protection requirement",
+		"Never update the branch to retry",
 	} {
 		if !strings.Contains(merge, want) {
 			t.Errorf("the merge skill does not say %q", want)
@@ -303,17 +301,17 @@ func TestRoleSkillsAreHiddenFromTheModel(t *testing.T) {
 	}
 }
 
-// behindRule is what a branch behind its base gets, per merge method: a
-// rebase line's history stays linear, the gate rebasing the branch.
-const behindRule = "a behind branch merges its base and pushes, never on a rebase line"
-
-// The worker rules and the merge skill give a branch behind its base the
-// same rule, word for word.
-func TestWorkerRulesAndMergeSkillShareTheBehindRule(t *testing.T) {
-	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+// Both instructions keep green heads unchanged and require merge-result checks.
+func TestWorkerRulesAndMergeSkillPreserveTheBehindHead(t *testing.T) {
 	for name, text := range map[string]string{"the worker rules": WorkerRules(), "the merge skill": Skill("merge")} {
-		if !strings.Contains(words(text), behindRule) {
-			t.Errorf("%s do not say %q", name, behindRule)
+		words := strings.Join(strings.Fields(text), " ")
+		for _, want := range []string{"merge-result check", "green head"} {
+			if !strings.Contains(words, want) {
+				t.Errorf("%s do not say %q", name, want)
+			}
+		}
+		if strings.Contains(words, "a behind branch merges its base and pushes") {
+			t.Errorf("%s still require a catch-up push", name)
 		}
 	}
 }

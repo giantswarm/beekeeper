@@ -18,7 +18,7 @@ Stricter wins.
 - **Post-merge.** `Part of <full issue URL>`, no auto-close; close with proof.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster: name context/kubeconfig; never write `kube.production`.
 - **Tests.** No local tests/lints: CI checks all; 1 push/round; read failures; `set -o pipefail`. Review proofs.
-- **Git.** No force push (even `--force-with-lease`). Before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. Own worktree; commit, no stash.
+- **Git.** No force push (even `--force-with-lease`). Never update a branch just because it is behind: merge its green head after the merge-result check passes. Own worktree; commit, no stash.
 - **Files.** Artifacts: `<scratchpad>`; scratch also `~/.local/state/<program>/`, not `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`.
 - **Stop**: kill by PID; gated: `beekeeper gate stop`. Move aside; no hard-delete.

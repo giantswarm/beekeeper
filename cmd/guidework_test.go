@@ -104,8 +104,9 @@ func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T
 	w.now = relayNow
 	guide := state.Party{Session: "guide-without-monitor", Name: "Guide fixture"}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.GuideReportsSince = w.now.Add(-time.Minute)
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: w.now.Add(-time.Hour)}}
-		return []state.Event{{Verb: loopFileVerb, Detail: "[fixture-report] issue to file" + fileReportSeparator + "the full problem"}}, nil
+		return []state.Event{{At: w.now, Verb: loopFileVerb, Detail: "[fixture-report] issue to file" + fileReportSeparator + "the full problem"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +231,49 @@ func TestGuidePeerTurnInvalidatesWorkCheck(t *testing.T) {
 				t.Fatalf("freshly checked turn blocked: %s", got)
 			}
 		})
+	}
+}
+
+func TestGuideReportsStartNowAndRetainBoundaryAcrossFeeds(t *testing.T) {
+	now := relayNow
+	problem := func(at time.Time, key string) state.Event {
+		return state.Event{At: at, Verb: loopFileVerb, Detail: "[" + key + "] finding" + fileReportSeparator + "details"}
+	}
+	st := &state.State{}
+	old := problem(now.Add(-time.Hour), "old")
+	if got := guideReportEvents(st, []state.Event{old}, now); len(got) != 0 {
+		t.Fatal("replayed pre-upgrade history")
+	}
+	freshA := problem(now.Add(time.Minute), "fresh-a")
+	freshB := problem(now.Add(2*time.Minute), "fresh-b")
+	if got := guideReportEvents(st, []state.Event{old, freshA, freshB}, now.Add(2*time.Minute)); len(got) != 2 {
+		t.Fatalf("lost fresh reports on first feed: %+v", got)
+	}
+	// A second feed observing the same batch must still see both fresh reports.
+	if got := guideReportEvents(st, []state.Event{old, freshA, freshB}, now.Add(2*time.Minute)); len(got) != 2 {
+		t.Fatalf("lost earlier fresh report on second feed: %+v", got)
+	}
+	if got := guideReportEvents(st, []state.Event{old}, now.Add(3*time.Minute)); len(got) != 0 {
+		t.Fatal("replayed history on another feed")
+	}
+	st.GuideWork = []state.GuideWork{
+		{ID: 1, Source: "old-a", Due: now.Add(-48 * time.Hour), Text: "historical problem alpha"},
+		{ID: 2, Source: "old-b", Due: now.Add(-48 * time.Hour), Text: "historical problem beta"},
+		{ID: 3, Due: now.Add(-48 * time.Hour), Text: "explicit guide task"},
+		{ID: 4, Source: "new-c", Due: now.Add(-12 * time.Hour), Text: "recent problem gamma"},
+	}
+	guideReportEvents(st, nil, now)
+	if len(st.GuideWork) != 3 || st.GuideWork[2].Kind != guideWorkBacklog || guideWorkBlocks(st.GuideWork[2], now) || !guideWorkBlocks(st.GuideWork[0], now) {
+		t.Fatalf("backlog migration: %+v", st.GuideWork)
+	}
+	text := st.GuideWork[2].Text
+	guideReportEvents(st, nil, now)
+	if st.GuideWork[2].Text != text {
+		t.Fatal("backlog migration is not idempotent")
+	}
+	// Aging an earlier item before the backlog entry folds in without repeating the header.
+	guideReportEvents(st, nil, now.Add(24*time.Hour))
+	if len(st.GuideWork) != 2 || strings.Count(st.GuideWork[1].Text, guideBacklogPrefix) != 1 {
+		t.Fatalf("late backlog fold: %+v", st.GuideWork)
 	}
 }
