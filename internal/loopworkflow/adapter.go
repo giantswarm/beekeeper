@@ -149,12 +149,7 @@ func serveGitHub() int {
 	// This fixture repository has a readable main branch and no release
 	// workflows. Delivery recovery must observe that explicitly, without
 	// allowing unrelated or unrecognized external requests.
-	case starts(ghAPI, "-H", "Accept: application/vnd.github.raw") && len(args) == 4 && slices.Contains([]string{
-		"repos/fixture/project/contents/.github/workflows/zz_generated.auto_release.yaml?ref=main",
-		"repos/fixture/project/contents/.github/workflows/auto-release.yaml?ref=main",
-		"repos/fixture/project/contents/.github/workflows/zz_generated.create_release_pr.yaml?ref=main",
-		"repos/fixture/project/contents/.github/workflows/zz_generated.create_release.yaml?ref=main",
-	}, args[3]):
+	case starts(ghAPI, "-H", "Accept: application/vnd.github.raw") && len(args) == 4 && fixtureWorkflowRead(args[3]):
 		fmt.Fprintln(os.Stderr, "gh: Not Found (HTTP 404)")
 		return 1
 	case starts(ghAPI, "repos/fixture/project/branches/main", "--jq", ".name") && len(args) == 4:
@@ -386,4 +381,15 @@ func serveClaude() int {
 		fmt.Fprintln(os.Stderr, "unknown fixture claude command: "+string(raw))
 		return 1
 	}
+}
+
+// fixtureWorkflowRead recognizes raw workflow reads only in the isolated
+// repository at its main ref. Unknown endpoints still fail closed.
+func fixtureWorkflowRead(endpoint string) bool {
+	name, ok := strings.CutPrefix(endpoint, "repos/fixture/project/contents/.github/workflows/")
+	if !ok {
+		return false
+	}
+	name, ok = strings.CutSuffix(name, "?ref=main")
+	return ok && name != "" && !strings.ContainsAny(name, "/?%") && name != "." && name != ".."
 }
