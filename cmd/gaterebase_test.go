@@ -137,7 +137,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 			self, launched := stubSelf(t)
 			asked := stubPullRebase(t, c.r, nil)
 			a := busyLaneApp(t)
-			argv := mergeArgv(scratchRepo, "--rebase", "--update-branch")
+			argv := mergeArgv(scratchRepo, "--rebase")
 			if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != ExitGateQueued {
 				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 			}
@@ -146,7 +146,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 				t.Fatalf("queued command lost arguments: argv %q, command %q", spec.Argv, spec.Command)
 			}
 			// The queued gate receives everything after -- unchanged. At its
-			// turn it must still launch devctl with both flags.
+			// turn it must still launch devctl with the rebase merge method.
 			g := &gateRun{app: a, argv: spec.Command, repo: scratchRepo, pr: 7,
 				release: &github.BaseRelease{Base: mainBranch, Auto: true}}
 			run, err := g.mergeArgv()
@@ -227,9 +227,9 @@ func rebaseTurn(t *testing.T, updateErr error, reads ...github.Rebase) (g *gateR
 }
 
 // A rebase merge that waited in its lane behind the merge that just landed
-// is only behind its base at its turn: GitHub rebases it onto the base, the
-// gate awaits the new head and devctl, unchanged, merges it.
-func TestARebaseMergeBehindItsBaseAtItsTurnIsRebasedAndMerged(t *testing.T) {
+// is only behind its base at its turn: the head stays unchanged and no
+// new CI run is triggered.
+func TestARebaseMergeBehindItsBaseAtItsTurnMergesWithoutUpdating(t *testing.T) {
 	behind := github.Rebase{Known: true, Rebaseable: true, State: github.BehindState, Head: "aaaaaaaaaaaa"}
 	stale := github.Rebase{Known: true, Rebaseable: true, State: github.BehindState, Head: "aaaaaaaaaaaa"}
 	rebased := github.Rebase{Known: true, Rebaseable: true, State: "blocked", Head: "bbbbbbbbbbbb"}
@@ -237,11 +237,11 @@ func TestARebaseMergeBehindItsBaseAtItsTurnIsRebasedAndMerged(t *testing.T) {
 	if err := startMerge(t, g); err != nil {
 		t.Fatalf("exit %d (%v), want 0", Code(err), err)
 	}
-	if *updates != 1 || *asked != 3 {
-		t.Errorf("%d rebase updates, %d reads; want one update, then reads until the new head", *updates, *asked)
+	if *updates != 0 || *asked != 1 {
+		t.Errorf("%d rebase updates, %d reads; want no updates and one read", *updates, *asked)
 	}
-	if d := lastEvent(t, g, "merge.rebased"); !strings.Contains(d, "o/r#7 was behind its base at its turn") || !strings.Contains(d, "(head bbbbbbbbb)") {
-		t.Errorf("merge.rebased event: %q", d)
+	if d := lastEvent(t, g, "merge.rebased"); d != "" {
+		t.Errorf("unexpected branch update: %s", d)
 	}
 	if got, err := os.ReadFile(args); err != nil || !strings.HasPrefix(string(got), "pr merge --no-release-wait o/r 7 --rebase") { //nolint:gosec // the test's own file
 		t.Errorf("devctl ran with %q (%v), want the gated command, ending at the merge in a lane without an installation", got, err)
@@ -262,8 +262,6 @@ func TestARebaseMergeThatCannotCatchUpAtItsTurnIsRefused(t *testing.T) {
 		why       string
 	}{
 		"conflicts": {github.Rebase{Known: true, Rebaseable: true, State: github.DirtyState}, nil, 0, "conflicts with its base"},
-		"not rebased": {github.Rebase{Known: true, Rebaseable: true, State: github.BehindState}, errors.New("merge conflict between base and head"), 1,
-			"which GitHub does not rebase it onto (merge conflict between base and head)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g, _, updates, args := rebaseTurn(t, c.updateErr, c.r)

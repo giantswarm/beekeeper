@@ -172,7 +172,7 @@ func TestLoopRestartKeepsGenuineBranchRepair(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
-	seedOlderRepair(t, r, "branch is behind its base")
+	seedOlderRepair(t, r, "branch conflicts with its base")
 	attempts := 0
 	r.command = func([]string) (string, int) {
 		attempts++
