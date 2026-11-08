@@ -54,7 +54,7 @@ wall-clock time: a machine that slept proves nothing and fails nothing meanwhile
 
 The probe needs no backlog, account or network, so an idle desk is judged too. It
 drives the candidate through real `supervisor loop --once` passes against a scratch
-origin and a fixture GitHub played by the controller's bytes, and proves the merge
+origin and a fixture GitHub played by the candidate's own bytes, and proves the merge
 in the origin. It repeats every five minutes after a pass, and at once after a
 failure or inconclusive run. A probe that cannot be built is inconclusive and
 clears the current pass while retaining prior pass history, so a candidate cannot
@@ -236,16 +236,45 @@ protocol does not claim durable installation on filesystems without them.
 
 ### Workflow fixture compatibility and updater contention
 
-The retained recovery controller supplies the isolated GitHub adapter. Raw
+The controller invokes the candidate’s isolated probe entrypoint. The candidate
+supplies both probe code and the GitHub adapter; the controller reads only its
+verdict. A retained control release still runs its own fixture. Raw
 workflow reads in the fixture repository at its main ref return a normal GitHub
 404 when no workflow exists; they must not become unknown-command failures.
 Reads outside that repository and ref remain unrecognized. The isolated probe
 creates its own configuration and does not inherit the live desk configuration.
 
-Updating the candidate does not replace an older retained controller's adapter.
-If that controller predates the required fixture response, the transition needs
-a reviewed, signed compatible bridge through the normal updater; do not edit the
-installation journal, disable probation or clear its fence manually.
+An already installed controller predating this protocol still supplies its old
+fixture on the first transition. If it rolls a new signed release back with
+`isolated workflow probe failed 3 times`, use the supported one-time recovery:
+
+1. Install the new release through the normal signed updater and retain its exact
+   version and rollback evidence. Do not edit the journal, quarantine or fence.
+2. Run the **candidate binary retained by that installation**, rather than the
+   restored old binary:
+   `<installed-executable>.update/<candidate-sha256> --config <desk-config> self-update --recover-outdated-judge <installed-executable>`.
+   Find the candidate digest in the installation journal. For a root-owned
+   executable, use the retained candidate in its external recovery directory
+   described above. An exact copy of the same signed candidate also works.
+3. Capture command output, the journal's `passed` phase and `judgeRecovery`
+   reason, the `self-update.recovery` event, fence clearance and a subsequent
+   supported state write. Existing services move at their normal quiet boundaries;
+   this command does not restart the supervisor loop. Take the alert snapshot
+   after the actual rollout/proof.
+
+This command requires the running bytes and version to match the candidate
+already verified by the release installer. It refuses other rollback reasons,
+modified artifacts, missing journals and failed or inconclusive candidate-owned
+probes. Under the installation lock it runs the real scratch-origin merge probe,
+then checks live state compatibility under the state and commit locks before
+reinstalling and promoting. It removes only this candidate's quarantine entry,
+preserves the prior target and original reason in `judgeRecovery`, and completes
+the writer fence. Other quarantine and skipped-release records remain intact.
+It may be repeated after interruption; an unfinished replacement must pass the
+probe again. A committed promotion can retry fence completion and logging.
+Passing this isolated recovery proves the candidate workflow, not a completed
+30-minute live probation; the operator's explicit command requests that one-time
+promotion past the outdated judge.
 
 Budget sampling serializes producers and bounds network work separately from
 publishing the observation. Publication waits for the ordinary state lock, up to

@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	probationPrepared    = "prepared"
-	probationPending     = "pending"
-	probationPassed      = "passed"
-	probationRollingBack = "rolling-back"
-	probationRolledBack  = "rolled-back"
+	outdatedJudgeProbeReason = "isolated workflow probe failed 3 times"
+	probationPrepared        = "prepared"
+	probationPending         = "pending"
+	probationPassed          = "passed"
+	probationRollingBack     = "rolling-back"
+	probationRolledBack      = "rolled-back"
 )
 
 // Binary identifies bytes verified by the release installer. A digest alone is
@@ -47,6 +48,8 @@ type Journal struct {
 	// Watched says a recovery controller supervises this candidate's probation:
 	// its verdict decides, and an update waits for it.
 	Watched bool `json:"watched,omitempty"`
+	// JudgeRecovery preserves the original quarantine reason after explicit recovery.
+	JudgeRecovery string `json:"judgeRecovery,omitempty"`
 	// Observed is the controller's durable record of this probation.
 	Observed *Observed `json:"observed,omitempty"`
 }
@@ -655,4 +658,83 @@ func Quarantine(ctx context.Context, path, reason string) error {
 	}
 	j.Quarantine[j.Candidate.Digest] = reason
 	return i.write(j)
+}
+
+// RecoverOutdatedJudge reinstalls only the installer's recorded verified
+// candidate after an isolated-probe rollback. Health is evaluated while holding
+// the installation lock; the state guard must validate compatibility and hold
+// its locks through replacement. No arbitrary downloaded bytes can enter here.
+func RecoverOutdatedJudge(ctx context.Context, target, self, version string, health func(context.Context, string) error, guard func(string, string, func() error) error) error {
+	if health == nil || guard == nil {
+		return errors.New("candidate probe and state guard are required")
+	}
+	i, err := openInstallation(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer i.close()
+	j, err := i.read()
+	if err != nil {
+		return err
+	}
+	if j == nil || j.Previous == nil {
+		return errors.New("no verified candidate and recovery target")
+	}
+	d, err := digest(self)
+	if err != nil {
+		return err
+	}
+	if j.Candidate != (Binary{Version: version, Digest: d}) {
+		return errors.New("running bytes are not the verified journal candidate")
+	}
+	if err := i.recover(j); err != nil {
+		return err
+	}
+	// A committed recovery is repeatable, including fence completion after a crash.
+	if j.Probation == probationPassed && j.JudgeRecovery != "" {
+		return nil
+	}
+	reason := j.Quarantine[d]
+	resuming := j.JudgeRecovery == reason && (j.Probation == probationPrepared || j.Probation == probationPending)
+	if (j.Probation != probationRolledBack && !resuming) || reason != outdatedJudgeProbeReason {
+		return errors.New("candidate was not rolled back solely for isolated workflow probe failures")
+	}
+	artifact, err := i.verify(j.Candidate)
+	if err != nil {
+		return err
+	}
+	if err := health(ctx, artifact); err != nil {
+		return fmt.Errorf("candidate's own probe refused recovery: %w", err)
+	}
+	return guard(version, version, func() error {
+		// Prepared is the normal crash-reconcilable installation transition. Keep
+		// quarantine until promotion so interruption cannot grant probation success.
+		j.Displaced = *j.Previous
+		j.Probation, j.Watched, j.JudgeRecovery = probationPrepared, false, reason
+		if err := i.write(j); err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(filepath.Clean(artifact))
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(raw)
+		if hex.EncodeToString(sum[:]) != d {
+			return errors.New("candidate changed before recovery")
+		}
+		info, err := os.Stat(i.target)
+		if err != nil {
+			return err
+		}
+		if i.external {
+			err = i.swap(artifact)
+		} else {
+			err = durableFile(i.target, raw, info.Mode().Perm())
+		}
+		if err != nil {
+			return err
+		}
+		delete(j.Quarantine, d)
+		return i.promote(j)
+	})
 }

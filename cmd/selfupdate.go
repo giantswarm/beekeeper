@@ -33,6 +33,8 @@ var runStageCanary = loopworkflow.StageCanary
 // selfUpdateCmdName is the self-update command's name.
 const selfUpdateCmdName = "self-update"
 
+const recoverOutdatedJudgeFlag = "recover-outdated-judge"
+
 // verbSelfUpdateCanary is the event logged when a candidate release fails the
 // self-update canary and is skipped.
 const verbSelfUpdateCanary = "self-update.canary"
@@ -76,7 +78,7 @@ var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...s
 
 func (a *app) selfUpdateCmd() *cobra.Command {
 	var check, pluginsOnly, completeProbation, rollback, controller, clearHold, canaryRecorded bool
-	var rollbackReason, version, recoveryTarget string
+	var rollbackReason, version, recoveryTarget, recoverJudge string
 	var stageCanary, canaryBundle, canaryRepo, canaryAllowOrg, canaryRun, canaryScenario, canaryOutput string
 	var canaryProject int
 	var canarySiblings []string
@@ -177,6 +179,9 @@ reset. A development build (version dev) is refused.`,
 					Scenario:  canaryScenario,
 					Siblings:  canarySiblings,
 				}, canaryOutput)
+			}
+			if recoverJudge != "" {
+				return a.recoverOutdatedJudge(cmd.Context(), recoverJudge)
 			}
 			if controller {
 				return a.runRecoveryController(cmd.Context(), a.out, recoveryTarget, every, cmp.Or(step, every))
@@ -294,6 +299,7 @@ reset. A development build (version dev) is refused.`,
 		},
 	}
 	c.Flags().StringVar(&version, hostVersionFlag, "", "install an exact release tag, including a pre-release (works with --check)")
+	c.Flags().StringVar(&recoverJudge, recoverOutdatedJudgeFlag, "", "reinstall and promote this verified journal candidate after an outdated judge rollback (installed executable path)")
 	c.Flags().BoolVar(&completeProbation, "complete-probation", false, "run health checks and promote the installed candidate to last-known-good")
 	c.Flags().BoolVar(&rollback, "rollback", false, "restore the verified previous binary only if live state is compatible")
 	c.Flags().StringVar(&rollbackReason, "rollback-reason", "", "durable quarantine reason for the failed candidate")
@@ -318,6 +324,9 @@ reset. A development build (version dev) is refused.`,
 		_ = c.Flags().MarkHidden(hidden)
 	}
 	c.MarkFlagsRequiredTogether(recoveryControllerFlag, recoveryTargetFlag)
+	for _, flag := range []string{"check", "complete-probation", "rollback", syncPluginsFlag, "stage-canary", hostVersionFlag, recoveryControllerFlag, "clear-recovery-hold"} {
+		c.MarkFlagsMutuallyExclusive(recoverOutdatedJudgeFlag, flag)
+	}
 	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag, "stage-canary")
 	c.MarkFlagsMutuallyExclusive(hostVersionFlag, "complete-probation", "rollback", syncPluginsFlag, "stage-canary")
 	c.MarkFlagsRequiredTogether("rollback", "rollback-reason")
@@ -514,4 +523,38 @@ func (a *app) warnUpdateConfig(w io.Writer) {
 	if err := a.loadConfig(); err != nil {
 		_, _ = fmt.Fprintf(w, "WARNING: the installed binary cannot read the configuration: %v. A newer release may accept or write values this version cannot read; repair the configuration before reverting.\n", err)
 	}
+}
+
+// recoverOutdatedJudge runs from the exact signed candidate previously installed
+// and retained by the updater, never from the old installed recovery target.
+func (a *app) recoverOutdatedJudge(ctx context.Context, target string) error {
+	if err := a.loadConfig(); err != nil {
+		return err
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	scratch, err := os.MkdirTemp("", "beekeeper-judge-recovery-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	if err := update.RecoverOutdatedJudge(ctx, target, self, project.Version(), func(ctx context.Context, binary string) error {
+		return loopworkflow.CandidateProbe(ctx, binary, "", scratch)
+	}, store.RecoverVersion); err != nil {
+		return err
+	}
+	if err := store.ResumeRecoveredWrites(project.Version()); err != nil {
+		return err
+	}
+	if err := store.Record(event(state.Party{Name: selfUpdateCmdName}, verbRecovery, "%s promoted after candidate-owned probe; outdated judge recovery", project.Version())); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(a.out, "Candidate-owned probe passed; verified candidate promoted and recovery fence completed. Existing processes move at their quiet boundaries.")
+	return err
 }
