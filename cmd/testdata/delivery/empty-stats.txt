@@ -1,1 +1,1 @@
-0 released, 0.00 released per day since 2026-01-01T00:00:00Z
+0 released, 0.00 released per day since 2026-01-01T00:00:00Z; mean start to released 0s (0 complete cycles)
