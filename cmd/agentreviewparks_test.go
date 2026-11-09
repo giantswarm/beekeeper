@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const pendingReviewWorktree = "/fixture/worktree"
+
 const multiParkSecondPR = "o/r#8"
 
 func TestReviewParksRetainEachPullRequest(t *testing.T) {
@@ -209,7 +211,7 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 			t.Cleanup(func() { recoverParkReviewHead = old })
 			readable := false
 			recoverParkReviewHead = func(_ context.Context, on, dir string) string {
-				if on != loopPR || dir != "/fixture/worktree" {
+				if on != loopPR || dir != pendingReviewWorktree {
 					t.Fatalf("verification %s in %s", on, dir)
 				}
 				if !readable {
@@ -221,11 +223,11 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 			remaining := "prove after merge"
 			p := &state.Park{On: loopPR, At: r.a.now, Waits: deskReviewWait, PostMerge: &remaining}
 			if !legacy {
-				p.Worktree = "/fixture/worktree"
+				p.Worktree = pendingReviewWorktree
 			}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: party, Task: loopIssueTask, Park: p}}
-				st.Starts = append(st.Starts, state.Start{Party: party, Dir: "/fixture/worktree"})
+				st.Starts = append(st.Starts, state.Start{Party: party, Dir: pendingReviewWorktree})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)

@@ -859,12 +859,12 @@ func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
 	oldHead, oldWorktree := parkReviewHead, parkWorktree
 	t.Cleanup(func() { parkReviewHead, parkWorktree = oldHead, oldWorktree })
 	parkReviewHead = func(string) string { return "" }
-	parkWorktree = func(string) string { return "/fixture/worktree" }
+	parkWorktree = func(string) string { return pendingReviewWorktree }
 	if err := park(t, w, "--on", refOne, "--post-merge", "prove", deskReviewWait); err != nil {
 		t.Fatal(err)
 	}
 	p := agentOf(t, w).Park
-	if p.Worktree != "/fixture/worktree" || p.ReviewHead != "" || p.PostMerge == nil || *p.PostMerge != "prove" {
+	if p.Worktree != pendingReviewWorktree || p.ReviewHead != "" || p.PostMerge == nil || *p.PostMerge != "prove" {
 		t.Fatalf("pending park: %+v", p)
 	}
 	out := w.out.(*bytes.Buffer).String()
