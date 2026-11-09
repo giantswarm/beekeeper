@@ -1973,9 +1973,11 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
-	// Intake never owns the refill stream: a slow or failed intake must
-	// leave existing ranked work eligible for every pass.
-	if len(intakeActs) > 0 {
+	// When a worker finishes (KindDone) and files a follow-up issue in the
+	// same pass, intake and rank that issue before refilling the freed slot;
+	// otherwise run intake concurrently in its own stream.
+	intakeBeforeFill := len(doneActs) > 0 && len(intakeActs) > 0
+	if len(intakeActs) > 0 && !intakeBeforeFill {
 		launch("stream:intake", func() error {
 			for _, act := range intakeActs {
 				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
@@ -2005,6 +2007,19 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		var errs []error
 		if err := l.settleStaleNext(staleActs); err != nil {
 			errs = append(errs, err)
+		}
+		// An intake still in flight from an earlier pass skips only this
+		// pass's intake; the follow-up issue it ranks waits for a later fill.
+		if intakeBeforeFill && l.beginInFlight("stream:intake") {
+			func() {
+				defer l.endInFlight("stream:intake")
+				for _, act := range intakeActs {
+					if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+						errs = append(errs, err)
+						return
+					}
+				}
+			}()
 		}
 		for _, act := range nextActs {
 			if err := l.execAction(ctx, st, claims, failures, act, reservations); err != nil {
