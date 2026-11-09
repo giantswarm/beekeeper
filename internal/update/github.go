@@ -31,10 +31,6 @@ const emptyRefAttempts = 3
 // online.
 var errIncompleteLookup = errors.New("refusing an incomplete lookup")
 
-// assetUploadWindow bounds how long a public release without its assets
-// counts as still uploading; uploads land 10 to 18 minutes after the tag.
-const assetUploadWindow = time.Hour
-
 type githubSource struct {
 	selfupdate.Source // retain the upstream asset downloader
 	api               *github.Client
@@ -257,16 +253,9 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 		if binary {
 			missing += ".bundle"
 		}
-		// A release past the upload window lost its assets for good: holding
-		// every update back for it would last until the next release.
-		if published := release.GetPublishedAt().Time; !published.IsZero() && time.Since(published) > assetUploadWindow {
-			skipped = append(skipped, candidate.tag+": no "+missing)
-			continue
-		}
-		// A public release can precede the upload job by the duration of the
-		// cross-platform build. Falling back here would falsely call an older
-		// version latest. Leave Latest unset until the signed asset pair exists.
-		return nil, fmt.Errorf("public release %s is still being prepared: missing %s; retry after its release assets finish uploading: %w", candidate.tag, missing, errIncompleteLookup)
+		// Published metadata precedes the asset upload job. Keep looking for
+		// the newest usable release rather than blocking every update on it.
+		skipped = append(skipped, candidate.tag+": no "+missing)
 	}
 	return nil, nil
 }

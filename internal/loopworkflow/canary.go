@@ -655,13 +655,28 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return "", err
 	}
-	for name, target := range map[string]string{ghCmd: ghBin, gitCmd: serverBin, claudeCmd: serverBin} {
+	for name, target := range map[string]string{"real-gh": ghBin, gitCmd: serverBin, claudeCmd: serverBin} {
 		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
 			return "", err
 		}
 	}
 	env, err = writeIsolatedGitAuth(dir, binDir, env)
 	if err != nil {
+		return "", err
+	}
+
+	// Budget probes intentionally strip ambient GH_TOKEN and ask the stored
+	// login for a credential. Supply only this canary's explicit credential
+	// through its isolated CLI; never fall back to the host's stored login.
+	ghWrapper := `#!/bin/sh
+set -eu
+if [ "$#" -eq 4 ] && [ "$1" = auth ] && [ "$2" = token ] && [ "$3" = --hostname ] && [ "$4" = github.com ]; then
+  printf '%s\n' "${BEEKEEPER_CANARY_GITHUB_TOKEN:?}"
+  exit 0
+fi
+exec "$(dirname "$0")/real-gh" "$@"
+`
+	if err := os.WriteFile(filepath.Join(binDir, ghCmd), []byte(ghWrapper), 0o700); err != nil { //nolint:gosec // G306: isolated sandbox CLI helper must be executable by its owner
 		return "", err
 	}
 
@@ -708,6 +723,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		"PATH="+binDir+":/usr/bin:/bin",
 		"BEEKEEPER_CONFIG="+filepath.Join(dir, "config.yaml"),
 		"GH_TOKEN="+sandboxToken,
+		"BEEKEEPER_CANARY_GITHUB_TOKEN="+sandboxToken,
 		"BEEKEEPER_GITHUB_API="+apiURL,
 		"GIT_ALLOW_PROTOCOL=file:https",
 		"GIT_AUTHOR_NAME=Beekeeper Canary",

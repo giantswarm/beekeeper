@@ -2923,6 +2923,9 @@ type GitHub struct {
 	// agent writes to (default giantswarm); the hook refuses every GitHub
 	// write to any other repository. An empty list turns the guard off.
 	AllowedOrgs []string `yaml:"allowedOrgs"`
+	// PublicOnlyOwners restricts these owners to verified public repositories
+	// at task admission and write boundaries, independently of AllowedOrgs.
+	PublicOnlyOwners []string `yaml:"publicOnlyOwners"`
 	// UpstreamReview is where a change meant for an upstream project is
 	// queued for a human's decision (an issue, owner/repo#n), named in the
 	// refusal; unset, the refusal names the team's upstream review list.
@@ -4070,6 +4073,11 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	for _, owner := range c.GitHub.PublicOnlyOwners {
+		if owner == "" || strings.TrimSpace(owner) != owner || strings.ContainsAny(owner, "/ *?\\\t\r\n") {
+			report(fmt.Errorf("github.publicOnlyOwners: invalid owner %q", owner))
+		}
+	}
 	if c.Delivery.StallAfter.Duration < 0 {
 		report(fmt.Errorf("delivery.stallAfter must be positive"))
 	}

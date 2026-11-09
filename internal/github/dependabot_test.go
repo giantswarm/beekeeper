@@ -29,7 +29,7 @@ func TestReadDependabotAlert(t *testing.T) {
 }
 
 func TestDependabotUnavailableIsNeverFixed(t *testing.T) {
-	for _, response := range []string{`{}`, `null`, `[]`, `{"number":8,"state":"fixed"}`, `{"number":7,"state":"fixed","html_url":"url"}`, `{"number":8,"state":"unexpected","html_url":"url"}`, `{"number":8,"html_url":"url"}`, `not JSON`} {
+	for _, response := range []string{`{}`, nullResponseFixture, `[]`, `{"number":8,"state":"fixed"}`, `{"number":7,"state":"fixed","html_url":"url"}`, `{"number":8,"state":"unexpected","html_url":"url"}`, `{"number":8,"html_url":"url"}`, `not JSON`} {
 		run := func(context.Context, ...string) ([]byte, error) { return []byte(response), nil }
 		if alert, err := ReadDependabotAlert(context.Background(), run, dependabotTestRepo, 8); err == nil || alert.State != "" {
 			t.Errorf("response %q: alert %+v, error %v", response, alert, err)

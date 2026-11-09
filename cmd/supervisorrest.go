@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 )
@@ -12,6 +16,39 @@ import (
 const loopRESTFile = "loop-rest.json"
 const loopRESTLimit = 1000
 const loopRESTReserve = 50
+
+// Emergency access disables the shared floor, not the background scan
+// allowance. Keep that allowance independent of GraphQL admission so scans
+// cannot consume the requests the emergency access is meant to preserve.
+func (a *app) loopScanREST(ctx context.Context, step string, run func() error) error {
+	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
+	held, err := lock.TryLockContext(ctx, 100*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return errLoopLater
+	}
+	defer func() { _ = lock.Unlock() }()
+	ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
+	before, err := readLoopGraphQLBudget(a, ctx)
+	if err != nil {
+		return fmt.Errorf("loop REST budget unavailable: %w", errLoopLater)
+	}
+	spend, err := a.reserveLoopREST(before, step)
+	if err != nil {
+		return err
+	}
+	runErr := run()
+	after, err := readLoopGraphQLBudget(a, ctx)
+	if err != nil {
+		return fmt.Errorf("loop REST spend unknown; reservation retained: %w", errLoopLater)
+	}
+	if err := a.settleLoopREST(before, after, spend, step); err != nil {
+		return err
+	}
+	return runErr
+}
 
 type loopRESTSpend struct {
 	Reset     time.Time      `json:"reset"`
@@ -37,7 +74,7 @@ func (a *app) reserveLoopREST(b github.Budget, step string) (loopRESTSpend, erro
 		spend.Steps = map[string]int{}
 	}
 	spend.Remaining = b.Remaining
-	if spend.Spent+loopRESTReserve > loopRESTLimit || b.Remaining < a.cfg.GitHub.Floor+loopRESTReserve {
+	if spend.Spent+loopRESTReserve > loopRESTLimit || b.Remaining < max(0, a.cfg.GitHub.Floor)+loopRESTReserve {
 		return spend, fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, loopRESTLimit, b.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
 	}
 	spend.Spent += loopRESTReserve

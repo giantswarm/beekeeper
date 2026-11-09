@@ -18,7 +18,66 @@ import (
 const (
 	loopFillKey             = "next capacity "
 	deliveryReservationsKey = "delivery reservations "
+	// openPullRefusal is how agents start refuses an item whose pull
+	// request is open: its delivery is in flight.
+	openPullRefusal = "already has an open pull request"
+	// staleNextAfter is the age past which a done event's next action is
+	// left to the refill instead of starting a board item itself.
+	staleNextAfter = time.Hour
+	// staleNextWhat is what a stale next action is recorded as.
+	staleNextWhat = "superseded by the capacity refill: the done event is stale"
 )
+
+// staleNext reports whether act is a next action for a done event older than
+// staleNextAfter or than the start of this running loop. The refill fills
+// every free slot without a done event, so such an action has nothing left
+// to start; a backlog of them only kept the refill from running.
+func (l *supervisorLoop) staleNext(act superloop.Action) bool {
+	if act.Kind != superloop.KindNext || act.Event == nil || act.Event.At.IsZero() {
+		return false
+	}
+	at := act.Event.At
+	// A single pass (--once, --dry-run) is a loop of its own: its start
+	// says nothing about the events before it.
+	running := !l.once && !l.dryRun
+	return running && at.Before(l.startedAt) || l.a.timeNow().Sub(at) > staleNextAfter
+}
+
+// settleStaleNext records the stale next actions as taken, in one write and
+// without a board read or a start, so no later plan holds them, and says how
+// many once.
+func (l *supervisorLoop) settleStaleNext(stale []superloop.Action) error {
+	var evs []state.Event
+	var settled []superloop.Action
+	for _, act := range stale {
+		if l.isCompleted(act.Key) {
+			continue
+		}
+		evs = append(evs, about(event(loopParty, "supervisor."+superloop.KindNext, "%s", superloop.Detail(act, staleNextWhat)), act.Ref))
+		settled = append(settled, act)
+	}
+	if len(evs) == 0 {
+		return nil
+	}
+	if err := l.a.store.Record(evs...); err != nil {
+		return fmt.Errorf("recording stale next actions: %w", err)
+	}
+	for _, act := range settled {
+		l.rememberAction(act)
+	}
+	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR NEXT SKIPPED %d stale done events; the refill fills capacity\n", len(settled))
+	return err
+}
+
+// nextFailed records err as act's failure: a next action that cannot settle
+// waits for its retry, and the refill still runs in the same pass.
+func (l *supervisorLoop) nextFailed(act superloop.Action, failures map[string]loopFailure, err error) error {
+	if failures == nil {
+		_, werr := fmt.Fprintf(l.a.out, "SUPERVISOR NEXT FAILED %s: %v\n", act.Key, err)
+		return werr
+	}
+	return l.failed(act, failures, err)
+}
 
 // A command refusal is item-specific; admission gates remain pass-wide waits.
 type refillStartError struct {

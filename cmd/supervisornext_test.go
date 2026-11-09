@@ -17,10 +17,10 @@ func TestLoopStaleNextSettlesBeforeClaimReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.once = true
-	l.since = r.a.now.Add(-30 * time.Minute)
+	l.startedAt = r.a.now.Add(-30 * time.Minute)
 	acts := []superloop.Action{}
 	claims := map[string]loopClaim{}
-	for i, age := range []time.Duration{6 * 24 * time.Hour, 2 * time.Hour, 31 * time.Minute} {
+	for i, age := range []time.Duration{6 * 24 * time.Hour, 2 * time.Hour, 61 * time.Minute} {
 		key := fmt.Sprintf("stale next %d", i)
 		acts = append(acts, superloop.Action{Key: key, Kind: superloop.KindNext, Event: &superloop.Event{At: r.a.now.Add(-age), Verb: superloop.VerbDone}})
 		claims[key] = loopClaim{target: "interrupted worker", at: r.a.now.Add(-age)}
@@ -40,7 +40,7 @@ func TestLoopStaleNextSettlesBeforeClaimReconciliation(t *testing.T) {
 			t.Fatalf("unsettled %s", act.Key)
 		}
 	}
-	if strings.Count(r.out.String(), "superseded 3 stale actions") != 1 {
+	if strings.Count(r.out.String(), "SKIPPED 3 stale done events") != 1 {
 		t.Fatal(r.out)
 	}
 	// Persisted taken records suppress the backlog after a process restart too.
@@ -61,7 +61,7 @@ func TestLoopStaleNextBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.since = r.a.now.Add(-2 * time.Hour)
+	l.startedAt = r.a.now.Add(-2 * time.Hour)
 	for _, tc := range []struct {
 		age   time.Duration
 		stale bool

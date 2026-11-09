@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 // The upstream guard refuses an agent's GitHub write to a repository outside
@@ -20,7 +22,8 @@ import (
 type Upstream struct {
 	// Orgs are the GitHub organizations and accounts an agent writes to
 	// (github.allowedOrgs); empty, the guard is off.
-	Orgs []string
+	Orgs       []string
+	Visibility github.VisibilityPolicy
 	// Review is where an upstream candidate is queued (github.upstreamReview),
 	// named in the refusal; "" names the team's upstream review list.
 	Review string
@@ -32,7 +35,7 @@ type Upstream struct {
 
 // upstreamWrite is a write the upstream guard refuses: what writes, where
 // to, and the command line segment it is.
-type upstreamWrite struct{ what, repo, command string }
+type upstreamWrite struct{ what, repo, command, refusal string }
 
 const (
 	ghRepoVerb   = "repo"
@@ -96,17 +99,20 @@ var writeMethods = map[string]bool{methodPost: true, "PATCH": true, "PUT": true,
 // methodPost is the method a body implies.
 const methodPost = "POST"
 
-func (u Upstream) on() bool { return len(u.Orgs) > 0 }
+func (u Upstream) on() bool { return len(u.Orgs) > 0 || len(u.Visibility.PublicOnlyOwners) > 0 }
 
 // allows reports whether owner is one of the organizations.
 func (u Upstream) allows(owner string) bool {
-	return slices.ContainsFunc(u.Orgs, func(o string) bool { return strings.EqualFold(o, owner) })
+	return len(u.Orgs) == 0 || slices.ContainsFunc(u.Orgs, func(o string) bool { return strings.EqualFold(o, owner) })
 }
 
 const unresolvedAPIRepo = "an unresolved gh api repository"
 
 // reason is the one-line refusal of w.
 func (u Upstream) reason(w upstreamWrite) string {
+	if w.refusal != "" {
+		return "Refused: " + w.refusal
+	}
 	if w.repo == unresolvedAPIRepo {
 		return "Refused: cannot resolve the gh api repository; write the literal repos/<owner>/<repo>/... path."
 	}
@@ -271,10 +277,19 @@ func (u Upstream) write(words []string, cwd string, known bool, vars map[string]
 	if repo == "" {
 		return nil
 	}
-	if owner, _, _ := strings.Cut(repo, "/"); u.allows(owner) {
-		return nil
+	return u.checkWrite(what, repo)
+}
+
+// checkWrite applies owner and visibility policy to the resolved target.
+func (u Upstream) checkWrite(what, repo string) *upstreamWrite {
+	owner, _, _ := strings.Cut(repo, "/")
+	if !u.allows(owner) {
+		return &upstreamWrite{what: what, repo: repo}
 	}
-	return &upstreamWrite{what: what, repo: repo}
+	if err := u.Visibility.Check(repo); err != nil {
+		return &upstreamWrite{what: what, repo: repo, refusal: err.Error()}
+	}
+	return nil
 }
 
 // ghWrite is what a gh call writes and the repository it writes to; "" for
@@ -454,13 +469,16 @@ func (u Upstream) gqlWrite(via, text string) (what, repo string) {
 	if !gqlMutation.MatchString(text) {
 		return "", ""
 	}
+	if len(u.Visibility.PublicOnlyOwners) > 0 {
+		return via, "an unresolved GraphQL mutation repository"
+	}
 	what = via + " (" + strings.TrimSuffix(strings.TrimSpace(gqlMutation.FindString(text)), "(") + ")"
 	owners := gqlOwner.FindAllStringSubmatch(text, -1)
 	if len(owners) == 0 {
 		return what, "a repository the mutation names by node id only (write it as gh pr or gh issue with --repo)"
 	}
 	for _, m := range owners {
-		if o := m[1] + m[2]; !u.allows(o) {
+		if o := m[1] + m[2]; !u.allows(o) || u.Visibility.Restricted(o) {
 			return what, o + "/*"
 		}
 	}
@@ -669,21 +687,41 @@ func repoSlug(s string) string {
 	return ""
 }
 
+// Include repository mutations which post no text as well as comment tools.
+func upstreamConnectorWrites(tool string) bool {
+	if postsToGitHub(tool) {
+		return true
+	}
+	for _, verb := range []string{"create_issue", "update_issue", "create_or_update_file", "delete_file", "push_files", "create_branch", "merge_pull_request", "create_repository", "fork_repository"} {
+		if strings.HasSuffix(tool, "__"+verb) {
+			return true
+		}
+	}
+	return false
+}
+
 // ownerKey is the input of a GitHub connector tool that names the owner.
 const ownerKey = "owner"
 
 // connectorWrite is the refused write of a GitHub connector (MCP) tool that
 // posts: its owner input outside the organizations; nil for none.
 func (u Upstream) connectorWrite(tool string, input map[string]any) *upstreamWrite {
-	if !u.on() || !strings.HasPrefix(tool, mcpPrefix) || !postsToGitHub(tool) {
+	if !u.on() || !strings.HasPrefix(tool, mcpPrefix) || !upstreamConnectorWrites(tool) {
 		return nil
 	}
 	owner, _ := input[ownerKey].(string)
-	if owner == "" || u.allows(owner) {
+	if owner == "" && len(u.Visibility.PublicOnlyOwners) == 0 {
 		return nil
 	}
 	repo, _ := input["repo"].(string)
-	return &upstreamWrite{what: tool, repo: owner + "/" + repo, command: tool}
+	w := u.checkWrite(tool, owner+"/"+repo)
+	if owner == "" && len(u.Visibility.PublicOnlyOwners) > 0 {
+		w = &upstreamWrite{what: tool, repo: "unknown", refusal: "cannot resolve repository visibility for connector write"}
+	}
+	if w != nil {
+		w.command = tool
+	}
+	return w
 }
 
 // commandLimit bounds the command a hook.refused event records.

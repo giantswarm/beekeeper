@@ -1394,3 +1394,23 @@ func TestProjectsPaths(t *testing.T) {
 		t.Fatal("accepted relative worktree root")
 	}
 }
+
+func TestPublicOnlyOwnersConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("github:\n  allowedOrgs: [example]\n  publicOnlyOwners: [EXAMPLE]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.GitHub.PublicOnlyOwners, []string{"EXAMPLE"}) {
+		t.Fatalf("visibility restriction = %v", c.GitHub.PublicOnlyOwners)
+	}
+	for _, owner := range []string{"", "example/repo", " example", "*"} {
+		c.GitHub.PublicOnlyOwners = []string{owner}
+		if err := c.validate(); err == nil {
+			t.Errorf("invalid owner %q accepted", owner)
+		}
+	}
+}

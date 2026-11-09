@@ -72,7 +72,7 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 
 func TestLookupRejectsIncompleteDraftSearch(t *testing.T) {
 	for name, search := range map[string]string{
-		"no search data":               "null",
+		"no search data":               nullResponseFixture,
 		"search ends before its count": `{"issueCount":51,"nodes":[],"pageInfo":{"hasNextPage":false}}`,
 		"missing cursor":               `{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}`,
 		"nonadvancing cursor":          `{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"unchanged"}}`,

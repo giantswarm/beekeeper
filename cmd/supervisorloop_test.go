@@ -231,6 +231,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	t.Cleanup(func() { readLoopGraphQLBudget = oldBudget })
 	readLoopGraphQLBudget = func(a *app, _ context.Context) (github.Budget, error) {
 		st, err := a.store.Read()
+		if err == nil && st.Budget == nil && a.cfg.GitHub.Floor <= 0 {
+			return github.Budget{Remaining: 4900, Limit: 5000, Reset: a.timeNow().Add(time.Hour)}, nil
+		}
 		if err != nil || st.Budget == nil {
 			return github.Budget{}, err
 		}

@@ -154,6 +154,9 @@ var readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, er
 // renewing a blind hourly hold.
 func (a *app) loopGitHub(ctx context.Context, step string, run func() error) error {
 	if a.cfg.GitHub.Floor <= 0 {
+		if step == "inventory" || step == loopSweepStep {
+			return a.loopScanREST(ctx, step, run)
+		}
 		return run()
 	}
 	st, err := a.store.Read()

@@ -385,6 +385,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
+	if err := a.checkRepositoryVisibility(ctx, repo); err != nil {
+		return gateRefused("%s", err)
+	}
 	if pr != 0 && a.cfg.Merge.Methods[repo] == mergeMethodRebase {
 		argv = merge.RequireRebase(argv)
 	}
@@ -921,6 +924,7 @@ func (g *gateRun) reloadQueueConfig() error {
 		}
 	}
 	next := *g.cfg
+	next.GitHub.PublicOnlyOwners = c.GitHub.PublicOnlyOwners
 	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
 	g.cfg = &next
 	g.lane = lane
@@ -1620,6 +1624,9 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 // than merge.cap devctl merges and promotes and its party may start one more
 // (sessionWait), and runs devctl.
 func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error) {
+	if err := g.checkRepositoryVisibility(g.ctx, g.repo); err != nil {
+		return "", g.refuseRunning("%s", err)
+	}
 	if g.runsDevctl() {
 		// devctl refuses to run behind its latest release (exit 7): a merge
 		// queued behind a devctl release starts on that release.

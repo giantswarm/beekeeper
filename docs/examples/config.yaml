@@ -150,6 +150,7 @@ github:
   floor: 2500               # the default; budget under which GitHub work stops
   urgentBound: 200          # the default; what an urgent merge (lanes urgent) keeps for itself under the floor
   probeRepo: example-org/tools   # default: giantswarm/beekeeper; any repository the token can read
+  publicOnlyOwners: []         # optionally [example-org]: refuse private/internal or unreadable repositories
   allowedOrgs: [example-org]     # default: [giantswarm]; the hook refuses every GitHub write to a repository of any other owner
   upstreamReview: example-org/issues#1   # where a change meant for upstream is queued; named in the refusal
 

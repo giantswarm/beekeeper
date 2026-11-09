@@ -61,6 +61,9 @@ func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, u
 	if !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
 		return refused("merge repository is outside the coordinator allowlist")
 	}
+	if err := a.checkRepositoryVisibility(ctx, use.Repository); err != nil {
+		return err
+	}
 	lane := a.cfg.LaneOf(use.Repository)
 	now := time.Now()
 	_, workerIndex := executionRecord(st, use.Ref)
