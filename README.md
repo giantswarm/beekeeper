@@ -109,9 +109,11 @@ search. The loop reuses each inventory for five minutes, then checks the latest
 updated pull in all states with an ETag: an unchanged response costs no REST
 core points and skips the GraphQL inventory. A full refresh runs at least hourly;
 missing validators and failed or incomplete reads never certify an empty backlog.
-With budget admission enabled, background inventory and orphan scans share a
+Background inventory and orphan scans always share a
 separate durable allowance of 1,000 REST points per window, reserving 50 points
-before a batch and preserving `github.floor` for other work. Fresh conditional
+before a batch and preserving an enabled `github.floor` for other work. Disabling
+the shared floor for emergency access does not disable this scan allowance or
+make scans depend on GraphQL admission. Fresh conditional
 budget samples settle the reservation; an interrupted or unreadable sample keeps
 it. Concurrent callers' spending during a batch counts conservatively. Exhausting
 this allowance holds background scans until reset; tracked PR reads, reviews and
