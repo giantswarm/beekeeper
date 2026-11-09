@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -91,7 +90,7 @@ func fakePlugins(t *testing.T, ps []installedPlugin) *[]string {
 	var ran []string
 	prevPin, prevUnder, prevInstalled := pinMarketplace, syncsUnder, runsInstalled
 	t.Cleanup(func() { pinMarketplace, syncsUnder, runsInstalled = prevPin, prevUnder, prevInstalled })
-	pinMarketplace = func(string, string) error { return nil }
+	pinMarketplace = func(context.Context, string, string) error { return nil }
 	syncsUnder = func(string) bool { return true }
 	// Keep the installed-binary decision made by asBinary, when present.
 	installed := runsInstalled
@@ -417,35 +416,46 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			original := []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper","ref":"main","sha":"newer-candidate"},"installLocation":"unchanged"},"other":{"source":{"source":"git","ref":"main"}}}`)
+			original := []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper","ref":"old"}},"other":{"source":{"source":"git","ref":"main"}}}`)
 			if err := os.WriteFile(path, original, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			pinMarketplace = realPin
-			run := claudePlugin
-			claudePlugin = func(ctx context.Context, args ...string) error {
-				raw, err := os.ReadFile(filepath.Clean(path))
-				if err != nil {
-					t.Fatal(err)
+			prev := verifyMarketplace
+			t.Cleanup(func() { verifyMarketplace = prev })
+			verifyMarketplace = func(_ context.Context, name string) error {
+				if name != "beekeeper" {
+					t.Fatalf("marketplace = %s", name)
 				}
-				var entries map[string]struct {
-					Source          struct{ Ref, Repo, SHA string }
-					InstallLocation string
-				}
-				if err := json.Unmarshal(raw, &entries); err != nil {
-					t.Fatal(err)
-				}
-				got := entries["beekeeper"]
-				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != litUnchanged || entries["other"].Source.Ref != mainBranch {
-					t.Fatalf("registry at sync: %s", raw)
-				}
-				return run(ctx, args...)
+				return nil
 			}
-			syncListed(context.Background(), io.Discard, []installedPlugin{{ID: beekeeperID, InstallPath: dir}}, true)
-			if len(*ran) != 2 {
-				t.Fatalf("commands = %v", *ran)
+			if !syncListed(context.Background(), io.Discard, []installedPlugin{{ID: beekeeperID, InstallPath: dir}}, true) {
+				t.Fatal("sync failed")
+			}
+			want := []string{"marketplace add giantswarm/beekeeper#" + version, refreshMarketplace, updateNoScope}
+			if !slices.Equal(*ran, want) {
+				t.Fatalf("commands = %v, want %v", *ran, want)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(raw, original) {
+				t.Fatalf("registry changed directly: %s, %v", raw, err)
 			}
 		})
+	}
+}
+
+func TestFailedPluginSyncRemainsRetryable(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+	pinMarketplace = func(context.Context, string, string) error { return os.ErrNotExist }
+	beekeeper(t, "timer")
+	if recordedSync(dir) != "" {
+		t.Fatal("failed sync recorded")
+	}
+	pinMarketplace = func(context.Context, string, string) error { return nil }
+	beekeeper(t, "timer")
+	if len(*ran) == 0 || recordedSync(dir) != newBinary {
+		t.Fatal("failed sync was not retried")
 	}
 }
 
@@ -477,5 +487,21 @@ func TestScratchDirectoriesLeavePluginUntouched(t *testing.T) {
 				t.Fatal("scratch run synced")
 			}
 		})
+	}
+}
+
+func TestPluginSyncRejectsUnverifiedInstall(t *testing.T) {
+	asBinary(t, newBinary)
+	fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+	claudePlugin = func(context.Context, ...string) error { return nil }
+	listPlugins = func(context.Context) ([]installedPlugin, error) {
+		return []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t, "lease")}}, nil
+	}
+	var out bytes.Buffer
+	if syncListed(context.Background(), &out, []installedPlugin{{ID: beekeeperID, InstallPath: "old"}}, true) {
+		t.Fatal("stale installed skills accepted")
+	}
+	if !strings.Contains(out.String(), "did not verify") {
+		t.Fatalf("output = %s", out.String())
 	}
 }
