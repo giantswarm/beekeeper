@@ -454,6 +454,9 @@ func TestGuideHandoverAndStartReportAllProviderSubscriptions(t *testing.T) {
 
 	runLive(t, a, map[int]string{1: "Guide run 1"})
 	a.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s1")
+	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", "Guide run 1")
 	startOut, err := runIn(a, a.guideCmd(), "start")
 	if err != nil {
 		t.Fatalf("guide start: %v", err)
