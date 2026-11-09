@@ -7,7 +7,7 @@ The guide reads this at `GUIDE RELAY DUE`, in a headless turn, and as a first gu
   beekeeper starts "Guide run N+1" as a fresh session and opens the relay to it. Its headless first
   turn takes the role with `beekeeper guide start`, checks owned work with `beekeeper guide work check` and ends. Once that turn ended, the relay prints
   one SendMessage to the successor's `local_` id: the guide makes exactly that call, which has the
-  desktop start the successor's CLI, where it reads `beekeeper guide handover --prompt`, arms `beekeeper guide watch` and
+  desktop start the successor's CLI, where it reads `beekeeper guide handover --prompt` (including every configured provider's subscription usage against pace and reset), arms `beekeeper guide watch` and
   acknowledges by name. What is not in beekeeper goes to it by `SendMessage` after that. Once
   `beekeeper guide status` exits 4 here, the guide stops its Monitor, leaves nothing running and
   ends. A relay not taken expires and the guide carries on. After a crash the standby unit starts

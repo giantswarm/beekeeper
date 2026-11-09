@@ -168,15 +168,16 @@ func (v *capacityView) capLocal() *capacityView {
 // bucketView is one usage bucket's windows and derived target within a
 // multi-bucket provider such as agy.
 type bucketView struct {
-	Name     string       `json:"name"`
-	Busy     []string     `json:"busy"`
-	Ceiling  int          `json:"ceiling"`
-	Room     int          `json:"room"`
-	FiveHour *usageWindow `json:"fiveHour,omitempty"`
-	SevenDay *usageWindow `json:"sevenDay,omitempty"`
-	Pace     *float64     `json:"pace,omitempty"`
-	High     bool         `json:"high,omitempty"`
-	Blocks   []string     `json:"blocks,omitempty"`
+	Name      string       `json:"name"`
+	Busy      []string     `json:"busy"`
+	Ceiling   int          `json:"ceiling"`
+	Room      int          `json:"room"`
+	FiveHour  *usageWindow `json:"fiveHour,omitempty"`
+	SevenDay  *usageWindow `json:"sevenDay,omitempty"`
+	Pace      *float64     `json:"pace,omitempty"`
+	High      bool         `json:"high,omitempty"`
+	Underused bool         `json:"underused,omitempty"`
+	Blocks    []string     `json:"blocks,omitempty"`
 }
 
 func (b *bucketView) windowsLine(now time.Time) string {
@@ -199,6 +200,7 @@ type providerView struct {
 	bucketOrder []string
 	High        bool     `json:"high,omitempty"`
 	HighPercent float64  `json:"highPercent,omitempty"`
+	Underused   bool     `json:"underused,omitempty"`
 	Stale       bool     `json:"stale,omitempty"`
 	Error       string   `json:"error,omitempty"`
 	Blocks      []string `json:"blocks,omitempty"`
@@ -949,6 +951,22 @@ type providerReadingResult struct {
 	constraintCeiling int
 }
 
+// windowUnderused reports whether sd's 7-day usage is heavily behind its pace
+// at now according to u's underuse thresholds.
+func windowUnderused(sd *usageWindow, u config.Usage, now time.Time) bool {
+	ratio := u.EffectiveUnderuseRatio()
+	if ratio <= 0 || sd == nil || sd.Pace == nil {
+		return false
+	}
+	if *sd.Pace+1e-9 < u.EffectiveUnderuseMinPace() {
+		return false
+	}
+	if !sd.ResetsAt.IsZero() && sd.ResetsAt.Sub(now) <= u.EffectiveUnderuseMinRemaining() {
+		return false
+	}
+	return sd.UsedPercent+1e-9 < *sd.Pace*ratio
+}
+
 func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
 	return buildProviderForStart(name, pCfg, pa, res, now, 0)
 }
@@ -1039,17 +1057,22 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 			if !high {
 				allHigh = false
 			}
+			underused := windowUnderused(sd, pCfg.Usage, now)
+			if underused {
+				pv.Underused = true
+			}
 			maxBucketCeiling = max(maxBucketCeiling, dp.Ceiling)
 			pv.Buckets[bName] = &bucketView{
-				Name:     bName,
-				Busy:     bBusy,
-				Ceiling:  dp.Ceiling,
-				Room:     bRoom,
-				FiveHour: fh,
-				SevenDay: sd,
-				Pace:     sdPace(sd),
-				High:     high,
-				Blocks:   bBlocks,
+				Name:      bName,
+				Busy:      bBusy,
+				Ceiling:   dp.Ceiling,
+				Room:      bRoom,
+				FiveHour:  fh,
+				SevenDay:  sd,
+				Pace:      sdPace(sd),
+				High:      high,
+				Underused: underused,
+				Blocks:    bBlocks,
 			}
 		}
 		if maxBucketCeiling == 0 {
@@ -1082,6 +1105,7 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 	pv.FiveHour = effectiveWindow(r.FiveHour, now)
 	pv.SevenDay = effectiveSevenDayWindow(r.SevenDay, now)
 	pv.Pace = sdPace(pv.SevenDay)
+	pv.Underused = windowUnderused(pv.SevenDay, pCfg.Usage, now)
 	dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pv.Pace)
 	pv.Ceiling, pv.High = reviewCeiling(dp.Ceiling, extra), high
 	switch {
@@ -1503,8 +1527,9 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	return false
 }
 
-// evaluateChoices ranks eligible subscriptions by budget left per hour until
-// their 7-day window resets (remaining percent / hours to reset). Configured
+// evaluateChoices ranks eligible subscriptions by distance behind their 7-day
+// pace (pace − usedPercent), then by budget left per hour until reset
+// (remaining percent / hours to reset) and lower configured cost. Configured
 // order breaks ties; self-hosted choices are fallbacks. The same gates apply
 // to every kind of start.
 func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, kind startFor, now time.Time) *choiceView {
@@ -1526,6 +1551,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 	}
 	var reasons []string
 	bestSubscription := false
+	bestBehind := math.Inf(-1)
 	bestRate := math.Inf(-1)
 	bestCost := math.Inf(1)
 
@@ -1551,6 +1577,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		if reason == "" {
 			cand.OK = true
 			subscription := !pCfg.SelfHosted()
+			behind := 0.0
 			rate := 0.0
 			if subscription {
 				sd := pv.SevenDay
@@ -1558,8 +1585,9 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 					sd = pv.findBucket(bucketName).SevenDay
 				}
 				if sd != nil && sd.Pace != nil {
-					behind := math.Round((*sd.Pace-sd.UsedPercent)*10) / 10
-					cand.BehindPace = &behind
+					behind = *sd.Pace - sd.UsedPercent
+					rounded := math.Round(behind*10) / 10
+					cand.BehindPace = &rounded
 				}
 				if r, ok := windowRate(sd, now); ok {
 					rate = r
@@ -1567,8 +1595,8 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 					cand.Rate = &rounded
 				}
 			}
-			if cv.Harness == "" || subscription && (!bestSubscription || rate > bestRate+1e-9 || math.Abs(rate-bestRate) <= 1e-9 && ch.Cost > 0 && ch.Cost < bestCost) {
-				bestSubscription, bestRate, bestCost = subscription, rate, ch.Cost
+			if cv.Harness == "" || subscription && (!bestSubscription || behind > bestBehind+1e-9 || math.Abs(behind-bestBehind) <= 1e-9 && (rate > bestRate+1e-9 || math.Abs(rate-bestRate) <= 1e-9 && ch.Cost > 0 && ch.Cost < bestCost)) {
+				bestSubscription, bestBehind, bestRate, bestCost = subscription, behind, rate, ch.Cost
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
 				cv.Provider = provName
@@ -1902,9 +1930,9 @@ configured, beekeeper reads each provider's usage windows (such as Claude's
 JSON windows and agy -p /usage's model buckets), counts busy agents against
 the provider and bucket they run on, caps the subscription providers' total by
 the machine guards and capacity.ceiling, and prints each provider's windows and
-verdict plus the eligible choice with the most 7-day budget left per hour until
-its reset (remaining percent / hours to reset), breaking ties by
-capacity.choices order, with self-hosted choices as fallbacks. Each
+verdict plus the eligible choice furthest behind its 7-day pace (with remaining
+7-day budget per hour, lower configured cost, and capacity.choices order
+breaking ties), with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and at or under the even pace of its 7-day window.
 If built-in Codex usage is unreadable, its last good windows still bound starts;
@@ -2151,10 +2179,10 @@ func (a *app) capacityPickCmd() *cobra.Command {
 		Long: `Print the one start capacity's decision allows now, as "<harness> <model>",
 or "none". The decision is the one agents start without --harness, the
 supervisor loop's reviewers and its next starts take: the eligible subscription
-with the most 7-day budget left per hour until its reset (remaining percent /
-hours to reset), with configured order breaking ties and self-hosted choices
-used when no subscription is eligible; a self-hosted choice takes the worker
-kind (code changes) only when its kinds list it. Each eligible choice
+furthest behind its 7-day pace (then most 7-day budget left per hour until its
+reset, lower configured cost, and configured order breaking ties), with
+self-hosted choices used when no subscription is eligible; a self-hosted choice
+takes the worker kind (code changes) only when its kinds list it. Each eligible choice
 has a configured provider and a free slot under its running-session ceiling,
 5-hour and 7-day windows under their stop percent, and 7-day use not ahead of
 the even pace of its window, with the

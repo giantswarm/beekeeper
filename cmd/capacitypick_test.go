@@ -447,6 +447,10 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 `
 	r.configure("")
 	agy5h := 10.0
+	agy7d := 10.0
+	agyReset7d := r.t0.Add(112 * time.Hour)
+	codex7d := 50.0
+	codexReset7d := r.t0.Add(48 * time.Hour)
 	r.read = func(cmd []string) usageReading {
 		switch cmd[0] {
 		case testReadClaude:
@@ -454,12 +458,12 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
 				SevenDay: &usageWindow{UsedPercent: 10, ResetsAt: r.t0.Add(134 * time.Hour)},
 			}
-		case "read-agy":
+		case testReadAgy:
 			return usageReading{
 				Buckets: map[string]usageBucket{
 					config.DefaultAgyGeminiBucket: {
 						FiveHour: &usageWindow{UsedPercent: agy5h, ResetsAt: r.reset5h},
-						SevenDay: &usageWindow{UsedPercent: 68, ResetsAt: r.t0.Add(15 * time.Hour)},
+						SevenDay: &usageWindow{UsedPercent: agy7d, ResetsAt: agyReset7d},
 					},
 				},
 				BucketOrder: []string{config.DefaultAgyGeminiBucket},
@@ -467,13 +471,21 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 		default:
 			return usageReading{
 				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
-				SevenDay: &usageWindow{UsedPercent: 32, ResetsAt: r.t0.Add(37 * time.Hour)},
+				SevenDay: &usageWindow{UsedPercent: codex7d, ResetsAt: codexReset7d},
 			}
 		}
 	}
+	// Furthest behind pace wins (agy 23.3 behind pace vs codex 21.4 behind pace,
+	// even though codex has 1.0%/h remaining vs agy's 0.8%/h).
 	r.want(harnessAgy + " " + pickGemini)
 	var p struct {
 		Capacity struct {
+			Providers map[string]struct {
+				Underused bool
+				Buckets   map[string]struct {
+					Underused bool
+				}
+			}
 			Choice struct {
 				Candidates []struct {
 					BehindPace *float64
@@ -485,8 +497,12 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
 		t.Fatal(err)
 	}
-	wantBehind := []float64{10.2, 23.1, 46}
-	wantRate := []float64{0.7, 2.1, 1.8}
+	if !p.Capacity.Providers[harnessAgy].Underused || !p.Capacity.Providers[harnessAgy].Buckets[config.DefaultAgyGeminiBucket].Underused ||
+		p.Capacity.Providers[codex.Harness].Underused {
+		t.Errorf("underused flags = %+v", p.Capacity.Providers)
+	}
+	wantBehind := []float64{10.2, 23.3, 21.4}
+	wantRate := []float64{0.7, 0.8, 1.0}
 	for i := range wantRate {
 		gotB := p.Capacity.Choice.Candidates[i].BehindPace
 		if gotB == nil || *gotB != wantBehind[i] {
@@ -497,6 +513,11 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 			t.Errorf("candidate %d rate = %v, want %v", i, gotR, wantRate[i])
 		}
 	}
+	// When two choices tie on distance behind pace (23.1 points), higher
+	// remaining budget per hour breaks the tie (2.1%/h vs 1.2%/h).
+	agy7d, agyReset7d = 68, r.t0.Add(15*time.Hour)
+	codex7d, codexReset7d = 54.9, r.t0.Add(37*time.Hour)
+	r.want(harnessAgy + " " + pickGemini)
 	agy5h = 90
 	r.want(codex.Harness + " " + pickGPT)
 }
