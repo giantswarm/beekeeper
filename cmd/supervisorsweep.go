@@ -142,20 +142,26 @@ func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tra
 			}
 			return []string{l.login}, nil
 		}
+		// Discovery is delivery work: inventory and orphan detail scans
+		// must not spend its allowance and hide approved heads. The
+		// listing interval still bounds searches; shared floors still apply.
 		var open []string
-		err := l.a.loopGitHub(ctx, "sweep", func() (err error) {
+		err := l.a.loopGitHub(ctx, "pull discovery", func() (err error) {
 			open, err = readOpenPulls(ctx, authors, l.a.cfg.GitHub.AllowedOrgs)
 			return err
 		})
 		l.sweepIncomplete = err != nil || len(open) >= sweepListLimit
 		if err != nil {
-			// The last list stands; the sweep tries again next interval.
+			// The last list stands. Retry next pass so a reset does not
+			// leave discovery waiting another full listing interval.
 			l.sayOnce("sweep list", "SUPERVISOR SWEEP cannot list the desk's open pull requests (%v): the last list stands", err)
 		} else {
 			l.clearSaid("sweep list")
 			l.openPulls = open
 		}
-		l.openPullsAt = now
+		if err == nil {
+			l.openPullsAt = now
+		}
 	}
 	var out []string
 	for _, ref := range l.openPulls {

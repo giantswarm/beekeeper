@@ -93,6 +93,9 @@ func TestEmergencyMergeMatchesApprovedHeadAndAuditsFailure(t *testing.T) {
 	}
 	old := github.RunGH
 	t.Cleanup(func() { github.RunGH = old })
+	oldRead := readLoopPull
+	t.Cleanup(func() { readLoopPull = oldRead })
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, nil }
 	approved := false
 	fail := true
 	var calls [][]string
@@ -568,5 +571,71 @@ func TestEmergencyRelayHandoverAndRevocation(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", original.Name)
 	if _, err := a.emergencyAction("revoked predecessor"); Code(err) != ExitRefused {
 		t.Fatalf("revoked grant restored: %v", err)
+	}
+}
+
+func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
+	for _, name := range []string{"accepted desk verdict", "previous head", "untrusted reviewer", "failing CI", "review rejected"} {
+		t.Run(name, func(t *testing.T) {
+			a := emergencyApp(t)
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge approved work.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			oldRead, oldGH := readLoopPull, github.RunGH
+			t.Cleanup(func() { readLoopPull, github.RunGH = oldRead, oldGH })
+			review := superloop.Review{Head: emergencyAdminHead, Verdict: superloop.Approved, Member: true, Body: loopApproved}
+			if name == "previous head" {
+				review.Head = "fedcba9"
+			}
+			if name == "untrusted reviewer" {
+				review.Member = false
+				review.Author = "untrusted-login"
+				a.cfg.Supervisor.Ownership.Authors = []string{"trusted"}
+			}
+			if name == "review rejected" {
+				review.Verdict = superloop.ChangesRequested
+			}
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Green: name != "failing CI", Reviews: []superloop.Review{review}}, nil
+			}
+			merges := 0
+			github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+				if args[1] == emergencyViewCommand {
+					return []byte(`{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","headRefOid":"abc1234"}`), nil
+				}
+				merges++
+				if slices.Contains(args, "--admin") || args[len(args)-1] != emergencyAdminHead {
+					t.Fatalf("unsafe merge %v", args)
+				}
+				return nil, nil
+			}
+			err := emergencyCall(a, gitMerge, emergencyTestRepo, "7")
+			if name == "accepted desk verdict" {
+				if err != nil || merges != 1 {
+					t.Fatalf("merge: %v calls %d", err, merges)
+				}
+			} else if Code(err) != ExitRefused || merges != 0 {
+				t.Fatalf("refusal: %v calls %d", err, merges)
+			}
+		})
+	}
+}
+
+func TestMergeReviewRequirementAcceptsCurrentDeskReviewFormat(t *testing.T) {
+	a := emergencyApp(t)
+	a.cfg.Merge.RequireReview = true
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := superloop.Pull{Ref: emergencyTestRepo + "#7", Head: emergencyAdminHead, Reviews: []superloop.Review{{Member: true, Verdict: superloop.Approved, Head: emergencyAdminHead, Body: "Review: approved\nHead reviewed: `abc1234`"}}}
+	why, _, err := a.checkMergeHeadAuthority(context.Background(), st, p, p.Head)
+	if err != nil || why != "" {
+		t.Fatalf("current review rejected: %s %v", why, err)
+	}
+	p.Reviews[0].Head = "9876abc"
+	why, _, err = a.checkMergeHeadAuthority(context.Background(), st, p, p.Head)
+	if err != nil || why == "" {
+		t.Fatalf("stale review accepted: %s %v", why, err)
 	}
 }

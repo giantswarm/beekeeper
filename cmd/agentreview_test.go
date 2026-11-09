@@ -157,7 +157,8 @@ func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *te
 		want       bool
 	}{
 		{"", loopHead, false},
-		{loopApproved, loopHead, false},
+		{loopApproved, loopHead, true},
+		{loopApproved, loopFixed, false},
 		{deskReviewApproved, loopFixed, false},
 		{deskReviewApproved, loopHead, true},
 		{"Desk review (opus): changes requested", loopHead, false},
