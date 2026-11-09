@@ -10,19 +10,24 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	deliveryFlowTestTask  = "work"
+	deliveryFlowTestVisit = "person's physical visit"
+)
+
 func TestDeliveryFlowClassification(t *testing.T) {
 	now := time.Now().UTC()
 	for _, tc := range []struct {
 		name, on, waits, class                     string
 		note, running, shortTimer, longTimer, pull bool
 	}{
-		{name: "running", class: deliveryFlowing, running: true},
+		{name: "active worker", class: deliveryFlowing, running: true},
 		{name: "decision", on: "#1", note: true, class: deliveryPerson},
 		{name: "missing decision", waits: "person's decision", class: deliveryPerson},
-		{name: "visit", waits: "person's physical visit", class: deliveryBlocked},
+		{name: "visit", waits: deliveryFlowTestVisit, class: deliveryBlocked},
 		{name: "external", waits: "external party delivers the equipment", class: deliveryBlocked},
 		{name: "ci", on: deliveryTestPull, waits: "CI", pull: true, class: deliveryFlowing},
-		{name: "review", on: deliveryTestPull, waits: "desk review", pull: true, class: deliveryFlowing},
+		{name: "queued review", on: deliveryTestPull, waits: "desk review", pull: true, class: deliveryFlowing},
 		{name: "release", on: "example/project@v1.0.0", class: deliveryFlowing},
 		{name: "short timer", shortTimer: true, class: deliveryFlowing},
 		{name: "long timer", longTimer: true, class: deliveryBlocked},
@@ -37,9 +42,9 @@ func TestDeliveryFlowClassification(t *testing.T) {
 			if tc.running {
 				park = nil
 			}
-			st := &state.State{DeliveriesAt: now, Deliveries: []state.Delivery{d}, Agents: []state.Agent{{Party: state.Party{Name: workerRole}, Task: "work", Park: park}}}
+			st := &state.State{DeliveriesAt: now, Deliveries: []state.Delivery{d}, Agents: []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: park}}}
 			if tc.note {
-				st.Notes = []state.Note{{ID: 1, For: "person", Refs: []string{d.Ref}}}
+				st.Notes = []state.Note{{ID: 1, For: holderPerson, Refs: []string{d.Ref}}}
 			}
 			if tc.shortTimer || tc.longTimer {
 				duration := time.Hour
@@ -67,18 +72,18 @@ func TestMixedDeliveriesAdmitBelowFlowingLimit(t *testing.T) {
 	now := time.Now().UTC()
 	st := &state.State{DeliveriesAt: now}
 	for i, name := range []string{"flow", "decision", "visit"} {
-		ref := []string{"o/r#1", "o/r#2", "o/r#3"}[i]
+		ref := []string{reserveIssue, reservePull, incidentRepairIssue}[i]
 		st.StartDelivery(ref, name, "", now)
-		ag := state.Agent{Party: state.Party{Name: name}, Task: "work"}
+		ag := state.Agent{Party: state.Party{Name: name}, Task: deliveryFlowTestTask}
 		if i == 1 {
 			ag.Park = &state.Park{On: "#1", At: now}
 		}
 		if i == 2 {
-			ag.Park = &state.Park{Waits: "person's physical visit", At: now}
+			ag.Park = &state.Park{Waits: deliveryFlowTestVisit, At: now}
 		}
 		st.Agents = append(st.Agents, ag)
 	}
-	st.Notes = []state.Note{{ID: 1, For: "person", Refs: []string{"o/r#2"}}}
+	st.Notes = []state.Note{{ID: 1, For: holderPerson, Refs: []string{reservePull}}}
 	v := readDelivery(st, 2, now)
 	if v.InDelivery != 1 || v.WaitingOnPerson != 1 || v.Blocked != 1 {
 		t.Fatalf("split %+v", v)
@@ -90,13 +95,13 @@ func TestMixedDeliveriesAdmitBelowFlowingLimit(t *testing.T) {
 		t.Fatal(wip)
 	}
 	// A dependent delivery waits outside the flow too.
-	st.Agents[0].Park = &state.Park{On: "o/r#3"}
+	st.Agents[0].Park = &state.Park{On: incidentRepairIssue}
 	if got := classifyDelivery(st, st.Deliveries[0], now, deliveryPolicy{}); got.Class != deliveryBlocked {
 		t.Fatal(got)
 	}
 	// A running fixer makes progress despite a parked original worker.
-	st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "fixer", Session: "fixer"}, Task: "fix"})
-	st.Records = []state.Record{{Session: st.Agents[3].Party, Issue: "o/r#3"}}
+	st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: reserveFixer, Session: reserveFixer}, Task: testFixWord})
+	st.Records = []state.Record{{Session: st.Agents[3].Party, Issue: incidentRepairIssue}}
 	if got := classifyDelivery(st, st.Deliveries[2], now, deliveryPolicy{}); got.Class != deliveryFlowing {
 		t.Fatal(got)
 	}
@@ -106,7 +111,7 @@ func TestDeliveryWaitMissingNoteReportedOnce(t *testing.T) {
 	a, _ := supervisorApp(t)
 	seed(t, a, func(st *state.State) {
 		st.StartDelivery(deliveryTestIssue, workerRole, "", a.timeNow())
-		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: "work", Park: &state.Park{Waits: "person's decision"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{Waits: "person's decision"}}}
 	})
 	line, err := a.checkDeliveries(a.timeNow())
 	if err != nil || !strings.Contains(line, "WAITING WITHOUT A NOTE") {
@@ -122,7 +127,7 @@ func TestDeliveryExternalHoldRestoresBoardAfterRestart(t *testing.T) {
 	f := useFakeBoard(t, a, map[int]string{7: holdWorking})
 	seed(t, a, func(st *state.State) {
 		st.StartDelivery(heldRef, workerRole, "", a.timeNow())
-		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: "work", Park: &state.Park{Waits: "person's physical visit"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{Waits: deliveryFlowTestVisit}}}
 	})
 	l := &supervisorLoop{a: a}
 	if err := l.syncDeliveryHolds(t.Context()); err != nil {
@@ -185,7 +190,7 @@ func TestDeliveryHoldCoexistsWithDecisionHold(t *testing.T) {
 	f := useFakeBoard(t, a, map[int]string{7: holdWorking})
 	seed(t, a, func(st *state.State) {
 		st.StartDelivery(heldRef, workerRole, "", a.timeNow())
-		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: "work", Park: &state.Park{External: true, Waits: "equipment delivery"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{External: true, Waits: "equipment delivery"}}}
 	})
 	l := &supervisorLoop{a: a}
 	if err := l.syncDeliveryHolds(t.Context()); err != nil {
@@ -200,7 +205,7 @@ func TestDeliveryHoldCoexistsWithDecisionHold(t *testing.T) {
 		t.Fatalf("decision lost original Status: %+v", h)
 	}
 	seed(t, a, func(st *state.State) {
-		st.Notes = []state.Note{{ID: 1, For: "person", Refs: []string{heldRef}, Held: h}}
+		st.Notes = []state.Note{{ID: 1, For: holderPerson, Refs: []string{heldRef}, Held: h}}
 		st.Agents[0].Park = nil
 	})
 	if err := l.syncDeliveryHolds(t.Context()); err != nil {
