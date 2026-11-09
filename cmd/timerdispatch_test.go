@@ -588,21 +588,25 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	oldBudget, oldProbe, oldWake := readBudget, runProbe, wakeOwner
+	oldBudget, oldReadProbe, oldProbe, oldWake := readBudget, readProbe, runProbe, wakeOwner
 	readBudget = func(*app, context.Context) (github.Budget, error) {
 		t.Error("budget sampled for latched pending wake retry")
 		return github.Budget{}, errors.New("unexpected budget read")
 	}
-	runProbe = func(context.Context, string) (bool, string) {
+	readProbe = func(context.Context, string) ([]byte, error) {
+		t.Error("check probe executed for latched pending wake retry")
+		return nil, errors.New("unexpected probe")
+	}
+	runProbe = func(context.Context, string) bool {
 		t.Error("shell probe executed for latched pending wake retry")
-		return false, "unexpected probe"
+		return false
 	}
 	var wakes atomic.Int32
 	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
 		wakes.Add(1)
 		return nil
 	}
-	t.Cleanup(func() { readBudget, runProbe, wakeOwner = oldBudget, oldProbe, oldWake })
+	t.Cleanup(func() { readBudget, readProbe, runProbe, wakeOwner = oldBudget, oldReadProbe, oldProbe, oldWake })
 	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
 	if err := lock.Lock(); err != nil {
 		t.Fatal(err)
