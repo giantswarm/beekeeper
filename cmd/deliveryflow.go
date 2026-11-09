@@ -81,7 +81,10 @@ func deliveryFlowSeen(st *state.State, d state.Delivery, now time.Time, p delive
 			return deliveryFlow{Class: deliveryBlocked, Reason: park.Waits}
 		}
 		for _, t := range st.Timers {
-			if strings.EqualFold(t.Wake, ag.Name) && t.Fired.IsZero() && !t.At.Before(park.At) {
+			// Workers arm their wake timer before parking. Match a pending
+			// occurrence, not its creation time; exclude timers bound to an
+			// older park. A due probe can still be waiting on its condition.
+			if strings.EqualFold(t.Wake, ag.Name) && t.Fired.IsZero() && (t.WakeParkAt.IsZero() || t.WakeParkAt.Equal(park.At)) {
 				if now.Sub(park.At) < 24*time.Hour && t.Due.Sub(park.At) < 24*time.Hour && (t.Until.IsZero() || t.Until.Sub(park.At) < 24*time.Hour) {
 					return flowing
 				}

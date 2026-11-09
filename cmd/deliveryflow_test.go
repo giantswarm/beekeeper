@@ -51,7 +51,8 @@ func TestDeliveryFlowClassification(t *testing.T) {
 				if tc.longTimer {
 					duration = 48 * time.Hour
 				}
-				st.Timers = []state.Timer{{Wake: workerRole, At: now, Due: now.Add(duration)}}
+				// The normal workflow arms the timer before the worker parks.
+				st.Timers = []state.Timer{{Wake: workerRole, At: now.Add(-time.Minute), Due: now.Add(duration)}}
 			}
 			got := classifyDelivery(st, d, now, deliveryPolicy{})
 			if got.Class != tc.class {
