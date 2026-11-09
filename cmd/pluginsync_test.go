@@ -505,3 +505,23 @@ func TestPluginSyncRejectsUnverifiedInstall(t *testing.T) {
 		t.Fatalf("output = %s", out.String())
 	}
 }
+
+// Disabled plugins are updated on release installs too. Matching installed
+// content must record success without enabling the plugin or retrying forever.
+func TestDisabledPluginSyncRecordsSuccess(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t, "lease")}})
+	beekeeper(t, "timer")
+	if recordedSync(dir) != newBinary {
+		t.Fatal("disabled plugin sync was not recorded")
+	}
+	now, err := listPlugins(context.Background())
+	if err != nil || len(now) != 1 || now[0].Enabled || now[0].ProjectEnabled {
+		t.Fatalf("disabled plugin enablement changed: %+v, %v", now, err)
+	}
+	*ran = nil
+	beekeeper(t, "timer")
+	if len(*ran) != 0 {
+		t.Fatalf("disabled plugin synced again: %v", *ran)
+	}
+}

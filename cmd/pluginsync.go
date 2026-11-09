@@ -162,6 +162,10 @@ func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool
 			if q.ID == p.ID && q.Scope == p.Scope {
 				version = q.Version
 				verified = true
+				// Release sync also updates disabled plugins. Verify their
+				// installed content without requiring them to be enabled;
+				// q is a copy, so this does not change Claude's settings.
+				q.Enabled = true
 				for _, name := range plugin.SkillNames() {
 					verified = verified && servesSkill(q, name)
 				}
