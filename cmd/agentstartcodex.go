@@ -272,8 +272,8 @@ func (a *app) resumeCodexUnit(ctx context.Context, id, name, msg string) error {
 	threadID := cmp.Or(codex.ReadThread(a.cfg.StateDir, inbox), strings.TrimSpace(s.Conversation))
 	if threadID == "" {
 		for _, proc := range codex.Ended(a.cfg.StateDir, a.cfg.Codex.SessionsDir, nil, time.Time{}) {
-			if strings.EqualFold(proc.HostID, hostID) && proc.SessionID != "" {
-				threadID = proc.SessionID
+			if strings.EqualFold(proc.HostID, hostID) && proc.ID != "" {
+				threadID = proc.ID
 				break
 			}
 		}
@@ -293,12 +293,15 @@ func (a *app) resumeCodexUnit(ctx context.Context, id, name, msg string) error {
 			dir = os.TempDir()
 		}
 	}
-	self, err := executablePath()
+	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	codexHome, err := codex.EnsureHome(a.cfg.StateDir, a.cfg.ProjectsDir, self, a.explicitConfig(), dir, false, a.cfg.Env)
-	if err != nil {
+	codexHome := codex.HomeDir(a.cfg.StateDir)
+	sh := a.cfg.Agents.Shell
+	unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
+	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, "")
+	if err := codex.EnsureHome(codexHome, a.cfg.Codex.AuthFile, a.cfg.Codex.ConfigFile, self, prelude); err != nil {
 		return err
 	}
 	if err := codex.MakeInbox(inbox); err != nil {
