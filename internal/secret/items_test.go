@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -102,29 +101,37 @@ func TestItemsRefuseAVaultOutsideTheAllowlist(t *testing.T) {
 func TestItemsBoundEachReadOnItsOwn(t *testing.T) {
 	tools := secrettest.New(map[string]string{vaultRef: token, "op://Shared/b/credential": password, "op://Shared/c/credential": password})
 	o := ops(tools)
-	var deadlines []time.Time
+	var doneChannels []<-chan struct{}
 	var mu sync.Mutex
 	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		d, ok := ctx.Deadline()
+		_, ok := ctx.Deadline()
 		if !ok {
 			t.Errorf("%s %v runs without a deadline", name, args)
 		}
+		if err := ctx.Err(); err != nil {
+			t.Errorf("%s %v starts with a cancelled context: %v", name, args, err)
+		}
 		mu.Lock()
-		deadlines = append(deadlines, d)
+		doneChannels = append(doneChannels, ctx.Done())
 		mu.Unlock()
 		return tools.Run(ctx, dir, env, stdin, name, args...)
 	}
 	if _, err := o.Items(context.Background(), shared, secret.ItemsOptions{Fields: true}); err != nil {
 		t.Fatal(err)
 	}
-	if len(deadlines) != 4 {
-		t.Fatalf("op calls = %d, want the listing and three reads", len(deadlines))
+	if len(doneChannels) != 4 {
+		t.Fatalf("op calls = %d, want the listing and three reads", len(doneChannels))
 	}
-	slices.SortFunc(deadlines, func(a, b time.Time) int { return a.Compare(b) })
-	for i := 1; i < len(deadlines); i++ {
-		if !deadlines[i].After(deadlines[i-1]) {
-			t.Errorf("call %d shares an earlier call's deadline", i)
+	// Independent timeout contexts have distinct cancellation channels, even
+	// when calls start in the same clock tick and their deadlines are equal.
+	seen := make(map[<-chan struct{}]bool)
+	for i, done := range doneChannels {
+		if done == nil {
+			t.Errorf("call %d has no cancellation channel", i)
+		} else if seen[done] {
+			t.Errorf("call %d shares an earlier call's timeout context", i)
 		}
+		seen[done] = true
 	}
 }
 
