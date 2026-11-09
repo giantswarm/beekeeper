@@ -516,7 +516,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			}
 			if err == nil && acquired {
 				if err := other.Update(func(st *state.State) ([]state.Event, error) {
-					st.Timers = append(st.Timers, state.Timer{ID: 1, Due: a.now.Add(-time.Minute), Run: "true"})
+					st.Timers = append(st.Timers, state.Timer{ID: 1, Due: a.now.Add(-time.Minute), Run: probeHolds})
 					return nil, nil
 				}); err != nil {
 					t.Error(err)
