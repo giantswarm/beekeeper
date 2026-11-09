@@ -620,25 +620,29 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				if worktreeManaged && worktreeRules == "" {
-					worktreeRules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, false)
-					if err != nil {
-						return err
-					}
-				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
-				if byTimer {
-					if timerLine == "" {
-						var err error
-						timerLine, err = a.recordTimerStart(name, tm, gateWait)
+				h, _ := harnessByName(harness)
+				err = a.withKindAdmission(cmd.Context(), name, func() error {
+					// Admission must precede worktree creation: a refused start
+					// must leave its branch and destination available for retry.
+					if worktreeManaged && worktreeRules == "" {
+						worktreeRules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, false)
 						if err != nil {
 							return err
 						}
 					}
-					sp.brief = timerLine + "\n\n" + sp.brief
-				}
-				h, _ := harnessByName(harness)
-				err = a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) })
+					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
+					if byTimer {
+						if timerLine == "" {
+							var err error
+							timerLine, err = a.recordTimerStart(name, tm, gateWait)
+							if err != nil {
+								return err
+							}
+						}
+						sp.brief = timerLine + "\n\n" + sp.brief
+					}
+					return h.Start(cmd.Context(), a, sp)
+				})
 				var qerr *agy.QuotaError
 				if autoPick && errors.As(err, &qerr) {
 					_, _ = fmt.Fprintf(a.out, "quota exhausted on %s/%s (%v); re-queuing %s on another choice\n", harness, model, qerr, name)
