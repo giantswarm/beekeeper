@@ -748,6 +748,14 @@ func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	stubFresh(t, &live)
 	calls := stubBackground(t, "backgrounded · "+bgShortID+" · "+bgName+"\n")
 
+	// Settlement no longer protects the old transcript from a stop once
+	// its event belongs to a fresh continuation waiting for headroom.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.Resumable = a.now
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "fix the red check", ""); err != nil {
 		t.Fatal(err)
 	}
