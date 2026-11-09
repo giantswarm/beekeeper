@@ -89,3 +89,31 @@ func TestRemoteStatusUsesCurrentPublicationAndRequiresBranchHistory(t *testing.T
 		})
 	}
 }
+
+func TestPressureExpiresOnlyEndedTaskGrace(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name                           string
+		pull                           *github.HeadPull
+		live, locked, dirty, published bool
+		want                           string
+	}{
+		{name: "recent merged", pull: &github.HeadPull{State: github.Merged, ClosedAt: now}, published: true, want: Remove},
+		{name: "dirty merged", pull: &github.HeadPull{State: github.Merged, ClosedAt: now}, dirty: true, published: true, want: Clean},
+		{name: "unpublished", pull: &github.HeadPull{State: github.Merged, ClosedAt: now}, want: Clean},
+		{name: "live", pull: &github.HeadPull{State: github.Merged, ClosedAt: now}, live: true, published: true, want: Keep},
+		{name: "locked", pull: &github.HeadPull{State: github.Merged, ClosedAt: now}, locked: true, published: true, want: Keep},
+		{name: "open", pull: &github.HeadPull{State: github.Open}, published: true, want: Keep},
+		{name: "unknown", published: true, want: Keep},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := Tree{Touched: now, Locked: tc.locked, Build: []string{"target/"}}
+			if tc.dirty {
+				tree.Work = []string{"source.go"}
+			}
+			if got := AutomaticPressure(tree, tc.pull, false, false, tc.live, tc.published, now, true); got.Action != tc.want {
+				t.Fatalf("got %+v, want %s", got, tc.want)
+			}
+		})
+	}
+}

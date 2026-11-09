@@ -73,6 +73,21 @@ func RemoteStatus(ctx context.Context, git Git, t Tree, hadPull bool) (gone, pub
 // worktrees need a merged pull request or a confirmed deleted remote branch.
 // Unlike the legacy doctor trim, unfinished tasks keep their build output.
 func Automatic(t Tree, pull *github.HeadPull, gone, harness, live, pushed bool, now time.Time) Verdict {
+	return AutomaticPressure(t, pull, gone, harness, live, pushed, now, false)
+}
+
+// AutomaticPressure expires retention grace only for tasks confirmed ended.
+// Live processes, locks, open tasks and unpublished work retain their protections.
+func AutomaticPressure(t Tree, pull *github.HeadPull, gone, harness, live, pushed bool, now time.Time, pressure bool) Verdict {
+	ended := gone || pull != nil && pull.State == github.Merged
+	if pressure && ended {
+		t.Touched = now.Add(-Grace)
+		if pull != nil {
+			p := *pull
+			p.ClosedAt = now.Add(-Grace)
+			pull = &p
+		}
+	}
 	if live {
 		return Verdict{Keep, "a live session or process works in it", KeptLive}
 	}

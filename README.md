@@ -4159,6 +4159,21 @@ continue independently. `beekeeper fatal` marks installed harness guard checks
 disabled rather than opening outages or repairs. `beekeeper capacity` and
 `beekeeper guide status` display `guards: off`.
 
+Automatic disk pruning releases its reclamation lock during discovery and remote
+worktree checks, so an idle supervisor does not lock out a manual prune. Under
+pressure, confirmed ended worktrees lose their retention grace; live sessions,
+locks, open pull requests and unpublished work remain protected. Finished task
+proofs and aside output, and fully retired execution source bundles, can be
+reclaimed without waiting for age grace. Unknown ownership, checkouts and pending
+execution recovery are retained. The built-in `agy-conversations` and `agy-brain`
+cache policies each cap their store at 2 GiB, trimming older entries first while
+protecting active conversations and the most recent hour. Each policy can be
+configured or disabled through `disk.caches`.
+
+Positive `watch.diskMinMiB` values retain a minimum 2 GiB reserve (5% on smaller
+disks). This floor applies to start admission and the watch's LOW DISK warning,
+so a tiny configured value cannot silently allow starts until the disk is full.
+
 The disk start floor uses `watch.diskMinMiB`: set it to `-1` to disable LOW DISK
 and its start refusal; zero retains the default 5% floor, and a positive value
 sets the floor in MiB. Other capacity thresholds keep their existing keys.

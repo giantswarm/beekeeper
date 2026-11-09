@@ -64,6 +64,14 @@ func (a *app) diskCacheEntries() []config.DiskCache {
 		{Name: config.DiskCacheTmp, Path: filepath.Join(a.cfg.StateDir, "tmp"), Mode: config.DiskCacheEntries, OlderThan: config.Duration{Duration: time.Hour}},
 		{Name: config.DiskCacheTranscripts, Path: filepath.Join(a.cfg.StateDir, "transcripts"), Mode: config.DiskCacheFiles, OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}, MaxGiB: 2},
 	}
+	for _, root := range []struct{ name, path string }{
+		{"agy-conversations", a.cfg.Agy.ConversationsDir},
+		{"agy-brain", a.cfg.Agy.BrainDir},
+	} {
+		if root.path != "" {
+			entries = append(entries, config.DiskCache{Name: root.name, Path: root.path, Mode: config.DiskCacheEntries, MaxGiB: 2})
+		}
+	}
 	builtins := len(entries)
 	for _, e := range a.cfg.Disk.Caches {
 		i := slices.IndexFunc(entries[:builtins], func(b config.DiskCache) bool { return b.Name == e.Name })

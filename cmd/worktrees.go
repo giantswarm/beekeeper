@@ -66,6 +66,7 @@ type worktreeMachine struct {
 	pulls     func(context.Context, []github.Head) (map[github.Head]github.HeadPull, error)
 	now       time.Time
 	automatic bool
+	pressure  bool
 	buildDirs []string
 	outputs   []config.BuildOutput
 	trash     string
@@ -477,7 +478,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if p, ok := pulls[github.Head{Repo: t.Repo, Branch: t.HeadBranch()}]; ok {
 			pull = &p
 		}
-		if m.automatic && pull != nil && (pull.State == github.Open || m.now.Sub(pull.ClosedAt) < worktrees.Grace) {
+		if m.automatic && pull != nil && (pull.State == github.Open || !m.pressure && m.now.Sub(pull.ClosedAt) < worktrees.Grace) {
 			v := worktrees.Automatic(t, pull, false, false, false, false, m.now)
 			r.kept[v.Kept]++
 			continue
@@ -504,7 +505,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				}
 			}
 			harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
-			v = worktrees.Automatic(t, pull, gone, harness, live.Holds(t.Dir), knownPushed, m.now)
+			v = worktrees.AutomaticPressure(t, pull, gone, harness, live.Holds(t.Dir), knownPushed, m.now, m.pressure)
 		}
 		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {
 			if m.recheck != nil {
