@@ -143,11 +143,10 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		}
 		i := slices.IndexFunc(current.Agents, func(cur state.Agent) bool { return cur.Name == name })
 		if i < 0 {
-			place, err := l.startPlacement(ctx, name, r.Repo, false, false)
-			if err != nil {
-				l.sayOnce("continue capacity "+ag.Name, "SUPERVISOR CONTINUATION WAITS %s: %v", ag.Name, err)
-				continue
-			}
+			// Keep the existing branch and any unpublished workspace on the
+			// coordinator. A new managed execution owns a new publish branch,
+			// so it cannot safely continue the original pull request. agents
+			// start still applies current local headroom and provider pace.
 			url := issueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
@@ -161,9 +160,6 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 				}
 				if url == "" {
 					url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
-				}
-				if place.remote() && branch != "" {
-					place.Ref = branch
 				}
 			}
 
@@ -204,8 +200,6 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			if len(l.a.cfg.Capacity.Choices) > 0 {
 				args = append(args, "--harness", harnessAuto)
 			}
-			args = append(args, place.remoteStartFlags()...)
-			args = append(args, place.excludeFlags()...)
 			if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				for k := range st.Agents {
 					cur := &st.Agents[k]

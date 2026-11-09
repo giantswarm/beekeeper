@@ -164,6 +164,9 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		if args[0] == agentsName && args[1] == agentStartName {
 			starts++
+			if slices.Contains(args, "--"+loopHostFlag) {
+				t.Fatal("continuation changed its managed publish branch")
+			}
 			brief, err := readStateFixture(r.a.store.Dir(), args[3])
 			if err != nil || !strings.Contains(string(brief), old.Task) || !strings.Contains(string(brief), parkAnswer) || !slices.Contains(args, harnessAuto) {
 				t.Fatalf("continuation brief: %s; %v", brief, err)
