@@ -8,10 +8,12 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const continuationOldSession = "continuation-old-session"
 const continuationNewSession = "continuation-new-session"
+const continuationTaskRef = "o/r#12"
 
 func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 	for _, harness := range []string{claudeComm, config.CodexHarness, harnessAgy} {
@@ -78,7 +80,7 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	next := state.Agent{Party: state.Party{Name: "replacement", Session: continuationNewSession}, Undelivered: "retry delivery"}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{old, next}
-		st.Records = []state.Record{{Session: old.Party, Issue: heldPull}}
+		st.Records = []state.Record{{Session: old.Party, Issue: continuationTaskRef}}
 		st.Grants = []state.Grant{{Resource: labOne, To: old.Party}}
 		return nil, nil
 	}); err != nil {
@@ -200,5 +202,21 @@ func TestLateWakeFollowsFreshContinuationInsteadOfOldTranscript(t *testing.T) {
 	st.Starts = append(st.Starts, state.Start{Party: next, Successor: &old})
 	if _, _, err := a.wakeParty(st, old.Session); err == nil {
 		t.Fatal("successor cycle resumed a transcript")
+	}
+}
+
+func TestLoopReconcilesQueuedContinuationAfterRestart(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Record(event(loopParty, continuationQueuedEvent, "%s: findings retained", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := r.a.store.Read()
+	_, done, err := l.reconcile(context.Background(), st, superloop.Action{Kind: superloop.KindRed}, loopClaim{target: loopWorker, at: r.a.now.Add(-time.Minute)})
+	if err != nil || !done {
+		t.Fatalf("queued delivery replayed after restart: %v, %v", done, err)
 	}
 }
