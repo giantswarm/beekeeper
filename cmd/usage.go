@@ -1857,6 +1857,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 
 	var parts []string
 	allHigh := len(k.Providers) > 0
+	anyUnderused := false
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.Enabled() {
@@ -1866,6 +1867,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		if pv == nil {
 			continue
 		}
+		anyUnderused = anyUnderused || pv.Underused
 		if pv.Kind == config.KindSelfHosted {
 			// No subscription behind it: no USAGE HIGH, nothing to tell its
 			// workers to park for; its own ceiling is the only guard.
@@ -1944,7 +1946,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	if shouldEmit && len(parts) > 0 {
 		w.emitNow("usage", "USAGE: %s", strings.Join(parts, "; "))
 	}
-	return &usageView{Ceiling: v.Ceiling, High: allHigh}
+	return &usageView{Ceiling: v.Ceiling, High: allHigh, Underused: anyUnderused}
 }
 
 func (w *watcher) clearUsageHighEpisode(file string) {

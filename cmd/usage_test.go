@@ -4153,18 +4153,19 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	if view == nil || !view.Underused {
 		t.Fatalf("first tick view = %+v, want Underused=true", view)
 	}
-	if !strings.Contains(out.String(), "USAGE UNDERUSED (agy/Gemini Models): 7d 10% below 50% of pace 33.3% (16.6%)") ||
+	if !strings.Contains(out.String(), "USAGE UNDERUSED (agy/Gemini Models): 7d 10% is 23.3% behind pace 33.3% (below 50% of pace") ||
 		strings.Contains(out.String(), "USAGE UNDERUSED (claude)") ||
 		strings.Contains(out.String(), "USAGE UNDERUSED (codex)") {
 		t.Fatalf("first tick output:\n%s", out.String())
 	}
-	if n, detail := countFiled(); n != 1 || !strings.Contains(detail, "[usage-underused-agy-gemini-models ") || !strings.Contains(detail, "agy/Gemini Models") {
+	if n, detail := countFiled(); n != 1 || !strings.Contains(detail, "[usage-underused-agy-Gemini Models ") || !strings.Contains(detail, "agy/Gemini Models") {
 		t.Fatalf("after first tick: count=%d, detail=%q", n, detail)
 	}
 
 	// 2. Second tick within the same 7-day window (with slight reset jitter): not emitted or filed again.
 	out.Reset()
 	agyReset7d = agyReset7d.Add(2 * time.Minute)
+	clk.advance(a.cfg.Capacity.Providers[harnessAgy].EffectiveEvery())
 	w.watchUsage(context.Background(), &state.State{}, nil)
 	if strings.Contains(out.String(), "USAGE UNDERUSED") {
 		t.Fatalf("repeat tick in same window emitted again:\n%s", out.String())
@@ -4173,14 +4174,15 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 		t.Fatalf("repeat tick in same window filed %d times, want 1", n)
 	}
 
-	// 3. Usage catches up to 20% (>= 16.6%): emits USAGE UNDERUSED CLEARED.
+	// 3. Usage catches up to 20% (>= 16.6%): ends the underuse condition.
 	out.Reset()
 	agy7d = 20
+	clk.advance(a.cfg.Capacity.Providers[harnessAgy].EffectiveEvery())
 	view = w.watchUsage(context.Background(), &state.State{}, nil)
 	if view == nil || view.Underused {
 		t.Fatalf("caught-up view = %+v, want Underused=false", view)
 	}
-	if !strings.Contains(out.String(), "USAGE UNDERUSED CLEARED (agy/Gemini Models): 7d 20% caught up to 50% of pace 33.3%") {
+	if !strings.Contains(out.String(), "ENDED USAGE UNDERUSED (agy/Gemini Models) (since ") {
 		t.Fatalf("caught-up tick output:\n%s", out.String())
 	}
 
@@ -4188,6 +4190,9 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	out.Reset()
 	agy7d = 10
 	agyReset7d = agyReset7d.Add(7 * 24 * time.Hour)
+	t0 = t0.Add(7 * 24 * time.Hour)
+	reset5h = reset5h.Add(7 * 24 * time.Hour)
+	clk.advance(7 * 24 * time.Hour)
 	w.watchUsage(context.Background(), &state.State{}, nil)
 	if !strings.Contains(out.String(), "USAGE UNDERUSED (agy/Gemini Models):") {
 		t.Fatalf("new window tick output:\n%s", out.String())
