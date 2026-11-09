@@ -115,7 +115,7 @@ func (s *FileStore) eventFiles() ([]*os.File, error) {
 	paths = append(paths, s.path("events.jsonl"))
 	var files []*os.File
 	for _, path := range paths {
-		f, err := os.Open(path)
+		f, err := os.Open(path) //nolint:gosec // paths come only from this store's fixed archive glob and active log
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

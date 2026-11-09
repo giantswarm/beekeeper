@@ -36,39 +36,31 @@ func (s *FileStore) FollowSnapshot(name, revision string, keep func(Event) bool)
 	if filepath.Base(name) != name || name == "." || strings.ContainsAny(name, `/\`) {
 		return s.Follow(name, keep)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.follows == nil {
-		s.follows = map[string]*followed{}
-	}
 	key := name + ":" + revision
+	at := s.eventReader(key)
+	at.mu.Lock()
+	defer at.mu.Unlock()
 	dir := s.path("event-checkpoints")
 	path := filepath.Join(dir, name+".json")
-	previous := s.follows[key]
-	var previousFile os.FileInfo
-	var previousOffset int64
-	if previous != nil {
-		previousFile, previousOffset = previous.file, previous.offset
-	}
+	previousFile, previousOffset := at.file, at.offset
 	var saved eventCheckpoint
-	if previous == nil {
-		if raw, err := os.ReadFile(path); err == nil {
+	if at.file == nil {
+		if raw, err := os.ReadFile(path); err == nil { //nolint:gosec // validated reader basename under the store checkpoint directory
 			if json.Unmarshal(raw, &saved) != nil {
 				saved = eventCheckpoint{}
 			}
 		}
 	}
-	if s.follows[key] == nil && saved.Revision == revision && saved.Offset >= 0 && filepath.Base(saved.Source) == saved.Source {
+	if at.file == nil && saved.Revision == revision && saved.Offset >= 0 && filepath.Base(saved.Source) == saved.Source {
 		if fi, err := os.Stat(filepath.Join(dir, saved.Source)); err == nil && fi.Size() >= saved.Offset {
-			s.follows[key] = &followed{file: fi, offset: saved.Offset, kept: saved.Kept, anchor: saved.Source}
+			at.file, at.offset, at.kept, at.anchor = fi, saved.Offset, saved.Kept, saved.Source
 		}
 	}
-	events, err := s.follow(key, keep)
+	events, err := s.follow(at, keep)
 	if err != nil {
 		return events, err
 	}
-	at := s.follows[key]
-	if at == nil || at.file == nil {
+	if at.file == nil {
 		return events, nil
 	}
 	if previousFile != nil && at.offset == previousOffset && os.SameFile(previousFile, at.file) {

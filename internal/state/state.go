@@ -1851,6 +1851,7 @@ type FileStore struct {
 
 // followed is how far a Follow reader has read the log, and what it kept.
 type followed struct {
+	mu     sync.Mutex
 	file   os.FileInfo
 	offset int64
 	kept   []Event
@@ -2320,23 +2321,33 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 // since: a watch that follows the log every poll parses each line once. A
 // log that was replaced or shrank is read again from its start.
 func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.follow(name, keep)
+	at := s.eventReader(name)
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	return s.follow(at, keep)
 }
 
-// follow runs with s.mu held. A cursor names an inode, so sealing the active
+func (s *FileStore) eventReader(name string) *followed {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.follows == nil {
+		s.follows = map[string]*followed{}
+	}
+	if s.follows[name] == nil {
+		s.follows[name] = &followed{}
+	}
+	return s.follows[name]
+}
+
+// follow runs with this reader's mutex held. Unrelated readers never queue
+// behind a cold history scan. A cursor names an inode, so sealing the active
 // log into an archive preserves its position and its retained projection.
-func (s *FileStore) follow(name string, keep func(Event) bool) ([]Event, error) {
+func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error) {
 	files, err := s.eventFiles()
 	if err != nil {
 		return nil, err
 	}
 	defer closeEventFiles(files)
-	if s.follows == nil {
-		s.follows = map[string]*followed{}
-	}
-	at := s.follows[name]
 	start := 0
 	if at != nil && at.file != nil {
 		start = -1
@@ -2351,9 +2362,8 @@ func (s *FileStore) follow(name string, keep func(Event) bool) ([]Event, error) 
 			}
 		}
 	}
-	if at == nil || at.file == nil || start < 0 {
-		at = &followed{}
-		s.follows[name] = at
+	if at.file == nil || start < 0 {
+		at.file, at.offset, at.kept = nil, 0, nil
 		start = 0
 	}
 	for _, f := range files[start:] {

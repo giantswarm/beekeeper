@@ -29,7 +29,7 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 	}
 	r.a.store = store
 	path := filepath.Join(store.Dir(), "events.jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // isolated fixture under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}

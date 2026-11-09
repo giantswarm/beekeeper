@@ -16,6 +16,7 @@ import (
 )
 
 const loopDiskKind = "disk"
+const watchDiskStateVerb = "watch.disk-state"
 
 const loopDiskPruneFailed = "prune failed: "
 
@@ -145,7 +146,7 @@ func (a *app) watchDisk() *watchDiskReading {
 	if at, err := a.readWatchLevel("disk-state", &current); err == nil && !at.IsZero() {
 		return &current
 	}
-	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "watch.disk-state" })
+	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == watchDiskStateVerb })
 	if err != nil || len(evs) == 0 {
 		return nil
 	}
@@ -166,7 +167,7 @@ func watchConditionEvent(e state.Event) bool {
 	case loopFileVerb:
 		key, _, ok := keyed(e.Detail)
 		return ok && strings.HasPrefix(key, loopDiskKind+" ")
-	case "supervisor.disk", "disk.prune", "watch.disk-state", "watch.budget-state", "watch.machine-state", "watch.clear",
+	case "supervisor.disk", "disk.prune", watchDiskStateVerb, "watch.budget-state", "watch.machine-state", "watch.clear",
 		"watch.disk", "watch.diskfull", "watch.load", "watch.cpupsi", "watch.avail", "watch.psi", "watch.swap", "watch.oomd":
 		return true
 	}
@@ -210,7 +211,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			}
 		case "disk.prune":
 			lastPrune = e.At
-		case "watch.disk-state":
+		case watchDiskStateVerb:
 			if err := json.Unmarshal([]byte(e.Detail), &disk); err != nil {
 				return err
 			}

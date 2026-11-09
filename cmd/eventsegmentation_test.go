@@ -23,7 +23,8 @@ func TestEventRotationWaitsForCompatibleRecoveryReader(t *testing.T) {
 	if policy.Enabled || !policy.Readers["new-reader"] || policy.Readers["legacy-reader"] {
 		t.Fatalf("first hop would hide history from legacy rollback: %+v", policy)
 	}
-	j.Previous = &j.Candidate
+	previous := j.Candidate
+	j.Previous = &previous
 	j.Candidate = update.Binary{Version: recoveryBadVersion, Digest: "next-reader"}
 	if err := r.a.recordEventReaders(j); err != nil {
 		t.Fatal(err)
