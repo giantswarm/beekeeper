@@ -529,6 +529,7 @@ func TestDisabledPluginSyncRecordsSuccess(t *testing.T) {
 
 // Claude checks user declarations before admitting a release-tagged source.
 func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
+	const sourceKey = "source"
 	for _, ref := range []string{"", "v0.120.0"} {
 		t.Run("ref="+ref, func(t *testing.T) {
 			realPin := pinMarketplace
@@ -544,15 +545,15 @@ func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(registry, "known_marketplaces.json"), []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper"}}}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			source := map[string]string{"source": "github", "repo": "giantswarm/beekeeper", "sha": "old"}
+			source := map[string]string{sourceKey: holdGitHub, workerGitHubRepoGroup: sshTestRepository, "sha": oldToken}
 			if ref != "" {
 				source["ref"] = ref
 			}
 			settings := map[string]any{
 				"enabledPlugins": map[string]bool{beekeeperID: false},
 				"extraKnownMarketplaces": map[string]any{
-					"beekeeper": map[string]any{"source": source, "autoUpdate": false},
-					"other":     map[string]any{"source": map[string]string{"source": "github", "repo": "other/plugin"}},
+					pluginName:  map[string]any{sourceKey: source, "autoUpdate": false},
+					removeOther: map[string]any{sourceKey: map[string]string{sourceKey: holdGitHub, workerGitHubRepoGroup: "other/plugin"}},
 				},
 			}
 			raw, err := json.Marshal(settings)
@@ -572,10 +573,10 @@ func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
 			called := false
 			claudePlugin = func(_ context.Context, args ...string) error {
 				called = true
-				if !slices.Equal(args, []string{"marketplace", "add", "giantswarm/beekeeper#" + latestRelease}) {
+				if !slices.Equal(args, []string{"marketplace", loopAdd, "giantswarm/beekeeper#" + latestRelease}) {
 					t.Fatalf("commands = %v", args)
 				}
-				got, err := os.ReadFile(path)
+				got, err := os.ReadFile(path) //nolint:gosec // settings fixture in the test directory
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -592,7 +593,7 @@ func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
 			prev := verifyMarketplace
 			t.Cleanup(func() { verifyMarketplace = prev })
 			verifyMarketplace = func(context.Context, string) error { return nil }
-			if err := pinMarketplace(context.Background(), "beekeeper", latestRelease); err != nil {
+			if err := pinMarketplace(context.Background(), pluginName, latestRelease); err != nil {
 				t.Fatal(err)
 			}
 			if !called {

@@ -306,7 +306,7 @@ var pinMarketplace = func(ctx context.Context, name, revision string) error {
 // before Claude checks marketplace admission. Leave undeclared sources alone.
 func pinMarketplaceSettings(dir, name, revision string) error {
 	path := filepath.Join(dir, "settings.json")
-	raw, err := os.ReadFile(filepath.Clean(path))
+	raw, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // user-selected Claude config directory
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -349,7 +349,7 @@ func pinMarketplaceSettings(dir, name, revision string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) //nolint:gosec // user-selected Claude settings path
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ func pinMarketplaceSettings(dir, name, revision string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
+	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // temporary file created in the Claude config directory
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		_ = tmp.Close()
 		return err
@@ -369,7 +369,7 @@ func pinMarketplaceSettings(dir, name, revision string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) //nolint:gosec // atomic replacement of the user-selected Claude settings
 }
 
 // verifyMarketplace checks Claude's view rather than trusting its registry file.
