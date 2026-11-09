@@ -775,7 +775,7 @@ func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeCodex := filepath.Join(fakeBinDir, "codex")
-	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test executable script
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -793,9 +793,10 @@ func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
 	})
 
 	const (
-		startID  = "abcdef12-3456-7890-abcd-ef1234567890"
-		threadID = "019d7000-1111-7222-8333-444455556666"
-		worker   = "beekeeper#3533: codex"
+		testCodexModel = "gpt-5.7"
+		startID        = "abcdef12-3456-7890-abcd-ef1234567890"
+		threadID       = "019d7000-1111-7222-8333-444455556666"
+		worker         = "beekeeper#3533: codex"
 	)
 
 	oldSend := sendCodexWhenReady
@@ -872,8 +873,26 @@ func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
 	// Waking the ended worker by name brings it back on the roster, restarts
 	// its codex unit with threadID recorded, and delivers the wake message.
 	out.Reset()
-	if err := a.wakeOrResume(context.Background(), worker, "CI passed; merge ready", ""); err != nil {
-		t.Fatalf("wakeOrResume ended codex worker: %v", err)
+	st, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, ok := a.endedWorker(st, worker)
+	if !ok {
+		t.Fatal("ended worker was not found by name")
+	}
+	if err := a.wakeEnded(context.Background(), state.Party{Name: supervisorName}, ended, "CI passed; merge ready", ""); err != nil {
+		t.Fatalf("wakeEnded codex worker: %v", err)
+	}
+	if deliveredInbox != codex.InboxPath(stateDir, startID) {
+		t.Errorf("deliveredInbox = %q, want original worker inbox", deliveredInbox)
+	}
+	st, err = store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !onRoster(st, ended.Party) {
+		t.Fatal("resumed worker was not restored to the roster")
 	}
 	if len(hl.started) != 2 {
 		t.Fatalf("launched units = %d, want 2 (initial + resumed)", len(hl.started))

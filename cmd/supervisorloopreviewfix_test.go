@@ -983,7 +983,7 @@ func TestReviewWorkerWithPendingWakeTimerStaysOnRoster(t *testing.T) {
 	ag := state.Agent{
 		Party:      party,
 		IdleSince:  time.Now(),
-		Park:       &state.Park{On: "o/r#42", Reason: "CI queued; timer wakes", ReviewHead: loopHead},
+		Park:       &state.Park{On: "o/r#42", Waits: "CI queued; timer wakes", ReviewHead: loopHead},
 		Harness:    "codex",
 		Model:      "gpt-5.4",
 		Task:       "Work https://github.com/o/r/issues/3533",
@@ -998,7 +998,7 @@ func TestReviewWorkerWithPendingWakeTimerStaysOnRoster(t *testing.T) {
 			Model:   "gpt-5.4",
 		}},
 		Timers: []state.Timer{{
-			ID:     "t1",
+			ID:     1,
 			Wake:   ag.Name,
 			Reason: "pr-checks",
 		}},

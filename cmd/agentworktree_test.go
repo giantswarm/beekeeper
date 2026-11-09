@@ -235,8 +235,8 @@ func TestPrepareStartWorktree(t *testing.T) {
 	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err != nil {
 		t.Fatalf("reuse local branch equal to origin/main: %v", err)
 	}
-	if got := git(target, "rev-parse", "HEAD"); got != head {
-		t.Fatalf("reused worktree HEAD = %s, want %s", got, head)
+	if got := git(target, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("reused worktree HEAD = %s, want %s", got, tip)
 	}
 
 	// If the branch was pushed to origin and the worktree was later removed,
@@ -245,11 +245,11 @@ func TestPrepareStartWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	git(target, "add", "pushed.txt")
-	git(target, "commit", "-m", "pushed work")
+	git(target, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "pushed work")
 	pushedTip := git(target, "rev-parse", "HEAD")
 	git(target, "push", "origin", "HEAD:refs/heads/fix/task")
 	git(checkout, "worktree", "remove", "--force", target)
-	git(checkout, "branch", "-f", "fix/task", head)
+	git(checkout, "branch", "-f", "fix/task", tip)
 	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err != nil {
 		t.Fatalf("reuse branch pushed to origin: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestPrepareStartWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	git(target, "add", "unpushed.txt")
-	git(target, "commit", "-m", "unpushed local work")
+	git(target, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "unpushed local work")
 	git(checkout, "worktree", "remove", "--force", target)
 	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err == nil {
 		t.Fatal("expected refusal when local branch has unpushed commits")
