@@ -20,6 +20,49 @@ const (
 	deliveryReservationsKey = "delivery reservations "
 )
 
+// A command refusal is item-specific; admission gates remain pass-wide waits.
+type refillStartError struct {
+	cause  error
+	output string
+}
+
+func (e *refillStartError) Error() string { return fmt.Sprintf("%v; %s", e.cause, e.output) }
+func (e *refillStartError) Unwrap() error { return e.cause }
+
+type fillRetry struct {
+	until    time.Time
+	failures int
+}
+
+func (l *supervisorLoop) fillSkipped() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var refs []string
+	for ref, retry := range l.fillRetries {
+		if l.a.timeNow().Before(retry.until) {
+			refs = append(refs, ref)
+		}
+	}
+	slices.Sort(refs)
+	return refs
+}
+
+func (l *supervisorLoop) deferFill(ref string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fillRetries == nil {
+		l.fillRetries = map[string]fillRetry{}
+	}
+	retry := l.fillRetries[ref]
+	every := l.a.cfg.Supervisor.FillRetryEvery.Duration
+	if every <= 0 {
+		every = time.Minute
+	}
+	retry.until = l.a.timeNow().Add(every << min(retry.failures, fillBackoff))
+	retry.failures++
+	l.fillRetries[ref] = retry
+}
+
 // fillPause holds the refill's board reads after an unproductive one: the
 // capacity limits it saw and the agents then live (on the roster, not done).
 type fillPause struct {
@@ -229,7 +272,13 @@ func (l *supervisorLoop) pauseFill(capacity string, live []string) {
 	defer l.mu.Unlock()
 	every := l.a.cfg.Supervisor.FillRetryEvery.Duration << min(l.fillEmpty, fillBackoff)
 	l.fillEmpty++
-	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.timeNow().Add(every)}
+	until := l.a.timeNow().Add(every)
+	for _, retry := range l.fillRetries {
+		if retry.until.After(l.a.timeNow()) && retry.until.Before(until) {
+			until = retry.until
+		}
+	}
+	l.fillPause = fillPause{capacity: capacity, live: live, until: until}
 }
 
 func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
@@ -297,6 +346,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	}
 	l.fillRan()
 	startedHere := map[string]bool{}
+	attemptedHere := map[string]bool{}
 	for key, c := range claims {
 		if !strings.HasPrefix(key, loopFillKey) {
 			continue
@@ -376,7 +426,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			pause()
 			return nil
 		}
-		if startedHere[next.Ref] {
+		if startedHere[next.Ref] || attemptedHere[next.Ref] || slices.Contains(l.fillSkipped(), next.Ref) {
 			pause()
 			return nil // a stale board answer must not dispatch the same item twice
 		}
@@ -388,8 +438,21 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return nil // the board may lag the worker's registration
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
+		attemptedHere[next.Ref] = true
 		what, err := l.startItem(ctx, act, *next, reserved...)
 		if err != nil {
+			var failed *refillStartError
+			if errors.As(err, &failed) {
+				l.deferFill(next.Ref)
+				l.stallWait(next.URL, "its start failed: "+oneLine(err.Error()))
+				l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", next.URL, err)
+				// Bound a pass even when the board keeps offering refused items.
+				if len(attemptedHere) >= 32 {
+					return nil
+				}
+				started-- // a refused command consumes no free worker slot
+				continue
+			}
 			why := "its start failed: " + oneLine(err.Error())
 			if errors.Is(err, errLoopLater) {
 				why = "its start waits: delivery admission, no room for a start on any host, or an incident, unmerged-backlog, fatal or unread-repository hold (the SUPERVISOR … WAITS lines name it)"
@@ -411,6 +474,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		l.stallClear()
 		l.mu.Lock()
 		l.fillEmpty = 0
+		delete(l.fillRetries, next.Ref)
 		l.mu.Unlock()
 	}
 }

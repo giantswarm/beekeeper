@@ -992,3 +992,59 @@ func TestLoopBoardNextRefusalWithoutNothingFreeFails(t *testing.T) {
 		}
 	}
 }
+
+// A refused top pick must not consume room or block lower-ranked work.
+// Its output survives in the claim ledger, and retries back off per item.
+func TestLoopFillSkipsRefusedItemAndRetriesWithBackoff(t *testing.T) {
+	r, busy := fillRig(t)
+	original := r.answer
+	refused := 0
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopBoard {
+			if !slices.Contains(args, "o/r#9") {
+				return `{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9"}}`, 0
+			}
+		}
+		if args[0] == agentsName && args[1] == agentStartName && args[2] == "r 9" {
+			refused++
+			return "refused: worktree already exists", ExitRefused
+		}
+		return original(args)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	r.loopPass(t, l)
+	if *busy != 3 || refused != 1 {
+		t.Fatalf("refused top blocked capacity: busy=%d refused=%d, %s", *busy, refused, r.out)
+	}
+	if !strings.Contains(r.out.String(), "worktree already exists") {
+		t.Fatalf("refusal output missing: %s", r.out)
+	}
+	closed := r.logged(t, loopClaimEndVerb)
+	if len(closed) != 1 || !strings.Contains(closed[0].Detail, "worktree already exists") {
+		t.Fatalf("refusal not retained: %+v", closed)
+	}
+	first := l.fillRetries["o/r#9"]
+	// Keep only one free slot: successful starts of other items must not reset
+	// this refused item's timer or the configured retry interval.
+	*busy = 2
+	r.a.now = first.until.Add(-time.Minute)
+	r.loopPass(t, l)
+	if refused != 1 {
+		t.Fatalf("retried before backoff: %d", refused)
+	}
+	*busy = 2
+	r.a.now = first.until.Add(time.Second)
+	retryAt := r.a.now
+	r.loopPass(t, l)
+	if refused != 2 {
+		t.Fatalf("did not retry expired refusal: %d, %s", refused, r.out)
+	}
+	second := l.fillRetries["o/r#9"]
+	if second.until.Sub(retryAt) < 2*r.a.cfg.Supervisor.FillRetryEvery.Duration {
+		t.Fatalf("retry did not back off: first=%+v second=%+v", first, second)
+	}
+}

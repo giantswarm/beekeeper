@@ -708,7 +708,8 @@ type supervisorLoop struct {
 	// fillEmpty counts the refill's unproductive board reads since its last
 	// start or a change that ended its pause; each one doubles the next
 	// pause, up to fillBackoff times.
-	fillEmpty int
+	fillEmpty   int
+	fillRetries map[string]fillRetry
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
@@ -3853,7 +3854,14 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action, re
 	if next == nil {
 		return "the board offers nothing: no worker starts", nil
 	}
-	return l.startItem(ctx, act, *next, reserved...)
+	what, err := l.startItem(ctx, act, *next, reserved...)
+	var refused *refillStartError
+	if errors.As(err, &refused) {
+		l.deferFill(next.Ref)
+		l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", next.URL, err)
+		return "", errLoopLater
+	}
+	return what, err
 }
 
 // loopBoardNone is a board next answer without a pick: nothing free, or
@@ -3896,7 +3904,7 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 		return nil, errLoopLater
 	}
 	l.clearSaid("board budget")
-	next, err := l.readNextItem(ctx, exemptOnly)
+	next, err := l.readNextItemSkipping(ctx, exemptOnly, l.fillSkipped())
 	// A scoped read can never fall back to ordinary work, even if the
 	// observation becomes fresh or a delivery ends while the read runs.
 	if next != nil && exemptOnly && !deliveryExempt(st, l.a.timeNow(), next.Ref, next.WIPExempt) {
@@ -3939,12 +3947,19 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 // nothing free, never a failure to retry.
 func (l *supervisorLoop) readNextItem(ctx context.Context, onlyExempt ...bool) (*loopBoardItem, error) {
 	exemptOnly := len(onlyExempt) > 0 && onlyExempt[0]
+	return l.readNextItemSkipping(ctx, exemptOnly, nil)
+}
+
+func (l *supervisorLoop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip []string) (*loopBoardItem, error) {
 	if !exemptOnly {
-		if next, err := l.a.nextMonitoredIssue(ctx); next != nil || err != nil {
+		if next, err := l.a.nextMonitoredIssue(ctx, skip...); next != nil || err != nil {
 			return next, err
 		}
 	}
 	args := []string{loopBoard, deliveryNextCommand, deliveryJSONFlag}
+	for _, ref := range skip {
+		args = append(args, "--skip", ref)
+	}
 	if exemptOnly {
 		args = append(args, deliveryExemptOnlyFlag)
 	}
@@ -4064,7 +4079,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.runStart(ctx, act, args...); err != nil {
+	if out, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			// A refusal of a placed start on a host is either room or
 			// an execution its interrupted start left reserved. The
@@ -4087,16 +4102,13 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		if strings.HasPrefix(act.Key, loopFillKey) {
 			// A returned failure is settled, rather than an interruption
 			// that a later start under the same name could reconcile.
-			closed := about(event(loopParty, loopClaimEndVerb, "[%s] start failed or refused", act.Key), act.Ref)
+			closed := about(event(loopParty, loopClaimEndVerb, "[%s] start failed or refused: %v; %s", act.Key, err, oneLine(out)), next.Ref)
 			if closeErr := l.a.store.Record(closed); closeErr != nil {
 				return "", fmt.Errorf("closing failed start claim: %w", closeErr)
 			}
 		}
 		if Code(err) == ExitRefused {
-			if strings.Contains(err.Error(), "omp start waits on lease") {
-				l.sayOnce("omp lease "+act.Key, "SUPERVISOR NEXT WAITS %s: %v", next.URL, err)
-			}
-			return "", errLoopLater
+			return "", &refillStartError{cause: err, output: oneLine(out)}
 		}
 		return "", err
 	}
