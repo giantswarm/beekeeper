@@ -427,7 +427,9 @@ func (w *watcher) rearmTimer(f timerFire, held string) (bool, error) {
 		retry.Held = held
 		// Space all delivery retries, including timers without a condition.
 		if held != "previous action interrupted" {
-			retry.Checked = w.now.UTC()
+			// Delivery can finish long after the dispatch snapshot was taken.
+			// Start the retry interval at this attempt, not at that old tick.
+			retry.Checked = w.clk().Now().UTC()
 			retry.PendingWakeReason, retry.PendingWakeTimedOut = f.reason, f.timedOut
 			// This occurrence already fired; expiry must not discard its retry.
 			retry.Expire = false
