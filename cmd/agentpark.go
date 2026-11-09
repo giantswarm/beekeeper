@@ -26,6 +26,8 @@ import (
 
 // The events of a park: set, settled (its note closed or its pull request
 // merged or closed) and ended by a resume.
+const deskReviewWait = "desk review"
+
 const (
 	parkEvent      = "agents.park"
 	resumableEvent = "agents.resumable"

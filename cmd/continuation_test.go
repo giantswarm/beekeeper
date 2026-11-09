@@ -184,3 +184,21 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 		t.Fatalf("takeover: starts=%d agents=%+v", starts, st.Agents)
 	}
 }
+
+func TestLateWakeFollowsFreshContinuationInsteadOfOldTranscript(t *testing.T) {
+	old := state.Party{Name: "previous worker", Session: continuationOldSession}
+	next := state.Party{Name: "current worker", Session: continuationNewSession}
+	st := &state.State{Starts: []state.Start{{Party: old, Successor: &next}}, Agents: []state.Agent{{Party: next, Task: recoveryTask}}}
+	a := &app{}
+	for _, q := range []string{old.Name, old.Session} {
+		ag, rostered, err := a.wakeParty(st, q)
+		if err != nil || !rostered || !ag.Is(next) {
+			t.Fatalf("late wake reached an old transcript: %+v %v", ag, err)
+		}
+	}
+	st.Agents = nil
+	st.Starts = append(st.Starts, state.Start{Party: next, Successor: &old})
+	if _, _, err := a.wakeParty(st, old.Session); err == nil {
+		t.Fatal("successor cycle resumed a transcript")
+	}
+}

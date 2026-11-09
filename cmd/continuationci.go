@@ -21,6 +21,19 @@ func (w *watcher) handCITimerToReview(ctx context.Context, f timerFire, ag state
 	if ag.Park.ReviewHead == "" && ag.Execution == nil {
 		return false, nil
 	}
+	if w.loopOwned {
+		var handed bool
+		err := w.loopGitHub(ctx, "ci-review", func() error {
+			var err error
+			handed, err = w.handCITimerToReviewRead(ctx, f, ag, ref)
+			return err
+		})
+		return handed, err
+	}
+	return w.handCITimerToReviewRead(ctx, f, ag, ref)
+}
+
+func (w *watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag state.Agent, ref string) (bool, error) {
 	c := checkOf(f.t)
 	out, err := readProbe(ctx, c.cmd)
 	if err != nil {

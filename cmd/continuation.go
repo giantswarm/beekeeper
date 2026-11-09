@@ -308,7 +308,18 @@ func (l *supervisorLoop) finishContinuation(old state.Agent, name string) error 
 			return nil, err
 		}
 		e := event(loopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
+		successor := next.Party
 		removeAgent(st, j)
+		for k := range st.Starts {
+			if st.Starts[k].Is(prev.Party) {
+				st.Starts[k].Successor = &successor
+			}
+		}
+		for k := range st.EndedWorkers {
+			if st.EndedWorkers[k].Is(prev.Party) {
+				st.EndedWorkers[k].Successor = &successor
+			}
+		}
 		return []state.Event{e}, nil
 	})
 }
