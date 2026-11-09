@@ -1105,6 +1105,7 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 	busy := len(l.inFlight) > 0
 	l.mu.Unlock()
 	if busy {
+		l.sayOnce("reexec-busy", "SUPERVISOR LOOP restart held: claims are in flight; re-executing the installed binary once they finish")
 		return false, nil
 	}
 	l.mergeActions.Wait()

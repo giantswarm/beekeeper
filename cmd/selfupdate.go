@@ -271,6 +271,8 @@ reset. A development build (version dev) is refused.`,
 					if configured {
 						if restarted, rerr := a.restartReplaced(w, res.Path, t, false); rerr == nil {
 							stale = slices.DeleteFunc(stale, func(s staleBinary) bool { return slices.Contains(restarted, s.Process) })
+						} else {
+							_, _ = fmt.Fprintf(w, "due     process restart request failed: %v\n", rerr)
 						}
 					}
 					left := make([]*proc.Process, len(stale))

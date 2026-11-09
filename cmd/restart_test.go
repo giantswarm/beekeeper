@@ -92,6 +92,29 @@ func TestRequestRestarts(t *testing.T) {
 	}
 }
 
+// The supervisor uses its own quiet-point re-exec path; installs must still
+// identify it as a restart participant and publish the pending restart.
+func TestSupervisorRestartRequested(t *testing.T) {
+	for _, args := range []string{
+		"beekeeper supervisor loop",
+		"beekeeper --config /c.yaml supervisor loop",
+	} {
+		p := &proc.Process{PID: 42, Comm: project.Name, Args: strings.Fields(args)}
+		var out bytes.Buffer
+		due, err := requestRestarts(&out, t.TempDir(), restartExe,
+			&proc.Table{ByPID: map[int]*proc.Process{42: p}},
+			func(int) (string, bool) { return restartExe, true }, time.Now(), false)
+		if err != nil || len(due) != 1 || !strings.Contains(out.String(), "once its current step ends") {
+			t.Fatalf("%s: due=%v err=%v output=%s", args, due, err, out.String())
+		}
+	}
+	for _, args := range []string{"beekeeper supervisor status", "beekeeper supervisor loop --once"} {
+		if restarts(&proc.Process{Comm: project.Name, Args: strings.Fields(args)}) {
+			t.Fatalf("requested restart of %s", args)
+		}
+	}
+}
+
 // A process restarts for a request newer than its start or the request it
 // restarted for, of the path it runs, once another file replaced it: a
 // re-executed process, no longer replaced, never restarts twice.

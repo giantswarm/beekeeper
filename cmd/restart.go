@@ -47,7 +47,8 @@ type restartRequest struct {
 }
 
 // restarts reports whether p is a process an install restarts: a running
-// beekeeper watch (not --once; the standby unit's too) or a waiting reopen,
+// beekeeper watch (not --once; the standby unit's too), supervisor loop,
+// or a waiting reopen,
 // global flags (--config) before the command or not. Alerts and guide
 // watches keep their owner's re-arm.
 func restarts(p *proc.Process) bool {
@@ -55,6 +56,9 @@ func restarts(p *proc.Process) bool {
 		return false
 	}
 	args := p.Args[1:]
+	if i := slices.Index(args, supervisorName); i >= 0 && i+1 < len(args) && args[i+1] == "loop" {
+		return !slices.Contains(args, "--once")
+	}
 	if i := slices.Index(args, watchName); i >= 0 {
 		return (i == 0 || !slices.Contains([]string{alertsName, guideName}, args[i-1])) && !slices.Contains(args, "--once")
 	}
