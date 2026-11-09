@@ -63,8 +63,8 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 				// Stop must remain observable while a writer holds the lock.
 				// Peek reads the atomically replaced snapshot without joining
 				// the queue of readers that can starve timer settlement.
-				st, err := a.store.Peek()
-				if err != nil || st.Stop != nil {
+				stopped, err := timerStopRequested(a.store)
+				if err != nil || stopped {
 					cancel()
 					return
 				}
@@ -199,6 +199,13 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 			}
 		}
 	}
+	// Idle passes must not rewrite the full state. Settlement is repeated
+	// transactionally below when work exists, so competing drivers still
+	// claim each occurrence exactly once.
+	scratch := state.State{Timers: slices.Clone(st.Timers), Stop: st.Stop}
+	if _, _, _, changed := settleTimersMatching(&scratch, found, now, timerTick, nil); !changed {
+		return w, nil
+	}
 	var lines []string
 	var fires []timerFire
 	err = a.store.Update(func(current *state.State) ([]state.Event, error) {
@@ -266,4 +273,16 @@ type fatalTimerFinding struct {
 
 func (f fatalTimerFinding) evidence() string {
 	return fmt.Sprintf("%d timer firing or condition-check deadlines missed by more than two minutes", f.overdue)
+}
+
+// Other stores retain their existing unlocked snapshot semantics.
+func timerStopRequested(store state.Store) (bool, error) {
+	if probe, ok := store.(interface{ StopRequested() (bool, error) }); ok {
+		return probe.StopRequested()
+	}
+	st, err := store.Peek()
+	if err != nil {
+		return false, err
+	}
+	return st.Stop != nil, nil
 }

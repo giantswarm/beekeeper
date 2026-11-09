@@ -262,6 +262,12 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 	if a.store == nil {
 		return "", fmt.Errorf("durable health unavailable")
 	}
+	keepHistory := func(e state.Event) bool { return e.Verb == throughputOutcomeVerb || e.Verb == throughputHealthVerb }
+	// Warm a cold reader before taking the state lock. Refresh it inside
+	// the transaction as well to include concurrent health transitions.
+	if _, err := a.store.Follow("throughput-health-history", keepHistory); err != nil {
+		return "", err
+	}
 	var line string
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var prev throughputHealth
@@ -282,7 +288,7 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 		if err != nil || !found {
 			obs.Unknown = true
 		}
-		evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == throughputOutcomeVerb || e.Verb == throughputHealthVerb })
+		evs, err := a.store.Follow("throughput-health-history", keepHistory)
 		if err != nil {
 			return nil, err
 		}

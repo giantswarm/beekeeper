@@ -1841,9 +1841,12 @@ type FileStore struct {
 	version string
 	// follows are the Follow readers' places in the log, by name; refused
 	// says a save was refused and logged, once per process.
-	mu      sync.Mutex
-	follows map[string]*followed
-	refused bool
+	mu            sync.Mutex
+	follows       map[string]*followed
+	refused       bool
+	stopMu        sync.Mutex
+	stopFile      os.FileInfo
+	stopRequested bool
 }
 
 // followed is how far a Follow reader has read the log, and what it kept.
@@ -1968,6 +1971,42 @@ func (s *FileStore) busy(waited time.Duration) error {
 // that must never wait on it (a permission hook): a write replaces the file
 // in one rename, so the document read is always a whole one.
 func (s *FileStore) Peek() (*State, error) { return s.load() }
+
+// StopRequested reads only stop intent from the atomic snapshot. Frequent
+// cancellation probes must not allocate every retained record and note.
+func (s *FileStore) StopRequested() (bool, error) {
+	// Keep this independent of Follow's mutex: a cold event-log scan must
+	// never delay cancellation. Atomic replacement changes file identity.
+	s.stopMu.Lock()
+	defer s.stopMu.Unlock()
+	f, err := os.Open(s.path("state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if old := s.stopFile; old != nil && os.SameFile(old, info) && old.Size() == info.Size() && old.ModTime().Equal(info.ModTime()) {
+		return s.stopRequested, nil
+	}
+	var intent struct {
+		Stop *Stop `json:"stop"`
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(raw, &intent); err != nil {
+		return false, err
+	}
+	s.stopFile, s.stopRequested = info, intent.Stop != nil
+	return s.stopRequested, nil
+}
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back with the events fn returns under the same lock. When fn fails nothing

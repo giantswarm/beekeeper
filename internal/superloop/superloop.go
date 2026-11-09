@@ -856,13 +856,21 @@ func parks(workers []Worker, l ledger, desk Desk) (fresh, stale map[string]bool)
 // taken.
 func Plan(in Input) []Action {
 	l := newLedger(in.Taken, in.Answers)
+	// Report pairing is local to an agent. Index once instead of walking
+	// the entire retained event history for every completed worker.
+	eventsByAgent := make(map[string][]Event)
+	for _, e := range in.Events {
+		eventsByAgent[e.Agent] = append(eventsByAgent[e.Agent], e)
+	}
 	rounds := max(in.Rounds, 1)
 	var out []Action
+	plannedKeys := make(map[string]bool)
 	add := func(a Action) {
 		if l.has(a.Key) {
 			return
 		}
-		if !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
+		if !plannedKeys[a.Key] {
+			plannedKeys[a.Key] = true
 			out = append(out, a)
 		}
 	}
@@ -882,7 +890,7 @@ func Plan(in Input) []Action {
 	// its person started, one gone already, or one whose own done the
 	// loop takes, stays as it is.
 	retire := func(ref, who, agent, why string) {
-		reported := slices.ContainsFunc(in.Events, func(e Event) bool { return e.Verb == VerbDone && e.Agent == agent })
+		reported := slices.ContainsFunc(eventsByAgent[agent], func(e Event) bool { return e.Verb == VerbDone })
 		if started[agent] && !reported {
 			add(Action{Key: retireKey(ref, who), Kind: KindDone, Ref: ref, Agent: agent, Message: why})
 		}
@@ -1026,7 +1034,7 @@ func Plan(in Input) []Action {
 	// paired is a report or problem agents idle --done logged with its
 	// done.
 	paired := func(r Event) bool {
-		return slices.ContainsFunc(in.Events, func(e Event) bool { return e.Verb == VerbDone && near(e, r) })
+		return slices.ContainsFunc(eventsByAgent[r.Agent], func(e Event) bool { return e.Verb == VerbDone && near(e, r) })
 	}
 	// forwarded is a problem of the reviewer of one of the loop's rounds
 	// that matches the changes request of its round the loop forwarded
@@ -1097,7 +1105,7 @@ func Plan(in Input) []Action {
 				return w.ParkedOn
 			}
 		}
-		for _, o := range in.Events {
+		for _, o := range eventsByAgent[e.Agent] {
 			if (o.Verb == VerbReport || o.Verb == VerbDone) && near(o, e) {
 				if m := pullURL.FindString(o.Detail); m != "" {
 					return issueRefFromURL(m)
@@ -1121,7 +1129,7 @@ func Plan(in Input) []Action {
 				// the others go to the guide's feed to file, before the
 				// agent leaves the roster.
 				var filed, unfiled []string
-				for _, p := range in.Events {
+				for _, p := range eventsByAgent[e.Agent] {
 					if p.Verb != VerbProblem || !near(p, e) || forwarded(p) {
 						continue
 					}
@@ -1151,7 +1159,7 @@ func Plan(in Input) []Action {
 				add(a)
 				continue
 			}
-			for _, p := range in.Events {
+			for _, p := range eventsByAgent[e.Agent] {
 				if p.Verb == VerbProblem && near(p, e) && !forwarded(p) && Filed(p.Detail) {
 					for _, u := range issueURL.FindAllString(p.Detail, -1) {
 						intake(issueRefFromURL(u), u, p.Agent, originOf(p, u))
