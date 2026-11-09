@@ -163,7 +163,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	sendCodexWhenReady = func(_ context.Context, inbox, msg string, _ time.Duration) error {
 		deliveredInbox, deliveredMsg = inbox, msg
 		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
-		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1234\"}\n{\"type\":\"turn.started\"}\n"), 0o600)
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1234\"}\n{\"type\":\"turn.started\"}\n"), 0o600) //nolint:gosec // logPath comes from the test-owned Codex inbox, not external input
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
 
@@ -430,7 +430,7 @@ func TestStartCodexValidationCleanupAndStop(t *testing.T) {
 	oldSend := sendCodexWhenReady
 	sendCodexWhenReady = func(_ context.Context, inbox, _ string, _ time.Duration) error {
 		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
-		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-fail\"}\n{\"type\":\"error\",\"message\":\"api failure\"}\n"), 0o600)
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-fail\"}\n{\"type\":\"error\",\"message\":\"api failure\"}\n"), 0o600) //nolint:gosec // logPath comes from the test-owned Codex inbox, not external input
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
 
@@ -806,7 +806,7 @@ func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
 	sendCodexWhenReady = func(_ context.Context, inbox, msg string, _ time.Duration) error {
 		deliveredInbox, deliveredMsg = inbox, msg
 		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
-		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\""+threadID+"\"}\n{\"type\":\"turn.started\"}\n"), 0o600)
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\""+threadID+"\"}\n{\"type\":\"turn.started\"}\n"), 0o600) //nolint:gosec // logPath comes from the test-owned Codex inbox, not external input
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
 
