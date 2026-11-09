@@ -199,7 +199,7 @@ func TestDeliveryCommandGoldenAndNoNetwork(t *testing.T) {
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	want := "https://github.com/o/r/issues/10  https://github.com/o/r/pull/20  ci  step 1m0s  age 1h0m0s  worker  checks\n1 in delivery of limit 0 (off)\n"
+	want := "https://github.com/o/r/issues/10  https://github.com/o/r/pull/20  ci  step 1m0s  age 1h0m0s  worker  checks\n1 flowing of limit 0 (off); 0 waiting on the person; 0 blocked\n"
 	if out.String() != want {
 		t.Fatalf("got %q, want %q", out.String(), want)
 	}
@@ -232,7 +232,7 @@ func TestDeliveryCommandGoldenAndNoNetwork(t *testing.T) {
 	if err := a.deliveryCmd().Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "0 in delivery of limit 0 (off)\n" {
+	if out.String() != "0 flowing of limit 0 (off); 0 waiting on the person; 0 blocked\n" {
 		t.Fatal(out.String())
 	}
 }
@@ -269,14 +269,14 @@ func TestDeliverySharedStatusAndReportReading(t *testing.T) {
 	if err := a.supervisorStatus(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "1 in delivery of limit 5") {
+	if !strings.Contains(out.String(), "1 flowing of limit 5") {
 		t.Fatal(out.String())
 	}
 	st, _ := a.store.Read()
 	v := readDelivery(st, 5, a.timeNow())
 	// report's Queue renders this same view, not an independently computed count.
 	f := &reportFacts{Delivery: &v, Zone: time.UTC}
-	if got := renderReport(f); !strings.Contains(got, "1 in delivery of limit 5") {
+	if got := renderReport(f); !strings.Contains(got, "1 flowing of limit 5") {
 		t.Fatal(got)
 	}
 }

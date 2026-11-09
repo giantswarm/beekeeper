@@ -148,6 +148,8 @@ func (l *supervisorLoop) deliveryReservations(st *state.State) ([]string, delive
 		switch {
 		case slices.ContainsFunc(repos, func(ref string) bool { return l.unreadRepo(ref) != "" }):
 			skips.outside++
+		case classifyDelivery(st, d, now, l.a.deliveryPolicy()).Class != deliveryFlowing:
+			skips.held++
 		case slices.ContainsFunc(repos, func(ref string) bool { return deliveryRepoHeld(st, ref, now) }):
 			skips.held++
 		case d.Step == state.DeliveryReviewQueued && deliveryReviewAsked(st, d):

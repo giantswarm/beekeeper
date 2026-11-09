@@ -1739,6 +1739,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.observeDeliveries(ctx, in, unread); err != nil {
 			return err
 		}
+		if err := l.syncDeliveryHolds(ctx); err != nil {
+			l.sayOnce("delivery board hold", "DELIVERY BOARD HOLD FAILED: %v", err)
+		} else {
+			l.clearSaid("delivery board hold")
+		}
 	}
 	if !l.dryRun {
 		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
@@ -4269,6 +4274,16 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	// how to park on a wait the loop watches, and nothing goes to the
 	// person, who could weigh no option of it.
 	if label == "unclassified" && e.Verb == parkEvent {
+		for _, d := range st.Deliveries {
+			if !d.Active() {
+				continue
+			}
+			for _, ag := range st.Agents {
+				if strings.EqualFold(ag.Name, e.Agent) && deliveryAgent(st, d, ag) && classifyDelivery(st, d, l.a.timeNow(), l.a.deliveryPolicy()).Class == deliveryBlocked {
+					return fmt.Sprintf("%s remains blocked on an external delivery wait", e.Agent), nil
+				}
+			}
+		}
 		act.Message = unclassifiedParkMessage(e)
 		if err := l.wake(ctx, act); err != nil {
 			return "", err

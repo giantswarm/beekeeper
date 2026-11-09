@@ -38,8 +38,32 @@ beekeeper config set delivery.wipLimit 2
 Zero disables the limit while keeping observation and statistics active.
 Capacity still controls running sessions through its existing resource and
 subscription constraints. Both must permit an ordinary new issue to start.
-A parked worker frees session capacity but keeps its delivery place; a
-merge alone also keeps it. An already over-limit desk drains existing work
+A parked worker frees session capacity. Only **flowing** deliveries keep a
+WIP place: implementation, CI, review, merge, release and automatic timers
+under a day. An open decision addressed to the guide's person and linked to
+the delivery (or its worker's note park) is **waiting on the person** and
+appears in the existing guide queue. A missing decision note is reported as
+a defect; file it with `note add --for <person> --ref <issue>` and include
+the question, default and deadline.
+
+Use `agents park --external "<what must happen>"` for any external event
+that no current decision can resolve. It needs an explicit wake when the
+event occurs. This typed wait is supported by local and execution workers.
+Existing parks naming a physical visit, technician, external party or
+physical measurement are recognized as external waits too. A timer
+of at least a day, or a dependency on a delivery that is not flowing is
+**blocked**. The loop records a board hold with its reason, moves the issue
+to Blocked / Waiting and restores its previous status when the wait clears.
+A person's visit without an actionable decision belongs here; a decision
+about arranging a visit belongs in a note. Unknown waits remain flowing
+until described clearly, so ambiguity cannot silently open admission.
+Running reviewers and fixers keep a delivery flowing even while its original
+worker waits. Blocked and person waits reserve no new worker slot.
+
+`supervisor status` prints `N flowing of limit L; M waiting on the person;
+K blocked`. `delivery --json` includes each row's `flow` classification and
+reason. Only the flowing count enters admission. A merge alone also keeps
+its place until release. An already over-limit desk drains existing work
 before admitting another ordinary issue.
 
 The gate covers automatic fill, next-after-done, monitored issues, board

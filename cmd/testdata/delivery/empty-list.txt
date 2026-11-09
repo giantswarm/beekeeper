@@ -1,1 +1,1 @@
-0 in delivery of limit 0 (off)
+0 flowing of limit 0 (off); 0 waiting on the person; 0 blocked

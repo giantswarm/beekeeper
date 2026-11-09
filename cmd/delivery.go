@@ -15,15 +15,18 @@ import (
 
 type deliveryRow struct {
 	state.Delivery
+	Flow    deliveryFlow  `json:"flow"`
 	StepAge time.Duration `json:"stepAge"`
 	Age     time.Duration `json:"age"`
 }
 
 type deliveryView struct {
-	Deliveries []deliveryRow `json:"deliveries"`
-	InDelivery int           `json:"inDelivery"`
-	Limit      int           `json:"limit"`
-	CompleteAt time.Time     `json:"completeAt"`
+	Deliveries      []deliveryRow `json:"deliveries"`
+	WaitingOnPerson int           `json:"waitingOnPerson"`
+	Blocked         int           `json:"blocked"`
+	InDelivery      int           `json:"inDelivery"`
+	Limit           int           `json:"limit"`
+	CompleteAt      time.Time     `json:"completeAt"`
 }
 
 // readDelivery is the component's one state-only reading, shared by status and
@@ -35,9 +38,16 @@ func readDelivery(st *state.State, limit int, now time.Time, policies ...deliver
 	}
 	v := deliveryView{Deliveries: []deliveryRow{}, Limit: limit, CompleteAt: st.DeliveriesAt}
 	for _, d := range st.Deliveries {
-		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
-		if deliveryInFlight(st, d, now, p) {
-			v.InDelivery++
+		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, Flow: classifyDelivery(st, d, now, p), StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
+		if deliveryOwned(st, d, now, p) {
+			switch classifyDelivery(st, d, now, p).Class {
+			case deliveryPerson:
+				v.WaitingOnPerson++
+			case deliveryBlocked:
+				v.Blocked++
+			default:
+				v.InDelivery++
+			}
 		}
 	}
 	slices.SortFunc(v.Deliveries, func(a, b deliveryRow) int { return strings.Compare(a.Ref, b.Ref) })
@@ -45,11 +55,11 @@ func readDelivery(st *state.State, limit int, now time.Time, policies ...deliver
 }
 
 func (v deliveryView) line() string {
-	line := fmt.Sprintf("%d in delivery of limit %d", v.InDelivery, v.Limit)
+	line := fmt.Sprintf("%d flowing of limit %d", v.InDelivery, v.Limit)
 	if v.Limit == 0 {
 		line += " (off)"
 	}
-	return line
+	return fmt.Sprintf("%s; %d waiting on the person; %d blocked", line, v.WaitingOnPerson, v.Blocked)
 }
 
 func (a *app) deliveryCmd() *cobra.Command {
