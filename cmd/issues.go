@@ -160,15 +160,19 @@ func postIssueTriage(ctx context.Context, webhook, message string) error {
 
 // nextMonitoredIssue rechecks both open state and live membership at dispatch.
 // It returns only a pointer, so no external issue text enters the worker brief.
-func (a *app) nextMonitoredIssue(ctx context.Context) (*loopBoardItem, error) {
+func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*loopBoardItem, error) {
 	// Avoid creating monitor state for installations that have not enabled it.
 	if _, err := os.Stat(a.issueMonitorDir()); errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	var next *loopBoardItem
 	err := issuemonitor.WithState(ctx, a.issueMonitorDir(), func(s *issuemonitor.State, save func(*issuemonitor.State) error) error {
-		for len(s.Queue) > 0 {
-			p := s.Queue[0]
+		for index := 0; index < len(s.Queue); {
+			p := s.Queue[index]
+			if slices.Contains(skip, p.Ref) {
+				index++
+				continue
+			}
 			r, ok := parseRef(p.Ref)
 			if !ok {
 				return errors.New("invalid monitored issue pointer")
@@ -179,7 +183,7 @@ func (a *app) nextMonitoredIssue(ctx context.Context) (*loopBoardItem, error) {
 			}
 			org, _, _ := strings.Cut(r.Repo, "/")
 			if i.State != emergencyOpenState || issuemonitor.Classify(ctx, issueMonitorGH, org, i.Author.Login) != issuemonitor.Employee {
-				s.Queue = s.Queue[1:]
+				s.Queue = slices.Delete(s.Queue, index, index+1)
 				rec := s.Issues[p.Ref]
 				rec.State = "reported-for-cleanup"
 				s.Issues[p.Ref] = rec
