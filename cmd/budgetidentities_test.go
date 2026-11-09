@@ -367,6 +367,17 @@ func TestForcedGraphQLSamplesShareRESTCache(t *testing.T) {
 	if rest.Load() != 1 || graph.Load() != 6 {
 		t.Fatalf("REST %d GraphQL %d, want 1 and 6", rest.Load(), graph.Load())
 	}
+	// Inventory accounting cannot refund a reservation using a cached REST sample.
+	scanCtx := context.WithValue(t.Context(), freshLoopRESTKey{}, true)
+	for range 2 {
+		if _, err := a.probeBudget(scanCtx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rest.Load() != 3 || graph.Load() != 8 {
+		t.Fatalf("scan samples: REST %d GraphQL %d", rest.Load(), graph.Load())
+	}
+
 	// Expiry forces a real REST read despite continuing GraphQL traffic.
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		b := st.Budget.Identities["gh"]
@@ -379,7 +390,7 @@ func TestForcedGraphQLSamplesShareRESTCache(t *testing.T) {
 	if _, err := a.probeBudget(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if rest.Load() != 2 {
+	if rest.Load() != 4 {
 		t.Fatal("expired REST sample was reused")
 	}
 }

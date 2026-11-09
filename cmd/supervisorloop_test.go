@@ -214,6 +214,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
 	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
+	oldRevision := readRepoPullRevision
+	t.Cleanup(func() { readRepoPullRevision = oldRevision })
+	readRepoPullRevision = func(context.Context, string, string) (string, bool, error) { return "", false, nil }
 	oldCloseIssue, oldEditBody, oldOpenPulls := closePullIssue, editPullBody, readRepoOpenPulls
 	t.Cleanup(func() {
 		readReviewedBehind = wasBehind

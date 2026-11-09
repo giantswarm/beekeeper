@@ -1575,7 +1575,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			sweepReads++
 		}
-		p, err := l.observePull(ctx, ref, changed)
+		step := loopPullStep
+		if slices.Contains(swept, ref) {
+			step = loopSweepStep
+		}
+		p, err := l.observePullStep(ctx, ref, changed, step)
 		if err != nil {
 			unread[ref] = true
 			if errors.Is(err, errLoopLater) {

@@ -18,6 +18,9 @@ var budgetCredentials = github.BudgetCredentials
 
 const unlabelledIdentity = "unlabelled"
 
+// Exact REST accounting is reserved for background inventory batches.
+type freshLoopRESTKey struct{}
+
 func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
@@ -154,7 +157,9 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 		Remaining: previous.Remaining, Used: previous.Limit - previous.Remaining, Reset: previous.Reset}
 	etag := previous.ETag
 	var err error
-	if previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset) {
+	forceREST, _ := ctx.Value(freshLoopRESTKey{}).(bool)
+	refreshREST := forceREST || previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset)
+	if refreshREST {
 		b, etag, err = github.Probe(ctx, client, credential.Value, repo, previous.ETag)
 	}
 	if err != nil {
@@ -174,7 +179,7 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 		b.Windows[key] = *graphqlOf(&window)
 	}
 	restAt := previous.At
-	if previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset) {
+	if refreshREST {
 		restAt = now
 	}
 	cached := state.Budget{Identity: id, Login: b.Login, ETag: etag, At: restAt,

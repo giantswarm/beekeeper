@@ -50,10 +50,10 @@ func deliveryGitHub(args []string) (int, bool) {
 			nodes = append(nodes, map[string]any{"id": fmt.Sprintf("I%d", n), statusField: map[string]any{"name": "Ready"}, "content": map[string]any{
 				numberField: n, "url": fmt.Sprintf("https://github.com/fixture/project/issues/%d", n), "title": fmt.Sprintf("fixture task %d", n), "state": "OPEN",
 				"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", repositoryField: map[string]any{"nameWithOwner": fixtureRepo},
-				"blockedBy": map[string]any{"totalCount": 0, "nodes": []any{}}, "subIssuesSummary": map[string]any{"total": 0, "completed": 0},
+				"blockedBy": map[string]any{"totalCount": 0, nodesField: []any{}}, "subIssuesSummary": map[string]any{"total": 0, "completed": 0},
 			}})
 		}
-		return emit(map[string]any{dataField: map[string]any{"repositoryOwner": map[string]any{"projectV2": map[string]any{"items": map[string]any{"pageInfo": map[string]any{"hasNextPage": false}, "nodes": nodes}}}}})
+		return emit(map[string]any{dataField: map[string]any{"repositoryOwner": map[string]any{"projectV2": map[string]any{"items": map[string]any{"pageInfo": map[string]any{"hasNextPage": false}, nodesField: nodes}}}}})
 	case slices.Contains(args, ghGraphQL) && strings.Contains(query, "issueOrPullRequest(number:"):
 		// Ref state batches use r0, r1, ... aliases. The only PR is 1;
 		// issue 2 closes when the merge closes its linked issue.

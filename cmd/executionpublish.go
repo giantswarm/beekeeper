@@ -320,7 +320,7 @@ func updatePublishedPull(repository, dir string, pull publicationPull, p executi
 	var updated []string
 	// REST, not gh pr edit: that reads review requests, which an App token may
 	// not reach, and fails the edit with them.
-	args := []string{"api", "-X", "PATCH", "repos/" + repository + "/pulls/" + path.Base(pull.URL), "--silent"}
+	args := []string{workerGitHubAPIGroup, "-X", "PATCH", "repos/" + repository + "/pulls/" + path.Base(pull.URL), "--silent"}
 	if title := strings.TrimSpace(p.Title); title != "" && title != strings.TrimSpace(pull.Title) {
 		args = append(args, "--raw-field", publicationTitle+"="+p.Title)
 		updated = append(updated, publicationTitle)

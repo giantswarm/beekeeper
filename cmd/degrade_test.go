@@ -25,7 +25,9 @@ func stubApp(t *testing.T) (*app, *bytes.Buffer) {
 	orig := plat
 	origUnmergedGH := unmergedGH
 	plat = platform.Stub()
-	unmergedGH = func(context.Context, ...string) ([]byte, error) { return []byte("[]"), nil }
+	unmergedGH = func(context.Context, ...string) ([]byte, error) {
+		return inventoryPage(t, nil, false, ""), nil
+	}
 	t.Cleanup(func() {
 		plat = orig
 		unmergedGH = origUnmergedGH

@@ -641,6 +641,10 @@ if args[:2] == ["search", "prs"]:
     print("[]")
     sys.exit(0)
 
+if args[:2] == ["api", "--include"] and len(args) >= 3 and args[2] == "repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=1":
+    sys.stdout.write("HTTP/2.0 200 OK\r\nETag: fixture\r\nContent-Type: application/json\r\n\r\n[]\n")
+    sys.exit(0)
+
 if args[:2] == ["api", "-i"]:
     sys.stdout.write("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n[]\n")
     sys.exit(0)
@@ -678,6 +682,9 @@ if len(args) >= 4 and args[:3] == ["api", "-X", "DELETE"] and "/git/refs/heads/"
 
 if args[:2] == ["api", "graphql"]:
     joined_args = " ".join(args)
+    if "pullRequests(states:OPEN," in joined_args:
+        print(json.dumps({"data": {"repository": {"pullRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}}))
+        sys.exit(0)
     if "fields(first:50)" in joined_args:
         project_obj = {
             "id": "PVT_canary",

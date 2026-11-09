@@ -92,11 +92,13 @@ func newPublicationRig(t *testing.T) *publicationRig {
 	}
 	executionPublishGH = func(_ context.Context, args ...string) ([]byte, error) {
 		switch strings.Join(args[:2], " ") {
+		case "api graphql":
+			return inventoryPage(t, nil, false, ""), nil
 		case "repo view":
 			return []byte(`{"defaultBranchRef":{"name":"main"}}`), nil
 		case "pr list":
 			if rig.created {
-				return json.Marshal([]publicationPull{{URL: publicationFixturePRURL, State: "OPEN", Title: rig.title, Body: rig.body}})
+				return json.Marshal([]publicationPull{{URL: publicationFixturePRURL, State: emergencyOpenState, Title: rig.title, Body: rig.body}})
 			}
 			return []byte(`[]`), nil
 		case publicationFixtureEdit:

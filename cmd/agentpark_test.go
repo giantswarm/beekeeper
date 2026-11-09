@@ -455,7 +455,7 @@ func TestPublishedParkHead(t *testing.T) {
 				return []byte(out), nil
 			}
 			gh := func(ctx context.Context, args ...string) ([]byte, error) {
-				if github.Repo(ctx) != repo || !slices.Equal(args, []string{"api", "repos/o/r/pulls/7"}) {
+				if github.Repo(ctx) != repo || !slices.Equal(args, []string{workerGitHubAPIGroup, "repos/o/r/pulls/7"}) {
 					t.Fatalf("gh call %v", args)
 				}
 				if tc.readErr {

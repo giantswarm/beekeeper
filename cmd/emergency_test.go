@@ -377,7 +377,7 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return p, nil }
 	var calls [][]string
 	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
-		if args[0] == "api" {
+		if args[0] == workerGitHubAPIGroup {
 			if args[1] == "graphql" {
 				return []byte(`{"data":{"repository":{"ref":{"branchProtectionRule":null}}}}`), nil
 			}
