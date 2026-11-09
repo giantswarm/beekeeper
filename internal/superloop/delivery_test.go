@@ -297,3 +297,18 @@ func TestReviewerPublishedFixesCountAsCIWithoutAnotherWorkerPark(t *testing.T) {
 		t.Fatalf("reviewer fixes with pending CI: %+v", got)
 	}
 }
+
+func TestLinkedDeliveryOutsideOwnershipDoesNotCount(t *testing.T) {
+	in := deliveryInput()
+	prev := Deliveries(in, nil)
+	in.Desk.Never = []string{"o/r"}
+	next := Deliveries(in, prev)
+	if len(next) != 1 || !next[0].OutsideDesk {
+		t.Fatalf("linked delivery did not retain ownership exclusion: %+v", next)
+	}
+	in.Desk.Never = nil
+	next = Deliveries(in, next)
+	if len(next) != 1 || next[0].OutsideDesk {
+		t.Fatalf("ownership recovery not observed: %+v", next)
+	}
+}

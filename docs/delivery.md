@@ -24,7 +24,7 @@ same reading. The steps follow the supervisor's existing cycle:
 
 An available release candidate counts as released. Promotion, installation
 and post-merge live proof follow outside this limit. Failed or unconfirmed
-releases keep their place. `delivery.step` events retain each transition,
+releases remain tracked and are escalated. `delivery.step` events retain each transition,
 including its original start time, for cycle evidence and statistics.
 
 ## Limit and capacity
@@ -45,8 +45,9 @@ before admitting another ordinary issue.
 The gate covers automatic fill, next-after-done, monitored issues, board
 selection and claims, and the final dispatch. Claims count under the state
 lock, so simultaneous starts cannot each spend the last place. A full limit
-leaves slots empty instead of reading more ordinary board work. A stale
-observation also holds new work until a complete loop observation returns.
+leaves slots empty instead of reading more ordinary board work. Incomplete sweeps reuse retained delivery observations, including local starts.
+Only a complete observation older than the greater of ten minutes and three
+loop intervals (or no complete observation) holds new work for freshness.
 
 Reviews, fixes, wakes and merges continue at the limit. Pending reviewers
 and fixes without a live worker reserve capacity before ordinary new work.
@@ -54,7 +55,11 @@ Manual starts, the named repair of an active incident, and `board.order`
 steps with `wipExempt: true` can exceed the limit, but still count. This is
 why the count can exceed the configured value without an admission failure.
 
-Stalled work remains counted and is raised after `delivery.stallAfter`.
+Only owned active deliveries with a live worker, reviewer or fixer, or a recent
+step change, count. Without a live agent, review and fix steps leave the count
+after `supervisor.reserveFor` (default one hour); other steps use
+`delivery.stallAfter` (default 24 hours). Stalled records remain visible and are
+raised once per episode to the guide, with recovery reported once.
 Use `beekeeper delivery drop <ref> --reason <why>` only to end its tracking:
 it neither closes pull requests nor stops workers. A changed pull head
 reopens a dropped delivery.

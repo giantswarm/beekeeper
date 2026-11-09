@@ -43,9 +43,9 @@ func TestDeliveryAdmissionPreviewAndExceptions(t *testing.T) {
 		{name: "under", limit: 2, count: 1, pick: true},
 		{name: "full", limit: 2, count: 2},
 		{name: "over", limit: 2, count: 3},
-		{name: "stale", limit: 2, count: 1, stale: 4 * time.Second},
+		{name: "stale", limit: 2, count: 1, stale: 11 * time.Minute},
 		{name: "future fails closed", limit: 2, count: 1, stale: -time.Second},
-		{name: "boundary fresh", limit: 2, count: 1, stale: 3 * time.Second, pick: true},
+		{name: "boundary fresh", limit: 2, count: 1, stale: 10 * time.Minute, pick: true},
 		{name: "exempt", limit: 1, count: 1, exempt: true, pick: true},
 		{name: "repair", limit: 1, count: 1, repair: true, pick: true},
 	} {
@@ -225,7 +225,8 @@ func TestDeliveryStallsRestartTwoWatchesRecoveryAndFull(t *testing.T) {
 	a.cfg.Delivery.WIPLimit = 1
 	a.cfg.Delivery.StallAfter.Duration = time.Hour
 	seed(t, a, func(st *state.State) {
-		st.Deliveries = []state.Delivery{{Ref: deliveryControlPendingRef, Step: state.DeliveryCI, Since: now.Add(-2 * time.Hour), Started: now.Add(-3 * time.Hour), Waits: deliveryControlChecks}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: "live-worker"}, Task: deliveryTestTask}}
+		st.Deliveries = []state.Delivery{{Ref: deliveryControlPendingRef, Agent: "live-worker", Step: state.DeliveryCI, Since: now.Add(-2 * time.Hour), Started: now.Add(-3 * time.Hour), Waits: deliveryControlChecks}}
 	})
 	var wg sync.WaitGroup
 	for range 2 {
@@ -512,7 +513,7 @@ func TestDeliveryRoomMinAfterReservation(t *testing.T) {
 	r, _ := fillRig(t)
 	r.a.cfg.Delivery.WIPLimit = 2
 	now := r.a.timeNow()
-	st := &state.State{DeliveriesAt: now, Deliveries: []state.Delivery{{Ref: refOne, Step: state.DeliveryReviewQueued}}}
+	st := &state.State{DeliveriesAt: now, Deliveries: []state.Delivery{{Ref: refOne, Step: state.DeliveryReviewQueued, Since: now}}}
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
 	if room := l.deliveryFillRoom(3, st); room != 1 {
 		t.Fatalf("reservation incorrectly consumed WIP room: %d", room)

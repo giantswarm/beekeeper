@@ -246,7 +246,7 @@ func (a *app) gatherReport(ctx context.Context, from, to time.Time, zone *time.L
 		}
 		f.Notes = append(f.Notes, n)
 	}
-	delivery := readDelivery(st, a.cfg.Delivery.WIPLimit, to)
+	delivery := readDelivery(st, a.cfg.Delivery.WIPLimit, to, a.deliveryPolicy())
 	f.Delivery = &delivery
 	f.Lanes = st.Merges
 	for _, t := range st.Timers {
