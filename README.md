@@ -2303,6 +2303,27 @@ is confirmed. A failed or unconfirmed release stays `releasing`; research comple
 without a pull request, or work closed unmerged without a continuing worker, is `dropped`.
 The release verdict and tag survive removal of the merge from its lane.
 
+An epic in the go status (`board.epics.go`, normally In Progress) gets an
+owner session before its sub-issue workers. The owner maintains the ordered
+plan and GitHub blocker dependencies, follows reports and reviews, and proves
+acceptance after the children merge. It does not implement, review or merge.
+It parks on the epic between events; changes to child delivery observations
+wake it. Only proven acceptance closes the epic and moves it to Done.
+
+`delivery.epicLimit` caps admitted epic owners (default `0`, off). Existing
+owners keep their places; further epics wait in board order. An owner retains
+its place while parked or waiting on a decision. `delivery.epicParallel`
+defaults to `3`: the loop admits up to three flowing children per epic and
+refills when one finishes. Waiting-on-person and blocked children are visible
+but do not consume a flowing place. Each child still passes the normal board,
+blocker, WIP, capacity, CI and independent review gates. Record dependencies
+with GitHub blockers; sub-issue order supplies priority among independent
+children. Configure an In Progress board step with `subIssues: true` to offer
+the children. Owner sessions do not count against the ordinary delivery WIP.
+`supervisor status` includes the last observed epic list, its observation time,
+and each open child's queued, flowing, waiting-on-person, blocked or merged
+state. An unreadable child remains unknown rather than proving completion.
+
 `delivery.wipLimit` defaults to `0` (off), accepts nonnegative values through
 `beekeeper config set delivery.wipLimit <n>`. When set, it holds new issues until
 a place is free. A delivery observation older than the greater of ten minutes and three loop intervals also holds

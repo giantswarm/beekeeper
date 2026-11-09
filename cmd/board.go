@@ -259,6 +259,19 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 				return err
 			}
 			cands := board.Rank(snap, a.cfg.Board, a.now)
+			epicState, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			cands, epics := epicCandidates(snap, a.cfg.Board, cands, epicState)
+			var previousEpics epicSnapshot
+			if _, err := a.store.ReadFile(epicSnapshotFile, &previousEpics); err != nil {
+				return err
+			}
+			retainEpicHistory(&epics, previousEpics, epicState, a.timeNow(), a.deliveryPolicy())
+			if err := a.store.WriteFile(epicSnapshotFile, epics); err != nil {
+				return err
+			}
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -278,7 +291,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 			if err != nil {
 				return err
 			}
-			sc := pickScope{exemptOnly: exemptOnly, wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, wipPolicy: a.deliveryPolicy(), me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+			sc := pickScope{epics: epics, epicLimit: a.cfg.Delivery.EpicLimit, epicParallel: a.cfg.Delivery.EpicParallel, exemptOnly: exemptOnly, wipLimit: a.cfg.Delivery.WIPLimit, loopInterval: a.cfg.Supervisor.LoopInterval.Duration, wipPolicy: a.deliveryPolicy(), me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
 				gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
 				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
 			if exemptOnly {
@@ -549,6 +562,9 @@ func nextSkip(skip []string, pick *board.Candidate) []string {
 // task or note names belongs to, and what the running sessions work on
 // (servingWork).
 type pickScope struct {
+	epics        epicSnapshot
+	epicLimit    int
+	epicParallel int
 	exemptOnly   bool
 	me           state.Party
 	alive        func(state.Party) bool
@@ -772,7 +788,10 @@ func nextFreePreview(st *state.State, cands []board.Candidate, sc pickScope) nex
 		if c.Skip == "" {
 			c.Skip = cmp.Or(owned(c.Ref), sc.prReferences[strings.ToLower(c.Ref)])
 		}
-		if c.Skip == "" && c.Epic != "" {
+		if c.Skip == "" {
+			c.Skip = epicAdmission(st, c, sc)
+		}
+		if c.Skip == "" && c.Epic != "" && epicOwner(st, c.Epic) == nil {
 			if o := owned(c.Epic); o != "" {
 				c.Skip = o + ", on epic " + c.Epic
 			}

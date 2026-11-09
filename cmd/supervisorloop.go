@@ -1297,6 +1297,18 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if !l.dryRun {
+		if err := l.completeEpics(ctx, st); err != nil {
+			l.sayOnce("epic completion", "SUPERVISOR EPIC completion waits: %v", err)
+		} else {
+			l.clearSaid("epic completion")
+		}
+		if err := l.wakeEpicOwners(ctx, st); err != nil {
+			l.sayOnce("epic wake", "SUPERVISOR EPIC wake waits: %v", err)
+		} else {
+			l.clearSaid("epic wake")
+		}
+	}
 	l.lifecyclePhase("read state and dispatch timers")
 	// Wall-clock timer jobs keep running while GitHub observations are
 	// held. Board commands they invoke still share the query admission gate.
@@ -4056,6 +4068,8 @@ func (l *supervisorLoop) readNextItemSkipping(ctx context.Context, exemptOnly bo
 }
 
 type loopBoardItem struct {
+	EpicOwner bool   `json:"epic_owner,omitempty"`
+	Epic      string `json:"epic,omitempty"`
 	WIPExempt bool   `json:"wip_exempt,omitempty"`
 	Ref       string `json:"ref"`
 	URL       string `json:"url"`
@@ -4063,6 +4077,9 @@ type loopBoardItem struct {
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem, reserved ...[]string) (string, error) {
 	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+		return "", err
+	}
+	if err := l.epicStart(next); err != nil {
 		return "", err
 	}
 	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
@@ -4083,6 +4100,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
 	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+	if next.EpicOwner {
+		name = "Epic owner " + next.Ref
+	}
 	if err := l.a.fatalAdmission(name, false); err != nil {
 		return "", errLoopLater
 	}
@@ -4098,7 +4118,16 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err != nil {
 		return "", err
 	}
+	if next.EpicOwner {
+		brief, err = l.brief("", "Own the epic {{.URL}}. Read its acceptance, comments and plan. Maintain ordered sub-issues and their GitHub blocker dependencies. The loop schedules implementation workers and independent reviewers; do not implement, review or merge. Follow their reports and reviews, raise barriers, and prove acceptance end to end after all children merge. Park on the epic between events; the loop wakes you when children change. Only after acceptance is proven, report idle --done with the exact marker Epic acceptance proven: followed by the acceptance evidence. The loop verifies that no sub-issue remains open, closes the epic and moves it to Done. Never mark an epic done merely because its children merged.", "epic-owner "+next.Ref, briefData{URL: next.URL, Repo: r.Repo, Number: r.N})
+		if err != nil {
+			return "", err
+		}
+	}
 	args := []string{agentsName, agentStartName, name, brief}
+	if next.EpicOwner {
+		args = append(args, "--task", epicOwnerTask+next.Ref)
+	}
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		// The start takes capacity's choice of harness and model, as a
 		// reviewer's does.
@@ -4119,6 +4148,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		return "", err
 	}
 	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+		return "", err
+	}
+	if err := l.epicStart(next); err != nil {
 		return "", err
 	}
 	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {

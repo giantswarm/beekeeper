@@ -116,3 +116,34 @@ func TestDeliveryExemptBoardStepConfig(t *testing.T) {
 		t.Fatal(c.Board.Order)
 	}
 }
+
+func TestEpicDeliverySettings(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	for _, tc := range []struct {
+		raw             string
+		limit, parallel int
+		bad             bool
+	}{
+		{"", 0, 3, false},
+		{"delivery: {epicLimit: 1, epicParallel: 4}", 1, 4, false},
+		{"delivery: {epicLimit: -1}", 0, 0, true},
+		{"delivery: {epicParallel: -1}", 0, 0, true},
+	} {
+		if err := os.WriteFile(p, []byte(tc.raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(p)
+		if (err != nil) != tc.bad {
+			t.Fatalf("%s: %v", tc.raw, err)
+		}
+		if err == nil && (c.Delivery.EpicLimit != tc.limit || c.Delivery.EpicParallel != tc.parallel) {
+			t.Fatal(c.Delivery)
+		}
+	}
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Set(p, []Setting{{Key: "delivery.epicLimit", Value: "2"}, {Key: "delivery.epicParallel", Value: "5"}}); err != nil || c.Delivery.EpicLimit != 2 || c.Delivery.EpicParallel != 5 {
+		t.Fatalf("%+v %v", c, err)
+	}
+}
