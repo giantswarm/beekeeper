@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -21,6 +23,66 @@ const (
 	timerProofFinished        = "proof finished"
 	timerDueEarlier           = "due earlier"
 )
+
+// A supervisor inventory can hold admission longer than the fatal timer
+// deadline. Timers must defer that check and still deliver unrelated wakes.
+func TestTimerDispatcherBoundsGitHubAdmissionWait(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	a.cfg.GitHub.Floor = 100
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget = &state.Budget{Remaining: 4900, Reset: a.now.Add(time.Hour),
+			GraphQL: &state.GraphQL{Remaining: 4900, Reset: a.now.Add(time.Hour)}}
+		st.Timers = []state.Timer{
+			{ID: 1, Due: a.now.Add(-time.Minute), When: prMerged7, Wake: workerRole},
+			{ID: 2, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldBudget, oldWake := readBudget, wakeOwner
+	readBudget = func(*app, context.Context) (github.Budget, error) { return github.Budget{}, nil }
+	var wakes atomic.Int32
+	wakeOwner = func(_ *app, ctx context.Context, _ state.Party, name, _, _ string) error {
+		if name != timerDispatchRepairWorker || ctx.Err() != nil {
+			t.Errorf("unrelated wake name=%q context=%v", name, ctx.Err())
+		}
+		wakes.Add(1)
+		return nil
+	}
+	t.Cleanup(func() { readBudget, wakeOwner = oldBudget, oldWake })
+	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	done := make(chan error, 1)
+	go func() {
+		w, err := a.dispatchTimerPass(t.Context())
+		if err == nil {
+			w.timerActs.Wait()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(fatalProbeTimeout + 5*time.Second):
+		_ = lock.Unlock()
+		<-done
+		t.Fatal("GitHub admission blocked independent timer settlement")
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wakes.Load() != 1 || len(st.Timers) != 1 || st.Timers[0].ID != 1 || !st.Timers[0].Unreadable || !st.Timers[0].Checked.Equal(a.now) {
+		t.Fatalf("wakes=%d timers=%+v", wakes.Load(), st.Timers)
+	}
+}
 
 func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {

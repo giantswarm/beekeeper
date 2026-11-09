@@ -188,7 +188,12 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 			githubHeld = true
 		}
 	}
-	found := batch.loopTimerChecks(ctx, st.Timers, now, githubHeld || batch.resetFirst(st))
+	// Admission shares the supervisor's GitHub lock. Bound the entire check
+	// phase, including that lock wait, so a slow inventory cannot prevent
+	// unrelated due timers from settling on this independent dispatcher.
+	checkCtx, cancelChecks := context.WithTimeout(ctx, fatalProbeTimeout)
+	found := batch.loopTimerChecks(checkCtx, st.Timers, now, githubHeld || batch.resetFirst(st))
+	cancelChecks()
 	// A GitHub admission refusal is an attempted check, not an absent tick.
 	// Record it so overdue detection distinguishes a stopped scheduler from
 	// an intentional budget/hold wait, without calling the reference healthy.
