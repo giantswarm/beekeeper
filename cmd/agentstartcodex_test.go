@@ -161,7 +161,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	var deliveredInbox, deliveredMsg string
 	sendCodexWhenReady = func(_ context.Context, inbox, msg string, _ time.Duration) error {
 		deliveredInbox, deliveredMsg = inbox, msg
-		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
+		logPath := codex.LogPath(stateDir, startID)
 		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1234\"}\n{\"type\":\"turn.started\"}\n"), 0o600)
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
@@ -420,7 +420,10 @@ func TestStartCodexValidationCleanupAndStop(t *testing.T) {
 	// 3. Clean up unit and inbox/log files when first turn fails to start.
 	oldSend := sendCodexWhenReady
 	sendCodexWhenReady = func(_ context.Context, inbox, _ string, _ time.Duration) error {
-		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
+		if inbox != codex.InboxPath(stateDir, startID) {
+			t.Fatalf("inbox = %q, want %q", inbox, codex.InboxPath(stateDir, startID))
+		}
+		logPath := codex.LogPath(stateDir, startID)
 		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-fail\"}\n{\"type\":\"error\",\"message\":\"api failure\"}\n"), 0o600)
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
