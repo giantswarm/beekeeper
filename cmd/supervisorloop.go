@@ -1577,7 +1577,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		step := loopPullStep
 		if slices.Contains(swept, ref) {
-			step = "sweep"
+			step = loopSweepStep
 		}
 		p, err := l.observePullStep(ctx, ref, changed, step)
 		if err != nil {

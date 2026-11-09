@@ -19,6 +19,7 @@ import (
 const loopGraphQLFile = "loop-graphql.json"
 const loopGraphQLLimit = config.DefaultLoopGraphQLLimit
 const loopPullStep = "pull"
+const loopSweepStep = "sweep"
 
 // The loop-owned watch samples the budget at most every 30 seconds. Keep
 // 300 points outside the work allowance for two identities' probes and boundaries.
@@ -179,7 +180,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.timeNow(), limit) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
-	scan := step == "inventory" || step == "sweep"
+	scan := step == "inventory" || step == loopSweepStep
 	if scan {
 		ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
 	}
