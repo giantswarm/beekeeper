@@ -242,12 +242,12 @@ func TestSingleTaskRepository(t *testing.T) {
 
 // A late admission refusal must not reserve the requested branch or checkout.
 func TestStartFatalRefusalLeavesWorktreeAvailable(t *testing.T) {
+	r := newPickRig(t, "    - {harness: claude, model: opus-x}\n")
 	bin := t.TempDir()
 	if err := os.Symlink("/bin/true", filepath.Join(bin, claudeComm)); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	r := newPickRig(t, "    - {harness: claude, model: opus-x}\n")
 	brief := filepath.Join(r.dir, "brief.md")
 	if err := os.WriteFile(brief, []byte("Implement a worker fix\n"), 0600); err != nil {
 		t.Fatal(err)
