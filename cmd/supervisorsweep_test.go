@@ -105,3 +105,40 @@ func TestSweepPullsSkipsTrackedAndOwnedPulls(t *testing.T) {
 		t.Errorf("sweep reads %v, want %v", got, want)
 	}
 }
+
+// Delivery discovery survives an exhausted background allowance, and failed
+// listings retry the next pass rather than postponing recovery for five minutes.
+func TestSweepDiscoverySurvivesDrainAndRetriesFailedListing(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = 0
+	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: r.a.timeNow().Add(time.Hour), Spent: loopRESTLimit}); err != nil {
+		t.Fatal(err)
+	}
+	old := readOpenPulls
+	t.Cleanup(func() { readOpenPulls = old })
+	attempts := 0
+	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, fmt.Errorf("temporarily unavailable")
+		}
+		return []string{loopPR}, nil
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := superloop.Input{Desk: superloop.Desk{Orgs: []string{"o"}, Authors: []string{loopDesk}}}
+	l.sweepPulls(context.Background(), in, nil)
+	if !l.openPullsAt.IsZero() {
+		t.Fatal("failed listing marked fresh")
+	}
+	got := l.sweepPulls(context.Background(), in, nil)
+	if attempts != 2 || !slices.Equal(got, []string{loopPR}) {
+		t.Fatalf("discovery after drain: %v attempts %d", got, attempts)
+	}
+	l.sweepPulls(context.Background(), in, nil)
+	if attempts != 2 {
+		t.Fatal("successful discovery ignored listing interval")
+	}
+}

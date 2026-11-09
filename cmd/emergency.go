@@ -180,8 +180,33 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if err = json.Unmarshal(raw, &pr); err != nil {
 				return err
 			}
-			if pr.State != emergencyOpenState || pr.IsDraft || pr.ReviewDecision != emergencyApproved || pr.HeadRefOid == "" {
+			if pr.State != emergencyOpenState || pr.IsDraft || pr.HeadRefOid == "" {
 				return refused("emergency merge requires an approved, open, non-draft pull request")
+			}
+			if pr.ReviewDecision != emergencyApproved {
+				// A same-account desk review is COMMENTED on GitHub. Read
+				// its trusted exact-head verdict instead of requiring a native
+				// approval. Branch protection still applies without --admin.
+				p, err := readLoopPull(cmd.Context(), fmt.Sprintf("%s#%d", args[0], n))
+				if err != nil {
+					return err
+				}
+				if p.State != superloop.Open || p.Draft || !p.Green || !sameCommit(p.Head, pr.HeadRefOid) {
+					return refused("emergency merge requires a green, open, non-draft pull request at the reviewed head")
+				}
+				reviews, err := a.trustedReviews(cmd.Context(), p)
+				if err != nil {
+					return err
+				}
+				var latest *superloop.Review
+				for i := range reviews {
+					if latest == nil || !reviews[i].At.Before(latest.At) {
+						latest = &reviews[i]
+					}
+				}
+				if latest == nil || latest.Verdict != superloop.Approved || !sameCommit(cmp.Or(latest.Head, latest.Commit), pr.HeadRefOid) {
+					return refused("emergency merge requires an approved desk review of the exact head")
+				}
 			}
 			if err := a.emergencyMergePolicy(args[0], n); err != nil {
 				return err

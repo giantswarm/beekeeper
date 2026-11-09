@@ -1190,8 +1190,8 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		if latest != nil {
 			first, _, _ = strings.Cut(strings.TrimSpace(latest.Body), "\n")
 		}
-		if first != deskReviewApproved {
-			return "merge.requireReview requires an approved Desk review (opus) comment on the head", false, nil
+		if first != deskReviewApproved && first != "Review: approved" {
+			return "merge.requireReview requires an approved desk review comment on the head", false, nil
 		}
 	}
 	approvedHead := ""
