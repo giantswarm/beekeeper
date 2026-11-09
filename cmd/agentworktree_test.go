@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/fatal"
 )
 
 const testBranchFlag = "--branch"
@@ -235,6 +236,45 @@ func TestSingleTaskRepository(t *testing.T) {
 	for _, brief := range []string{"https://github.com/example/one/issues/1 https://github.com/example/two/issues/2", "example/one#1 and example/two#2"} {
 		if err := singleTaskRepository(brief); err == nil || !strings.Contains(err.Error(), "split") {
 			t.Fatalf("multi repository task: %v", err)
+		}
+	}
+}
+
+// A late admission refusal must not reserve the requested branch or checkout.
+func TestStartFatalRefusalLeavesWorktreeAvailable(t *testing.T) {
+	r := newPickRig(t, "    - {harness: claude, model: opus-x}\n")
+	bin := t.TempDir()
+	if err := os.Symlink("/bin/true", filepath.Join(bin, claudeComm)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	brief := filepath.Join(r.dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Implement a worker fix\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := testCheckoutArgs(t, r.dir, []string{"refused-worker", brief, usageDirFlag, r.dir, testHarnessFlag, claudeComm, usageForceFlag})
+	branch := args[len(args)-1]
+	a, _ := r.app(false)
+	q := fatal.Queue{}
+	q.Observe(fatal.Observation{ID: "installed-guard-check", Failed: true}, a.now)
+	if err := q.Save(a.store.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(r.dir, "worktrees", filepath.Base(r.dir), branch)
+	a.cfg.Agents.WorktreesDir = filepath.Join(r.dir, "worktrees")
+	for range 2 {
+		c := a.agentStartCmd()
+		c.SilenceErrors, c.SilenceUsage = true, true
+		c.SetArgs(args)
+		if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "takes priority") {
+			t.Fatalf("start refusal: %v", err)
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			t.Fatalf("refused start left worktree: %v", err)
+		}
+		out, err := runGit(t.Context(), r.dir, "branch", "--list", branch)
+		if err != nil || strings.TrimSpace(string(out)) != "" {
+			t.Fatalf("refused start left branch: %s, %v", out, err)
 		}
 	}
 }
