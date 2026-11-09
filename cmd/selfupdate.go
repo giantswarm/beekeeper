@@ -199,7 +199,10 @@ reset. A development build (version dev) is refused.`,
 					return err
 				}
 				if completeProbation {
-					if err := a.canaryRelease(cmd.Context(), a.out, path, project.Version()); err != nil {
+					if err := probationHealth(cmd.Context(), a.cfgPath, path); err != nil {
+						if errors.Is(err, update.ErrHealthUnproven) {
+							return err
+						}
 						if qerr := update.Quarantine(cmd.Context(), path, "post-install health checks failed"); qerr != nil {
 							return errors.Join(err, qerr)
 						}
@@ -247,12 +250,7 @@ reset. A development build (version dev) is refused.`,
 					return a.canaryRelease(ctx, w, path, version)
 				},
 				Health: func(ctx context.Context, path, _ string) error {
-					why := canaryFailure(ctx, a.cfgPath, path)
-					if why == "" {
-						return nil
-					}
-					_, _ = fmt.Fprintf(w, "The installed candidate failed its health check (%s); quarantining it.\n", why)
-					return errors.New(why)
+					return probationHealth(ctx, a.cfgPath, path)
 				},
 				Skip:     a.isSkippedRelease,
 				Recovery: a.launchRecovery,
@@ -487,6 +485,19 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 	}
 	_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
 	return fmt.Errorf("skipping %s: %s", version, why)
+}
+
+// probationHealth distinguishes a broken offline version probe from unavailable
+// live evidence. A busy state lock or budget outage must remain retryable.
+func probationHealth(ctx context.Context, cfgPath, path string) error {
+	name, why := canaryCheck(ctx, cfgPath, path)
+	if why == "" {
+		return nil
+	}
+	if name != hostVersionFlag || ctx.Err() != nil {
+		return fmt.Errorf("%w: %s", update.ErrHealthUnproven, why)
+	}
+	return errors.New(why)
 }
 
 // canaryFailure runs the canary checks on the binary at path and says why the

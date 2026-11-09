@@ -1068,3 +1068,34 @@ type hostRollbackRejectingValidator struct{ acceptingValidator }
 func (*hostRollbackRejectingValidator) Validate(string, []byte, []byte) error {
 	return errors.New("invalid signature bundle")
 }
+
+// An unavailable health check must neither quarantine nor promote. Once the
+// evidence is available the same candidate can become the recovery target.
+func TestUpdateUnprovenHealthCanRetry(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, _ := installed(t)
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	first := installJournal(t, exe)
+	acceptRelease(t, thirdV, thirdBinary, latestV)
+	ctx := WithOptions(context.Background(), Options{Health: func(context.Context, string, string) error {
+		return errors.Join(ErrHealthUnproven, context.DeadlineExceeded)
+	}})
+	if _, err := InstallVersion(ctx, io.Discard, thirdV); !errors.Is(err, ErrHealthUnproven) {
+		t.Fatalf("unproven update: %v", err)
+	}
+	assertUnchanged(t, exe, []byte(newBinary))
+	j := installJournal(t, exe)
+	if j.Probation != probationPending || len(j.Quarantine) != 0 || j.Candidate != first.Candidate {
+		t.Fatalf("unproven check changed candidate: %+v", j)
+	}
+	ctx = WithOptions(context.Background(), Options{Health: func(context.Context, string, string) error { return nil }})
+	if _, err := InstallVersion(ctx, io.Discard, thirdV); err != nil {
+		t.Fatal(err)
+	}
+	j = installJournal(t, exe)
+	if j.Previous == nil || *j.Previous != first.Candidate || len(j.Quarantine) != 0 {
+		t.Fatalf("retry failed to retain healthy candidate: %+v", j)
+	}
+}

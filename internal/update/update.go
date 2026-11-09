@@ -32,6 +32,10 @@ const lookupTimeout = 15 * time.Second
 // ErrOutdated is what a check returns when a newer release exists.
 var ErrOutdated = errors.New("a newer beekeeper release is available")
 
+// ErrHealthUnproven leaves probation pending when live health evidence is
+// unavailable. It neither promotes nor quarantines the installed candidate.
+var ErrHealthUnproven = errors.New("candidate health is unproven")
+
 // Seams the tests replace: where releases come from (GitHub, authenticated
 // with the environment's token or the gh login, never anonymously; empty tag
 // responses are retried),
@@ -66,6 +70,7 @@ type Result struct {
 type Canary func(ctx context.Context, path, version string) error
 
 // Health checks the executable at path, the installed candidate of version.
+// Return ErrHealthUnproven (possibly wrapped) for transient or unreadable evidence.
 type Health func(ctx context.Context, path, version string) error
 
 // Options configures a Run call through its context.
