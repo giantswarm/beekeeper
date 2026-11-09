@@ -71,3 +71,29 @@ func TestDeliveryDoesNotDiagnoseSecondsOldRelease(t *testing.T) {
 		t.Fatalf("premature alarm: %q %v", line, err)
 	}
 }
+
+func TestGuideFilingReasonMapsAndUnmapsReport(t *testing.T) {
+	a := guideNextApp(t)
+	text := "report" + fileReportSeparator + "defect to file"
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		retainGuideReport(st, "first", text, a.now, st.Guide.Holder.Party)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	issue := "https://github.com/o/r/issues/1"
+	if err := guideWorkRun(t, a, "done", "1", "--reason", "Filed "+issue); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := a.store.Read()
+	if len(st.GuideWork) != 0 || st.GuideFindings[guideFindingFingerprint(text)].Issue != issue {
+		t.Fatalf("filing did not map: %+v", st.GuideFindings)
+	}
+	if err := guideWorkRun(t, a, "unmap", issue); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = a.store.Read()
+	if !retainGuideReport(st, "after-resolution", text, a.now, state.Party{}) {
+		t.Fatal("resolved finding suppressed a new observation")
+	}
+}

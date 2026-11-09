@@ -4214,7 +4214,8 @@ When filing or recognizing an existing issue for a report, record its mapping:
 beekeeper guide work done <id> --reason "Filed the defect" --issue https://github.com/owner/repo/issues/123
 ```
 
-Matching report bodies then increment that issue's local observation tally,
+An issue URL in the completion reason also records the mapping, preserving the
+existing guide filing workflow. Matching report bodies then increment that issue's local observation tally,
 visible in `beekeeper guide work`, without creating more due work. Reporter and
 observation-time headers do not affect the fingerprint. Different report bodies
 remain new findings. Once the issue is resolved, use

@@ -92,6 +92,16 @@ func (a *app) guideWorkCmd() *cobra.Command {
 		if strings.TrimSpace(reason) == "" {
 			return fmt.Errorf("--reason is required")
 		}
+		// Existing guides already record filed issue URLs in the result.
+		// Preserve that workflow while making its ownership durable.
+		if issue == "" {
+			for _, candidate := range refURL.FindAllString(reason, -1) {
+				if strings.HasPrefix(candidate, "https://github.com/") && strings.Contains(candidate, "/issues/") {
+					issue = candidate
+					break
+				}
+			}
+		}
 		me, err := a.caller()
 		if err != nil {
 			return err

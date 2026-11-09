@@ -990,7 +990,7 @@ lines that save would have recorded, again only when those lines change.`,
 			for {
 				a.now = time.Now()
 				// Re-exec before consuming any durable feed entries.
-				for _, l := range self.lines(ctx, nil, nil) {
+				for _, l := range self.refresh(ctx) {
 					_, _ = fmt.Fprintln(a.out, a.now.Format("15:04:05")+" "+l)
 				}
 				feed, err := a.guideFeed(ctx)

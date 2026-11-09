@@ -42,8 +42,9 @@ func newGuideSelf() *guideSelf {
 	return g
 }
 
-// lines are the lines of one poll whose feed said feed and ended with err.
-func (g *guideSelf) lines(ctx context.Context, feed []string, err error) []string {
+// refresh runs before a poll, so re-execution cannot consume its feed or
+// clear the refused-save deduplication state.
+func (g *guideSelf) refresh(ctx context.Context) []string {
 	var out []string
 	if !g.stale {
 		if path, ok := g.replaced(); ok {
@@ -52,13 +53,19 @@ func (g *guideSelf) lines(ctx context.Context, feed []string, err error) []strin
 				if execErr := g.exec(); execErr != nil {
 					out = append(out, fmt.Sprintf("GUIDE REEXEC FAILED: %v", execErr))
 				} else {
-					return feed
+					return nil
 				}
 			}
 			out = append(out, fmt.Sprintf("GUIDE WATCH STALE: this watch (pid %d) runs %s; self-update installed %s at %s, a re-arm picks it up: %s",
 				g.pid, project.Version(), g.versionOf(ctx, path), path, rearm(g.args)))
 		}
 	}
+	return out
+}
+
+// lines are the lines of one poll whose feed said feed and ended with err.
+func (g *guideSelf) lines(_ context.Context, feed []string, err error) []string {
+	var out []string
 	var stale *state.StaleWriterError
 	switch {
 	case errors.As(err, &stale):
