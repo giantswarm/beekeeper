@@ -847,18 +847,34 @@ func (l *supervisorLoop) checkUnmergedBacklogs(ctx context.Context, in superloop
 	l.mu.Unlock()
 	start := sort.Search(len(keys), func(i int) bool { return keys[i] > cursor })
 	keys = append(slices.Clone(keys[start:]), keys[:start]...)
+	const unmergedChecksPerPass = 8
+	checked := 0
+	now := l.a.timeNow()
 	for _, key := range keys {
 		if ctx.Err() != nil {
 			break
 		}
-		// Resume after the attempted repository next pass, even if admission
-		// used the entire budget, so one unread repository cannot starve others.
 		l.mu.Lock()
-		l.unmergedCursor = key
+		obs, cached := l.unmerged[key]
 		l.mu.Unlock()
+		networkCheck := !cached || now.Sub(obs.at) >= unmergedCacheTTL
+		if networkCheck {
+			if checked >= unmergedChecksPerPass {
+				continue
+			}
+			checked++
+			// Resume after the attempted repository next pass, even if admission
+			// used the entire budget, so one unread repository cannot starve others.
+			l.mu.Lock()
+			l.unmergedCursor = key
+			l.mu.Unlock()
+		}
 		repo := repos[key]
 		recent, why, err := l.repoRecentUnmerged(ctx, repo)
 		if err != nil {
+			if errors.Is(err, errLoopLater) {
+				break
+			}
 			continue
 		}
 		if err := l.escalateUnmergedBacklog(repo, recent, why); err != nil {

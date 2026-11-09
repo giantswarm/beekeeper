@@ -30,6 +30,9 @@ func (a *app) loopScanREST(ctx context.Context, step string, run func() error) e
 		return errLoopLater
 	}
 	defer func() { _ = lock.Unlock() }()
+	if err := a.loopRESTHeld(a.timeNow()); err != nil {
+		return err
+	}
 	ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
 	before, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil {
@@ -55,6 +58,20 @@ type loopRESTSpend struct {
 	Spent     int            `json:"spent"`
 	Remaining int            `json:"remaining"`
 	Steps     map[string]int `json:"steps,omitempty"`
+}
+
+func (a *app) loopRESTHeld(now time.Time) error {
+	var spend loopRESTSpend
+	if _, err := a.store.ReadFile(loopRESTFile, &spend); err != nil {
+		return err
+	}
+	if spend.Reset.IsZero() || !now.Before(spend.Reset) || spend.Spent+loopRESTReserve <= loopRESTLimit {
+		return nil
+	}
+	if st, err := a.store.Read(); err == nil && st.Budget != nil && !st.Budget.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, st.Budget.Reset) {
+		return nil
+	}
+	return fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, loopRESTLimit, spend.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
 }
 
 // Called under loop-graphql.lock, so parallel loop actions share one ledger.

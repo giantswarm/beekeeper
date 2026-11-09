@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -15,6 +16,30 @@ import (
 // hostDrainRetry paces the next update of a host that answered busy while
 // the coordinator recorded no execution on it.
 const hostDrainRetry = 10 * time.Minute
+
+func hostHoldWait(pin state.HostPin, b *state.Budget, now time.Time) bool {
+	if reset, ok := hostHoldRateReset(pin.Held); ok {
+		return now.Before(reset)
+	}
+	if github.RateLimited(pin.Held) && b != nil && b.Remaining > 0 && now.After(pin.Tried) && !b.At.Before(pin.Tried) {
+		return false
+	}
+	return now.Sub(pin.Tried) < hostUpdateRetry
+}
+
+func hostHoldRateReset(held string) (time.Time, bool) {
+	_, rest, ok := strings.Cut(held, "resets at ")
+	if !ok {
+		return time.Time{}, false
+	}
+	token := strings.Fields(rest)
+	if len(token) == 0 {
+		return time.Time{}, false
+	}
+	raw := strings.TrimRight(token[0], ".,;:)")
+	t, err := time.Parse(time.RFC3339, raw)
+	return t, err == nil
+}
 
 // updateHosts brings every execution host (agents.hosts) to the release
 // this coordinator runs, with agents hosts update, once the coordinator
@@ -38,7 +63,7 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 		switch {
 		case pin != nil && pin.Held == "" && pin.Version == version:
 			continue
-		case pin != nil && pin.Held != "" && pin.HeldVersion == version && a.timeNow().Sub(pin.Tried) < hostUpdateRetry:
+		case pin != nil && pin.Held != "" && pin.HeldVersion == version && hostHoldWait(*pin, st.Budget, a.timeNow()):
 			continue
 		case pin != nil && pin.Held == "" && a.timeNow().Sub(pin.Tried) < hostDrainRetry:
 			continue

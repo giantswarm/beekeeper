@@ -753,3 +753,62 @@ func TestHostSelfUpdateFollowsCoordinatorBackToRecoveryRelease(t *testing.T) {
 		t.Fatalf("coordinator downgrade: %+v, installs %v, restarts %v", got, h.installs, h.restarts)
 	}
 }
+
+func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	digest := execution.Digest([]byte("prepared after rate limit reset"))
+	stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){
+		sshTestSelector:      pinnedAnswer(sshTestSelector, digest),
+		sshTestOtherSelector: pinnedAnswer(sshTestOtherSelector, digest),
+	})
+	lookups := 0
+	prevLookup := lookupRelease
+	t.Cleanup(func() { lookupRelease = prevLookup })
+	lookupRelease = func(ctx context.Context, version string) (update.Release, error) {
+		lookups++
+		return prevLookup(ctx, version)
+	}
+	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestOtherSelector); err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 1 {
+		t.Fatalf("lookupRelease called %d times across 2 hosts for the same release, want 1", lookups)
+	}
+
+	r := newLoopRig(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{
+		sshTestSelector: {Endpoint: execution.Endpoint{SSH: sshTestSelector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: sshTestSelector, WorkspaceRoot: hostFixtureWorkspaces, Repositories: map[string]string{sshTestRepository: hostFixtureSource}, Harnesses: []string{claudeComm}, MaxBusy: 1},
+	}
+	resetAt := r.a.now.Add(5 * time.Minute).UTC().Truncate(time.Second)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.HostPins = []state.HostPin{{
+			Selector:    sshTestSelector,
+			Identity:    sshTestSelector,
+			Tried:       r.a.now,
+			HeldAt:      r.a.now,
+			HeldVersion: hostNewRelease,
+			Held:        "looking up release " + hostNewRelease + " of giantswarm/beekeeper: GitHub rate limit exceeded; resets at " + resetAt.Format(time.RFC3339),
+		}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	r.a.now = resetAt.Add(-time.Minute)
+	st, _ := r.a.store.Read()
+	l.updateHosts(context.Background(), st)
+	if len(r.calls) != 0 {
+		t.Fatalf("retried rate-limited host before reset: %v", r.calls)
+	}
+	r.a.now = resetAt.Add(time.Second)
+	st, _ = r.a.store.Read()
+	l.updateHosts(context.Background(), st)
+	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, "hosts", hostUpdateCmdName, sshTestSelector}) {
+		t.Fatalf("rate-limited host did not retry immediately after reset: %v", r.calls)
+	}
+}
