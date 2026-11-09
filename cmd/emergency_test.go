@@ -575,7 +575,7 @@ func TestEmergencyRelayHandoverAndRevocation(t *testing.T) {
 }
 
 func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
-	for _, name := range []string{"approved", "stale", "outsider", "red", "changes requested"} {
+	for _, name := range []string{"accepted desk verdict", "previous head", "untrusted reviewer", "failing CI", "review rejected"} {
 		t.Run(name, func(t *testing.T) {
 			a := emergencyApp(t)
 			if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge approved work.", untilFlag, "10m"); err != nil {
@@ -583,20 +583,20 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 			}
 			oldRead, oldGH := readLoopPull, github.RunGH
 			t.Cleanup(func() { readLoopPull, github.RunGH = oldRead, oldGH })
-			review := superloop.Review{Head: emergencyAdminHead, Verdict: superloop.Approved, Member: true, Body: "Review: approved"}
-			if name == "stale" {
-				review.Head = "def4567"
+			review := superloop.Review{Head: emergencyAdminHead, Verdict: superloop.Approved, Member: true, Body: loopApproved}
+			if name == "previous head" {
+				review.Head = "fedcba9"
 			}
-			if name == "outsider" {
+			if name == "untrusted reviewer" {
 				review.Member = false
-				review.Author = "outsider"
+				review.Author = "untrusted reviewer"
 				a.cfg.Supervisor.Ownership.Authors = []string{"trusted"}
 			}
-			if name == "changes requested" {
+			if name == "review rejected" {
 				review.Verdict = superloop.ChangesRequested
 			}
 			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
-				return superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Green: name != "red", Reviews: []superloop.Review{review}}, nil
+				return superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Green: name != "failing CI", Reviews: []superloop.Review{review}}, nil
 			}
 			merges := 0
 			github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
@@ -610,7 +610,7 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 				return nil, nil
 			}
 			err := emergencyCall(a, gitMerge, emergencyTestRepo, "7")
-			if name == "approved" {
+			if name == "accepted desk verdict" {
 				if err != nil || merges != 1 {
 					t.Fatalf("merge: %v calls %d", err, merges)
 				}
@@ -633,7 +633,7 @@ func TestMergeReviewRequirementAcceptsCurrentDeskReviewFormat(t *testing.T) {
 	if err != nil || why != "" {
 		t.Fatalf("current review rejected: %s %v", why, err)
 	}
-	p.Reviews[0].Head = "def4567"
+	p.Reviews[0].Head = "9876abc"
 	why, _, err = a.checkMergeHeadAuthority(context.Background(), st, p, p.Head)
 	if err != nil || why == "" {
 		t.Fatalf("stale review accepted: %s %v", why, err)
