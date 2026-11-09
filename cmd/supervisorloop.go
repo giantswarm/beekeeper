@@ -688,6 +688,9 @@ type supervisorLoop struct {
 	mu        sync.Mutex
 	a         *app
 	since     time.Time
+	// startedAt is when this process's loop started: a next action for a
+	// done event before it is settled by the refill (staleNext).
+	startedAt time.Time
 	once      bool
 	// said are the failures already printed, by key.
 	said map[string]bool
@@ -1066,7 +1069,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun, bin: loopBinary()}
+	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), startedAt: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun, bin: loopBinary()}
 	if a.loadedCfg != "" {
 		if raw, readErr := os.ReadFile(a.loadedCfg); readErr == nil { //nolint:gosec // configured path
 			l.cfgSum = sha256.Sum256(raw)
@@ -1767,8 +1770,18 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		l.fillPreview = &preview
 		defer func() { l.fillPreview = nil }()
+		stale := 0
 		for _, act := range actions {
+			if l.staleNext(act) {
+				stale++
+				continue
+			}
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
+				return err
+			}
+		}
+		if stale > 0 {
+			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD NEXT skip %d stale done events; the refill fills capacity\n", stale); err != nil {
 				return err
 			}
 		}
@@ -1872,6 +1885,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		intakeActs []superloop.Action
 		doneActs   []superloop.Action
 		nextActs   []superloop.Action
+		staleActs  []superloop.Action
 		otherActs  []superloop.Action
 	)
 	for _, act := range actions {
@@ -1898,6 +1912,10 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		case superloop.KindDone:
 			doneActs = append(doneActs, act)
 		case superloop.KindNext:
+			if l.staleNext(act) {
+				staleActs = append(staleActs, act)
+				continue
+			}
 			nextActs = append(nextActs, act)
 		default:
 			otherActs = append(otherActs, act)
@@ -1980,27 +1998,34 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		return nil
 	})
 
+	// The refill runs in every pass with room: neither a next action that
+	// fails nor an intake still in flight keeps it from filling capacity
+	// (https://github.com/giantswarm/beekeeper/issues/3485).
 	launch("stream:workers", func() error {
-		if intakeBeforeFill {
-			if !l.beginInFlight("stream:intake") {
-				return nil // Retry from a fresh snapshot after outstanding intake.
-			}
-			err := func() error {
+		var errs []error
+		if err := l.settleStaleNext(staleActs); err != nil {
+			errs = append(errs, err)
+		}
+		// An intake still in flight from an earlier pass skips only this
+		// pass's intake; the follow-up issue it ranks waits for a later fill.
+		if intakeBeforeFill && l.beginInFlight("stream:intake") {
+			func() {
 				defer l.endInFlight("stream:intake")
 				for _, act := range intakeActs {
 					if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-						return err
+						errs = append(errs, err)
+						return
 					}
 				}
-				return nil
 			}()
-			if err != nil {
-				return err
-			}
 		}
 		for _, act := range nextActs {
 			if err := l.execAction(ctx, st, claims, failures, act, reservations); err != nil {
-				return err
+				// Its failure is the action's, never the refill's.
+				if ferr := l.nextFailed(act, failures, err); ferr != nil {
+					errs = append(errs, ferr)
+				}
+				break
 			}
 			// Every next action asks for the same thing, the board's next
 			// item: once one did not settle (its start waits, failed or
@@ -2011,7 +2036,8 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 				break
 			}
 		}
-		return l.fill(ctx, st, claims, taken, reservations)
+		errs = append(errs, l.fill(ctx, st, claims, taken, reservations))
+		return errors.Join(errs...)
 	})
 
 	// Keep transitions for one worker ordered, without making a stalled
@@ -3862,6 +3888,11 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action, re
 	var refused *refillStartError
 	if errors.As(err, &refused) {
 		l.deferFill(next.Ref)
+		if strings.Contains(err.Error(), openPullRefusal) {
+			// The item's delivery is in flight: nothing is left for this
+			// done event to start, and the refill takes the next item.
+			return fmt.Sprintf("%s %s: its delivery is in flight, no second start", next.URL, openPullRefusal), nil
+		}
 		l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", next.URL, err)
 		return "", errLoopLater
 	}
