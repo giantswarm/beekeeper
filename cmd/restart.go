@@ -56,7 +56,7 @@ func restarts(p *proc.Process) bool {
 		return false
 	}
 	args := p.Args[1:]
-	if i := slices.Index(args, supervisorName); i >= 0 && i+1 < len(args) && args[i+1] == "loop" {
+	if i := slices.Index(args, supervisorCommand); i >= 0 && i+1 < len(args) && args[i+1] == "loop" {
 		return !slices.Contains(args, "--once")
 	}
 	if i := slices.Index(args, watchName); i >= 0 {
