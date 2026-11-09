@@ -3,7 +3,7 @@ name: park
 description: Ending an open task on a beekeeper desk. Load before parking.
 ---
 
-# park
+# park — ending a turn with the task open
 
 - **External waits:** `agents park --on <#note|owner/repo#n> "<wait>"`, then end the turn. Events go to a fresh, capacity-selected worker with the task, wait and event; never resume the old transcript. Hold refusal 77: park on the named `hold:<target>`; retry once lifted.
 - **Desk review, immediately after push:** `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. Matching published HEAD requests review. The loop owns CI and merge. Omit `--post-merge` only when merge ends the task without a continuation.
