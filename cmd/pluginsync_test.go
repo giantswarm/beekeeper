@@ -545,7 +545,7 @@ func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(registry, "known_marketplaces.json"), []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper"}}}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			source := map[string]string{sourceKey: holdGitHub, workerGitHubRepoGroup: sshTestRepository, "sha": oldToken}
+			source := map[string]string{sourceKey: holdGitHub, workerGitHubRepoGroup: sshTestRepository, "sha": "previous-revision"}
 			if ref != "" {
 				source["ref"] = ref
 			}
