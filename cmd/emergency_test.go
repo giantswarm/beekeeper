@@ -589,7 +589,7 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 			}
 			if name == "untrusted reviewer" {
 				review.Member = false
-				review.Author = "untrusted reviewer"
+				review.Author = "untrusted-login"
 				a.cfg.Supervisor.Ownership.Authors = []string{"trusted"}
 			}
 			if name == "review rejected" {
