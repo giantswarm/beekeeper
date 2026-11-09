@@ -655,6 +655,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	interval := w.cfg.Watch.Interval.Duration
 	if once {
+		w.ctx = ctx
 		w.upgradeCycle(ctx)
 		w.sample(ctx)
 		w.lastSweep = time.Now() // swept here, not in the poll's background
@@ -674,14 +675,15 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.worktreesOn = true
 	w.slotsOn = true
 	w.readFreeMark()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	w.ctx = ctx
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
 	// The first sample comes before the reads start: they begin knowing
 	// whether the machine is strained. The loop's own first sample is one
 	// interval later: two samples in a row span one (CPU PRESSURE).
 	w.sample(ctx)
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	if w.batchEvery > 0 {

@@ -413,7 +413,7 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 			} else if r.dry {
 				dryTrim(r, u, target)
 			} else {
-				n, removed, err := gocache.Trim(u, target, func() bool { return false })
+				n, removed, err := gocache.Trim(u, target, func() bool { return a.context().Err() != nil })
 				r.Freed += n
 				r.Removed += removed
 				if err != nil {
@@ -479,6 +479,9 @@ func (w *watcher) diskPrune(now time.Time, pressure bool) {
 			return
 		}
 		r := d.pruneDisk(false, pressure, func() (diskMachine, error) { return liveDisk(&d) })
+		if d.context().Err() != nil {
+			return
+		}
 		if r.locked {
 			w.diskPruneNext = now.Add(goCacheRetry)
 			return
