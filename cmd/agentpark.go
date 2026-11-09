@@ -560,6 +560,9 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 	if target != nil && (target.Is(by) || !wakeRoute(*target)) {
 		return a.endParkUnwoken(by, *target)
 	}
+	if target != nil && freshPark(st, *target) {
+		return a.queueContinuation(by, *target, parkMessage(target.Park, by.Name))
+	}
 	block := a.usageHighBlockForAgent(ctx, st, nil, target)
 	if block != "" && !force {
 		return refused("no resume: %s (--force resumes anyway)", block)
@@ -692,6 +695,12 @@ func (a *app) resumeOffRoster(ctx context.Context, by, p state.Party, force bool
 		return err
 	}
 	self := p.Is(by)
+	if !self && !roleRun(st, p) && !onRoster(st, p) {
+		if k, ok := offRosterPark(st, cmp.Or(p.Session, p.HostSession, p.Name)); ok {
+			return a.adoptContinuation(by, st.Parks[k], parkMessage(&st.Parks[k], by.Name))
+		}
+	}
+
 	ag := state.Agent{Party: p}
 	block := a.usageHighBlockForAgent(ctx, st, nil, &ag)
 	if block != "" && !force && !self {
@@ -1024,7 +1033,7 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 			continue
 		}
 		cp := ag
-		if w.usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
+		if !freshPark(st, ag) && w.usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
 			continue
 		}
 		quiet := *w.app // the wake's own report is not a watch line

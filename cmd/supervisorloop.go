@@ -1361,6 +1361,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := l.continueParks(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
 	}

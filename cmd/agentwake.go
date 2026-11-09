@@ -169,6 +169,16 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err != nil {
 		return err
 	}
+	if !rostered && !roleRun(st, ag.Party) {
+		if i, ok := offRosterPark(st, q); ok {
+			return a.adoptContinuation(by, st.Parks[i], msg)
+		}
+	}
+	// A parked worker relinquished its turn. Persist the event for the loop,
+	// which selects a fresh worker against current provider pace.
+	if rostered && freshPark(st, ag) {
+		return a.queueContinuation(by, ag, msg)
+	}
 	if rostered && ag.Done {
 		if err := a.fatalAdmission(ag.Name, false); err != nil {
 			return err

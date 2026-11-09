@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"runtime"
@@ -27,10 +28,11 @@ import (
 // capacityView is what capacity shows: the roster's busy, parked and idle
 // agents against the target, the headroom a new start needs and the verdict.
 type capacityView struct {
-	WorkerCeiling      int  `json:"workerCeiling"`
-	ReviewHeadroom     int  `json:"reviewHeadroom"`
-	ReviewHeadroomUsed int  `json:"reviewHeadroomUsed"`
-	Review             bool `json:"review"`
+	Activity           map[string]*providerActivity `json:"activity24h,omitempty"`
+	WorkerCeiling      int                          `json:"workerCeiling"`
+	ReviewHeadroom     int                          `json:"reviewHeadroom"`
+	ReviewHeadroomUsed int                          `json:"reviewHeadroomUsed"`
+	Review             bool                         `json:"review"`
 	reviewLimitReached bool
 	agentCount
 	Ceiling   int                      `json:"ceiling"`
@@ -2062,6 +2064,11 @@ nothing; it makes no GitHub call.`,
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
+			events, err := a.store.Follow("capacity-activity", func(e state.Event) bool { return e.Verb == "agents.wake" || e.Verb == resumedEvent })
+			if err != nil {
+				return err
+			}
+			v.Activity = activityCounts(st, events, liveCap, a.now)
 			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
@@ -2087,6 +2094,10 @@ nothing; it makes no GitHub call.`,
 				if pv := v.Providers[name]; pv != nil {
 					p("provider %s: %s", name, pv.line(a.now))
 				}
+			}
+			for _, provider := range slices.Sorted(maps.Keys(v.Activity)) {
+				activity := v.Activity[provider]
+				p("activity 24h %s: %d wakes, %d resumes, %d fresh starts", provider, activity.Wakes, activity.Resumes, activity.FreshStarts)
 			}
 			if v.Choice != nil {
 				p("choice: %s", v.Choice.line())

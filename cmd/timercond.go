@@ -327,6 +327,25 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 		w.emitNow("timer", "TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now))
 		return
 	}
+	if i, err := findAgent(st, f.t.Wake); err == nil && freshPark(st, st.Agents[i]) {
+		ag := st.Agents[i]
+		handed, err := w.handCITimerToReview(ctx, f, ag)
+		if err != nil {
+			w.emitNow("timer", "TIMER HANDOFF FAILED: #%d: %v", f.t.ID, err)
+			return
+		}
+		if !handed {
+			quiet := *w.app
+			quiet.out = io.Discard
+			if err := quiet.queueContinuation(watchParty, ag, f.message()); err != nil {
+				w.emitNow("timer", "TIMER CONTINUATION FAILED: #%d: %v", f.t.ID, err)
+				return
+			}
+		}
+		delivered = true
+		w.closeCIWakeTimer(f.t)
+		return
+	}
 	quiet := *w.app // the wake's own report is not a watch line
 	quiet.out = io.Discard
 	if !f.t.Due.IsZero() {
@@ -336,7 +355,7 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	// it. Pass the park through the durable delivery ledger so acceptance
 	// clears it, while storage or an uncertain delivery keeps it parked.
 	var wakeErr error
-	if i, findErr := findAgent(st, f.t.Wake); findErr == nil && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
+	if i, findErr := findAgent(st, f.t.Wake); findErr == nil && !freshPark(st, st.Agents[i]) && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
 		ag := st.Agents[i]
 		wakeErr = quiet.enqueueExecutionWake(ctx, watchParty, ag, f.message(), ag.Park)
 	} else {
