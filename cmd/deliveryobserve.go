@@ -14,6 +14,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+// Optional remote observations must leave time for planning and cancellation.
+const loopPlanningObservationTimeout = 20 * time.Second
+
 const deliveryReleaseEvery = 5 * time.Minute
 const deliveryReleaseReads = 2
 
@@ -63,6 +66,8 @@ type deliveryReleaseResult struct {
 }
 
 func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Input, unread map[string]bool) error {
+	ctx, cancel := context.WithTimeout(ctx, loopPlanningObservationTimeout)
+	defer cancel()
 	l.mu.Lock()
 	in.OpenPulls = slices.Clone(l.openPulls)
 	l.mu.Unlock()
@@ -82,7 +87,7 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 	l.mu.Unlock()
 	issueReads := 0
 	for _, d := range st.Deliveries {
-		if issueReads >= sweepReadsPerPass {
+		if ctx.Err() != nil || issueReads >= sweepReadsPerPass {
 			break
 		}
 		if d.Active() && len(d.Pulls) == 0 {
@@ -115,7 +120,7 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 			continue
 		}
 		for _, ref := range d.Pulls {
-			if len(results) >= deliveryReleaseReads {
+			if ctx.Err() != nil || len(results) >= deliveryReleaseReads {
 				break
 			}
 			if _, ok := results[ref]; ok {

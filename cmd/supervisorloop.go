@@ -763,6 +763,7 @@ type supervisorLoop struct {
 	openPullsAt     time.Time
 	sweepIncomplete bool
 	unmerged        map[string]loopUnmergedObservation
+	unmergedCursor  string
 	cfgSum          [32]byte
 }
 
@@ -1741,6 +1742,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.lifecyclePhase("plan and record heartbeat")
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if !l.dryRun {
+		l.lifecyclePhase("observe deliveries")
 		if err := l.observeDeliveries(ctx, in, unread); err != nil {
 			return err
 		}
@@ -1751,11 +1753,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("record planned throughput")
 		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
 			return err
 		}
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("check planner stalls")
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
 		}
@@ -1765,6 +1769,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.checkStall(); err != nil {
 			return err
 		}
+		l.lifecyclePhase("observe repository backlogs")
 		if err := l.checkUnmergedBacklogs(ctx, in); err != nil {
 			return err
 		}
@@ -1794,6 +1799,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		return l.fill(ctx, st, claims, in.Taken)
 	}
+	l.lifecyclePhase("dispatch planned actions")
 	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
 }
 

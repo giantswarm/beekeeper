@@ -12,7 +12,7 @@ func TestDecisionHistorySurvivesAgeAndIncludesVerbatimSource(t *testing.T) {
 	a, out := noteApp(t)
 	const decisionAuthor = "decision-author"
 	words := "Proceed.\nKeep the existing limit."
-	e := answerEvent(state.Party{Name: "recorder"}, &recordedAnswer{About: "o/r#1", By: decisionAuthor, Via: viaCLI, Answer: words}, nil)
+	e := answerEvent(state.Party{Name: "recorder"}, &recordedAnswer{About: reserveIssue, By: decisionAuthor, Via: viaCLI, Answer: words}, nil)
 	e.At = a.now.Add(-365 * 24 * time.Hour)
 	if err := a.store.Log(e); err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestDecisionHistorySurvivesAgeAndIncludesVerbatimSource(t *testing.T) {
 	if err := a.store.Log(other); err != nil {
 		t.Fatal(err)
 	}
-	events, err := a.decisionHistory("o/r#1")
+	events, err := a.decisionHistory(reserveIssue)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("history: %v, %v", events, err)
 	}

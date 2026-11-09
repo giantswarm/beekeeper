@@ -206,7 +206,7 @@ func TestGuideQueueIgnoresTheDesktopsTurnSummary(t *testing.T) {
 	// The supervisor's turn is a status report the desktop marks as needing
 	// its person; it filed no note and serves no --waits for the person.
 	sup := state.Party{Session: "sP", Name: "Supervisor run 17"}
-	st := &state.State{Records: []state.Record{{Session: sup, Issue: "o/r#1"}}}
+	st := &state.State{Records: []state.Record{{Session: sup, Issue: reserveIssue}}}
 	sessions := []*claude.Session{{ID: "sP", Name: sup.Name, Waiting: &claude.Waiting{Turn: "t1", Action: "clarify: is fixture-lab-67 an agent"}}}
 	if q, _ := guideQueue(st, sessions, personTimo, time.Time{}); len(q) != 0 {
 		t.Fatalf("a report read as an ask is queued: %+v", q)

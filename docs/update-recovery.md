@@ -299,3 +299,11 @@ publishing the observation. Publication waits for the ordinary state lock, up to
 two minutes or the caller's remaining deadline, whichever is shorter. Transient
 state contention therefore does not immediately reject a healthy update canary;
 short caller deadlines and real GitHub budget failures still fail closed.
+
+The planner records separate lifecycle phases for delivery observation, throughput
+recording, stall checks, repository backlog observation and action dispatch.
+Delivery and backlog remote observations each have a 20-second aggregate budget,
+including shared GitHub admission. Unread observations remain unknown and are
+retried; the backlog scan resumes after its last attempted repository. These
+deadlines inherit service cancellation. They do not refresh a blocked phase's
+heartbeat or count an incomplete observation as successful probation.

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -835,13 +837,25 @@ func (l *supervisorLoop) checkUnmergedBacklogs(ctx context.Context, in superloop
 		}
 	}
 	l.mu.Unlock()
-	for _, key := range slices.Sorted(func(yield func(string) bool) {
-		for k := range repos {
-			if !yield(k) {
-				return
-			}
+	// Bound the whole optional scan, including admission to the shared GitHub
+	// lock. Per-request timeouts alone multiply by the number of repositories.
+	ctx, cancel := context.WithTimeout(ctx, loopPlanningObservationTimeout)
+	defer cancel()
+	keys := slices.Sorted(maps.Keys(repos))
+	l.mu.Lock()
+	cursor := l.unmergedCursor
+	l.mu.Unlock()
+	start := sort.Search(len(keys), func(i int) bool { return keys[i] > cursor })
+	keys = append(slices.Clone(keys[start:]), keys[:start]...)
+	for _, key := range keys {
+		if ctx.Err() != nil {
+			break
 		}
-	}) {
+		// Resume after the attempted repository next pass, even if admission
+		// used the entire budget, so one unread repository cannot starve others.
+		l.mu.Lock()
+		l.unmergedCursor = key
+		l.mu.Unlock()
 		repo := repos[key]
 		recent, why, err := l.repoRecentUnmerged(ctx, repo)
 		if err != nil {
