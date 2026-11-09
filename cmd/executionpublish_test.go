@@ -429,6 +429,54 @@ func TestPublicationGitRunsNoDetachedMaintenance(t *testing.T) {
 	}
 }
 
+// Observe the process boundary on a real fixture commit, rather than relying
+// only on configuration reads or a timing-sensitive TempDir cleanup failure.
+func TestPublicationCommitStartsNoMaintenance(t *testing.T) {
+	rig := newPublicationRig(t)
+	for _, tc := range []struct {
+		name        string
+		enable      bool
+		maintenance bool
+	}{
+		{name: "positive control", enable: true, maintenance: true},
+		{name: "publication runner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			trace := filepath.Join(t.TempDir(), "git-events.json")
+			args := []string{"-c", "maintenance.autoDetach=false"}
+			if tc.enable {
+				// Override the runner's suppression only for the control. Keep
+				// maintenance synchronous so the control cannot race cleanup.
+				args = append(args, "-c", "maintenance.auto=true")
+			}
+			args = append(args, "commit", "--allow-empty", "-m", "maintenance probe")
+			if _, err := runPublicationGit(t.Context(), rig.workspace, []string{"GIT_TRACE2_EVENT=" + trace}, args...); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var commit, maintenance bool
+			for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+				var event struct {
+					Event string   `json:"event"`
+					Name  string   `json:"name"`
+					Args  []string `json:"argv"`
+				}
+				if err := json.Unmarshal(line, &event); err != nil {
+					t.Fatal(err)
+				}
+				commit = commit || event.Event == "cmd_name" && event.Name == "commit"
+				maintenance = maintenance || event.Event == "child_start" && slices.Contains(event.Args, "maintenance")
+			}
+			if !commit || maintenance != tc.maintenance {
+				t.Fatalf("commit observed: %t, maintenance started: %t, want %t", commit, maintenance, tc.maintenance)
+			}
+		})
+	}
+}
+
 func TestExecutionPublicationDiagnosesWorkflowScopeRejection(t *testing.T) {
 	rig := newPublicationRig(t)
 	// The remote rejects the push with GitHub's message for a credential
