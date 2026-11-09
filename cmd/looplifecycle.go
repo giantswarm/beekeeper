@@ -32,11 +32,13 @@ type loopLifecycle struct {
 	Failure string    `json:"failure,omitempty"`
 }
 
+var loopLifecycleNow = time.Now
+
 func (l *supervisorLoop) lifecyclePhase(phase string) {
 	if l.lifecycle == nil {
 		return
 	}
-	l.lifecycle.Phase, l.lifecycle.At = phase, time.Now().UTC()
+	l.lifecycle.Phase, l.lifecycle.At = phase, loopLifecycleNow().UTC()
 	// Diagnostics must not change loop admission or turn a successful pass
 	// into a failure. Recovery reports missing evidence when this write fails.
 	_ = l.a.store.WriteFile(loopLifecycleFile, l.lifecycle)

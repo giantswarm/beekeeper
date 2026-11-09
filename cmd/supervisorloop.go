@@ -1566,7 +1566,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
+	l.lifecyclePhase("discover pull requests")
 	swept := l.sweepPulls(ctx, in, tracked)
+	l.lifecyclePhase("observe repository ownership")
 	if len(tracked)+len(swept) > 0 && !l.ownership(ctx, &in.Desk) {
 		tracked = nil
 	} else {
@@ -1577,6 +1579,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	unreviewedEnded := map[string]bool{}
 	pullHeld := false
 	for _, ref := range tracked {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Each completed observation is progress, even when the batch takes
+		// longer than the recovery heartbeat window. Never refresh in the
+		// background while an individual observation is blocked.
+		l.lifecyclePhase("observe pull requests")
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
 		}

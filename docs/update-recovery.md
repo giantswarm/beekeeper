@@ -95,6 +95,11 @@ and its candidate version, preserving eligible-PR ages and marking throughput
 unknown until planning finishes. Retained controllers recognize this progress too.
 Controllers also accept fresh, matching post-startup lifecycle progress, so a
 first pass longer than ten minutes is healthy while it advances through phases.
+Discovery and ownership have separate phase markers. The loop checkpoints between
+individual pull-request observations, so a large progressing batch cannot retain
+the earlier history marker until its heartbeat expires. Each PR observation has
+a one-minute deadline covering admission-lock waits and budget probes as well as
+the GitHub read; discovery also has a one-minute deadline.
 Failed exits override a fresh checkpoint. There is no background keepalive:
 a stalled phase's checkpoint expires after three minutes. Between-pass markers
 preserve completed planning evidence. A competing loop cannot overwrite the

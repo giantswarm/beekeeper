@@ -127,6 +127,8 @@ var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), 
 // tracked already, outside the desk, or owned by an agent the roster names
 // for them (parked on one, or its worker by name), which need no read.
 func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tracked []string) []string {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	now := l.a.timeNow()
 	if l.openPullsAt.IsZero() || now.Sub(l.openPullsAt) >= sweepListEvery {
 		authors := func() ([]string, error) {
