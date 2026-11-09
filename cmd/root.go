@@ -101,6 +101,7 @@ func Main() int {
 }
 
 type app struct {
+	emergencyStart     bool // scoped to the authenticated emergency start command
 	selectionKind      string
 	selectionAuthor    string
 	executionTransport func(execution.Host) execution.Transport

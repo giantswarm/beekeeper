@@ -524,8 +524,14 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		o.Unknown = true
 		return o
 	}
-	_, _, code, err := fatalRun(ctx, "", []string{bin, workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, fatalGateOption})
-	if err != nil || code != 0 {
+	// Leave time for REST observation when identity/GraphQL admission stalls.
+	gateCtx, gateCancel := context.WithTimeout(ctx, 5*time.Second)
+	_, gateErr, code, err := fatalRun(gateCtx, "", []string{bin, workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, fatalGateOption})
+	timedOut := errors.Is(gateCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(gateErr, "context deadline exceeded")
+	gateCancel()
+	// A budget refusal remains authoritative. Only an unavailable timed-out
+	// gate falls back to the bounded REST reads below.
+	if (err != nil || code != 0) && !timedOut {
 		o.Unknown = true
 		return o
 	}

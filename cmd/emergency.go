@@ -95,7 +95,9 @@ which waives nothing but the review requirement.
 Other controls are
 emergency hold set/lift, emergency start (capacity --force), and emergency
 capacity <capacity.key> <value> (validated configuration). Standing stop and
-starts holds still apply; lift a starts hold explicitly when authorized.
+starts holds still apply; lift a starts hold explicitly when authorized. Emergency
+start can override exhausted main-outage repair barriers under the active grant;
+other fatal outages remain barriers. Each override is audited.
 
 Emergency auto-install pause/resume is independent of the grant: it only
 pauses the supervisor's release installation, leaving its other work running.
@@ -209,6 +211,8 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if err := cmd.Flags().Set("force", "true"); err != nil {
 				return err
 			}
+			a.emergencyStart = true
+			defer func() { a.emergencyStart = false }()
 			return runStart(cmd, args)
 		})
 	}

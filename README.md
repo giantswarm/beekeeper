@@ -135,7 +135,8 @@ loop's go. It reads the base's effective rules and requires every required
 context on that head, including any required App identity. It refuses unreadable
 requirements, classic protection, and non-review rules it cannot verify.
 `emergency hold set/lift`, `emergency
-start` (forced capacity admission), and `emergency capacity capacity.ceiling 4`
+start` (forced capacity admission; an active authenticated grant also overrides
+exhausted main-outage repair barriers, with a durable audit record), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.
 Under an active grant, admin merge attempts and results also name the full PR URL and exact head,
 including refused or failed attempts; a moved head requires a new invocation
