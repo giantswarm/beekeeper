@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -523,5 +524,80 @@ func TestDisabledPluginSyncRecordsSuccess(t *testing.T) {
 	beekeeper(t, "timer")
 	if len(*ran) != 0 {
 		t.Fatalf("disabled plugin synced again: %v", *ran)
+	}
+}
+
+// Claude checks user declarations before admitting a release-tagged source.
+func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
+	for _, ref := range []string{"", "v0.120.0"} {
+		t.Run("ref="+ref, func(t *testing.T) {
+			realPin := pinMarketplace
+			asBinary(t, latestRelease)
+			fakePlugins(t, []installedPlugin{{ID: beekeeperID, InstallPath: pluginCopy(t)}})
+			pinMarketplace = realPin
+			dir := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			registry := filepath.Join(dir, "plugins")
+			if err := os.MkdirAll(registry, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(registry, "known_marketplaces.json"), []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper"}}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source := map[string]string{"source": "github", "repo": "giantswarm/beekeeper", "sha": "old"}
+			if ref != "" {
+				source["ref"] = ref
+			}
+			settings := map[string]any{
+				"enabledPlugins": map[string]bool{beekeeperID: false},
+				"extraKnownMarketplaces": map[string]any{
+					"beekeeper": map[string]any{"source": source, "autoUpdate": false},
+					"other":     map[string]any{"source": map[string]string{"source": "github", "repo": "other/plugin"}},
+				},
+			}
+			raw, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "settings.json")
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source["ref"] = latestRelease
+			delete(source, "sha")
+			want, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			claudePlugin = func(_ context.Context, args ...string) error {
+				called = true
+				if !slices.Equal(args, []string{"marketplace", "add", "giantswarm/beekeeper#" + latestRelease}) {
+					t.Fatalf("commands = %v", args)
+				}
+				got, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded any
+				if err := json.Unmarshal(got, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				got, err = json.Marshal(decoded)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("settings = %s, want %s (%v)", got, want, err)
+				}
+				return nil
+			}
+			prev := verifyMarketplace
+			t.Cleanup(func() { verifyMarketplace = prev })
+			verifyMarketplace = func(context.Context, string) error { return nil }
+			if err := pinMarketplace(context.Background(), "beekeeper", latestRelease); err != nil {
+				t.Fatal(err)
+			}
+			if !called {
+				t.Fatal("marketplace registration skipped")
+			}
+		})
 	}
 }

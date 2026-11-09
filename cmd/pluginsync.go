@@ -293,10 +293,83 @@ var pinMarketplace = func(ctx context.Context, name, revision string) error {
 	if source == "" || strings.Contains(source, "#") {
 		return fmt.Errorf("marketplace %s has an invalid source", name)
 	}
+	if err := pinMarketplaceSettings(dir, name, revision); err != nil {
+		return err
+	}
 	if err := claudePlugin(ctx, "marketplace", "add", source+"#"+revision); err != nil {
 		return err
 	}
 	return verifyMarketplace(ctx, name)
+}
+
+// pinMarketplaceSettings aligns an existing user declaration with the release
+// before Claude checks marketplace admission. Leave undeclared sources alone.
+func pinMarketplaceSettings(dir, name, revision string) error {
+	path := filepath.Join(dir, "settings.json")
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return err
+	}
+	var marketplaces map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(settings["extraKnownMarketplaces"], &marketplaces); err != nil {
+		if settings["extraKnownMarketplaces"] == nil {
+			return nil
+		}
+		return err
+	}
+	entry := marketplaces[name]
+	if entry == nil || entry["source"] == nil {
+		return nil
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(entry["source"], &source); err != nil {
+		return err
+	}
+	if source == nil {
+		return fmt.Errorf("marketplace %s has no settings source", name)
+	}
+	source["ref"], _ = json.Marshal(revision)
+	delete(source, "sha")
+	entry["source"], err = json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	settings["extraKnownMarketplaces"], err = json.Marshal(marketplaces)
+	if err != nil {
+		return err
+	}
+	raw, err = json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".beekeeper-settings-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // verifyMarketplace checks Claude's view rather than trusting its registry file.
