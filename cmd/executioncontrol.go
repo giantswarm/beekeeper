@@ -35,6 +35,7 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	External  bool    `json:"external,omitempty"`
 	Checks    bool    `json:"checks,omitempty"`
 	PostMerge *string `json:"postMerge,omitempty"`
 	// Head is the HEAD of the execution's workspace when it parked. The
@@ -416,6 +417,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if err := validateOverlapPark(v.On, v.Waits); err != nil {
 			return "", nil, err
 		}
+		if v.External && (v.On != "" || v.Checks) {
+			return "", nil, refused("external park requires no target or CI wait")
+		}
 		if v.Checks {
 			ref, ok := parseRef(v.On)
 			if !ok || ag.Execution == nil || v.PostMerge != nil {
@@ -483,7 +487,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				inheritReviewParkOnAgent(st, ag, rp, a.now.UTC())
 			}
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
+		ag.Park = &state.Park{External: v.External, By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		recordAgentReviewPark(st, *ag)
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {

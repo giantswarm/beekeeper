@@ -44,6 +44,18 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			if !d.Active() {
 				continue
 			}
+			flow := classifyDelivery(st, d, now, a.deliveryPolicy())
+			if deliveryOwned(st, d, now, a.deliveryPolicy()) && flow.Class != deliveryFlowing {
+				if flow.MissingNote {
+					key := "missing-note " + d.Ref
+					detail := "DELIVERY WAITING WITHOUT A NOTE " + deliveryURL(d.Ref, false) + ": file a decision with --for and --ref so the guide can serve it"
+					next.Episodes[key] = detail
+					if _, ok := old.Episodes[key]; !ok {
+						file(key, detail)
+					}
+				}
+				continue
+			}
 			if deliveryInFlight(st, d, now, a.deliveryPolicy()) {
 				active = append(active, d)
 			}

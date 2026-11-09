@@ -15,6 +15,9 @@
       "agent": "worker",
       "waits": "checks",
       "releaseChecked": "0001-01-01T00:00:00Z",
+      "flow": {
+        "class": "flowing"
+      },
       "stepAge": 7200000000000,
       "age": 14400000000000
     },
@@ -32,10 +35,15 @@
       "started": "2026-01-01T00:00:00Z",
       "releaseChecked": "0001-01-01T00:00:00Z",
       "verdict": "no_release",
+      "flow": {
+        "class": "flowing"
+      },
       "stepAge": 75600000000000,
       "age": 86400000000000
     }
   ],
+  "waitingOnPerson": 0,
+  "blocked": 0,
   "inDelivery": 1,
   "limit": 4,
   "completeAt": "2026-01-02T00:00:00Z"

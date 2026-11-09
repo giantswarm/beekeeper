@@ -37,6 +37,11 @@ func (a *app) holdOn(ctx context.Context, notes []state.Note, ref string) (*stat
 		return nil, fmt.Errorf("--holds %s: %w", ref, err)
 	}
 	h := &state.ItemHold{Ref: mv.Ref, Status: mv.To, Was: mv.From}
+	if st, err := a.store.Read(); err == nil {
+		if prior, ok := st.DeliveryHolds[strings.ToLower(mv.Ref)]; ok {
+			h.Was = prior.Was
+		}
+	}
 	if _, o := heldBy(notes, mv.Ref, 0); o != nil {
 		h.Was = o.Was
 	}
@@ -106,6 +111,11 @@ func (a *app) release(ctx context.Context, by state.Party, n *state.Note, how st
 		if err == nil {
 			if o, _ := heldBy(st.Notes, h.Ref, n.ID); o != nil {
 				line = fmt.Sprintf("HOLD KEPT: %s stays %s after note #%d %s: note #%d holds it still", h.Ref, h.Status, n.ID, how, o.ID)
+			}
+		}
+		if line == "" && err == nil {
+			if _, held := st.DeliveryHolds[strings.ToLower(h.Ref)]; held {
+				line = fmt.Sprintf("HOLD KEPT: %s waits on an external delivery blocker", h.Ref)
 			}
 		}
 		if line == "" {

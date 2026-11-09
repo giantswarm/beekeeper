@@ -99,7 +99,7 @@ func validateParkWait(on, waits string) error {
 
 func (a *app) agentParkCmd() *cobra.Command {
 	var on, postMerge string
-	var checks bool
+	var checks, external bool
 	c := &cobra.Command{
 		Use:   "park <what it waits for>",
 		Short: "Park the calling agent on a note, a release, a pull request or a person: it keeps its task without holding a busy slot",
@@ -140,6 +140,11 @@ with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
 by hand, also for a park without --on; run by the parked agent with no
 agent named, it ends its own park and wakes nobody.
+
+--external records a wait no current decision can resolve, such as a
+physical visit or external event. Use it without --on; explicitly wake the
+worker once the event occurs. Its delivery leaves WIP and the loop holds
+its board item in Blocked / Waiting.
 
 --checks is available to SSH workers: --on owner/repo#n names the CI wait.
 The coordinator records a pr-checks wake timer with the park, without requesting
@@ -182,6 +187,9 @@ agents wake: its task is that message's first line.`,
 				return err
 			}
 			waits := oneLine(args[0])
+			if external && (on != "" || checks) {
+				return usageErr("--external uses an explicit wake, without --on or --checks")
+			}
 			if waits == "" {
 				return usageErr("say what the agent waits for")
 			}
@@ -232,9 +240,9 @@ agents wake: its task is that message's first line.`,
 				// The coordinator proves the review head against the
 				// execution's owned branch: the workspace's own branch
 				// never is the published one, nor does the host read GitHub.
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: declaration})
+				return a.remoteControl(cmd.Context(), "park", executionPark{External: external, On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: declaration})
 			}
-			line, err := a.park(me, on, waits, remaining...)
+			line, err := a.parkWithWait(me, on, waits, external, remaining...)
 			if err != nil {
 				return err
 			}
@@ -242,6 +250,7 @@ agents wake: its task is that message's first line.`,
 			return err
 		},
 	}
+	c.Flags().BoolVar(&external, "external", false, "wait for an external event no current decision resolves; move the delivery to Blocked / Waiting until explicitly woken")
 	c.Flags().BoolVar(&checks, "checks", false, "SSH worker: park for CI on --on owner/repo#n; coordinator wakes on green or red, without requesting review")
 	c.Flags().StringVar(&postMerge, "post-merge", "", "work to wake for after merge (release, rollout, proof); empty closes the task without a wake")
 	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a release (owner/repo@v1.2.3), a hold (hold:<target>) or an alert (alert:<name>)")
@@ -255,6 +264,10 @@ agents wake: its task is that message's first line.`,
 // returns the line that says so. A bare note number is the central
 // instance's note when the machine has none of it open, as note answer's.
 func (a *app) park(me state.Party, on, waits string, postMerge ...string) (string, error) {
+	return a.parkWithWait(me, on, waits, false, postMerge...)
+}
+
+func (a *app) parkWithWait(me state.Party, on, waits string, external bool, postMerge ...string) (string, error) {
 	if err := validateParkWait(on, waits); err != nil {
 		return "", err
 	}
@@ -292,7 +305,7 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		if target, ok := parkHold(on); ok && !holdStands(st, target, a.now) {
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
-		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
+		park := &state.Park{External: external, By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
 		if i >= 0 && reviewHead != "" {
 			var declaration *string
 			if len(postMerge) > 0 {

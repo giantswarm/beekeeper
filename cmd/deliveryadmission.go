@@ -27,18 +27,23 @@ type deliveryWIP struct {
 }
 
 type deliveryPolicy struct {
+	person     string
 	desk       superloop.Desk
 	stallAfter time.Duration
 	reserveFor time.Duration
 }
 
 func (a *app) deliveryPolicy() deliveryPolicy {
-	return deliveryPolicy{stallAfter: a.cfg.Delivery.StallAfter.Duration, reserveFor: a.cfg.Supervisor.ReserveFor.Duration, desk: superloop.Desk{Orgs: a.cfg.GitHub.AllowedOrgs, Never: a.cfg.Supervisor.Ownership.Never}}
+	return deliveryPolicy{person: a.cfg.Guide.Person, stallAfter: a.cfg.Delivery.StallAfter.Duration, reserveFor: a.cfg.Supervisor.ReserveFor.Duration, desk: superloop.Desk{Orgs: a.cfg.GitHub.AllowedOrgs, Never: a.cfg.Supervisor.Ownership.Never}}
 }
 
 // Retained observations remain usable across partial sweeps. Local starts are
 // included immediately under the same lock as admission, even during an outage.
 func deliveryInFlight(st *state.State, d state.Delivery, now time.Time, p deliveryPolicy) bool {
+	return deliveryOwned(st, d, now, p) && classifyDelivery(st, d, now, p).Class == deliveryFlowing
+}
+
+func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryPolicy) bool {
 	if reason, _ := p.desk.Unread(d.Ref); reason != "" {
 		return false
 	}
