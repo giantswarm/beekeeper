@@ -156,6 +156,23 @@ func (a *app) watchDisk() *watchDiskReading {
 	return &reading
 }
 
+// Retain only events this projection consumes. Broad watch.* and file-event
+// prefixes otherwise copy large, unrelated report bodies into the checkpoint.
+func watchConditionEvent(e state.Event) bool {
+	switch e.Verb {
+	case loopClaimVerb:
+		_, target, ok := keyed(e.Detail)
+		return ok && target == "disk prune"
+	case loopFileVerb:
+		key, _, ok := keyed(e.Detail)
+		return ok && strings.HasPrefix(key, loopDiskKind+" ")
+	case "supervisor.disk", "disk.prune", "watch.disk-state", "watch.budget-state", "watch.machine-state", "watch.clear",
+		"watch.disk", "watch.diskfull", "watch.load", "watch.cpupsi", "watch.avail", "watch.psi", "watch.swap", "watch.oomd":
+		return true
+	}
+	return false
+}
+
 // Watch conditions are lasting levels, reconstructed after a restart.
 // Budget readings expire rather than treating a dead watch as permission
 // to start workers. Thresholds and all source reads stay in watch.
@@ -165,14 +182,12 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	} else if line != "" {
 		_, _ = fmt.Fprintln(l.a.out, line)
 	}
-	if line, err := l.a.checkThroughput(l.a.timeNow(), false); err != nil {
+	if line, err := l.a.checkThroughput(l.a.timeNow(), false, func() { l.lifecyclePhase("read throughput history") }); err != nil {
 		return err
 	} else if line != "" {
 		_, _ = fmt.Fprintln(l.a.out, line)
 	}
-	evs, err := l.a.store.Follow("supervisor-watch-conditions", func(e state.Event) bool {
-		return strings.HasPrefix(e.Verb, "watch.") || e.Verb == "supervisor.disk" || e.Verb == loopFileVerb || e.Verb == loopClaimVerb || e.Verb == "disk.prune"
-	})
+	evs, err := state.FollowSnapshot(l.a.store, "supervisor-watch-conditions", "v2", l.eventHistoryFilter(watchConditionEvent))
 	if err != nil {
 		return err
 	}

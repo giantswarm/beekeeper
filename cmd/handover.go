@@ -262,8 +262,8 @@ func (a *app) logCmd() *cobra.Command {
 		Short: "The event log: every claim, grant, hold, registration, note and build run",
 		Long: `The event log: every claim, grant, hold, registration, note and build run.
 
-Retention: events.jsonl in the state directory keeps every event since the
-machine's first, never trimmed or rotated, so --since 30d answers the last 30
+Retention: events.jsonl rotates at 64 MiB into dated event-segments in the
+state directory. No events are deleted; --since reads all segments, so 30d answers the last 30
 days in full. An agents.* event (start, wake, handover, note, broadcast) waits
 for the state lock rather than give up on a busy one.
 
