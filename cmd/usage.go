@@ -34,6 +34,9 @@ const (
 	// usageHighFile records the busy workers already told to park in the
 	// current USAGE HIGH episode, so watch restarts never tell a worker twice.
 	usageHighFile = "usage-high.json"
+	// usageUnderusedFile records whether a P1 finding was already filed for
+	// the current 7-day subscription window's heavy underuse.
+	usageUnderusedFile = "usage-underused.json"
 	// verbUsageHigh logs each busy worker told to park on USAGE HIGH.
 	verbUsageHigh = "usage.high"
 	// episodeGap separates consecutive 5-hour windows if watch slept across
@@ -58,6 +61,13 @@ func usageHighBucketFile(name, bucket string) string {
 	return "usage-high-" + unsafeKey.ReplaceAllString(name, "_") + "-" + unsafeKey.ReplaceAllString(bucket, "_") + ".json"
 }
 
+func usageUnderusedTargetFile(target string) string {
+	if strings.TrimSpace(target) == "" {
+		return usageUnderusedFile
+	}
+	return "usage-underused-" + unsafeKey.ReplaceAllString(target, "_") + ".json"
+}
+
 func usageQuotaFile(name string) string {
 	if strings.TrimSpace(name) == "" {
 		return "usage-quota.json"
@@ -70,7 +80,7 @@ func quotaFileForUsageFile(file string) string {
 		return "usage-quota.json"
 	}
 	if rest, ok := strings.CutPrefix(file, "usage-"); ok {
-		if !strings.HasPrefix(rest, "high-") && !strings.HasPrefix(rest, "quota-") {
+		if !strings.HasPrefix(rest, "high-") && !strings.HasPrefix(rest, "quota-") && !strings.HasPrefix(rest, "underused-") {
 			return "usage-quota-" + rest
 		}
 	}
@@ -290,6 +300,7 @@ type usageView struct {
 	Ceiling     int          `json:"ceiling"`
 	High        bool         `json:"high,omitempty"`
 	HighPercent float64      `json:"highPercent,omitempty"`
+	Underused   bool         `json:"underused,omitempty"`
 	Error       string       `json:"error,omitempty"`
 }
 
@@ -298,6 +309,13 @@ type usageHighLedger struct {
 	Episode  string            `json:"episode,omitempty"`
 	ResetsAt time.Time         `json:"resetsAt,omitzero"`
 	Told     map[string]string `json:"told,omitempty"`
+}
+
+// usageUnderusedLedger tracks whether a P1 finding was already filed for the
+// current 7-day subscription window.
+type usageUnderusedLedger struct {
+	ResetsAt   time.Time `json:"resetsAt,omitzero"`
+	ReportedAt time.Time `json:"reportedAt,omitzero"`
 }
 
 func runUsageCommand(ctx context.Context, command []string, timeout time.Duration) (usageReading, error) {
@@ -795,6 +813,7 @@ func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.C
 		Ceiling:     derived.Ceiling,
 		High:        high,
 		HighPercent: k.Usage.EffectiveHighPercent(),
+		Underused:   windowUnderused(sd, k.Usage, now),
 	}
 }
 
@@ -1451,6 +1470,75 @@ func (u *usageView) highWatchLine(now time.Time) string {
 	return "USAGE HIGH: " + u.highFigure(now) + "; new starts and resumes wait until reset, telling busy workers to finish their step and park"
 }
 
+func underusedFigureText(sd *usageWindow, u config.Usage, now time.Time) string {
+	if sd == nil || sd.Pace == nil {
+		return ""
+	}
+	behind := math.Round(max(0, *sd.Pace-sd.UsedPercent)*10) / 10
+	s := fmt.Sprintf("7d %s is %s behind pace %s (below %s of pace",
+		pct(sd.UsedPercent), pct(behind), pct(*sd.Pace), pct(math.Round(u.EffectiveUnderuseRatio()*1000)/10))
+	if !sd.ResetsAt.IsZero() && now.Before(sd.ResetsAt) {
+		s += fmt.Sprintf(", resets %s, in %s", clock(now.Local(), sd.ResetsAt), dur(sd.ResetsAt.Sub(now)))
+	}
+	return s + ")"
+}
+
+func sameUnderuseWindow(prev, cur time.Time) bool {
+	if prev.IsZero() && cur.IsZero() {
+		return true
+	}
+	if prev.IsZero() || cur.IsZero() {
+		return false
+	}
+	diff := cur.Sub(prev)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= episodeGap
+}
+
+func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *usageWindow, u config.Usage) {
+	underused := windowUnderused(sd, u, w.now)
+	if !underused {
+		w.check(condKey, false, "")
+		if w.chores && w.store != nil && sd != nil && !sd.ResetsAt.IsZero() {
+			var l usageUnderusedLedger
+			if found, err := w.store.ReadFile(file, &l); err == nil && found && !l.ReportedAt.IsZero() && !sameUnderuseWindow(l.ResetsAt, sd.ResetsAt) {
+				_ = w.store.WriteFile(file, usageUnderusedLedger{})
+			}
+		}
+		return
+	}
+	fig := underusedFigureText(sd, u, w.now)
+	line := "USAGE UNDERUSED: " + fig + "; P1 finding filed"
+	if target != "" {
+		line = fmt.Sprintf("USAGE UNDERUSED (%s): %s; P1 finding filed", target, fig)
+	}
+	w.check(condKey, true, "%s", line)
+	if !w.chores || w.store == nil {
+		return
+	}
+	var l usageUnderusedLedger
+	_, _ = w.store.ReadFile(file, &l)
+	if !l.ReportedAt.IsZero() && sameUnderuseWindow(l.ResetsAt, sd.ResetsAt) {
+		return
+	}
+	l = usageUnderusedLedger{ResetsAt: sd.ResetsAt, ReportedAt: w.now.UTC()}
+	_ = w.store.WriteFile(file, l)
+	subject := cmp.Or(target, "subscription")
+	winKey := w.now.UTC().Format(time.RFC3339)
+	if !sd.ResetsAt.IsZero() {
+		winKey = sd.ResetsAt.UTC().Format(time.RFC3339)
+	}
+	report := fmt.Sprintf("P1: subscription budget for %s is heavily underused: %s. File a P1 issue and ensure starts use this subscription budget before reset.",
+		subject, fig)
+	detail := fmt.Sprintf("[%s %s] P1 subscription budget underused (%s)%s%s",
+		condKey, winKey, subject, fileReportSeparator, report)
+	if err := w.store.Record(state.Event{At: w.now, By: watchParty, Verb: loopFileVerb, Detail: detail}); err != nil {
+		w.fail(condKey+"-guide", "cannot retain usage underuse finding for guide: %v", err)
+	}
+}
+
 func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
@@ -1634,6 +1722,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	if !k.Usage.Enabled() {
 		w.clear("usage-error")
 		w.clear("usage-high")
+		w.clear("usage-underused")
 		w.clearUsageHighEpisode(usageHighFile)
 		return nil
 	}
@@ -1649,6 +1738,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 		w.reportUsageFallback("usage-error", "", u.Fallback)
 		w.emitNow("usage", "USAGE: %s", u.watchLine(w.now))
 		w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
+		w.checkUsageUnderused("usage-underused", usageUnderusedFile, "", u.SevenDay, k.Usage)
 		return u
 	}
 	now := w.usageNow()
@@ -1682,6 +1772,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 		}
 	}
 	w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
+	w.checkUsageUnderused("usage-underused", usageUnderusedFile, "", u.SevenDay, k.Usage)
 	if !u.High {
 		w.clearUsageHighEpisode(usageHighFile)
 		return u
@@ -1803,6 +1894,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 				highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
 					target, highFigureText(bv.FiveHour, pv.HighPercent, w.now), target)
 				w.check("usage-high-"+name+"-"+bName, bv.High, "%s", highLine)
+				w.checkUsageUnderused("usage-underused-"+name+"-"+bName, usageUnderusedTargetFile(target), target, bv.SevenDay, p.Usage)
 				ledgerFile := usageHighBucketFile(name, bName)
 				if !bv.High {
 					allHigh = false
@@ -1819,6 +1911,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
 			name, highFigureText(pv.FiveHour, pv.HighPercent, w.now), name)
 		w.check("usage-high-"+name, pv.High, "%s", highLine)
+		w.checkUsageUnderused("usage-underused-"+name, usageUnderusedTargetFile(name), name, pv.SevenDay, p.Usage)
 		if !pv.High {
 			allHigh = false
 			w.clearUsageHighEpisode(usageHighProviderFile(name))

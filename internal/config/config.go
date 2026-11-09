@@ -1192,11 +1192,14 @@ const DefaultCeiling = 10
 // Defaults of capacity.usage and capacity.providers.<name> when a usage
 // command is set.
 const (
-	DefaultUsageEvery       = 5 * time.Minute
-	DefaultUsageReportEvery = 30 * time.Minute
-	DefaultUsageTimeout     = 90 * time.Second
-	DefaultUsageStaleAfter  = 15 * time.Minute
-	DefaultUsageHighPercent = 95.0
+	DefaultUsageEvery                = 5 * time.Minute
+	DefaultUsageReportEvery          = 30 * time.Minute
+	DefaultUsageTimeout              = 90 * time.Second
+	DefaultUsageStaleAfter           = 15 * time.Minute
+	DefaultUsageHighPercent          = 95.0
+	DefaultUsageUnderuseRatio        = 0.5
+	DefaultUsageUnderuseMinPace      = 10.0
+	DefaultUsageUnderuseMinRemaining = 24 * time.Hour
 )
 
 // DefaultClaudeUsageCommand reads plan windows without a model turn.
@@ -1311,11 +1314,11 @@ type Capacity struct {
 	providerOrder []string
 	// Choices is the ordered list of (harness, model) pairs that
 	// `agents start --harness auto` and `beekeeper capacity` evaluate:
-	// a start takes the eligible subscription with the most 7-day budget
-	// left per hour until its reset, with order breaking ties and
-	// self-hosted choices as fallbacks. Each provider must have room,
-	// its 5-hour window below its threshold and its 7-day use within the
-	// weekly cap and not ahead of the even pace.
+	// a start takes the eligible subscription furthest behind its 7-day
+	// pace (with 7-day budget left per hour, lower configured cost, and
+	// order breaking ties) and self-hosted choices as fallbacks. Each
+	// provider must have room, its 5-hour window below its threshold and
+	// its 7-day use within the weekly cap and not ahead of the even pace.
 	Choices []Choice `yaml:"choices"`
 	// ReviewSkipPace is read and ignored: a review is decided exactly like
 	// a worker's start, with no pace exception.
@@ -1622,6 +1625,21 @@ type Usage struct {
 	// (default 0); a positive margin counts as 0.
 	PaceMargin    float64 `yaml:"paceMargin"`
 	paceMarginSet bool
+	// UnderuseRatio is the fraction of the 7-day window's even pace below
+	// which usage counts as heavily underused (sevenDay.usedPercent <
+	// underuseRatio * sevenDay.pace) once sevenDay.pace reaches
+	// UnderuseMinPace and more than UnderuseMinRemaining remains before
+	// sevenDay.resetsAt (default 0.5; 0 or negative disables).
+	UnderuseRatio    float64 `yaml:"underuseRatio"`
+	underuseRatioSet bool
+	// UnderuseMinPace is the minimum 7-day pace percent before underuse is
+	// checked (default 10).
+	UnderuseMinPace    float64 `yaml:"underuseMinPace"`
+	underuseMinPaceSet bool
+	// UnderuseMinRemaining is the minimum time remaining before
+	// sevenDay.resetsAt for underuse to fire (default 24h).
+	UnderuseMinRemaining    Duration `yaml:"underuseMinRemaining"`
+	underuseMinRemainingSet bool
 	// FiveHour and SevenDay map a window's usedPercent to a ceiling: the
 	// first band with usedPercent < upTo applies, and at or past the last
 	// band's upTo the window yields 0. When both windows have bands, the
@@ -1693,6 +1711,34 @@ func (u Usage) EffectiveHighPercent() float64 {
 	return DefaultUsageHighPercent
 }
 
+// EffectiveUnderuseRatio is UnderuseRatio when explicitly set (clamped to >=0,
+// so 0 or negative disables underuse detection), or DefaultUsageUnderuseRatio
+// when unset.
+func (u Usage) EffectiveUnderuseRatio() float64 {
+	if u.underuseRatioSet {
+		return max(0, u.UnderuseRatio)
+	}
+	return DefaultUsageUnderuseRatio
+}
+
+// EffectiveUnderuseMinPace is UnderuseMinPace when explicitly set (clamped to
+// >=0), or DefaultUsageUnderuseMinPace when unset.
+func (u Usage) EffectiveUnderuseMinPace() float64 {
+	if u.underuseMinPaceSet {
+		return max(0, u.UnderuseMinPace)
+	}
+	return DefaultUsageUnderuseMinPace
+}
+
+// EffectiveUnderuseMinRemaining is UnderuseMinRemaining when explicitly set
+// (clamped to >=0), or DefaultUsageUnderuseMinRemaining when unset.
+func (u Usage) EffectiveUnderuseMinRemaining() time.Duration {
+	if u.underuseMinRemainingSet {
+		return max(0, u.UnderuseMinRemaining.Duration)
+	}
+	return DefaultUsageUnderuseMinRemaining
+}
+
 // BucketFor returns the usage bucket name for model: an exact or prefix match
 // in u.Buckets if configured, else "Gemini Models" for gemini* models and
 // "Claude and GPT models" otherwise.
@@ -1719,23 +1765,28 @@ func (u Usage) BucketFor(model string) string {
 func (u Usage) hasFields() bool {
 	return u.Every.Duration != 0 || u.Timeout.Duration != 0 || u.StaleAfter.Duration != 0 ||
 		u.ReportEvery.Duration != 0 || u.highPercentSet || u.fiveHourMaxSet ||
-		u.sevenDayMaxSet || u.paceMarginSet || len(u.FiveHour) > 0 ||
+		u.sevenDayMaxSet || u.paceMarginSet || u.underuseRatioSet ||
+		u.underuseMinPaceSet || u.underuseMinRemainingSet || len(u.FiveHour) > 0 ||
 		len(u.SevenDay) > 0 || len(u.PaceCaps) > 0 || len(u.Buckets) > 0
 }
 
 // UnmarshalYAML records whether highPercent, fiveHourMax, sevenDayMax,
-// paceMargin and reportEvery were explicitly set.
+// paceMargin, underuseRatio, underuseMinPace, underuseMinRemaining and
+// reportEvery were explicitly set.
 func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
 	type plain Usage
 	if err := n.Decode((*plain)(u)); err != nil {
 		return err
 	}
 	var set struct {
-		ReportEvery *Duration `yaml:"reportEvery"`
-		HighPercent *float64  `yaml:"highPercent"`
-		FiveHourMax *float64  `yaml:"fiveHourMax"`
-		SevenDayMax *float64  `yaml:"sevenDayMax"`
-		PaceMargin  *float64  `yaml:"paceMargin"`
+		ReportEvery          *Duration `yaml:"reportEvery"`
+		HighPercent          *float64  `yaml:"highPercent"`
+		FiveHourMax          *float64  `yaml:"fiveHourMax"`
+		SevenDayMax          *float64  `yaml:"sevenDayMax"`
+		PaceMargin           *float64  `yaml:"paceMargin"`
+		UnderuseRatio        *float64  `yaml:"underuseRatio"`
+		UnderuseMinPace      *float64  `yaml:"underuseMinPace"`
+		UnderuseMinRemaining *Duration `yaml:"underuseMinRemaining"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
@@ -1745,6 +1796,9 @@ func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
 	u.fiveHourMaxSet = set.FiveHourMax != nil
 	u.sevenDayMaxSet = set.SevenDayMax != nil
 	u.paceMarginSet = set.PaceMargin != nil
+	u.underuseRatioSet = set.UnderuseRatio != nil
+	u.underuseMinPaceSet = set.UnderuseMinPace != nil
+	u.underuseMinRemainingSet = set.UnderuseMinRemaining != nil
 	return nil
 }
 
@@ -1844,6 +1898,15 @@ func (u *Usage) defaults(home string) {
 	if !u.highPercentSet {
 		u.HighPercent = DefaultUsageHighPercent
 	}
+	if !u.underuseRatioSet {
+		u.UnderuseRatio = DefaultUsageUnderuseRatio
+	}
+	if !u.underuseMinPaceSet {
+		u.UnderuseMinPace = DefaultUsageUnderuseMinPace
+	}
+	if !u.underuseMinRemainingSet {
+		u.UnderuseMinRemaining = Duration{Duration: DefaultUsageUnderuseMinRemaining}
+	}
 }
 
 func (u Usage) validateNamedEach(prefix string, report func(error)) {
@@ -1876,6 +1939,15 @@ func (u Usage) validateNamedEach(prefix string, report func(error)) {
 	}
 	if u.paceMarginSet && (u.PaceMargin < -100 || u.PaceMargin > 100) {
 		report(fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin))
+	}
+	if u.underuseRatioSet && u.UnderuseRatio > 1 {
+		report(fmt.Errorf("%s.underuseRatio: %g is above 1", prefix, u.UnderuseRatio))
+	}
+	if u.underuseMinPaceSet && (u.UnderuseMinPace < 0 || u.UnderuseMinPace > 100) {
+		report(fmt.Errorf("%s.underuseMinPace: %g is not in [0, 100]", prefix, u.UnderuseMinPace))
+	}
+	if u.underuseMinRemainingSet && u.UnderuseMinRemaining.Duration < 0 {
+		report(fmt.Errorf("%s.underuseMinRemaining: %s is negative", prefix, u.UnderuseMinRemaining.Duration))
 	}
 	for _, w := range []struct {
 		name  string

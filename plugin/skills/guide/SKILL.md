@@ -66,7 +66,9 @@ resume --reason "<words>"` when authorized. `beekeeper emergency` shows both sta
 The person spends their attention only on what needs them: each decision arrives with enough
 context to answer it in one read, one at a time. Every answer reaches the session that asked, in
 their words, and the supervisor knows in one line. New ideas land where they get worked. The
-roadmap board shows what is really in progress, blocked, in validation and done.
+roadmap board shows what is really in progress, blocked, in validation and done. Using all
+subscription budget across every configured provider (not only one) is a standing goal of every
+guide: heavy underuse of any provider's subscription budget is a P1.
 
 ## Context
 
@@ -137,7 +139,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   handling of messages and its watch. Keep processing peer messages and the watch while the answer
   waits. Record the answer verbatim with `beekeeper answer`; a pending note alone is not asking.
 - **Open work is durable.** Record the person's standing goals with `beekeeper guide work add
-  "<goal>" --kind goal --due <next-check>`. Record each task and change with a restoration deadline before acting,
+  "<goal>" --kind goal --due <next-check>`. Keep a standing goal to use all subscription budget across every configured provider (`beekeeper capacity`, `beekeeper guide handover --prompt`, and `beekeeper guide start` report each provider's usage, pace and reset); when `GUIDE PROBLEM` reports heavy subscription underuse (`USAGE UNDERUSED`), file it as a P1 issue at once and steer work so every configured provider's budget is used before reset. Record each task and change with a restoration deadline before acting,
   using `--kind task` or `--kind restore` and `--due <next-action-or-restoration-time>`. Work belongs
   to the guide role and reaches its successor in `guide handover --prompt`. Finish actionable work
   in the turn and close it with `guide work done <id> --reason "<result or filed issue URL>"`.

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -360,5 +362,106 @@ func TestGuideCentralFeedLifecycle(t *testing.T) {
 				t.Fatalf("closed twice: %q", lines)
 			}
 		})
+	}
+}
+
+func TestGuideHandoverAndStartReportAllProviderSubscriptions(t *testing.T) {
+	a, _ := stubApp(t)
+	origMachine := plat.Machine
+	plat.Machine = tableMachine{plat.Machine}
+	t.Cleanup(func() { plat.Machine = origMachine })
+
+	t0 := a.now
+	reset5h := t0.Add(3 * time.Hour).UTC()
+	a.cfg.Capacity = config.Capacity{
+		Floor:   1,
+		Ceiling: 6,
+		Providers: map[string]config.Provider{
+			claudeComm:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadClaude}}},
+			harnessAgy:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadAgy}}},
+			codex.Harness: {Ceiling: 2, Usage: config.Usage{Command: []string{testReadCodex}}},
+		},
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: pickOpus},
+			{Harness: harnessAgy, Model: pickGemini},
+			{Harness: codex.Harness, Model: pickGPT},
+		},
+	}
+	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+		switch cmd[0] {
+		case testReadClaude:
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &usageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
+			}, nil
+		case testReadAgy:
+			return usageReading{
+				Buckets: map[string]usageBucket{
+					config.DefaultAgyGeminiBucket: {
+						FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+						SevenDay: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(112 * time.Hour).UTC()},
+					},
+				},
+				BucketOrder: []string{config.DefaultAgyGeminiBucket},
+			}, nil
+		default:
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &usageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
+			}, nil
+		}
+	}
+
+	wantSubstrings := []string{
+		"claude: ",
+		"7d 9%",
+		"pace 10.7%",
+		"agy: ",
+		"bucket Gemini Models: ",
+		"7d 10%",
+		"pace 33.3%",
+		"UNDERUSED (7d 10% below 50% of pace 33.3% (16.6%)",
+		"codex: ",
+		"7d 50%",
+		"pace 71.4%",
+		"choice: agy / gemini-x (provider agy, bucket Gemini Models)",
+	}
+
+	prompt, err := runIn(a, a.guideHandoverCmd(), "--prompt")
+	if err != nil {
+		t.Fatalf("guide handover --prompt: %v", err)
+	}
+	if !strings.Contains(prompt, "### Subscription budgets\n") {
+		t.Fatalf("prompt missing Subscription budgets section:\n%s", prompt)
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("guide handover --prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	full, err := runIn(a, a.guideHandoverCmd(), "--full")
+	if err != nil {
+		t.Fatalf("guide handover --full: %v", err)
+	}
+	if !strings.Contains(full, "## Subscription budgets\n") {
+		t.Fatalf("handover missing Subscription budgets section:\n%s", full)
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(full, want) {
+			t.Errorf("guide handover --full missing %q:\n%s", want, full)
+		}
+	}
+
+	runLive(t, a, map[int]string{1: "Guide run 1"})
+	a.as = ""
+	startOut, err := runIn(a, a.guideCmd(), "start")
+	if err != nil {
+		t.Fatalf("guide start: %v", err)
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(startOut, want) {
+			t.Errorf("guide start missing %q:\n%s", want, startOut)
+		}
 	}
 }
