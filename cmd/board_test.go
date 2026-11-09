@@ -401,13 +401,13 @@ func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
 		text, owner string
 		want        []string
 	}{
-		{"decide https://github.com/o/r/issues/10 and https://github.com/O/R/pull/11/files", owner, []string{"o/r#10", "o/r#11"}},
+		{"decide https://github.com/o/r/issues/10 and https://github.com/O/R/pull/11/files", owner, []string{"o/r#10", planningPull}},
 		{"https://github.com/o/r/issues/7 and o/r#8", owner, []string{"o/r#7", "o/r#8"}},
 		{"model-manager#258 and llm-d#29", owner, []string{"gs/model-manager#258", "gs/llm-d#29"}},
 		{"beekeeper#525, #555 and #563 wait", owner, []string{"gs/beekeeper#525", "gs/beekeeper#555", "gs/beekeeper#563"}},
 		{"beekeeper: #534 (a), #535 (b), #565 (c)", owner, []string{"gs/beekeeper#534", "gs/beekeeper#535", "gs/beekeeper#565"}},
 		{"o/r: #1, #2; then x/y#3, #4", owner, []string{refOne, idleRef, "x/y#3", "x/y#4"}},
-		{"https://github.com/o/r/issues/10, #11 too", owner, []string{"o/r#10", "o/r#11"}},
+		{"https://github.com/o/r/issues/10, #11 too", owner, []string{"o/r#10", planningPull}},
 		// A bare #n before any repository names nothing.
 		{"#5 then o/r#16 and #17", owner, []string{"o/r#16", "o/r#17"}},
 		{"#5 alone", owner, nil},
@@ -472,7 +472,7 @@ func TestBlockerClearedOffersNoItemItsStatusHolds(t *testing.T) {
 	// Blocked on its dependency alone, which closed since.
 	snap := &board.Snapshot{
 		Order: []config.BoardStep{{Name: "blocker cleared", Status: []string{blocked}, Unblocked: true}},
-		Items: []board.Item{item("o/r#1", closed.Add(time.Hour)), item("o/r#2", closed.Add(-time.Hour))},
+		Items: []board.Item{item(reserveIssue, closed.Add(time.Hour)), item("o/r#2", closed.Add(-time.Hour))},
 	}
 	res := nextFree(&state.State{}, board.Rank(snap, config.Board{}, listed), pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
 	if res.Pick == nil || res.Pick.Ref != "o/r#2" || res.Pick.Step != "blocker cleared" {

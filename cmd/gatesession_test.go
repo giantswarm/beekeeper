@@ -21,8 +21,8 @@ func TestASessionsThirdMergeWaitsWithoutReadingGitHub(t *testing.T) {
 	_, launched := stubSelf(t)
 	me := state.Party{Session: "s1", Name: ownerName}
 	a := queueApp(t,
-		state.Merge{Repo: "o/a", PR: 1, Lane: "o/a", By: me, PID: sleeper(t), Phase: state.Running, Joined: time.Now().Add(-time.Hour), Started: time.Now()},
-		state.Merge{Repo: "o/b", PR: 1, Lane: "o/b", By: me, PID: sleeper(t), Phase: state.Running, Joined: time.Now().Add(-time.Hour), Started: time.Now()})
+		state.Merge{Repo: planningRepoA, PR: 1, Lane: planningRepoA, By: me, PID: sleeper(t), Phase: state.Running, Joined: time.Now().Add(-time.Hour), Started: time.Now()},
+		state.Merge{Repo: planningRepoB, PR: 1, Lane: planningRepoB, By: me, PID: sleeper(t), Phase: state.Running, Joined: time.Now().Add(-time.Hour), Started: time.Now()})
 	a.cfg.Merge.SessionCap = 2
 
 	var err error

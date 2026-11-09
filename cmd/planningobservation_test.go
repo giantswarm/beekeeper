@@ -11,11 +11,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const (
+	planningPull  = "o/r#11"
+	planningRepoA = "o/a"
+	planningRepoB = "o/b"
+)
+
 func TestDeliveryPlanningBoundsReleaseObservations(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
 	seed(t, a, func(st *state.State) {
-		st.Deliveries = []state.Delivery{{Ref: "o/r#1", Pulls: []string{"o/r#11"}, Step: state.DeliveryReleasing, Started: now.Add(-time.Hour), Since: now.Add(-time.Minute)}}
+		st.Deliveries = []state.Delivery{{Ref: reserveIssue, Pulls: []string{planningPull}, Step: state.DeliveryReleasing, Started: now.Add(-time.Hour), Since: now.Add(-time.Minute)}}
 	})
 	old := readDeliveryRelease
 	t.Cleanup(func() { readDeliveryRelease = old })
@@ -29,7 +35,7 @@ func TestDeliveryPlanningBoundsReleaseObservations(t *testing.T) {
 		return "", "", context.DeadlineExceeded
 	}
 	l := &supervisorLoop{a: a, said: map[string]bool{}}
-	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{"o/r#11": {Ref: "o/r#11", State: superloop.Merged, MergeCommit: loopHead}}}
+	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}
 	if err := l.observeDeliveries(context.Background(), in, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +78,11 @@ func TestBacklogPlanningBoundsAdmissionAndRotates(t *testing.T) {
 		return "", false, errors.New("unread")
 	}
 	in := superloop.Input{Pulls: map[string]superloop.Pull{"o/a#1": {State: superloop.Open}, "o/b#1": {State: superloop.Open}}}
-	l.unmergedCursor = "o/a"
+	l.unmergedCursor = planningRepoA
 	if err := l.checkUnmergedBacklogs(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
-	if len(order) != 2 || order[0] != "o/b" || order[1] != "o/a" {
+	if len(order) != 2 || order[0] != planningRepoB || order[1] != planningRepoA {
 		t.Fatalf("resume order: %v", order)
 	}
 	// A shutdown cancels admission before any further repository is inspected.
