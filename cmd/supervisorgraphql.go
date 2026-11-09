@@ -371,6 +371,9 @@ func loopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
 func (a *app) loopTimerChecks(ctx context.Context, timers []state.Timer, now time.Time, held bool) map[int]checkResult {
 	var local, remote []state.Timer
 	for _, t := range timers {
+		if !timerDispatchCheckDue(t, now) {
+			continue
+		}
 		if checkOf(t).github {
 			remote = append(remote, t)
 		} else {

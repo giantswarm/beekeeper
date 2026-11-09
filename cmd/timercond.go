@@ -85,7 +85,7 @@ func checkTimers(ctx context.Context, timers []state.Timer, now time.Time, lowBu
 	checks := map[string]timerCheck{}
 	byCmd := map[string][]int{}
 	for _, t := range timers {
-		if !t.Conditional() || t.Due.After(now) || !t.Checked.IsZero() && now.Sub(t.Checked) < cmp.Or(t.Every, timerEvery) {
+		if !t.Conditional() || t.PendingWakeReason != "" || t.Due.After(now) || !t.Checked.IsZero() && now.Sub(t.Checked) < cmp.Or(t.Every, timerEvery) {
 			continue
 		}
 		if c := checkOf(t); c.cmd != "" && (!c.github || !lowBudget) {
@@ -274,59 +274,114 @@ func (w *watcher) wouldFireTimers(st *state.State, found map[int]checkResult) {
 // outside the poll: a wake by name takes seconds, a command up to
 // timerRunTimeout. A timer without either was its watch line.
 func (w *watcher) actTimers(ctx context.Context, fires []timerFire) {
+	var wakeFires []timerFire
 	for _, f := range fires {
 		switch {
 		case f.t.Wake != "":
-			w.timerActs.Go(func() { w.wakeTimer(ctx, f) })
+			wakeFires = append(wakeFires, f)
 		case f.t.Run != "":
 			w.timerActs.Go(func() { w.runTimer(ctx, f) })
 		}
 	}
+	if len(wakeFires) > 0 {
+		w.timerActs.Go(func() { w.wakeTimers(ctx, wakeFires) })
+	}
+}
+
+type timerWakeOutcome struct {
+	fire    timerFire
+	rearm   bool
+	closeCI bool
+	line    string
 }
 
 // wakeTimer wakes a fired timer's agent with its message; a wake that fails
 // is a line, so the supervisor's watch still has the text.
 func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
-	original := f
-	delivered := false
-	defer func() {
-		if !delivered {
-			if _, err := w.rearmTimer(original, "wake not delivered; retrying"); err != nil {
-				w.emitNow("timer", "TIMER WAKE RETRY FAILED: #%d: %v", original.t.ID, err)
-			}
-		}
-	}()
+	w.wakeTimers(ctx, []timerFire{f})
+}
+
+func (w *watcher) wakeTimers(ctx context.Context, fires []timerFire) {
+	if len(fires) == 0 {
+		return
+	}
 	// A timer may have fired before the agent replaced its wait. Read the
 	// current park at delivery, including parks off the roster; a stale
 	// repeating timer must never turn a session waiting on a person.
 	st, err := w.store.Read()
 	if err != nil {
-		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err)
+		outcomes := make([]timerWakeOutcome, 0, len(fires))
+		for _, f := range fires {
+			outcomes = append(outcomes, timerWakeOutcome{
+				fire:  f,
+				rearm: true,
+				line:  fmt.Sprintf("TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err),
+			})
+		}
+		w.settleWakeOutcomes(outcomes)
 		return
 	}
-	if strings.EqualFold(f.t.Wake, guideRoleAlias) {
-		h := guideRole.get(st).Holder
-		if h == nil {
-			w.emitNow("timer", "TIMER WAKE FAILED: #%d: no session holds the guide role", f.t.ID)
-			return
-		}
-		f.t.Wake = h.Session
-		if f.t.Wake == "" {
-			f.t.Wake = h.Name
-		}
+	type wakeDelivery struct {
+		original timerFire
+		resolved timerFire
 	}
-	if !f.t.WakeParkAt.IsZero() {
-		p := wakeTargetPark(st, f.t.Wake)
-		if p == nil || !p.Checks || !p.At.Equal(f.t.WakeParkAt) || !p.By.Is(f.t.By) {
-			delivered = true
-			w.closeCIWakeTimer(f.t)
-			return // The worker has already left or replaced this CI wait.
+	var immediate []timerWakeOutcome
+	var deliveries []wakeDelivery
+	for _, f := range fires {
+		original := f
+		if strings.EqualFold(f.t.Wake, guideRoleAlias) {
+			h := guideRole.get(st).Holder
+			if h == nil {
+				immediate = append(immediate, timerWakeOutcome{
+					fire:  original,
+					rearm: true,
+					line:  fmt.Sprintf("TIMER WAKE FAILED: #%d: no session holds the guide role", f.t.ID),
+				})
+				continue
+			}
+			f.t.Wake = h.Session
+			if f.t.Wake == "" {
+				f.t.Wake = h.Name
+			}
 		}
+		if !f.t.WakeParkAt.IsZero() {
+			p := wakeTargetPark(st, f.t.Wake)
+			if p == nil || !p.Checks || !p.At.Equal(f.t.WakeParkAt) || !p.By.Is(f.t.By) {
+				immediate = append(immediate, timerWakeOutcome{
+					fire:    original,
+					closeCI: true,
+				})
+				continue // The worker has already left or replaced this CI wait.
+			}
+		}
+		if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.cfg.Guide.Person) {
+			immediate = append(immediate, timerWakeOutcome{
+				fire:  original,
+				rearm: true,
+				line:  fmt.Sprintf("TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now)),
+			})
+			continue
+		}
+		deliveries = append(deliveries, wakeDelivery{original: original, resolved: f})
 	}
-	if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.cfg.Guide.Person) {
-		w.emitNow("timer", "TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now))
+	if len(immediate) > 0 {
+		w.settleWakeOutcomes(immediate)
+	}
+	if len(deliveries) == 0 {
 		return
 	}
+	outcomes := make([]timerWakeOutcome, len(deliveries))
+	var wg sync.WaitGroup
+	for idx, d := range deliveries {
+		wg.Go(func() {
+			outcomes[idx] = w.deliverWakeTimer(ctx, st, d.original, d.resolved)
+		})
+	}
+	wg.Wait()
+	w.settleWakeOutcomes(outcomes)
+}
+
+func (w *watcher) deliverWakeTimer(ctx context.Context, st *state.State, original, f timerFire) timerWakeOutcome {
 	quiet := *w.app // the wake's own report is not a watch line
 	quiet.out = io.Discard
 	if !f.t.Due.IsZero() {
@@ -345,29 +400,107 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	if err := wakeErr; err != nil {
 		var pending *executionDeliveryPending
 		if errors.As(err, &pending) {
-			delivered = true
-			w.closeCIWakeTimer(f.t)
-			w.emitNow("timer", "TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200))
-			return
+			return timerWakeOutcome{
+				fire:    original,
+				closeCI: !f.t.WakeParkAt.IsZero(),
+				line:    fmt.Sprintf("TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200)),
+			}
 		}
-		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200))
-		return
+		return timerWakeOutcome{
+			fire:  original,
+			rearm: true,
+			line:  fmt.Sprintf("TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200)),
+		}
 	}
-	delivered = true
-	w.closeCIWakeTimer(f.t)
+	return timerWakeOutcome{
+		fire:    original,
+		closeCI: !f.t.WakeParkAt.IsZero(),
+	}
 }
 
-// closeCIWakeTimer retires a CI timer only after durable handoff or obsolescence.
-func (w *watcher) closeCIWakeTimer(t state.Timer) {
-	if t.WakeParkAt.IsZero() {
+func (w *watcher) timerRetryNow() time.Time {
+	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+		return w.clk().Now().UTC()
+	}
+	return w.now.UTC()
+}
+
+func (w *watcher) settleWakeOutcomes(outcomes []timerWakeOutcome) {
+	needStateWrite := false
+	var lines []string
+	for _, o := range outcomes {
+		if o.rearm || (o.closeCI && !o.fire.t.WakeParkAt.IsZero()) {
+			needStateWrite = true
+		}
+		if o.line != "" {
+			lines = append(lines, o.line)
+		}
+	}
+	if !needStateWrite {
+		if len(lines) > 0 {
+			w.emitLinesNow("timer", lines)
+		}
 		return
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Timers = slices.DeleteFunc(st.Timers, func(current state.Timer) bool { return current.ID == t.ID })
-		return nil, nil
-	}); err != nil {
-		w.emitNow("timer", "TIMER WAKE CLEANUP FAILED: #%d: %v", t.ID, err)
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		checkedAt := w.timerRetryNow()
+		var evs []state.Event
+		for _, o := range outcomes {
+			if o.line != "" {
+				evs = append(evs, event(watchParty, "watch.timer", "%s", o.line))
+			}
+			if o.closeCI && !o.fire.t.WakeParkAt.IsZero() {
+				st.Timers = slices.DeleteFunc(st.Timers, func(current state.Timer) bool { return current.ID == o.fire.t.ID })
+			}
+			if o.rearm {
+				evs = append(evs, rearmTimerInState(st, o.fire, "wake not delivered; retrying", checkedAt))
+			}
+		}
+		return evs, nil
+	})
+	if err != nil {
+		var errLines []string
+		for _, o := range outcomes {
+			if o.line != "" {
+				errLines = append(errLines, o.line)
+			}
+			if o.closeCI && !o.fire.t.WakeParkAt.IsZero() {
+				errLines = append(errLines, fmt.Sprintf("TIMER WAKE CLEANUP FAILED: #%d: %v", o.fire.t.ID, err))
+			}
+			if o.rearm {
+				errLines = append(errLines, fmt.Sprintf("TIMER WAKE RETRY FAILED: #%d: %v", o.fire.t.ID, err))
+			}
+		}
+		w.emitLinesNow("timer", errLines)
+		return
 	}
+	for _, line := range lines {
+		w.outputEvent(line)
+	}
+}
+
+func rearmTimerInState(st *state.State, f timerFire, held string, checkedAt time.Time) state.Event {
+	retry := f.t
+	retry.Checked, retry.Fired = time.Time{}, time.Time{}
+	retry.Held = held
+	// Space all delivery retries, including timers without a condition.
+	if held != "previous action interrupted" {
+		retry.Checked = checkedAt
+		retry.PendingWakeReason, retry.PendingWakeTimedOut = f.reason, f.timedOut
+		// This occurrence already fired; expiry must not discard its retry.
+		retry.Expire = false
+	}
+	for i, t := range st.Timers {
+		if t.ID != retry.ID {
+			continue
+		}
+		if t.Repeat != "" && t.Run == retry.Run && t.Wake == retry.Wake && t.Due.Equal(f.nextDue) {
+			st.Timers[i] = retry
+		}
+		return event(watchParty, "timer.failed", "#%d %s: %s", retry.ID, held, retry.What)
+	}
+	st.Timers = append(st.Timers, retry)
+	return event(watchParty, "timer.failed", "#%d %s; re-armed: %s", retry.ID, held, retry.What)
 }
 
 // runTimer runs a fired timer's command, its output in timers/<id>.log of
