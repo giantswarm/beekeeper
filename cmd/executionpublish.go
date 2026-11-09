@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -282,11 +283,43 @@ func publishGit(ctx context.Context, dir string, args ...string) (string, error)
 func ownedPulls(ctx context.Context, repository, branch string) ([]publicationPull, error) {
 	raw, err := executionPublishGH(ctx, "pr", "list", loopRepoFlag, repository, "--head", branch, "--state", "all", "--json", "url,state,"+publicationTitle+","+publicationBody)
 	if err != nil {
-		return nil, err
+		// gh pr list uses GraphQL. Its failure must not strand a pushed
+		// branch when the REST pull endpoint can settle the same outcome.
+		return ownedPullsREST(ctx, repository, branch)
 	}
 	var pulls []publicationPull
 	if json.Unmarshal(raw, &pulls) != nil || len(pulls) > 1 {
 		return nil, errors.New("ambiguous owned pull request")
+	}
+	return pulls, nil
+}
+
+// ownedPullsREST uses a separate read deadline: the GraphQL attempt may
+// have exhausted its context. This fallback never grants authority to write.
+func ownedPullsREST(ctx context.Context, repository, branch string) ([]publicationPull, error) {
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
+	defer cancel()
+	owner, _, _ := strings.Cut(repository, "/")
+	endpoint := "repos/" + repository + "/pulls?state=all&per_page=2&head=" + url.QueryEscape(owner+":"+branch)
+	raw, err := executionPublishGH(readCtx, "api", endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		URL   string `json:"html_url"`
+		State string `json:"state"`
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	if json.Unmarshal(raw, &rows) != nil || len(rows) > 1 {
+		return nil, errors.New("ambiguous owned pull request")
+	}
+	pulls := make([]publicationPull, 0, len(rows))
+	for _, row := range rows {
+		if row.URL == "" || (row.State != "open" && row.State != "closed") {
+			return nil, errors.New("invalid owned pull request")
+		}
+		pulls = append(pulls, publicationPull{URL: row.URL, State: strings.ToUpper(row.State), Title: row.Title, Body: row.Body})
 	}
 	return pulls, nil
 }

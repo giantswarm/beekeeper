@@ -260,6 +260,62 @@ func TestExecutionPublicationCreateOutlivesTheAttemptsDeadline(t *testing.T) {
 	}
 }
 
+// A lost create reply and a persistently unavailable GraphQL list must
+// reconcile through REST, including on an identical republication.
+func TestExecutionPublicationReconcilesThroughREST(t *testing.T) {
+	rig := newPublicationRig(t)
+	p := rig.publication(t, rig.commit(t, "change.txt", "one\n"))
+	rig.dropCreate = true
+	original := executionPublishGH
+	reads := 0
+	executionPublishGH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[0] == "pr" && args[1] == transcriptListCommand {
+			return nil, errors.New("GraphQL unavailable")
+		}
+		if args[0] == "api" && strings.HasPrefix(args[1], "repos/"+rig.request.Repository+"/pulls?") {
+			reads++
+			if !strings.Contains(args[1], "state=all&per_page=2&head=giantswarm%3A") {
+				t.Fatalf("unscoped reconciliation: %v", args)
+			}
+			if rig.created {
+				return json.Marshal([]struct {
+					URL   string `json:"html_url"`
+					State string `json:"state"`
+					Title string `json:"title"`
+					Body  string `json:"body"`
+				}{{URL: publicationFixturePRURL, State: "open", Title: rig.title, Body: rig.body}})
+			}
+			return []byte(`[]`), nil
+		}
+		return original(ctx, args...)
+	}
+	var result executionPublicationResult
+	for range 2 {
+		if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+			t.Fatal(err)
+		}
+		if result.URL != publicationFixturePRURL || rig.creates != 1 {
+			t.Fatal("publication was not reconciled", result, rig.creates)
+		}
+	}
+	if reads != 3 {
+		t.Fatal("expected pre-create, lost reply and retry REST reads", reads)
+	}
+}
+
+func TestOwnedPullsRESTRejectsUnreadableOrAmbiguousResults(t *testing.T) {
+	original := executionPublishGH
+	t.Cleanup(func() { executionPublishGH = original })
+	for _, body := range []string{`not-json`, `[{},{}]`, `[{}]`, `[{"html_url":"url","state":"unknown"}]`} {
+		t.Run(body, func(t *testing.T) {
+			executionPublishGH = func(context.Context, ...string) ([]byte, error) { return []byte(body), nil }
+			if _, err := ownedPullsREST(t.Context(), "giantswarm/beekeeper", "owned"); err == nil {
+				t.Fatal("invalid response treated as a settled outcome")
+			}
+		})
+	}
+}
+
 // editNames says the edit's arguments carry a field with this prefix.
 func editNames(args []string, prefix string) bool {
 	return slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, prefix) })
