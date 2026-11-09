@@ -823,6 +823,8 @@ const (
 	testModelOpus46 = "claude-opus-4-6-thinking"
 	testModelGemini = "gemini-3-1-pro-medium"
 	testReadClaude  = "read-claude"
+	testReadAgy     = "read-agy"
+	testReadCodex   = "read-codex"
 	testExcludeFlag = "--exclude"
 	testHarnessFlag = "--harness"
 	testDryRunFlag  = "--dry-run"
@@ -4063,5 +4065,139 @@ func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	rawCfg := `capacity:
+  ceiling: 6
+  providers:
+    claude:
+      ceiling: 2
+      command: ["read-claude"]
+    agy:
+      ceiling: 2
+      command: ["read-agy"]
+    codex:
+      ceiling: 2
+      command: ["read-codex"]
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := newFakeClock(t)
+	t0 := clk.Now()
+	reset5h := t0.Add(3 * time.Hour).UTC()
+	agyReset7d := t0.Add(112 * time.Hour).UTC()
+	agy7d := 10.0
+
+	var out bytes.Buffer
+	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &out}
+	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+		switch cmd[0] {
+		case testReadClaude:
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &usageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
+			}, nil
+		case testReadAgy:
+			return usageReading{
+				Buckets: map[string]usageBucket{
+					config.DefaultAgyGeminiBucket: {
+						FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+						SevenDay: &usageWindow{UsedPercent: agy7d, ResetsAt: agyReset7d},
+					},
+				},
+				BucketOrder: []string{config.DefaultAgyGeminiBucket},
+			}, nil
+		default:
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &usageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
+			}, nil
+		}
+	}
+	w := a.newWatcher(false, true)
+	w.now = t0
+	w.clock = clk
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+
+	countFiled := func() (int, string) {
+		evs, rerr := store.Events(0, nil)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		n := 0
+		last := ""
+		for _, ev := range evs {
+			if ev.Verb == loopFileVerb && strings.Contains(ev.Detail, "P1 subscription budget underused") {
+				n++
+				last = ev.Detail
+			}
+		}
+		return n, last
+	}
+
+	// 1. First tick: agy/Gemini Models is at 10% vs 33.3% pace (< 16.6% threshold, 112h left).
+	//    claude (9% vs 10.7% pace) and codex (50% vs 71.4% pace) are not underused.
+	view := w.watchUsage(context.Background(), &state.State{}, nil)
+	if view == nil || !view.Underused {
+		t.Fatalf("first tick view = %+v, want Underused=true", view)
+	}
+	if !strings.Contains(out.String(), "USAGE UNDERUSED (agy/Gemini Models): 7d 10% is 23.3% behind pace 33.3% (below 50% of pace") ||
+		strings.Contains(out.String(), "USAGE UNDERUSED (claude)") ||
+		strings.Contains(out.String(), "USAGE UNDERUSED (codex)") {
+		t.Fatalf("first tick output:\n%s", out.String())
+	}
+	if n, detail := countFiled(); n != 1 || !strings.Contains(detail, "[usage-underused-agy-Gemini Models ") || !strings.Contains(detail, "agy/Gemini Models") {
+		t.Fatalf("after first tick: count=%d, detail=%q", n, detail)
+	}
+
+	// 2. Second tick within the same 7-day window (with slight reset jitter): not emitted or filed again.
+	out.Reset()
+	agyReset7d = agyReset7d.Add(2 * time.Minute)
+	clk.advance(a.cfg.Capacity.Providers[harnessAgy].EffectiveEvery())
+	w.watchUsage(context.Background(), &state.State{}, nil)
+	if strings.Contains(out.String(), "USAGE UNDERUSED") {
+		t.Fatalf("repeat tick in same window emitted again:\n%s", out.String())
+	}
+	if n, _ := countFiled(); n != 1 {
+		t.Fatalf("repeat tick in same window filed %d times, want 1", n)
+	}
+
+	// 3. Usage catches up to 20% (>= 16.6%): ends the underuse condition.
+	out.Reset()
+	agy7d = 20
+	clk.advance(a.cfg.Capacity.Providers[harnessAgy].EffectiveEvery())
+	view = w.watchUsage(context.Background(), &state.State{}, nil)
+	if view == nil || view.Underused {
+		t.Fatalf("caught-up view = %+v, want Underused=false", view)
+	}
+	if !strings.Contains(out.String(), "ENDED USAGE UNDERUSED (agy/Gemini Models) (since ") {
+		t.Fatalf("caught-up tick output:\n%s", out.String())
+	}
+
+	// 4. Next 7-day window (>6h shift in reset) falls underused again: files once for the new window.
+	out.Reset()
+	agy7d = 10
+	agyReset7d = agyReset7d.Add(7 * 24 * time.Hour)
+	t0 = t0.Add(7 * 24 * time.Hour)
+	reset5h = reset5h.Add(7 * 24 * time.Hour)
+	clk.advance(7 * 24 * time.Hour)
+	w.watchUsage(context.Background(), &state.State{}, nil)
+	if !strings.Contains(out.String(), "USAGE UNDERUSED (agy/Gemini Models):") {
+		t.Fatalf("new window tick output:\n%s", out.String())
+	}
+	if n, _ := countFiled(); n != 2 {
+		t.Fatalf("new window tick filed count = %d, want 2", n)
 	}
 }

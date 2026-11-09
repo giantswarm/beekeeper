@@ -188,6 +188,14 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 			return err
 		}
 	}
+	if rl.name == guideRole.name {
+		st, _ := a.store.Read()
+		for _, line := range a.guideSubscriptionLines(ctx, st, sessions) {
+			if _, err := fmt.Fprintf(a.out, "subscription: %s\n", line); err != nil {
+				return err
+			}
+		}
+	}
 	if line := a.titleRun(ctx, me, rl.runName(run)); line != "" {
 		_, err := fmt.Fprintln(a.out, line)
 		return err

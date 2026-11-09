@@ -601,8 +601,12 @@ the hand-over before gets only what changed; --full prints everything.`,
 				}
 			}
 			relay := a.relayLine(guideRole, r)
+			subs := a.guideSubscriptionLines(cmd.Context(), st, sessions)
 			unbacked := a.unbackedPersonItems(st, q, s)
 			facts := append(textFacts("guide", head+"\n"+relay+"\n"+emergencyText(st, a.now)), a.queueFacts(q)...)
+			if len(subs) > 0 {
+				facts = append(facts, textFacts("subscriptions", strings.Join(subs, "\n"))...)
+			}
 			facts = append(facts, textFacts("decisions", decisionHistoryText(decisions))...)
 			facts = append(facts, textFacts("guide-work", guideWorkText(st))...)
 			facts = append(facts, textFacts("standing", a.capture(func() { a.printStanding(s) }))...)
@@ -613,6 +617,12 @@ the hand-over before gets only what changed; --full prints everything.`,
 				_, _ = fmt.Fprintf(a.out, "# Guide hand-over, %s\n\n%s\n", a.now.Format("2006-01-02 15:04 MST"), head)
 				if relay != "" {
 					_, _ = fmt.Fprintln(a.out, relay)
+				}
+				if len(subs) > 0 {
+					_, _ = fmt.Fprintln(a.out, "\n## Subscription budgets")
+					for _, l := range subs {
+						_, _ = fmt.Fprintln(a.out, "- "+l)
+					}
 				}
 				_, _ = fmt.Fprintln(a.out, "\n## Emergency grant\n"+emergencyText(st, a.now))
 				_, _ = fmt.Fprintln(a.out, "\n## Standing instructions")
@@ -675,6 +685,14 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 		p("Read and follow %q.\n", a.standingPath())
 	}
 	p("## Owned work, goals and restoration deadlines\n\n%s\n", guideWorkText(st))
+	if subs := a.guideSubscriptionLines(context.Background(), st, nil); len(subs) > 0 {
+		section(p, "Subscription budgets", false, "")
+		p("Keep every configured provider's subscription budget on pace; heavy underuse is a P1.\n")
+		for _, l := range subs {
+			p("- %s", l)
+		}
+		p("")
+	}
 	a.promptBoard(p, bv)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
@@ -698,6 +716,92 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 		p("- `%s`: %s", c[0], c[1])
 	}
 	return nil
+}
+
+// guideSubscriptionLines reports every configured subscription provider's
+// usage windows, pace, reset and underuse state, plus the next start choice.
+func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessions []*claude.Session) []string {
+	if a == nil || a.cfg == nil {
+		return nil
+	}
+	k := a.liveCapacity()
+	if len(k.Providers) > 0 {
+		if st == nil && a.store != nil {
+			st, _ = a.store.Read()
+		}
+		if st == nil {
+			st = &state.State{}
+		}
+		if sessions == nil && a.store != nil {
+			sessions, _, _ = a.sessions()
+		}
+		a.syncAgyQuotaFromState(st, a.now)
+		readings := make(map[string]providerReadingResult, len(k.Providers))
+		anySubscription := false
+		for _, name := range k.ProviderNames() {
+			p := k.Providers[name]
+			if p.SelfHosted() {
+				continue
+			}
+			anySubscription = true
+			if !p.Enabled() {
+				continue
+			}
+			r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
+			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+		}
+		if !anySubscription {
+			return nil
+		}
+		pa := countProviderAgents(st, sessions, k, a.now, a.cfg)
+		providers := make(map[string]*providerView, len(k.Providers))
+		var lines []string
+		for _, name := range k.ProviderNames() {
+			p := k.Providers[name]
+			if p.SelfHosted() {
+				providers[name] = buildSelfHostedProviderView(name, p, pa[name], providerReadingResult{}, a.now)
+				continue
+			}
+			pv := buildSingleProviderView(name, p, pa[name], readings[name], a.now)
+			providers[name] = pv
+			line := name + ": " + pv.line(a.now)
+			if pv.Underused {
+				if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
+					var uParts []string
+					for _, bName := range pv.bucketOrder {
+						if bv := pv.Buckets[bName]; bv != nil && bv.Underused {
+							uParts = append(uParts, bName+": "+underusedFigureText(bv.SevenDay, p.Usage, a.now))
+						}
+					}
+					if len(uParts) > 0 {
+						line += "; UNDERUSED (" + strings.Join(uParts, "; ") + ")"
+					}
+				} else if fig := underusedFigureText(pv.SevenDay, p.Usage, a.now); fig != "" {
+					line += "; UNDERUSED (" + fig + ")"
+				}
+			}
+			lines = append(lines, line)
+		}
+		if len(k.Choices) > 0 {
+			cv := evaluateChoices(k, providers, nil, a.noStart(st), nil, forWorker, a.now)
+			lines = append(lines, "choice: "+cv.line())
+		}
+		return lines
+	}
+	if !k.Usage.Enabled() {
+		return nil
+	}
+	_, u := a.resolveUsage(ctx, k)
+	if u == nil {
+		return nil
+	}
+	line := u.snapshotLine(a.now)
+	if u.Underused {
+		if fig := underusedFigureText(u.SevenDay, k.Usage, a.now); fig != "" {
+			line += "; UNDERUSED (" + fig + ")"
+		}
+	}
+	return []string{line}
 }
 
 const unbackedProseHeader = "Prose notes are not tracked by `beekeeper guide queue`; verify each candidate item below and either back it in state (`beekeeper note reopen <id>`, `beekeeper note defer <id> --due <time>`, or `beekeeper note add --for <person> --kind todo`) or remove stale prose:"
