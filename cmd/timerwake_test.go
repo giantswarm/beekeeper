@@ -261,7 +261,7 @@ func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		w.wakeTimer(t.Context(), timerFire{t: timer, reason: "due"})
+		w.wakeTimer(t.Context(), timerFire{t: timer, reason: paramDue})
 		if len(*woke) == 0 || !strings.Contains((*woke)[len(*woke)-1], name+"-session") {
 			t.Fatalf("timer did not reach current holder: %v", *woke)
 		}
@@ -281,7 +281,7 @@ func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: "due"})
+	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: paramDue})
 	if len(*woke) != 0 {
 		t.Fatalf("woke without a holder: %v", *woke)
 	}
@@ -468,7 +468,7 @@ func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	clock.now = relayNow.Add(4 * time.Minute)
 	w.clock = clock
 	timer := state.Timer{ID: 42, Due: relayNow, Wake: agentOne, Every: time.Minute}
-	rearmed, err := w.rearmTimer(timerFire{t: timer, reason: "due"}, "wake skipped")
+	rearmed, err := w.rearmTimer(timerFire{t: timer, reason: paramDue}, "wake skipped")
 	if err != nil || !rearmed {
 		t.Fatalf("rearm: %v, %v", rearmed, err)
 	}
