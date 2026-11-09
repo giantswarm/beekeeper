@@ -564,13 +564,13 @@ func removeAgent(st *state.State, i int) {
 	ag := st.Agents[i]
 	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") {
 		task := cmp.Or(ag.Task, ag.LastTask)
+		ended := state.Start{Party: ag.Party, At: ag.Registered, Harness: ag.Harness, Model: ag.Model, Task: task}
+		if s, ok := startRecordOf(st, ag.Party); ok {
+			ended = mergeStart(ended, s)
+		}
 		if k := slices.IndexFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }); k >= 0 {
-			st.EndedWorkers[k].Task = cmp.Or(task, st.EndedWorkers[k].Task)
+			st.EndedWorkers[k] = mergeStart(ended, st.EndedWorkers[k])
 		} else {
-			ended := state.Start{Party: ag.Party, At: ag.Registered, Harness: ag.Harness, Model: ag.Model, Task: task}
-			if j := st.StartIndex(ag.Party); j >= 0 {
-				ended.Dir, ended.Conversation = st.Starts[j].Dir, st.Starts[j].Conversation
-			}
 			st.EndedWorkers = append(st.EndedWorkers, ended)
 		}
 	}

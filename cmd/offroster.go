@@ -101,12 +101,59 @@ func (a *app) endedWorker(st *state.State, q string) (state.Start, bool) {
 	var found state.Start
 	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
 		if strings.EqualFold(s.Name, strings.TrimSpace(q)) && !s.At.Before(found.At) {
-			task, conv := cmp.Or(s.Task, found.Task), cmp.Or(s.Conversation, found.Conversation)
-			found = s
-			found.Task, found.Conversation = task, conv
+			found = mergeStart(s, found)
 		}
 	}
 	return found, found.Name != ""
+}
+
+// mergeStart fills empty fields of dst from src so an ended worker keeps its
+// recorded directory, conversation, model, effort and task across state updates.
+func mergeStart(dst, src state.Start) state.Start {
+	dst.Party = state.Party{
+		Name:        cmp.Or(dst.Name, src.Name),
+		Session:     cmp.Or(dst.Session, src.Session),
+		HostSession: cmp.Or(dst.HostSession, src.HostSession),
+		Person:      cmp.Or(dst.Person, src.Person),
+		Host:        cmp.Or(dst.Host, src.Host),
+	}
+	if dst.At.IsZero() {
+		dst.At = src.At
+	}
+	dst.Mode = cmp.Or(dst.Mode, src.Mode)
+	dst.Background = dst.Background || src.Background
+	dst.Dir = cmp.Or(dst.Dir, src.Dir)
+	dst.Harness = cmp.Or(dst.Harness, src.Harness)
+	dst.Model = cmp.Or(dst.Model, src.Model)
+	dst.Effort = cmp.Or(dst.Effort, src.Effort)
+	dst.Task = cmp.Or(dst.Task, src.Task)
+	dst.Conversation = cmp.Or(dst.Conversation, src.Conversation)
+	if dst.Execution == nil {
+		dst.Execution = src.Execution
+	}
+	return dst
+}
+
+// startRecordOf returns the merged start record for p across Starts and
+// EndedWorkers, if any.
+func startRecordOf(st *state.State, p state.Party) (state.Start, bool) {
+	if st == nil {
+		return state.Start{}, false
+	}
+	var found state.Start
+	var ok bool
+	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
+		convMatch := s.Conversation != "" && (s.Conversation == p.Session || s.Conversation == p.HostSession)
+		if s.Is(p) || convMatch {
+			if !ok || !s.At.Before(found.At) {
+				found = mergeStart(s, found)
+			} else {
+				found = mergeStart(found, s)
+			}
+			ok = true
+		}
+	}
+	return found, ok
 }
 
 // endedMessage is the turn a worker brought back by name starts with: msg

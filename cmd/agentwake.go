@@ -71,10 +71,12 @@ start again does; agents messages shows its receipt and agents hosts sync
 reconciles it without creating another process. Reuse --request-id for
 an identical retry; use a new ID for another identical message.
 
-An omp agent (agents start --harness omp) or an agy agent (agents start
---harness agy) gets the message in its inbox, at its next tool round / model
-call or as its next turn; one whose process ended is refused: nothing resumes
-it.
+An omp agent (agents start --harness omp), an agy agent (agents start
+--harness agy) or a codex agent (agents start --harness codex) gets the message
+in its inbox, at its next tool round / model call or as its next turn. An agy
+or codex agent whose unit ended is continued in its recorded conversation or
+thread; an omp agent whose process ended cannot be continued and the refusal
+names its stored transcript.
 
 A session whose CLI runs receives a peer envelope. The Guide's envelope
 contains the message itself and needs no beekeeper hook. Other sessions get
@@ -484,6 +486,14 @@ func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm 
 // wakeOmp writes msg to the inbox of the omp agent ag, started under id.
 func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
 	if err := a.sendOmp(ag.Name, id, msg); err != nil {
+		if errors.Is(err, errGone) {
+			var s state.Start
+			if st, rerr := a.store.Read(); rerr == nil {
+				s, _ = startRecordOf(st, ag.Party)
+			}
+			s = mergeStart(s, state.Start{Party: ag.Party, Harness: omp.Harness, Model: ag.Model})
+			return goneRefusal("%s: its omp agent no longer runs (%s ended): an omp session cannot be continued; %s", ag.Name, ompUnit(id), a.transcriptHint(context.Background(), s))
+		}
 		return err
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its omp inbox", ag.Name))
@@ -504,13 +514,18 @@ func (a *app) sendOmp(name, id, msg string) error {
 	return nil
 }
 
-// wakeAgy writes msg to the inbox of the agy agent ag, started under id.
+// wakeAgy writes msg to the inbox of the agy agent ag, started under id, or
+// continues its conversation in a new transient unit when its unit ended.
 func (a *app) wakeAgy(by state.Party, ag state.Agent, id, msg string) error {
-	if err := a.sendAgy(ag.Name, id, msg); err != nil {
-		return err
+	err := agy.Send(agy.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, agy.ErrNotRunning) {
+		return a.continueAgyAgent(context.Background(), by, ag, id, msg)
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", ag.Name, err)
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its agy inbox", ag.Name))
-	_, err := fmt.Fprintf(a.out, "wake: %s runs (agy): written to its inbox, it runs the message before its next model call or as its next turn\n", ag.Name)
+	_, err = fmt.Fprintf(a.out, "wake: %s runs (agy): written to its inbox, it runs the message before its next model call or as its next turn\n", ag.Name)
 	return err
 }
 
@@ -527,17 +542,22 @@ func (a *app) sendAgy(name, id, msg string) error {
 	return nil
 }
 
-// wakeCodex writes msg to the inbox of the codex agent ag, started under id.
+// wakeCodex writes msg to the inbox of the codex agent ag, started under id,
+// or continues its thread in a new transient unit when its unit ended.
 func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
-	if err := a.sendCodex(ag.Name, id, msg); err != nil {
-		return err
+	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, codex.ErrNotRunning) {
+		return a.continueCodexAgent(context.Background(), by, ag, id, msg)
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", ag.Name, err)
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
 	if install.CheckCodexHooks(install.CodexWorkerHooks(a.cfg.StateDir), "", "") != "" {
 		_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): mid-turn hook unavailable; queued for its next turn, after the current turn ends (remaining duration unknown)\n", ag.Name)
 		return err
 	}
-	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
+	_, err = fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
 	return err
 }
 

@@ -195,10 +195,22 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		_, _ = codex.RemoveInbox(inbox)
 		return a.undelivered(by, s.Party, fmt.Errorf("the brief did not reach its inbox: %w (journalctl --user -u %s)", err, unit))
 	}
-	if _, err := awaitCodexBrief(ctx, logPath, func() bool { return unitEnded(ctx, unit) }, codexBriefWait); err != nil {
+	threadID, err := awaitCodexBrief(ctx, logPath, func() bool { return unitEnded(ctx, unit) }, codexBriefWait)
+	if err != nil {
 		_ = plat.Launcher.Stop(ctx, unit)
 		_, _ = codex.RemoveInbox(inbox)
 		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
+	}
+	if threadID != "" {
+		_ = codex.RecordThread(a.cfg.StateDir, inbox, threadID)
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if i := st.StartIndex(s.Party); i >= 0 {
+				st.Starts[i].Conversation = threadID
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
 	}
 	_, err = fmt.Fprintf(a.out, "started %s: codex agent codex_%s, bypass, on %s, in %s, busy with %q\n"+
 		"turn: %s (%s)\n",
@@ -208,6 +220,109 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 			_, err = fmt.Fprintf(a.out, "handed over lease %s to %s\n", r, sp.name)
 		}
 	}
+	return err
+}
+
+// continueCodexAgent restarts the transient user unit of the codex agent ag
+// (started under id) on its recorded thread and queues msg as its resumed turn.
+func (a *app) continueCodexAgent(ctx context.Context, by state.Party, ag state.Agent, id, msg string) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	s, _ := startRecordOf(st, ag.Party)
+	s = mergeStart(s, state.Start{Party: ag.Party, Harness: codex.Harness, Model: ag.Model})
+	inbox := codex.InboxPath(a.cfg.StateDir, id)
+	logPath := codex.LogPath(a.cfg.StateDir, id)
+	threadID := strings.TrimSpace(s.Conversation)
+	if threadID == "" && a.cfg != nil && a.cfg.StateDir != "" {
+		threadID = strings.TrimSpace(codex.ReadThread(a.cfg.StateDir, inbox))
+		if threadID == "" {
+			if tid, _, err := readCodexBriefStream(logPath); err == nil {
+				threadID = strings.TrimSpace(tid)
+			}
+		}
+	}
+	s.Conversation = cmp.Or(s.Conversation, threadID)
+	dir := strings.TrimSpace(s.Dir)
+	unit := codexUnit(id)
+	if threadID == "" || dir == "" {
+		return goneRefusal("%s: its codex agent no longer runs (%s ended): %s", ag.Name, unit, a.transcriptHint(ctx, s))
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return goneRefusal("%s: its codex agent no longer runs (%s ended): %s", ag.Name, unit, a.transcriptHint(ctx, s))
+	}
+	if !plat.Launcher.Available() {
+		return refused("this machine has no unit launcher (systemd --user): a codex agent runs in a transient user unit")
+	}
+	model, err := a.codexModel(s.Model)
+	if err != nil {
+		return goneRefusal("%s: its codex agent no longer runs (%s ended): %s", ag.Name, unit, a.transcriptHint(ctx, s))
+	}
+	bin, err := exec.LookPath(codex.Comm)
+	if err != nil {
+		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	codexHome := codex.HomeDir(a.cfg.StateDir)
+	sh := a.cfg.Agents.Shell
+	unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
+	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, "")
+	if err := codex.EnsureHome(codexHome, a.cfg.Codex.AuthFile, a.cfg.Codex.ConfigFile, self, prelude); err != nil {
+		return err
+	}
+	_ = plat.Launcher.Stop(ctx, unit)
+	_ = os.Remove(logPath)
+	if err := codex.MakeInbox(inbox); err != nil {
+		return err
+	}
+	if err := codex.RecordThread(a.cfg.StateDir, inbox, threadID); err != nil {
+		_, _ = codex.RemoveInbox(inbox)
+		return err
+	}
+	runnerArgv := []string{self, codexRunCmdName, inbox, logPath, bin, model}
+	if s.Effort != "" {
+		runnerArgv = append(runnerArgv, s.Effort)
+	}
+	if err := launchCodex(
+		unit,
+		dir,
+		a.explicitConfig(),
+		runnerArgv,
+		codex.EnvAgent+"="+id,
+		codex.EnvName+"="+ag.Name,
+		"CODEX_HOME="+codexHome,
+		"ZDOTDIR="+codex.ZshDir(codexHome),
+	); err != nil {
+		_, _ = codex.RemoveInbox(inbox)
+		return fmt.Errorf("waking %s: %w", ag.Name, err)
+	}
+	if err := sendCodexWhenReady(ctx, inbox, msg, inboxWait); err != nil {
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = codex.RemoveInbox(inbox)
+		return fmt.Errorf("waking %s: the message did not reach its inbox: %w (journalctl --user -u %s)", ag.Name, err, unit)
+	}
+	if _, err := awaitCodexBrief(ctx, logPath, func() bool { return unitEnded(ctx, unit) }, codexBriefWait, threadID); err != nil {
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = codex.RemoveInbox(inbox)
+		return fmt.Errorf("waking %s: %w (journalctl --user -u %s)", ag.Name, err, unit)
+	}
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := st.StartIndex(ag.Party); i >= 0 {
+			st.Starts[i].Conversation = cmp.Or(st.Starts[i].Conversation, threadID)
+		}
+		for i := range st.EndedWorkers {
+			if st.EndedWorkers[i].Is(ag.Party) {
+				st.EndedWorkers[i].Conversation = cmp.Or(st.EndedWorkers[i].Conversation, threadID)
+			}
+		}
+		return []state.Event{event(by, "agents.wake", "%s: continued codex thread %s in %s (%s)", ag.Name, threadID, dir, unit)}, nil
+	})
+	_, err = fmt.Fprintf(a.out, "wake: %s had no running codex unit: continued thread %s in %s with the message as its turn (journalctl --user -u %s)\n",
+		ag.Name, threadID, dir, unit)
 	return err
 }
 
@@ -275,13 +390,18 @@ var sendCodexWhenReady = func(ctx context.Context, inbox, msg string, wait time.
 // awaitCodexBrief waits up to wait for the stream log at logPath to show the
 // started session's thread.started and turn.started events, confirming the
 // first turn began in its own thread.
-func awaitCodexBrief(ctx context.Context, logPath string, ended func() bool, wait time.Duration) (string, error) {
+func awaitCodexBrief(ctx context.Context, logPath string, ended func() bool, wait time.Duration, knownThread ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
+	var seedThread string
+	if len(knownThread) > 0 {
+		seedThread = knownThread[0]
+	}
 	for {
 		threadID, started, err := readCodexBriefStream(logPath)
+		threadID = cmp.Or(threadID, seedThread)
 		if err != nil {
 			return threadID, err
 		}
@@ -290,6 +410,7 @@ func awaitCodexBrief(ctx context.Context, logPath string, ended func() bool, wai
 		}
 		if ended != nil && ended() {
 			threadID, started, err = readCodexBriefStream(logPath)
+			threadID = cmp.Or(threadID, seedThread)
 			if err != nil {
 				return threadID, err
 			}

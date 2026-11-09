@@ -1018,8 +1018,11 @@ func (a *app) enrichMetaFromState(st *state.State, meta *transcripts.Meta, p sta
 
 	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
 		conversation := meta.ID != "" && s.Conversation == meta.ID
-		if s.Is(p) || conversation || (meta.ID != "" && s.Session == meta.ID) || (meta.HostSession != "" && s.HostSession == meta.HostSession) {
-			if conversation {
+		ompDirMatch := meta.Harness == omp.Harness && s.Harness == omp.Harness && meta.Cwd != "" && s.Dir != "" &&
+			filepath.Clean(s.Dir) == filepath.Clean(meta.Cwd) &&
+			(s.At.IsZero() || meta.StartedAt.IsZero() || !meta.StartedAt.Before(s.At.Add(-5*time.Second)))
+		if s.Is(p) || conversation || ompDirMatch || (meta.ID != "" && s.Session == meta.ID) || (meta.HostSession != "" && s.HostSession == meta.HostSession) {
+			if conversation || ompDirMatch {
 				meta.HostSession = cmp.Or(meta.HostSession, s.HostSession)
 				p.HostSession = cmp.Or(s.HostSession, p.HostSession)
 			}

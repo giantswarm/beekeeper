@@ -1,14 +1,22 @@
 package cmd
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/codex"
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/transcripts"
 )
@@ -66,6 +74,232 @@ func TestEndedClaudeWorkerWakesByNameInItsOwnConversation(t *testing.T) {
 				t.Fatal("a worker back on the roster still counts as ended")
 			}
 		})
+	}
+}
+
+func TestEndedAgyWorkerWakesByNameInItsOwnConversation(t *testing.T) {
+	for _, action := range []string{agentWakeName, agentResumeName} {
+		t.Run(action, func(t *testing.T) {
+			const (
+				id    = "11223344-5566-7788-99aa-bbccddeeff00"
+				model = "claude-opus-4-6-thinking"
+			)
+			writeFakeAgy(t, "Available models:\n  "+model+"\n")
+			dir := t.TempDir()
+			workDir := t.TempDir()
+			store, err := state.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			a := &app{
+				cfg:   &config.Config{StateDir: dir},
+				store: store,
+				now:   time.Now(),
+				out:   &out,
+			}
+			var gotMsg string
+			origLauncher, origMachine := plat.Launcher, plat.Machine
+			t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
+			plat.Machine = tableMachine{plat.Machine}
+			l := &agyTestLauncher{
+				onStart: func(u platform.Unit) {
+					go func() {
+						inbox := agy.InboxPath(dir, id)
+						logPath := agy.StreamPath(dir, id)
+						f, oerr := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test FIFO
+						if oerr != nil {
+							return
+						}
+						defer func() { _ = f.Close() }()
+						_, _ = bufio.NewReader(f).ReadString('\n')
+						if msgs, derr := agy.Drain(inbox); derr == nil && len(msgs) > 0 {
+							gotMsg = msgs[0]
+						}
+						stream := `{"event":"init","conversation_id":"` + endedConv + `"}` + "\n" +
+							`{"event":"step_update","step_update":{"conversation_id":"` + endedConv + `","step_type":"user_input"}}` + "\n"
+						_ = os.WriteFile(logPath, []byte(stream), 0o600)
+					}()
+				},
+			}
+			plat.Launcher = l
+
+			p := state.Party{HostSession: agy.HostPrefix + id, Name: endedName}
+			seed(t, a, func(st *state.State) {
+				st.Starts = []state.Start{{Party: p, Harness: agy.Harness, Model: model, Dir: workDir, At: a.now.Add(-time.Hour), Conversation: endedConv}}
+				st.Agents = []state.Agent{{Party: p, Registered: a.now.Add(-time.Hour), LastTask: endedTask, Harness: agy.Harness, Model: model, Done: true}}
+				removeAgent(st, 0)
+			})
+			_ = a.endAgy(t.Context(), id)
+
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, ok := a.endedWorker(st, endedName)
+			if !ok || s.Conversation != endedConv || s.Dir != workDir {
+				t.Fatalf("endedWorker = %+v, %v", s, ok)
+			}
+			msg := "continue agy"
+			if action == agentResumeName {
+				msg = endedResumeMessage
+			}
+			if err := a.wakeEnded(t.Context(), waker, s, msg, ""); err != nil {
+				t.Fatalf("wakeEnded(agy): %v", err)
+			}
+			if len(l.started) != 1 || !slices.Contains(l.started[0].Argv, "--conversation") || !slices.Contains(l.started[0].Argv, endedConv) {
+				t.Fatalf("started argv = %v, want --conversation %s", l.started, endedConv)
+			}
+			if !strings.Contains(gotMsg, endedTask) || !strings.Contains(gotMsg, msg) {
+				t.Fatalf("delivered message = %q, want task %q and %q", gotMsg, endedTask, msg)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Agents) != 1 || st.Agents[0].Name != endedName || st.Agents[0].Task != endedTask {
+				t.Fatalf("roster = %+v", st.Agents)
+			}
+		})
+	}
+}
+
+func TestEndedCodexWorkerWakesByNameInItsOwnConversation(t *testing.T) {
+	for _, action := range []string{agentWakeName, agentResumeName} {
+		t.Run(action, func(t *testing.T) {
+			const (
+				id       = "22334455-6677-8899-aabb-ccddeeff0011"
+				model    = "gpt-5.7"
+				threadID = "thread-ended-42"
+			)
+			root := t.TempDir()
+			stateDir := filepath.Join(root, "state")
+			workDir := filepath.Join(root, "work")
+			userCodex := filepath.Join(root, "user-codex")
+			fakeBin := filepath.Join(root, "bin")
+			for _, d := range []string{workDir, userCodex, fakeBin} {
+				if err := os.MkdirAll(d, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			authFile := filepath.Join(userCodex, "auth.json")
+			if err := os.WriteFile(authFile, []byte(`{"access_token":"test"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			userConfig := filepath.Join(userCodex, "config.toml")
+			if err := os.WriteFile(userConfig, []byte("[features]\nplugins = true\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(fakeBin, codex.Comm), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test executable
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			store, err := state.Open(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			a := &app{
+				cfg: &config.Config{
+					StateDir: stateDir,
+					Codex:    config.Codex{Model: model, AuthFile: authFile, ConfigFile: userConfig},
+				},
+				store: store,
+				now:   time.Now(),
+				out:   &out,
+			}
+
+			var gotMsg string
+			origLauncher, origSend := plat.Launcher, sendCodexWhenReady
+			t.Cleanup(func() {
+				plat.Launcher = origLauncher
+				sendCodexWhenReady = origSend
+			})
+			l := &agyTestLauncher{
+				onStart: func(u platform.Unit) {
+					logPath := codex.LogPath(stateDir, id)
+					stream := `{"type":"turn.started"}` + "\n"
+					_ = os.WriteFile(logPath, []byte(stream), 0o600)
+				},
+			}
+			plat.Launcher = l
+			sendCodexWhenReady = func(_ context.Context, _ string, m string, _ time.Duration) error {
+				gotMsg = m
+				return nil
+			}
+
+			p := state.Party{HostSession: codex.HostPrefix + id, Name: endedName}
+			seed(t, a, func(st *state.State) {
+				st.Starts = []state.Start{{Party: p, Harness: codex.Harness, Model: model, Dir: workDir, At: a.now.Add(-time.Hour), Conversation: threadID}}
+				st.Agents = []state.Agent{{Party: p, Registered: a.now.Add(-time.Hour), LastTask: endedTask, Harness: codex.Harness, Model: model, Done: true}}
+				removeAgent(st, 0)
+			})
+			_ = a.endCodex(t.Context(), id)
+
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, ok := a.endedWorker(st, endedName)
+			if !ok || s.Conversation != threadID || s.Dir != workDir {
+				t.Fatalf("endedWorker = %+v, %v", s, ok)
+			}
+			msg := "continue codex"
+			if action == agentResumeName {
+				msg = endedResumeMessage
+			}
+			if err := a.wakeEnded(t.Context(), waker, s, msg, ""); err != nil {
+				t.Fatalf("wakeEnded(codex): %v", err)
+			}
+			if len(l.started) != 1 || !slices.Contains(l.started[0].Argv, codexRunCmdName) {
+				t.Fatalf("started argv = %v, want %s", l.started, codexRunCmdName)
+			}
+			if gotThread := codex.ReadThread(stateDir, codex.InboxPath(stateDir, id)); gotThread != threadID {
+				t.Fatalf("recorded thread = %q, want %q", gotThread, threadID)
+			}
+			if !strings.Contains(gotMsg, endedTask) || !strings.Contains(gotMsg, msg) {
+				t.Fatalf("delivered message = %q, want task %q and %q", gotMsg, endedTask, msg)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Agents) != 1 || st.Agents[0].Name != endedName || st.Agents[0].Task != endedTask {
+				t.Fatalf("roster = %+v", st.Agents)
+			}
+		})
+	}
+}
+
+func TestEndedOmpWorkerRefusalNamesItsTranscript(t *testing.T) {
+	a, _ := stubApp(t)
+	p := state.Party{HostSession: omp.HostPrefix + "ended-omp", Name: endedName}
+	endWorker(t, a, p, omp.Harness)
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := transcripts.SafeKey(omp.Harness, executionLocal, "omp-sess-1")
+	if _, err := a.transcriptStore().Save(transcripts.Meta{
+		Key:        key,
+		ID:         "omp-sess-1",
+		Harness:    omp.Harness,
+		Host:       executionLocal,
+		RosterName: endedName,
+	}, []transcripts.Turn{{Role: transcripts.RoleUser, Text: endedTask}}); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := a.endedWorker(st, endedName)
+	if !ok {
+		t.Fatalf("endedWorker = %+v, %v", s, ok)
+	}
+	err = a.wakeEnded(t.Context(), waker, s, "continue", "")
+	if !errors.Is(err, errGone) || !strings.Contains(err.Error(), "cannot continue") || !strings.Contains(err.Error(), key) {
+		t.Fatalf("refusal = %v", err)
+	}
+	if st, err = a.store.Read(); err != nil || len(st.Agents) != 0 {
+		t.Fatalf("the roster keeps an omp worker that did not come back: %+v, %v", st.Agents, err)
 	}
 }
 

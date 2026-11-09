@@ -222,9 +222,10 @@ func agyModels(ctx context.Context, bin string) ([]string, error) {
 }
 
 // agyArgv is an agy agent's command line: stream-json in and out, on its
-// model, with --dangerously-skip-permissions, optional --remote-control, and
+// model, with --dangerously-skip-permissions, optional --remote-control,
+// optional --conversation <id> when continuing an existing conversation, and
 // --project <id> when known or --new-project otherwise.
-func agyArgv(bin, model string, remoteControl bool, projectID string) []string {
+func agyArgv(bin, model string, remoteControl bool, projectID string, conversationID ...string) []string {
 	argv := []string{
 		bin,
 		"--input-format", "stream-json",
@@ -235,12 +236,101 @@ func agyArgv(bin, model string, remoteControl bool, projectID string) []string {
 	if remoteControl {
 		argv = append(argv, "--remote-control")
 	}
+	if len(conversationID) > 0 && conversationID[0] != "" {
+		argv = append(argv, "--conversation", conversationID[0])
+	}
 	if projectID != "" {
 		argv = append(argv, "--project", projectID)
 	} else {
 		argv = append(argv, "--new-project")
 	}
 	return argv
+}
+
+// continueAgyAgent restarts the transient user unit of the agy agent ag
+// (started under id) on its recorded conversation and sends msg as its turn.
+func (a *app) continueAgyAgent(ctx context.Context, by state.Party, ag state.Agent, id, msg string) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	s, _ := startRecordOf(st, ag.Party)
+	s = mergeStart(s, state.Start{Party: ag.Party, Harness: agy.Harness, Model: ag.Model})
+	convID := strings.TrimSpace(s.Conversation)
+	if convID == "" && a.cfg != nil && a.cfg.StateDir != "" {
+		if b, err := os.ReadFile(agy.AgentConvPath(a.cfg.StateDir, id)); err == nil { //nolint:gosec // beekeeper's own state file
+			convID = strings.TrimSpace(string(b))
+		}
+		if convID == "" {
+			if c, _, err := readAgyBriefStream(agy.StreamPath(a.cfg.StateDir, id)); err == nil {
+				convID = strings.TrimSpace(c)
+			}
+		}
+	}
+	s.Conversation = cmp.Or(s.Conversation, convID)
+	dir := strings.TrimSpace(s.Dir)
+	model := strings.TrimSpace(s.Model)
+	unit := agyUnit(id)
+	if convID == "" || dir == "" || model == "" {
+		return goneRefusal("%s: its agy agent no longer runs (%s ended): %s", ag.Name, unit, a.transcriptHint(ctx, s))
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return goneRefusal("%s: its agy agent no longer runs (%s ended): %s", ag.Name, unit, a.transcriptHint(ctx, s))
+	}
+	if !plat.Launcher.Available() {
+		return refused("this machine has no unit launcher (systemd --user): an agy agent runs in a transient user unit")
+	}
+	if a.cfg.Hooks.GuardsEnabled() {
+		if err := refuseUnguardedAgy(); err != nil {
+			return err
+		}
+	}
+	bin, err := exec.LookPath(agy.Comm)
+	if err != nil {
+		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	inbox := agy.InboxPath(a.cfg.StateDir, id)
+	stream := agy.StreamPath(a.cfg.StateDir, id)
+	_ = plat.Launcher.Stop(ctx, unit)
+	_ = os.Remove(stream)
+	if err := agy.MakeInbox(inbox); err != nil {
+		return err
+	}
+	projID := agy.ProjectForDir(a.cfg.Agy.ProjectsDir, dir)
+	argv := agyRunArgv(self, inbox, stream, agyArgv(bin, model, a.cfg.Agy.RemoteControl, projID, convID))
+	if err := launch(unit, dir, a.explicitConfig(), nil, argv,
+		agy.EnvAgent+"="+id, agy.EnvName+"="+ag.Name); err != nil {
+		_, _ = agy.RemoveInbox(inbox)
+		return fmt.Errorf("waking %s: %w", ag.Name, err)
+	}
+	if err := sendAgyWhenOpen(ctx, inbox, msg, inboxWait); err != nil {
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = agy.RemoveInbox(inbox)
+		return fmt.Errorf("waking %s: the message did not reach its inbox: %w (journalctl --user -u %s)", ag.Name, err, unit)
+	}
+	if _, err := awaitAgyBrief(ctx, stream, func() bool { return unitEnded(ctx, unit) }, agyBriefWait); err != nil {
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = agy.RemoveInbox(inbox)
+		return fmt.Errorf("waking %s: %w (journalctl --user -u %s)", ag.Name, err, unit)
+	}
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := st.StartIndex(ag.Party); i >= 0 {
+			st.Starts[i].Conversation = cmp.Or(st.Starts[i].Conversation, convID)
+		}
+		for i := range st.EndedWorkers {
+			if st.EndedWorkers[i].Is(ag.Party) {
+				st.EndedWorkers[i].Conversation = cmp.Or(st.EndedWorkers[i].Conversation, convID)
+			}
+		}
+		return []state.Event{event(by, "agents.wake", "%s: continued agy conversation %s in %s (%s)", ag.Name, convID, dir, unit)}, nil
+	})
+	_, err = fmt.Fprintf(a.out, "wake: %s had no running agy unit: continued conversation %s in %s with the message as its turn (journalctl --user -u %s)\n",
+		ag.Name, convID, dir, unit)
+	return err
 }
 
 // agyRunArgv wraps agyArgs in beekeeper agy-run on inbox and stream.
