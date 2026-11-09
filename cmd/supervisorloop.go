@@ -1167,6 +1167,7 @@ func (l *supervisorLoop) reloadConfig() {
 	if l.a.loadedCfg != "" {
 		l.a.cfg = c
 	} else {
+		l.a.cfg.GitHub.PublicOnlyOwners = slices.Clone(c.GitHub.PublicOnlyOwners)
 		if len(c.GitHub.AllowedOrgs) > 0 {
 			l.a.cfg.GitHub.AllowedOrgs = c.GitHub.AllowedOrgs
 		}

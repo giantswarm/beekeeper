@@ -12,15 +12,16 @@ import (
 )
 
 const (
-	upstreamAPIHost = "api.github.com"
-	upstreamGitHost = "github.com"
+	upstreamAPIHost     = "api.github.com"
+	upstreamGitHost     = "github.com"
+	upstreamUploadsHost = "uploads.github.com"
 )
 
 // githubWrite checks the actual request before any broker token is attached.
 // Unknown write targets fail closed; GraphQL mutations identify their targets
 // by opaque node IDs, so clients must use the owner-scoped REST endpoints.
 func (e *Egress) githubWrite(r *http.Request, host string) error {
-	if len(e.AllowedOrgs) == 0 {
+	if len(e.AllowedOrgs) == 0 && len(e.Visibility.PublicOnlyOwners) == 0 {
 		return nil
 	}
 	deny := func() error {
@@ -66,11 +67,14 @@ func (e *Egress) githubWrite(r *http.Request, host string) error {
 			return deny()
 		}
 	}
-	owner := ""
+	owner, repo := "", ""
 	switch host {
-	case upstreamAPIHost, "uploads.github.com":
+	case upstreamAPIHost, upstreamUploadsHost:
 		if len(parts) >= 2 && (parts[0] == "repos" || parts[0] == "orgs") {
 			owner = parts[1]
+			if parts[0] == "repos" && len(parts) >= 3 {
+				repo = parts[2]
+			}
 		}
 		// Rendering Markdown has no persistent side effects.
 		if r.Method == http.MethodPost && (r.URL.Path == "/markdown" || r.URL.Path == "/markdown/raw") {
@@ -83,10 +87,11 @@ func (e *Egress) githubWrite(r *http.Request, host string) error {
 		}
 		if len(parts) == 3 && parts[2] == "git-receive-pack" {
 			owner = parts[0]
+			repo = strings.TrimSuffix(parts[1], ".git")
 		}
 	}
-	if owner != "" && slices.ContainsFunc(e.AllowedOrgs, func(o string) bool { return strings.EqualFold(owner, o) }) {
-		return nil
+	if owner != "" && (len(e.AllowedOrgs) == 0 || slices.ContainsFunc(e.AllowedOrgs, func(o string) bool { return strings.EqualFold(owner, o) })) {
+		return e.Visibility.Check(owner + "/" + repo)
 	}
 	return deny()
 }

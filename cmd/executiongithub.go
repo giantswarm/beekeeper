@@ -164,6 +164,11 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 	if request.Write && !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
 		return errors.New("worker GitHub repository is outside configured owners")
 	}
+	if request.Write {
+		if err := a.checkRepositoryVisibility(context.Background(), request.Repository); err != nil {
+			return err
+		}
+	}
 	if request.PushBranch != "" {
 		branch := executionOwnedBranch(r)
 		if round := assignedExecutionReviewRound(st, ref); round != nil {

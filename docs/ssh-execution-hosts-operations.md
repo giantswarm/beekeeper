@@ -1253,3 +1253,5 @@ of the exact published head, the coordinator's go, and the merge receipt/URL
 from `agents merge`. Verify raw host merge commands remain denied. Record
 failed steps explicitly; a successful launch or fake-harness test alone does
 not complete the PR/review/go/merge proof for that harness.
+
+Repository visibility restrictions also apply at SSH task admission and coordinator write boundaries. Set `github.publicOnlyOwners: [example]` to require verified public visibility for that owner. Private, internal, missing and unreadable visibility results are refused before starting work and when granting write authority, publishing or merging. Owners not listed retain the existing policy.

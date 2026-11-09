@@ -428,6 +428,13 @@ work, which takes no choice on a self-hosted provider.`,
 			if err != nil {
 				return err
 			}
+			visibilityCheckout := ""
+			if worktreeManaged {
+				visibilityCheckout = dir
+			}
+			if err := a.admitTaskVisibility(cmd.Context(), brief+"\n"+task, visibilityCheckout); err != nil {
+				return err
+			}
 			if worktreeManaged {
 				if _, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true); err != nil {
 					return err
