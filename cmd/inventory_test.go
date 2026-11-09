@@ -238,3 +238,72 @@ func TestOrphanDetailsRespectRESTAllowanceWhileTrackedPullsContinue(t *testing.T
 		t.Fatalf("scan hold blocked tracked pull: reads=%d err=%v", reads, err)
 	}
 }
+
+func TestLoopScanAllowanceSurvivesDisabledFloor(t *testing.T) {
+	for _, floor := range []int{-1, 0} {
+		t.Run(fmt.Sprint(floor), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.GitHub.Floor = floor
+			reset := r.a.timeNow().Add(time.Hour)
+			remaining := 4900
+			readLoopGraphQLBudget = func(_ *app, ctx context.Context) (github.Budget, error) {
+				if fresh, _ := ctx.Value(freshLoopRESTKey{}).(bool); !fresh {
+					t.Fatal("scan used a cached REST sample")
+				}
+				// A disabled GraphQL gate must not disable REST accounting.
+				return github.Budget{Remaining: remaining, Reset: reset}, nil
+			}
+			runs := 0
+			for range loopRESTLimit / loopRESTReserve {
+				if err := r.a.loopGitHub(context.Background(), "inventory", func() error {
+					runs++
+					remaining -= loopRESTReserve
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A restarted caller and a different scan type share the ledger.
+			restarted := *r.a
+			if err := restarted.loopGitHub(context.Background(), loopSweepStep, func() error {
+				t.Fatal("orphan scan bypassed exhausted allowance")
+				return nil
+			}); !errors.Is(err, errLoopLater) {
+				t.Fatalf("exhausted scan: %v", err)
+			}
+			if err := restarted.loopGitHub(context.Background(), loopPullStep, func() error {
+				runs++
+				return nil
+			}); err != nil || runs != loopRESTLimit/loopRESTReserve+1 {
+				t.Fatalf("emergency tracked read blocked: runs=%d err=%v", runs, err)
+			}
+		})
+	}
+}
+
+func TestLoopScanDisabledFloorRetainsUnknownSpend(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = -1
+	reset := r.a.timeNow().Add(time.Hour)
+	probes := 0
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		probes++
+		if probes > 1 {
+			return github.Budget{}, errors.New("unavailable")
+		}
+		return github.Budget{Remaining: 4900, Reset: reset}, nil
+	}
+	if err := r.a.loopGitHub(context.Background(), loopSweepStep, func() error { return nil }); !errors.Is(err, errLoopLater) {
+		t.Fatalf("unknown spend accepted: %v", err)
+	}
+	var spend loopRESTSpend
+	if _, err := r.a.store.ReadFile(loopRESTFile, &spend); err != nil || spend.Spent != loopRESTReserve {
+		t.Fatalf("reservation lost: %+v %v", spend, err)
+	}
+	if err := r.a.loopGitHub(context.Background(), "inventory", func() error {
+		t.Fatal("unreadable budget admitted a scan")
+		return nil
+	}); !errors.Is(err, errLoopLater) {
+		t.Fatalf("unreadable budget: %v", err)
+	}
+}
