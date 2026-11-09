@@ -632,7 +632,7 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 		t.Errorf("stopped on a park it did not see: %q", argvs(*calls))
 	}
 	pollStop(t, w, live)
-	if len(*calls) != 1 {
+	if len(*calls) != 2 {
 		t.Errorf("the new park's stop: %q", argvs(*calls))
 	}
 }
