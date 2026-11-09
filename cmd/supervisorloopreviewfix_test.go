@@ -979,13 +979,15 @@ func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
 }
 
 func TestReviewWorkerWithPendingWakeTimerStaysOnRoster(t *testing.T) {
+	const model = "gpt-5.4"
+
 	party := state.Party{Name: "beekeeper#3533", HostSession: "codex_abcdef12"}
 	ag := state.Agent{
 		Party:      party,
 		IdleSince:  time.Now(),
 		Park:       &state.Park{On: "o/r#42", Waits: "CI queued; timer wakes", ReviewHead: loopHead},
-		Harness:    "codex",
-		Model:      "gpt-5.4",
+		Harness:    transcriptTestCodex,
+		Model:      model,
 		Task:       "Work https://github.com/o/r/issues/3533",
 		AssignedAt: time.Now(),
 	}
@@ -994,8 +996,8 @@ func TestReviewWorkerWithPendingWakeTimerStaysOnRoster(t *testing.T) {
 		Starts: []state.Start{{
 			Party:   party,
 			Dir:     "/tmp/worktree",
-			Harness: "codex",
-			Model:   "gpt-5.4",
+			Harness: transcriptTestCodex,
+			Model:   model,
 		}},
 		Timers: []state.Timer{{
 			ID:     1,
