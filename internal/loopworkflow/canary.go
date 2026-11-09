@@ -676,7 +676,7 @@ if [ "$#" -eq 4 ] && [ "$1" = auth ] && [ "$2" = token ] && [ "$3" = --hostname 
 fi
 exec "$(dirname "$0")/real-gh" "$@"
 `
-	if err := os.WriteFile(filepath.Join(binDir, ghCmd), []byte(ghWrapper), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, ghCmd), []byte(ghWrapper), 0o700); err != nil { //nolint:gosec // G306: isolated sandbox CLI helper must be executable by its owner
 		return "", err
 	}
 
