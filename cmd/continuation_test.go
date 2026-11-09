@@ -6,11 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const continuationOldSession = "continuation-old-session"
+const continuationNewSession = "continuation-new-session"
+
 func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
-	for _, harness := range []string{"claude", "codex", "agy"} {
+	for _, harness := range []string{claudeComm, config.CodexHarness, harnessAgy} {
 		t.Run(harness, func(t *testing.T) {
 			w := parkingWatch(t, nil)
 			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -27,7 +31,7 @@ func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 				}
 			}
 			ag := agentOf(t, w)
-			if ag.Park == nil || len(ag.Park.Continuation) != 1 || ag.Park.Continuation[0] != parkAnswer {
+			if ag.Park == nil || len(ag.Park.Continuation) != 1 || !strings.Contains(ag.Park.Continuation[0], parkAnswer) {
 				t.Fatalf("event not retained once: %+v", ag.Park)
 			}
 		})
@@ -37,7 +41,7 @@ func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 func TestContinuationStartupRetainsEventsOnCapacityRefusal(t *testing.T) {
 	r, _ := fillRig(t)
 	r.a.cfg.LeaseDir = t.TempDir()
-	ag := state.Agent{Party: state.Party{Name: "parked", Session: "old"}, Task: recoveryTask,
+	ag := state.Agent{Party: state.Party{Name: holderParked, Session: continuationOldSession}, Task: recoveryTask,
 		Park: &state.Park{At: r.a.now, On: "#3", Waits: "answer", Continuation: []string{parkAnswer}}}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = []state.Agent{ag}; return nil, nil }); err != nil {
 		t.Fatal(err)
@@ -45,6 +49,9 @@ func TestContinuationStartupRetainsEventsOnCapacityRefusal(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		if args[0] == fillCapacityCommand {
 			return fillNoRoomJSON, 0
+		}
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "capacity full", ExitRefused
 		}
 		t.Fatalf("unexpected command %v", args)
 		return "", 1
@@ -58,7 +65,7 @@ func TestContinuationStartupRetainsEventsOnCapacityRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ = r.a.store.Read()
-	if len(st.Agents) != 1 || len(st.Agents[0].Park.Continuation) != 1 {
+	if len(st.Agents) != 1 || len(st.Agents[0].Park.Continuation) != 1 || st.Agents[0].Park.Continuing {
 		t.Fatalf("task lost: %+v", st.Agents)
 	}
 }
@@ -66,13 +73,13 @@ func TestContinuationStartupRetainsEventsOnCapacityRefusal(t *testing.T) {
 func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	r, _ := fillRig(t)
 	r.a.cfg.LeaseDir = t.TempDir()
-	old := state.Agent{Party: state.Party{Name: "parked", Session: "old"}, Task: recoveryTask, AssignedAt: r.a.now.Add(-time.Hour),
+	old := state.Agent{Party: state.Party{Name: holderParked, Session: continuationOldSession}, Task: recoveryTask, AssignedAt: r.a.now.Add(-time.Hour),
 		Park: &state.Park{At: r.a.now, On: "#3", Continuation: []string{parkAnswer}}}
-	next := state.Agent{Party: state.Party{Name: "replacement", Session: "new"}, Undelivered: "retry delivery"}
+	next := state.Agent{Party: state.Party{Name: "replacement", Session: continuationNewSession}, Undelivered: "retry delivery"}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{old, next}
-		st.Records = []state.Record{{Session: old.Party, Issue: "o/r#12"}}
-		st.Grants = []state.Grant{{Resource: "lab", To: old.Party}}
+		st.Records = []state.Record{{Session: old.Party, Issue: heldPull}}
+		st.Grants = []state.Grant{{Resource: labOne, To: old.Party}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -108,5 +115,72 @@ func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 	err := w.queueContinuation(state.Party{Name: resumer}, agentOf(t, w), parkAnswer)
 	if err == nil || !strings.Contains(err.Error(), "retry event delivery") {
 		t.Fatalf("event acknowledged without delivery: %v", err)
+	}
+}
+
+func TestReviewWaitIgnoresLegacyMechanicalTimers(t *testing.T) {
+	w := parkingWatch(t, nil)
+	woke := stubWakes(t)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: w.now, On: loopPR, ReviewHead: loopHead, Waits: deskReviewWait}
+		recordAgentReviewPark(st, st.Agents[0])
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.wakeTimer(context.Background(), timerFire{t: state.Timer{ID: 1, Wake: agentOne, When: "pr-checks " + loopPR}, reason: "holds"})
+	if len(*woke) != 0 || len(agentOf(t, w).Park.Continuation) != 0 {
+		t.Fatal("mechanical review event used a worker turn")
+	}
+}
+
+func TestStoppedExecutionRetainsItsPendingContinuation(t *testing.T) {
+	a, r := executionTestApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: a.now, Continuation: []string{parkAnswer}}
+		st.Starts[0].Execution.Observation.StopAcknowledged = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := a.store.Read()
+	if why := stoppedExecutionWhy(st, st.Agents[0]); why != "" {
+		t.Fatalf("%s lost its queued task: %s", r.Name, why)
+	}
+}
+
+func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
+	r, _ := fillRig(t)
+	r.a.cfg.LeaseDir = t.TempDir()
+	old := state.Agent{Party: state.Party{Name: holderParked, Session: continuationOldSession}, Task: recoveryTask,
+		Park: &state.Park{At: r.a.now, On: "#3", Waits: "decision", Continuation: []string{parkAnswer}}}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = []state.Agent{old}; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			starts++
+			brief, err := readStateFixture(r.a.store.Dir(), args[3])
+			if err != nil || !strings.Contains(string(brief), old.Task) || !strings.Contains(string(brief), parkAnswer) || !strings.Contains(strings.Join(args, " "), "--harness auto") {
+				t.Fatalf("continuation brief: %s; %v", brief, err)
+			}
+			r.started(t, args[2], continuationNewSession)
+		}
+		return "", 0
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		st, _ := r.a.store.Read()
+		if err := l.continueParks(context.Background(), st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, _ := r.a.store.Read()
+	if starts != 1 || len(st.Agents) != 1 || st.Agents[0].Session != continuationNewSession || st.Agents[0].Task != old.Task {
+		t.Fatalf("takeover: starts=%d agents=%+v", starts, st.Agents)
 	}
 }

@@ -121,7 +121,7 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 
 // Answering the note an agent parked on says AGENT RESUMABLE once; with
 // agents.autoResume the next poll resumes it once with the answer word for
-// word and ends the park.
+// word in a fresh continuation and retains the park until startup.
 func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 	w := parkingWatch(t, nil)
 	w.cfg.Agents.AutoResume = true
@@ -144,14 +144,7 @@ func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 	if !strings.Contains(out, `AGENT RESUMABLE "Agent one": parked on #3: Alex's answer; resumable since`) {
 		t.Errorf("line:\n%s", out)
 	}
-	want := watchParty.Name + " → " + agentOne + ": Your park on #3 (Alex's answer) is over: note #3 answered by Alex: " + parkAnswer +
-		". Re-query the live state of your task and continue it."
-	if !slices.Equal(*woke, []string{want}) {
-		t.Errorf("woke %q\nwant %q", *woke, want)
-	}
-	if ag := agentOf(t, w); ag.Park != nil || ag.Task != parkTask {
-		t.Errorf("after the resume: task %q park %+v", ag.Task, ag.Park)
-	}
+	assertFreshQueue(t, w, *woke, parkAnswer)
 }
 
 // Without agents.autoResume the watch only says the park resumable; a
@@ -178,12 +171,11 @@ func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
 		t.Fatal(err)
 	}
-	if len(*woke) != 1 || !strings.Contains((*woke)[0], "Your park on o/r#1 (the merge ahead of mine) is over: o/r#1 merged.") {
-		t.Errorf("woke %q", *woke)
+	assertFreshQueue(t, w, *woke, "o/r#1 merged")
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
+		t.Fatalf("idempotent continuation delivery: %v", err)
 	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err == nil || !strings.Contains(err.Error(), "is not parked") {
-		t.Errorf("second resume: %v", err)
-	}
+	assertFreshQueue(t, w, *woke, "o/r#1 merged")
 }
 
 // --as <name> acts as the registered agent of that name for agents park and
@@ -243,10 +235,7 @@ func TestResumeByHand(t *testing.T) {
 	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
 		t.Fatal(err)
 	}
-	want := resumer + " → " + agentOne + ": Your park on the supervisor's go is over: " + resumer + " resumed you by hand. Re-query the live state of your task and continue it."
-	if !slices.Equal(*woke, []string{want}) {
-		t.Errorf("woke %q", *woke)
-	}
+	assertFreshQueue(t, w, *woke, "resumed you by hand")
 }
 
 // resume runs agents resume as the calling session (agentOne) with args.
@@ -511,9 +500,7 @@ func TestPlainPullWaitWakesOnMergeOrClose(t *testing.T) {
 			refs[refOne] = status
 			w.pending(context.Background(), nil)
 			w.pending(context.Background(), nil)
-			if len(*woke) != 1 || !strings.Contains((*woke)[0], strings.ToLower(status)) || agentOf(t, w).Park != nil {
-				t.Fatalf("settled %s: %v", status, *woke)
-			}
+			assertFreshQueue(t, w, *woke, strings.ToLower(status))
 		})
 	}
 }
@@ -566,11 +553,15 @@ func TestAReviewResumesASessionParkedOffTheRoster(t *testing.T) {
 	for range 3 {
 		w.pending(context.Background(), nil)
 	}
-	want := watchParty.Name + " → " + offSession.Session + ": Your park on o/r#1 (the desk review) is over: o/r#1 has a new review changes_requested by " + reviewerLogin + " at " +
-		relayNow.Add(time.Minute).UTC().Format(time.RFC3339) + ": read and answer its reviews and comments since the park. Re-query the live state of your task and continue it."
-	if !slices.Equal(*woke, []string{want}) {
-		t.Errorf("woke %q\nwant %q", *woke, want)
+	if len(*woke) != 0 {
+		t.Fatalf("old off-roster transcript woke: %v", *woke)
 	}
+	st, _ := w.store.Read()
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(offSession) })
+	if i < 0 || st.Agents[i].Park == nil || len(st.Agents[i].Park.Continuation) != 1 || !strings.Contains(st.Agents[i].Park.Continuation[0], "changes_requested") {
+		t.Fatal("off-roster task lost its review event")
+	}
+
 	if out := w.out.(*bytes.Buffer).String(); strings.Count(out, `AGENT RESUMABLE "`+offSession.Session+`"`) != 1 {
 		t.Errorf("out:\n%s", out)
 	}
@@ -595,36 +586,19 @@ func TestAReviewMakesAnAgentsParkResumable(t *testing.T) {
 }
 
 // A session parked off the roster is resumed by hand by its id; one whose
-// session is gone by then gets no wake and one line, and its park is gone.
-func TestResumeOffTheRoster(t *testing.T) {
+// session has no task context keeps its park and is refused without a resume.
+func TestResumeOffTheRosterRequiresRecordedTask(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
 	if _, err := w.park(offSession, "", "the supervisor's go"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Session); err != nil {
-		t.Fatal(err)
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Session); err == nil || !strings.Contains(err.Error(), "no recorded task reference") {
+		t.Fatalf("anonymous park resumed an old transcript: %v", err)
 	}
-	if len(*woke) != 1 || !strings.HasPrefix((*woke)[0], resumer+" → "+offSession.Session+": Your park on the supervisor's go is over") {
-		t.Errorf("woke %q", *woke)
-	}
-
-	if _, err := w.park(offSession, "", "the supervisor's go"); err != nil {
-		t.Fatal(err)
-	}
-	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
-		return goneRefusal("%s: session %s has no transcript under /p to resume", offSession.Session, offSession.Session)
-	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Name); err != nil {
-		t.Fatal(err)
-	}
-	evs, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == resumedEvent && strings.Contains(e.Detail, "is not woken") })
 	st, _ := w.store.Read()
-	if len(evs) != 1 || len(st.Parks) != 0 {
-		t.Errorf("events %+v parks %+v", evs, st.Parks)
-	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Session); err == nil {
-		t.Error("resumed a session no longer parked")
+	if len(*woke) != 0 || len(st.Parks) != 1 {
+		t.Fatal("unknown task lost its park")
 	}
 }
 
@@ -723,9 +697,7 @@ func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
 				t.Fatalf("answered local note did not become resumable: %+v", p)
 			}
 			w.pending(t.Context(), nil)
-			if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) || agentOf(t, w).Park != nil {
-				t.Fatalf("answered local note did not wake once with answer: %v", *woke)
-			}
+			assertFreshQueue(t, w, *woke, parkAnswer)
 		})
 	}
 }
@@ -870,5 +842,15 @@ func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
 	out := w.out.(*bytes.Buffer).String()
 	if !strings.Contains(out, "verification pending") || !strings.Contains(out, "retries automatically") || strings.Contains(out, "plain wait recorded") {
 		t.Fatalf("output: %s", out)
+	}
+}
+
+// A settled wait is a durable event for the next fresh worker, never a turn
+// of the session that parked. Repeated settlement must not grow the brief.
+func assertFreshQueue(t *testing.T, w *watcher, woke []string, contains string) {
+	t.Helper()
+	ag := agentOf(t, w)
+	if len(woke) != 0 || ag.Park == nil || len(ag.Park.Continuation) != 1 || !strings.Contains(ag.Park.Continuation[0], contains) {
+		t.Fatalf("want fresh continuation containing %q, woke=%v park=%+v", contains, woke, ag.Park)
 	}
 }

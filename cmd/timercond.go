@@ -329,6 +329,14 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	}
 	if i, err := findAgent(st, f.t.Wake); err == nil && freshPark(st, st.Agents[i]) {
 		ag := st.Agents[i]
+		// The loop already owns every transition of a proven review
+		// request, including CI, budget retries, approval and merge. Old
+		// reminder/reset timers must not turn it back into model work.
+		if rp, ok := st.ReviewParkFor(ag.Park.On); ok && rp.Party.Is(ag.Party) && ag.Park.ReviewHead != "" && rp.ReviewHead == ag.Park.ReviewHead {
+			delivered = true
+			w.closeCIWakeTimer(f.t)
+			return
+		}
 		handed, err := w.handCITimerToReview(ctx, f, ag)
 		if err != nil {
 			w.emitNow("timer", "TIMER HANDOFF FAILED: #%d: %v", f.t.ID, err)

@@ -1966,9 +1966,9 @@ waiting agents do no work, spend next to no budget and never block a start.
 There is no separate cap on live sessions (busy plus waiting): memory, swap,
 load and lab headroom bound new starts instead. A fixed session cap would let
 waiters exclude useful work despite available headroom. These guards judge
-starts, not simultaneous wakes: waiters that wake together can push busy over
-its ceiling; existing agents finish, and new starts wait for room. Re-read
-capacity before starting replacement work.
+starts and fresh parked-worker continuations: they wait for room and use
+current provider pace. Messages to already busy workers do not claim another
+slot. Re-read capacity before starting replacement work.
 The supervisor, the guide and a role's successor are not counted.
 
 capacity.local.ceiling, when set, caps the busy agents this machine runs
@@ -2064,7 +2064,9 @@ nothing; it makes no GitHub call.`,
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
-			events, err := a.store.Follow("capacity-activity", func(e state.Event) bool { return e.Verb == "agents.wake" || e.Verb == resumedEvent })
+			events, err := a.store.Follow("capacity-activity", func(e state.Event) bool {
+				return e.Verb == agentWakeEvent || e.Verb == resumedEvent || e.Verb == transcriptResumeEvent
+			})
 			if err != nil {
 				return err
 			}

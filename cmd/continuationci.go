@@ -7,6 +7,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // handCITimerToReview handles a successful typed CI wait without an LLM
@@ -14,7 +15,10 @@ import (
 // Red, closed and expired waits need reasoning and use a fresh continuation.
 func (w *watcher) handCITimerToReview(ctx context.Context, f timerFire, ag state.Agent) (bool, error) {
 	kind, ref, _ := strings.Cut(f.t.When, " ")
-	if kind != "pr-checks" || ref != ag.Park.On || f.timedOut {
+	if kind != timerPRChecks || ref != ag.Park.On || f.timedOut {
+		return false, nil
+	}
+	if ag.Park.ReviewHead == "" && ag.Execution == nil {
 		return false, nil
 	}
 	c := checkOf(f.t)
@@ -26,7 +30,19 @@ func (w *watcher) handCITimerToReview(ctx context.Context, f timerFire, ag state
 	if err != nil {
 		return false, err
 	}
-	if !p.Green || p.State != "OPEN" || p.Head == "" {
+	if !p.Green || p.State != superloop.Open || p.Head == "" {
+		return false, nil
+	}
+	if ag.Execution != nil {
+		st, err := w.store.Read()
+		if err != nil {
+			return false, err
+		}
+		r, _ := executionRecord(st, *ag.Execution)
+		if r == nil || executionReviewHead(ctx, r, ref, p.Head) != p.Head {
+			return false, nil
+		}
+	} else if ag.Park.ReviewHead != p.Head {
 		return false, nil
 	}
 	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -35,13 +51,18 @@ func (w *watcher) handCITimerToReview(ctx context.Context, f timerFire, ag state
 			if !cur.Is(ag.Party) {
 				continue
 			}
-			if cur.Park == nil || !cur.Park.At.Equal(ag.Park.At) || cur.Park.On != ref {
+			if cur.Park == nil || !cur.Park.At.Equal(ag.Park.At) || cur.Park.On != ref || cur.Park.Continuing || len(cur.Park.Continuation) > 0 {
 				return nil, fmt.Errorf("CI park changed before review handoff")
+			}
+			if cur.Execution != nil {
+				if r, _ := executionRecord(st, *cur.Execution); r != nil {
+					r.Completed = true
+				}
 			}
 			cur.Park.Checks = false
 			cur.Park.RefKind = github.RefPullRequest
 			cur.Park.ReviewHead = p.Head
-			cur.Park.Waits = "desk review"
+			cur.Park.Waits = deskReviewWait
 			cur.Park.Resumable = state.Park{}.Resumable
 			cur.Park.Answer = ""
 			recordAgentReviewPark(st, *cur)

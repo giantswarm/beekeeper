@@ -591,10 +591,11 @@ func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 	if err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, bgName); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:3], []string{bgFlag, resumeFlag}) || (*calls)[0].argv[3] != bgID ||
-		!strings.Contains((*calls)[0].argv[4], "the desk review") || (*calls)[0].dir != dir {
-		t.Errorf("resume calls %q", argvs(*calls))
+	assertFreshQueue(t, w, nil, "the desk review")
+	if len(*calls) != 0 {
+		t.Errorf("resumed the old background session: %q", argvs(*calls))
 	}
+
 }
 
 // A resume that lands between the watch's look and its stop (it ended the
@@ -615,19 +616,19 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	woke := stubWakes(t) // the resume reaches the running CLI by name
-	if err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, bgName); err != nil || len(*woke) != 1 {
+	if err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, bgName); err != nil || len(*woke) != 0 {
 		t.Fatalf("resume: %v, woke %v", err, *woke)
 	}
 	w.stopParked(t.Context(), seen, live)
-	if len(*calls) != 0 {
-		t.Errorf("the stop ended the CLI the resume woke: %q", argvs(*calls))
+	if len(*calls) != 1 {
+		t.Errorf("the parked resident did not stop after queuing its continuation: %q", argvs(*calls))
 	}
 	// Parked again on another wait, quiet: the look at the old park stops nothing either.
 	if _, err := a.park(p, "", "the next review"); err != nil {
 		t.Fatal(err)
 	}
 	w.stopParked(t.Context(), seen, live)
-	if len(*calls) != 0 {
+	if len(*calls) != 1 {
 		t.Errorf("stopped on a park it did not see: %q", argvs(*calls))
 	}
 	pollStop(t, w, live)
@@ -680,7 +681,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{bgStopCmd, reviewedStoppedCase, bgFlag}; !slices.Equal(seq, want) {
+	if want := []string{bgStopCmd, reviewedStoppedCase}; !slices.Equal(seq, want) {
 		t.Errorf("calls %v, want %v", seq, want)
 	}
 
@@ -689,8 +690,8 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	seq = nil
 	a.now = time.Now()
 	pollStop(t, w, live)
-	if len(seq) != 0 {
-		t.Errorf("stopped just after its wake: %v", seq)
+	if !slices.Equal(seq, []string{bgStopCmd}) {
+		t.Errorf("unexpected resume after queueing its event: %v", seq)
 	}
 	a.now = a.now.Add(time.Minute)
 	pollStop(t, w, live)
@@ -731,11 +732,8 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 	}
 }
 
-// A wake to a parked background session is never silently undone: once its
-// message is in the transcript, the session stays stopped off for as long as
-// its turn runs — a model thinking over the message writes nothing, and the
-// quiet transcript must not read as a turn that ended. It stops only when the
-// transcript holds the turn's answer.
+// A parked background session keeps events for a fresh worker; it is never
+// resumed and its idle resident can still be stopped to release memory.
 func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -750,32 +748,18 @@ func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	stubFresh(t, &live)
 	calls := stubBackground(t, "backgrounded · "+bgShortID+" · "+bgName+"\n")
 
-	// The wake resumes the session; the daemon writes the message as its
-	// turn into the transcript, and the model thinks. The transcript has
-	// been quiet longer than stewardQuiet (its LastActive is old, the wake's
-	// stamp will expire): the only proof that a turn runs is the wake's
-	// message without an answer after it.
 	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "fix the red check", ""); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, transcript, parkedTurn+
-		`{"type":"user","message":{"content":"fix the red check"}}`+"\n")
-	a.now = time.Now().Add(stewardQuiet + time.Minute) // the wake's stamp expired
-	pollStop(t, w, live)
-	if len(*calls) != 1 || (*calls)[0].argv[1] != bgFlag {
-		t.Fatalf("the stop undid the wake's turn: %q", argvs(*calls))
+	st, _ := a.store.Read()
+	if len(*calls) != 0 || len(st.Agents[0].Park.Continuation) != 1 {
+		t.Fatal("parked background transcript resumed")
 	}
-	if strings.Contains(out.String(), "PARKED SESSION STOPPED") {
-		t.Errorf("output:\n%s", out)
-	}
-
-	// The turn answers and stops: the park's session is stopped for memory.
-	writeFile(t, transcript, parkedTurn+
-		`{"type":"user","message":{"content":"fix the red check"}}`+"\n"+
-		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"pushed the fix"}]}}`+"\n")
+	writeFile(t, transcript, parkedTurn)
+	a.now = time.Now().Add(stewardQuiet + time.Minute)
 	pollStop(t, w, live)
-	if len(*calls) != 2 || !slices.Equal((*calls)[1].argv[1:], []string{bgStopCmd, bgShortID}) {
-		t.Fatalf("calls %q, want the wake then the stop", argvs(*calls))
+	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:], []string{bgStopCmd, bgShortID}) {
+		t.Fatalf("calls %q, want only the parked resident stopped", argvs(*calls))
 	}
 	if !strings.Contains(out.String(), `PARKED SESSION STOPPED "`+bgName+`"`) {
 		t.Errorf("output:\n%s", out)

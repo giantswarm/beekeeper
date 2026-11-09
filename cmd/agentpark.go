@@ -461,7 +461,12 @@ func (a *app) agentResumeCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   agentResumeName + " [--force] [<agent>]",
 		Short: "Resume a parked or gone agent",
-		Long: `resume ends an agent's park (agents park) and wakes it, as agents wake
+		Long: `For a parked worker, resume queues a fresh continuation in the supervisor
+loop. It carries the task, reference and what settled the wait; the old
+transcript stays parked. Current capacity selects the next worker, so the
+previous provider's high usage never forces another turn on that provider.
+
+For other sessions, resume ends an agent's park (agents park) and wakes it, as agents wake
 does: by name to a running CLI, else headless. Its turn carries what
 settled the wait, a person's answer word for word, or that the caller
 resumed it by hand. Before retirement, a gone agent can also be resumed:
@@ -1047,7 +1052,7 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 			continue
 		}
 		ag := state.Agent{Party: p.By}
-		if w.usageHighBlockForAgent(ctx, st, nil, &ag) != "" {
+		if roleRun(st, p.By) && w.usageHighBlockForAgent(ctx, st, nil, &ag) != "" {
 			continue
 		}
 		quiet := *w.app

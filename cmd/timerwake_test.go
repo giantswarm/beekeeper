@@ -74,10 +74,9 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	answer(t, w)
 	w.pending(context.Background(), nil)
 	w.pending(context.Background(), nil)
-	if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) {
-		t.Fatalf("answer should start exactly one turn: %v", *woke)
-	}
-	t.Log("eight simulated hours: zero model turns before the answer; exactly one after")
+	assertFreshQueue(t, w, *woke, parkAnswer)
+	t.Log("eight simulated hours: no transcript resumes; answer retained for a fresh worker")
+
 }
 
 func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
@@ -128,9 +127,18 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			fakeRead(t, func(string) ([]byte, error) { return ciAnswer("OPEN", ciLintRed), nil })
 			w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 1, Wake: q, When: tc.when}, reason: "holds"})
-			if (len(*woke) == 1) != tc.wantWake {
+			st, _ := w.store.Read()
+			delivered := len(*woke) == 1
+			for _, ag := range st.Agents {
+				delivered = delivered || ag.Park != nil && len(ag.Park.Continuation) == 1
+			}
+			if delivered != tc.wantWake {
 				t.Fatalf("wake=%v, want delivery=%v", *woke, tc.wantWake)
+			}
+			if !tc.guide && !tc.offRoster && len(*woke) > 0 {
+				t.Fatal("parked worker resumed")
 			}
 		})
 	}

@@ -275,8 +275,8 @@ func (o leaseResumeOpener) Running(*proc.Table) time.Time {
 	return time.Time{}
 }
 
-// A lease resume starts a turn immediately even when the desktop has a row
-// for the session but its CLI is absent. A pending import still blocks it.
+// A lease settlement queues a fresh continuation without opening the desktop
+// or resuming the parked CLI, including while its old import is pending.
 func TestLeaseResumeWithoutCLIStartsHeadless(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ready", true: "import pending"}[pending], func(t *testing.T) {
@@ -300,18 +300,15 @@ func TestLeaseResumeWithoutCLIStartsHeadless(t *testing.T) {
 				a.importPending(rotationLogin, time.Minute)
 			}
 			err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, rotationName)
-			if pending {
-				if err == nil || !strings.Contains(err.Error(), "import is pending") || len(l.started) != 0 {
-					t.Fatalf("pending import: starts %v, error %v", l.started, err)
-				}
-			} else if err != nil || len(l.started) != 1 || !strings.HasPrefix(l.started[0], wakePrefix(rotationLogin)) {
-				t.Fatalf("lease resume: starts %v, error %v", l.started, err)
+			if err != nil || len(l.started) != 0 {
+				t.Fatalf("parked transcript started: %v, %v", l.started, err)
 			}
+
 			st, err := a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (st.Agents[0].Park != nil) != pending {
+			if st.Agents[0].Park == nil || len(st.Agents[0].Park.Continuation) != 1 {
 				t.Fatalf("park after resume: %+v", st.Agents[0].Park)
 			}
 		})

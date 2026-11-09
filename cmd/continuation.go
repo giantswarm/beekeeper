@@ -2,13 +2,18 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
+
+const continuationQueuedEvent = "agents.continuation-queued"
 
 // Role holders have a separate relay lifecycle. Workers hand their task to
 // the loop rather than turning the transcript that happened to park it.
@@ -33,7 +38,12 @@ func (a *app) queueContinuation(by state.Party, ag state.Agent, message string) 
 			return nil, refused("%s: continuation brief is full; event remains undelivered", ag.Name)
 		}
 		p.Continuation = append(p.Continuation, message)
-		return []state.Event{event(by, "agents.continuation-queued", "%s: %s", ag.Name, message)}, nil
+		if st.Agents[i].Execution != nil {
+			if r, _ := executionRecord(st, *st.Agents[i].Execution); r != nil {
+				r.Completed = true
+			}
+		}
+		return []state.Event{event(by, continuationQueuedEvent, "%s: %s", ag.Name, message)}, nil
 	})
 	if err != nil {
 		return err
@@ -62,12 +72,15 @@ func (a *app) adoptContinuation(by state.Party, p state.Park, message string) er
 		}
 		for _, r := range st.Records {
 			if r.Session.Is(p.By) && r.Ended.IsZero() && r.Issue != "" {
-				task = "Continue " + issueURL(r.Issue)
+				task = "Continue " + r.Issue
+				if ref, ok := parseRef(r.Issue); ok && !strings.HasPrefix(r.Issue, "https://") {
+					task = "Continue " + issueURL(refName(ref))
+				}
 			}
 		}
 		if task == "" {
-			if _, ok := parseRef(p.On); ok {
-				task = "Continue " + issueURL(p.On)
+			if ref, ok := parseRef(p.On); ok {
+				task = "Continue " + issueURL(refName(ref))
 			}
 		}
 		if task == "" {
@@ -117,11 +130,13 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		if !ok || l.agentUnreadRepo(st, ag, ref) != "" {
 			continue
 		}
+		ref = refName(r)
 		if l.dryRun {
 			l.sayOnce("continue "+ag.Name, "SUPERVISOR WOULD CONTINUE %s with a fresh worker for %s", ag.Name, ref)
 			continue
 		}
-		name := fmt.Sprintf("%s next-%x", truncate(ag.Name, 80), ag.Park.At.UnixNano())
+		id := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%s/%d", ag.Name, ag.Session, ag.HostSession, ag.Park.At.UnixNano())))
+		name := fmt.Sprintf("%s next-%x", truncate(ag.Name, 60), id[:8])
 		current, err := l.a.store.Read()
 		if err != nil {
 			return err
@@ -135,12 +150,15 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			}
 			url := issueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
-			if ag.Park.RefKind == "PullRequest" || head != "" {
+			if ag.Park.RefKind == github.RefPullRequest || head != "" {
 				pull, err := readLoopPull(ctx, ref)
 				if err != nil {
 					continue
 				}
 				url, branch, head = pull.URL, pull.Branch, pull.Head
+				if pull.State != superloop.Open {
+					branch = pull.Base
+				}
 				if url == "" {
 					url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
 				}
@@ -151,6 +169,27 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 
 			context := fmt.Sprintf("Previous wait: %s\nReference: %s\nPublished head: %s\nEvents:\n%s", ag.Park.Waits, ref, head, strings.Join(ag.Park.Continuation, "\n"))
 			context += "\nExisting branch: " + branch
+			workspace := ag.Park.Worktree
+			if k := st.StartIndex(ag.Party); workspace == "" && k >= 0 {
+				workspace = st.Starts[k].Dir
+			}
+			context += "\nPrevious workspace (inspect for unpublished work): " + workspace
+			for _, rp := range st.ReviewParks {
+				if rp.Party.Is(ag.Party) {
+					pr, ok := parseRef(rp.On)
+					if ok {
+						context += fmt.Sprintf("\nRelated PR: https://github.com/%s/pull/%d at %s", pr.Repo, pr.N, rp.ReviewHead)
+					}
+				}
+			}
+			note, _, err := l.a.lastNote(ag.Party, ag.AssignedAt)
+			if err != nil {
+				return err
+			}
+			if note != "" {
+				context += "\nLatest handover note (full record in beekeeper log --verb agents.note):\n" + truncate(note, 8192)
+			}
+
 			if ag.Park.PostMerge != nil {
 				context += "\nRemaining post-merge work: " + *ag.Park.PostMerge
 			}
@@ -198,6 +237,12 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 				}
 			}
 		}
+		if i >= 0 && current.Agents[i].Execution == nil && current.Agents[i].Undelivered != "" {
+			message := ag.Task + "\n" + strings.Join(ag.Park.Continuation, "\n")
+			if _, err := l.run(ctx, agentsName, agentWakeName, name, message); err != nil {
+				continue
+			}
+		}
 		if err := l.finishContinuation(ag, name); err != nil {
 			return err
 		}
@@ -225,17 +270,38 @@ func (l *supervisorLoop) finishContinuation(old state.Agent, name string) error 
 		if !slices.Equal(prev.Park.Continuation, old.Park.Continuation) {
 			return nil, refused("continuation changed during startup")
 		}
-		next.Task, next.AssignedAt = prev.Task, prev.AssignedAt
+		if !next.Done {
+			next.Task, next.AssignedAt = prev.Task, prev.AssignedAt
+		}
 		for k := range st.Records {
 			if st.Records[k].Session.Is(prev.Party) && st.Records[k].Ended.IsZero() {
 				st.Records[k].Session = next.Party
 				st.Records[k].Waits = ""
+				if next.Done {
+					st.Records[k].Ended = l.a.now.UTC()
+				}
 			}
 		}
 		for k := range st.ReviewParks {
 			if st.ReviewParks[k].Party.Is(prev.Party) {
 				st.ReviewParks[k].Party, st.ReviewParks[k].Agent = next.Party, next.Name
 				st.ReviewParks[k].Execution = next.Execution
+			}
+		}
+		for k := range st.Timers {
+			t := &st.Timers[k]
+			if t.Wake == prev.Name || t.Wake == prev.Session && prev.Session != "" || t.Wake == prev.HostSession && prev.HostSession != "" {
+				t.Wake = next.Name
+			}
+		}
+		for k := range st.Owed {
+			if st.Owed[k].Owner.Is(prev.Party) {
+				st.Owed[k].Owner = next.Party
+			}
+		}
+		for k := range st.Notes {
+			if st.Notes[k].By.Is(prev.Party) {
+				st.Notes[k].By = next.Party
 			}
 		}
 		if _, err := handClaims(st, lease.Dir(l.a.cfg.LeaseDir), prev.Party, next.Party); err != nil {

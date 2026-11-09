@@ -600,7 +600,7 @@ const whyReportedDone = "it reported its work done"
 // off the roster, "" while its reservation or run continues. An
 // execution has no local desktop session to archive or retitle.
 func stoppedExecutionWhy(st *state.State, ag state.Agent) string {
-	if ag.Execution == nil || holdsRole(st, ag.Party) {
+	if ag.Execution == nil || holdsRole(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
 		return ""
 	}
 	r, _ := executionRecord(st, *ag.Execution)
