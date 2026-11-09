@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -130,7 +131,7 @@ func TestReviewWaitIgnoresLegacyMechanicalTimers(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.wakeTimer(context.Background(), timerFire{t: state.Timer{ID: 1, Wake: agentOne, When: "pr-checks " + loopPR}, reason: "holds"})
+	w.wakeTimer(context.Background(), timerFire{t: state.Timer{ID: 1, Wake: agentOne, When: "pr-checks " + loopPR}, reason: "fixture condition settled"})
 	if len(*woke) != 0 || len(agentOf(t, w).Park.Continuation) != 0 {
 		t.Fatal("mechanical review event used a worker turn")
 	}
@@ -155,7 +156,7 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 	r, _ := fillRig(t)
 	r.a.cfg.LeaseDir = t.TempDir()
 	old := state.Agent{Party: state.Party{Name: holderParked, Session: continuationOldSession}, Task: recoveryTask,
-		Park: &state.Park{At: r.a.now, On: "#3", Waits: "decision", Continuation: []string{parkAnswer}}}
+		Park: &state.Park{At: r.a.now, On: "#3", Waits: noteDecision, Continuation: []string{parkAnswer}}}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = []state.Agent{old}; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 		if args[0] == agentsName && args[1] == agentStartName {
 			starts++
 			brief, err := readStateFixture(r.a.store.Dir(), args[3])
-			if err != nil || !strings.Contains(string(brief), old.Task) || !strings.Contains(string(brief), parkAnswer) || !strings.Contains(strings.Join(args, " "), "--harness auto") {
+			if err != nil || !strings.Contains(string(brief), old.Task) || !strings.Contains(string(brief), parkAnswer) || !slices.Contains(args, harnessAuto) {
 				t.Fatalf("continuation brief: %s; %v", brief, err)
 			}
 			r.started(t, args[2], continuationNewSession)
@@ -218,5 +219,38 @@ func TestLoopReconcilesQueuedContinuationAfterRestart(t *testing.T) {
 	_, done, err := l.reconcile(context.Background(), st, superloop.Action{Kind: superloop.KindRed}, loopClaim{target: loopWorker, at: r.a.now.Add(-time.Minute)})
 	if err != nil || !done {
 		t.Fatalf("queued delivery replayed after restart: %v, %v", done, err)
+	}
+}
+
+func TestContinuationWithoutChoicesUsesGatedDefaultStart(t *testing.T) {
+	r, _ := fillRig(t)
+	r.a.cfg.Capacity.Choices = nil
+	r.a.cfg.LeaseDir = t.TempDir()
+	old := state.Agent{Party: state.Party{Name: holderParked, Session: continuationOldSession}, Task: recoveryTask,
+		Park: &state.Park{At: r.a.now, Continuation: []string{parkAnswer}}}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = []state.Agent{old}; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	started := false
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			if slices.Contains(args, harnessAuto) {
+				t.Fatal("forced an unavailable choice pool")
+			}
+			started = true
+			r.started(t, args[2], continuationNewSession)
+		}
+		return "", 0
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := r.a.store.Read()
+	if err := l.continueParks(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	if !started {
+		t.Fatal("legacy desk lost its fresh continuation")
 	}
 }

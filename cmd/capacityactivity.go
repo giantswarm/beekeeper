@@ -49,7 +49,7 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 		if e.At.Before(now.Add(-24*time.Hour)) || e.At.After(now) {
 			continue
 		}
-		provider := "unknown"
+		provider := kindUnknown
 		var latest time.Time
 		for _, s := range starts {
 			if !strings.HasPrefix(e.Detail, s.Name+": ") || s.At.After(e.At) || s.At.Before(latest) {

@@ -200,7 +200,10 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			if err := l.incidentStart(ref); err != nil {
 				continue
 			}
-			args := []string{agentsName, agentStartName, name, brief, "--harness", harnessAuto}
+			args := []string{agentsName, agentStartName, name, brief}
+			if len(l.a.cfg.Capacity.Choices) > 0 {
+				args = append(args, "--harness", harnessAuto)
+			}
 			args = append(args, place.remoteStartFlags()...)
 			args = append(args, place.excludeFlags()...)
 			if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {

@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	ciGreenName = "green"
 	prChecks7   = "pr-checks o/r#7"
 	ciHead      = "abcdef0123456789abcdef0123456789abcdef01"
 	ciLintURL   = "https://github.com/o/r/actions/runs/9/job/90"
@@ -78,8 +79,8 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 		settled []byte
 		says    string
 	}{
-		"red":   {ciAnswer("OPEN", ciRunning, ciLintRed), "pr-checks o/r#7 holds: CI red on head abcdef012: pre-commit " + ciLintURL},
-		"green": {ciAnswer("OPEN", ciSucceeded, ciStatusOK), "pr-checks o/r#7 holds: CI green on head abcdef012: every check passed"},
+		"red":       {ciAnswer("OPEN", ciRunning, ciLintRed), "pr-checks o/r#7 holds: CI red on head abcdef012: pre-commit " + ciLintURL},
+		ciGreenName: {ciAnswer("OPEN", ciSucceeded, ciStatusOK), "pr-checks o/r#7 holds: CI green on head abcdef012: every check passed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
@@ -122,7 +123,7 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 				t.Fatalf("old worker woke: %v", woke)
 			}
 			settled, _ := w.store.Read()
-			if name == "green" {
+			if name == ciGreenName {
 				if settled.Agents[0].Park.ReviewHead != ciHead || len(settled.ReviewParks) != 1 {
 					t.Fatal("green CI did not request review")
 				}

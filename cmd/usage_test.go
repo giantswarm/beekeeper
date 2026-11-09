@@ -2014,7 +2014,7 @@ capacity:
 	if slices.ContainsFunc(woke, func(s string) bool { return strings.HasPrefix(s, "Parked") }) {
 		t.Fatalf("parked transcript resumed: %q", woke)
 	}
-	for _, name := range []string{"ParkedClaude", "ParkedAgyClaude", "ParkedAgyGemini"} {
+	for _, name := range []string{parkedClaude.Name, parkedAgyClaude.Name, parkedAgyGemini.Name} {
 		st, _ := store.Read()
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == name })
 		if i < 0 || st.Agents[i].Park == nil || len(st.Agents[i].Park.Continuation) == 0 {
