@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/brand"
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -180,7 +181,8 @@ func (s *server) mcpServer(options ...mcpserver.ServerOption) *mcpserver.MCPServ
 	// Updates are delivered through subscriptions/listen only. Advertising
 	// legacy resources/subscribe would acknowledge requests we never track.
 	options = append([]mcpserver.ServerOption{mcpserver.WithToolCapabilities(false),
-		mcpserver.WithResourceCapabilities(false, false), mcpserver.WithHooks(s.subscriptionHooks())}, options...)
+		mcpserver.WithResourceCapabilities(false, false), mcpserver.WithHooks(s.subscriptionHooks()),
+		brand.WithGiantSwarmIcon()}, options...)
 	m := mcpserver.NewMCPServer(project.Name, project.Version(), options...)
 	for _, t := range append(s.tools(), s.messageTools()...) {
 		m.AddTool(t.tool, s.handle(t))
