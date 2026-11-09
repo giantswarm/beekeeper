@@ -466,17 +466,6 @@ func TestSnapshotUpgradeFromHold(t *testing.T) {
 
 const snapshotInstallation = "prod"
 
-// signalUpdateStore exposes when a competing watch reaches its transaction.
-type signalUpdateStore struct {
-	state.Store
-	attempted chan struct{}
-}
-
-func (s signalUpdateStore) Update(fn func(*state.State) ([]state.Event, error)) error {
-	close(s.attempted)
-	return s.Store.Update(fn)
-}
-
 func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 	for _, firstRunning := range []bool{false, true} {
 		t.Run(fmt.Sprintf("first-running-%t", firstRunning), func(t *testing.T) {
@@ -487,9 +476,8 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			attempted := make(chan struct{})
 			copyApp := *a
-			copyApp.store = signalUpdateStore{Store: other, attempted: attempted}
+			copyApp.store = other
 			// Each watch gets its own output to avoid concurrent buffer writes.
 			copyApp.out = io.Discard
 			second := copyApp.newWatcher(false, false)
@@ -520,18 +508,35 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 					return status(!firstRunning)
 				})
 			}()
-			<-attempted
-			// The first observation still owns the state transaction.
+			// The cycle lock orders watches, while the state lock stays free.
 			lock := flock.New(filepath.Join(a.store.Dir(), "state.lock"))
 			acquired, err := lock.TryLock()
 			if acquired {
 				_ = lock.Unlock()
 			}
+			if err == nil && acquired {
+				if err := other.Update(func(st *state.State) ([]state.Event, error) {
+					st.Timers = append(st.Timers, state.Timer{ID: 1, Due: a.now.Add(-time.Minute), Run: "true"})
+					return nil, nil
+				}); err != nil {
+					t.Error(err)
+				}
+				timers, err := copyApp.dispatchTimerPass(t.Context())
+				if err != nil {
+					t.Error(err)
+				} else {
+					timers.timerActs.Wait()
+					st, readErr := other.Read()
+					if readErr != nil || len(st.Timers) != 0 {
+						t.Errorf("timer did not settle during upgrade observation: %v", readErr)
+					}
+				}
+			}
 			close(release)
 			<-doneFirst
 			<-doneSecond
-			if err != nil || acquired {
-				t.Fatalf("observation did not retain the state lock: acquired=%t err=%v", acquired, err)
+			if err != nil || !acquired {
+				t.Fatalf("observation retained the state lock: acquired=%t err=%v", acquired, err)
 			}
 			if held := <-seen; held != firstRunning {
 				t.Errorf("second observation saw held=%t, want %t", held, firstRunning)
