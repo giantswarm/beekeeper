@@ -267,7 +267,9 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 		}
 		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
-	if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", goTestSubcmd, "./..."); err != nil {
+	// Keep heavyweight live canaries in full CI, outside the coordinator merge
+	// path. Short mode still checks every package and its reverse dependents.
+	if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", goTestSubcmd, "-short", "./..."); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
