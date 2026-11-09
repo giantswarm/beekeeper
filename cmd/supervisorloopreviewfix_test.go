@@ -159,11 +159,11 @@ func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 				if !roster {
 					p = &st.Parks[0]
 				}
-				want := roster && head != ""
-				if (p.PostMerge != nil) != want {
+				// Pending roster requests retain their instructions for recovery.
+				if (p.PostMerge != nil) != roster {
 					t.Fatalf("loop metadata on wrong park: %+v", p)
 				}
-				if !want && strings.Contains(line, "loop reviews and merges") {
+				if (!roster || head == "") && strings.Contains(line, "loop reviews and merges") {
 					t.Fatalf("unowned park claims loop processing: %s", line)
 				}
 			})
