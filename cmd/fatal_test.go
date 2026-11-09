@@ -523,3 +523,73 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 		t.Fatalf("%d restarts %d workers", restarts, starts)
 	}
 }
+
+func TestFatalMainRecoversLaterHeadAfterGateTimeout(t *testing.T) {
+	q := fatal.Queue{}
+	a, _ := stubApp(t)
+	q.Observe(fatal.Observation{ID: "main:example/tool", Failed: true, Evidence: "old-head"}, a.now)
+	q.Incidents[0].Attempts = 3
+	oldRun := fatalRun
+	t.Cleanup(func() { fatalRun = oldRun })
+	fatalRun = func(_ context.Context, _ string, args []string) (string, string, int, error) {
+		if args[0] != "gh" {
+			return "", "GitHub identity: context deadline exceeded", 1, nil
+		}
+		if strings.Contains(args[2], "/status?") {
+			return `{"sha":"new-head","state":"pending","total_count":0}`, "", 0, nil
+		}
+		if !strings.Contains(args[2], "/commits/new-head/") {
+			t.Fatal("checks not pinned to current HEAD", args)
+		}
+		return `{"total_count":2,"check_runs":[{"conclusion":"success"},{"conclusion":"skipped"}]}`, "", 0, nil
+	}
+	q.Observe(fatalMain(t.Context(), "example/tool", "/config.yaml"), a.now)
+	if err := q.Barrier("ordinary"); err != nil {
+		t.Fatal("green later HEAD did not resume admission", err)
+	}
+}
+
+func TestFatalMainRespectsBudgetRefusal(t *testing.T) {
+	fakeFatalRun(t, func(args []string) (string, int) {
+		if args[0] == "gh" {
+			t.Fatal("REST called after budget refusal")
+		}
+		return "", ExitRefused
+	})
+	if o := fatalMain(t.Context(), "example/tool", "/config.yaml"); !o.Unknown || o.Failed {
+		t.Fatalf("%+v", o)
+	}
+}
+
+func TestEmergencyStartOverridesOnlyExhaustedMainWithActiveGrant(t *testing.T) {
+	a := emergencyApp(t)
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Repair main.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	q := fatal.Queue{}
+	q.Observe(fatal.Observation{ID: "main:example/tool", Failed: true}, a.now)
+	for _, tc := range []struct {
+		id                 string
+		attempts           int
+		emergency, allowed bool
+	}{
+		{"main:example/tool", 3, false, false},
+		{"main:example/tool", 2, true, false},
+		{"guard:codex", 3, true, false},
+		{"main:example/tool", 3, true, true},
+	} {
+		q.Incidents[0].ID, q.Incidents[0].Attempts = tc.id, tc.attempts
+		if err := q.Save(a.store.Dir()); err != nil {
+			t.Fatal(err)
+		}
+		a.emergencyStart = tc.emergency
+		if err := a.fatalAdmission("repair", false); (err == nil) != tc.allowed {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+	}
+	// Revalidate at admission even if authorization expired during setup.
+	a.now = a.now.Add(time.Hour)
+	if err := a.fatalAdmission("repair", false); err == nil {
+		t.Fatal("expired grant bypassed outage")
+	}
+}
