@@ -119,6 +119,9 @@ desktop send to its local_ id by name to it, so no second copy starts.`,
 				return err
 			}
 			if st, err := a.store.Read(); err == nil {
+				if _, err := guideMessageTarget(st, args[0]); err != nil {
+					return err
+				}
 				if s, ok := a.endedWorker(st, args[0]); ok {
 					return a.wakeEnded(cmd.Context(), by, s, msg, mode)
 				}

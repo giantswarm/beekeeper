@@ -30,6 +30,10 @@ func goneRefusal(format string, a ...any) error { return goneError{refused(forma
 // settles wakes its waiter whether or not it registered. The error is the
 // roster's when q names neither.
 func (a *app) wakeParty(st *state.State, q string) (state.Agent, bool, error) {
+	q, err := guideMessageTarget(st, q)
+	if err != nil {
+		return state.Agent{}, false, err
+	}
 	i, err := findAgent(st, q)
 	if err == nil {
 		return st.Agents[i], true, nil
