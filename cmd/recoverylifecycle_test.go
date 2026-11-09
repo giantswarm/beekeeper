@@ -254,7 +254,7 @@ func TestLoopExitPersistsDiagnosticWithoutErrorContents(t *testing.T) {
 	}
 	var life loopLifecycle
 	found, err := r.a.store.ReadFile(loopLifecycleFile, &life)
-	if err != nil || !found || !life.Exited || life.Code != 1 || life.Phase != loopPhaseStartup {
+	if err != nil || !found || !life.Exited || life.Code != 1 || life.Phase != loopPhaseStartupHistory {
 		t.Fatalf("lost startup exit: %+v, %v", life, err)
 	}
 	if strings.Contains(life.Failure, "disk full") {

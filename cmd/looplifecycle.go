@@ -19,6 +19,8 @@ const (
 	loopPhaseObserve  = "observe workers and pull requests"
 )
 
+const loopPhaseStartupHistory = "read loop startup history"
+
 // Phase transitions are bounded progress evidence. Only the loop holding
 // the exclusive loop lock writes it; failed contenders cannot overwrite it.
 // No command output, paths, configuration or lock-holder identities are saved.

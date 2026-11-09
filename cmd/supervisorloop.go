@@ -920,8 +920,8 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		return err
 	}
 	startup := &supervisorLoop{a: a, lifecycle: life}
-	startup.lifecyclePhase("read loop startup history")
-	l, err := a.newSupervisorLoop(false, func() { startup.lifecyclePhase("read loop startup history") })
+	startup.lifecyclePhase(loopPhaseStartupHistory)
+	l, err := a.newSupervisorLoop(false, func() { startup.lifecyclePhase(loopPhaseStartupHistory) })
 	if err != nil {
 		return err
 	}
