@@ -3740,7 +3740,9 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	if err := validateReadingAt(r, u, now.Add(30*time.Second)); err != nil {
 		t.Fatalf("valid source rejected: %v", err)
 	}
-	a.now = now.Add(6 * time.Minute)
+	// resolveReading stamps the cache at fetch completion, after now.
+	// Advance from that timestamp so the reported age is exactly 20 minutes.
+	a.now = r.At.Add(6 * time.Minute)
 	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
 		return usageReading{}, errors.New(readFailure)
 	}
