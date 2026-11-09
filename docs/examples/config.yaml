@@ -554,4 +554,6 @@ notify:                     # what watch --notify sends to the desktop; the mach
 # board.order steps may set wipExempt: true (still counted).
 delivery:
   wipLimit: 0
+  epicLimit: 0             # active epic owners; 0 leaves the epic limit off
+  epicParallel: 3          # flowing sub-issues per epic; blockers still gate each child
   stallAfter: 24h             # raise a stuck step/full limit; never automatically drop

@@ -58,8 +58,10 @@ const ModelServer = "model-server"
 
 // Delivery configures observation of issue delivery. A zero limit is off.
 type Delivery struct {
-	WIPLimit   int      `yaml:"wipLimit"`
-	StallAfter Duration `yaml:"stallAfter"`
+	WIPLimit     int      `yaml:"wipLimit"`
+	EpicLimit    int      `yaml:"epicLimit"`
+	EpicParallel int      `yaml:"epicParallel"`
+	StallAfter   Duration `yaml:"stallAfter"`
 }
 
 // Config is the parsed configuration with the defaults applied.
@@ -3536,6 +3538,9 @@ func userHomeDir() (string, error) {
 
 func (c *Config) defaults() error {
 	setDur(&c.Delivery.StallAfter, 24*time.Hour)
+	if c.Delivery.EpicParallel == 0 {
+		c.Delivery.EpicParallel = 3
+	}
 	home, err := userHomeDir()
 	if err != nil {
 		return err
@@ -4080,6 +4085,12 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	if c.Delivery.StallAfter.Duration < 0 {
 		report(fmt.Errorf("delivery.stallAfter must be positive"))
+	}
+	if c.Delivery.EpicLimit < 0 {
+		report(fmt.Errorf("delivery.epicLimit must be nonnegative"))
+	}
+	if c.Delivery.EpicParallel < 0 {
+		report(fmt.Errorf("delivery.epicParallel must be positive"))
 	}
 	if c.Delivery.WIPLimit < 0 {
 		report(fmt.Errorf("delivery.wipLimit must be nonnegative"))

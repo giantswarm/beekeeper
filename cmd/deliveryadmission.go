@@ -44,6 +44,9 @@ func deliveryInFlight(st *state.State, d state.Delivery, now time.Time, p delive
 }
 
 func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryPolicy) bool {
+	if epicOwner(st, d.Ref) != nil {
+		return false
+	}
 	if reason, _ := p.desk.Unread(d.Ref); reason != "" {
 		return false
 	}

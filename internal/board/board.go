@@ -143,6 +143,7 @@ func (snap *Snapshot) Parent(ref string) string {
 // Candidate is an item the order offers, in its place.
 type Candidate struct {
 	WIPExempt bool `json:"wip_exempt,omitempty"`
+	EpicOwner bool `json:"epic_owner,omitempty"`
 	Item
 	// Step is the name of the step that offers it; Epic the epic whose
 	// sub-issue it is.
