@@ -110,9 +110,10 @@ capacity count it parked, not busy, the doctor and the watch leave it
 alone, and it ends its turn instead of waiting in a sleep that holds its
 slot and its CLI's memory. A background session beekeeper started (agents.mode
 background) costs no memory while parked either: once its turn ended, the
-watch stops it (claude stop, which keeps its conversation), and
-the wake that ends the park resumes it from its transcript (claude --bg
---resume).
+watch stops it. A settled worker wait goes to a fresh session selected by
+current capacity and provider pace, with its task, reference and event.
+The previous transcript is never resumed; a failed start retains the park.
+Role holders use their separate relay lifecycle.
 
 --on names what settles the wait: a note (#12; on a machine with a central
 instance <context>#12 is its note, and a bare number the machine has no
@@ -120,8 +121,8 @@ note of is the central instance's), an issue or pull request
 (owner/repo#n), a release (owner/repo@v1.2.3), or a hold (hold:<target>,
 the one a gate's exit 77 names);
 alert:<name> waits for a firing alert (a bare alertname or installation/alertname);
-lease claim --park parks on a lease. The supervisor loop wakes alert waits
-and replaces a parked session that cannot be resumed, keeping its task.
+lease claim --park parks on a lease. The supervisor loop settles alert waits
+and continues parked tasks with fresh workers.
 
 A GitHub target is refused when the wait names a hold or a gate run. Use
 hold:<target> for a hold. Gate runs have no automatic park target: identify
@@ -137,10 +138,10 @@ review or comment by anyone but its author since the park (a review posted
 under the author's own login settles nothing), the hold
 lifted or ended, the release available (artifacts and CI, checked with
 devctl release wait), or the lease free and the agent's to claim, the watch says AGENT
-RESUMABLE once. With agents.autoResume the watch then resumes the agent
-with what settled it, a person's answer word for word, as agents wake
-does: by name to a running CLI, else headless. agents resume does the same
-by hand, also for a park without --on; run by the parked agent with no
+RESUMABLE once. With agents.autoResume the watch queues a fresh worker
+continuation with what settled it, a person's answer word for word.
+agents resume does the same by hand, also for a park without --on;
+run by the parked agent with no
 agent named, it ends its own park and wakes nobody.
 
 --external records a wait no current decision can resolve, such as a
@@ -149,8 +150,9 @@ worker once the event occurs. Its delivery leaves WIP and the loop holds
 its board item in Blocked / Waiting.
 
 --checks is available to SSH workers: --on owner/repo#n names the CI wait.
-The coordinator records a pr-checks wake timer with the park, without requesting
-review. End the turn; green or red CI wakes you to fix or request desk review.
+The coordinator records a pr-checks timer. End the turn; owned green CI goes
+directly to desk review, while red CI goes to a fresh worker with the failures.
+An unverified head remains a plain wait and grants no review authority.
 
 A park from the pull request's own worktree at its published HEAD records
 a CI and independent review request, retained per pull request. Push and park
@@ -170,10 +172,9 @@ cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A ne
 park. --as <name> parks the registered agent of that name, whatever
 session registered it: a session of another harness or a wrapper script
 parks its agent that way, without a harness's session variables. A session off the roster parks too (any session that never
-registered): its park is kept apart from the roster,
-settles the same way and resumes it by its session id; one whose session
-is gone by then gets no wake and one line, and the issues it served go
-back to the board. A roster agent without a task is refused: it has
+registered): its park is kept apart from the roster and settles the same
+way. A recorded task or reference lets the loop adopt it for a fresh
+continuation; without that context it stays parked and is refused. A roster agent without a task is refused: it has
 nothing to wait for. One
 that reported its task idle (agents idle, --done included) has a task
 again once the supervisor's next message re-tasks it, by SendMessage or
@@ -255,8 +256,8 @@ agents wake: its task is that message's first line.`,
 		},
 	}
 	c.Flags().BoolVar(&external, "external", false, "wait for an external event no current decision resolves; move the delivery to Blocked / Waiting until explicitly woken")
-	c.Flags().BoolVar(&checks, "checks", false, "SSH worker: park for CI on --on owner/repo#n; coordinator wakes on green or red, without requesting review")
-	c.Flags().StringVar(&postMerge, "post-merge", "", "work to wake for after merge (release, rollout, proof); empty closes the task without a wake")
+	c.Flags().BoolVar(&checks, "checks", false, "SSH worker: park for CI on --on owner/repo#n; owned green CI goes to review; red CI goes to a fresh worker")
+	c.Flags().StringVar(&postMerge, "post-merge", "", "work to continue after merge (release, rollout, proof); empty closes the task without a continuation")
 	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a release (owner/repo@v1.2.3), a hold (hold:<target>) or an alert (alert:<name>)")
 	c.MarkFlagsMutuallyExclusive("checks", "post-merge")
 	return c
