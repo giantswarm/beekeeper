@@ -322,11 +322,16 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 }
 
 func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed time.Time) (superloop.Pull, error) {
+	return l.observePullStep(ctx, ref, changed, loopPullStep)
+}
+
+// Orphan detail reads share scan admission; tracked pulls keep their own path.
+func (l *supervisorLoop) observePullStep(ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
 	if seen, ok := l.pulls[ref]; ok && seen.changed.Equal(changed) && l.a.timeNow().Sub(seen.at) < loopPullEvery {
 		return seen.pull, nil
 	}
 	var p superloop.Pull
-	err := l.a.loopGitHub(ctx, "pull", func() (err error) {
+	err := l.a.loopGitHub(ctx, step, func() (err error) {
 		p, err = readLoopPull(ctx, ref)
 		return err
 	})

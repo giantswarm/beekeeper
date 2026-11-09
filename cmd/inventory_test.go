@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // Model GraphQL's nested connection shape, including linked closing issues.
@@ -206,5 +207,34 @@ func TestPullRevisionUsesConditionalAllStateUpdates(t *testing.T) {
 		if status == 304 && etag != "inventory-etag-old" || status == 200 && etag != deliveryNextCommand {
 			t.Fatalf("wrong validator %s", etag)
 		}
+	}
+}
+
+func TestOrphanDetailsRespectRESTAllowanceWhileTrackedPullsContinue(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = 2500
+	healthyLoopBudget(t, r)
+	reset := r.a.now.Add(time.Hour)
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		return github.Budget{Remaining: 4900, Reset: reset,
+			GraphQL: &github.GraphQL{Remaining: 4900, Limit: 5000, Reset: reset}}, nil
+	}
+	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: reset, Spent: loopRESTLimit}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		reads++
+		return r.pull, nil
+	}
+	if _, err := l.observePullStep(context.Background(), "orphan", r.a.now, "sweep"); !errors.Is(err, errLoopLater) || reads != 0 {
+		t.Fatalf("orphan bypassed exhausted REST allowance: reads=%d err=%v", reads, err)
+	}
+	if _, err := l.observePull(context.Background(), "tracked", r.a.now); err != nil || reads != 1 {
+		t.Fatalf("scan hold blocked tracked pull: reads=%d err=%v", reads, err)
 	}
 }
