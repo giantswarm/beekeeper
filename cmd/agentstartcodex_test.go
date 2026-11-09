@@ -750,8 +750,10 @@ func TestBackgroundDropsCodexIdentity(t *testing.T) {
 	}
 }
 
+const testGOOSWindows = "windows"
+
 func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == testGOOSWindows {
 		t.Skip("FIFO inboxes require unix")
 	}
 	root := t.TempDir()
@@ -858,13 +860,15 @@ func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
 	}
 
 	// Simulate the codex unit ending and its inbox being cleaned up while the
-	// worker is removed into EndedWorkers.
+	// worker is removed into EndedWorkers and its serving record is released.
 	_, _ = codex.RemoveInbox(codex.InboxPath(stateDir, startID))
 	if ended := codex.Ended(stateDir, cfg.Codex.SessionsDir, nil, time.Time{}); len(ended) != 1 || ended[0].HostID != codex.HostPrefix+startID {
 		t.Fatalf("codex.Ended after RemoveInbox = %+v, want HostID=%s", ended, codex.HostPrefix+startID)
 	}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		workerParty := st.Agents[0].Party
 		removeAgent(st, 0)
+		clearRecords(st, workerParty)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

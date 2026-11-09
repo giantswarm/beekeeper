@@ -19,7 +19,7 @@ import (
 // Exercise the CLI boundary, including Main's exit code, with transcript
 // replay in place of Claude. No browser, network, model or shared state is used.
 func TestBrowseDisconnectCLI(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == testGOOSWindows {
 		t.Skip("the replay host uses a POSIX shell")
 	}
 	self, err := os.Executable()
