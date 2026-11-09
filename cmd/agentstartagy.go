@@ -250,6 +250,11 @@ func agyArgv(bin, model string, remoteControl bool, projectID string, conversati
 // continueAgyAgent restarts the transient user unit of the agy agent ag
 // (started under id) on its recorded conversation and sends msg as its turn.
 func (a *app) continueAgyAgent(ctx context.Context, by state.Party, ag state.Agent, id, msg string) error {
+	startID, err := uuid.Parse(id)
+	if err != nil {
+		return refused("invalid agy worker start ID: %v", err)
+	}
+	id = startID.String()
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -296,7 +301,7 @@ func (a *app) continueAgyAgent(ctx context.Context, by state.Party, ag state.Age
 	inbox := agy.InboxPath(a.cfg.StateDir, id)
 	stream := agy.StreamPath(a.cfg.StateDir, id)
 	_ = plat.Launcher.Stop(ctx, unit)
-	_ = os.Remove(stream)
+	_ = os.Remove(stream) //nolint:gosec // the worker ID is a canonical UUID, beneath beekeeper's configured state directory
 	if err := agy.MakeInbox(inbox); err != nil {
 		return err
 	}

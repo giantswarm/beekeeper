@@ -398,13 +398,14 @@ func transcriptNamed(meta transcripts.Meta, name string) error {
 }
 
 func TestOmpTranscriptDirectoryMatchUsesLatestStart(t *testing.T) {
+	const workDir = "/omp-shared-work"
 	a, _ := stubApp(t)
 	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	older := state.Start{Party: state.Party{Name: "older", HostSession: omp.HostPrefix + "older"}, Harness: omp.Harness, Dir: "/work", At: at}
-	newer := state.Start{Party: state.Party{Name: "newer", HostSession: omp.HostPrefix + "newer"}, Harness: omp.Harness, Dir: "/work", At: at.Add(time.Hour)}
+	older := state.Start{Party: state.Party{Name: "omp-previous-worker", HostSession: omp.HostPrefix + "omp-previous-worker"}, Harness: omp.Harness, Dir: workDir, At: at}
+	newer := state.Start{Party: state.Party{Name: "omp-latest-worker", HostSession: omp.HostPrefix + "omp-latest-worker"}, Harness: omp.Harness, Dir: workDir, At: at.Add(time.Hour)}
 	st := &state.State{Starts: []state.Start{older, newer}}
 	for _, started := range []time.Time{newer.At.Add(time.Second), {}} {
-		meta := transcripts.Meta{ID: "omp-session", Harness: omp.Harness, Cwd: "/work", StartedAt: started}
+		meta := transcripts.Meta{ID: "omp-session", Harness: omp.Harness, Cwd: workDir, StartedAt: started}
 		a.enrichMetaFromState(st, &meta, state.Party{Session: meta.ID}, nil)
 		if started.IsZero() {
 			if meta.HostSession != "" || meta.RosterName != "" {

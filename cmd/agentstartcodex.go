@@ -226,6 +226,11 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 // continueCodexAgent restarts the transient user unit of the codex agent ag
 // (started under id) on its recorded thread and queues msg as its resumed turn.
 func (a *app) continueCodexAgent(ctx context.Context, by state.Party, ag state.Agent, id, msg string) error {
+	startID, err := uuid.Parse(id)
+	if err != nil {
+		return refused("invalid codex worker start ID: %v", err)
+	}
+	id = startID.String()
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -275,7 +280,7 @@ func (a *app) continueCodexAgent(ctx context.Context, by state.Party, ag state.A
 		return err
 	}
 	_ = plat.Launcher.Stop(ctx, unit)
-	_ = os.Remove(logPath)
+	_ = os.Remove(logPath) //nolint:gosec // the worker ID is a canonical UUID, beneath beekeeper's configured state directory
 	if err := codex.MakeInbox(inbox); err != nil {
 		return err
 	}
