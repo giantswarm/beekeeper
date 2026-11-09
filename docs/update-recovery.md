@@ -52,6 +52,13 @@ wall-clock time: a machine that slept proves nothing and fails nothing meanwhile
 | GitHub unavailable, or heartbeat, outcome or state evidence unreadable | Stays unproven: no rollback, no promotion |
 | 30 observed minutes, a current passed probe, the heartbeat where one is owed | Promote to last known good |
 
+During event-history loading, the loop refreshes its lifecycle and existing
+throughput heartbeat at most once per minute as it decodes events, including
+events its filters discard. This supports retained controllers that read the
+existing heartbeat format. A blocked read stops reporting progress; no background
+keepalive or longer probation window masks a stalled reader. Planning eligibility
+remains unknown until the planner completes its observation.
+
 The probe needs no backlog, account or network, so an idle desk is judged too. It
 drives the candidate through real `supervisor loop --once` passes against a scratch
 origin and a fixture GitHub played by the candidate's own bytes, and proves the merge

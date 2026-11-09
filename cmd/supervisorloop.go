@@ -1410,7 +1410,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
-	taken, err := a.store.Follow("supervisor-loop-taken", func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
+	taken, err := a.store.Follow("supervisor-loop-taken", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
 	if err != nil {
 		return err
 	}
@@ -1473,9 +1473,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.stages, l.stageDetail = stages, stageDetail
 	l.mu.Unlock()
 	since := l.since
-	evs, err := a.store.Follow("supervisor-loop", func(e state.Event) bool {
+	evs, err := a.store.Follow("supervisor-loop", l.eventHistoryFilter(func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
-	})
+	}))
 	if err != nil {
 		return err
 	}
@@ -1516,7 +1516,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
-	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
+	answers, err := a.store.Follow("supervisor-loop-answers", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
 	if err != nil {
 		return err
 	}
