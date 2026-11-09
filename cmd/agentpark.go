@@ -158,9 +158,11 @@ PR worktree in turn; another park does not replace earlier review requests.
 A worker on an SSH execution host parks from
 its workspace: the coordinator checks the pull request against the
 execution's own published branch and the workspace's HEAD, and a park after
-a new publication asks for that head's review. Every other park (including one whose
-publication cannot be verified) records a plain wait: no reviewer, merge
-go or findings forwarded. The command says which it recorded. A bot's pull request the desk
+a new publication asks for that head's review. A local roster worker's explicit
+"desk review" request whose publication cannot be verified is saved with its
+worktree and retried by the supervisor loop after GitHub access recovers. Until
+verification succeeds it grants no review or merge authority. Other unverified
+parks record a plain wait. The command says which it recorded. A bot's pull request the desk
 did not open gets the same review once its login is in supervisor.ownership.bots. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
 park. --as <name> parks the registered agent of that name, whatever
@@ -306,7 +308,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
 		park := &state.Park{External: external, By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
-		if i >= 0 && reviewHead != "" {
+		if i >= 0 && (reviewHead != "" || isDeskReviewWait(waits)) {
 			var declaration *string
 			if len(postMerge) > 0 {
 				declaration = &postMerge[0]
@@ -362,7 +364,11 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 			if i < 0 && reviewHead != "" {
 				back += "; plain wait off the roster; no supervisor review requested"
 			} else {
-				back += "; " + parkReviewMode(reviewHead)
+				if reviewHead == "" && i >= 0 && isDeskReviewWait(waits) {
+					back += "; review request saved; published HEAD verification pending; the supervisor loop retries automatically (including after GitHub budget recovery)"
+				} else {
+					back += "; " + parkReviewMode(reviewHead)
+				}
 			}
 		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
@@ -1127,4 +1133,9 @@ func parkReviewMode(head string) string {
 		return "review request recorded for pushed HEAD " + head
 	}
 	return "plain wait recorded; no review, go or findings forwarded; to request review, re-run from the published worktree: cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\""
+}
+
+// isDeskReviewWait identifies an explicit review request, never an overlap or CI wait.
+func isDeskReviewWait(waits string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(waits)), "desk review")
 }

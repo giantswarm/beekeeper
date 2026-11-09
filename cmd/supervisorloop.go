@@ -1368,6 +1368,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := l.recoverReviewRequests(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
 	if err := l.endReviewWorkers(ctx, st); err != nil {
 		return err
 	}

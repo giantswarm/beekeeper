@@ -853,3 +853,22 @@ func TestMergedPRDoesNotSettleMismatchedPark(t *testing.T) {
 		})
 	}
 }
+
+func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
+	w := parkingWatch(t, map[string]string{refOne: github.Open})
+	oldHead, oldWorktree := parkReviewHead, parkWorktree
+	t.Cleanup(func() { parkReviewHead, parkWorktree = oldHead, oldWorktree })
+	parkReviewHead = func(string) string { return "" }
+	parkWorktree = func(string) string { return pendingReviewWorktree }
+	if err := park(t, w, "--on", refOne, "--post-merge", "prove", deskReviewWait); err != nil {
+		t.Fatal(err)
+	}
+	p := agentOf(t, w).Park
+	if p.Worktree != pendingReviewWorktree || p.ReviewHead != "" || p.PostMerge == nil || *p.PostMerge != "prove" {
+		t.Fatalf("pending park: %+v", p)
+	}
+	out := w.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, "verification pending") || !strings.Contains(out, "retries automatically") || strings.Contains(out, "plain wait recorded") {
+		t.Fatalf("output: %s", out)
+	}
+}
