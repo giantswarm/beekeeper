@@ -846,7 +846,7 @@ func (d DiskCache) MaxBytes() int64 { return int64(d.MaxGiB * (1 << 30)) }
 
 // Builtin reports whether name is one of beekeeper's own cache entries.
 func (DiskCache) Builtin(name string) bool {
-	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp || name == DiskCacheTranscripts
+	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp || name == DiskCacheTranscripts || name == "agy-conversations" || name == "agy-brain"
 }
 
 // BuildOutput is explicitly disposable output of the task in Worktree.
@@ -3092,12 +3092,13 @@ func (w Watch) GTTMax(ramMiB int) int { return atMost(w.GTTMaxMiB, DefaultGTTMax
 // TmpMax is the TMPFS threshold on a /tmp of tmpMiB.
 func (w Watch) TmpMax(tmpMiB int) int { return atMost(w.TmpMaxMiB, DefaultTmpMax, tmpMiB) }
 
-// DiskMin is the LOW DISK threshold on a / of diskMiB. Negative disables it.
+// DiskMin is the LOW DISK threshold. Explicit positive values retain at least
+// a 2 GiB reserve (or 5% on smaller disks). Negative disables it.
 func (w Watch) DiskMin(diskMiB int) int {
 	if w.DiskMinMiB < 0 {
 		return 0
 	}
-	return atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB)
+	return max(min(2048, int(DefaultDiskMin*float64(diskMiB))), atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB))
 }
 
 // DiskCritical is the DISK NEARLY FULL threshold on a / of diskMiB.

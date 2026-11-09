@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -397,5 +400,50 @@ func TestDiskPressureIncludesDockerBelowCaps(t *testing.T) {
 	r := a.pruneDisk(false, true, func() (diskMachine, error) { return diskMachine{}, nil })
 	if len(r.Errors) != 0 || r.Freed == 0 || len(f.removed) == 0 || len(f.builderRemoved) == 0 {
 		t.Fatalf("disk pressure did not reclaim Docker: %s", r)
+	}
+}
+
+// Remote publication queries must not block a manual cache prune. The
+// worktree lock independently serializes the worktree half of either pass.
+func TestDiskPruneReleasesLockDuringRemoteChecks(t *testing.T) {
+	a, readTrees, root := worktreeApp(t)
+	trees, err := readTrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkLock := func() {
+		lock := flock.New(filepath.Join(a.store.Dir(), diskPruneLock))
+		ok, err := lock.TryLock()
+		if err != nil || !ok {
+			t.Fatalf("prune lock held outside reclamation: %v", err)
+		}
+		_ = lock.Unlock()
+	}
+	trees.dirs = []string{filepath.Join(root, mergedPR)}
+	pulls := trees.pulls
+	queried := false
+	trees.pulls = func(ctx context.Context, heads []github.Head) (map[github.Head]github.HeadPull, error) {
+		queried = true
+		checkLock()
+		return pulls(ctx, heads)
+	}
+	r := a.pruneDisk(true, false, func() (diskMachine, error) {
+		checkLock()
+		return diskMachine{trees: trees}, nil
+	})
+	if len(r.Errors) != 0 || !queried {
+		t.Fatalf("prune failed or skipped query: %s", r)
+	}
+	checkLock()
+}
+
+func TestOnePressurePassRestoresReserve(t *testing.T) {
+	a, m := diskFixture(t)
+	// Model a filesystem 8 KiB below its floor. Its old cache/output entries
+	// exceed that deficit; the pass must reclaim enough without a person.
+	const deficit = 8 << 10
+	r := a.pruneDisk(false, true, func() (diskMachine, error) { return m, nil })
+	if len(r.Errors) != 0 || r.Freed <= deficit {
+		t.Fatalf("one pressure pass did not restore reserve: %s", r)
 	}
 }

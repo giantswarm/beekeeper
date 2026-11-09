@@ -27,6 +27,11 @@ type diskCache struct {
 // cacheCleanerTimeout bounds one tool's cleaner.
 const cacheCleanerTimeout = 10 * time.Minute
 
+const (
+	diskCacheAgyConversations = "agy-conversations"
+	diskCacheAgyBrain         = "agy-brain"
+)
+
 // runCacheCleaner runs a cleaner in its cache root; tests replace it.
 var runCacheCleaner = func(ctx context.Context, dir string, argv []string) error {
 	exe, err := proc.LookPath(argv[0])
@@ -63,6 +68,14 @@ func (a *app) diskCacheEntries() []config.DiskCache {
 		{Name: config.DiskCacheSccache, Path: sccache, Mode: config.DiskCacheModeSc, MaxGiB: gib(a.cfg.Disk.SccacheMaxGiB)},
 		{Name: config.DiskCacheTmp, Path: filepath.Join(a.cfg.StateDir, "tmp"), Mode: config.DiskCacheEntries, OlderThan: config.Duration{Duration: time.Hour}},
 		{Name: config.DiskCacheTranscripts, Path: filepath.Join(a.cfg.StateDir, "transcripts"), Mode: config.DiskCacheFiles, OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}, MaxGiB: 2},
+	}
+	for _, root := range []struct{ name, path string }{
+		{diskCacheAgyConversations, a.cfg.Agy.ConversationsDir},
+		{diskCacheAgyBrain, a.cfg.Agy.BrainDir},
+	} {
+		if root.path != "" {
+			entries = append(entries, config.DiskCache{Name: root.name, Path: root.path, Mode: config.DiskCacheEntries, MaxGiB: 2})
+		}
 	}
 	builtins := len(entries)
 	for _, e := range a.cfg.Disk.Caches {

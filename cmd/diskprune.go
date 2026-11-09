@@ -122,6 +122,20 @@ func (a *app) diskMachine() (diskMachine, error) {
 	}
 	d, err := diskReferences()
 	m.refs, m.builds, m.foreign = d.refs, d.builds, d.foreign
+	// Conversation use is durable even between harness turns. Refresh these
+	// references with each process scan rather than relying on open files.
+	m.refresh = func() (diskRefs, error) {
+		d, err := diskReferences()
+		if err != nil {
+			return d, err
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			return d, err
+		}
+		d.refs = a.protectHarnessStores(st, d.refs)
+		return d, nil
+	}
 	if unknownReferences(err) {
 		m.unknown = err
 	} else if err != nil {
@@ -225,6 +239,11 @@ func sortedReasons(m map[string]int) []string {
 
 func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) diskRun {
 	r := diskRun{dry: dry}
+	m, err := read()
+	if err != nil {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
 	lock := flock.New(filepath.Join(a.store.Dir(), diskPruneLock))
 	ok, err := lock.TryLock()
 	if err != nil {
@@ -236,11 +255,6 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		return r
 	}
 	defer func() { _ = lock.Unlock() }()
-	m, err := read()
-	if err != nil {
-		r.Errors = append(r.Errors, err)
-		return r
-	}
 	pressure = pressure || m.pressure
 	r.pressure = pressure
 	r.foreign = m.foreign
@@ -264,11 +278,28 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	} else {
 		r.Keep("caches and tmp: " + keptReferencesUnknown)
 	}
+	if pressure && known {
+		a.pruneFinishedState(&r, &m)
+	}
 	m.trees.automatic = true
+	m.trees.pressure = pressure
 	m.trees.refs = m.refs
 	m.trees.unknown = m.unknown
 	m.trees.trash = filepath.Join(a.store.Dir(), "trash")
+	// Worktree discovery and remote publication checks have their own lock.
+	// Do not monopolize the disk lock while waiting on the network.
+	if err := lock.Unlock(); err != nil {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
 	r.trees = a.trimWorktrees(dry, func() (worktreeMachine, error) { return m.trees, nil })
+	ok, err = lock.TryLock()
+	if err != nil || !ok {
+		if err != nil {
+			r.Errors = append(r.Errors, err)
+		}
+		return r
+	}
 	known, ok = rereadDisk(&r, &m)
 	if !ok {
 		return r
@@ -291,6 +322,9 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	}
 	if len(r.trees.failed) > 0 {
 		r.Errors = append(r.Errors, fmt.Errorf("%d worktree actions failed", len(r.trees.failed)))
+	}
+	if pressure && m.stillLow != nil && m.stillLow() {
+		r.Keep("disk remains below floor after safe reclamation; starts stay held")
 	}
 	if pressure && m.cacheHome != "" && (m.stillLow == nil || m.stillLow()) {
 		r.uncovered = uncoveredCaches(m.cacheHome, m.entries, diskHoldingMin, 5)
