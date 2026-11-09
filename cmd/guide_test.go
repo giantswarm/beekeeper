@@ -374,7 +374,6 @@ func TestGuideHandoverAndStartReportAllProviderSubscriptions(t *testing.T) {
 	t0 := a.now
 	reset5h := t0.Add(3 * time.Hour).UTC()
 	a.cfg.Capacity = config.Capacity{
-		Floor:   1,
 		Ceiling: 6,
 		Providers: map[string]config.Provider{
 			claudeComm:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadClaude}}},
