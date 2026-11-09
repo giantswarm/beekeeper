@@ -30,7 +30,8 @@ const testAppCache = "app"
 
 func customCaches(a *app) []diskCache {
 	return slices.DeleteFunc(resolveDiskCaches(a.diskCacheEntries()), func(c diskCache) bool {
-		return c.name == config.DiskCacheTmp || c.name == config.DiskCacheTranscripts
+		return c.name == config.DiskCacheTmp || c.name == config.DiskCacheTranscripts ||
+			c.name == diskCacheAgyConversations || c.name == diskCacheAgyBrain
 	})
 }
 
@@ -105,7 +106,7 @@ func TestDiskCacheBuiltinsAreDefaultEntries(t *testing.T) {
 		}
 		return n
 	}
-	if got := names(); !slices.Equal(got, []string{config.DiskCacheGo, config.DiskCacheSccache, config.DiskCacheTmp, config.DiskCacheTranscripts}) {
+	if got := names(); !slices.Equal(got, []string{config.DiskCacheGo, config.DiskCacheSccache, config.DiskCacheTmp, config.DiskCacheTranscripts, diskCacheAgyConversations, diskCacheAgyBrain}) {
 		t.Fatalf("defaults=%v", got)
 	}
 	if got := a.builtinCache(config.DiskCacheGo, config.DiskCacheModeGo).MaxBytes(); got != a.cfg.Doctor.GoCacheMax() {
@@ -117,7 +118,7 @@ func TestDiskCacheBuiltinsAreDefaultEntries(t *testing.T) {
 		{Name: config.DiskCacheTmp, OlderThan: config.Duration{Duration: 2 * time.Hour}},
 		{Name: "uv", Path: "/cache/uv", MaxGiB: 2},
 	}
-	if got := names(); !slices.Equal(got, []string{config.DiskCacheGo, config.DiskCacheTmp, config.DiskCacheTranscripts, "uv"}) {
+	if got := names(); !slices.Equal(got, []string{config.DiskCacheGo, config.DiskCacheTmp, config.DiskCacheTranscripts, diskCacheAgyConversations, diskCacheAgyBrain, "uv"}) {
 		t.Fatalf("configured=%v", got)
 	}
 	if got := a.builtinCache(config.DiskCacheGo, config.DiskCacheModeGo).MaxBytes(); got != 1<<30 {

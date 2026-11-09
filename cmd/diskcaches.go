@@ -27,6 +27,11 @@ type diskCache struct {
 // cacheCleanerTimeout bounds one tool's cleaner.
 const cacheCleanerTimeout = 10 * time.Minute
 
+const (
+	diskCacheAgyConversations = "agy-conversations"
+	diskCacheAgyBrain         = "agy-brain"
+)
+
 // runCacheCleaner runs a cleaner in its cache root; tests replace it.
 var runCacheCleaner = func(ctx context.Context, dir string, argv []string) error {
 	exe, err := proc.LookPath(argv[0])
@@ -65,8 +70,8 @@ func (a *app) diskCacheEntries() []config.DiskCache {
 		{Name: config.DiskCacheTranscripts, Path: filepath.Join(a.cfg.StateDir, "transcripts"), Mode: config.DiskCacheFiles, OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}, MaxGiB: 2},
 	}
 	for _, root := range []struct{ name, path string }{
-		{"agy-conversations", a.cfg.Agy.ConversationsDir},
-		{"agy-brain", a.cfg.Agy.BrainDir},
+		{diskCacheAgyConversations, a.cfg.Agy.ConversationsDir},
+		{diskCacheAgyBrain, a.cfg.Agy.BrainDir},
 	} {
 		if root.path != "" {
 			entries = append(entries, config.DiskCache{Name: root.name, Path: root.path, Mode: config.DiskCacheEntries, MaxGiB: 2})
