@@ -409,7 +409,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			realPin := pinMarketplace
 			asBinary(t, version+" (commit abcdef0)")
-			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t)}})
 			dir := t.TempDir()
 			t.Setenv("CLAUDE_CONFIG_DIR", dir)
 			path := filepath.Join(dir, "plugins", "known_marketplaces.json")
@@ -436,7 +436,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 			if !slices.Equal(*ran, want) {
 				t.Fatalf("commands = %v, want %v", *ran, want)
 			}
-			raw, err := os.ReadFile(path)
+			raw, err := os.ReadFile(path) //nolint:gosec // the registry fixture in the test directory
 			if err != nil || !bytes.Equal(raw, original) {
 				t.Fatalf("registry changed directly: %s, %v", raw, err)
 			}
@@ -446,7 +446,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 
 func TestFailedPluginSyncRemainsRetryable(t *testing.T) {
 	dir := asBinary(t, newBinary)
-	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t)}})
 	pinMarketplace = func(context.Context, string, string) error { return os.ErrNotExist }
 	beekeeper(t, "timer")
 	if recordedSync(dir) != "" {
@@ -492,13 +492,13 @@ func TestScratchDirectoriesLeavePluginUntouched(t *testing.T) {
 
 func TestPluginSyncRejectsUnverifiedInstall(t *testing.T) {
 	asBinary(t, newBinary)
-	fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+	fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t)}})
 	claudePlugin = func(context.Context, ...string) error { return nil }
 	listPlugins = func(context.Context) ([]installedPlugin, error) {
-		return []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t, "lease")}}, nil
+		return []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t, "lease")}}, nil
 	}
 	var out bytes.Buffer
-	if syncListed(context.Background(), &out, []installedPlugin{{ID: beekeeperID, InstallPath: "old"}}, true) {
+	if syncListed(context.Background(), &out, []installedPlugin{{ID: beekeeperID, InstallPath: "previous-plugin-cache"}}, true) {
 		t.Fatal("stale installed skills accepted")
 	}
 	if !strings.Contains(out.String(), "did not verify") {
