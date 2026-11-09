@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -195,5 +197,66 @@ func TestLastMergedPullPreservesEarlierPostMergeWork(t *testing.T) {
 	}
 	if len(st.ReviewParks) != 0 || len(st.WorkerReports) != 0 {
 		t.Fatalf("last merge retained review records or reported completion: parks=%+v reports=%+v", st.ReviewParks, st.WorkerReports)
+	}
+}
+
+func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.GitHub.AllowedOrgs = []string{"o"}
+			old := recoverParkReviewHead
+			t.Cleanup(func() { recoverParkReviewHead = old })
+			readable := false
+			recoverParkReviewHead = func(_ context.Context, on, dir string) string {
+				if on != loopPR || dir != "/fixture/worktree" {
+					t.Fatalf("verification %s in %s", on, dir)
+				}
+				if !readable {
+					return ""
+				}
+				return loopHead
+			}
+			party := state.Party{Name: loopWorker, Session: "pending-review"}
+			remaining := "prove after merge"
+			p := &state.Park{On: loopPR, At: r.a.now, Waits: deskReviewWait, PostMerge: &remaining}
+			if !legacy {
+				p.Worktree = "/fixture/worktree"
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: party, Task: loopIssueTask, Park: p}}
+				st.Starts = append(st.Starts, state.Start{Party: party, Dir: "/fixture/worktree"})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			l := &supervisorLoop{a: r.a}
+			recover := func() *state.State {
+				st, err := r.a.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := l.recoverReviewRequests(context.Background(), st); err != nil {
+					t.Fatal(err)
+				}
+				st, err = r.a.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return st
+			}
+			st := recover()
+			if st.Agents[0].Park.ReviewHead != "" || len(st.ReviewParks) != 0 {
+				t.Fatal("unverified request gained review authority")
+			}
+			readable = true
+			st = recover()
+			rp, ok := st.ReviewParkFor(loopPR)
+			if !ok || rp.ReviewHead != loopHead || rp.PostMerge == nil || *rp.PostMerge != remaining {
+				t.Fatalf("recovered request: %+v", rp)
+			}
+			recoverParkReviewHead = func(context.Context, string, string) string { t.Fatal("verified request retried"); return "" }
+			recover()
+		})
 	}
 }
