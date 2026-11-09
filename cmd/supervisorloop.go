@@ -1767,8 +1767,18 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		l.fillPreview = &preview
 		defer func() { l.fillPreview = nil }()
+		stale := 0
 		for _, act := range actions {
+			if l.staleNext(act) {
+				stale++
+				continue
+			}
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
+				return err
+			}
+		}
+		if stale > 0 {
+			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD NEXT supersede %d stale actions by capacity refill\n", stale); err != nil {
 				return err
 			}
 		}
@@ -1852,10 +1862,52 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	return l.completeAction(act, what)
 }
 
+// staleNext is superseded by the capacity refill, without consulting the
+// board or reconciling an old start claim against event history.
+func (l *supervisorLoop) staleNext(act superloop.Action) bool {
+	return act.Kind == superloop.KindNext && act.Event != nil &&
+		(act.Event.At.Before(l.since) || act.Event.At.Before(l.a.timeNow().Add(-time.Hour)))
+}
+
+func (l *supervisorLoop) settleStaleNext(actions []superloop.Action) ([]superloop.Action, error) {
+	pending := make([]superloop.Action, 0, len(actions))
+	settled := []superloop.Action{}
+	records := []state.Event{}
+	for _, act := range actions {
+		if !l.staleNext(act) {
+			pending = append(pending, act)
+			continue
+		}
+		if l.isCompleted(act.Key) {
+			continue
+		}
+		records = append(records, about(event(loopParty, "supervisor.next", "%s", superloop.Detail(act, "superseded by capacity refill")), act.Ref))
+		settled = append(settled, act)
+	}
+	if len(settled) > 0 {
+		if err := l.a.store.Record(records...); err != nil {
+			return nil, err
+		}
+		for _, act := range settled {
+			l.rememberAction(act)
+		}
+		_, err := fmt.Fprintf(l.a.out, "SUPERVISOR NEXT superseded %d stale actions by capacity refill\n", len(settled))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return pending, nil
+}
+
 // runPassActions runs merges, review starts, intake, worker starts and PR/worker
 // transitions independently so a merge waiting on CI or in a lane queue never
 // delays a review or worker start, and the reverse.
 func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+	var err error
+	actions, err = l.settleStaleNext(actions)
+	if err != nil {
+		return err
+	}
 	current, readErr := l.a.store.Read()
 	if readErr != nil {
 		return readErr
@@ -1953,11 +2005,9 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
-	// When a worker finishes (KindDone) and files a follow-up issue in the
-	// same pass, intake and rank that issue before refilling the freed slot;
-	// otherwise run intake concurrently in its own stream.
-	intakeBeforeFill := len(doneActs) > 0 && len(intakeActs) > 0
-	if len(intakeActs) > 0 && !intakeBeforeFill {
+	// Intake never owns the refill stream: a slow or failed intake must
+	// leave existing ranked work eligible for every pass.
+	if len(intakeActs) > 0 {
 		launch("stream:intake", func() error {
 			for _, act := range intakeActs {
 				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
@@ -1981,26 +2031,10 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	})
 
 	launch("stream:workers", func() error {
-		if intakeBeforeFill {
-			if !l.beginInFlight("stream:intake") {
-				return nil // Retry from a fresh snapshot after outstanding intake.
-			}
-			err := func() error {
-				defer l.endInFlight("stream:intake")
-				for _, act := range intakeActs {
-					if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-						return err
-					}
-				}
-				return nil
-			}()
-			if err != nil {
-				return err
-			}
-		}
 		for _, act := range nextActs {
 			if err := l.execAction(ctx, st, claims, failures, act, reservations); err != nil {
-				return err
+				setErr(err)
+				break // Refill still runs after a failed next action.
 			}
 			// Every next action asks for the same thing, the board's next
 			// item: once one did not settle (its start waits, failed or
@@ -2061,7 +2095,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	err := l.actionErr
+	err = l.actionErr
 	l.actionErr = nil
 	return err
 }
@@ -3861,6 +3895,9 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action, re
 	what, err := l.startItem(ctx, act, *next, reserved...)
 	var refused *refillStartError
 	if errors.As(err, &refused) {
+		if strings.Contains(refused.output, "already has an open pull request") {
+			return "delivery already in flight: " + next.URL, nil
+		}
 		l.deferFill(next.Ref)
 		l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", next.URL, err)
 		return "", errLoopLater
