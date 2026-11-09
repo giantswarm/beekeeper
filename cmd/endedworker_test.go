@@ -396,3 +396,22 @@ func transcriptNamed(meta transcripts.Meta, name string) error {
 	}
 	return nil
 }
+
+func TestOmpTranscriptDirectoryMatchUsesLatestStart(t *testing.T) {
+	a, _ := stubApp(t)
+	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	older := state.Start{Party: state.Party{Name: "older", HostSession: omp.HostPrefix + "older"}, Harness: omp.Harness, Dir: "/work", At: at}
+	newer := state.Start{Party: state.Party{Name: "newer", HostSession: omp.HostPrefix + "newer"}, Harness: omp.Harness, Dir: "/work", At: at.Add(time.Hour)}
+	st := &state.State{Starts: []state.Start{older, newer}}
+	for _, started := range []time.Time{newer.At.Add(time.Second), {}} {
+		meta := transcripts.Meta{ID: "omp-session", Harness: omp.Harness, Cwd: "/work", StartedAt: started}
+		a.enrichMetaFromState(st, &meta, state.Party{Session: meta.ID}, nil)
+		if started.IsZero() {
+			if meta.HostSession != "" || meta.RosterName != "" {
+				t.Fatalf("timestamp-free transcript acquired an identity: %+v", meta)
+			}
+		} else if meta.HostSession != newer.HostSession || meta.RosterName != newer.Name {
+			t.Fatalf("later transcript acquired the wrong worker identity: %+v", meta)
+		}
+	}
+}
