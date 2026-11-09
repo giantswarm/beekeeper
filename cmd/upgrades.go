@@ -65,7 +65,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 
 // publishUpgrades merges against the latest cache while holding a separate
 // process-shared lock. It also returns that merged view through rs.
-// Never acquire the state lock here: watches publish during a state update.
+// This cache lock is independent of the upgrade cycle and state locks.
 func (a *app) publishUpgrades(ctx context.Context, rs upgrade.Readings) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -141,14 +141,39 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 	} else {
 		_ = w.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
 	}
+	// Serialize observation and reconciliation across watches without holding
+	// the desk state lock during Kubernetes reads. Those reads can take minutes;
+	// timers, stop requests and other desk writers must remain able to settle.
 	var statuses []upgrade.Status
+	if dir := w.store.Dir(); dir != "" {
+		cycle := flock.New(filepath.Join(dir, "upgrades-cycle.lock"))
+		ok, err := cycle.TryLockContext(ctx, 10*time.Millisecond)
+		if err != nil || !ok {
+			if ctx.Err() == nil {
+				w.fail("upgrades", "UPGRADES unknown: cycle lock unavailable (%v)", err)
+			}
+			return
+		}
+		defer func() { _ = cycle.Unlock() }()
+		observed, err := w.store.Read()
+		if err != nil {
+			w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
+			return
+		}
+		now = w.clk().Now()
+		statuses = read(ctx, observed, now, w.upgrades, w.upgradeFresh(observed, now))
+		if ctx.Err() != nil {
+			return
+		}
+	}
 	var begun, ended, holds []state.Hold
-	// Observation and reconciliation must share the state transaction so another
-	// watch cannot apply an observation between these two steps. Retryable stores
-	// repeat the observation along with reconciliation.
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		now = w.clk().Now()
-		statuses = read(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
+		if w.store.Dir() == "" {
+			// Remote stores have no shared filesystem lock; retain observation
+			// on each resource-version retry instead of reusing a stale reading.
+			statuses = read(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
