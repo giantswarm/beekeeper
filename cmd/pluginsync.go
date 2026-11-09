@@ -113,7 +113,7 @@ func syncPlugins(ctx context.Context, w io.Writer, all bool) {
 }
 
 // syncListed is syncPlugins of the listed plugins ps.
-func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool) {
+func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool) bool {
 	var due []installedPlugin
 	for _, p := range ps {
 		if all && isBeekeeper(p) {
@@ -125,12 +125,13 @@ func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool
 			due = append(due, s.p)
 		}
 	}
+	success := true
 	refreshed := map[string]error{}
 	var updated []installedPlugin
 	for _, p := range due {
 		m := marketplace(p)
 		if _, done := refreshed[m]; !done {
-			refreshed[m] = pinMarketplace(m, pluginRevision())
+			refreshed[m] = pinMarketplace(ctx, m, pluginRevision())
 			if refreshed[m] == nil {
 				refreshed[m] = claudePlugin(ctx, "marketplace", "update", m)
 			}
@@ -141,26 +142,46 @@ func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool
 		}
 		if err != nil {
 			_, _ = fmt.Fprintf(w, "The plugin %s stays at %s: %v (%s)\n", p.ID, p.Version, err, refreshCommand(p))
+			success = false
 			continue
 		}
 		updated = append(updated, p)
 	}
 	if len(updated) == 0 {
-		return
+		return success
 	}
-	now, _ := listPlugins(ctx)
+	now, err := listPlugins(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "Could not verify the updated plugins: %v\n", err)
+		return false
+	}
 	for _, p := range updated {
-		version := pluginRevision()
+		version := ""
+		verified := false
 		for _, q := range now {
 			if q.ID == p.ID && q.Scope == p.Scope {
 				version = q.Version
+				verified = true
+				// Release sync also updates disabled plugins. Verify their
+				// installed content without requiring them to be enabled;
+				// q is a copy, so this does not change Claude's settings.
+				q.Enabled = true
+				for _, name := range plugin.SkillNames() {
+					verified = verified && servesSkill(q, name)
+				}
 			}
+		}
+		if !verified {
+			_, _ = fmt.Fprintf(w, "The plugin %s did not verify against this release; its next command will retry.\n", p.ID)
+			success = false
+			continue
 		}
 		if version == p.Version {
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "Updated the plugin %s %s → %s: sessions started from now load its skills.\n", p.ID, p.Version, version)
 	}
+	return success
 }
 
 // pluginSyncFile, in the state directory, names the binary that last
@@ -227,10 +248,9 @@ func pluginRevision() string {
 	return fields[0]
 }
 
-// pinMarketplace preserves the registered source and pins its ref before Claude
-// refreshes it. Refuse sources without git revision support rather than updating
-// them to an unrelated version.
-var pinMarketplace = func(name, revision string) error {
+// pinMarketplace asks Claude to register the release source itself. Writing the
+// private registry directly can leave a marketplace that Claude does not load.
+var pinMarketplace = func(ctx context.Context, name, revision string) error {
 	if revision == "" {
 		return fmt.Errorf("no release tag for this binary")
 	}
@@ -247,7 +267,13 @@ var pinMarketplace = func(name, revision string) error {
 	if err != nil {
 		return err
 	}
-	var entries map[string]map[string]json.RawMessage
+	var entries map[string]struct {
+		Source struct {
+			Kind string `json:"source"`
+			Repo string `json:"repo"`
+			URL  string `json:"url"`
+		} `json:"source"`
+	}
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return err
 	}
@@ -255,16 +281,59 @@ var pinMarketplace = func(name, revision string) error {
 	if !ok {
 		return fmt.Errorf("marketplace %s is not registered", name)
 	}
+	var source string
+	switch entry.Source.Kind {
+	case "github":
+		source = entry.Source.Repo
+	case "git":
+		source = entry.Source.URL
+	default:
+		return fmt.Errorf("marketplace %s does not support release tags", name)
+	}
+	if source == "" || strings.Contains(source, "#") {
+		return fmt.Errorf("marketplace %s has an invalid source", name)
+	}
+	if err := pinMarketplaceSettings(dir, name, revision); err != nil {
+		return err
+	}
+	if err := claudePlugin(ctx, "marketplace", "add", source+"#"+revision); err != nil {
+		return err
+	}
+	return verifyMarketplace(ctx, name)
+}
+
+// pinMarketplaceSettings aligns an existing user declaration with the release
+// before Claude checks marketplace admission. Leave undeclared sources alone.
+func pinMarketplaceSettings(dir, name, revision string) error {
+	path := filepath.Join(dir, "settings.json")
+	raw, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // user-selected Claude config directory
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return err
+	}
+	var marketplaces map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(settings["extraKnownMarketplaces"], &marketplaces); err != nil {
+		if settings["extraKnownMarketplaces"] == nil {
+			return nil
+		}
+		return err
+	}
+	entry := marketplaces[name]
+	if entry == nil || entry["source"] == nil {
+		return nil
+	}
 	var source map[string]json.RawMessage
 	if err := json.Unmarshal(entry["source"], &source); err != nil {
 		return err
 	}
-	var kind string
-	if err := json.Unmarshal(source["source"], &kind); err != nil {
-		return err
-	}
-	if kind != "github" && kind != "git" {
-		return fmt.Errorf("marketplace %s does not support release tags", name)
+	if source == nil {
+		return fmt.Errorf("marketplace %s has no settings source", name)
 	}
 	source["ref"], _ = json.Marshal(revision)
 	delete(source, "sha")
@@ -272,16 +341,27 @@ var pinMarketplace = func(name, revision string) error {
 	if err != nil {
 		return err
 	}
-	raw, err = json.MarshalIndent(entries, "", "  ")
+	settings["extraKnownMarketplaces"], err = json.Marshal(marketplaces)
 	if err != nil {
 		return err
 	}
-	// Rename a complete file so Claude never reads a partial registry.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".beekeeper-marketplace-*")
+	raw, err = json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
+	info, err := os.Stat(path) //nolint:gosec // user-selected Claude settings path
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".beekeeper-settings-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // temporary file created in the Claude config directory
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		return err
@@ -289,7 +369,27 @@ var pinMarketplace = func(name, revision string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) //nolint:gosec // atomic replacement of the user-selected Claude settings
+}
+
+// verifyMarketplace checks Claude's view rather than trusting its registry file.
+var verifyMarketplace = func(ctx context.Context, name string) error {
+	out, err := exec.CommandContext(ctx, "claude", "plugin", "marketplace", "list", "--json").Output()
+	if err != nil {
+		return fmt.Errorf("listing Claude marketplaces: %w", err)
+	}
+	var entries []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out, &entries); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("marketplace %s is not visible to Claude", name)
 }
 
 // syncOnce brings the installed beekeeper plugins up to date once per
@@ -322,7 +422,9 @@ func syncOnce(ctx context.Context, w io.Writer, dir string) (ran bool) {
 	if err != nil {
 		return false
 	}
-	syncListed(ctx, w, ps, true)
+	if !syncListed(ctx, w, ps, true) {
+		return true
+	}
 	_ = os.WriteFile(path, []byte(id+"\n"), 0o600)
 	return true
 }

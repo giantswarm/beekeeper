@@ -91,7 +91,7 @@ func fakePlugins(t *testing.T, ps []installedPlugin) *[]string {
 	var ran []string
 	prevPin, prevUnder, prevInstalled := pinMarketplace, syncsUnder, runsInstalled
 	t.Cleanup(func() { pinMarketplace, syncsUnder, runsInstalled = prevPin, prevUnder, prevInstalled })
-	pinMarketplace = func(string, string) error { return nil }
+	pinMarketplace = func(context.Context, string, string) error { return nil }
 	syncsUnder = func(string) bool { return true }
 	// Keep the installed-binary decision made by asBinary, when present.
 	installed := runsInstalled
@@ -410,42 +410,53 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			realPin := pinMarketplace
 			asBinary(t, version+" (commit abcdef0)")
-			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t)}})
 			dir := t.TempDir()
 			t.Setenv("CLAUDE_CONFIG_DIR", dir)
 			path := filepath.Join(dir, "plugins", "known_marketplaces.json")
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			original := []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper","ref":"main","sha":"newer-candidate"},"installLocation":"unchanged"},"other":{"source":{"source":"git","ref":"main"}}}`)
+			original := []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper","ref":"old"}},"other":{"source":{"source":"git","ref":"main"}}}`)
 			if err := os.WriteFile(path, original, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			pinMarketplace = realPin
-			run := claudePlugin
-			claudePlugin = func(ctx context.Context, args ...string) error {
-				raw, err := os.ReadFile(filepath.Clean(path))
-				if err != nil {
-					t.Fatal(err)
+			prev := verifyMarketplace
+			t.Cleanup(func() { verifyMarketplace = prev })
+			verifyMarketplace = func(_ context.Context, name string) error {
+				if name != "beekeeper" {
+					t.Fatalf("marketplace = %s", name)
 				}
-				var entries map[string]struct {
-					Source          struct{ Ref, Repo, SHA string }
-					InstallLocation string
-				}
-				if err := json.Unmarshal(raw, &entries); err != nil {
-					t.Fatal(err)
-				}
-				got := entries["beekeeper"]
-				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != litUnchanged || entries["other"].Source.Ref != mainBranch {
-					t.Fatalf("registry at sync: %s", raw)
-				}
-				return run(ctx, args...)
+				return nil
 			}
-			syncListed(context.Background(), io.Discard, []installedPlugin{{ID: beekeeperID, InstallPath: dir}}, true)
-			if len(*ran) != 2 {
-				t.Fatalf("commands = %v", *ran)
+			if !syncListed(context.Background(), io.Discard, []installedPlugin{{ID: beekeeperID, InstallPath: dir}}, true) {
+				t.Fatal("sync failed")
+			}
+			want := []string{"marketplace add giantswarm/beekeeper#" + version, refreshMarketplace, updateNoScope}
+			if !slices.Equal(*ran, want) {
+				t.Fatalf("commands = %v, want %v", *ran, want)
+			}
+			raw, err := os.ReadFile(path) //nolint:gosec // the registry fixture in the test directory
+			if err != nil || !bytes.Equal(raw, original) {
+				t.Fatalf("registry changed directly: %s, %v", raw, err)
 			}
 		})
+	}
+}
+
+func TestFailedPluginSyncRemainsRetryable(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t)}})
+	pinMarketplace = func(context.Context, string, string) error { return os.ErrNotExist }
+	beekeeper(t, "timer")
+	if recordedSync(dir) != "" {
+		t.Fatal("failed sync recorded")
+	}
+	pinMarketplace = func(context.Context, string, string) error { return nil }
+	beekeeper(t, "timer")
+	if len(*ran) == 0 || recordedSync(dir) != newBinary {
+		t.Fatal("failed sync was not retried")
 	}
 }
 
@@ -475,6 +486,118 @@ func TestScratchDirectoriesLeavePluginUntouched(t *testing.T) {
 			selfUpdate(t, update.Result{Current: latestRelease, Latest: latestRelease})
 			if len(*ran) != 0 || recordedSync(dir) != "" {
 				t.Fatal("scratch run synced")
+			}
+		})
+	}
+}
+
+func TestPluginSyncRejectsUnverifiedInstall(t *testing.T) {
+	asBinary(t, newBinary)
+	fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t)}})
+	claudePlugin = func(context.Context, ...string) error { return nil }
+	listPlugins = func(context.Context) ([]installedPlugin, error) {
+		return []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t, "lease")}}, nil
+	}
+	var out bytes.Buffer
+	if syncListed(context.Background(), &out, []installedPlugin{{ID: beekeeperID, InstallPath: "previous-plugin-cache"}}, true) {
+		t.Fatal("stale installed skills accepted")
+	}
+	if !strings.Contains(out.String(), "did not verify") {
+		t.Fatalf("output = %s", out.String())
+	}
+}
+
+// Disabled plugins are updated on release installs too. Matching installed
+// content must record success without enabling the plugin or retrying forever.
+func TestDisabledPluginSyncRecordsSuccess(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t, "lease")}})
+	beekeeper(t, "timer")
+	if recordedSync(dir) != newBinary {
+		t.Fatal("disabled plugin sync was not recorded")
+	}
+	now, err := listPlugins(context.Background())
+	if err != nil || len(now) != 1 || now[0].Enabled || now[0].ProjectEnabled {
+		t.Fatalf("disabled plugin enablement changed: %+v, %v", now, err)
+	}
+	*ran = nil
+	beekeeper(t, "timer")
+	if len(*ran) != 0 {
+		t.Fatalf("disabled plugin synced again: %v", *ran)
+	}
+}
+
+// Claude checks user declarations before admitting a release-tagged source.
+func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
+	const sourceKey = "source"
+	for _, ref := range []string{"", "v0.120.0"} {
+		t.Run("ref="+ref, func(t *testing.T) {
+			realPin := pinMarketplace
+			asBinary(t, latestRelease)
+			fakePlugins(t, []installedPlugin{{ID: beekeeperID, InstallPath: pluginCopy(t)}})
+			pinMarketplace = realPin
+			dir := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			registry := filepath.Join(dir, "plugins")
+			if err := os.MkdirAll(registry, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(registry, "known_marketplaces.json"), []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper"}}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source := map[string]string{sourceKey: holdGitHub, workerGitHubRepoGroup: sshTestRepository, "sha": "previous-revision"}
+			if ref != "" {
+				source["ref"] = ref
+			}
+			settings := map[string]any{
+				"enabledPlugins": map[string]bool{beekeeperID: false},
+				"extraKnownMarketplaces": map[string]any{
+					pluginName:  map[string]any{sourceKey: source, "autoUpdate": false},
+					removeOther: map[string]any{sourceKey: map[string]string{sourceKey: holdGitHub, workerGitHubRepoGroup: "other/plugin"}},
+				},
+			}
+			raw, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "settings.json")
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source["ref"] = latestRelease
+			delete(source, "sha")
+			want, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			claudePlugin = func(_ context.Context, args ...string) error {
+				called = true
+				if !slices.Equal(args, []string{"marketplace", loopAdd, "giantswarm/beekeeper#" + latestRelease}) {
+					t.Fatalf("commands = %v", args)
+				}
+				got, err := os.ReadFile(path) //nolint:gosec // settings fixture in the test directory
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded any
+				if err := json.Unmarshal(got, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				got, err = json.Marshal(decoded)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("settings = %s, want %s (%v)", got, want, err)
+				}
+				return nil
+			}
+			prev := verifyMarketplace
+			t.Cleanup(func() { verifyMarketplace = prev })
+			verifyMarketplace = func(context.Context, string) error { return nil }
+			if err := pinMarketplace(context.Background(), pluginName, latestRelease); err != nil {
+				t.Fatal(err)
+			}
+			if !called {
+				t.Fatal("marketplace registration skipped")
 			}
 		})
 	}
