@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const fatalTestMainIncident = "main:example/tool"
+
 func TestFatalRecoveryStartsAfterObservationBudgetExpires(t *testing.T) {
 	a, _ := stubApp(t)
 	dir := a.store.Dir()
@@ -527,7 +529,7 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 func TestFatalMainRecoversLaterHeadAfterGateTimeout(t *testing.T) {
 	q := fatal.Queue{}
 	a, _ := stubApp(t)
-	q.Observe(fatal.Observation{ID: "main:example/tool", Failed: true, Evidence: "old-head"}, a.now)
+	q.Observe(fatal.Observation{ID: fatalTestMainIncident, Failed: true, Evidence: "old-head"}, a.now)
 	q.Incidents[0].Attempts = 3
 	oldRun := fatalRun
 	t.Cleanup(func() { fatalRun = oldRun })
@@ -567,16 +569,16 @@ func TestEmergencyStartOverridesOnlyExhaustedMainWithActiveGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := fatal.Queue{}
-	q.Observe(fatal.Observation{ID: "main:example/tool", Failed: true}, a.now)
+	q.Observe(fatal.Observation{ID: fatalTestMainIncident, Failed: true}, a.now)
 	for _, tc := range []struct {
 		id                 string
 		attempts           int
 		emergency, allowed bool
 	}{
-		{"main:example/tool", 3, false, false},
-		{"main:example/tool", 2, true, false},
+		{fatalTestMainIncident, 3, false, false},
+		{fatalTestMainIncident, 2, true, false},
 		{"guard:codex", 3, true, false},
-		{"main:example/tool", 3, true, true},
+		{fatalTestMainIncident, 3, true, true},
 	} {
 		q.Incidents[0].ID, q.Incidents[0].Attempts = tc.id, tc.attempts
 		if err := q.Save(a.store.Dir()); err != nil {
