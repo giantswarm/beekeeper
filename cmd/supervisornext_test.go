@@ -87,7 +87,7 @@ func TestLoopRefillSurvivesNextFailureAndInflightIntake(t *testing.T) {
 			l.beginInFlight("stream:intake")
 			defer l.endInFlight("stream:intake")
 			acts := []superloop.Action{
-				{Kind: superloop.KindDone, Key: "done absent", Agent: "absent"},
+				{Kind: superloop.KindDone, Key: "done missing worker", Agent: "missing next-action worker"},
 				{Kind: superloop.KindIntake, Key: "intake pending"},
 			}
 			if failedNext {
