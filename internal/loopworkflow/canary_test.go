@@ -1027,6 +1027,9 @@ func buildActualCandidate(t *testing.T, dir, name string) string {
 // advance, cleans up owned branches when PR creation fails after push or after
 // an interrupted run, and fails closed if exit cleanup fails.
 func TestLiveSandboxCanaryFreshWorkflowIsolationAndCleanupGate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("candidate build and live workflow canary run in full CI")
+	}
 	acceptTestBundles(t)
 	dir := t.TempDir()
 	goodCand := buildActualCandidate(t, dir, "beekeeper-linux-amd64")

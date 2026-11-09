@@ -722,3 +722,24 @@ const (
 const testMergedWord = "merged"
 
 const testStatusWord = "status"
+
+// The coordinator must skip heavyweight canaries while retaining ordinary
+// merge-result assertions. Full CI runs without -short.
+func TestReviewedMergeChecksUseShortMode(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{
+		"guard/canary_test.go": `package guard
+import "testing"
+func TestHeavyCanary(t *testing.T) {
+	if testing.Short() { t.Skip("full CI only") }
+	t.Fatal("heavy canary must not run on the coordinator")
+}
+func TestShortMode(t *testing.T) {
+	if !testing.Short() { t.Fatal("merge checks require short mode") }
+}
+`,
+	}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+	repo.advanceMain(t, repo.head1)
+	if reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head1); code != 0 {
+		t.Fatalf("short merge checks refused: %d: %s", code, reason)
+	}
+}
