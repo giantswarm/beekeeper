@@ -420,7 +420,7 @@ echo '{"type":"turn.completed"}'
 	}
 }
 
-func TestRemoveInboxRemovesAllCompanionFilesWhenFIFOMissing(t *testing.T) {
+func TestRemoveInboxPreservesThreadLinkWhenFIFOMissing(t *testing.T) {
 	stateDir := t.TempDir()
 	const id = "agent-cleanup"
 	const threadID = "thread-cleanup-1"
@@ -460,11 +460,19 @@ func TestRemoveInboxRemovesAllCompanionFilesWhenFIFOMissing(t *testing.T) {
 		StatePath(inbox),
 		logPath,
 		ThreadPath(stateDir, id),
-		ThreadLinkPath(stateDir, threadID),
 	} {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected %s to be removed, stat err = %v", p, err)
 		}
+	}
+	// Transcript recovery still needs to map the thread to its original inbox
+	// after the runner and its transient companion files have gone.
+	link, err := os.ReadFile(ThreadLinkPath(stateDir, threadID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(link)); got != inbox {
+		t.Errorf("preserved thread link = %q, want %q", got, inbox)
 	}
 }
 

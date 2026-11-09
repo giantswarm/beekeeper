@@ -225,6 +225,49 @@ func TestPrepareStartWorktree(t *testing.T) {
 	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err == nil {
 		t.Fatal("reused existing destination")
 	}
+
+	// If a dead worker's worktree directory was removed while its local branch
+	// remained at origin/main, starting on that branch reuses it.
+	git(checkout, "worktree", "remove", "--force", target)
+	if out := git(checkout, "branch", "--list", "fix/task"); out == "" {
+		t.Fatal("expected local branch fix/task to remain after worktree remove")
+	}
+	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err != nil {
+		t.Fatalf("reuse local branch equal to origin/main: %v", err)
+	}
+	if got := git(target, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("reused worktree HEAD = %s, want %s", got, tip)
+	}
+
+	// If the branch was pushed to origin and the worktree was later removed,
+	// starting on that branch fetches origin/<branch> and checks out its tip.
+	if err := os.WriteFile(filepath.Join(target, "pushed.txt"), []byte("pushed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(target, "add", "pushed.txt")
+	git(target, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "pushed work")
+	pushedTip := git(target, "rev-parse", "HEAD")
+	git(target, "push", "origin", "HEAD:refs/heads/fix/task")
+	git(checkout, "worktree", "remove", "--force", target)
+	git(checkout, "branch", "-f", "fix/task", tip)
+	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err != nil {
+		t.Fatalf("reuse branch pushed to origin: %v", err)
+	}
+	if got := git(target, "rev-parse", "HEAD"); got != pushedTip {
+		t.Fatalf("reused remote branch HEAD = %s, want %s", got, pushedTip)
+	}
+
+	// If the local branch has unpushed commits not on origin, start refuses
+	// rather than overwriting local work.
+	if err := os.WriteFile(filepath.Join(target, "unpushed.txt"), []byte("unpushed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(target, "add", "unpushed.txt")
+	git(target, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "unpushed local work")
+	git(checkout, "worktree", "remove", "--force", target)
+	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err == nil {
+		t.Fatal("expected refusal when local branch has unpushed commits")
+	}
 }
 
 func TestSingleTaskRepository(t *testing.T) {

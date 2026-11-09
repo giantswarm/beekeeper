@@ -195,10 +195,20 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		_, _ = codex.RemoveInbox(inbox)
 		return a.undelivered(by, s.Party, fmt.Errorf("the brief did not reach its inbox: %w (journalctl --user -u %s)", err, unit))
 	}
-	if _, err := awaitCodexBrief(ctx, logPath, func() bool { return unitEnded(ctx, unit) }, codexBriefWait); err != nil {
+	threadID, err := awaitCodexBrief(ctx, logPath, func() bool { return unitEnded(ctx, unit) }, codexBriefWait)
+	if err != nil {
 		_ = plat.Launcher.Stop(ctx, unit)
 		_, _ = codex.RemoveInbox(inbox)
 		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
+	}
+	if threadID != "" {
+		_ = codex.RecordThread(a.cfg.StateDir, inbox, threadID)
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if i := st.StartIndex(s.Party); i >= 0 {
+				st.Starts[i].Conversation = threadID
+			}
+			return nil, nil
+		})
 	}
 	_, err = fmt.Fprintf(a.out, "started %s: codex agent codex_%s, bypass, on %s, in %s, busy with %q\n"+
 		"turn: %s (%s)\n",
@@ -223,6 +233,109 @@ func launchCodex(unit, dir, config string, argv []string, env ...string) error {
 		TermIsSuccess: true,
 		StopTimeout:   turnStopWait,
 	}, config, env...)
+}
+
+// resumeCodexUnit restarts a stopped codex worker's user unit on its recorded
+// thread and delivers msg as its next turn. It returns codex.ErrNotRunning
+// when the worker has no start record or no recorded conversation thread to
+// resume.
+func (a *app) resumeCodexUnit(ctx context.Context, id, name, msg string) error {
+	if !plat.Launcher.Available() {
+		return codex.ErrNotRunning
+	}
+	bin, err := exec.LookPath(codex.Comm)
+	if err != nil {
+		return codex.ErrNotRunning
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	hostID := codex.HostPrefix + id
+	var s state.Start
+	var hasStart bool
+	for _, cand := range slices.Concat(st.Starts, st.EndedWorkers) {
+		if strings.EqualFold(cand.HostSession, hostID) && !cand.At.Before(s.At) {
+			conv := cmp.Or(cand.Conversation, s.Conversation)
+			dir := cmp.Or(cand.Dir, s.Dir)
+			model := cmp.Or(cand.Model, s.Model)
+			effort := cmp.Or(cand.Effort, s.Effort)
+			s = cand
+			s.Conversation, s.Dir, s.Model, s.Effort = conv, dir, model, effort
+			hasStart = true
+		}
+	}
+	if !hasStart {
+		return codex.ErrNotRunning
+	}
+	inbox := codex.InboxPath(a.cfg.StateDir, id)
+	threadID := cmp.Or(codex.ReadThread(a.cfg.StateDir, inbox), strings.TrimSpace(s.Conversation))
+	if threadID == "" {
+		for _, proc := range codex.Ended(a.cfg.StateDir, a.cfg.Codex.SessionsDir, nil, time.Time{}) {
+			if strings.EqualFold(proc.HostID, hostID) && proc.ID != "" {
+				threadID = proc.ID
+				break
+			}
+		}
+	}
+	if threadID == "" {
+		return codex.ErrNotRunning
+	}
+	model := cmp.Or(strings.TrimSpace(s.Model), strings.TrimSpace(a.cfg.Codex.Model))
+	if model == "" {
+		return codex.ErrNotRunning
+	}
+	dir := s.Dir
+	if info, serr := os.Stat(dir); serr != nil || !info.IsDir() {
+		if fallback, ferr := a.agentDir("", ""); ferr == nil {
+			dir = fallback
+		} else {
+			dir = os.TempDir()
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	codexHome := codex.HomeDir(a.cfg.StateDir)
+	sh := a.cfg.Agents.Shell
+	unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
+	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, "")
+	if err := codex.EnsureHome(codexHome, a.cfg.Codex.AuthFile, a.cfg.Codex.ConfigFile, self, prelude); err != nil {
+		return err
+	}
+	if err := codex.MakeInbox(inbox); err != nil {
+		return err
+	}
+	if err := codex.RecordThread(a.cfg.StateDir, inbox, threadID); err != nil {
+		_, _ = codex.RemoveInbox(inbox)
+		return err
+	}
+	logPath := codex.LogPath(a.cfg.StateDir, id)
+	unit := codexUnit(id)
+	runnerArgv := []string{self, codexRunCmdName, inbox, logPath, bin, model}
+	if s.Effort != "" {
+		runnerArgv = append(runnerArgv, s.Effort)
+	}
+	if err := launchCodex(
+		unit,
+		dir,
+		a.explicitConfig(),
+		runnerArgv,
+		codex.EnvAgent+"="+id,
+		codex.EnvName+"="+cmp.Or(name, s.Name),
+		"CODEX_HOME="+codexHome,
+		"ZDOTDIR="+codex.ZshDir(codexHome),
+	); err != nil {
+		_, _ = codex.RemoveInbox(inbox)
+		return err
+	}
+	if err := sendCodexWhenReady(ctx, inbox, msg, inboxWait); err != nil {
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = codex.RemoveInbox(inbox)
+		return err
+	}
+	return nil
 }
 
 func (a *app) codexModel(flag string) (string, error) {
