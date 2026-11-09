@@ -542,10 +542,14 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 }
 
 // sendCodex writes msg to the inbox of the codex agent name, started under id;
-// one whose unit ended is refused.
+// one whose unit ended is resumed on its recorded thread when possible, else
+// refused.
 func (a *app) sendCodex(name, id, msg string) error {
 	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, codex.ErrNotRunning) {
+		if rerr := a.resumeCodexUnit(context.Background(), id, name, msg); rerr == nil {
+			return nil
+		}
 		return goneRefusal("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
 	}
 	if err != nil {

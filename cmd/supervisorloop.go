@@ -2977,6 +2977,11 @@ func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
 	if ag.Park == nil || ag.Park.ReviewHead == "" || loopParkOn(ag.Park) == "" {
 		return false
 	}
+	if slices.ContainsFunc(st.Timers, func(t state.Timer) bool {
+		return t.Fired.IsZero() && t.Wake != "" && (strings.EqualFold(t.Wake, ag.Name) || ag.Is(state.Party{Name: t.Wake, Session: t.Wake, HostSession: t.Wake}))
+	}) {
+		return false
+	}
 	k := st.StartIndex(ag.Party)
 	if k < 0 {
 		return false

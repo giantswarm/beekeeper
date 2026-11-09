@@ -32,22 +32,14 @@ func MakeInbox(inbox string) error {
 }
 
 // RemoveInbox removes the inbox FIFO at inbox, its queue, lock and state files,
-// its stream log (<id>.jsonl), its thread file (<id>.thread) and its thread
-// link (threads/<threadID>); removed is false when none of them existed.
+// its stream log (<id>.jsonl), and its thread file (<id>.thread); removed is
+// false when none of them existed. The reverse link under threads/<threadID> is
+// kept so ended rollout transcripts under CODEX_HOME/sessions remain linked to
+// the worker's host session id.
 func RemoveInbox(inbox string) (removed bool, err error) {
 	paths := []string{inbox, QueuePath(inbox), LockPath(inbox), StatePath(inbox)}
-	stateDir := stateDirFromInbox(inbox)
-	if q, qerr := readQueue(inbox); qerr == nil && strings.TrimSpace(q.ThreadID) != "" && stateDir != "" {
-		paths = append(paths, ThreadLinkPath(stateDir, strings.TrimSpace(q.ThreadID)))
-	}
 	if base, ok := strings.CutSuffix(inbox, ".in"); ok {
-		threadFile := base + ".thread"
-		if b, rerr := os.ReadFile(threadFile); rerr == nil { //nolint:gosec // beside the agent's inbox under the state folder
-			if tid := strings.TrimSpace(string(b)); tid != "" && stateDir != "" {
-				paths = append(paths, ThreadLinkPath(stateDir, tid))
-			}
-		}
-		paths = append(paths, threadFile, base+".jsonl")
+		paths = append(paths, base+".thread", base+".jsonl")
 	}
 	for _, p := range paths {
 		if rerr := os.Remove(p); rerr == nil {

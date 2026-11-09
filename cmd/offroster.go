@@ -102,8 +102,12 @@ func (a *app) endedWorker(st *state.State, q string) (state.Start, bool) {
 	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
 		if strings.EqualFold(s.Name, strings.TrimSpace(q)) && !s.At.Before(found.At) {
 			task, conv := cmp.Or(s.Task, found.Task), cmp.Or(s.Conversation, found.Conversation)
+			dir, effort := cmp.Or(s.Dir, found.Dir), cmp.Or(s.Effort, found.Effort)
+			harness, model := cmp.Or(s.Harness, found.Harness), cmp.Or(s.Model, found.Model)
 			found = s
 			found.Task, found.Conversation = task, conv
+			found.Dir, found.Effort = dir, effort
+			found.Harness, found.Model = harness, model
 		}
 	}
 	return found, found.Name != ""
