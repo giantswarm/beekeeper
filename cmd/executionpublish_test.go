@@ -453,7 +453,7 @@ func TestPublicationCommitStartsNoMaintenance(t *testing.T) {
 			if _, err := runPublicationGit(t.Context(), rig.workspace, []string{"GIT_TRACE2_EVENT=" + trace}, args...); err != nil {
 				t.Fatal(err)
 			}
-			data, err := os.ReadFile(trace)
+			data, err := os.ReadFile(trace) //nolint:gosec // trace is a fixed filename inside this test's TempDir
 			if err != nil {
 				t.Fatal(err)
 			}
