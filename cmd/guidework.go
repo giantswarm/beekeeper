@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strconv"
@@ -22,6 +23,17 @@ const (
 
 func guideWorkText(st *state.State) string {
 	var b strings.Builder
+	var fingerprints []string
+	for fingerprint := range st.GuideFindings {
+		fingerprints = append(fingerprints, fingerprint)
+	}
+	slices.Sort(fingerprints)
+	for _, fingerprint := range fingerprints {
+		finding := st.GuideFindings[fingerprint]
+		if finding.Issue != "" {
+			_, _ = fmt.Fprintf(&b, "- Filed finding: %s; observations: %d; fingerprint: %s\n", finding.Issue, finding.Count, fingerprint)
+		}
+	}
 	for _, work := range st.GuideWork {
 		_, _ = fmt.Fprintf(&b, "- %d [%s] %s; owner: guide (recorded by %s); due: %s\n", work.ID, work.Kind, work.Text, work.By.Name, work.Due.Format("2006-01-02 15:04:05 MST"))
 	}
@@ -71,7 +83,7 @@ func (a *app) guideWorkCmd() *cobra.Command {
 	}}
 	add.Flags().StringVar(&kind, "kind", paramTask, "task, goal or restore")
 	add.Flags().StringVar(&due, "due", "", "next action or restoration time (now, 30m or a dated time)")
-	var reason string
+	var reason, issue string
 	done := &cobra.Command{Use: "done <id> --reason <result>", Short: "Close owned work with its result", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
 		id, err := strconv.Atoi(args[0])
 		if err != nil {
@@ -92,11 +104,24 @@ func (a *app) guideWorkCmd() *cobra.Command {
 			if i < 0 {
 				return nil, fmt.Errorf("guide work %d not found", id)
 			}
+			if issue != "" {
+				if _, ok := parseRef(issue); !ok || !strings.HasPrefix(issue, "https://github.com/") || !strings.Contains(issue, "/issues/") {
+					return nil, fmt.Errorf("--issue requires a full GitHub issue URL")
+				}
+				if st.GuideFindings == nil {
+					st.GuideFindings = map[string]state.GuideFinding{}
+				}
+				fingerprint := guideFindingFingerprint(st.GuideWork[i].Text)
+				finding := st.GuideFindings[fingerprint]
+				finding.Issue = issue
+				st.GuideFindings[fingerprint] = finding
+			}
 			st.Guide.WorkChecked = nil
 			st.GuideWork = slices.Delete(st.GuideWork, i, i+1)
 			return []state.Event{{At: a.now, By: me, Verb: "guide.work.done", Detail: fmt.Sprintf("%d: %s", id, reason)}}, nil
 		})
 	}}
+	done.Flags().StringVar(&issue, "issue", "", "existing issue owning this report; matching reports increment its tally")
 	done.Flags().StringVar(&reason, "reason", "", "what was done, filed or restored")
 	var next, why string
 	deferWork := &cobra.Command{Use: "defer <id> --due <time> --reason <why>", Short: "Schedule owned work's next action with its reason", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
@@ -151,7 +176,25 @@ func (a *app) guideWorkCmd() *cobra.Command {
 			return []state.Event{{At: a.now, By: me, Verb: "guide.work.checked"}}, nil
 		})
 	}}
-	c.AddCommand(add, done, deferWork, check)
+	unmap := &cobra.Command{Use: "unmap <issue-url>", Short: "Allow new reports after a filed issue is resolved", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
+		me, err := a.caller()
+		if err != nil {
+			return err
+		}
+		return a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if st.Guide == nil || st.Guide.Holder == nil || !st.Guide.Holder.Is(me) {
+				return nil, refused("only the current guide changes report mappings")
+			}
+			for fingerprint, finding := range st.GuideFindings {
+				if finding.Issue == args[0] {
+					finding.Issue = ""
+					st.GuideFindings[fingerprint] = finding
+				}
+			}
+			return []state.Event{{At: a.now, By: me, Verb: "guide.finding.unmapped", Detail: args[0]}}, nil
+		})
+	}}
+	c.AddCommand(add, done, deferWork, check, unmap)
 	return c
 }
 
@@ -212,9 +255,83 @@ func guideReportEvents(st *state.State, events []state.Event, now time.Time) []s
 	if migrated && backlog != nil {
 		st.GuideWork = append(kept, *backlog)
 	}
-	return fresh
+	return settleGuideRecoveries(st, fresh)
 }
 
 func guideWorkBlocks(work state.GuideWork, now time.Time) bool {
 	return work.Kind != guideWorkGoal && work.Kind != guideWorkBacklog && !work.Due.After(now)
+}
+
+// Fingerprint only the finding, not the reporter or observation time.
+func guideFindingFingerprint(text string) string {
+	_, body, ok := strings.Cut(text, fileReportSeparator)
+	if !ok {
+		body = text
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(body))))
+}
+
+// retainGuideReport is shared by both feeds under the state lock. Recovery is
+// bookkeeping, never new work; a known issue owns subsequent matching reports.
+func retainGuideReport(st *state.State, key, text string, at time.Time, by state.Party) bool {
+	_, body, _ := strings.Cut(text, fileReportSeparator)
+	if strings.HasPrefix(body, "RECOVERED:") {
+		source := strings.Replace(key, "delivery recovered ", "delivery ", 1)
+		source = strings.Replace(source, "delivery full recovered ", "delivery full ", 1)
+		if !slices.Contains(st.GuideReports, source) {
+			st.GuideReports = append(st.GuideReports, source)
+		}
+		st.GuideWork = slices.DeleteFunc(st.GuideWork, func(w state.GuideWork) bool {
+			_, previous, _ := strings.Cut(w.Text, fileReportSeparator)
+			return w.Source != "" && (strings.HasPrefix(key, "throughput ") && strings.HasPrefix(w.Source, "throughput ") || w.Source == source || strings.TrimSpace(strings.TrimPrefix(body, "RECOVERED:")) == strings.TrimSpace(previous))
+		})
+		return false
+	}
+	if slices.Contains(st.GuideReports, key) {
+		return false
+	}
+	st.GuideReports = append(st.GuideReports, key)
+	if st.GuideFindings == nil {
+		st.GuideFindings = map[string]state.GuideFinding{}
+	}
+	fingerprint := guideFindingFingerprint(text)
+	finding := st.GuideFindings[fingerprint]
+	finding.Count++
+	st.GuideFindings[fingerprint] = finding
+	if finding.Issue != "" {
+		return false
+	}
+	// Coalesce a repeated report while its original work is still open.
+	if slices.ContainsFunc(st.GuideWork, func(w state.GuideWork) bool { return w.Source != "" && guideFindingFingerprint(w.Text) == fingerprint }) {
+		return false
+	}
+	st.Guide.WorkChecked = nil
+	st.NextGuideWork++
+	st.GuideWork = append(st.GuideWork, state.GuideWork{ID: st.NextGuideWork, Kind: paramTask, Text: text, Due: at, By: by, Source: key})
+	return true
+}
+
+// Settle a whole batch before announcing anything: a raised and recovered
+// episode between polls must not spend a guide turn.
+func settleGuideRecoveries(st *state.State, events []state.Event) []state.Event {
+	for _, e := range events {
+		key, text, ok := keyed(e.Detail)
+		_, body, _ := strings.Cut(text, fileReportSeparator)
+		if ok && strings.HasPrefix(body, "RECOVERED:") {
+			if strings.HasPrefix(key, "throughput ") {
+				for _, prior := range events {
+					previous, _, _ := keyed(prior.Detail)
+					if !prior.At.After(e.At) && strings.HasPrefix(previous, "throughput ") && !slices.Contains(st.GuideReports, previous) {
+						st.GuideReports = append(st.GuideReports, previous)
+					}
+				}
+			}
+			retainGuideReport(st, key, text, e.At, state.Party{})
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(events), func(e state.Event) bool {
+		_, text, _ := keyed(e.Detail)
+		_, body, _ := strings.Cut(text, fileReportSeparator)
+		return strings.HasPrefix(body, "RECOVERED:")
+	})
 }

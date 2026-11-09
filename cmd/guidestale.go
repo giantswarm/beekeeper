@@ -12,11 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-// guideSelf is what a guide watch says about itself: GUIDE WATCH STALE once
-// self-update replaced its binary, and GUIDE SAVE REFUSED, with the lines
-// the refused save would have recorded, while a newer release's state
-// refuses its saves. Both name the command that re-arms it, which is its
-// owner's to run: the watch never re-executes itself.
+// guideSelf detects binary replacement before consuming the next feed. Failed
+// re-execution is reported once, retaining the running process as a fallback.
 type guideSelf struct {
 	pid  int
 	args []string
@@ -26,6 +23,7 @@ type guideSelf struct {
 	replaced  func() (string, bool)
 	versionOf func(context.Context, string) string
 
+	exec  func() error
 	stale bool
 	// refused is the feed of the last refused save it said, so a save
 	// refused again for the same lines says nothing new.
@@ -33,7 +31,7 @@ type guideSelf struct {
 }
 
 func newGuideSelf() *guideSelf {
-	g := &guideSelf{pid: os.Getpid(), args: os.Args, versionOf: binaryVersion}
+	g := &guideSelf{pid: os.Getpid(), args: os.Args, versionOf: binaryVersion, exec: func() error { return platform.RunningBinary().Exec() }}
 	g.replaced = func() (string, bool) {
 		b := platform.ProcessBinary(g.pid)
 		if b == nil {
@@ -50,6 +48,13 @@ func (g *guideSelf) lines(ctx context.Context, feed []string, err error) []strin
 	if !g.stale {
 		if path, ok := g.replaced(); ok {
 			g.stale = true
+			if g.exec != nil {
+				if execErr := g.exec(); execErr != nil {
+					out = append(out, fmt.Sprintf("GUIDE REEXEC FAILED: %v", execErr))
+				} else {
+					return feed
+				}
+			}
 			out = append(out, fmt.Sprintf("GUIDE WATCH STALE: this watch (pid %d) runs %s; self-update installed %s at %s, a re-arm picks it up: %s",
 				g.pid, project.Version(), g.versionOf(ctx, path), path, rearm(g.args)))
 		}

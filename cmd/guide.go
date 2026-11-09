@@ -970,9 +970,8 @@ in the state, so a restarted feed says nothing again; only a standing
 GUIDE RELAY DUE is said by each feed and repeats every five minutes until
 a relay opens, and after a change of guide.relayAt. Runs until killed; --once polls once.
 
-The feed never re-executes itself. Once self-update replaced its binary it
-says GUIDE WATCH STALE, once, with the version it runs, the one installed
-and the command that re-arms it. A save a newer release refuses (the state
+The feed re-executes itself after self-update or rollback replaces its binary.
+A failed re-execution is reported once with the command that re-arms it. A save a newer release refuses (the state
 written by it) is said as GUIDE SAVE REFUSED with the same command and the
 lines that save would have recorded, again only when those lines change.`,
 		Args: cobra.NoArgs,
@@ -990,6 +989,10 @@ lines that save would have recorded, again only when those lines change.`,
 			self := newGuideSelf()
 			for {
 				a.now = time.Now()
+				// Re-exec before consuming any durable feed entries.
+				for _, l := range self.lines(ctx, nil, nil) {
+					_, _ = fmt.Fprintln(a.out, a.now.Format("15:04:05")+" "+l)
+				}
 				feed, err := a.guideFeed(ctx)
 				for _, l := range self.lines(ctx, feed, err) {
 					_, _ = fmt.Fprintln(a.out, a.now.Format("15:04:05")+" "+l)
@@ -1047,9 +1050,9 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 			lines = append(lines, fmt.Sprintf("GUIDE RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
-		reportsSince, workText := st.GuideReportsSince, guideWorkText(st)
+		reportsSince, workText, reportCount := st.GuideReportsSince, guideWorkText(st), len(st.GuideReports)
 		pl, pf := guideProblemLines(st, guideReportEvents(st, problems, a.now))
-		pf = pf || !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st)
+		pf = pf || !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st) || reportCount != len(st.GuideReports)
 		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
 		cl, cf := a.centralGuideLines(st, sessions, central.notes, central.closed, centralErr == nil)
 		lines = append(lines, cl...)
@@ -1274,6 +1277,9 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 // guideProblemLines delivers reports once, escaped onto one physical line.
 // Keys are retained only while their report remains in the event log.
 func guideProblemLines(st *state.State, events []state.Event) (lines []string, changed bool) {
+	workBeforeRecovery, reportsBeforeRecovery := guideWorkText(st), len(st.GuideReports)
+	events = settleGuideRecoveries(st, events)
+	recovered := workBeforeRecovery != guideWorkText(st) || reportsBeforeRecovery != len(st.GuideReports)
 	current := map[string]bool{}
 	for _, e := range events {
 		key, text, ok := keyed(e.Detail)
@@ -1285,25 +1291,26 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 	}
 	guideRole.update(st, func(r *state.Role) {
 		before := len(r.Fed)
+		reportsBefore, workBefore := len(st.GuideReports), guideWorkText(st)
 		r.Fed = slices.DeleteFunc(r.Fed, func(key string) bool {
 			return strings.HasPrefix(key, "problem:") && !current[key]
 		})
-		changed = len(r.Fed) != before
+		changed = recovered || len(r.Fed) != before
 		for _, e := range events {
 			key, text, ok := keyed(e.Detail)
 			if !ok || !strings.Contains(text, fileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
 				continue
 			}
-			if r.Holder != nil && !slices.Contains(st.GuideReports, key) {
-				r.WorkChecked = nil
-				st.NextGuideWork++
-				st.GuideWork = append(st.GuideWork, state.GuideWork{ID: st.NextGuideWork, Kind: paramTask, Text: text, Due: e.At, By: r.Holder.Party, Source: key})
-				st.GuideReports = append(st.GuideReports, key)
+			if r.Holder != nil {
+				if !retainGuideReport(st, key, text, e.At, r.Holder.Party) {
+					continue
+				}
 			}
 			r.Fed = append(r.Fed, "problem:"+key)
 			lines = append(lines, "GUIDE PROBLEM: "+escapedLine(text))
 			changed = true
 		}
+		changed = changed || reportsBefore != len(st.GuideReports) || workBefore != guideWorkText(st)
 	})
 	return lines, changed
 }

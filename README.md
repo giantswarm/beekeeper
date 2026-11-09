@@ -4199,3 +4199,30 @@ so a tiny configured value cannot silently allow starts until the disk is full.
 The disk start floor uses `watch.diskMinMiB`: set it to `-1` to disable LOW DISK
 and its start refusal; zero retains the default 5% floor, and a positive value
 sets the floor in MiB. Other capacity thresholds keep their existing keys.
+
+### Guide report ownership
+
+Guide reports use a shared durable delivery record. The first consumer to retain a
+report owns its delivery; the other consumer respects the same record. Re-arming the foreground watch does not replay reports already
+retained by either path. Recovery reports close their matching delivery work
+without creating a new task, including episodes raised and recovered between
+polls. Refill, review and merge-decision stalls raise one alarm per episode.
+
+When filing or recognizing an existing issue for a report, record its mapping:
+
+```sh
+beekeeper guide work done <id> --reason "Filed the defect" --issue https://github.com/owner/repo/issues/123
+```
+
+Matching report bodies then increment that issue's local observation tally,
+visible in `beekeeper guide work`, without creating more due work. Reporter and
+observation-time headers do not affect the fingerprint. Different report bodies
+remain new findings. Once the issue is resolved, use
+`beekeeper guide work unmap https://github.com/owner/repo/issues/123` to allow
+subsequent observations to raise new work. Mapping lifecycle is explicit; the
+watch does not poll GitHub for every repeated report.
+
+A guide watch re-executes the installed executable after replacement by an update
+or rollback, preserving its PID, arguments and durable delivery records. It checks
+for replacement before consuming the next feed. A failed re-execution is reported
+once with manual recovery instructions.

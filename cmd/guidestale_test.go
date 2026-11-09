@@ -106,3 +106,16 @@ func TestGuideWatchReportsARefusedSave(t *testing.T) {
 		t.Errorf("writer %+v, fed %q: the older release's feed saved", st.Writer, st.GuideRole().Fed)
 	}
 }
+
+func TestGuideWatchReexecutesReplacedBinary(t *testing.T) {
+	replaced := true
+	g := testGuideSelf(&replaced)
+	calls := 0
+	g.exec = func() error { calls++; return nil }
+	if lines := g.lines(t.Context(), nil, nil); len(lines) != 0 || calls != 1 {
+		t.Fatalf("replacement: %q calls=%d", lines, calls)
+	}
+	if lines := g.lines(t.Context(), nil, nil); len(lines) != 0 || calls != 1 {
+		t.Fatalf("replacement repeated: %q calls=%d", lines, calls)
+	}
+}

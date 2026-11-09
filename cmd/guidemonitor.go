@@ -33,19 +33,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 		}
 		to = r.Holder.Name
 		holder = r.Holder.Party
-		for _, e := range guideReportEvents(st, events, w.now) {
-			key, text, ok := keyed(e.Detail)
-			if !ok || !strings.Contains(text, fileReportSeparator) || slices.Contains(st.GuideReports, key) {
-				continue
-			}
-			st.GuideReports = append(st.GuideReports, key)
-			if slices.Contains(r.Fed, "problem:"+key) {
-				continue
-			}
-			r.WorkChecked = nil
-			st.NextGuideWork++
-			st.GuideWork = append(st.GuideWork, state.GuideWork{ID: st.NextGuideWork, Kind: paramTask, Text: text, By: r.Holder.Party, Due: w.now.UTC(), Source: key})
-		}
+
 		var current []string
 		notice := func(key, text string) {
 			key = r.Holder.Session + ":" + r.Holder.HostSession + ":" + key
@@ -60,16 +48,26 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 			since = r.Holder.Since
 		}
 		grace := max(2*time.Minute, 3*w.cfg.Watch.Interval.Duration)
+		// Both consumers retain reports under the same lock; the first owns
+		// delivery and the other observes the durable report key.
+		for _, e := range guideReportEvents(st, events, w.now) {
+			key, text, ok := keyed(e.Detail)
+			if !ok || !strings.Contains(text, fileReportSeparator) {
+				continue
+			}
+			retainGuideReport(st, key, text, e.At, r.Holder.Party)
+		}
+
 		if !since.IsZero() && w.now.Sub(since) > grace {
 			notice("watch:"+since.String(), "GUIDE WATCH LAPSED: the independent desk watch has seen no guide feed heartbeat since "+since.Format(time.RFC3339)+"; re-arm `beekeeper guide watch` and read `beekeeper guide work`.")
 		}
 		for _, n := range st.Notes {
-			if guides(w.cfg.Guide.Person, &n) {
+			if guides(w.cfg.Guide.Person, &n) && !slices.Contains(r.Fed, fmt.Sprintf("note#%d", n.ID)) {
 				notice(fmt.Sprintf("note:%d:%s", n.ID, n.At.String()), fmt.Sprintf("GUIDE DECISION: note %d is waiting; run `beekeeper guide next` and ask in conversation without a blocking tool.", n.ID))
 			}
 		}
 		for _, work := range st.GuideWork {
-			if guideWorkBlocks(work, w.now) {
+			if guideWorkBlocks(work, w.now) && !slices.Contains(r.Fed, "problem:"+work.Source) {
 				notice(fmt.Sprintf("work:%d:%s", work.ID, work.Due.String()), fmt.Sprintf("GUIDE WORK DUE: %d [%s] %s; run `beekeeper guide work`.", work.ID, work.Kind, escapedLine(work.Text)))
 			}
 		}
