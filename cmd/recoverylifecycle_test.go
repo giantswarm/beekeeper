@@ -391,3 +391,67 @@ func TestRecoveryAcceptsHistoryCheckpointAndRejectsStalledReader(t *testing.T) {
 		t.Fatalf("stalled history reader: %s: %s", verdict, reason)
 	}
 }
+
+// Even discarded events prove that the reader is moving. Exercise the real
+// Follow callback path across more than a heartbeat grace, then stop reading.
+func TestRecoveryAcceptsProgressingEventHistory(t *testing.T) {
+	c, now := recoveryRig(t)
+	oldVersion := loopRunningVersion
+	t.Cleanup(func() { loopRunningVersion = oldVersion })
+	loopRunningVersion = func() string { return recoveryBadVersion }
+	j := journal(t, c)
+	events := make([]state.Event, 20)
+	for i := range events {
+		events[i] = state.Event{At: *now, Verb: "history-fixture"}
+	}
+	if err := c.store.Update(func(*state.State) ([]state.Event, error) { return events, nil }); err != nil {
+		t.Fatal(err)
+	}
+	l := &supervisorLoop{a: c.a}
+	checkpoints := 0
+	filter := eventProgressFilter(func(state.Event) bool { return false }, func() {
+		checkpoints++
+		if err := l.checkpointThroughput(*now); err != nil {
+			t.Fatal(err)
+		}
+		s := c.signals(t.Context(), j)
+		if verdict, reason := update.Decide(update.Observed{Elapsed: update.HeartbeatGrace, ProbePassed: true}, s); verdict != update.Wait {
+			t.Fatalf("progressing reader: %s: %s", verdict, reason)
+		}
+	}, func() time.Time { return *now })
+	kept, err := c.store.Follow("history-progress-test", func(e state.Event) bool {
+		*now = now.Add(time.Minute)
+		return filter(e)
+	})
+	if err != nil || len(kept) != 0 || checkpoints < len(events) {
+		t.Fatalf("history: kept=%d checkpoints=%d err=%v", len(kept), checkpoints, err)
+	}
+	*now = now.Add(4 * time.Minute)
+	if verdict, reason := update.Decide(update.Observed{Elapsed: update.HeartbeatGrace, ProbePassed: true}, c.signals(t.Context(), j)); verdict != update.RollBack {
+		t.Fatalf("stalled reader: %s: %s", verdict, reason)
+	}
+}
+
+func TestEventHistoryProgressIsRateLimited(t *testing.T) {
+	now := time.Now()
+	checkpoints := 0
+	filter := eventProgressFilter(func(e state.Event) bool { return e.Verb == answerRecorded }, func() { checkpoints++ }, func() time.Time { return now })
+	for range 10 {
+		if filter(state.Event{}) {
+			t.Fatal("discarded event retained")
+		}
+	}
+	if checkpoints != 0 {
+		t.Fatal("checkpoint before cadence")
+	}
+	now = now.Add(throughputCadence)
+	if !filter(state.Event{Verb: answerRecorded}) {
+		t.Fatal("accepted event discarded")
+	}
+	for range 10 {
+		filter(state.Event{})
+	}
+	if checkpoints != 1 {
+		t.Fatalf("checkpoints=%d, want 1", checkpoints)
+	}
+}

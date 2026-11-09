@@ -112,3 +112,21 @@ func (c *recoveryController) loopSilence(jVersion string, installed time.Time) s
 	}
 	return fmt.Sprintf("candidate loop last reached %s; no health checkpoint for %s", life.Phase, c.now().Sub(life.At).Round(time.Second))
 }
+
+// eventHistoryFilter checkpoints only when the reader actually decodes another
+// event, including events the caller discards. A blocked read or parser cannot
+// keep itself alive. Side-file writes do not acquire the event reader's mutex.
+func (l *supervisorLoop) eventHistoryFilter(keep func(state.Event) bool) func(state.Event) bool {
+	return eventProgressFilter(keep, func() { l.lifecyclePhase("read event history") }, time.Now)
+}
+
+func eventProgressFilter(keep func(state.Event) bool, checkpoint func(), now func() time.Time) func(state.Event) bool {
+	last := now()
+	return func(e state.Event) bool {
+		if at := now(); at.Sub(last) >= throughputCadence {
+			checkpoint()
+			last = at
+		}
+		return keep(e)
+	}
+}
