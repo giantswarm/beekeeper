@@ -269,7 +269,7 @@ func TestExecutionPublicationReconcilesThroughREST(t *testing.T) {
 	original := executionPublishGH
 	reads := 0
 	executionPublishGH = func(ctx context.Context, args ...string) ([]byte, error) {
-		if args[0] == "pr" && args[1] == "list" {
+		if args[0] == "pr" && args[1] == transcriptListCommand {
 			return nil, errors.New("GraphQL unavailable")
 		}
 		if args[0] == "api" && strings.HasPrefix(args[1], "repos/"+rig.request.Repository+"/pulls?") {
@@ -278,7 +278,12 @@ func TestExecutionPublicationReconcilesThroughREST(t *testing.T) {
 				t.Fatalf("unscoped reconciliation: %v", args)
 			}
 			if rig.created {
-				return json.Marshal([]map[string]string{{"html_url": publicationFixturePRURL, "state": "open", "title": rig.title, "body": rig.body}})
+				return json.Marshal([]struct {
+					URL   string `json:"html_url"`
+					State string `json:"state"`
+					Title string `json:"title"`
+					Body  string `json:"body"`
+				}{{URL: publicationFixturePRURL, State: "open", Title: rig.title, Body: rig.body}})
 			}
 			return []byte(`[]`), nil
 		}
@@ -301,7 +306,7 @@ func TestExecutionPublicationReconcilesThroughREST(t *testing.T) {
 func TestOwnedPullsRESTRejectsUnreadableOrAmbiguousResults(t *testing.T) {
 	original := executionPublishGH
 	t.Cleanup(func() { executionPublishGH = original })
-	for _, body := range []string{`invalid`, `[{},{}]`, `[{}]`, `[{"html_url":"url","state":"unknown"}]`} {
+	for _, body := range []string{`not-json`, `[{},{}]`, `[{}]`, `[{"html_url":"url","state":"unknown"}]`} {
 		t.Run(body, func(t *testing.T) {
 			executionPublishGH = func(context.Context, ...string) ([]byte, error) { return []byte(body), nil }
 			if _, err := ownedPullsREST(t.Context(), "giantswarm/beekeeper", "owned"); err == nil {
