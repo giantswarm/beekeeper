@@ -15,9 +15,14 @@ import (
 )
 
 const epicOwnerTask = "Epic owner: "
+const epicChildMerged = "merged"
+const epicChildQueued = "queued"
+const epicChildPerson = "waiting on the person"
+
 const epicSnapshotFile = "epic-delivery.json"
 
 type epicDelivery struct {
+	Item     board.Item   `json:"item"`
 	Ref      string       `json:"ref"`
 	URL      string       `json:"url"`
 	Children []board.Item `json:"children"`
@@ -40,14 +45,14 @@ func epicOwner(st *state.State, ref string) *state.Agent {
 
 // Offer the owner even after the last child closes: only acceptance ends an epic.
 // This uses the same ranked eligibility gates as implementation work.
-func epicCandidates(snap *board.Snapshot, cfg config.Board, cands []board.Candidate) ([]board.Candidate, epicSnapshot) {
+func epicCandidates(snap *board.Snapshot, cfg config.Board, cands []board.Candidate, states ...*state.State) ([]board.Candidate, epicSnapshot) {
 	view := epicSnapshot{At: time.Now().UTC()}
 	var owners []board.Candidate
 	for _, it := range snap.Items {
-		if !snap.Gate.Epic(it) || it.Status != snap.Gate.Go {
+		if !snap.Gate.Epic(it) || (it.Status != snap.Gate.Go && (len(states) == 0 || epicOwner(states[0], it.Ref) == nil)) {
 			continue
 		}
-		view.Epics = append(view.Epics, epicDelivery{Ref: it.Ref, URL: it.URL, Children: it.SubIssues, Missing: it.Missing})
+		view.Epics = append(view.Epics, epicDelivery{Item: it, Ref: it.Ref, URL: it.URL, Children: it.SubIssues, Missing: it.Missing})
 		one := *snap
 		one.Order = slices.Clone(snap.Order)
 		for i := range one.Order {
@@ -94,14 +99,18 @@ func epicAdmission(st *state.State, c board.Candidate, sc pickScope) string {
 	if c.EpicOwner {
 		ref = c.Ref
 	}
-	if !slices.ContainsFunc(sc.epics.Epics, func(e epicDelivery) bool { return strings.EqualFold(e.Ref, ref) }) {
+	index := slices.IndexFunc(sc.epics.Epics, func(e epicDelivery) bool { return strings.EqualFold(e.Ref, ref) })
+	if index < 0 {
 		return ""
+	}
+	if why := heldByDecision(st.Notes, sc.epics.Epics[index].Item); why != "" {
+		return why
 	}
 	owner := epicOwner(st, ref)
 	if owner == nil && sc.epicLimit > 0 {
 		slots := sc.epicLimit
-		for _, e := range sc.epics.Epics {
-			if epicOwner(st, e.Ref) != nil {
+		for _, ag := range st.Agents {
+			if !ag.Done && strings.HasPrefix(ag.Task, epicOwnerTask) {
 				slots--
 			}
 		}
@@ -138,7 +147,7 @@ func epicAdmission(st *state.State, c board.Candidate, sc pickScope) string {
 			if strings.EqualFold(ch.Ref, c.Ref) {
 				continue
 			}
-			if epicChildState(st, ch.Ref, sc.listed, sc.wipPolicy) == "flowing" {
+			if epicChildState(st, ch.Ref, sc.listed, sc.wipPolicy) == deliveryFlowing {
 				n++
 			}
 		}
@@ -158,16 +167,19 @@ func epicChildState(st *state.State, ref string, now time.Time, policy deliveryP
 		if !strings.EqualFold(d.Ref, ref) {
 			continue
 		}
+		if d.Step == state.DeliveryDropped {
+			return deliveryBlocked
+		}
 		if !d.Active() || d.Step == state.DeliveryReleasing {
-			return "merged"
+			return epicChildMerged
 		}
 		switch classifyDelivery(st, d, now, policy).Class {
 		case deliveryPerson:
-			return "waiting on the person"
+			return epicChildPerson
 		case deliveryBlocked:
-			return "blocked"
+			return deliveryBlocked
 		default:
-			return "flowing"
+			return deliveryFlowing
 		}
 	}
 	for _, ag := range st.Agents {
@@ -176,11 +188,11 @@ func epicChildState(st *state.State, ref string, now time.Time, policy deliveryP
 		}
 		for _, r := range namedRefs(ag.Task, "") {
 			if strings.EqualFold(r, ref) {
-				return "flowing"
+				return deliveryFlowing
 			}
 		}
 	}
-	return "queued"
+	return epicChildQueued
 }
 
 func (a *app) epicStatus(st *state.State) (string, error) {
@@ -198,7 +210,7 @@ func (a *app) epicStatus(st *state.State) (string, error) {
 			b.WriteString("; owner queued")
 		}
 		for _, ch := range e.Children {
-			fmt.Fprintf(&b, "\n  %s: %s", ch.URL, epicChildState(st, ch.Ref, a.timeNow(), a.deliveryPolicy()))
+			fmt.Fprintf(&b, "\n  %s: %s", ch.URL, epicChildStatus(st, ch, a.timeNow(), a.deliveryPolicy()))
 		}
 		for _, missing := range e.Missing {
 			fmt.Fprintf(&b, "\n  unknown: %s", missing)
@@ -221,7 +233,7 @@ func (l *supervisorLoop) wakeEpicOwners(ctx context.Context, st *state.State) er
 		}
 		var parts []string
 		for _, ch := range e.Children {
-			part := ch.Ref + ": " + epicChildState(st, ch.Ref, l.a.timeNow(), l.a.deliveryPolicy())
+			part := ch.Ref + ": " + epicChildStatus(st, ch, l.a.timeNow(), l.a.deliveryPolicy())
 			for _, d := range st.Deliveries {
 				if strings.EqualFold(d.Ref, ch.Ref) {
 					part += fmt.Sprintf(" %s %s %s", d.Step, d.Since.Format(time.RFC3339Nano), d.Verdict)
@@ -298,7 +310,7 @@ const epicAcceptanceProven = "Epic acceptance proven: "
 func (l *supervisorLoop) completeEpics(ctx context.Context, st *state.State) error {
 	for _, report := range st.WorkerReports {
 		ref, ok := strings.CutPrefix(report.Task, epicOwnerTask)
-		if !ok || !report.Finished || !strings.Contains(report.Text, epicAcceptanceProven) {
+		if !ok || !report.Finished || !strings.HasPrefix(strings.TrimSpace(report.Text), epicAcceptanceProven) || strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(report.Text), epicAcceptanceProven)) == "" {
 			continue
 		}
 		r, ok := parseRef(ref)
@@ -313,7 +325,7 @@ func (l *supervisorLoop) completeEpics(ctx context.Context, st *state.State) err
 		if completed {
 			continue
 		}
-		raw, err := epicGitHub(ctx, "api", fmt.Sprintf("repos/%s/issues/%d", r.Repo, r.N), "--jq", ".sub_issues_summary.open")
+		raw, err := epicGitHub(ctx, "api", fmt.Sprintf("repos/%s/issues/%d", r.Repo, r.N), "--jq", `.sub_issues_summary | if (.total | type) == "number" and (.completed | type) == "number" then .total - .completed else null end`)
 		if err != nil {
 			return err
 		}
@@ -331,4 +343,41 @@ func (l *supervisorLoop) completeEpics(ctx context.Context, st *state.State) err
 		}
 	}
 	return nil
+}
+
+// Keep merged children visible after they leave GitHub's open-child list.
+func retainEpicHistory(view *epicSnapshot, previous epicSnapshot, st *state.State, now time.Time, policy deliveryPolicy) {
+	for i := range view.Epics {
+		e := &view.Epics[i]
+		for _, old := range previous.Epics {
+			if !strings.EqualFold(e.Ref, old.Ref) {
+				continue
+			}
+			for _, ch := range old.Children {
+				if epicChildState(st, ch.Ref, now, policy) != epicChildMerged {
+					continue
+				}
+				if !slices.ContainsFunc(e.Children, func(current board.Item) bool { return strings.EqualFold(current.Ref, ch.Ref) }) {
+					e.Children = append(e.Children, ch)
+				}
+			}
+		}
+	}
+}
+
+func epicChildStatus(st *state.State, child board.Item, now time.Time, policy deliveryPolicy) string {
+	status := epicChildState(st, child.Ref, now, policy)
+	if status != epicChildQueued {
+		return status
+	}
+	if len(child.Missing) > 0 {
+		return state.DeliveryUnknown
+	}
+	if heldByDecision(st.Notes, child) != "" {
+		return epicChildPerson
+	}
+	if child.OpenBlockers > 0 || strings.Contains(strings.ToLower(child.Status), deliveryBlocked) {
+		return deliveryBlocked
+	}
+	return status
 }

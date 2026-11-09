@@ -167,7 +167,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		return a.printJSON(supervisorView{Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}
 	if pid == 0 {
-		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n%s\n", loopServiceHint(), delivery.line())
+		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n%s\n%s\n", loopServiceHint(), delivery.line(), epics)
 		return err
 	}
 	line := fmt.Sprintf("the supervisor loop runs (PID %d)", pid)

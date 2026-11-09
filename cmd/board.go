@@ -259,7 +259,16 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 				return err
 			}
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			cands, epics := epicCandidates(snap, a.cfg.Board, cands)
+			epicState, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			cands, epics := epicCandidates(snap, a.cfg.Board, cands, epicState)
+			var previousEpics epicSnapshot
+			if _, err := a.store.ReadFile(epicSnapshotFile, &previousEpics); err != nil {
+				return err
+			}
+			retainEpicHistory(&epics, previousEpics, epicState, a.timeNow(), a.deliveryPolicy())
 			if err := a.store.WriteFile(epicSnapshotFile, epics); err != nil {
 				return err
 			}

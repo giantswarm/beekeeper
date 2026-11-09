@@ -1298,10 +1298,14 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if !l.dryRun {
 		if err := l.completeEpics(ctx, st); err != nil {
-			return err
+			l.sayOnce("epic completion", "SUPERVISOR EPIC completion waits: %v", err)
+		} else {
+			l.clearSaid("epic completion")
 		}
 		if err := l.wakeEpicOwners(ctx, st); err != nil {
-			return err
+			l.sayOnce("epic wake", "SUPERVISOR EPIC wake waits: %v", err)
+		} else {
+			l.clearSaid("epic wake")
 		}
 	}
 	l.lifecyclePhase("read state and dispatch timers")
