@@ -9,7 +9,7 @@ import (
 )
 
 func TestGuideRecoverySettlesBeforeEitherFeed(t *testing.T) {
-	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "guide"}}}}
+	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: guideName}}}}
 	report := "report" + fileReportSeparator + "DELIVERY STALLED fixture"
 	events := []state.Event{
 		{At: relayNow, Detail: "[delivery fixture] " + report},
@@ -27,7 +27,7 @@ func TestGuideRecoverySettlesBeforeEitherFeed(t *testing.T) {
 }
 
 func TestGuideReportHasOneDeliveryAcrossFeedsAndRearm(t *testing.T) {
-	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "guide"}}}}
+	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: guideName}}}}
 	ev := state.Event{At: relayNow, Detail: "[fixture] report" + fileReportSeparator + "new defect"}
 	key, text, _ := keyed(ev.Detail)
 	if !retainGuideReport(st, key, text, ev.At, state.Party{}) {
@@ -49,7 +49,7 @@ func TestGuideKnownFindingTalliesWithoutNewWork(t *testing.T) {
 	st := &state.State{Guide: &state.Role{}}
 	text := "report at now" + fileReportSeparator + "same defect"
 	fingerprint := guideFindingFingerprint(text)
-	st.GuideFindings = map[string]state.GuideFinding{fingerprint: {Issue: "https://github.com/o/r/issues/1", Count: 1}}
+	st.GuideFindings = map[string]state.GuideFinding{fingerprint: {Issue: issueOneURL, Count: 1}}
 	if retainGuideReport(st, "new observation", "another reporter"+fileReportSeparator+"same defect", relayNow, state.Party{}) {
 		t.Fatal("known issue announced")
 	}
@@ -81,7 +81,7 @@ func TestGuideFilingReasonMapsAndUnmapsReport(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	issue := "https://github.com/o/r/issues/1"
+	issue := issueOneURL
 	if err := guideWorkRun(t, a, "done", "1", "--reason", "Filed "+issue); err != nil {
 		t.Fatal(err)
 	}
