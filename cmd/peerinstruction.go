@@ -37,6 +37,9 @@ func (a *app) relayInstruction(ctx context.Context, session, address, msg string
 	if err != nil {
 		return "", err
 	}
+	if _, err := guideMessageTarget(st, session); err != nil {
+		return "", err
+	}
 	by, err := a.caller()
 	if err != nil {
 		by = state.Party{Name: noSession}
@@ -110,6 +113,23 @@ func relayInstructionOutcome(status string) string {
 
 // instructionTarget resolves a live Claude peer without guessing between CLIs.
 func (a *app) instructionTarget(to string) (*claude.Session, error) {
+	store := a.store
+	if store == nil {
+		var err error
+		store, err = state.Open(a.cfg.StateDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	st, err := store.Read()
+	if err != nil {
+		return nil, err
+	}
+	original := to
+	to, err = guideMessageTarget(st, to)
+	if err != nil {
+		return nil, err
+	}
 	table, err := plat.Machine.Processes()
 	if err != nil {
 		return nil, nil
@@ -133,6 +153,9 @@ func (a *app) instructionTarget(to string) (*claude.Session, error) {
 		if _, err := uniqueName(sessions, found); err != nil {
 			return nil, err
 		}
+	}
+	if found == nil && to != original {
+		return nil, refused("current guide has no reachable CLI; use beekeeper agents wake guide to deliver the message")
 	}
 	return found, nil
 }

@@ -52,6 +52,10 @@ func (a *app) inboxPeer(session, name, msg string) (string, error) {
 	if err != nil {
 		return "", nil
 	}
+	name, err = guideMessageTarget(st, name)
+	if err != nil {
+		return "", err
+	}
 	ag, h, id, ok := inboxAgent(st, name)
 	if !ok {
 		target, err := a.instructionTarget(name)
