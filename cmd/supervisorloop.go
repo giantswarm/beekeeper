@@ -1635,7 +1635,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
-	if in.Taken, err = l.dropAdminRepairs(in.Taken, stages, stageDetail); err != nil {
+	if in.Taken, err = l.dropInvalidMergeRepairs(in.Taken, stages, stageDetail); err != nil {
 		return err
 	}
 	l.mu.Lock()
