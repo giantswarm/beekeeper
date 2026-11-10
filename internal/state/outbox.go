@@ -33,6 +33,9 @@ func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[exe
 	if len(events) == 0 {
 		return writeJSON(s.path("state.json"), st)
 	}
+	if err := s.rotateEvents(); err != nil {
+		return err
+	}
 	f, err := s.openEventLog()
 	if err != nil {
 		return err

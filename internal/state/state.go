@@ -1858,9 +1858,11 @@ type FileStore struct {
 
 // followed is how far a Follow reader has read the log, and what it kept.
 type followed struct {
+	mu     sync.Mutex
 	file   os.FileInfo
 	offset int64
 	kept   []Event
+	anchor string
 }
 
 var _ Store = (*FileStore)(nil)
@@ -2239,6 +2241,9 @@ func (s *FileStore) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
+	if err := s.rotateEvents(); err != nil {
+		return err
+	}
 	f, err := s.openEventLog()
 	if err != nil {
 		return err
@@ -2289,36 +2294,33 @@ func endLine(f *os.File) error {
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
 func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
-	f, err := os.Open(s.path("events.jsonl"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	files, err := s.eventFiles()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeEventFiles(files)
 	var out []Event
-	reader := bufio.NewReader(f)
-	for {
-		// A record can contain a complete note and answer of any length.
-		line, readErr := reader.ReadBytes('\n')
-		var e Event
-		// A write lost to an unclean shutdown leaves NUL bytes, and the next
-		// append lands right behind them on the same line.
-		line = bytes.TrimLeft(line, "\x00")
-		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
-			out = append(out, e)
-			if n > 0 && len(out) > n {
-				out = out[len(out)-n:]
+	for _, f := range files {
+		reader := bufio.NewReader(f)
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			var e Event
+			line = bytes.TrimLeft(line, "\x00")
+			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
+				out = append(out, e)
+				if n > 0 && len(out) > n {
+					out = out[len(out)-n:]
+				}
+			}
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if readErr != nil {
+				return out, readErr
 			}
 		}
-		if errors.Is(readErr, io.EOF) {
-			return out, nil
-		}
-		if readErr != nil {
-			return out, readErr
-		}
 	}
+	return out, nil
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under
@@ -2326,50 +2328,81 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 // since: a watch that follows the log every poll parses each line once. A
 // log that was replaced or shrank is read again from its start.
 func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) {
+	at := s.eventReader(name)
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	return s.follow(at, keep)
+}
+
+func (s *FileStore) eventReader(name string) *followed {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f, err := os.Open(s.path("events.jsonl"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
 	if s.follows == nil {
 		s.follows = map[string]*followed{}
 	}
-	at := s.follows[name]
-	if at == nil || !os.SameFile(at.file, fi) || fi.Size() < at.offset {
-		at = &followed{}
-		s.follows[name] = at
+	if s.follows[name] == nil {
+		s.follows[name] = &followed{}
 	}
-	at.file = fi
-	if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
+	return s.follows[name]
+}
+
+// follow runs with this reader's mutex held. Unrelated readers never queue
+// behind a cold history scan. A cursor names an inode, so sealing the active
+// log into an archive preserves its position and its retained projection.
+func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error) {
+	files, err := s.eventFiles()
+	if err != nil {
 		return nil, err
 	}
-	reader := bufio.NewReader(f)
-	for {
-		// Events can contain unbounded reports, just as in Events. Only
-		// advance past complete lines: a partial append is read again later.
-		line, readErr := reader.ReadBytes('\n')
-		if errors.Is(readErr, io.EOF) {
-			return slices.Clone(at.kept), nil
-		}
-		if readErr != nil {
-			return slices.Clone(at.kept), readErr
-		}
-		at.offset += int64(len(line))
-		var e Event
-		line = bytes.TrimLeft(line, "\x00")
-		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
-			at.kept = append(at.kept, e)
+	defer closeEventFiles(files)
+	start := 0
+	if at != nil && at.file != nil {
+		start = -1
+		for i, f := range files {
+			fi, err := f.Stat()
+			if err != nil {
+				return nil, err
+			}
+			if os.SameFile(at.file, fi) && fi.Size() >= at.offset {
+				start = i
+				break
+			}
 		}
 	}
+	if at.file == nil || start < 0 {
+		at.file, at.offset, at.kept = nil, 0, nil
+		start = 0
+	}
+	for _, f := range files[start:] {
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, err
+		}
+		if at.file == nil || !os.SameFile(at.file, fi) {
+			at.offset = 0
+		}
+		at.file = fi
+		if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+		reader := bufio.NewReader(f)
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if readErr != nil {
+				return slices.Clone(at.kept), readErr
+			}
+			at.offset += int64(len(line))
+			var e Event
+			line = bytes.TrimLeft(line, "\x00")
+			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
+				at.kept = append(at.kept, e)
+			}
+		}
+	}
+	return slices.Clone(at.kept), nil
 }
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);
