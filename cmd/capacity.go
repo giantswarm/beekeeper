@@ -2029,7 +2029,7 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
 					return err
@@ -2057,7 +2057,7 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
 					return err

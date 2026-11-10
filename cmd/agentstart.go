@@ -357,7 +357,7 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			kind := startKind(review, ofSelfHosted)
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
 				if harness == harnessAuto {
 					base, ok = claudeHarness{}, true
