@@ -1935,7 +1935,8 @@ configured, beekeeper reads each provider's usage windows (such as Claude's
 JSON windows and agy -p /usage's model buckets), counts busy agents against
 the provider and bucket they run on, caps the subscription providers' total by
 the machine guards and capacity.ceiling, and prints each provider's windows and
-verdict plus the eligible choice furthest behind its 7-day pace (with remaining
+verdict plus eligible choices below half their 7-day pace first, then furthest
+behind pace (with remaining
 7-day budget per hour, lower configured cost, and capacity.choices order
 breaking ties), with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
@@ -2195,7 +2196,8 @@ func (a *app) capacityPickCmd() *cobra.Command {
 		Long: `Print the one start capacity's decision allows now, as "<harness> <model>",
 or "none". The decision is the one agents start without --harness, the
 supervisor loop's reviewers and its next starts take: the eligible subscription
-furthest behind its 7-day pace (then most 7-day budget left per hour until its
+below half its 7-day pace first, then furthest behind pace (then most 7-day
+budget left per hour until its
 reset, lower configured cost, and configured order breaking ties), with
 self-hosted choices used when no subscription is eligible; a self-hosted choice
 takes the worker kind (code changes) only when its kinds list it. Each eligible choice

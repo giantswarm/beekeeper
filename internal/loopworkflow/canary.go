@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -1108,8 +1110,9 @@ func serveCanaryClaude() int {
 			name = args[idx+1]
 		}
 		rows := readSessions()
-		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
-		sessionID := short + "-0000-0000-0000-000000000001"
+		// Retired sessions disappear from rows; their IDs must never be reused.
+		sessionID := uuid.NewString()
+		short := sessionID[:8]
 		rows = append(rows, map[string]any{
 			"id":           short,
 			sessionIDField: sessionID,

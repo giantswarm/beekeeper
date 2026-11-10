@@ -215,7 +215,7 @@ func TestLoopFillWhileNextAndIntakeAreInFlight(t *testing.T) {
 	}
 	acts := []superloop.Action{
 		freshNext(r),
-		{Kind: superloop.KindDone, Key: "done retired", Agent: "retired"},
+		{Kind: superloop.KindDone, Key: "done retired", Agent: staleNextAgent},
 		{Kind: superloop.KindIntake, Key: "intake o/r#98", Ref: "o/r#98"},
 	}
 	if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
