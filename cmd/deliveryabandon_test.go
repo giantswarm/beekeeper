@@ -14,6 +14,9 @@ const (
 	abandonClaimed     = "retained claim"
 	abandonRoster      = "assigned owner"
 	abandonLive        = "live serve record"
+	abandonReviewPark  = "saved review park"
+	abandonFailedRel   = "failed release"
+	abandonFreshRel    = "recent release"
 	abandonUnknown     = "missing end evidence"
 	abandonArchive     = "archived owner"
 	abandonEndedWorker = "ended worker"
@@ -24,7 +27,7 @@ const (
 )
 
 func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
-	for _, protect := range []string{abandonNoOwner, abandonClaimed, abandonRoster, abandonLive, abandonUnknown, abandonArchive, abandonEndedWorker, abandonDoneAgent} {
+	for _, protect := range []string{abandonNoOwner, abandonClaimed, abandonRoster, abandonLive, abandonReviewPark, abandonFailedRel, abandonFreshRel, abandonUnknown, abandonArchive, abandonEndedWorker, abandonDoneAgent} {
 		t.Run(protect, func(t *testing.T) {
 			a, _ := supervisorApp(t)
 			now := a.timeNow()
@@ -39,6 +42,12 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 					st.Agents = []state.Agent{{Party: by, Task: "finish delivery"}}
 				case abandonLive:
 					st.Records = append(st.Records, state.Record{Session: state.Party{Name: abandonReplacement}, Issue: refOne})
+				case abandonReviewPark:
+					st.ReviewParks = []state.ReviewPark{{Agent: by.Name, On: refOne, Serves: refOne}}
+				case abandonFailedRel:
+					st.Deliveries[0].Verdict = state.DeliveryReleaseFailed
+				case abandonFreshRel:
+					st.Deliveries[0].Since = now.Add(-5 * time.Minute)
 				case abandonArchive:
 					st.Records = nil
 					st.Archives = []state.Archive{{Party: by, Since: now.Add(-time.Hour)}}

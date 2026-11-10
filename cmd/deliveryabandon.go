@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,9 +19,17 @@ func abandonEndedDeliveries(st *state.State, now time.Time) []state.Event {
 	var events []state.Event
 	for i := range st.Deliveries {
 		d := &st.Deliveries[i]
-		if !d.Active() || d.Agent == "" || slices.ContainsFunc(st.Claims, func(c state.Claim) bool { return deliveryMatches(*d, c.Issue) }) ||
+		if !d.Active() || d.Agent == "" ||
+			d.Step == state.DeliveryReleasing && (d.Verdict == state.DeliveryReleaseFailed || !d.Since.IsZero() && now.Sub(d.Since) < 30*time.Minute) ||
+			slices.ContainsFunc(st.Claims, func(c state.Claim) bool { return deliveryMatches(*d, c.Issue) }) ||
 			slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return deliveryAgent(st, *d, ag) }) ||
 			slices.ContainsFunc(st.Parks, func(p state.Park) bool { return deliveryMatches(*d, p.On) || strings.EqualFold(p.By.Name, d.Agent) }) ||
+			slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+				return deliveryMatches(*d, rp.On) || rp.Serves != "" && deliveryMatches(*d, rp.Serves) || rp.Serves == "" && strings.EqualFold(rp.Agent, d.Agent)
+			}) ||
+			slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+				return deliveryMatches(*d, m.Repo+"#"+strconv.Itoa(m.PR)) || strings.EqualFold(m.By.Name, d.Agent)
+			}) ||
 			slices.ContainsFunc(st.Starts, func(s state.Start) bool {
 				return strings.EqualFold(s.Name, d.Agent) && s.Execution != nil && !endedExecution(s.Execution)
 			}) {
