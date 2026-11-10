@@ -34,7 +34,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			return nil, false
 		}
 		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}}
-		var events []state.Event
+		events := abandonEndedDeliveries(st, now)
 		file := func(key, detail string) {
 			lines = append(lines, detail)
 			events = append(events, event(loopParty, loopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail))
