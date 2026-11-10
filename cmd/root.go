@@ -54,9 +54,11 @@ const (
 type exitError struct {
 	code int
 	msg  string
+	err  error
 }
 
 func (e *exitError) Error() string { return e.msg }
+func (e *exitError) Unwrap() error { return e.err }
 
 // Code returns the exit code err asks for.
 func Code(err error) int {

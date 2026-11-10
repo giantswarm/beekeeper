@@ -487,7 +487,7 @@ func TestRecoveryRestartMovesOnlyRestartableProcesses(t *testing.T) {
 		plat.Launcher = prevLauncher
 	})
 
-	l := &haltLauncher{installed: map[string]string{loopUnit: unitActive}}
+	l := &haltLauncher{installed: map[string]string{loopUnit: unitActive, standbyUnit: unitActive}}
 	plat.Launcher = l
 
 	loopReplaced := true
@@ -500,7 +500,7 @@ func TestRecoveryRestartMovesOnlyRestartableProcesses(t *testing.T) {
 		byPID := map[int]*proc.Process{
 			10: {PID: 10, Comm: project.Name, Args: []string{project.Name, supervisorCommand, "loop"}},
 			20: {PID: 20, Comm: project.Name, Args: []string{project.Name, "codex-run", "--worktree", "/tmp/wt"}},
-			25: {PID: 25, Comm: project.Name, Args: []string{project.Name, watchName}},
+			25: {PID: 25, Comm: project.Name, Args: []string{project.Name, watchName, "--notify", "--standby"}},
 			30: {PID: 30, PPID: 1, Comm: project.Name, Start: brokerStart},
 		}
 		if brokerBusyChild {
@@ -547,23 +547,109 @@ func TestRecoveryRestartMovesOnlyRestartableProcesses(t *testing.T) {
 		t.Fatalf("brokerRestarts=%d stopped=%v, want 1 and none", brokerRestarts, l.stopped)
 	}
 
-	// Attempt recoveryRestartTicks with only watch still on the replaced binary:
-	// broker is already on the restored binary and loopUnit is not stopped.
+	// A stuck standby is restarted after the grace, but only a later process
+	// read can prove that the restart actually moved it off the failed bytes.
 	watchReplaced = true
-	if !c.restart(t.Context(), recoveryRestartTicks) {
-		t.Fatal("did not settle at recoveryRestartTicks")
+	if c.restart(t.Context(), recoveryRestartTicks) {
+		t.Fatal("settled without confirming standby replacement")
 	}
-	if brokerRestarts != 1 || len(l.stopped) != 0 {
-		t.Fatalf("brokerRestarts=%d stopped=%v, want 1 and no loop stop when loop is already current", brokerRestarts, l.stopped)
+	if brokerRestarts != 1 || len(l.stopped) != 1 || l.stopped[0] != standbyUnit || len(l.resumed) != 1 || l.resumed[0] != standbyUnit {
+		t.Fatalf("stopped=%v resumed=%v, want standby restart only", l.stopped, l.resumed)
+	}
+	watchReplaced = false
+	if !c.restart(t.Context(), recoveryRestartTicks+1) {
+		t.Fatal("did not settle after observing the restored standby")
 	}
 
-	// Attempt recoveryRestartTicks when supervisor loop itself is still stuck
-	// on the replaced binary: loopUnit is stopped and resumed.
+	// A failed service operation must not be recorded as successful recovery.
 	loopReplaced = true
-	if !c.restart(t.Context(), recoveryRestartTicks) {
-		t.Fatal("did not settle at recoveryRestartTicks")
+	l.fail = map[string]bool{loopUnit: true}
+	if c.restart(t.Context(), recoveryRestartTicks) {
+		t.Fatal("settled after failed loop restart")
 	}
-	if len(l.stopped) != 1 || l.stopped[0] != loopUnit || len(l.resumed) != 1 || l.resumed[0] != loopUnit {
-		t.Fatalf("stopped=%v resumed=%v, want [%s] and [%s]", l.stopped, l.resumed, loopUnit, loopUnit)
+	l.fail = nil
+	if c.restart(t.Context(), recoveryRestartTicks+1) {
+		t.Fatal("settled without confirming loop replacement")
+	}
+	if len(l.stopped) != 2 || l.stopped[1] != loopUnit || len(l.resumed) != 2 || l.resumed[1] != loopUnit {
+		t.Fatalf("stopped=%v resumed=%v, want standby then loop", l.stopped, l.resumed)
+	}
+	loopReplaced = false
+	if !c.restart(t.Context(), recoveryRestartTicks+2) {
+		t.Fatal("did not settle after observing the restored loop")
+	}
+	// Model a controller dying after stopping a service but before starting it.
+	// A fresh controller must recover the known service from the journal even
+	// though its old process no longer appears in the process table.
+	l.installed[standbyUnit] = unitInactive
+	restarted := *c
+	if restarted.restart(t.Context(), recoveryRestartTicks+3) {
+		t.Fatal("settled on the same tick as resuming a stopped service")
+	}
+	if len(l.resumed) != 3 || l.resumed[2] != standbyUnit {
+		t.Fatalf("lost restart intent across controller restart: %v", l.resumed)
+	}
+	if !restarted.restart(t.Context(), recoveryRestartTicks+4) {
+		t.Fatal("did not confirm resumed service")
+	}
+	recoveryReadProcs = func() (*proc.Table, error) { return nil, errors.New("process inspection failed") }
+	if c.restart(t.Context(), recoveryRestartTicks+3) {
+		t.Fatal("unreadable processes reported successful recovery")
+	}
+}
+
+func TestRecoveryRefreshesHeartbeatBeforeRollingBack(t *testing.T) {
+	c, now := recoveryRig(t)
+	started := now.Add(10 * time.Second)
+	staleAt := started.Add(10 * time.Second)
+	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{
+		Version: normalizeLoopVersion(recoveryBadVersion),
+		Started: started,
+		At:      staleAt,
+		Phase:   loopPhaseRecover,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	*now = staleAt.Add(3*throughputCadence + time.Minute)
+	if err := update.Observe(t.Context(), c.target, func(j *update.Journal) error {
+		j.Observed = &update.Observed{
+			Elapsed:       2*update.HeartbeatGrace - time.Minute,
+			LoopStarted:   true,
+			LoopStartedAt: 0,
+			HeartbeatSeen: true,
+			LastBeatAt:    time.Minute,
+			ProbePassed:   true,
+			ProbedAt:      2*update.HeartbeatGrace - time.Minute,
+			LastPassAt:    2*update.HeartbeatGrace - time.Minute,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	c.now = func() time.Time {
+		reads++
+		// Simulate the candidate writing a fresh lifecycle checkpoint while the
+		// controller evaluates the tick after the initial stale read.
+		if reads == 2 {
+			freshAt := now.Add(-3 * time.Second)
+			_ = c.store.WriteFile(loopLifecycleFile, loopLifecycle{
+				Version: normalizeLoopVersion(recoveryBadVersion),
+				Started: started,
+				At:      freshAt,
+				Phase:   "observe repository backlogs",
+			})
+		}
+		return *now
+	}
+	if c.mustTick(t) {
+		t.Fatal("settled probation on a tick whose candidate wrote a fresh checkpoint")
+	}
+	if got := installed(t, c); got != recoveryBadBytes {
+		t.Fatalf("rolled back a candidate with a 3s-old checkpoint: installed=%q", got)
+	}
+	j := journal(t, c)
+	if !j.Pending() || j.Observed == nil || j.Observed.LastBeatAt != j.Observed.Elapsed-3*time.Second {
+		t.Fatalf("expected refreshed heartbeat recorded on journal, got %+v", j.Observed)
 	}
 }

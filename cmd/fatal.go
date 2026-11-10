@@ -145,13 +145,13 @@ func fatalService(ctx context.Context, unit string) fatal.Observation {
 		return o
 	}
 	switch strings.TrimSpace(out) {
-	case fatalDisabledState, "masked", "not-found":
+	case fatalDisabledState, "masked", unitNotFound:
 		o.Disabled = true
 		return o
 	case fatalEnabledState, "enabled-runtime":
 	default:
 		loaded, _, _, loadErr := fatalRun(ctx, "", []string{"systemctl", "--user", "show", unit, "--property=LoadState", "--value"})
-		if loadErr == nil && strings.TrimSpace(loaded) == "not-found" {
+		if loadErr == nil && strings.TrimSpace(loaded) == unitNotFound {
 			o.Disabled = true
 			return o
 		}

@@ -87,6 +87,15 @@ type recoveryFence struct {
 // ErrRecoveryWriterFenced identifies a refused state write after rollback.
 var ErrRecoveryWriterFenced = errors.New("state writes fenced after binary recovery; use the installed restored release or a later compatible signed release")
 
+// WriterFenced reports whether the recovery fence currently refuses state
+// writes from s.
+func WriterFenced(s Store) bool {
+	if fs, ok := s.(*FileStore); ok && fs != nil {
+		return errors.Is(fs.checkRecoveryFence(), ErrRecoveryWriterFenced)
+	}
+	return false
+}
+
 func (s *FileStore) checkRecoveryFence() error {
 	var fence recoveryFence
 	found, err := s.ReadFile(recoveryFenceFile, &fence)

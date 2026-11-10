@@ -191,7 +191,7 @@ func (w *watcher) checkInstalledGate(ctx context.Context, file string) {
 			err = fmt.Errorf("%s", detail)
 		}
 	}
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
 		w.fail("installed-gate "+file, "WATCH GATE FAILED %s: budget --gate failed after install: %s", file, oneLine(err.Error()))
 	}
 }

@@ -4303,6 +4303,100 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 	}
 }
 
+func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) {
+	r := newLoopRig(t)
+	r.replaced = true
+	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.a.store = candidateStore
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !state.WriterFenced(r.a.store) {
+		t.Fatal("expected candidate store to be fenced after recovery")
+	}
+	bgCtx := l.backgroundContext(context.Background())
+	if !l.beginInFlight("stream:workers") {
+		t.Fatal("failed to mark worker stream in flight")
+	}
+	l.passActions.Go(func() {
+		defer l.endInFlight("stream:workers")
+		<-bgCtx.Done()
+	})
+	reexec, err := l.reexec(context.Background())
+	if err != nil || !reexec || r.execs != 1 {
+		t.Fatalf("fenced reexec with in-flight action = %v, %v (execs=%d)", reexec, err, r.execs)
+	}
+	if strings.Contains(r.out.String(), "SUPERVISOR LOOP restart held: claims are in flight") {
+		t.Fatalf("fenced candidate held re-exec on in-flight claims: %s", r.out.String())
+	}
+}
+
+func TestLoopReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
+	r := newLoopRig(t)
+	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.a.store = candidateStore
+	now := time.Now().UTC()
+	if err := candidateStore.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{
+			{
+				Party: state.Party{Name: "w1", HostSession: "s1"},
+				Task:  "Work https://github.com/org/repo/issues/1",
+				Park:  &state.Park{At: now, On: loopPR, Waits: deskReviewWait, ReviewHead: loopHead, Worktree: "/tmp/wt1"},
+			},
+			{
+				Party: state.Party{Name: "w2", HostSession: "s2"},
+				Task:  "Work https://github.com/org/repo/issues/2",
+				Park:  &state.Park{At: now, On: "org/repo#13", Waits: deskReviewWait, ReviewHead: loopHead, Worktree: "/tmp/wt2"},
+			},
+		}
+		for _, ag := range st.Agents {
+			st.Starts = append(st.Starts, state.Start{Party: ag.Party, Dir: ag.Park.Worktree})
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.lifecycle = &loopLifecycle{Version: recoveryBadVersion, Started: now}
+	prevInTurn := loopInTurn
+	t.Cleanup(func() { loopInTurn = prevInTurn })
+	loopInTurn = func(*app, state.Party) bool { return false }
+
+	st, err := candidateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCalls := 0
+	r.answer = func(args []string) (string, int) {
+		runCalls++
+		if err := candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return "cannot write the state: " + state.ErrRecoveryWriterFenced.Error(), 1
+	}
+	err = l.endReviewWorkers(context.Background(), st)
+	if !errors.Is(err, state.ErrRecoveryWriterFenced) || runCalls != 1 {
+		t.Fatalf("endReviewWorkers error = %v (runCalls=%d), want %v and 1 call", err, runCalls, state.ErrRecoveryWriterFenced)
+	}
+	// Once fenced, a subsequent pass stops before running any further worker commands.
+	if err := l.endReviewWorkers(context.Background(), st); err != nil || runCalls != 1 {
+		t.Fatalf("fenced endReviewWorkers = %v (runCalls=%d), want nil and no extra calls", err, runCalls)
+	}
+}
+
 func TestLoopReviewsReferencesToNeverRepositories(t *testing.T) {
 	r := newLoopRig(t)
 	r.ownedBy(loopTeamB)
