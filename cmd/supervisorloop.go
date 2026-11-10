@@ -1625,6 +1625,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p, err := l.observePullStep(ctx, ref, changed, step)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
@@ -1778,6 +1781,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	l.lifecyclePhase("plan and record heartbeat")
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !l.dryRun {
 		l.lifecyclePhase("observe deliveries")
 		if err := l.observeDeliveries(ctx, in, unread); err != nil {
@@ -1860,7 +1866,7 @@ func (l *supervisorLoop) endInFlight(key string) {
 }
 
 func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action, reserved ...[]string) error {
-	if l.pauseForReexec() {
+	if l.pauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
 	// An earlier pass can finish after this pass took its snapshot.
@@ -1919,6 +1925,9 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 // transitions independently so a merge waiting on CI or in a lane queue never
 // delays a review or worker start, and the reverse.
 func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+	if ctx.Err() != nil {
+		return nil
+	}
 	current, readErr := l.a.store.Read()
 	if readErr != nil {
 		return readErr
@@ -3082,6 +3091,9 @@ func sortTrackedPulls(in superloop.Input, tracked []string) {
 
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if ag.Park == nil || ag.Park.ReviewHead == "" {
 			continue
 		}
@@ -3129,6 +3141,9 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if ref := ag.Execution; ref != nil {
 			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
 				if _, err := l.run(ctx, agentsName, loopStop, ag.Name, "--reason", "supervisor loop: desk review requested"); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
 					l.sayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
 					continue
 				}
@@ -3144,6 +3159,9 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 			}
 		}
 		if err := l.remove(ctx, ag.Name, "supervisor loop: desk review of "+on+" requested; its park stays saved for the review and the merge"); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
 		}

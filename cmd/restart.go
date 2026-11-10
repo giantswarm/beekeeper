@@ -46,6 +46,15 @@ type restartRequest struct {
 	Binary string `json:"binary"`
 }
 
+func isSupervisorLoop(p *proc.Process) bool {
+	if p.Comm != project.Name || len(p.Args) < 2 {
+		return false
+	}
+	args := p.Args[1:]
+	i := slices.Index(args, supervisorCommand)
+	return i >= 0 && i+1 < len(args) && args[i+1] == "loop" && !slices.Contains(args, "--once")
+}
+
 // restarts reports whether p is a process an install restarts: a running
 // beekeeper watch (not --once; the standby unit's too), supervisor loop,
 // or a waiting reopen,
@@ -55,10 +64,10 @@ func restarts(p *proc.Process) bool {
 	if p.Comm != project.Name || len(p.Args) < 2 {
 		return false
 	}
-	args := p.Args[1:]
-	if i := slices.Index(args, supervisorCommand); i >= 0 && i+1 < len(args) && args[i+1] == "loop" {
-		return !slices.Contains(args, "--once")
+	if isSupervisorLoop(p) {
+		return true
 	}
+	args := p.Args[1:]
 	if i := slices.Index(args, watchName); i >= 0 {
 		return (i == 0 || !slices.Contains([]string{alertsName, guideName}, args[i-1])) && !slices.Contains(args, "--once")
 	}
@@ -262,11 +271,12 @@ func brokerDue(pid int, bin, exe string, written time.Time, t *proc.Table) (brok
 // restartBrokerOn puts the broker unit onto the binary an install wrote at
 // exe at written: restarted when it runs the replaced one and serves no
 // call, else the restart still due named with its command. An unavailable
-// handover refuses the restart. dry only names the step.
-func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.Time, t *proc.Table, dry bool, session bool) {
+// handover refuses the restart. dry only names the step. It reports whether
+// the broker still runs the replaced binary.
+func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.Time, t *proc.Table, dry bool, session bool) bool {
 	pid, bin, err := brokerProcess()
 	if err != nil {
-		return
+		return false
 	}
 	const handover = "install prepares the vault handover before restarting"
 	due := func(why string) {
@@ -277,12 +287,13 @@ func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.
 	switch step {
 	case brokerBusy:
 		due(fmt.Sprintf("while it serves %d call(s), a restart would end them", calls))
+		return true
 	case brokerRestart:
 		if !dry {
 			if session {
 				if err := prepareBrokerHandover(ctx); err != nil {
 					_, _ = fmt.Fprintf(w, "due     %s (pid %d) stays on the replaced binary: %v\n", secret.BrokerUnit, pid, brokerHandoverRefusal(err))
-					return
+					return true
 				}
 			}
 			if err := restartBroker(ctx); err != nil {
@@ -290,11 +301,12 @@ func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.
 					err = errors.Join(err, revokeBrokerHandover(context.WithoutCancel(ctx)))
 				}
 				due(fmt.Sprintf("(%v)", err))
-				return
+				return true
 			}
 		}
 		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d): on %s now; %s\n", "restart", secret.BrokerUnit, pid, exe, handover)
 	}
+	return false
 }
 
 // resolvedPath is path with its symbolic links resolved, else path.
