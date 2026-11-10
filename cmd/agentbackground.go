@@ -374,15 +374,39 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 	if err != nil {
 		return err
 	}
-	out, err := bgRun(ctx, w.dir, cleanEnv(os.Environ(), a.explicitConfig()), bgResumeArgv(bin, w.id, msg))
+	env := cleanEnv(os.Environ(), a.explicitConfig())
+	// Poll-time process observations can be stale after suspend. Ask the
+	// daemon immediately before resuming, and fail closed if it cannot answer.
+	rows, err := bgList(ctx, bin, env, false)
+	if err != nil {
+		return fmt.Errorf("checking background session before resume: %w", err)
+	}
+	for _, row := range rows {
+		if row.SessionID != w.id {
+			continue
+		}
+		if row.Name == "" || slices.ContainsFunc(rows, func(other bgSession) bool {
+			return other.Name == row.Name && other.SessionID != w.id
+		}) {
+			return fmt.Errorf("running background session %s has no unique messaging name", w.id)
+		}
+		return cliSend(ctx, a, row.Name, msg)
+	}
+	out, err := bgRun(ctx, w.dir, env, bgResumeArgv(bin, w.id, msg))
+	// Even a failed call may have launched a copy before reporting failure.
+	if short := bgShort(out); short != "" && !strings.HasPrefix(w.id, short) {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgWait)
+		defer cancel()
+		if stopErr := a.bgStop(cleanup, short); stopErr != nil {
+			return fmt.Errorf("claude --bg --resume started a copy %s of session %s; stopping the copy failed: %w", short, w.id, stopErr)
+		}
+		return fmt.Errorf("claude --bg --resume started a copy %s of session %s; stopped the copy", short, w.id)
+	}
 	if err != nil {
 		return fmt.Errorf("claude --bg --resume: %w (%s)", err, firstLines(out))
 	}
-	switch short := bgShort(out); {
-	case short == "":
+	if bgShort(out) == "" {
 		return fmt.Errorf("claude --bg --resume named no session (%s)", firstLines(out))
-	case !strings.HasPrefix(w.id, short):
-		return fmt.Errorf("claude --bg --resume started a copy %s of session %s instead of continuing it (%s): claude stop %s ends the copy", short, w.id, firstLines(out), short)
 	}
 	return nil
 }

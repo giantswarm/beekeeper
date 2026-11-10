@@ -221,9 +221,67 @@ func TestWakeBackground(t *testing.T) {
 		t.Errorf("units %v, output:\n%s", l.started, out)
 	}
 
-	stubBackground(t, "backgrounded · 9e3d7b10 · "+bgName+"\n")
+	copyCalls := stubBackground(t, "backgrounded · 9e3d7b10 · "+bgName+"\n")
 	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "your task", ""); err == nil || !strings.Contains(err.Error(), "started a copy 9e3d7b10") {
 		t.Errorf("a copy: err = %v", err)
+	}
+	if len(*copyCalls) != 2 || !slices.Equal((*copyCalls)[1].argv[1:], []string{bgStopCmd, "9e3d7b10"}) {
+		t.Fatalf("copy was not stopped: %+v", *copyCalls)
+	}
+}
+
+func TestReviveBackgroundAlreadyRunning(t *testing.T) {
+	a, _ := stubApp(t)
+	p := state.Party{Session: bgID, Name: bgName}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Dir: t.TempDir(), Background: true})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	calls := stubBackground(t, "", bgSession{SessionID: bgID, Name: bgName, Kind: bgKind})
+	original := cliSend
+	t.Cleanup(func() { cliSend = original })
+	sends := 0
+	cliSend = func(_ context.Context, _ *app, to, msg string) error {
+		sends++
+		if to != bgName || msg != "resume after suspend" {
+			t.Fatalf("message to %q: %q", to, msg)
+		}
+		return nil
+	}
+	if err := a.reviveBackground(t.Context(), p, "resume after suspend"); err != nil {
+		t.Fatal(err)
+	}
+	if sends != 1 || len(*calls) != 0 {
+		t.Fatalf("sends %d, background commands %+v", sends, *calls)
+	}
+}
+
+func TestResumeBackgroundRefusesUnknownOrAmbiguousLiveness(t *testing.T) {
+	for _, scenario := range []string{"listing failed", "duplicate name", "missing name"} {
+		t.Run(scenario, func(t *testing.T) {
+			a, _ := stubApp(t)
+			rows := []bgSession{{SessionID: bgID, Name: bgName}}
+			if scenario == "duplicate name" {
+				rows = append(rows, bgSession{SessionID: "another-session", Name: bgName})
+			}
+			if scenario == "missing name" {
+				rows[0].Name = ""
+			}
+			calls := stubBackground(t, "", rows...)
+			if scenario == "listing failed" {
+				bgList = func(context.Context, string, []string, bool) ([]bgSession, error) {
+					return nil, errors.New("daemon unavailable")
+				}
+			}
+			if err := a.resumeBackground(t.Context(), wakeTarget{id: bgID}, "continue"); err == nil {
+				t.Fatal("unsafe resume accepted")
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("background commands: %+v", *calls)
+			}
+		})
 	}
 }
 
