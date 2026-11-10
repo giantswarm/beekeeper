@@ -1419,8 +1419,9 @@ func TestMutualOverlapRequiresObservedOwnedTarget(t *testing.T) {
 		{"other author", func(_ *Input, p *Pull) { p.Author = "other-author" }},
 		{"other team", func(_ *Input, p *Pull) { p.Team = teamB }},
 		{"unknown teams", func(in *Input, _ *Pull) { in.Desk.TeamsUnknown = true }},
-		{"named never", func(_ *Input, p *Pull) { p.Title = "update o/tool" }},
-		{"incomplete files", func(_ *Input, p *Pull) { p.ChangedFiles = 1 }},
+		{"allowed named never", func(_ *Input, p *Pull) { p.Title = "update o/tool" }},
+		{"allowed incomplete files", func(_ *Input, p *Pull) { p.ChangedFiles = 1 }},
+		{"never repository", func(in *Input, _ *Pull) { in.Desk.Never = append(in.Desk.Never, repoOf(targetRef)) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Input{
@@ -1443,7 +1444,7 @@ func TestMutualOverlapRequiresObservedOwnedTarget(t *testing.T) {
 			}
 			var acts []Action
 			planOverlap(in, ledger{}, overlapPRB, in.Pulls[overlapPRB], nil, func(string) bool { return false }, func(a Action) { acts = append(acts, a) })
-			if tc.name != "allowed" {
+			if !strings.HasPrefix(tc.name, "allowed") {
 				if len(acts) != 0 {
 					t.Fatalf("unsafe handoff: %+v", acts)
 				}
