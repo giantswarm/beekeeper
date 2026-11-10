@@ -201,6 +201,10 @@ func serveGitHub() int {
 	case starts(ghAPI, "-i") && len(args) == 3 && slices.Contains([]string{"repos/fixture/project/issues/1/comments?per_page=100&page=1", "repos/fixture/project/issues/2/comments?per_page=100&page=1"}, args[2]):
 		fmt.Print("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n[]")
 		return 0
+	// Fixture checks are external checks represented by the rollup; there
+	// are no additional Actions workflow runs for this head.
+	case starts(ghAPI, "--paginate") && len(args) == 3 && args[2] == fmt.Sprintf("repos/fixture/project/actions/runs?head_sha=%s&per_page=100", p["headRefOid"]):
+		return emit(map[string]any{"workflow_runs": []any{}})
 	case starts(ghAPI, "--paginate") && len(args) == 3 && slices.Contains([]string{"repos/fixture/project/pulls/1/reviews", "repos/fixture/project/pulls/1/comments", "repos/fixture/project/issues/1/comments"}, args[2]):
 		return emit([]any{})
 	case starts(ghAPI) && len(args) == 4 && strings.HasPrefix(args[1], "repos/fixture/project/commits/") && args[2] == "--jq" && args[3] == ".commit.committer.date":
@@ -213,6 +217,13 @@ func serveGitHub() int {
 			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
 			if len(b) > 0 {
 				p["headRefOid"] = strings.Repeat("f", 40)
+				raw, err = json.Marshal(p)
+				if err != nil {
+					panic(err)
+				}
+				if err = os.WriteFile(filepath.Join(root, pullJSONFile), raw, 0600); err != nil { //nolint:gosec // scratch fixture state
+					panic(err)
+				}
 			}
 			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
 				panic(err)

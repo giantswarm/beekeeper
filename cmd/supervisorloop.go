@@ -177,7 +177,91 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
-	return parseLoopPull(ref, out)
+	p, err := parseLoopPull(ref, out)
+	if err != nil || p.State != "OPEN" {
+		return p, err
+	}
+	// A newer suite may fail before creating a required job. The rollup
+	// still contains that job's old success, so also read workflow runs.
+	runs, err := github.RunGH(ctx, "api", "--paginate", fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=100", r.Repo, p.Head))
+	if err != nil {
+		return superloop.Pull{}, fmt.Errorf("read workflow runs for %s: %w", ref, err)
+	}
+	var snapshot loopPullJSON
+	if err := json.Unmarshal(out, &snapshot); err != nil {
+		return superloop.Pull{}, err
+	}
+	if err := applyLoopWorkflowRuns(&p, runs, snapshot.Rollup); err != nil {
+		return superloop.Pull{}, err
+	}
+	return p, nil
+}
+
+// loopWorkflowRun identifies a workflow independently of its display name.
+// Run IDs order new suites; run attempts order reruns of the same suite.
+type loopWorkflowRun struct {
+	ID         uint64 `json:"id"`
+	WorkflowID uint64 `json:"workflow_id"`
+	Attempt    int    `json:"run_attempt"`
+	Head       string `json:"head_sha"`
+	Name       string `json:"name"`
+	URL        string `json:"html_url"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+}
+
+func applyLoopWorkflowRuns(p *superloop.Pull, raw []byte, rollup []loopCheck) error {
+	latest := map[uint64]loopWorkflowRun{}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	pages := 0
+	for {
+		var page struct {
+			Runs []loopWorkflowRun `json:"workflow_runs"`
+		}
+		if err := dec.Decode(&page); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("read workflow runs: %w", err)
+		}
+		if page.Runs == nil {
+			return errors.New("read workflow runs: missing workflow_runs")
+		}
+		pages++
+		for _, run := range page.Runs {
+			if run.Head != p.Head {
+				continue
+			}
+			if run.ID == 0 || run.WorkflowID == 0 {
+				return errors.New("read workflow runs: missing run or workflow ID")
+			}
+			old, seen := latest[run.WorkflowID]
+			if !seen || run.ID > old.ID || run.ID == old.ID && run.Attempt > old.Attempt {
+				latest[run.WorkflowID] = run
+			}
+		}
+	}
+	if pages == 0 {
+		return errors.New("read workflow runs: empty response")
+	}
+	for _, run := range latest {
+		// An old job absent from the newest suite is not evidence of a
+		// passing check, even when the jobs that did run all succeeded.
+		for _, check := range rollup {
+			id := loopActionsRun(check.DetailsURL)
+			if check.WorkflowName == run.Name && id != 0 && id < run.ID && !check.superseded(rollup) {
+				p.Green = false
+			}
+		}
+		c := loopCheck{Status: strings.ToUpper(run.Status), Conclusion: strings.ToUpper(run.Conclusion)}
+		if !c.green() {
+			p.Green = false
+		}
+		if c.red() {
+			p.Red = append(p.Red, superloop.Check{Name: run.Name, URL: run.URL})
+		}
+	}
+	slices.SortStableFunc(p.Red, func(x, y superloop.Check) int { return strings.Compare(x.Name, y.Name) })
+	return nil
 }
 
 // readBaseMerge reads whether the approval of approved covers p's head: it
@@ -313,11 +397,12 @@ func (c loopCheck) concluded() bool {
 	return slices.Contains([]string{checkSuccess, checkFailure, checkError}, c.State)
 }
 
-// superseded reports only cancellations replaced on this head's rollup.
-// Failures and timeouts remain red even when a later run exists. Actions run
-// IDs also order queued replacements whose startedAt has not been set yet.
+// superseded reports check runs replaced on this head's rollup. Only the
+// newest run of a named check counts, regardless of its outcome. A cancelled
+// job can also be replaced by a newer workflow run with renamed jobs. Actions
+// run IDs order queued replacements whose startedAt has not been set yet.
 func (c loopCheck) superseded(checks []loopCheck) bool {
-	if c.Conclusion != "CANCELLED" || c.Status != checkCompleted {
+	if c.Status == "" {
 		return false
 	}
 	oldRun := loopActionsRun(c.DetailsURL)
@@ -329,9 +414,14 @@ func (c loopCheck) superseded(checks []loopCheck) bool {
 		newRun := loopActionsRun(next.DetailsURL)
 		newRepo, _, _ := strings.Cut(next.DetailsURL, "/actions/runs/")
 		newerActionsRun := oldRun != 0 && newRun > oldRun && oldRepo == newRepo
-		sameCheck := c.Name != "" && c.Name == next.Name
-		sameWorkflow := c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
-		return (sameCheck || sameWorkflow) && (newerActionsRun || !c.StartedAt.IsZero() && next.StartedAt.After(c.StartedAt))
+		// Job names are only unique within a workflow. Independent workflows
+		// may both have a job named test and must not replace each other.
+		sameCheck := c.Name != "" && c.Name == next.Name && c.WorkflowName == next.WorkflowName
+		sameWorkflow := c.Conclusion == "CANCELLED" && c.Status == checkCompleted && c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
+		if oldRun != 0 && newRun != 0 && oldRun != newRun && oldRepo == newRepo {
+			return (sameCheck || sameWorkflow) && newerActionsRun
+		}
+		return sameCheck && !c.StartedAt.IsZero() && next.StartedAt.After(c.StartedAt)
 	})
 }
 
