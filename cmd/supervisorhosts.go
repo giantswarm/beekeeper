@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -21,7 +22,7 @@ func hostHoldWait(pin state.HostPin, b *state.Budget, now time.Time) bool {
 	if reset, ok := hostHoldRateReset(pin.Held); ok {
 		return now.Before(reset)
 	}
-	if github.RateLimited(pin.Held) && b != nil && b.Remaining > 0 && now.After(pin.Tried) && !b.At.Before(pin.Tried) {
+	if github.RateLimited(errors.New(pin.Held)) && b != nil && b.Remaining > 0 && now.After(pin.Tried) && !b.At.Before(pin.Tried) {
 		return false
 	}
 	return now.Sub(pin.Tried) < hostUpdateRetry

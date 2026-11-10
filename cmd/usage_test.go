@@ -552,7 +552,7 @@ capacity:
 	resCmd.SilenceErrors = true
 	resCmd.SilenceUsage = true
 	resCmd.SetArgs([]string{"ParkedAuto"})
-	if err := resCmd.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no resume: usage high:") {
+	if err := resCmd.Execute(); err != nil {
 		t.Fatalf("agents resume without --force = exit %d (%v)", Code(err), err)
 	}
 
@@ -561,14 +561,12 @@ capacity:
 	forceResCmd.SilenceErrors = true
 	forceResCmd.SilenceUsage = true
 	forceResCmd.SetArgs([]string{usageForceFlag, "ParkedManual"})
-	if err := forceResCmd.Execute(); err != nil || len(woke) != 1 || !strings.HasPrefix(woke[0], "ParkedManual :: ") {
+	if err := forceResCmd.Execute(); err != nil || len(woke) != 0 {
 		t.Fatalf("agents resume --force = %v, woke=%q", err, woke)
 	}
-	resEvs, err := store.Events(0, func(e state.Event) bool { return e.Verb == resumedEvent })
-	if err != nil || !slices.ContainsFunc(resEvs, func(e state.Event) bool {
-		return strings.Contains(e.Detail, "ParkedManual") && strings.Contains(e.Detail, "over no resume: usage high:")
-	}) {
-		t.Fatalf("agents.resumed events = %+v, %v", resEvs, err)
+	resEvs, err := store.Events(0, func(e state.Event) bool { return e.Verb == continuationQueuedEvent })
+	if err != nil || !slices.ContainsFunc(resEvs, func(e state.Event) bool { return strings.Contains(e.Detail, "ParkedManual") }) {
+		t.Fatalf("fresh continuation events = %+v, %v", resEvs, err)
 	}
 
 	// 6. Once fiveHour.resetsAt passes, watch re-reads immediately, emits ENDED
@@ -584,14 +582,14 @@ capacity:
 	if !strings.Contains(out3.String(), "ENDED USAGE HIGH") {
 		t.Fatalf("after 5h reset, missing ENDED USAGE HIGH:\n%s", out3.String())
 	}
-	if len(woke) != 1 || !strings.HasPrefix(woke[0], "ParkedAuto :: Your park on #1") {
+	if len(woke) != 0 {
 		t.Fatalf("autoResume after 5h reset: woke = %q", woke)
 	}
 	stAfter, err := store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.IndexFunc(stAfter.Agents, func(ag state.Agent) bool { return ag.Name == "ParkedAuto" }); i < 0 || stAfter.Agents[i].Park != nil {
+	if i := slices.IndexFunc(stAfter.Agents, func(ag state.Agent) bool { return ag.Name == "ParkedAuto" }); i < 0 || stAfter.Agents[i].Park == nil || len(stAfter.Agents[i].Park.Continuation) != 1 {
 		t.Fatalf("ParkedAuto still parked after autoResume: %+v", stAfter.Agents)
 	}
 
@@ -1978,7 +1976,7 @@ capacity:
 	resAgyClaude.SilenceUsage = true
 	resAgyClaude.SetArgs([]string{"ParkedAgyClaude"})
 	err = resAgyClaude.Execute()
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no resume: provider agy (Claude and GPT models): usage high: 5h 96% at or past 95%") {
+	if err != nil {
 		t.Fatalf("resume ParkedAgyClaude under bucket USAGE HIGH: code=%d, err=%v", Code(err), err)
 	}
 
@@ -2013,10 +2011,15 @@ capacity:
 	}) {
 		t.Fatalf("non-high workers were told to park: woke=%q", woke)
 	}
-	if !slices.ContainsFunc(woke, func(s string) bool { return strings.HasPrefix(s, "ParkedClaude ::") }) ||
-		!slices.ContainsFunc(woke, func(s string) bool { return strings.HasPrefix(s, "ParkedAgyGemini ::") }) ||
-		slices.ContainsFunc(woke, func(s string) bool { return strings.HasPrefix(s, "ParkedAgyClaude ::") }) {
-		t.Fatalf("autoResume per-provider/bucket wake mismatch: woke=%q", woke)
+	if slices.ContainsFunc(woke, func(s string) bool { return strings.HasPrefix(s, "Parked") }) {
+		t.Fatalf("parked transcript resumed: %q", woke)
+	}
+	for _, name := range []string{parkedClaude.Name, parkedAgyClaude.Name, parkedAgyGemini.Name} {
+		st, _ := store.Read()
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == name })
+		if i < 0 || st.Agents[i].Park == nil || len(st.Agents[i].Park.Continuation) == 0 {
+			t.Fatalf("missing continuation for %s", name)
+		}
 	}
 
 	// 3. Now claude enters USAGE HIGH (97%) while agy's buckets are both low (10%) and local is disabled (!Enabled()):
@@ -2041,7 +2044,7 @@ capacity:
 	resClaude.SilenceUsage = true
 	resClaude.SetArgs([]string{"ParkedClaude"})
 	err = resClaude.Execute()
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no resume: provider claude: usage high: 5h 97% at or past 95%") {
+	if err != nil {
 		t.Fatalf("resume ParkedClaude under claude USAGE HIGH: code=%d, err=%v", Code(err), err)
 	}
 }

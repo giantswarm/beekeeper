@@ -977,3 +977,39 @@ func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
 		t.Fatalf("absorbed PR's ReviewPark remained in state: %+v", st.ReviewParks)
 	}
 }
+
+func TestReviewWorkerWithPendingWakeTimerStaysOnRoster(t *testing.T) {
+	const model = "gpt-5.4"
+
+	party := state.Party{Name: "beekeeper#3533", HostSession: "codex_abcdef12"}
+	ag := state.Agent{
+		Party:      party,
+		IdleSince:  time.Now(),
+		Park:       &state.Park{On: "o/r#42", Waits: "CI queued; timer wakes", ReviewHead: loopHead},
+		Harness:    transcriptTestCodex,
+		Model:      model,
+		Task:       "Work https://github.com/o/r/issues/3533",
+		AssignedAt: time.Now(),
+	}
+	st := &state.State{
+		Agents: []state.Agent{ag},
+		Starts: []state.Start{{
+			Party:   party,
+			Dir:     "/tmp/worktree",
+			Harness: transcriptTestCodex,
+			Model:   model,
+		}},
+		Timers: []state.Timer{{
+			ID:     1,
+			Wake:   ag.Name,
+			Reason: "pr-checks",
+		}},
+	}
+	if shouldEndReviewWorker(st, ag) {
+		t.Fatal("shouldEndReviewWorker = true while an unfired timer is set to wake the worker")
+	}
+	st.Timers[0].Fired = time.Now()
+	if !shouldEndReviewWorker(st, ag) {
+		t.Fatal("shouldEndReviewWorker = false after the wake timer has fired")
+	}
+}

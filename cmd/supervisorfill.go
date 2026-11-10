@@ -47,6 +47,9 @@ func (l *supervisorLoop) staleNext(act superloop.Action) bool {
 // without a board read or a start, so no later plan holds them, and says how
 // many once.
 func (l *supervisorLoop) settleStaleNext(stale []superloop.Action) error {
+	if l.pauseForReexec() {
+		return nil
+	}
 	var evs []state.Event
 	var settled []superloop.Action
 	for _, act := range stale {
@@ -398,6 +401,9 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	if l.dryRun {
 		return l.previewFill(ctx)
 	}
+	if l.pauseForReexec() || ctx.Err() != nil {
+		return nil
+	}
 	attempts := map[string]int{}
 	for _, t := range taken {
 		if ref, ok := strings.CutPrefix(t.Key, loopFillKey); ok {
@@ -409,6 +415,9 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	startedHere := map[string]bool{}
 	attemptedHere := map[string]bool{}
 	for key, c := range claims {
+		if l.pauseForReexec() || ctx.Err() != nil {
+			return nil
+		}
 		if !strings.HasPrefix(key, loopFillKey) {
 			continue
 		}
@@ -429,7 +438,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	// A non-positive limit means the first fresh capacity read sets it.
 	limit := 0
 	for started := 0; ; started++ {
-		if l.pauseForReexec() {
+		if l.pauseForReexec() || ctx.Err() != nil {
 			return nil
 		}
 		cap := l.fillCapacity(ctx)

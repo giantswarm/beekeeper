@@ -54,11 +54,13 @@ const prNotMerged = "not merged"
 
 // timerConditions are the typed conditions by kind. Each is one read of one
 // reference, so the timers on the same reference share it.
+const timerPRChecks = "pr-checks"
+
 var timerConditions = map[string]timerCondition{
 	"pr-merged": {ghRefForm, ghRef, true, func(m []string) string {
 		return fmt.Sprintf("gh api repos/%s/pulls/%s --jq .merged", m[1], m[2])
 	}, always(outputIs("true", prNotMerged))},
-	"pr-checks": {ghRefForm, ghRef, true, func(m []string) string {
+	timerPRChecks: {ghRefForm, ghRef, true, func(m []string) string {
 		return fmt.Sprintf("gh pr view %s --repo %s --json state,headRefOid,statusCheckRollup", m[2], m[1])
 	}, func(m []string) judge { return prChecksSettled(m[1] + "#" + m[2]) }},
 	"issue-closed": {ghRefForm, ghRef, true, func(m []string) string {

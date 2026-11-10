@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -15,8 +16,13 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 	if a.store == nil {
 		return "", fmt.Errorf("durable delivery health unavailable")
 	}
+	st, err := a.store.Read()
+	if err != nil {
+		return "", err
+	}
 	var lines []string
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	step := func(st *state.State) ([]state.Event, bool) {
+		lines = nil
 		after := a.cfg.Delivery.StallAfter.Duration
 		if after <= 0 {
 			after = 24 * time.Hour
@@ -25,7 +31,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 		// Watches capture their tick before taking the lock. A slower older tick
 		// must not recover an episode a newer tick has just raised.
 		if now.Before(old.At) {
-			return nil, nil
+			return nil, false
 		}
 		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}}
 		var events []state.Event
@@ -60,13 +66,21 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 				active = append(active, d)
 			}
 			failed := d.Step == state.DeliveryReleasing && (d.Verdict == state.DeliveryReleaseFailed || d.Verdict == verdictUnconfirmed)
-			if !failed && deliveryInFlight(st, d, now, a.deliveryPolicy()) && (d.Since.IsZero() || now.Sub(d.Since) < after) {
+			// Transitional steps also need time to finish; only explicit failures
+			// are actionable immediately. Never diagnose a seconds-old step.
+			stepAfter := max(after, 5*time.Minute)
+			if d.Step == state.DeliveryReleasing {
+				stepAfter = max(after, 30*time.Minute)
+			}
+			if !failed && (d.Since.IsZero() || now.Sub(d.Since) < stepAfter) {
 				continue
 			}
 			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))
 			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, now.Sub(d.Since)).Round(time.Second), strings.TrimSpace(d.Waits+" "+d.Verdict+" "+d.Release))
-			next.Episodes[key] = detail
-			if _, ok := old.Episodes[key]; !ok {
+			if prev, ok := old.Episodes[key]; ok {
+				next.Episodes[key] = prev
+			} else {
+				next.Episodes[key] = detail
 				file(key, detail)
 			}
 		}
@@ -101,7 +115,16 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 		if old.FullRaised && (next.FullSignature != old.FullSignature) {
 			file("full recovered "+old.FullSignature, "RECOVERED: WIP FULL episode ended: delivery step or limit changed")
 		}
+		changed := len(events) > 0 || !maps.Equal(old.Episodes, next.Episodes) ||
+			old.FullSignature != next.FullSignature || !old.FullSince.Equal(next.FullSince) || old.FullRaised != next.FullRaised
 		st.DeliveryHealth = next
+		return events, changed
+	}
+	if _, changed := step(st); !changed {
+		return "", nil
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		events, _ := step(st)
 		return events, nil
 	})
 	return strings.Join(lines, "\n"), err

@@ -4232,3 +4232,52 @@ func TestLoopDoesNotReexecWhenShutdownBeginsWhileWatchDrains(t *testing.T) {
 		t.Fatal("re-executed during shutdown")
 	}
 }
+
+func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.replaced = true
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !l.beginInFlight("stream:workers") {
+		t.Fatal("failed to mark worker stream in flight")
+	}
+	alertReads := 0
+	oldAlerts := readLoopAlerts
+	t.Cleanup(func() { readLoopAlerts = oldAlerts })
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) {
+		alertReads++
+		return nil, nil
+	}
+	pullReads := 0
+	oldReadPull := readLoopPull
+	t.Cleanup(func() { readLoopPull = oldReadPull })
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		pullReads++
+		return r.pull, nil
+	}
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.execs != 0 {
+		t.Fatalf("re-executed while a claim was in flight: %d", r.execs)
+	}
+	if alertReads != 0 || pullReads != 0 {
+		t.Fatalf("ran pass observations on a replaced binary (alerts=%d pulls=%d)", alertReads, pullReads)
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR LOOP restart held: claims are in flight") {
+		t.Fatalf("missing restart-held log: %s", r.out.String())
+	}
+	if err := l.settleStaleNext([]superloop.Action{{Key: "next 1", Kind: superloop.KindNext}}); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, "supervisor."+superloop.KindNext); len(evs) != 0 {
+		t.Fatalf("settled stale next while draining for re-exec: %+v", evs)
+	}
+	l.endInFlight("stream:workers")
+	if reexec, err := l.reexec(context.Background()); err != nil || !reexec || r.execs != 1 {
+		t.Fatalf("reexec after draining in-flight claim = %v, %v (execs=%d)", reexec, err, r.execs)
+	}
+}

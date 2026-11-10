@@ -98,7 +98,7 @@ func TestTeleportRenewLockProcess(t *testing.T) {
 }
 
 func TestTeleportRenewLockReleased(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == testGOOSWindows {
 		t.Skip("uses a shell tsh fixture")
 	}
 	for _, fail := range []bool{false, true} {

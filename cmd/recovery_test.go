@@ -15,8 +15,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 const (
@@ -465,5 +467,103 @@ func TestRecoveryProbeFailureEvidenceIsBoundedAndCleared(t *testing.T) {
 	o = journal(t, c).Observed
 	if o.ProbeFailure != "" || o.ProbeFailures != 0 || !o.ProbePassed {
 		t.Fatalf("passing probe kept stale cause: %+v", o)
+	}
+}
+
+func TestRecoveryRestartMovesOnlyRestartableProcesses(t *testing.T) {
+	c, _ := recoveryRig(t)
+	fi, err := os.Stat(c.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := fi.ModTime()
+
+	prevRead, prevBin := recoveryReadProcs, recoveryProcessBinary
+	prevBrokerP, prevBrokerR := brokerProcess, restartBroker
+	prevLauncher := plat.Launcher
+	t.Cleanup(func() {
+		recoveryReadProcs, recoveryProcessBinary = prevRead, prevBin
+		brokerProcess, restartBroker = prevBrokerP, prevBrokerR
+		plat.Launcher = prevLauncher
+	})
+
+	l := &haltLauncher{installed: map[string]string{loopUnit: unitActive}}
+	plat.Launcher = l
+
+	loopReplaced := true
+	watchReplaced := false
+	brokerStart := written.Add(-time.Minute)
+	brokerBusyChild := true
+	brokerRestarts := 0
+
+	recoveryReadProcs = func() (*proc.Table, error) {
+		byPID := map[int]*proc.Process{
+			10: {PID: 10, Comm: project.Name, Args: []string{project.Name, supervisorCommand, "loop"}},
+			20: {PID: 20, Comm: project.Name, Args: []string{project.Name, "codex-run", "--worktree", "/tmp/wt"}},
+			25: {PID: 25, Comm: project.Name, Args: []string{project.Name, watchName}},
+			30: {PID: 30, PPID: 1, Comm: project.Name, Start: brokerStart},
+		}
+		if brokerBusyChild {
+			byPID[31] = &proc.Process{PID: 31, PPID: 30, Comm: project.Name}
+		}
+		return &proc.Table{ByPID: byPID}, nil
+	}
+	recoveryProcessBinary = func(pid int) (string, bool) {
+		switch pid {
+		case 10:
+			return c.target, loopReplaced
+		case 20:
+			return c.target, true
+		case 25:
+			return c.target, watchReplaced
+		default:
+			return c.target, false
+		}
+	}
+	brokerProcess = func() (int, string, error) { return 30, c.target, nil }
+	restartBroker = func(context.Context) error {
+		brokerRestarts++
+		brokerStart = written.Add(time.Second)
+		return nil
+	}
+
+	// Attempt 1: loop is due and broker serves a call, so recovery waits.
+	if c.restart(t.Context(), 1) {
+		t.Fatal("settled while supervisor loop and busy broker still ran the replaced binary")
+	}
+	if brokerRestarts != 0 || len(l.stopped) != 0 {
+		t.Fatalf("brokerRestarts=%d stopped=%v, want 0 and none", brokerRestarts, l.stopped)
+	}
+
+	// Attempt 2: loop re-executed onto the restored binary and broker is idle;
+	// a worker turn (codex-run) still runs the old binary, which does not block
+	// recovery or re-restart the broker.
+	loopReplaced = false
+	brokerBusyChild = false
+	if !c.restart(t.Context(), 2) {
+		t.Fatal("did not settle once loop and broker moved to the restored binary")
+	}
+	if brokerRestarts != 1 || len(l.stopped) != 0 {
+		t.Fatalf("brokerRestarts=%d stopped=%v, want 1 and none", brokerRestarts, l.stopped)
+	}
+
+	// Attempt recoveryRestartTicks with only watch still on the replaced binary:
+	// broker is already on the restored binary and loopUnit is not stopped.
+	watchReplaced = true
+	if !c.restart(t.Context(), recoveryRestartTicks) {
+		t.Fatal("did not settle at recoveryRestartTicks")
+	}
+	if brokerRestarts != 1 || len(l.stopped) != 0 {
+		t.Fatalf("brokerRestarts=%d stopped=%v, want 1 and no loop stop when loop is already current", brokerRestarts, l.stopped)
+	}
+
+	// Attempt recoveryRestartTicks when supervisor loop itself is still stuck
+	// on the replaced binary: loopUnit is stopped and resumed.
+	loopReplaced = true
+	if !c.restart(t.Context(), recoveryRestartTicks) {
+		t.Fatal("did not settle at recoveryRestartTicks")
+	}
+	if len(l.stopped) != 1 || l.stopped[0] != loopUnit || len(l.resumed) != 1 || l.resumed[0] != loopUnit {
+		t.Fatalf("stopped=%v resumed=%v, want [%s] and [%s]", l.stopped, l.resumed, loopUnit, loopUnit)
 	}
 }

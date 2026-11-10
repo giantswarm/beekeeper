@@ -50,6 +50,7 @@ func guardDenied(output []byte) bool {
 	_ = json.Unmarshal(output, &decision)
 	return decision.Decision == guardDeny || decision.Specific.Decision == guardDeny
 }
+
 type executionNote struct {
 	Draft noteDraft  `json:"draft"`
 	Note  state.Note `json:"note"`

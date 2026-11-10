@@ -565,3 +565,36 @@ func TestAutomaticWorktreesRejectChangedTask(t *testing.T) {
 		}
 	}
 }
+
+func TestTrimWorktreesHonorsAppContextCancellation(t *testing.T) {
+	a, _ := stubApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.ctx = ctx
+
+	inspected := 0
+	pulled := false
+	retired := false
+	m := worktreeMachine{
+		dirs: []string{filepath.Join(t.TempDir(), "wt-1"), filepath.Join(t.TempDir(), "wt-2")},
+		git: func(context.Context, string, ...string) ([]byte, error) {
+			inspected++
+			return nil, context.Canceled
+		},
+		pulls: func(context.Context, []github.Head) (map[github.Head]github.HeadPull, error) {
+			pulled = true
+			return nil, nil
+		},
+		retire: func(context.Context, []string, bool) error {
+			retired = true
+			return nil
+		},
+	}
+	r := a.trimWorktrees(false, func() (worktreeMachine, error) { return m, nil })
+	if !errors.Is(r.err, context.Canceled) {
+		t.Fatalf("trimWorktrees err = %v, want context.Canceled", r.err)
+	}
+	if inspected != 0 || pulled || retired {
+		t.Fatalf("cancelled trimWorktrees ran inspected=%d pulled=%v retired=%v, want 0/false/false", inspected, pulled, retired)
+	}
+}

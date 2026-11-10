@@ -258,18 +258,33 @@ func evaluateThroughput(now time.Time, after time.Duration, obs throughputObserv
 
 // Both watches share this durable incident boundary. The state lock serializes
 // evaluation and guide filing so concurrent/restarted watches cannot duplicate it.
-func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
+func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (string, error) {
 	if a.store == nil {
 		return "", fmt.Errorf("durable health unavailable")
 	}
+	var prev throughputHealth
+	if _, err := a.store.ReadFile(throughputHealthFile, &prev); err != nil {
+		return "", err
+	}
+	if !prev.At.IsZero() && !now.Before(prev.At) && now.Sub(prev.At) < throughputCadence {
+		return "", nil
+	}
 	keepHistory := func(e state.Event) bool { return e.Verb == throughputOutcomeVerb || e.Verb == throughputHealthVerb }
+	if len(progress) > 0 {
+		keepHistory = eventProgressFilter(keepHistory, progress[0], time.Now)
+	}
 	// Warm a cold reader before taking the state lock. Refresh it inside
 	// the transaction as well to include concurrent health transitions.
-	if _, err := a.store.Follow("throughput-health-history", keepHistory); err != nil {
+	if _, err := state.FollowSnapshot(a.store, "throughput-health-history", "v1", keepHistory); err != nil {
+		return "", err
+	}
+	st, err := a.store.Read()
+	if err != nil {
 		return "", err
 	}
 	var line string
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	step := func(st *state.State, commit bool) ([]state.Event, error) {
+		line = ""
 		var prev throughputHealth
 		if _, err := a.store.ReadFile(throughputHealthFile, &prev); err != nil {
 			return nil, err
@@ -288,12 +303,15 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 		if err != nil || !found {
 			obs.Unknown = true
 		}
-		evs, err := a.store.Follow("throughput-health-history", keepHistory)
+		evs, err := state.FollowSnapshot(a.store, "throughput-health-history", "v1", keepHistory)
 		if err != nil {
 			return nil, err
 		}
 		if initializing && len(evs) == 0 {
-			return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: unknownState})
+			if commit {
+				return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: unknownState})
+			}
+			return nil, nil
 		}
 		var outcomes []throughputOutcome
 		prev.Status = ""
@@ -319,11 +337,16 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 			after = 2 * time.Hour
 		}
 		status, detail := evaluateThroughput(now, after, obs, outcomes, held || st.Stop != nil || a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, now))
-		if err := a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: status}); err != nil {
-			return nil, err
-		}
 		if status == prev.Status || prev.Status == "" && status == throughputHealthy {
+			if commit {
+				return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: status})
+			}
 			return nil, nil
+		}
+		if commit {
+			if err := a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: status}); err != nil {
+				return nil, err
+			}
 		}
 		incident := prev.Incident
 		alert := strings.HasPrefix(status, "failed-") || status == throughputStalledMerge
@@ -344,6 +367,30 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 			events = append(events, event(loopParty, loopFileVerb, "[%s] %s", key, report))
 		}
 		return events, nil
+	}
+	events, err := step(st, false)
+	if err != nil {
+		return "", err
+	}
+	if len(events) == 0 {
+		var needUpdate bool
+		if err := a.store.Exclusive(func() error {
+			evs, err := step(st, false)
+			if err != nil {
+				return err
+			}
+			if len(evs) > 0 {
+				needUpdate = true
+				return nil
+			}
+			_, err = step(st, true)
+			return err
+		}); err != nil || !needUpdate {
+			return line, err
+		}
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		return step(st, true)
 	})
 	return line, err
 }

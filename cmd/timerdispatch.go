@@ -171,7 +171,7 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 		return nil, err
 	}
 	batch := a.snapshotAtNow()
-	w := &watcher{app: batch}
+	w := &watcher{app: batch, clock: wallClock{}}
 	if st.Stop != nil {
 		return w, nil
 	}
@@ -219,13 +219,16 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 		}
 		var events []state.Event
 		lines, events, fires, _ = settleTimersMatching(current, found, now, timerTick, nil)
+		for _, line := range lines {
+			events = append(events, event(watchParty, "watch.timer", "%s", line))
+		}
 		return events, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, line := range lines {
-		w.emitNow("timer", "%s", line)
+		w.outputEvent(line)
 	}
 	w.actTimers(ctx, fires)
 	return w, nil
@@ -236,7 +239,7 @@ func timerDispatchCheckDue(t state.Timer, now time.Time) bool {
 	if every <= 0 {
 		every = timerEvery
 	}
-	return t.Conditional() && !t.Due.After(now) && (t.Checked.IsZero() || now.Sub(t.Checked) >= every)
+	return t.Conditional() && t.PendingWakeReason == "" && !t.Due.After(now) && (t.Checked.IsZero() || now.Sub(t.Checked) >= every)
 }
 
 // A condition that is false but checked on schedule is not an outage. What

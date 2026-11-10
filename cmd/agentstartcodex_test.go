@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -162,7 +163,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	sendCodexWhenReady = func(_ context.Context, inbox, msg string, _ time.Duration) error {
 		deliveredInbox, deliveredMsg = inbox, msg
 		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
-		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1234\"}\n{\"type\":\"turn.started\"}\n"), 0o600)
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1234\"}\n{\"type\":\"turn.started\"}\n"), 0o600) //nolint:gosec // logPath comes from the test-owned Codex inbox, not external input
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
 
@@ -238,6 +239,14 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	}
 	if deliveredInbox != codex.InboxPath(stateDir, startID) || !strings.Contains(deliveredMsg, "Worker rules") {
 		t.Errorf("delivered (%q, %q)", deliveredInbox, deliveredMsg)
+	}
+	if gotThread := codex.ReadThread(stateDir, codex.InboxPath(stateDir, startID)); gotThread != "thread-1234" {
+		t.Errorf("ReadThread = %q, want thread-1234", gotThread)
+	}
+	if st, rerr := store.Read(); rerr != nil {
+		t.Fatal(rerr)
+	} else if len(st.Starts) != 1 || st.Starts[0].Conversation != "thread-1234" {
+		t.Errorf("Starts = %+v, want Conversation=thread-1234", st.Starts)
 	}
 
 	// Verify isolated CODEX_HOME files were generated.
@@ -421,7 +430,7 @@ func TestStartCodexValidationCleanupAndStop(t *testing.T) {
 	oldSend := sendCodexWhenReady
 	sendCodexWhenReady = func(_ context.Context, inbox, _ string, _ time.Duration) error {
 		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
-		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-fail\"}\n{\"type\":\"error\",\"message\":\"api failure\"}\n"), 0o600)
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-fail\"}\n{\"type\":\"error\",\"message\":\"api failure\"}\n"), 0o600) //nolint:gosec // logPath comes from the test-owned Codex inbox, not external input
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
 
@@ -738,5 +747,164 @@ func TestBackgroundDropsCodexIdentity(t *testing.T) {
 	wantBrowse := state.Party{Session: "browse-turn-id", Name: "beekeeper browse"}
 	if gotBrowse != wantBrowse {
 		t.Fatalf("envParty(browseEnv) = %+v, want %+v", gotBrowse, wantBrowse)
+	}
+}
+
+const testGOOSWindows = "windows"
+
+func TestWakeResumesStoppedAndEndedCodexWorker(t *testing.T) {
+	if runtime.GOOS == testGOOSWindows {
+		t.Skip("FIFO inboxes require unix")
+	}
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	leaseDir := filepath.Join(root, "leases")
+	userCodex := filepath.Join(root, "user-codex")
+	if err := os.MkdirAll(filepath.Join(userCodex, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authFile := filepath.Join(userCodex, "auth.json")
+	if err := os.WriteFile(authFile, []byte(`{"token":"test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userConfig := filepath.Join(userCodex, "config.toml")
+	if err := os.WriteFile(userConfig, []byte("model = \"gpt-5.4\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBinDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBinDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeCodex := filepath.Join(fakeBinDir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test executable script
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldLauncher := plat.Launcher
+	oldMachine := plat.Machine
+	hl := &haltLauncher{installed: map[string]string{}}
+	plat.Launcher = hl
+	testMachine = roomyMachine{plat.Machine}
+	plat.Machine = testMachine
+	t.Cleanup(func() {
+		testMachine = nil
+		plat.Launcher = oldLauncher
+		plat.Machine = oldMachine
+	})
+
+	const (
+		testCodexModel = "gpt-5.7"
+		startID        = "abcdef12-3456-7890-abcd-ef1234567890"
+		threadID       = "019d7000-1111-7222-8333-444455556666"
+		worker         = "beekeeper#3533: codex"
+	)
+
+	oldSend := sendCodexWhenReady
+	var deliveredInbox, deliveredMsg string
+	sendCodexWhenReady = func(_ context.Context, inbox, msg string, _ time.Duration) error {
+		deliveredInbox, deliveredMsg = inbox, msg
+		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\""+threadID+"\"}\n{\"type\":\"turn.started\"}\n"), 0o600) //nolint:gosec // logPath comes from the test-owned Codex inbox, not external input
+	}
+	defer func() { sendCodexWhenReady = oldSend }()
+
+	store, err := state.Open(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		StateDir: stateDir,
+		LeaseDir: leaseDir,
+		Codex: config.Codex{
+			SessionsDir: filepath.Join(userCodex, "sessions"),
+			AuthFile:    authFile,
+			ConfigFile:  userConfig,
+			Model:       testCodexModel,
+		},
+	}
+	var out bytes.Buffer
+	a := &app{
+		cfg:   cfg,
+		store: store,
+		now:   time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
+		out:   &out,
+		as:    supervisorName,
+	}
+
+	sp := agentStart{
+		id:     startID,
+		name:   worker,
+		role:   workerRole,
+		brief:  "Work https://github.com/giantswarm/beekeeper/issues/3533",
+		task:   "Work https://github.com/giantswarm/beekeeper/issues/3533",
+		serves: "giantswarm/beekeeper#3533",
+		dir:    root,
+		model:  testCodexModel,
+	}
+	if err := a.startCodexAgent(context.Background(), sp); err != nil {
+		t.Fatalf("startCodexAgent: %v", err)
+	}
+
+	// Write a rollout transcript in the isolated CODEX_HOME sessions folder.
+	sessDir := filepath.Join(codex.HomeDir(stateDir), "sessions", "2026", "11", "09")
+	if err := os.MkdirAll(sessDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rolloutPath := filepath.Join(sessDir, "rollout-2026-11-09T12-00-00-"+threadID+".jsonl")
+	rolloutContent := `{"timestamp":"2026-11-09T12:00:00Z","type":"session_meta","payload":{"id":"` + threadID + `","cwd":"` + root + `"}}` + "\n" +
+		`{"timestamp":"2026-11-09T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Work https://github.com/giantswarm/beekeeper/issues/3533"}]}}` + "\n"
+	if err := os.WriteFile(rolloutPath, []byte(rolloutContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the codex unit ending and its inbox being cleaned up while the
+	// worker is removed into EndedWorkers and its serving record is released.
+	_, _ = codex.RemoveInbox(codex.InboxPath(stateDir, startID))
+	if ended := codex.Ended(stateDir, cfg.Codex.SessionsDir, nil, time.Time{}); len(ended) != 1 || ended[0].HostID != codex.HostPrefix+startID {
+		t.Fatalf("codex.Ended after RemoveInbox = %+v, want HostID=%s", ended, codex.HostPrefix+startID)
+	}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		workerParty := st.Agents[0].Party
+		removeAgent(st, 0)
+		clearRecords(st, workerParty)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Waking the ended worker by name brings it back on the roster, restarts
+	// its codex unit with threadID recorded, and delivers the wake message.
+	out.Reset()
+	st, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, ok := a.endedWorker(st, worker)
+	if !ok {
+		t.Fatal("ended worker was not found by name")
+	}
+	if err := a.wakeEnded(context.Background(), state.Party{Name: supervisorName}, ended, "CI passed; merge ready", ""); err != nil {
+		t.Fatalf("wakeEnded codex worker: %v", err)
+	}
+	if deliveredInbox != codex.InboxPath(stateDir, startID) {
+		t.Errorf("deliveredInbox = %q, want original worker inbox", deliveredInbox)
+	}
+	st, err = store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !onRoster(st, ended.Party) {
+		t.Fatal("resumed worker was not restored to the roster")
+	}
+	if len(hl.started) != 2 {
+		t.Fatalf("launched units = %d, want 2 (initial + resumed)", len(hl.started))
+	}
+	if gotThread := codex.ReadThread(stateDir, codex.InboxPath(stateDir, startID)); gotThread != threadID {
+		t.Errorf("ReadThread after resume = %q, want %s", gotThread, threadID)
+	}
+	if !strings.Contains(deliveredMsg, "CI passed; merge ready") {
+		t.Errorf("deliveredMsg = %q, want wake message", deliveredMsg)
 	}
 }

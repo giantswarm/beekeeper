@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	ciGreenName = "green"
 	prChecks7   = "pr-checks o/r#7"
 	ciHead      = "abcdef0123456789abcdef0123456789abcdef01"
 	ciLintURL   = "https://github.com/o/r/actions/runs/9/job/90"
@@ -71,16 +72,15 @@ func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 
 // The workflow of a worker that parks on its pull request's CI as a plain
 // wait, with a pr-checks timer: the timer keeps waiting while the checks
-// run, wakes the worker once a check fails, naming it and its URL, and
-// closes, so the same failure wakes it no second time. A green run wakes it
-// with that outcome.
+// run, queues a fresh worker on failure with the check and URL, and closes.
+// A green run goes directly to review without a worker turn.
 func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 	for name, tc := range map[string]struct {
 		settled []byte
 		says    string
 	}{
-		"red":   {ciAnswer("OPEN", ciRunning, ciLintRed), "pr-checks o/r#7 holds: CI red on head abcdef012: pre-commit " + ciLintURL},
-		"green": {ciAnswer("OPEN", ciSucceeded, ciStatusOK), "pr-checks o/r#7 holds: CI green on head abcdef012: every check passed"},
+		"red":       {ciAnswer("OPEN", ciRunning, ciLintRed), "pr-checks o/r#7 holds: CI red on head abcdef012: pre-commit " + ciLintURL},
+		ciGreenName: {ciAnswer("OPEN", ciSucceeded, ciStatusOK), "pr-checks o/r#7 holds: CI green on head abcdef012: every check passed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
@@ -103,7 +103,7 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 			t.Cleanup(func() { wakeOwner = wasWake })
 			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}, Task: "fix o/r#7",
-					Park: &state.Park{On: claimIssue, At: relayNow.Add(-time.Minute), Waits: "CI"}}}
+					Park: &state.Park{On: claimIssue, At: relayNow.Add(-time.Minute), Waits: "CI", ReviewHead: ciHead}}}
 				st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prChecks7, Wake: bk228, What: "CI settled: fix or park for review", Until: relayNow.Add(2 * time.Hour)}}
 				return nil, nil
 			}); err != nil {
@@ -119,10 +119,18 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 			w.now = relayNow.Add(timerEvery)
 			w.pending(context.Background(), live)
 			w.timerActs.Wait()
-			want := "BK 228: beekeeper timer #1 (" + tc.says + "): CI settled: fix or park for review"
-			if len(woke) != 1 || woke[0] != want {
-				t.Fatalf("woke %q, want %q", woke, want)
+			if len(woke) != 0 {
+				t.Fatalf("old worker woke: %v", woke)
 			}
+			settled, _ := w.store.Read()
+			if name == ciGreenName {
+				if settled.Agents[0].Park.ReviewHead != ciHead || len(settled.ReviewParks) != 1 {
+					t.Fatal("green CI did not request review")
+				}
+			} else if len(settled.Agents[0].Park.Continuation) != 1 {
+				t.Fatal("red CI did not queue a fresh worker")
+			}
+
 			if !strings.Contains(out.String(), "TIMER: #1, "+tc.says) {
 				t.Errorf("watch said %q", out.String())
 			}
@@ -131,7 +139,7 @@ func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 			w.now = relayNow.Add(3 * timerEvery)
 			w.pending(context.Background(), live)
 			w.timerActs.Wait()
-			if st, _ := w.store.Read(); len(st.Timers) != 0 || len(woke) != 1 || reads != before {
+			if st, _ := w.store.Read(); len(st.Timers) != 0 || len(woke) != 0 || reads != before {
 				t.Fatalf("after firing: timers %+v, woke %v, reads %d→%d", st.Timers, woke, before, reads)
 			}
 		})
