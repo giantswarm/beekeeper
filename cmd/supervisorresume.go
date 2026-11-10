@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -402,14 +403,17 @@ func (l *supervisorLoop) recoverUnfinishedTurns(ctx context.Context, st *state.S
 		}
 		if ag.Execution != nil {
 			r, _ := executionRecord(st, *ag.Execution)
-			if r == nil || r.Completed || r.StopRequest != nil || r.Observation.StopAcknowledged || !r.Observation.Ready {
+			if r == nil || !r.Request.Messaging || r.Completed || r.StopRequest != nil || r.Observation.StopAcknowledged || !r.Observation.Ready || r.Observation.Reachability != execution.Reachable || executionInTurn(st, ag.Party, l.a.now) {
+				continue
+			}
+			if h, ok := l.a.cfg.Agents.Hosts[r.Selector]; !ok || h.Identity != r.Handle.Ref.Host {
 				continue
 			}
 			o := r.Observation
-			if !o.BetweenTurns() && !r.Terminal() || o.LastActive.IsZero() || !ag.ResumedWait.IsZero() && !o.LastActive.After(ag.ResumedWait) {
+			if !o.BetweenTurns() || o.LastActive.IsZero() || !ag.ResumedWait.IsZero() && !o.LastActive.After(ag.ResumedWait) {
 				continue
 			}
-			if _, err := l.a.resumeOnWait(ctx, ag.Name, ""); err != nil {
+			if _, err := l.a.resumeOnWait(ctx, ag.Name, ""); err != nil && !isUnreachable(err) && !errors.Is(err, execution.ErrUnsupported) {
 				return err
 			}
 			continue

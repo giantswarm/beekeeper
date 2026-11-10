@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -1900,14 +1899,24 @@ func (s *FileStore) Dir() string { return s.dir }
 
 func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name) }
 
-// Read returns the current state under a shared lock.
+// Read copies the current state under a shared lock, then decodes the snapshot
+// after releasing it. Large read-only views must not hold up writers while
+// allocating and decoding the retained history. Pending outbox recovery still
+// re-reads the latest state under the exclusive lock before changing anything.
 func (s *FileStore) Read() (*State, error) {
 	unlock, err := s.lock(true, lockWait)
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.load()
+	raw, err := os.ReadFile(s.path("state.json"))
 	unlock()
+	if errors.Is(err, os.ErrNotExist) {
+		return &State{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.decode(raw)
 	if err != nil || st.EventOutbox == nil {
 		return st, err
 	}
@@ -1948,34 +1957,6 @@ type lockHolder struct {
 	PID     int       `json:"pid"`
 	Command string    `json:"command"`
 	At      time.Time `json:"at"`
-}
-
-// lock takes the state lock, shared or exclusive, waiting at most wait;
-// an exclusive holder records itself for the waiters' LockBusyError.
-func (s *FileStore) lock(shared bool, wait time.Duration) (unlock func(), err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
-	defer cancel()
-	l := flock.New(s.path("state.lock"))
-	take := l.TryLockContext
-	if shared {
-		take = l.TryRLockContext
-	}
-	ok, err := take(ctx, 10*time.Millisecond)
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		return nil, err
-	}
-	if !ok {
-		return nil, s.busy(wait)
-	}
-	if shared {
-		return func() { _ = l.Unlock() }, nil
-	}
-	holder := s.path(holderFile)
-	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: command(os.Args), At: time.Now()})
-	return func() {
-		_ = os.Remove(holder)
-		_ = l.Unlock()
-	}, nil
 }
 
 const holderFile = "state.lock.holder"
@@ -2212,14 +2193,18 @@ func command(args []string) string {
 }
 
 func (s *FileStore) load() (*State, error) {
-	st := &State{}
 	raw, err := os.ReadFile(s.path("state.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return st, nil
+		return &State{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	return s.decode(raw)
+}
+
+func (s *FileStore) decode(raw []byte) (*State, error) {
+	st := &State{}
 	if err := json.Unmarshal(raw, st); err != nil {
 		err = fmt.Errorf("%s: %w", s.path("state.json"), err)
 		if newer := s.newerWriter(raw); newer != "" {

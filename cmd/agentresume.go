@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -186,7 +187,10 @@ func (a *app) resumeOnWait(ctx context.Context, id, turn string) (bool, error) {
 	}
 	message += "\nTask: " + ag.Task + "\n" + taskEndings
 	if err := resumeHeadless(ctx, a, ag, message); err != nil {
-		return false, fmt.Errorf("resuming %s on its wait: %w", ag.Name, err)
+		var pending *executionDeliveryPending
+		if !errors.As(err, &pending) {
+			return false, fmt.Errorf("resuming %s on its wait: %w", ag.Name, err)
+		}
 	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for k := range st.Agents {
