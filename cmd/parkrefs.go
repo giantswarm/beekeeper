@@ -139,24 +139,59 @@ func (a *app) parkSuggestion(me state.Party, on string) string {
 	return suggestion
 }
 
-// resolveParkRef refuses targets GitHub confirms are missing or already settled.
-// A failed read leaves the type empty for lazy classification after the park.
+// readParkRefREST uses the target repository's configured gh identity and the
+// issues endpoint, which also identifies pull requests without review access.
+var readParkRefREST = func(ctx context.Context, r github.PR) (github.RefState, error) {
+	ctx, cancel := context.WithTimeout(github.ActingOn(ctx, r.Repo), time.Minute)
+	defer cancel()
+	path := fmt.Sprintf("repos/%s/issues/%d", r.Repo, r.N)
+	out, err := github.RunGH(ctx, "api", path)
+	if err != nil {
+		return github.RefState{}, fmt.Errorf("gh api %s: %w", path, err)
+	}
+	var item struct {
+		State string `json:"state"`
+		Pull  *struct {
+			MergedAt *time.Time `json:"merged_at"`
+		} `json:"pull_request"`
+	}
+	if err := json.Unmarshal(out, &item); err != nil {
+		return github.RefState{}, fmt.Errorf("gh api %s: %w", path, err)
+	}
+	if item.State != "open" && item.State != "closed" {
+		return github.RefState{}, fmt.Errorf("gh api %s: missing or invalid state", path)
+	}
+	result := github.RefState{Kind: github.RefIssue, State: strings.ToUpper(item.State)}
+	if item.Pull != nil {
+		result.Kind = github.RefPullRequest
+		if item.Pull.MergedAt != nil {
+			result.State = github.Merged
+		}
+	}
+	return result, nil
+}
+
+// resolveParkRef refuses settled targets and reports failed reads. If the
+// richer GraphQL lookup cannot classify a target, use the minimal REST read.
 func resolveParkRef(ctx context.Context, on string) (string, error) {
 	r, ok := parseRef(on)
 	if !ok {
 		return "", nil
 	}
-	reads, err := refStates(ctx, []github.PR{r})
-	if err != nil {
-		return "", nil
-	}
+	reads, lookupErr := refStates(ctx, []github.PR{r})
 	read := reads[r]
-	kind := read.Kind
-	if kind != github.RefIssue && kind != github.RefPullRequest {
-		return "", refused("%s is not a readable issue or pull request", on)
+	if read.Kind != github.RefIssue && read.Kind != github.RefPullRequest {
+		if lookupErr == nil {
+			lookupErr = fmt.Errorf("no classified answer for %s", on)
+		}
+		var err error
+		read, err = readParkRefREST(ctx, r)
+		if err != nil {
+			return "", refused("%s is not a readable issue or pull request: GraphQL reference read: %v; REST reference read: %v", on, lookupErr, err)
+		}
 	}
 	if read.State == github.Closed || read.State == github.Merged {
 		return "", refused("%s is already %s: continue the task without parking", on, strings.ToLower(read.State))
 	}
-	return kind, nil
+	return read.Kind, nil
 }
