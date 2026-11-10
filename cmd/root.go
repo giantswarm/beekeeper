@@ -367,9 +367,9 @@ func (a *app) callerSession() (state.Party, error) {
 		}
 	}
 	var t *proc.Table
-	if tbl, err := plat.Machine.Processes(); err == nil {
-		t = tbl
-		if p.Name == "" {
+	if p.Name == "" {
+		if tbl, err := plat.Machine.Processes(); err == nil {
+			t = tbl
 			p.Name = claude.RecordName(a.cfg, t, p.Session)
 		}
 	}
@@ -387,13 +387,18 @@ func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
 	if a.store == nil || p.Session == "" {
 		return
 	}
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return
 	}
 	var prevID, jobID string
-	if t != nil {
-		prevID, jobID = claude.ResumedSession(a.cfg, t, p.Session)
+	if !hasStateSession(st, p.Session) && hasAnyStateSession(st) && hasCLISessionRecords(a.cfg) {
+		if t == nil {
+			t, _ = plat.Machine.Processes()
+		}
+		if t != nil {
+			prevID, jobID = claude.ResumedSession(a.cfg, t, p.Session)
+		}
 	}
 	var desktopInitID string
 	var priorIDs []string
@@ -409,7 +414,7 @@ func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
 		return h != nil && h.Session == p.Session && h.HostSession == ""
 	})
 	if len(oldIDs) > 0 || needsHost {
-		_ = a.store.Update(func(ust *state.State) ([]state.Event, error) {
+		_ = a.store.UpdateWithin(100*time.Millisecond, func(ust *state.State) ([]state.Event, error) {
 			for _, oldID := range oldIDs {
 				rebindSessionState(ust, oldID, p.Session, p.HostSession)
 			}
@@ -425,6 +430,78 @@ func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
 			p.Name = h.Name
 		}
 	}
+}
+
+func hasStateSession(st *state.State, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, s := range st.Starts {
+		if s.Session == id {
+			return true
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Session == id {
+			return true
+		}
+	}
+	for _, rl := range roles {
+		r := rl.get(st)
+		if r.Holder != nil && r.Holder.Session == id {
+			return true
+		}
+		if r.Relay != nil && (r.Relay.From.Session == id || r.Relay.To.Session == id) {
+			return true
+		}
+		for _, rf := range r.Relieved {
+			if rf.Party.Session == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasAnyStateSession(st *state.State) bool {
+	for _, s := range st.Starts {
+		if s.Session != "" {
+			return true
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Session != "" {
+			return true
+		}
+	}
+	for _, rl := range roles {
+		r := rl.get(st)
+		if r.Holder != nil && r.Holder.Session != "" {
+			return true
+		}
+		if r.Relay != nil && (r.Relay.From.Session != "" || r.Relay.To.Session != "") {
+			return true
+		}
+		for _, rf := range r.Relieved {
+			if rf.Party.Session != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasCLISessionRecords(cfg *config.Config) bool {
+	if cfg == nil || cfg.Claude.SessionsDir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(cfg.Claude.SessionsDir)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(entries, func(e os.DirEntry) bool {
+		return !e.IsDir() && strings.HasSuffix(e.Name(), ".json")
+	})
 }
 
 func resumedStateSessions(st *state.State, curID, prevID, jobID, desktopInitID string, priorIDs []string) []string {

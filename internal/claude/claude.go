@@ -418,16 +418,6 @@ func ResumedSession(cfg *config.Config, t *proc.Table, id string) (prevID, jobID
 			return prev, r.JobID
 		}
 	}
-	if p := OwnCLI(t, os.Getpid()); p != nil {
-		prev := ownID(p.Args)
-		if prev == id {
-			prev = ""
-		}
-		if r, ok := readCLIRecord(cfg, p); ok {
-			return prev, r.JobID
-		}
-		return prev, ""
-	}
 	return "", ""
 }
 

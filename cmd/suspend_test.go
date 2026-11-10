@@ -215,23 +215,28 @@ func (m staticProcMachine) Processes() (*proc.Table, error) {
 
 func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 	const (
-		origID      = "a2e980cb-6c26-411f-a3fd-45bc0a0ebde0"
-		origShortID = "a2e980cb"
-		resumedID   = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
-		resumedName = "beekeeper resume after suspend"
-		guideName56 = "Guide run 56"
+		origID            = "a2e980cb-6c26-411f-a3fd-45bc0a0ebde0"
+		origShortID       = "a2e980cb"
+		resumedID         = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
+		resumedName       = "beekeeper resume after suspend"
+		guideName56       = "Guide run 56"
+		resumedWorkText   = "follow up after suspend"
+		resumedNoteText   = "Proceed with the fix?"
+		resumedDoneReason = "closed after suspend"
+		resumedAnswerText = "yes, proceed"
 	)
 
 	t.Run("background guide resumed with new session id in daemon listing", func(t *testing.T) {
 		a, _ := stubApp(t)
+		a.as = ""
 		plat.Machine = tableMachine{plat.Machine}
 		dir := t.TempDir()
 		guide := state.Party{Name: guideName56, Session: origID}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 56}
-			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: "follow up after suspend", Due: a.now, By: guide}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: "Proceed with the fix?", At: a.now.Add(-time.Minute)}}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: guide}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -257,11 +262,11 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumedName)
 
 		workCmd := a.guideWorkCmd()
-		workCmd.SetArgs([]string{paramDone, "1", "--reason", "closed after suspend"})
+		workCmd.SetArgs([]string{paramDone, "1", flagNoteReason, resumedDoneReason})
 		if err := workCmd.Execute(); err != nil {
 			t.Fatalf("guide work done: %v", err)
 		}
-		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, "yes, proceed", false, answerNoteOpts{}); err != nil {
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, resumedAnswerText, false, answerNoteOpts{}); err != nil {
 			t.Fatalf("answer: %v", err)
 		}
 		if err := a.runStart(t.Context(), guideRole, false); err != nil {
@@ -278,13 +283,14 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 
 	t.Run("background guide resumed with new session id in cli record", func(t *testing.T) {
 		a, _ := stubApp(t)
+		a.as = ""
 		dir := t.TempDir()
 		guide := state.Party{Name: guideName56, Session: origID}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 56}
-			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: "follow up after suspend", Due: a.now, By: guide}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: "Proceed with the fix?", At: a.now.Add(-time.Minute)}}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: guide}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -295,7 +301,7 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 			Machine: plat.Machine,
 			table: &proc.Table{
 				ByPID: map[int]*proc.Process{
-					4242: {PID: 4242, Comm: "claude", StartTicks: 100, Args: []string{"claude bg-spare", "--bg-spare"}},
+					4242: {PID: 4242, Comm: claudeComm, StartTicks: 100, Args: []string{"claude bg-spare", "--bg-spare"}},
 				},
 			},
 		}
@@ -304,11 +310,11 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumedName)
 
 		workCmd := a.guideWorkCmd()
-		workCmd.SetArgs([]string{paramDone, "1", "--reason", "closed after suspend"})
+		workCmd.SetArgs([]string{paramDone, "1", flagNoteReason, resumedDoneReason})
 		if err := workCmd.Execute(); err != nil {
 			t.Fatalf("guide work done: %v", err)
 		}
-		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, "yes, proceed", false, answerNoteOpts{}); err != nil {
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, resumedAnswerText, false, answerNoteOpts{}); err != nil {
 			t.Fatalf("answer: %v", err)
 		}
 		if err := a.runStart(t.Context(), guideRole, false); err != nil {
@@ -325,6 +331,7 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 
 	t.Run("desktop guide started without prior holder and resumed with new session id", func(t *testing.T) {
 		a, _ := stubApp(t)
+		a.as = ""
 		plat.Machine = tableMachine{plat.Machine}
 		hostID := "local_" + origID
 		seed := state.Party{Name: guideName56, Session: origID, HostSession: hostID}
@@ -338,8 +345,8 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: "follow up after suspend", Due: a.now, By: seed}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: "Proceed with the fix?", At: a.now.Add(-time.Minute)}}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: seed}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return evs, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -349,11 +356,11 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumedName)
 
 		workCmd := a.guideWorkCmd()
-		workCmd.SetArgs([]string{paramDone, "1", "--reason", "closed after suspend"})
+		workCmd.SetArgs([]string{paramDone, "1", flagNoteReason, resumedDoneReason})
 		if err := workCmd.Execute(); err != nil {
 			t.Fatalf("guide work done: %v", err)
 		}
-		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, "yes, proceed", false, answerNoteOpts{}); err != nil {
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, resumedAnswerText, false, answerNoteOpts{}); err != nil {
 			t.Fatalf("answer: %v", err)
 		}
 		if err := a.runStart(t.Context(), guideRole, false); err != nil {
