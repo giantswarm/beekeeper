@@ -260,7 +260,7 @@ func TestFatalRepairOwnerUsesProcessLiveness(t *testing.T) {
 }
 
 func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
-	for _, status := range []string{fatalDisabledState, "masked", "not-found", fatalEnabledState, fatalUnavailable} {
+	for _, status := range []string{fatalDisabledState, "masked", unitNotFound, fatalEnabledState, fatalUnavailable} {
 		t.Run(status, func(t *testing.T) {
 			fakeFatalRun(t, func(args []string) (string, int) {
 				if slices.Contains(args, "is-enabled") {
@@ -269,7 +269,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 				return "", 3
 			})
 			o := fatalService(t.Context(), "beekeeper-supervisor-loop.service")
-			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == "not-found") || o.Failed != (status == fatalEnabledState) || o.Unknown != (status == fatalUnavailable) {
+			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == unitNotFound) || o.Failed != (status == fatalEnabledState) || o.Unknown != (status == fatalUnavailable) {
 				t.Fatalf("%+v", o)
 			}
 		})

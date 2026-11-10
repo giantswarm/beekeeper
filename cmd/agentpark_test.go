@@ -797,7 +797,7 @@ func TestParkRefusesMismatchedWaitTarget(t *testing.T) {
 			}
 		})
 	}
-	for _, waits := range []string{"desk review", "waiting for this PR to merge", "the shareholder review"} {
+	for _, waits := range []string{deskReviewWait, "waiting for this PR to merge", "the shareholder review"} {
 		if err := validateParkWait(refOne, waits); err != nil {
 			t.Fatal(err)
 		}

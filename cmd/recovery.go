@@ -541,7 +541,7 @@ func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
 			continue // Never start a service this recovery has not seen running.
 		}
 		status := plat.Launcher.State(ctx, service.unit)
-		if status == "" || status == "not-found" {
+		if status == "" || status == unitNotFound {
 			settled = false
 			continue
 		}

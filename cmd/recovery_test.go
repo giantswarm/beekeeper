@@ -581,7 +581,7 @@ func TestRecoveryRestartMovesOnlyRestartableProcesses(t *testing.T) {
 	// Model a controller dying after stopping a service but before starting it.
 	// A fresh controller must recover the known service from the journal even
 	// though its old process no longer appears in the process table.
-	l.installed[standbyUnit] = "inactive"
+	l.installed[standbyUnit] = unitInactive
 	restarted := *c
 	if restarted.restart(t.Context(), recoveryRestartTicks+3) {
 		t.Fatal("settled on the same tick as resuming a stopped service")

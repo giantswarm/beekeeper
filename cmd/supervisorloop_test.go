@@ -4338,7 +4338,7 @@ func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) 
 	}
 }
 
-func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
+func TestLoopReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
 	r := newLoopRig(t)
 	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
 	if err != nil {
@@ -4351,13 +4351,16 @@ func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T)
 			{
 				Party: state.Party{Name: "w1", HostSession: "s1"},
 				Task:  "Work https://github.com/org/repo/issues/1",
-				Park:  &state.Park{At: now, On: loopPR, Waits: "desk review", ReviewHead: loopHead, Worktree: "/tmp/wt1"},
+				Park:  &state.Park{At: now, On: loopPR, Waits: deskReviewWait, ReviewHead: loopHead, Worktree: "/tmp/wt1"},
 			},
 			{
 				Party: state.Party{Name: "w2", HostSession: "s2"},
 				Task:  "Work https://github.com/org/repo/issues/2",
-				Park:  &state.Park{At: now, On: "org/repo#13", Waits: "desk review", ReviewHead: loopHead, Worktree: "/tmp/wt2"},
+				Park:  &state.Park{At: now, On: "org/repo#13", Waits: deskReviewWait, ReviewHead: loopHead, Worktree: "/tmp/wt2"},
 			},
+		}
+		for _, ag := range st.Agents {
+			st.Starts = append(st.Starts, state.Start{Party: ag.Party, Dir: ag.Park.Worktree})
 		}
 		return nil, nil
 	}); err != nil {
@@ -4379,7 +4382,9 @@ func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T)
 	runCalls := 0
 	r.answer = func(args []string) (string, int) {
 		runCalls++
-		_ = candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil })
+		if err := candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil }); err != nil {
+			t.Fatal(err)
+		}
 		return "cannot write the state: " + state.ErrRecoveryWriterFenced.Error(), 1
 	}
 	err = l.endReviewWorkers(context.Background(), st)
