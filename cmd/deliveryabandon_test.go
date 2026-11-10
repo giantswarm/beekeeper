@@ -16,13 +16,15 @@ const (
 	abandonLive        = "live serve record"
 	abandonUnknown     = "missing end evidence"
 	abandonArchive     = "archived owner"
+	abandonEndedWorker = "ended worker"
+	abandonDoneAgent   = "done roster owner"
 	abandonName        = "abandonment-fixture-worker"
 	abandonSession     = "abandonment-fixture-session"
 	abandonReplacement = "abandonment-fixture-successor"
 )
 
 func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
-	for _, protect := range []string{abandonNoOwner, abandonClaimed, abandonRoster, abandonLive, abandonUnknown, abandonArchive} {
+	for _, protect := range []string{abandonNoOwner, abandonClaimed, abandonRoster, abandonLive, abandonUnknown, abandonArchive, abandonEndedWorker, abandonDoneAgent} {
 		t.Run(protect, func(t *testing.T) {
 			a, _ := supervisorApp(t)
 			now := a.timeNow()
@@ -40,6 +42,12 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 				case abandonArchive:
 					st.Records = nil
 					st.Archives = []state.Archive{{Party: by, Since: now.Add(-time.Hour)}}
+				case abandonEndedWorker:
+					st.Records = nil
+					st.EndedWorkers = []state.Start{{Party: by, At: now.Add(-50 * time.Hour)}}
+				case abandonDoneAgent:
+					st.Records = nil
+					st.Agents = []state.Agent{{Party: by, Done: true, LastTask: "release"}}
 				case abandonUnknown:
 					st.Records = nil
 				}
@@ -52,7 +60,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := protect == abandonNoOwner || protect == abandonArchive
+			want := protect == abandonNoOwner || protect == abandonArchive || protect == abandonEndedWorker || protect == abandonDoneAgent
 			if st.Deliveries[0].Abandoned != want {
 				t.Fatalf("delivery: %+v", st.Deliveries[0])
 			}
@@ -76,13 +84,25 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 func TestEndedWorkerTimersAreCancelled(t *testing.T) {
 	now := time.Now().UTC()
 	by := state.Party{Name: abandonName, Session: abandonSession}
-	st := &state.State{Records: []state.Record{{Session: by, Ended: now.Add(-time.Hour)}}, Timers: []state.Timer{
-		{ID: 1, Wake: by.Name, Due: now.Add(-time.Minute), Repeat: state.RepeatDaily},
-		{ID: 2, Wake: by.Session, Due: now.Add(time.Hour)},
-		{ID: 3, Wake: "unknown-worker", Due: now.Add(time.Hour)},
-	}}
+	endedBy := state.Party{Name: "ended-worker-name", Session: "ended-worker-session"}
+	doneBy := state.Party{Name: "done-worker-name", Session: "done-worker-session"}
+	handedBy := state.Party{Name: "handed-worker-name", Session: "handed-worker-session"}
+	successor := state.Party{Name: abandonReplacement, Session: "successor-session"}
+	st := &state.State{
+		Agents:       []state.Agent{{Party: doneBy, Done: true}, {Party: successor}},
+		Records:      []state.Record{{Session: by, Ended: now.Add(-time.Hour)}},
+		EndedWorkers: []state.Start{{Party: endedBy, At: now.Add(-2 * time.Hour)}, {Party: handedBy, At: now.Add(-2 * time.Hour), Successor: &successor}},
+		Timers: []state.Timer{
+			{ID: 1, Wake: by.Name, Due: now.Add(-time.Minute), Repeat: state.RepeatDaily},
+			{ID: 2, Wake: by.Session, Due: now.Add(time.Hour)},
+			{ID: 3, Wake: "unknown-worker", Due: now.Add(time.Hour)},
+			{ID: 4, Wake: endedBy.Name, Due: now.Add(time.Hour)},
+			{ID: 5, Wake: doneBy.Name, Due: now.Add(time.Hour)},
+			{ID: 6, Wake: handedBy.Session, Due: now.Add(time.Hour)},
+		},
+	}
 	_, events, fires, changed := settleTimers(st, nil, now)
-	if !changed || len(events) != 2 || len(fires) != 0 || len(st.Timers) != 1 || st.Timers[0].ID != 3 {
+	if !changed || len(events) != 4 || len(fires) != 0 || len(st.Timers) != 2 || st.Timers[0].ID != 3 || st.Timers[1].ID != 6 {
 		t.Fatalf("timers=%+v events=%+v fires=%+v", st.Timers, events, fires)
 	}
 	st.Agents = []state.Agent{{Party: by}}
