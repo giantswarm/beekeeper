@@ -368,6 +368,9 @@ func TestRemoteCompletionRequiresAndRecordsDeliveryEvidence(t *testing.T) {
 	}
 	request.ID, request.Sequence = "outcome-proven", 2
 	request.Data = mustExecutionJSON(t, executionReport{Finished: true, NoChange: "operation verified in the issue response", Text: completedFixtureTask, Problems: []string{ghNone}})
+	// Successful receipts omit Error; decode into a fresh result so the
+	// previous refusal cannot survive JSON decoding of the corrected report.
+	result = execution.ControlResult{}
 	if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil || result.Error != "" {
 		t.Fatalf("no-change: %v %+v", err, result)
 	}
