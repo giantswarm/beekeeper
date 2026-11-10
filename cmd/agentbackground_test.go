@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -771,5 +773,89 @@ func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `PARKED SESSION STOPPED "`+bgName+`"`) {
 		t.Errorf("output:\n%s", out)
+	}
+}
+
+// backgroundRecordStore uses the real state lock with a short deadline so
+// the regression exercises a record timeout without waiting two minutes.
+type backgroundRecordStore struct{ state.Store }
+
+func (s backgroundRecordStore) Update(fn func(*state.State) ([]state.Event, error)) error {
+	return s.Store.UpdateWithin(10*time.Millisecond, fn)
+}
+
+func TestStartBackgroundStopsWhenRecordingLosesTheLock(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cancel    bool
+		stopFails bool
+	}{
+		{name: "busy lock"},
+		{name: "canceled caller", cancel: true},
+		{name: "failed cleanup", stopFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.store = backgroundRecordStore{a.store}
+			calls := stubBackground(t, "backgrounded · "+bgShortID+" · "+bgName+"\n", bgSession{ID: bgShortID, SessionID: bgID})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			lock := flock.New(filepath.Join(a.store.Dir(), "state.lock"))
+			defer func() { _ = lock.Unlock() }()
+			list := bgList
+			bgList = func(ctx context.Context, bin string, env []string, all bool) ([]bgSession, error) {
+				// The session was launched; another writer wins just before
+				// the start attempts to record it.
+				if err := lock.Lock(); err != nil {
+					t.Fatal(err)
+				}
+				if tc.cancel {
+					cancel()
+				}
+				return list(ctx, bin, env, all)
+			}
+			run := bgRun
+			stopErr := errors.New("stop failed")
+			bgRun = func(ctx context.Context, dir string, env, argv []string) (string, error) {
+				if argv[1] == bgStopCmd {
+					if err := ctx.Err(); err != nil {
+						t.Fatalf("cleanup inherited cancellation: %v", err)
+					}
+					if _, ok := ctx.Deadline(); !ok {
+						t.Fatal("cleanup has no deadline")
+					}
+				}
+				out, err := run(ctx, dir, env, argv)
+				if argv[1] == bgStopCmd && tc.stopFails {
+					return "", stopErr
+				}
+				return out, err
+			}
+			_, err := a.startBackground(ctx, agentStart{name: bgName, task: bgTask}, t.TempDir(), nil, state.Party{Name: "supervisor"}, func(state.Party) bool { return false })
+			var busy *state.LockBusyError
+			if !errors.As(err, &busy) {
+				t.Fatalf("start error = %v, want the lock failure", err)
+			}
+			if len(*calls) != 2 || !slices.Equal((*calls)[1].argv[1:], []string{bgStopCmd, bgShortID}) {
+				t.Fatalf("calls = %+v, want launch then stop of the created session", *calls)
+			}
+			if tc.stopFails {
+				if !errors.Is(err, stopErr) || !strings.Contains(err.Error(), "could not be stopped") || !strings.Contains(err.Error(), "claude stop "+bgShortID) {
+					t.Fatalf("cleanup failure = %v", err)
+				}
+			} else if !strings.Contains(err.Error(), "stopped because") {
+				t.Fatalf("start error = %v, want confirmation it stopped", err)
+			}
+			if err := lock.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Starts) != 0 || len(st.Agents) != 0 {
+				t.Fatalf("failed start recorded: starts %+v, agents %+v", st.Starts, st.Agents)
+			}
+		})
 	}
 }
