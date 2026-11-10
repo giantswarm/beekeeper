@@ -4306,7 +4306,7 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) {
 	r := newLoopRig(t)
 	r.replaced = true
-	candidateStore, err := state.OpenVersion(r.a.store.Dir(), "v0.175.0-rc.346")
+	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4315,7 +4315,7 @@ func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := candidateStore.RecoverVersion("v0.175.0-rc.335", "v0.175.0-rc.346", func() error { return nil }); err != nil {
+	if err := candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if !state.WriterFenced(r.a.store) {
@@ -4340,7 +4340,7 @@ func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) 
 
 func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
 	r := newLoopRig(t)
-	candidateStore, err := state.OpenVersion(r.a.store.Dir(), "v0.175.0-rc.346")
+	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4367,7 +4367,7 @@ func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.lifecycle = &loopLifecycle{Version: "v0.175.0-rc.346", Started: now}
+	l.lifecycle = &loopLifecycle{Version: recoveryBadVersion, Started: now}
 	prevInTurn := loopInTurn
 	t.Cleanup(func() { loopInTurn = prevInTurn })
 	loopInTurn = func(*app, state.Party) bool { return false }
@@ -4379,7 +4379,7 @@ func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T)
 	runCalls := 0
 	r.answer = func(args []string) (string, int) {
 		runCalls++
-		_ = candidateStore.RecoverVersion("v0.175.0-rc.335", "v0.175.0-rc.346", func() error { return nil })
+		_ = candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil })
 		return "cannot write the state: state writes fenced after binary recovery", 1
 	}
 	err = l.endReviewWorkers(context.Background(), st)

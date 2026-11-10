@@ -45,7 +45,7 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase("recover quota and parks")
+		l.lifecyclePhase(loopPhaseRecover)
 		if l.dryRun {
 			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 				return err
@@ -74,8 +74,8 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			l.sayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
 			continue
 		}
-		note, _, _ := l.a.lastNote(ag.Party, time.Time{}, func() { l.lifecyclePhase("recover quota and parks") })
-		l.lifecyclePhase("recover quota and parks")
+		note, _, _ := l.a.lastNote(ag.Party, time.Time{}, func() { l.lifecyclePhase(loopPhaseRecover) })
+		l.lifecyclePhase(loopPhaseRecover)
 		err = l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			// The replacement took the name, and with it the task; it
 			// serves what the old session served.
@@ -294,7 +294,7 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase("recover quota and parks")
+		l.lifecyclePhase(loopPhaseRecover)
 		if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 			continue
 		}

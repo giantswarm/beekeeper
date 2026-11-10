@@ -244,7 +244,7 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	s := c.signals(ctx, j)
 	o.NoteLoop(s)
 	verdict, reason := update.Decide(o, s)
-	if verdict == update.RollBack && reason == "no health heartbeat from the candidate's loop" {
+	if verdict == update.RollBack && reason == update.MissingHeartbeatReason {
 		c.refreshHeartbeat(j, &s)
 		if s.Heartbeat || s.Unproven != "" {
 			o.NoteLoop(s)
@@ -256,7 +256,7 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	}
 	switch verdict {
 	case update.RollBack:
-		if reason == "no health heartbeat from the candidate's loop" {
+		if reason == update.MissingHeartbeatReason {
 			c.refreshHeartbeat(j, &s)
 			if s.Heartbeat || s.Unproven != "" {
 				o.NoteLoop(s)
@@ -271,7 +271,7 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 					return false, nil
 				}
 			}
-			if reason == "no health heartbeat from the candidate's loop" {
+			if reason == update.MissingHeartbeatReason {
 				reason += ": " + c.loopSilence(j.Candidate.Version, j.InstalledAt)
 			}
 		}

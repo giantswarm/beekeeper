@@ -606,7 +606,7 @@ func TestRecoveryRefreshesHeartbeatBeforeRollingBack(t *testing.T) {
 		Version: normalizeLoopVersion(recoveryBadVersion),
 		Started: started,
 		At:      staleAt,
-		Phase:   "recover quota and parks",
+		Phase:   loopPhaseRecover,
 	}); err != nil {
 		t.Fatal(err)
 	}

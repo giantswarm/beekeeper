@@ -68,7 +68,7 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return
 		}
-		l.lifecyclePhase("tidy and sync claims")
+		l.lifecyclePhase(loopPhaseTidy)
 		pin := st.HostPin(selector)
 		if pin != nil && pin.Identity != a.cfg.Agents.Hosts[selector].Identity {
 			pin = nil

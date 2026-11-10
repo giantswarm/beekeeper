@@ -106,6 +106,10 @@ type Signals struct {
 	LoopStartedAgo           time.Duration
 }
 
+// MissingHeartbeatReason identifies the rollback whose evidence must be re-read
+// immediately before changing the installed binary.
+const MissingHeartbeatReason = "no health heartbeat from the candidate's loop"
+
 // Verdicts of Decide.
 const (
 	Wait     = "wait"
@@ -131,7 +135,7 @@ func Decide(o Observed, s Signals) (verdict, reason string) {
 		}
 		return RollBack, reason
 	case s.HeartbeatRequired && !s.Heartbeat && heartbeatOverdue(o, s):
-		return RollBack, "no health heartbeat from the candidate's loop"
+		return RollBack, MissingHeartbeatReason
 	case o.Elapsed < ProbationWindow:
 		return Wait, "in probation"
 	case !o.ProbePassed:

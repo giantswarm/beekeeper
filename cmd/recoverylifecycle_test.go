@@ -471,7 +471,7 @@ func TestRecoveryGraceFollowsLastCheckpoint(t *testing.T) {
 				*now = started.Add(time.Duration(minute) * time.Minute)
 				if minute <= 11 {
 					if useLifecycle {
-						if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: started, At: *now, Phase: "recover quota and parks"}); err != nil {
+						if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: started, At: *now, Phase: loopPhaseRecover}); err != nil {
 							t.Fatal(err)
 						}
 					} else if err := c.store.WriteFile(throughputObservationFile, throughputObservation{Candidate: recoveryBadVersion, At: *now}); err != nil {

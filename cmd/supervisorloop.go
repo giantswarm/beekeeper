@@ -1543,17 +1543,17 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase("tidy and sync claims")
+		l.lifecyclePhase(loopPhaseTidy)
 		l.tidy(ctx, st)
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase("tidy and sync claims")
+		l.lifecyclePhase(loopPhaseTidy)
 		l.updateHosts(ctx, st)
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase("tidy and sync claims")
+		l.lifecyclePhase(loopPhaseTidy)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
@@ -1561,14 +1561,14 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 			return err
 		}
 	}
-	l.lifecyclePhase("recover quota and parks")
+	l.lifecyclePhase(loopPhaseRecover)
 	if err := l.recoverQuota(ctx, st); err != nil {
 		return err
 	}
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase("recover quota and parks")
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1579,7 +1579,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase("recover quota and parks")
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1590,7 +1590,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase("recover quota and parks")
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1601,7 +1601,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase("recover quota and parks")
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -3375,7 +3375,7 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if l.dryRun || !shouldEndReviewWorker(st, ag) {
 			continue
 		}
-		l.lifecyclePhase("recover quota and parks")
+		l.lifecyclePhase(loopPhaseRecover)
 		if loopInTurn(l.a, ag.Party) {
 			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
 			continue
