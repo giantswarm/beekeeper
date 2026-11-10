@@ -3498,7 +3498,7 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 		}
 		return out, nil
 	}
-	parkReviewHead = func(string) string { return "" }
+	parkReviewHead = func(string) (string, string) { return "", parkVerificationUnavailable }
 
 	me := state.Party{Name: "worker A", Session: "session-a"}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+const parkVerificationUnavailable = "verification unavailable"
 
 const (
 	parkTask   = "beekeeper#86: agents park"
@@ -452,7 +455,11 @@ func TestPublishedParkHead(t *testing.T) {
 				}
 				return []byte(fmt.Sprintf(`{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, tc.remoteBranch, tc.remoteHead, tc.remoteRepo)), nil
 			}
-			if got := publishedParkHead(context.Background(), loopPR, ".", git, gh); got != tc.want {
+			got, reason := publishedParkVerification(context.Background(), loopPR, ".", git, gh)
+			if (got == "") != (reason != "") {
+				t.Fatalf("head %q, reason %q", got, reason)
+			}
+			if got != tc.want {
 				t.Fatalf("head %q, want %q", got, tc.want)
 			}
 		})
@@ -464,7 +471,7 @@ func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 	t.Cleanup(func() { parkReviewHead = was })
 	for _, head := range []string{"", loopHead} {
 		w := parkingWatch(t, map[string]string{refOne: github.Open})
-		parkReviewHead = func(string) string { return head }
+		parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 		if err := park(t, w, "--on", refOne, "waiting"); err != nil {
 			t.Fatal(err)
 		}
@@ -648,7 +655,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	t.Cleanup(func() { parkReviewHead = was })
 	for _, head := range []string{"", loopHead} {
 		w := parkingWatch(t, map[string]string{refOne: github.Open})
-		parkReviewHead = func(string) string { return head }
+		parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 		line, err := w.park(offSession, refOne, "waiting")
 		if err != nil {
 			t.Fatal(err)
@@ -830,7 +837,7 @@ func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open})
 	oldHead, oldWorktree := parkReviewHead, parkWorktree
 	t.Cleanup(func() { parkReviewHead, parkWorktree = oldHead, oldWorktree })
-	parkReviewHead = func(string) string { return "" }
+	parkReviewHead = func(string) (string, string) { return "", parkVerificationUnavailable }
 	parkWorktree = func(string) string { return pendingReviewWorktree }
 	if err := park(t, w, "--on", refOne, "--post-merge", "prove", deskReviewWait); err != nil {
 		t.Fatal(err)
@@ -852,5 +859,23 @@ func assertFreshQueue(t *testing.T, w *watcher, woke []string, contains string) 
 	ag := agentOf(t, w)
 	if len(woke) != 0 || ag.Park == nil || len(ag.Park.Continuation) != 1 || !strings.Contains(ag.Park.Continuation[0], contains) {
 		t.Fatalf("want fresh continuation containing %q, woke=%v park=%+v", contains, woke, ag.Park)
+	}
+}
+
+func TestDeskReviewParkJSONExplainsPendingVerification(t *testing.T) {
+	w := parkingWatch(t, map[string]string{refOne: github.Open})
+	old := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = old })
+	parkReviewHead = func(string) (string, string) { return "", "GitHub pull request lookup failed" }
+	w.json = true
+	if err := park(t, w, "--on", refOne, deskReviewWait); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]string
+	if err := json.Unmarshal(w.out.(*bytes.Buffer).Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result["message"], "GitHub pull request lookup failed") || !strings.Contains(result["message"], "retries automatically") {
+		t.Fatalf("JSON: %v", result)
 	}
 }
