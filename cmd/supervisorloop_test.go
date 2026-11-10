@@ -4306,8 +4306,17 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 // A planned classification must re-read the park before sending a wake or
 // asking the classifier: a worker can change state during loop observations.
 func TestLoopClassifyRechecksParkState(t *testing.T) {
-	const firedTimer, oldParkTimer = "fired timer", "old park timer"
-	for _, change := range []string{"timer", "done", "removed", "replaced", "resumable", firedTimer, oldParkTimer, "unwatched"} {
+	const (
+		activeTimer    = "active timer"
+		workerDone     = "worker done"
+		workerRemoved  = "worker removed"
+		parkReplaced   = "park replaced"
+		parkResumable  = "park resumable"
+		firedTimer     = "fired timer"
+		oldParkTimer   = "old park timer"
+		stillUnwatched = "still unwatched"
+	)
+	for _, change := range []string{activeTimer, workerDone, workerRemoved, parkReplaced, parkResumable, firedTimer, oldParkTimer, stillUnwatched} {
 		t.Run(change, func(t *testing.T) {
 			r := newLoopRig(t)
 			at := time.Now().UTC().Add(-time.Minute)
@@ -4320,7 +4329,7 @@ func TestLoopClassifyRechecksParkState(t *testing.T) {
 				i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
 				ag := &current.Agents[i]
 				switch change {
-				case "timer", firedTimer, oldParkTimer:
+				case activeTimer, firedTimer, oldParkTimer:
 					timer := state.Timer{Wake: loopWorker, At: at.Add(-time.Second), Due: at.Add(time.Hour)}
 					if change == firedTimer {
 						timer.Fired = at
@@ -4329,13 +4338,13 @@ func TestLoopClassifyRechecksParkState(t *testing.T) {
 						timer.WakeParkAt = at.Add(-time.Hour)
 					}
 					current.Timers = append(current.Timers, timer)
-				case "done":
+				case workerDone:
 					ag.Done, ag.Task, ag.Park = true, "", nil
-				case "removed":
+				case workerRemoved:
 					current.Agents = slices.Delete(current.Agents, i, i+1)
-				case "replaced":
+				case parkReplaced:
 					ag.Park.At = at.Add(time.Second)
-				case "resumable":
+				case parkResumable:
 					ag.Park.Resumable = at.Add(time.Second)
 				}
 			})
@@ -4344,11 +4353,11 @@ func TestLoopClassifyRechecksParkState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantWake := change == firedTimer || change == oldParkTimer || change == "unwatched"
+			wantWake := change == firedTimer || change == oldParkTimer || change == stillUnwatched
 			if wake := r.called(agentsName, agentWakeName); (wake != nil) != wantWake {
 				t.Fatalf("wake %v, want wake %v", wake, wantWake)
 			}
-			if note := r.called("note", loopAdd); note != nil {
+			if note := r.called(loopNote, loopAdd); note != nil {
 				t.Fatalf("unexpected person note: %v", note)
 			}
 		})
