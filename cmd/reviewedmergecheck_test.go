@@ -147,8 +147,8 @@ func parkMergeCheckPR(t *testing.T, r *loopRig, worker, on, url, head string) {
 	}
 }
 
-// Two PRs that are each green on their own but together fail golangci-lint
-// (goconst) or go test never both reach main: the first merges and advances
+// Two PRs that are each green on their own but together fail go test
+// never both reach main: the first merges and advances
 // main, while the second is refused on the combined merge result (PR + current
 // main) and returned to its owner with the failing check.
 func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(t *testing.T) {
@@ -158,18 +158,6 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 		pr2Files  map[string]string
 		wantCheck string
 	}{
-		"goconst across two PRs": {
-			baseFiles: map[string]string{
-				testGuardBaseFile: "package guard\n\nfunc Base() string { return \"ok\" }\n",
-			},
-			pr1Files: map[string]string{
-				testGuardPR1File: "package guard\n\nfunc One(x string) bool {\n\tif x == \"agy-harness\" {\n\t\treturn true\n\t}\n\treturn x == \"agy-harness\" && Base() != \"\"\n}\n",
-			},
-			pr2Files: map[string]string{
-				testGuardPR2File: "package guard\n\nfunc Two(y string) bool {\n\tif y == \"agy-harness\" {\n\t\treturn true\n\t}\n\treturn y == \"agy-harness\" && Base() != \"\"\n}\n",
-			},
-			wantCheck: "goconst",
-		},
 		"go test failure across two PRs": {
 			baseFiles: map[string]string{
 				testGuardCostFile:    "package guard\n\nvar costA, costB int\n\nfunc TotalCost() int { return costA + costB }\n",
@@ -337,39 +325,6 @@ func TestCheckReviewedMergeResultStopsWhenDeskStoppedMeanwhile(t *testing.T) {
 	reason, code := r.a.checkReviewedMergeResult(t.Context(), r.pull, loopHead)
 	if code != github.SquashNotApplicable || reason != reasonDeskStopped {
 		t.Fatalf("got (%q, %d), want (%q, %d)", reason, code, reasonDeskStopped, github.SquashNotApplicable)
-	}
-}
-
-func TestCmdPackageHasNoGoConstFindings(t *testing.T) {
-	if finding := checkPackageGoConst("..", "./cmd"); finding != "" {
-		t.Fatalf("goconst in ./cmd: %s", finding)
-	}
-}
-
-// A PR behind its base is checked for its own changes, not for files only the
-// base changed (https://github.com/giantswarm/beekeeper/issues/3392).
-func TestMergeResultGoConstSkipsBaseOnlyFiles(t *testing.T) {
-	baseOnly := "package other\n\nfunc A() string { return \"base-only\" }\nfunc B() string { return \"base-only\" }\nfunc C() string { return \"base-only\" }\n"
-	repo := newMergeCheckRepo(t, map[string]string{"other/other.go": baseOnly}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
-	repo.advanceMain(t, repo.head1)
-	r := newLoopRig(t)
-	r.a.cfg.Disk.Checkouts = []string{repo.dir}
-	_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
-	if code != 0 {
-		t.Fatalf("base-only file blamed on PR: %d: %s", code, reason)
-	}
-}
-
-// golangci-lint's goconst skips integer strings outside numbers.min/max (3).
-func TestGoConstMatchesGolangciNumberRange(t *testing.T) {
-	dir := t.TempDir()
-	src := "package p\n\nvar _ = []string{\"137\", \"137\", \"137\", \"0x3\", \"0x3\", \"0x3\"}\n"
-	if err := os.WriteFile(filepath.Join(dir, "p_test.go"), []byte(src), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	finding := checkPackageGoConst(dir, ".")
-	if strings.Contains(finding, `"137"`) || !strings.Contains(finding, `"0x3"`) {
-		t.Fatalf("got %q", finding)
 	}
 }
 
@@ -552,16 +507,72 @@ func TestFetchReviewedMergeRefsDoesNotUseCachedBase(t *testing.T) {
 	}
 }
 
-func TestMergeResultConfiguredLintFailure(t *testing.T) {
-	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
-	lintDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\necho 'configured gosec failure'\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
-		t.Fatal(err)
+// Only the real configured linter may refuse lint: repeated strings in test
+// files must not trigger an independent goconst policy before it runs.
+func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
+	for _, configName := range []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json", ""} {
+		for _, lintFails := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/fails=%v", configName, lintFails), func(t *testing.T) {
+				files := map[string]string{
+					"guard/repeated_test.go": "package guard\nvar repeated = []string{\"repeated-policy\", \"repeated-policy\", \"repeated-policy\"}\n",
+				}
+				if configName != "" {
+					// The command fixture below represents the configured linter;
+					// it alone interprets settings such as ignore-tests or disable.
+					files[configName] = "repository policy fixture\n"
+				}
+				repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, files, nil)
+				c := exec.CommandContext(t.Context(), "git", "checkout", "-q", repo.head2) //nolint:gosec // fixed git command in test-owned repository
+				c.Dir = repo.dir
+				if out, err := c.CombinedOutput(); err != nil {
+					t.Fatalf("checkout: %v: %s", err, out)
+				}
+				lintDir := t.TempDir()
+				argsFile := filepath.Join(lintDir, "args")
+				t.Setenv("MERGE_LINT_ARGS", argsFile)
+				script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$MERGE_LINT_ARGS\"\n"
+				if lintFails {
+					script += "echo 'configured lint failure'\nexit 1\n"
+				}
+				if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in test-owned directory
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
+				wantArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
+				label := "no repository config"
+				if configName == "" {
+					wantArgs = append(wantArgs, "--no-config")
+				} else {
+					wantArgs = append(wantArgs, "--config", filepath.Join(repo.dir, configName))
+					label = configName
+				}
+				wantArgs = append(wantArgs, "./...")
+				args, err := os.ReadFile(argsFile) //nolint:gosec // fixed args filename inside the test-owned temporary directory
+				if err != nil || !slices.Equal(strings.Fields(string(args)), wantArgs) {
+					t.Fatalf("lint args %q, %v; want %v", args, err, wantArgs)
+				}
+				if lintFails {
+					if code != github.SquashRed || !strings.Contains(reason, label) || !strings.Contains(reason, "configured lint failure") {
+						t.Fatalf("got %d: %s", code, reason)
+					}
+				} else if code != 0 {
+					t.Fatalf("repository lint passed but merge refused: %d: %s", code, reason)
+				}
+			})
+		}
 	}
-	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
-	if code != github.SquashRed || !strings.Contains(reason, "configured gosec failure") {
-		t.Fatalf("got %d: %s", code, reason)
+}
+
+func TestMergeResultLintConfigPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{".golangci.json", ".golangci.toml", ".golangci.yaml", ".golangci.yml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := golangCILintConfig(dir); got != name {
+			t.Fatalf("got %q, want %q", got, name)
+		}
 	}
 }
 
