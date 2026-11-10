@@ -26,7 +26,12 @@ func worktreeRoot(dir string) string {
 		dir = real
 	}
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		if fi, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+		var fi os.FileInfo
+		if root, err := os.OpenRoot(d); err == nil {
+			fi, _ = root.Stat(".git")
+			_ = root.Close()
+		}
+		if fi != nil {
 			if fi.Mode().IsRegular() {
 				return d
 			}

@@ -137,9 +137,14 @@ func scanSccache(dir string) (gocache.Usage, error) {
 // removeEmptyDirs removes the directories under root a trim left empty,
 // deepest first; root itself stays. sccache creates them again on a write.
 func removeEmptyDirs(root string) {
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return
+	}
+	defer dir.Close() //nolint:errcheck // best-effort cleanup
 	var dirs []string
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() && p != root {
+	_ = fs.WalkDir(dir.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && p != "." {
 			dirs = append(dirs, p)
 		}
 		return nil
@@ -148,7 +153,7 @@ func removeEmptyDirs(root string) {
 		return strings.Count(b, string(filepath.Separator)) - strings.Count(a, string(filepath.Separator))
 	})
 	for _, d := range dirs {
-		_ = os.Remove(d) // fails on a directory still holding entries
+		_ = dir.Remove(d) // fails on a directory still holding entries
 	}
 }
 

@@ -1650,6 +1650,8 @@ const (
 
 // Merge is one devctl pr merge the gate holds in its lane's queue.
 type Merge struct {
+	// Head is the commit pinned by the gate, retained for detached outcomes.
+	Head string `json:"head,omitempty"`
 	Repo string `json:"repo"`
 	PR   int    `json:"pr"`
 	Lane string `json:"lane"`
@@ -1755,6 +1757,8 @@ func (o Owed) Key() string {
 // code and its reason (the verdict and the failed checks), for whoever it ran
 // for.
 type Failed struct {
+	// Head identifies the tested commit; empty on records from older gates.
+	Head   string    `json:"head,omitempty"`
 	Repo   string    `json:"repo"`
 	PR     int       `json:"pr"`
 	Lane   string    `json:"lane"`
