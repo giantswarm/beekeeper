@@ -407,9 +407,17 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		if err != nil || len(raw) > execution.MaxWire {
 			return deny()
 		}
+		var guardReq any
+		if allowed := executionGuardDecision(a.executionHook(), guardFormat, j, a.executionProtected(s))(raw); !guardDenied(allowed) {
+			_, calls := guard.GitHubCalls(raw, guardFormat)
+			_, restCalls := guard.GitHubRESTCalls(raw, guardFormat)
+			if len(calls)+len(restCalls) > 0 {
+				guardReq = executionGuardRequest{Calls: calls, RESTCalls: restCalls}
+			}
+		}
 		var authority executionAuthority
 		co := s.Config.Coordinators[j.Request.Coordinator]
-		if err := execution.CoordinatorCall(cmd.Context(), co.Callback, string(j.Handle.Ref.Host), "guard", j.Handle.Ref, nil, j.Request.ControlKey, &authority, nil); err != nil || authority.Stopped {
+		if err := execution.CoordinatorCall(cmd.Context(), co.Callback, string(j.Handle.Ref.Host), "guard", j.Handle.Ref, guardReq, j.Request.ControlKey, &authority, nil); err != nil || authority.Stopped {
 			return deny()
 		}
 		h := a.executionHook()

@@ -88,7 +88,7 @@ func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) 
 			}
 			continue
 		}
-		b, cached, err := a.probeIdentity(ctx, credential, previous, now)
+		b, cached, err := a.probeIdentity(ctx, credential, previous, saved[github.IdentityGH], now)
 		profiles[credential.Identity], saved[credential.Identity] = b, cached
 		if err != nil {
 			failures = append(failures, fmt.Errorf("GitHub identity %s: %w", credential.Identity, err))
@@ -136,7 +136,7 @@ func historicalBudget(g *state.GraphQL) github.Budget {
 	return github.Budget{Identity: g.Identity, Login: g.Login, Remaining: g.Limit, Limit: g.Limit, Reset: g.Reset, GraphQL: graphqlOf(g)}
 }
 
-func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredential, previous state.Budget, now time.Time) (github.Budget, state.Budget, error) {
+func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredential, previous, ghSaved state.Budget, now time.Time) (github.Budget, state.Budget, error) {
 	id := credential.Identity
 	unknown := func(err error) (github.Budget, state.Budget, error) {
 		g := &github.GraphQL{Identity: id, Err: err.Error()}
@@ -159,7 +159,12 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 	var err error
 	forceREST, _ := ctx.Value(freshLoopRESTKey{}).(bool)
 	refreshREST := forceREST || previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset)
-	if refreshREST {
+	sharedGH := id == github.IdentityApp && previous.Login != "" && ghSaved.Login == previous.Login && ghSaved.Limit > 0 && now.Before(ghSaved.Reset)
+	if sharedGH {
+		b = github.Budget{Identity: id, Resource: "core", Limit: ghSaved.Limit,
+			Remaining: ghSaved.Remaining, Used: ghSaved.Limit - ghSaved.Remaining, Reset: ghSaved.Reset}
+		refreshREST = false
+	} else if refreshREST {
 		b, etag, err = github.Probe(ctx, client, credential.Value, repo, previous.ETag)
 	}
 	if err != nil {
@@ -179,7 +184,9 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 		b.Windows[key] = *graphqlOf(&window)
 	}
 	restAt := previous.At
-	if refreshREST {
+	if sharedGH {
+		restAt = ghSaved.At
+	} else if refreshREST {
 		restAt = now
 	}
 	cached := state.Budget{Identity: id, Login: b.Login, ETag: etag, At: restAt,

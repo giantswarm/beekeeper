@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -30,6 +31,26 @@ type executionAuthority struct {
 	Stopped    bool `json:"stopped"`
 	GitHubHeld bool `json:"githubHeld"`
 }
+
+type executionGuardRequest struct {
+	Calls     []guard.GitHubCall `json:"calls,omitempty"`
+	RESTCalls []guard.GitHubCall `json:"rest_calls,omitempty"`
+}
+
+func guardDenied(output []byte) bool {
+	if len(output) == 0 {
+		return false
+	}
+	var decision struct {
+		Decision string `json:"decision"`
+		Specific struct {
+			Decision string `json:"permissionDecision"`
+		} `json:"hookSpecificOutput"`
+	}
+	_ = json.Unmarshal(output, &decision)
+	return decision.Decision == guardDeny || decision.Specific.Decision == guardDeny
+}
+
 type executionNote struct {
 	Draft noteDraft  `json:"draft"`
 	Note  state.Note `json:"note"`
@@ -281,6 +302,25 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			for _, hold := range st.Holds {
 				if hold.Target == holdGitHub && hold.Active(time.Now()) {
 					authority.GitHubHeld = true
+				}
+			}
+			if !authority.Stopped && !authority.GitHubHeld && len(req.Payload) > 0 {
+				var gReq executionGuardRequest
+				if json.Unmarshal(req.Payload, &gReq) == nil {
+					now := a.timeNow()
+					who := st.Starts[i].Party
+					for _, call := range gReq.Calls {
+						if call.Class != "" {
+							detail, _ := json.Marshal(call)
+							events = append(events, state.Event{At: now, By: who, Verb: verbGitHubCall, Detail: string(detail)})
+						}
+					}
+					for _, call := range gReq.RESTCalls {
+						if call.Class != "" {
+							detail, _ := json.Marshal(call)
+							events = append(events, state.Event{At: now, By: who, Verb: verbGitHubRESTCall, Detail: string(detail)})
+						}
+					}
 				}
 			}
 			value = authority

@@ -408,12 +408,27 @@ func (a *app) rebindHostExecutions(ctx context.Context, selector string, h execu
 
 }
 
+const hostReleaseCacheFile = "host-release.json"
+
 // updateHost has host h install and prepare release version, which the
 // coordinator looks up for it.
 func (a *app) updateHost(ctx context.Context, h execution.Host, version string) (execution.HostUpdate, error) {
-	rel, err := lookupRelease(ctx, version)
-	if err != nil {
-		return execution.HostUpdate{}, err
+	var rel update.Release
+	var cached bool
+	if a.store != nil {
+		if ok, err := a.store.ReadFile(hostReleaseCacheFile, &rel); err == nil && ok && rel.Tag == version && len(rel.Assets) > 0 {
+			cached = true
+		}
+	}
+	if !cached {
+		var err error
+		rel, err = lookupRelease(ctx, version)
+		if err != nil {
+			return execution.HostUpdate{}, err
+		}
+		if a.store != nil && rel.Tag == version && len(rel.Assets) > 0 {
+			_ = a.store.WriteFile(hostReleaseCacheFile, rel)
+		}
 	}
 	given, err := json.Marshal(rel)
 	if err != nil {

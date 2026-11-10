@@ -151,12 +151,14 @@ func Probe(ctx context.Context, client *http.Client, token, repo, etag string) (
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
-	observeREST()
 	resp, err := client.Do(req)
 	if err != nil {
 		return Budget{}, etag, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotModified {
+		observeREST()
+	}
 	b, perr := parse(resp.Header)
 	switch resp.StatusCode {
 	case http.StatusOK:

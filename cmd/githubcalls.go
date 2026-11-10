@@ -49,7 +49,7 @@ func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
 		detail, _ := json.Marshal(call)
 		events = append(events, state.Event{At: time.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail)})
 	}
-	_ = store.RecordWithin(100*time.Millisecond, events...)
+	_ = store.RecordWithin(200*time.Millisecond, events...)
 }
 
 type githubCaller struct {
@@ -132,7 +132,7 @@ func (a *app) observeREST() {
 		if who.Session == "" && who.HostSession == "" {
 			who.Name = "beekeeper"
 		}
-		_ = a.store.RecordWithin(10*time.Millisecond, state.Event{
+		_ = a.store.RecordWithin(200*time.Millisecond, state.Event{
 			At: time.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail),
 		})
 	}

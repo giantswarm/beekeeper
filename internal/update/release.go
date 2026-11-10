@@ -11,6 +11,8 @@ import (
 
 	"github.com/giantswarm/go-selfupdate"
 	"github.com/google/go-github/v93/github"
+
+	deskgithub "github.com/giantswarm/beekeeper/internal/github"
 )
 
 // Release is one release of Repository as an authenticated lookup found it:
@@ -56,6 +58,7 @@ func LookupVersion(ctx context.Context, version string) (Release, error) {
 	owner, repo, _ := strings.Cut(Repository, "/")
 	lookup, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
+	deskgithub.ObserveRESTCall("update.LookupVersion")
 	rel, response, err := client.Repositories.GetReleaseByTag(lookup, owner, repo, version)
 	switch {
 	case response != nil && response.StatusCode == http.StatusNotFound:
