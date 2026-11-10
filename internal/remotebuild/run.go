@@ -33,6 +33,11 @@ type Command func(context.Context, io.Reader, io.Writer, ...string) error
 type Record func(verb, detail string)
 
 type Runner struct {
+	// Dir selects the source worktree without changing the coordinator process cwd.
+	// Empty preserves the caller's current working directory.
+	Dir string
+	// RequireRemote refuses unavailable execution instead of suggesting a local fallback.
+	RequireRemote  bool
 	Config         Config
 	StateDir       string
 	Stdout, Stderr io.Writer
@@ -89,11 +94,27 @@ func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args .
 // Try returns handled=false only before any command could have started remotely.
 // Every such failure emits one line and leaves the ordinary local slot unchanged.
 func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int) {
-	if !r.Config.Enabled {
-		return false, 0
-	}
+	return r.try(ctx, argv, Toolchain(argv))
+}
+
+// TryMergeCheck also admits read-only golangci-lint in the configured Go image.
+// The coordinator supplies literal arguments and a worktree-relative config.
+func (r Runner) TryMergeCheck(ctx context.Context, argv []string) (bool, int) {
+	r.RequireRemote = true
 	tool := Toolchain(argv)
-	if tool == "" {
+	if len(argv) >= 2 && argv[0] == "golangci-lint" && argv[1] == "run" {
+		for _, arg := range argv[2:] {
+			if strings.HasPrefix(arg, "--fix") || filepath.IsAbs(arg) {
+				return false, 0
+			}
+		}
+		tool = "go"
+	}
+	return r.try(ctx, argv, tool)
+}
+
+func (r Runner) try(ctx context.Context, argv []string, tool string) (handled bool, code int) {
+	if !r.Config.Enabled || tool == "" {
 		return false, 0
 	}
 	if r.Stdout == nil {
@@ -106,6 +127,11 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	fallback := func(reason string) (bool, int) {
 		if ctx.Err() != nil {
 			return true, 130
+		}
+		if r.RequireRemote {
+			r.record(runrecord.Fallback, runrecord.FallbackDetail(facts, reason, r.Name))
+			_, _ = fmt.Fprintf(r.Stderr, "beekeeper run: remote unavailable (%s); local execution disabled\n", reason)
+			return true, 125
 		}
 		// The local slot runs the command; its own start and end follow
 		// under the local id. The fallback says why it came here.
@@ -124,17 +150,21 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	if os.Getenv("GOFLAGS") != "" || os.Getenv("RUSTFLAGS") != "" || os.Getenv("CARGO_ENCODED_RUSTFLAGS") != "" {
 		return fallback("caller toolchain flags require local environment")
 	}
-	rootBytes, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output() //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
+	cwd := r.Dir
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return fallback("working directory unavailable")
+		}
+	}
+	rootBytes, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel").Output() //nolint:gosec // explicit caller-owned worktree
 	if err != nil {
 		return fallback("not a git worktree")
 	}
 	root, err := filepath.EvalSymlinks(strings.TrimSpace(string(rootBytes)))
 	if err != nil {
 		return fallback("worktree root unavailable")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fallback("working directory unavailable")
 	}
 	cwd, err = filepath.EvalSymlinks(cwd)
 	if err != nil {
