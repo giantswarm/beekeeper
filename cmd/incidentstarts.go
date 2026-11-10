@@ -33,7 +33,7 @@ func (l *supervisorLoop) incidentStart(ref string) error {
 	}
 	if why := incidentStartReason(st, l.a.timeNow(), ref); why != "" {
 		l.sayOnce("incident "+ref, "SUPERVISOR START WAITS %s: %s", ref, why)
-		return errLoopLater
+		return fmt.Errorf("%s: %w", why, errLoopLater)
 	}
 	l.clearSaid("incident " + ref)
 	return nil

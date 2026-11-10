@@ -3,8 +3,10 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"path/filepath"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
@@ -34,7 +36,7 @@ func (a *app) sessionEffort(sp agentStart) string {
 			return e
 		}
 	}
-	return a.cfg.Agents.EffortFor(sp.name, cmp.Or(sp.kind, sp.role))
+	return a.cfg.Agents.EffortFor(sp.name, cmp.Or(sp.kind, sp.role), "claude")
 }
 
 // refuseAgyEffort refuses an effort agy would silently ignore.
@@ -65,4 +67,30 @@ func startTurnLine(profile, level string) string {
 		return "its task runs as a headless turn" + effortText(level)
 	}
 	return profiledTurn(profile) + effortText(level)
+}
+
+// selectedEffort resolves policy only after the harness is known. A retry on a
+// different capacity choice must resolve afresh, never inherit the failed pick.
+func (a *app) selectedEffort(name, kind, harness, model, explicit, choice string) (string, error) {
+	level := strings.TrimSpace(explicit)
+	if level == "" {
+		level = a.cfg.Agents.EffortFor(name, kind, harness)
+	}
+	if level == "" {
+		level = strings.TrimSpace(choice)
+	}
+	if !config.ValidEffort(level) {
+		return "", usageErr("invalid effort %q", level)
+	}
+	if harness == harnessAgy {
+		if err := refuseAgyEffort(level); err != nil {
+			return "", err
+		}
+	}
+	if harness == codex.Harness && level != "" {
+		if err := codex.ValidateEffort(filepath.Join(filepath.Dir(a.cfg.Codex.ConfigFile), "models_cache.json"), model, level); err != nil {
+			return "", usageErr("%v", err)
+		}
+	}
+	return level, nil
 }

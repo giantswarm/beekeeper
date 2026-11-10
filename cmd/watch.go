@@ -374,7 +374,6 @@ type watcher struct {
 	suspendChecked  time.Time
 	suspendThrough  time.Time
 	suspendRecovery map[string]suspendWake
-	suspendResults  chan map[string]suspendWake
 	suspendDeliver  func(context.Context, suspendWake) error
 	// Hung checks get a fresh grace period on startup and after a suspend
 	// (or a long gap in observations). These times stay in memory so their
@@ -2184,7 +2183,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
-		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
+		kl, ke := markResumable(st, w.recheckLeaseParks(st, parks), w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
 		tl, te, tf, touched := settleTimersMatching(st, found, w.now, w.cfg.Watch.Interval.Duration, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf

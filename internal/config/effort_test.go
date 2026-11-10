@@ -77,3 +77,38 @@ const (
 	testWorkerKind = "worker"
 	testHighEffort = "high"
 )
+
+func TestHarnessScopedEffort(t *testing.T) {
+	a := Agents{Models: []AgentModelRule{{Match: ".*", Harness: CodexHarness, Effort: testHighEffort}}}
+	for _, harness := range []string{CodexHarness, AgyHarness, "claude", ""} {
+		want := ""
+		if harness == CodexHarness {
+			want = testHighEffort
+		}
+		if got := a.EffortFor("worker", testWorkerKind, harness); got != want {
+			t.Errorf("%s: %q want %q", harness, got, want)
+		}
+	}
+}
+
+func TestCapacityChoiceEffortConfiguration(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	for _, tc := range []struct {
+		harness, effort string
+		invalid         bool
+	}{
+		{CodexHarness, testHighEffort, false}, {AgyHarness, "", false}, {AgyHarness, testHighEffort, true}, {CodexHarness, "invalid-selector", true},
+	} {
+		raw := fmt.Sprintf("capacity:\n  providers:\n    %s: {}\n  choices:\n    - {harness: %s, model: test-model, effort: %q}\n", tc.harness, tc.harness, tc.effort)
+		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(p)
+		if (err != nil) != tc.invalid {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+		if err == nil && c.Capacity.Choices[0].Effort != tc.effort {
+			t.Fatal("choice effort lost")
+		}
+	}
+}

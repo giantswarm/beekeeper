@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,11 @@ func TestMergeResultLintWithAnotherRunner(t *testing.T) {
 	for _, lintFails := range []bool{false, true} {
 		t.Run(fmt.Sprintf("findings=%v", lintFails), func(t *testing.T) {
 			repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+			c := exec.CommandContext(t.Context(), "git", "checkout", "-q", repo.head2) //nolint:gosec // fixed git command in the test-owned repository
+			c.Dir = repo.dir
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("checkout: %v: %s", err, out)
+			}
 			lintDir := t.TempDir()
 			script := `#!/bin/sh
 parallel=false

@@ -6,17 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -231,9 +226,9 @@ func hasReviewedCommit(ctx context.Context, repoDir, rev string) bool {
 	return err == nil
 }
 
-// runReviewedMergeChecks runs goconst/golangci-lint and go test on the Go
+// runReviewedMergeChecks runs repository-configured golangci-lint and go test on the Go
 // module in worktreeDir, including reverse dependents and unchanged tests.
-func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBranch, head string) (string, int) {
+func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, head string) (string, int) {
 	if _, err := os.Stat(filepath.Join(worktreeDir, "go.mod")); err != nil {
 		return "", 0
 	}
@@ -243,22 +238,17 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 	if _, err := exec.LookPath("golangci-lint"); err != nil {
 		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
 	}
-	// Keep the fast diagnostic, but it never substitutes for configured lint.
-	// It covers only the PR's own changes (merge base..head): files only the
-	// base changed are not the PR's to fix.
-	diffOut, err := runGit(ctx, worktreeDir, "diff", "--name-only", mergeBase+".."+head)
-	if err != nil {
-		return "reading merge diff: " + err.Error(), github.SquashTooling
-	}
-	changedFiles := strings.Fields(string(diffOut))
-	for _, pkg := range changedGoPackages(worktreeDir, changedFiles) {
-		if finding := checkPackageGoConst(worktreeDir, pkg); finding != "" {
-			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), finding), github.SquashRed
-		}
-	}
-	lintArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
-	if !hasGolangCILintConfig(worktreeDir) {
-		lintArgs = append(lintArgs, "--enable", "goconst,govet,gosec")
+	// Never approximate a repository's linter policy with a separate check or
+	// extra linters. Pin the config to this merge result so discovery cannot
+	// inherit a configuration from a parent directory or the user's home.
+	configName := golangCILintConfig(worktreeDir)
+	lintArgs := []string{"run", "--max-issues-per-linter=0", "--max-same-issues=0"}
+	configLabel := "no repository config (--no-config; default linters)"
+	if configName == "" {
+		lintArgs = append(lintArgs, "--no-config")
+	} else {
+		lintArgs = append(lintArgs, "--config", filepath.Join(worktreeDir, configName))
+		configLabel = configName
 	}
 	// Independent merge worktrees may lint concurrently with other workers.
 	// Avoid the host-wide runner lock without suppressing lint findings.
@@ -268,7 +258,7 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
-		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
+		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, shortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
 	}
 	// Keep heavyweight live canaries in full CI, outside the coordinator merge
 	// path. Short mode still checks every package and its reverse dependents.
@@ -282,201 +272,14 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 	return "", 0
 }
 
-// checkPackageGoConst checks a Go package directory for repeated string
-// literals (>=3 occurrences of length >=3, or matching an existing constant)
-// as an early diagnostic; the configured golangci-lint remains required.
-func checkPackageGoConst(worktreeDir, pkg string) string {
-	relDir := strings.TrimPrefix(pkg, "./")
-	if pkg == "." {
-		relDir = "."
-	}
-	absDir := filepath.Join(worktreeDir, filepath.FromSlash(relDir))
-	entries, err := os.ReadDir(absDir)
-	if err != nil {
-		return ""
-	}
-	for _, testPass := range []bool{false, true} {
-		if finding := checkFilesGoConst(worktreeDir, absDir, entries, testPass); finding != "" {
-			return finding
-		}
-	}
-	return ""
-}
-
-func checkFilesGoConst(worktreeDir, absDir string, entries []os.DirEntry, testPass bool) string {
-	fset := token.NewFileSet()
-	consts := map[string]string{}
-	type occurrence struct {
-		pos   token.Position
-		count int
-	}
-	counts := map[string]*occurrence{}
-	var order []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
-		}
-		isTest := strings.HasSuffix(e.Name(), "_test.go")
-		if isTest != testPass {
-			continue
-		}
-		path := filepath.Join(absDir, e.Name())
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			continue
-		}
-		ignore := map[*ast.BasicLit]bool{}
-		for _, imp := range f.Imports {
-			if imp.Path != nil {
-				ignore[imp.Path] = true
-			}
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			gd, ok := n.(*ast.GenDecl)
-			if !ok || gd.Tok != token.CONST {
-				return true
-			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for i, val := range vs.Values {
-					lit, ok := val.(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						continue
-					}
-					ignore[lit] = true
-					if s, err := strconv.Unquote(lit.Value); err == nil && len(s) >= 3 && i < len(vs.Names) {
-						consts[s] = vs.Names[i].Name
-					}
-				}
-			}
-			return true
-		})
-		ast.Inspect(f, func(n ast.Node) bool {
-			for _, lit := range goconstLiterals(n, ignore) {
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil || utf8.RuneCountInString(s) < 3 || goconstIgnoresNumber(s) {
-					continue
-				}
-				occ, exists := counts[s]
-				if !exists {
-					occ = &occurrence{pos: fset.Position(lit.Pos())}
-					counts[s] = occ
-					order = append(order, s)
-				}
-				occ.count++
-			}
-			return true
-		})
-	}
-	for _, s := range order {
-		occ := counts[s]
-		if occ.count < 3 {
-			continue
-		}
-		rel, err := filepath.Rel(worktreeDir, occ.pos.Filename)
-		if err != nil {
-			rel = filepath.Base(occ.pos.Filename)
-		}
-		if name, ok := consts[s]; ok {
-			return fmt.Sprintf("%s:%d:%d: string %q has %d occurrences, already defined as %s (goconst)", filepath.ToSlash(rel), occ.pos.Line, occ.pos.Column, s, occ.count, name)
-		}
-		return fmt.Sprintf("%s:%d:%d: string %q has %d occurrences, make it a constant (goconst)", filepath.ToSlash(rel), occ.pos.Line, occ.pos.Column, s, occ.count)
-	}
-	return ""
-}
-
-// goconstIgnoresNumber mirrors golangci-lint's goconst defaults
-// (numbers.min = numbers.max = 3): an integer string outside [3, 3] is skipped.
-func goconstIgnoresNumber(s string) bool {
-	i, err := strconv.ParseInt(s, 0, 0)
-	return err == nil && i != 3
-}
-
-// goconstLiterals extracts string literals from the AST node types that
-// jgautheron/goconst inspects (equality comparisons, assignments, variable
-// specs, return statements, and case clauses).
-func goconstLiterals(n ast.Node, ignore map[*ast.BasicLit]bool) []*ast.BasicLit {
-	var exprs []ast.Expr
-	switch v := n.(type) {
-	case *ast.BinaryExpr:
-		if v.Op == token.EQL || v.Op == token.NEQ {
-			exprs = append(exprs, v.X, v.Y)
-		}
-	case *ast.AssignStmt:
-		exprs = append(exprs, v.Rhs...)
-	case *ast.GenDecl:
-		if v.Tok == token.VAR {
-			for _, spec := range v.Specs {
-				if vs, ok := spec.(*ast.ValueSpec); ok {
-					exprs = append(exprs, vs.Values...)
-				}
-			}
-		}
-	case *ast.ReturnStmt:
-		exprs = append(exprs, v.Results...)
-	case *ast.CaseClause:
-		exprs = append(exprs, v.List...)
-	case *ast.CompositeLit:
-		exprs = append(exprs, v.Elts...)
-	case *ast.KeyValueExpr:
-		exprs = append(exprs, v.Key)
-		if _, isIdent := v.Key.(*ast.Ident); !isIdent {
-			exprs = append(exprs, v.Value)
-		}
-	}
-	var out []*ast.BasicLit
-	for _, e := range exprs {
-		if lit, ok := e.(*ast.BasicLit); ok && lit.Kind == token.STRING && !ignore[lit] {
-			out = append(out, lit)
-		}
-	}
-	return out
-}
-
-func hasGolangCILintConfig(dir string) bool {
-	for _, name := range []string{".golangci.yaml", ".golangci.yml", ".golangci.toml", ".golangci.json"} {
+// golangCILintConfig follows golangci-lint's config extension precedence.
+func golangCILintConfig(dir string) string {
+	for _, name := range []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return true
+			return name
 		}
 	}
-	return false
-}
-
-// changedGoPackages returns the sorted relative package paths (./ or ./sub/pkg)
-// in worktreeDir containing .go files that were modified in changedFiles.
-func changedGoPackages(worktreeDir string, changedFiles []string) []string {
-	var dirs []string
-	for _, f := range changedFiles {
-		if !strings.HasSuffix(f, ".go") {
-			continue
-		}
-		d := filepath.Dir(filepath.FromSlash(f))
-		pkg := "./" + filepath.ToSlash(d)
-		if d == "." {
-			pkg = "."
-		}
-		if hasGoFiles(filepath.Join(worktreeDir, d)) {
-			dirs = append(dirs, pkg)
-		}
-	}
-	slices.Sort(dirs)
-	return slices.Compact(dirs)
-}
-
-func hasGoFiles(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") {
-			return true
-		}
-	}
-	return false
+	return ""
 }
 
 const goTestSubcmd = "test"

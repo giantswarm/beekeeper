@@ -2342,7 +2342,14 @@ active named incident repairs instead allow exemption-only board discovery
 (`board next --wip-exempt-only`), retaining the existing ranking and admission
 checks, skipping the monitored queue, and never falling back to ordinary picks.
 The held limit sets no refill pause, so a completed release frees the next pass.
-It checks again immediately before dispatch.
+It checks again immediately before dispatch. With a worker brief configured,
+every pass that starts no board worker logs `SUPERVISOR REFILL started 0:` with its reason, including full or
+stale delivery admission (count, limit and last complete observation), capacity,
+GitHub budget, incident holds, board backoff or an earlier refill still running.
+Passes that fail before dispatch report that failure too. Release observations
+probe the oldest attempted releases first, with never-probed releases ahead of
+retries, so a slow pass or a few failing releases cannot starve the rest of the
+backlog and keep published deliveries occupying WIP.
 
 Reviews, forwards, fixes, wakes, rework, merges and repairs keep their existing
 admission rules. An active incident hold's named repair and a `board.order` step
@@ -2586,6 +2593,30 @@ and a crash both start a fresh session.
   When `capacity.usage.command` is configured, beekeeper runs that command (bounded by
   `capacity.usage.timeout`, default `15s`) to read the subscription's 5-hour and 7-day usage
   windows as JSON on stdout (`{"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}`, either window optional unless its bands or `highPercent` are configured), caches the reading in `usage.json` for `capacity.usage.every` (default `5m`, re-reading at once once a window's `resetsAt` passes), and derives `ceiling` from the ascending `{upTo, ceiling}` bands in `capacity.usage.fiveHour` and `capacity.usage.sevenDay` (taking the lower `ceiling` when both windows have bands, and `0` at or past a window's last `upTo`). `beekeeper capacity` appends `; usage 5h …, 7d …` to its `capacity:` line and includes `usage` in `--json`; `beekeeper snapshot` prints `usage: …` (`--json` `usage`); `beekeeper watch` prints `USAGE: …` every `capacity.usage.reportEvery` (default `30m`, negative turns periodic lines off, `watch --once` prints once). Once `fiveHour.usedPercent` reaches `capacity.usage.highPercent` (default `95`), `watch` emits `USAGE HIGH` once (`ENDED USAGE HIGH` once reset), tells each running busy worker once per window episode to finish its current step and park, and gates `capacity`, unforced `agents start`, unforced `agents resume` (`--force` overrides) and `watch`'s `autoResume` until `fiveHour.resetsAt`.
+
+Capacity choices may set a session `effort`, independently for each harness:
+
+```yaml
+capacity:
+  choices:
+    - {harness: codex, model: gpt-6-astra, effort: high}
+    - {harness: agy, model: example-model}
+agents:
+  models:
+    - {match: '.*', kind: review, harness: codex, effort: high}
+```
+
+An explicit `agents start --effort` wins, followed by the first matching effort
+rule, then the selected capacity choice's effort. A rule's optional `harness`
+limits its effort; its model selector remains independent of harness selection.
+Unscoped rules retain their existing behavior. Local and SSH starts resolve the
+effort after choosing the harness, including dry runs and quota retries. Codex
+checks the selected model's `supported_reasoning_levels` in `models_cache.json`
+beside `codex.configFile`; missing, unreadable or unknown model metadata refuses
+the start with a catalog diagnostic. Refresh the catalog with Codex before
+starting with an effort setting. agy choices must omit effort. Starts record the
+resolved effort, and resumed sessions retain it.
+
   `capacity.providers.claude: {}` defaults to `[claude, -p, /usage, --output-format, json]`.
   This local command uses no model tokens and needs no credential reader or status line. It runs
   under beekeeper's state directory at the provider's `every` (default `5m`), with its `timeout`.
@@ -2943,7 +2974,8 @@ Review-raised issues use the `follow-up` label, stay unranked in backlog and are
 never attached as epic sub-issues. `board next` skips that label by default.
 
 A park on a pull request requests the supervisor loop's independent review only
-when run from that pull request's worktree branch at its published HEAD. The
+when its reason starts with "desk review", the pull request is not a draft,
+and it runs from that pull request's worktree branch at its published HEAD. The
 command records and prints the verified head. Other parks, including older parks
 without this evidence, are plain waits: no reviewer, merge go or findings
 forwarded; the watch resumes them when the pull request merges or closes. If
