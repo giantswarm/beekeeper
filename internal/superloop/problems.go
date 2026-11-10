@@ -58,8 +58,7 @@ func ownDeliveryProblem(in Input, l ledger, e Event) bool {
 		}
 		owns := strings.EqualFold(e.Agent, PullWorkerName(ref))
 		for _, w := range matched {
-			owns = owns || strings.EqualFold(w.Serves, ref) ||
-				(strings.EqualFold(w.ParkedOn, ref) && (w.ReviewRequested || !waitsOnOtherPull(w, l)))
+			owns = owns || strings.EqualFold(w.Serves, ref) || ownsParkedPull(in, l, ref, w)
 		}
 		for _, issue := range p.Closes {
 			owns = owns || owned[strings.ToLower(issue)]
@@ -77,7 +76,7 @@ func ownDeliveryProblem(in Input, l ledger, e Event) bool {
 				if ev.Verb != VerbPark || !strings.EqualFold(ev.Agent, e.Agent) {
 					continue
 				}
-				if on, waits := ParkedOn(ev.Detail); strings.EqualFold(on, ref) && !waitsOnOtherPull(Worker{Name: e.Agent, ParkedOn: on, Waits: waits}, l) {
+				if on, waits := ParkedOn(ev.Detail); ownsParkedPull(in, l, ref, Worker{Name: e.Agent, ParkedOn: on, Waits: waits}) {
 					owns = true
 					break
 				}
@@ -135,6 +134,35 @@ func ownDeliveryProblem(in Input, l ledger, e Event) bool {
 			continue
 		}
 		if !repos[strings.ToLower(owner+"/"+name)] {
+			return false
+		}
+	}
+	return true
+}
+
+func ownsParkedPull(in Input, l ledger, ref string, w Worker) bool {
+	if !strings.EqualFold(w.ParkedOn, ref) || strings.HasPrefix(w.Name, "Review ") {
+		return false
+	}
+	if w.ReviewRequested || (w.Waits != "" && ownPullWait(w.Waits)) {
+		return true
+	}
+	if owner := l.reviewer[ref]; owner != "" {
+		return strings.EqualFold(owner, w.Name)
+	}
+	if w.Serves != "" {
+		return strings.EqualFold(w.Serves, ref)
+	}
+	if w.Waits != "" {
+		return false
+	}
+	for _, other := range in.Workers {
+		if strings.EqualFold(other.Name, w.Name) {
+			continue
+		}
+		if (strings.EqualFold(other.ParkedOn, ref) && other.ReviewRequested) ||
+			strings.EqualFold(other.Serves, ref) ||
+			strings.EqualFold(other.Name, PullWorkerName(ref)) {
 			return false
 		}
 	}

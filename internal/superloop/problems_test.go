@@ -8,8 +8,8 @@ import (
 
 func TestOwnDeliveryProblemsStayInTimeline(t *testing.T) {
 	for _, tc := range []struct {
-		name, body                             string
-		unknown, closed, done, saved, wantFile bool
+		name, body                                      string
+		unknown, closed, done, saved, overlap, wantFile bool
 	}{
 		{name: "own PR", body: "CI red on https://github.com/o/r/pull/8, reading saved output before fixing"},
 		{name: "check and path", body: "pre-commit/goconst failed on https://github.com/o/r/pull/8 (https://github.com/o/r/actions/runs/12/job/34) in internal/superloop/problems.go and cmd/supervisorloop.go"},
@@ -18,6 +18,7 @@ func TestOwnDeliveryProblemsStayInTimeline(t *testing.T) {
 		{name: "completion", body: "CI rerun for https://github.com/o/r/pull/8", done: true},
 		{name: "unknown owner", body: "CI red on https://github.com/o/r/pull/8", unknown: true, wantFile: true},
 		{name: "closed PR", body: "CI red on https://github.com/o/r/pull/8", closed: true, wantFile: true},
+		{name: "overlap waiter", body: "CI red on https://github.com/o/r/pull/8", overlap: true, wantFile: true},
 		{name: "other PR", body: "CI red on https://github.com/o/r/pull/9", wantFile: true},
 		{name: "external defect", body: "https://github.com/o/r/pull/8 fails because other/tool has a gate timeout", wantFile: true},
 		{name: "external URL defect", body: "https://github.com/o/r/pull/8 fails in https://github.com/other/tool/actions/runs/9", wantFile: true},
@@ -33,6 +34,12 @@ func TestOwnDeliveryProblemsStayInTimeline(t *testing.T) {
 			if tc.saved {
 				w.ParkedOn = overlapPRB
 				w.ReviewRequested = true
+			}
+			if tc.overlap {
+				p.Closes = nil
+				w.Serves = overlapPRA
+				w.ParkedOn = overlapPRB
+				w.Waits = "overlap with " + overlapPRB
 			}
 			in := Input{Workers: []Worker{w}, Pulls: map[string]Pull{overlapPRB: p}, Events: []Event{{At: t0, Verb: VerbProblem, Agent: worker, Detail: worker + ": " + tc.body}}}
 			if tc.unknown {
