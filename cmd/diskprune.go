@@ -239,9 +239,15 @@ func sortedReasons(m map[string]int) []string {
 
 func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) diskRun {
 	r := diskRun{dry: dry}
+	if a.context().Err() != nil {
+		return r
+	}
 	m, err := read()
 	if err != nil {
 		r.Errors = append(r.Errors, err)
+		return r
+	}
+	if a.context().Err() != nil {
 		return r
 	}
 	lock := flock.New(filepath.Join(a.store.Dir(), diskPruneLock))
@@ -268,7 +274,13 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 			r.docker = &docker
 		}
 	}
+	if a.context().Err() != nil {
+		return r
+	}
 	a.pruneDiskCaches(&r, m, pressure)
+	if a.context().Err() != nil {
+		return r
+	}
 	known, ok := rereadDisk(&r, &m)
 	if !ok {
 		return r
@@ -278,8 +290,14 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	} else {
 		r.Keep("caches and tmp: " + keptReferencesUnknown)
 	}
+	if a.context().Err() != nil {
+		return r
+	}
 	if pressure && known {
 		a.pruneFinishedState(&r, &m)
+	}
+	if a.context().Err() != nil {
+		return r
 	}
 	m.trees.automatic = true
 	m.trees.pressure = pressure
@@ -293,6 +311,9 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		return r
 	}
 	r.trees = a.trimWorktrees(dry, func() (worktreeMachine, error) { return m.trees, nil })
+	if a.context().Err() != nil {
+		return r
+	}
 	ok, err = lock.TryLock()
 	if err != nil || !ok {
 		if err != nil {
@@ -312,6 +333,9 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		trash := append(slices.Clone(m.trash), m.trees.trash)
 		slices.Sort(trash)
 		for _, d := range slices.Compact(trash) {
+			if a.context().Err() != nil {
+				return r
+			}
 			r.Add(diskprune.Children(d, cutoff, m.refs, dry))
 		}
 	} else {
@@ -326,10 +350,10 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	if pressure && m.stillLow != nil && m.stillLow() {
 		r.Keep("disk remains below floor after safe reclamation; starts stay held")
 	}
-	if pressure && m.cacheHome != "" && (m.stillLow == nil || m.stillLow()) {
+	if pressure && m.cacheHome != "" && (m.stillLow == nil || m.stillLow()) && a.context().Err() == nil {
 		r.uncovered = uncoveredCaches(m.cacheHome, m.entries, diskHoldingMin, 5)
 	}
-	if !dry {
+	if !dry && a.context().Err() == nil {
 		_ = a.store.Log(event(watchParty, "disk.prune", "%s", r))
 		if pressure {
 			_ = a.store.WriteFile(diskHoldingFile, diskHolding{At: a.now, Text: r.holdingText()})
@@ -425,7 +449,10 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 			}
 		}
 	}
-	pruneSccache(r, m, a.builtinCache(config.DiskCacheSccache, config.DiskCacheModeSc).MaxBytes(), pressure)
+	if a.context().Err() != nil {
+		return
+	}
+	pruneSccacheContext(a.context(), r, m, a.builtinCache(config.DiskCacheSccache, config.DiskCacheModeSc).MaxBytes(), pressure)
 }
 
 // diskCacheTarget preserves warm caches on healthy scheduled runs.

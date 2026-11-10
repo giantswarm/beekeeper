@@ -819,7 +819,7 @@ func (w *watcher) readCtx(ctx context.Context) context.Context {
 // and the next poll skips it instead of starting a second one. fn keeps
 // running on ctx, within its own timeouts.
 func (w *watcher) inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn func(context.Context)) {
-	if !running.CompareAndSwap(false, true) {
+	if ctx.Err() != nil || !running.CompareAndSwap(false, true) {
 		return
 	}
 	done := make(chan struct{})
@@ -1432,6 +1432,9 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 
 // pollSessions does what the process table and the sessions in it tell.
 func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Table) {
+	if ctx.Err() != nil {
+		return
+	}
 	w.table = t
 	sessions := discover(w.cfg, t, w.now)
 	owners := make(map[int]string, len(sessions))
@@ -1443,14 +1446,26 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
 	w.tendFeedback(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	w.pending(ctx, sessions)
+	if ctx.Err() != nil {
+		return
+	}
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
 	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
 	w.twins(sessions, t)
 	w.ungated(sessions, t)
+	if ctx.Err() != nil {
+		return
+	}
 	w.sameTitles(w.stopRevived(ctx, sessions))
+	if ctx.Err() != nil {
+		return
+	}
 	w.staleWatches(ctx, t)
 }
 
@@ -1526,6 +1541,9 @@ func (w *watcher) poll(ctx context.Context) {
 		w.clear("proc")
 		w.pollSessions(ctx, since, t)
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	w.staleMerges()
 	w.lostMerges(ctx)
 	w.owedOutcomes(ctx)
@@ -1534,6 +1552,9 @@ func (w *watcher) poll(ctx context.Context) {
 	w.slotHolds()
 	w.unbrokered()
 	w.vaultWaits()
+	if ctx.Err() != nil {
+		return
+	}
 	w.sink(ctx)
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
@@ -1574,6 +1595,9 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
 		w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	w.saveMark()
 	if w.notifier != nil {
@@ -1676,12 +1700,16 @@ const exposedKey = "exposed "
 // EXPOSED line naming the file when it is found, never its content, and one
 // ENDED line once it is fixed.
 func (w *watcher) exposures() {
+	ctx := w.context()
 	o := w.cfg.Outbound
 	found := map[string]bool{}
-	for _, e := range guard.Sweep(o.SweepRoots, o.SweepDepth) {
+	for _, e := range guard.SweepContext(ctx, o.SweepRoots, o.SweepDepth) {
 		key := exposedKey + e.Path
 		found[key] = true
 		w.emit(key, "EXPOSED %s: %s", e.Path, e.What)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	w.clearMissing(exposedKey, found)
 }
@@ -2023,6 +2051,9 @@ var watchParty = state.Party{Name: "beekeeper watch"}
 // The state keeps that they were reported, so each is one line however many
 // watches run; the state is written only then.
 func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
+	if ctx.Err() != nil {
+		return
+	}
 	st, err := w.store.Read()
 	if err != nil {
 		w.fail("state-read", "cannot read the state: %v", err)
@@ -2030,11 +2061,21 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.clear("state-read")
 	if w.chores {
-		defer w.claims(ctx)
+		defer func() {
+			if ctx.Err() == nil {
+				w.claims(ctx)
+			}
+		}()
 	}
 	st = w.syncExecutions(ctx, st)
+	if ctx.Err() != nil {
+		return
+	}
 	w.records = st.Records
 	supervised := w.checkLoop(ctx, st)
+	if ctx.Err() != nil {
+		return
+	}
 	if w.standby {
 		w.guideGone(ctx, st, sessions)
 		w.resumeRestarted(ctx, guideRole, st, sessions)
@@ -2049,10 +2090,16 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if w.standby && supervised {
 		return // the supervisor loop's watch reports them
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	w.sayStop(st)
 	w.noteAnswers(st)
 	w.refusals()
 	u := w.watchUsage(ctx, st, sessions)
+	if ctx.Err() != nil {
+		return
+	}
 	if w.chores && (u == nil || !u.High) {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
@@ -2062,13 +2109,22 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if st.Stop == nil {
 		w.stoppedAgents(st, sessions) // STOPPED names the sessions the stop ended
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
 	w.rowlessAgents(st)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
+	if ctx.Err() != nil {
+		return
+	}
 	var over, kept []overtake
 	if len(overtakeRefs(st)) > 0 {
 		readRefs := func() error {
@@ -2083,7 +2139,13 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 			_ = readRefs()
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	parks := w.settledParks(ctx, st)
+	if ctx.Err() != nil {
+		return
+	}
 	if !w.chores {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
@@ -2095,8 +2157,14 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	} else {
 		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	if w.chores {
 		w.overrides(ctx, githubHeld)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	var settles func(state.Timer) bool // nil: a running watch settles every timer
 	if !w.chores {
