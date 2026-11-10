@@ -498,7 +498,12 @@ func TestExecutionStopDuringPreparationSendsNoStart(t *testing.T) {
 				case "rev-parse":
 					return []byte(strings.Repeat("b", 40) + "\n"), nil
 				case "bundle":
-					return nil, os.WriteFile(args[2], []byte("fixture bundle"), 0o600)
+					root, err := os.OpenRoot(filepath.Dir(args[2]))
+					if err != nil {
+						return nil, err
+					}
+					defer root.Close() //nolint:errcheck // test fixture
+					return nil, root.WriteFile(filepath.Base(args[2]), []byte("fixture bundle"), 0o600)
 				}
 				return nil, nil
 			}
