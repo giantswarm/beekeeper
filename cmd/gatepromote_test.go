@@ -395,7 +395,7 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 	}
 
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
-	stubBaseRelease(t, github.BaseRelease{Base: "main", Auto: true}, nil)
+	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a, g = promotePlace(t)
 	g.pr, g.argv, g.candidate = 7, mergeArgv(scratchRepo), ""
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {

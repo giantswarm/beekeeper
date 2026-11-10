@@ -338,19 +338,22 @@ func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *t
 		t.Fatal(err)
 	}
 	now := r.a.timeNow()
-	l.login = "fixture-user"
-	l.teams = map[string]string{"team-a": "fixture-user"}
+	const cacheLogin = "fixture-user"
+	const cacheTeam = "team-a"
+	const cacheETag = `"etag-7"`
+	l.login = cacheLogin
+	l.teams = map[string]string{cacheTeam: cacheLogin}
 	l.teamsAt = now
 	l.tidyAt = now
 	l.openPulls = []string{loopPR}
 	l.openPullsAt = now
 	l.unmerged = map[string]loopUnmergedObservation{
-		repo: {pulls: []unmergedPull{{Number: 7, State: emergencyOpenState, CreatedAt: now}}, etag: `"etag-7"`, at: now, fullAt: now},
+		repo: {pulls: []unmergedPull{{Number: 7, State: emergencyOpenState, CreatedAt: now}}, etag: cacheETag, at: now, fullAt: now},
 	}
 	l.unmergedCursor = repo
-	l.defaultBranches = map[string]string{repo: "main"}
+	l.defaultBranches = map[string]string{repo: mainBranch}
 	l.cachePull(loopPR, superloop.Pull{Ref: loopPR, State: superloop.Merged})
-	if obs := l.unmerged[repo]; obs.etag != `"etag-7"` || len(obs.pulls) != 0 || !obs.at.IsZero() {
+	if obs := l.unmerged[repo]; obs.etag != cacheETag || len(obs.pulls) != 0 || !obs.at.IsZero() {
 		t.Fatalf("cachePull did not preserve ETag while dropping merged PR: %+v", obs)
 	}
 	l.saveCache()
@@ -360,7 +363,7 @@ func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *t
 		t.Fatal(err)
 	}
 	restarted.loadCache()
-	if restarted.login != "fixture-user" || restarted.teams["team-a"] != "fixture-user" || restarted.defaultBranches[repo] != "main" || restarted.unmerged[repo].etag != `"etag-7"` || restarted.unmergedCursor != repo {
+	if restarted.login != cacheLogin || restarted.teams[cacheTeam] != cacheLogin || restarted.defaultBranches[repo] != mainBranch || restarted.unmerged[repo].etag != cacheETag || restarted.unmergedCursor != repo {
 		t.Fatalf("restarted loop lost persisted cache: login=%q teams=%v branches=%v unmerged=%+v", restarted.login, restarted.teams, restarted.defaultBranches, restarted.unmerged)
 	}
 }

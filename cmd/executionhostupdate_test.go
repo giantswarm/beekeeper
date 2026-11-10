@@ -37,6 +37,7 @@ const (
 	hostFixtureSource        = "/srv/source"
 	hostFixtureDraining      = "host-c"
 	hostDrainsWord           = "drains"
+	hostFixtureCommand       = "hosts"
 	hostFixtureCoordinator   = "coordinator.example"
 	hostFixtureWorker        = "remote-worker"
 )
@@ -132,7 +133,7 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	if !slices.Equal(h.installs, []string{hostNewRelease}) || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
 		t.Errorf("installs %v, restarts %v", h.installs, h.restarts)
 	}
-	wantArgs := []string{sshTestExecutable, "--" + configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", "1", "--" + hostVersionFlag, hostNewRelease}
+	wantArgs := []string{sshTestExecutable, "--" + configFlag, s.ConfigPath, agentsName, hostFixtureCommand, "self-update", "--protocol", "1", "--" + hostVersionFlag, hostNewRelease}
 	if !slices.Equal(h.prepareArgs, wantArgs) {
 		t.Errorf("the installed release ran %v, want %v", h.prepareArgs, wantArgs)
 	}
@@ -284,7 +285,7 @@ func TestHostsUpdatePinsTheDigestInStateWithoutAConfiguredOne(t *testing.T) {
 		probed = append(probed, h.PolicyDigest)
 		return probe(ctx, h)
 	}
-	out, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector)
+	out, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector)
 	if err != nil || !strings.Contains(out, hostNewRelease) || !strings.Contains(out, digest) {
 		t.Fatalf("hosts update: %s, %v", out, err)
 	}
@@ -327,10 +328,10 @@ func TestHostsUpdateHoldsAFailingHostWhileTheOthersRun(t *testing.T) {
 		},
 		sshTestOtherSelector: pinnedAnswer(sshTestOtherSelector, digest),
 	})
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), "held") {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), "held") {
 		t.Fatalf("a failing update: %v", err)
 	}
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestOtherSelector); err != nil {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestOtherSelector); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()
@@ -361,7 +362,7 @@ func TestHostsUpdateHoldsAFailingHostWhileTheOthersRun(t *testing.T) {
 		t.Errorf("a start on a held host reserved %d", len(st.Starts))
 	}
 	failing = false
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); err != nil {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := a.store.Read(); st.HostPin(sshTestSelector).Held != "" {
@@ -377,7 +378,7 @@ func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 			return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostOldRelease, Busy: 2}, nil
 		},
 	})
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) {
 		t.Fatalf("a busy host: %v", err)
 	}
 	st, err := a.store.Read()
@@ -396,7 +397,7 @@ func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 		t.Fatal(err)
 	}
 	*calls = nil
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || len(*calls) != 0 {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || len(*calls) != 0 {
 		t.Fatalf("recorded executions: %v, calls %v", err, *calls)
 	}
 }
@@ -438,7 +439,7 @@ func TestHostsUpdateGoesAheadUnderAParkedWorkerBetweenTurns(t *testing.T) {
 	} {
 		record(c.o, c.park)
 		*calls = nil
-		if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) || len(*calls) != 0 {
+		if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) || len(*calls) != 0 {
 			t.Fatalf("%s: %v, calls %v", name, err, *calls)
 		}
 	}
@@ -458,7 +459,7 @@ func TestHostsUpdateGoesAheadUnderAParkedWorkerBetweenTurns(t *testing.T) {
 		return o, nil
 	}
 	a.executionTransport = func(execution.Host) execution.Transport { return fake }
-	out, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector)
+	out, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector)
 	if err != nil || len(*calls) != 1 || !strings.Contains(out, "1 executions between turns rebound") {
 		t.Fatalf("a parked worker between turns: %s, %v, calls %v", out, err, *calls)
 	}
@@ -539,7 +540,7 @@ func TestHostsUpdateRefusesADevelopmentBuildWhichGatesNoStart(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, "dev")
 	calls := stubHostUpdates(t, a, nil)
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || len(*calls) != 0 {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || len(*calls) != 0 {
 		t.Fatalf("a development build updated a host: %v, %v", err, *calls)
 	}
 	h, err := a.executionHost(sshTestSelector)
@@ -567,7 +568,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	}
 	// The command records what agents hosts update records.
 	r.answer = func(args []string) (string, int) {
-		if len(args) != 4 || args[0] != agentsName || args[1] != "hosts" || args[2] != hostUpdateCmdName {
+		if len(args) != 4 || args[0] != agentsName || args[1] != hostFixtureCommand || args[2] != hostUpdateCmdName {
 			return "", 0
 		}
 		selector := args[3]
@@ -701,7 +702,7 @@ func TestHostsUpdateHoldsAHostWhoseReleaseLookupFails(t *testing.T) {
 	lookupRelease = func(context.Context, string) (update.Release, error) {
 		return update.Release{}, errors.New("GitHub rate limit exceeded; resets at 2026-11-03T15:00:00Z")
 	}
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), "rate limit exceeded; resets at") {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), "rate limit exceeded; resets at") {
 		t.Fatalf("a refused lookup: %v", err)
 	}
 	if len(*calls) != 0 {
@@ -769,10 +770,10 @@ func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t 
 		lookups++
 		return prevLookup(ctx, version)
 	}
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); err != nil {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestOtherSelector); err != nil {
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestOtherSelector); err != nil {
 		t.Fatal(err)
 	}
 	if lookups != 1 {
@@ -808,7 +809,7 @@ func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t 
 	r.a.now = resetAt.Add(time.Second)
 	st, _ = r.a.store.Read()
 	l.updateHosts(context.Background(), st)
-	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, "hosts", hostUpdateCmdName, sshTestSelector}) {
+	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, hostFixtureCommand, hostUpdateCmdName, sshTestSelector}) {
 		t.Fatalf("rate-limited host did not retry immediately after reset: %v", r.calls)
 	}
 }
