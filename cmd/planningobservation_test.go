@@ -121,7 +121,7 @@ func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 			t.Fatal("issue reads left no release observation allowance")
 		}
 		releaseRead = true
-		return verdictAvailable, "v2.0.0-rc.1", nil
+		return verdictAvailable, deliveryAvailableTag, nil
 	}
 	l := &supervisorLoop{a: a, said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}

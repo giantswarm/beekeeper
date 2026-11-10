@@ -20,9 +20,9 @@ const (
 // already emitted its detailed warning. Admission recovery must need no restart.
 func TestRefillZeroStartReasons(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{
-		{"capacity", "no room for a worker"},
+		{loopCapacity, "no room for a worker"},
 		{refillCapacityErrorCase, "state lock is busy"},
-		{"held", "held: starts held"},
+		{reviewedHeldCase, "held: starts held"},
 		{refillEmptyCase, "no free board item"},
 		{"budget", "GitHub budget under github.floor"},
 		{refillFullCase, "wip full: 1 of 1"},
@@ -35,11 +35,11 @@ func TestRefillZeroStartReasons(t *testing.T) {
 			r.answer = func(args []string) (string, int) {
 				if args[0] == fillCapacityCommand {
 					switch tc.name {
-					case "capacity":
+					case loopCapacity:
 						return fillNoRoomJSON, 0
 					case refillCapacityErrorCase:
 						return "the state lock is busy", 1
-					case "held":
+					case reviewedHeldCase:
 						return `{"ceiling":3,"room":0,"stopped":"starts held"}`, 0
 					}
 				}
@@ -84,7 +84,7 @@ func TestRefillZeroStartReasons(t *testing.T) {
 			for _, line := range strings.Split(r.out.String(), "\n") {
 				if strings.HasPrefix(line, refillZeroLine) {
 					lines++
-					if !strings.Contains(line, tc.want) && !(tc.name == refillEmptyCase && strings.Contains(line, "backoff until")) {
+					if !strings.Contains(line, tc.want) && (tc.name != refillEmptyCase || !strings.Contains(line, "backoff until")) {
 						t.Fatalf("missing reason %q: %s", tc.want, line)
 					}
 				}

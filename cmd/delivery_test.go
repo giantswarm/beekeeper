@@ -22,6 +22,7 @@ import (
 const deliveryFixtureRepo = "o/r"
 const deliveryCompareBehind = "behind"
 const deliveryFailedTag = "v8.1.1"
+const deliveryAvailableTag = "v2.0.0-rc.1"
 
 func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 	for _, tc := range []struct {
@@ -121,7 +122,7 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 	}
 	in.Now = now.Add(deliveryReleaseEvery)
 	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
-		return verdictAvailable, "v2.0.0-rc.1", nil
+		return verdictAvailable, deliveryAvailableTag, nil
 	}
 	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
@@ -576,7 +577,7 @@ func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	readDeliveryRelease = func(_ context.Context, p superloop.Pull) (string, string, error) {
 		probed = append(probed, p.Ref)
 		if p.Ref == tail {
-			return verdictAvailable, "v2.0.0-rc.1", nil
+			return verdictAvailable, deliveryAvailableTag, nil
 		}
 		return "", "", errors.New("release observation unavailable")
 	}
