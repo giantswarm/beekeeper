@@ -22,6 +22,7 @@ const (
 	incidentModeFlag    = "--incident"
 	incidentFixerKind   = "fixer"
 	incidentRoomJSON    = `{"room":1}`
+	incidentOtherIssue  = "other/repo#1"
 )
 
 func TestIncidentBoardSkipsOtherWorkButOffersRepair(t *testing.T) {
@@ -32,9 +33,9 @@ func TestIncidentBoardSkipsOtherWorkButOffersRepair(t *testing.T) {
 	if res.Pick == nil || res.Pick.Ref != incidentRepairIssue {
 		t.Fatalf("repair not offered: %+v", res)
 	}
-	cands[2] = board.Candidate{Item: board.Item{Ref: "other/repo#1"}, Step: stepUpNext}
+	cands[2] = board.Candidate{Item: board.Item{Ref: incidentOtherIssue}, Step: stepUpNext}
 	res = nextFree(st, cands, sc)
-	if res.Pick == nil || res.Pick.Ref != "other/repo#1" {
+	if res.Pick == nil || res.Pick.Ref != incidentOtherIssue {
 		t.Fatalf("other repository blocked: %+v", res)
 	}
 }
@@ -199,7 +200,7 @@ func TestRepositoryHoldBoardSkipsUntilLiftOrExpiry(t *testing.T) {
 	st := &state.State{Holds: []state.Hold{{Target: "O/R", Reason: incidentReason}}}
 	sc := pickScope{listed: now, alive: func(state.Party) bool { return false }}
 	cands := boardCandidates(3)
-	cands[2] = board.Candidate{Item: board.Item{Ref: "other/repo#1"}, Step: stepUpNext}
+	cands[2] = board.Candidate{Item: board.Item{Ref: incidentOtherIssue}, Step: stepUpNext}
 	res := nextFree(st, cands, sc)
 	if res.Pick == nil || res.Pick.Ref != cands[2].Ref || len(res.Skipped) != 2 {
 		t.Fatalf("held repository not skipped: %+v", res)
