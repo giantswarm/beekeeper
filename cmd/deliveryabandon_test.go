@@ -36,7 +36,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 				case abandonClaimed:
 					st.Claims = []state.Claim{{Issue: refOne, Session: by}}
 				case abandonRoster:
-					st.Agents = []state.Agent{{Party: by, Task: "release"}}
+					st.Agents = []state.Agent{{Party: by, Task: "finish delivery"}}
 				case abandonLive:
 					st.Records = append(st.Records, state.Record{Session: state.Party{Name: abandonReplacement}, Issue: refOne})
 				case abandonArchive:
@@ -47,7 +47,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 					st.EndedWorkers = []state.Start{{Party: by, At: now.Add(-50 * time.Hour)}}
 				case abandonDoneAgent:
 					st.Records = nil
-					st.Agents = []state.Agent{{Party: by, Done: true, LastTask: "release"}}
+					st.Agents = []state.Agent{{Party: by, Done: true, LastTask: "finish delivery"}}
 				case abandonUnknown:
 					st.Records = nil
 				}

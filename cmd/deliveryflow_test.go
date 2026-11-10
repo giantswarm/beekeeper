@@ -28,7 +28,7 @@ func TestDeliveryFlowClassification(t *testing.T) {
 		{name: "external", waits: "external party delivers the equipment", class: deliveryBlocked},
 		{name: "ci", on: deliveryTestPull, waits: "CI", pull: true, class: deliveryFlowing},
 		{name: "queued review", on: deliveryTestPull, waits: "desk review", pull: true, class: deliveryFlowing},
-		{name: "release", on: "example/project@v1.0.0", class: deliveryFlowing},
+		{name: "release wait", on: "example/project@v1.0.0", class: deliveryFlowing},
 		{name: "short timer", shortTimer: true, class: deliveryFlowing},
 		{name: "long timer", longTimer: true, class: deliveryBlocked},
 		{name: "unknown remains counted", waits: "something unspecified", class: deliveryFlowing},
