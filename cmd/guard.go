@@ -894,14 +894,15 @@ context instead. beekeeper install registers it in
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
 			globs, path := sh.Globs == config.GlobsLiteral, sh.Path
+			var envGate string
 			if !scoped {
 				// a held session outside the scope gets the sandbox's part
 				// only: its gh would otherwise resolve to the link to devctl
 				unalias, globs, path = nil, false, nil
 			} else {
-				unheld += guard.DevctlVersionGateShell(a.cfg.Hooks.GuardsEnabled())
+				envGate = guard.DevctlVersionGateShell(a.cfg.Hooks.GuardsEnabled())
 			}
-			if err := guard.WritePrelude(env, guard.Prelude(unalias, globs, path, drop, unheld)); err != nil {
+			if err := guard.WritePrelude(env, guard.Prelude(unalias, globs, path, drop, unheld, envGate)); err != nil {
 				return err
 			}
 			if !held {

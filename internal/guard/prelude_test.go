@@ -261,21 +261,32 @@ func TestDevctlVersionGateShellTogglesExportAndUnset(t *testing.T) {
 		}
 		t.Run(sh, func(t *testing.T) {
 			env := filepath.Join(t.TempDir(), "env.sh")
-			if err := WritePrelude(env, Prelude(nil, false, nil, nil, DevctlVersionGateShell(false))); err != nil {
+			if err := WritePrelude(env, Prelude(nil, false, nil, nil, "", DevctlVersionGateShell(false))); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-}\"").CombinedOutput() //nolint:gosec // the test's own shells
-			if err != nil || string(out) != "true" {
-				t.Fatalf("guards off in %s: %v: %q", sh, err, out)
+			for _, rt := range []string{"", "1"} {
+				c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-}\"") //nolint:gosec // the test's own shells
+				if rt != "" {
+					c.Env = append(os.Environ(), sandbox.Runtime+"="+rt)
+				}
+				out, err := c.CombinedOutput()
+				if err != nil || string(out) != "true" {
+					t.Fatalf("guards off in %s (SANDBOX_RUNTIME=%q): %v: %q", sh, rt, err, out)
+				}
 			}
-			if err := WritePrelude(env, Prelude(nil, false, nil, nil, DevctlVersionGateShell(true))); err != nil {
+			if err := WritePrelude(env, Prelude(nil, false, nil, nil, "", DevctlVersionGateShell(true))); err != nil {
 				t.Fatal(err)
 			}
-			c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-"+unsetCmd+"}\"") //nolint:gosec // the test's own shells
-			c.Env = append(os.Environ(), "DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true")
-			out, err = c.CombinedOutput()
-			if err != nil || string(out) != unsetCmd {
-				t.Fatalf("guards on in %s did not unset inherited variable: %v: %q", sh, err, out)
+			for _, rt := range []string{"", "1"} {
+				c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-"+unsetCmd+"}\"") //nolint:gosec // the test's own shells
+				c.Env = append(os.Environ(), "DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true")
+				if rt != "" {
+					c.Env = append(c.Env, sandbox.Runtime+"="+rt)
+				}
+				out, err := c.CombinedOutput()
+				if err != nil || string(out) != unsetCmd {
+					t.Fatalf("guards on in %s (SANDBOX_RUNTIME=%q) did not unset inherited variable: %v: %q", sh, rt, err, out)
+				}
 			}
 		})
 	}

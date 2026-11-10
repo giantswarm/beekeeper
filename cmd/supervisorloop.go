@@ -92,6 +92,7 @@ func runArgv(ctx context.Context, stdin string, argv []string) (string, string, 
 		return "", "", 0, errors.New("no command")
 	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
+	c.Env = devctlCommandEnv("")
 	c.Stdin = strings.NewReader(stdin)
 	var out, errOut bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errOut

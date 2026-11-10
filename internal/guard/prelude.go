@@ -58,7 +58,7 @@ const (
 // It always drops the vault credentials of vaultEnv from the environment:
 // no agent command runs with a vault session or token.
 // Every line ends with exit status 0.
-func Prelude(unalias []string, literalGlobs bool, path, drop []string, unheld string) string {
+func Prelude(unalias []string, literalGlobs bool, path, drop []string, unheld string, env ...string) string {
 	var b strings.Builder
 	b.WriteString(preludeBegin + "\n")
 	fmt.Fprintf(&b, "for _bk_v in $(env | sed -nE 's/^(%s)=.*/\\1/p'); do unset \"$_bk_v\"; done; unset _bk_v\n", vaultEnv)
@@ -80,6 +80,9 @@ func Prelude(unalias []string, literalGlobs bool, path, drop []string, unheld st
 	} else {
 		writeDrop(&b, drop)
 		writePath(&b, path)
+	}
+	for _, s := range env {
+		b.WriteString(s)
 	}
 	b.WriteString(preludeEnd + "\n")
 	return b.String()

@@ -1060,6 +1060,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if a.cfg.Merge.DevctlServes(repo) {
 		argv = append([]string{devctlBinary, "auth", "exec", "--"}, argv...)
 	}
+	if a.cfg != nil {
+		github.SetDevctlSkipVersionCheck(!a.cfg.Hooks.GuardsEnabled())
+	}
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
 	if runErr != nil {

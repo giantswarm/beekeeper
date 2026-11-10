@@ -132,6 +132,9 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantSkip {
 		t.Fatalf("devctlToken with guards=false got %q, %v", tok, err)
 	}
+	if out, _, code, err := runArgv(ctx, "", []string{fakeDevctl}); err != nil || code != 0 || strings.TrimSpace(out) != wantSkip {
+		t.Fatalf("runArgv with guards=false got %q, code=%d, err=%v", out, code, err)
+	}
 
 	// 2. Re-enabling hooks.guards unsets the shell variable and strips it from
 	// worker environments and beekeeper-owned devctl child commands even if set
@@ -152,5 +155,8 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	}
 	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantEnf {
 		t.Fatalf("devctlToken with guards=true got %q, %v", tok, err)
+	}
+	if out, _, code, err := runArgv(ctx, "", []string{fakeDevctl}); err != nil || code != 0 || strings.TrimSpace(out) != wantEnf {
+		t.Fatalf("runArgv with guards=true got %q, code=%d, err=%v", out, code, err)
 	}
 }
