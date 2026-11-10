@@ -3009,6 +3009,8 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.install(ctx, act)
 	case superloop.KindClassify:
 		return l.classify(ctx, st, act)
+	case superloop.KindProgress:
+		return "delivery progress: " + act.Message, nil
 	case superloop.KindFile:
 		return l.toFile(ctx, st, act)
 	case superloop.KindIntake:
