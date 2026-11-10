@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestDoctorDeskWorkflow(t *testing.T) {
 		t.Fatal("diagnostic exposed desk source text")
 	}
 	for name, body := range files {
-		raw, err := os.ReadFile(filepath.Join(desk, name))
+		raw, err := fs.ReadFile(os.DirFS(desk), name)
 		if err != nil || string(raw) != body {
 			t.Fatalf("doctor changed %s: %v", name, err)
 		}
