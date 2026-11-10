@@ -513,8 +513,13 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 			t.Errorf("candidate %d rate = %v, want %v", i, gotR, wantRate[i])
 		}
 	}
+	// With no choice below half pace, distance and remaining rate rank starts.
 	// When two choices tie on distance behind pace (23.1 points), higher
 	// remaining budget per hour breaks the tie (2.1%/h vs 1.2%/h).
+	r.choices = `    - {harness: agy, model: gemini-x}
+    - {harness: codex, model: gpt-x}
+`
+	r.configure("")
 	agy7d, agyReset7d = 68, r.t0.Add(15*time.Hour)
 	codex7d, codexReset7d = 54.9, r.t0.Add(37*time.Hour)
 	r.want(harnessAgy + " " + pickGemini)
