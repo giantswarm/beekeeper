@@ -68,7 +68,9 @@ the floor for it go first: a line names them, and the gated waits and the
 watch's GitHub timer checks start after them.
 
 --gate bounds probes and credential discovery to seconds and skips plugin
-synchronization and caller diagnostics. It exits 3 when GitHub refuses
+synchronization and caller diagnostics. A busy shared probe lock falls back
+to direct REST and GraphQL probes after 500 ms, with a warning; that reading
+is not saved out of order. Known unexpired low windows still apply. It exits 3 when GitHub refuses
 GraphQL calls, the budget is under the
 floor (github.floor, default 2500), merges queued for the reset go first or
 a "github" hold is set:
@@ -91,8 +93,16 @@ unread core budget:
 			if err := checkBuckets(gate, buckets); err != nil {
 				return err
 			}
+			if gate {
+				ctx = context.WithValue(ctx, budgetGateKey{}, true)
+			}
 			b, err := readBudget(a, ctx)
 			if err = unsavedBudget(err); err != nil {
+				if !a.json {
+					for _, warning := range b.Warnings {
+						_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
+					}
+				}
 				if a.json {
 					_ = a.printJSON(b)
 				}

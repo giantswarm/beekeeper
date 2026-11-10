@@ -21,6 +21,10 @@ const unlabelledIdentity = "unlabelled"
 // Exact REST accounting is reserved for background inventory batches.
 type freshLoopRESTKey struct{}
 
+// Gate reads reserve time for a direct probe when another producer is busy.
+type budgetGateKey struct{}
+type budgetDirectKey struct{}
+
 func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
@@ -28,7 +32,19 @@ func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) 
 	// the initial cache read through publication so a delayed high response
 	// cannot overwrite a concurrent low reading or return it to admission.
 	lock := flock.New(filepath.Join(a.store.Dir(), "budget-probe.lock"))
-	held, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+	lockCtx := ctx
+	gate, _ := ctx.Value(budgetGateKey{}).(bool)
+	if gate {
+		var stop context.CancelFunc
+		lockCtx, stop = context.WithTimeout(ctx, 500*time.Millisecond)
+		defer stop()
+	}
+	held, err := lock.TryLockContext(lockCtx, 10*time.Millisecond)
+	if gate && !held && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		b, probeErr := a.readIdentityProfiles(context.WithValue(ctx, budgetDirectKey{}, true), parentCtx, false)
+		b.Warnings = append(b.Warnings, "budget probe lock timed out; fallback: direct GitHub REST and GraphQL budget probes (not saved)")
+		return b, probeErr
+	}
 	if err != nil {
 		return github.Budget{}, err
 	}
@@ -36,6 +52,10 @@ func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) 
 		return github.Budget{}, errors.New("budget probe lock unavailable")
 	}
 	defer func() { _ = lock.Unlock() }()
+	return a.readIdentityProfiles(ctx, parentCtx, true)
+}
+
+func (a *app) readIdentityProfiles(ctx, parentCtx context.Context, publish bool) (github.Budget, error) {
 	st, err := a.store.Peek()
 	if err != nil {
 		return github.Budget{}, err
@@ -107,6 +127,10 @@ func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) 
 			b = github.LowestBudget(profiles, now)
 		}
 	}
+	b.Warnings = warnings
+	if !publish {
+		return b, errors.Join(failures...)
+	}
 	minimum := saved[b.Identity]
 	if b.GraphQL != nil {
 		minimum.GraphQL = storedGraphQL(b.GraphQL, saved[b.GraphQL.Identity].GraphQL.At)
@@ -116,6 +140,9 @@ func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) 
 	// deadline. A short network-probe deadline must not turn routine lock
 	// contention into a failed pre-install canary.
 	wait := 2 * time.Minute
+	if gate, _ := ctx.Value(budgetGateKey{}).(bool); gate {
+		wait = 100 * time.Millisecond
+	}
 	if deadline, ok := parentCtx.Deadline(); ok {
 		wait = min(wait, time.Until(deadline))
 	}
@@ -158,8 +185,10 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 	etag := previous.ETag
 	var err error
 	forceREST, _ := ctx.Value(freshLoopRESTKey{}).(bool)
+	direct, _ := ctx.Value(budgetDirectKey{}).(bool)
+	forceREST = forceREST || direct
 	refreshREST := forceREST || previous.Limit == 0 || now.Sub(previous.At) >= 30*time.Second || !now.Before(previous.Reset)
-	sharedGH := id == github.IdentityApp && previous.Login != "" && ghSaved.Login == previous.Login && ghSaved.Limit > 0 && now.Before(ghSaved.Reset)
+	sharedGH := !direct && id == github.IdentityApp && previous.Login != "" && ghSaved.Login == previous.Login && ghSaved.Limit > 0 && now.Before(ghSaved.Reset)
 	if sharedGH {
 		b = github.Budget{Identity: id, Resource: "core", Limit: ghSaved.Limit,
 			Remaining: ghSaved.Remaining, Used: ghSaved.Limit - ghSaved.Remaining, Reset: ghSaved.Reset}
@@ -172,7 +201,7 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 	}
 	b.Identity = id
 	g := previous.GraphQL
-	if g == nil || g.Identity != id || g.Err != "" || now.Sub(g.At) > a.cfg.Merge.BudgetFresh.Duration || !g.Reset.IsZero() && !now.Before(g.Reset) {
+	if direct || g == nil || g.Identity != id || g.Err != "" || now.Sub(g.At) > a.cfg.Merge.BudgetFresh.Duration || !g.Reset.IsZero() && !now.Before(g.Reset) {
 		reading := github.ProbeGraphQL(ctx, client, credential.Value, now)
 		reading.Identity = id
 		g = storedGraphQL(&reading, now)
