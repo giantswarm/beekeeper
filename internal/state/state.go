@@ -1958,14 +1958,19 @@ func (s *FileStore) lock(shared bool, wait time.Duration) (unlock func(), err er
 	if !ok {
 		return nil, s.busy(wait)
 	}
+	acquired := time.Now()
 	if shared {
-		return func() { _ = l.Unlock() }, nil
+		return func() {
+			_ = l.Unlock()
+			traceLockHold(acquired, time.Now(), true)
+		}, nil
 	}
 	holder := s.path(holderFile)
-	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: command(os.Args), At: time.Now()})
+	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: command(os.Args), At: acquired})
 	return func() {
 		_ = os.Remove(holder)
 		_ = l.Unlock()
+		traceLockHold(acquired, time.Now(), false)
 	}, nil
 }
 
