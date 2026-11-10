@@ -189,11 +189,42 @@ func TestLoopNextSettlesOnAnOpenPullRequestRefusal(t *testing.T) {
 	}
 	var found bool
 	for _, e := range r.logged(t, staleNextVerb) {
-		if strings.HasPrefix(e.Detail, "["+staleNextFresh+"]") && strings.Contains(e.Detail, openPullRefusal) {
+		if strings.HasPrefix(e.Detail, "["+staleNextFresh+"]") && strings.Contains(e.Detail, "superseded by the capacity refill") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("the settled next action does not say the open pull request:\n%s", r.out)
+		t.Fatalf("the next action was not delegated to refill:\n%s", r.out)
+	}
+}
+
+// A previous pass can remain blocked on intake or next bookkeeping. Those
+// streams must not prevent this pass from filling newly available capacity.
+func TestLoopFillWhileNextAndIntakeAreInFlight(t *testing.T) {
+	r, busy := fillRig(t)
+	l := staleNextLoop(t, r)
+	for _, key := range []string{"stream:next", "stream:intake", "stream:worker-retirement"} {
+		if !l.beginInFlight(key) {
+			t.Fatalf("stream already reserved: %s", key)
+		}
+		defer l.endInFlight(key)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acts := []superloop.Action{
+		freshNext(r),
+		{Kind: superloop.KindDone, Key: "done retired", Agent: "retired"},
+		{Kind: superloop.KindIntake, Key: "intake o/r#98", Ref: "o/r#98"},
+	}
+	if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+		t.Fatal(err)
+	}
+	if *busy != 3 {
+		t.Fatalf("filled %d of 3 slots while earlier streams remain busy: %s", *busy, r.out)
+	}
+	if l.isCompleted(staleNextFresh) || l.isCompleted("intake o/r#98") {
+		t.Fatal("executed an already reserved stream")
 	}
 }

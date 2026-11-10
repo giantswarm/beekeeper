@@ -1529,8 +1529,8 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	return false
 }
 
-// evaluateChoices ranks eligible subscriptions by distance behind their 7-day
-// pace (pace − usedPercent), then by budget left per hour until reset
+// evaluateChoices prioritizes eligible subscriptions below half their 7-day
+// pace, then ranks by distance behind pace and budget left per hour until reset
 // (remaining percent / hours to reset) and lower configured cost. Configured
 // order breaks ties; self-hosted choices are fallbacks. The same gates apply
 // to every kind of start.
@@ -1553,6 +1553,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 	}
 	var reasons []string
 	bestSubscription := false
+	bestUnderused := false
 	bestBehind := math.Inf(-1)
 	bestRate := math.Inf(-1)
 	bestCost := math.Inf(1)
@@ -1579,6 +1580,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		if reason == "" {
 			cand.OK = true
 			subscription := !pCfg.SelfHosted()
+			underused := false
 			behind := 0.0
 			rate := 0.0
 			if subscription {
@@ -1587,6 +1589,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 					sd = pv.findBucket(bucketName).SevenDay
 				}
 				if sd != nil && sd.Pace != nil {
+					underused = sd.UsedPercent < *sd.Pace*0.5
 					behind = *sd.Pace - sd.UsedPercent
 					rounded := math.Round(behind*10) / 10
 					cand.BehindPace = &rounded
@@ -1597,8 +1600,8 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 					cand.Rate = &rounded
 				}
 			}
-			if cv.Harness == "" || subscription && (!bestSubscription || behind > bestBehind+1e-9 || math.Abs(behind-bestBehind) <= 1e-9 && (rate > bestRate+1e-9 || math.Abs(rate-bestRate) <= 1e-9 && ch.Cost > 0 && ch.Cost < bestCost)) {
-				bestSubscription, bestBehind, bestRate, bestCost = subscription, behind, rate, ch.Cost
+			if cv.Harness == "" || subscription && (!bestSubscription || underused && !bestUnderused || underused == bestUnderused && (behind > bestBehind+1e-9 || math.Abs(behind-bestBehind) <= 1e-9 && (rate > bestRate+1e-9 || math.Abs(rate-bestRate) <= 1e-9 && ch.Cost > 0 && ch.Cost < bestCost))) {
+				bestSubscription, bestUnderused, bestBehind, bestRate, bestCost = subscription, underused, behind, rate, ch.Cost
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
 				cv.Provider = provName

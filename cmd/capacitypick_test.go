@@ -521,3 +521,24 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 	agy5h = 90
 	r.want(codex.Harness + " " + pickGPT)
 }
+
+func TestCapacityPickPrioritizesBelowHalfPace(t *testing.T) {
+	lowPace, highPace := 32.0, 86.0
+	k := config.Capacity{Providers: map[string]config.Provider{claudeComm: {}, codex.Harness: {}}, Choices: []config.Choice{
+		{Harness: claudeComm, Model: pickOpus},
+		{Harness: codex.Harness, Model: pickGPT},
+	}}
+	providers := map[string]*providerView{
+		claudeComm:    {Room: 1, SevenDay: &usageWindow{UsedPercent: 50, Pace: &highPace}},
+		codex.Harness: {Room: 1, SevenDay: &usageWindow{UsedPercent: 12, Pace: &lowPace}},
+	}
+	got := evaluateChoices(k, providers, nil, "", nil, forWorker, time.Now())
+	if got.Provider != codex.Harness {
+		t.Fatalf("below-half-pace provider lost to greater absolute lag: %+v", got)
+	}
+	providers[codex.Harness].Room = 0
+	got = evaluateChoices(k, providers, nil, "", nil, forWorker, time.Now())
+	if got.Provider != claudeComm {
+		t.Fatalf("underuse bypassed admission: %+v", got)
+	}
+}
