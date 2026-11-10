@@ -2252,6 +2252,7 @@ func briefIssue(brief string) string {
 // in brief, excluding background/follow-up citations, or falls back to
 // briefIssue(brief) when none is an issue URL.
 func briefIssues(brief string) []string {
+	brief = brieflint.WithoutData(brief)
 	var out []string
 	for line := range strings.SplitSeq(brief, "\n") {
 		for _, loc := range briefIssueURL.FindAllStringSubmatchIndex(line, -1) {
