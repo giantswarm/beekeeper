@@ -385,6 +385,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 
 func (a *app) supervisorLoopCmd() *cobra.Command {
 	var once, dryRun bool
+	var recordDir string
 	c := &cobra.Command{
 		Use:   "loop [--once] [--dry-run]",
 		Short: "Run the supervisor: a deterministic loop over beekeeper's events",
@@ -672,12 +673,16 @@ SUPERVISOR WOULD <KIND> and takes none: it runs read-only queries, logs nothing,
 fires no timer and takes no lock, so it can run beside the loop.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if recordDir != "" && !dryRun {
+				return fmt.Errorf("--record requires --dry-run")
+			}
 			if dryRun {
-				return a.dryRunSupervisorLoop(cmd.Context())
+				return a.dryRunSupervisorLoop(cmd.Context(), recordDir)
 			}
 			return a.runSupervisorLoop(cmd.Context(), once)
 		},
 	}
+	c.Flags().StringVar(&recordDir, "record", "", "write an anonymized planner input.json (requires --dry-run)")
 	c.Flags().BoolVar(&once, "once", false, "one pass, then exit")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: read-only capacity and board queries, no log line or timer")
 	return c
@@ -685,6 +690,8 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // supervisorLoop is one run of the loop: what it said once.
 type supervisorLoop struct {
+	recordDir string
+	recording *loopRecording
 	lifecycle *loopLifecycle
 	reviewDir string // explicit agents review checkout
 	mu        sync.Mutex
@@ -1066,13 +1073,25 @@ const loopUnit = "beekeeper-supervisor-loop.service"
 // dryRunSupervisorLoop is one pass that says what it would take: it runs
 // only read-only queries, logs nothing, fires no timer and takes no lock,
 // so it can run beside the loop.
-func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
+func (a *app) dryRunSupervisorLoop(ctx context.Context, recordDirs ...string) error {
 	l, err := a.newSupervisorLoop(true)
 	if err != nil {
 		return err
 	}
+	if len(recordDirs) > 0 {
+		l.recordDir = recordDirs[0]
+	}
 	a.now = time.Now()
-	return l.pass(ctx)
+	if err := l.pass(ctx); err != nil {
+		return err
+	}
+	if l.recordDir != "" {
+		if l.recording == nil {
+			return fmt.Errorf("no complete planner input to record")
+		}
+		return writeLoopRecording(l.recordDir, *l.recording)
+	}
+	return nil
 }
 
 // newSupervisorLoop logs the loop's start, unless it is a dry run, and
@@ -1935,6 +1954,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	l.lifecyclePhase("plan and record heartbeat")
+	if l.dryRun {
+		l.recording = &loopRecording{Agents: st.Agents, Deliveries: st.Deliveries}
+		in = l.recording.capture(in)
+	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1973,6 +1996,9 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	if l.dryRun {
+		if len(unread) > 0 || l.sweepIncomplete || observationUnknown {
+			return fmt.Errorf("dry-run observations incomplete; retry later")
+		}
 		preview := *st
 		preview.Deliveries = superloop.Deliveries(in, st.Deliveries)
 		if len(unread) == 0 && !l.sweepIncomplete {
