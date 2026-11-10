@@ -385,6 +385,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 
 func (a *app) supervisorLoopCmd() *cobra.Command {
 	var once, dryRun bool
+	var recordDir string
 	c := &cobra.Command{
 		Use:   "loop [--once] [--dry-run]",
 		Short: "Run the supervisor: a deterministic loop over beekeeper's events",
@@ -635,10 +636,9 @@ Ownership decides what the loop does with a parked pull request, before any
 review, go or forward:
 
   - outside github.allowedOrgs: nothing at all, not even a read
-  - in supervisor.ownership.never, or its title, head branch or a changed
-    path names a repository there: nothing, whatever else says
-    (a repository named github needs its qualified owner/github in metadata;
-    ordinary GitHub workflow paths and action names do not identify it)
+  - its repository matches supervisor.ownership.never: nothing, whatever
+    else says; references in titles, descriptions, branches, changed paths
+    or comments do not affect ownership
   - parked before the loop's first start: nothing; a park from before is
     no request for its review
   - opened by a login outside supervisor.ownership.authors (default: the
@@ -676,12 +676,16 @@ SUPERVISOR WOULD <KIND> and takes none: it runs read-only queries, logs nothing,
 fires no timer and takes no lock, so it can run beside the loop.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if recordDir != "" && !dryRun {
+				return fmt.Errorf("--record requires --dry-run")
+			}
 			if dryRun {
-				return a.dryRunSupervisorLoop(cmd.Context())
+				return a.dryRunSupervisorLoop(cmd.Context(), recordDir)
 			}
 			return a.runSupervisorLoop(cmd.Context(), once)
 		},
 	}
+	c.Flags().StringVar(&recordDir, "record", "", "write an anonymized planner input.json (requires --dry-run)")
 	c.Flags().BoolVar(&once, "once", false, "one pass, then exit")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: read-only capacity and board queries, no log line or timer")
 	return c
@@ -689,6 +693,8 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // supervisorLoop is one run of the loop: what it said once.
 type supervisorLoop struct {
+	recordDir string
+	recording *loopRecording
 	lifecycle *loopLifecycle
 	reviewDir string // explicit agents review checkout
 	mu        sync.Mutex
@@ -1092,13 +1098,25 @@ const loopUnit = "beekeeper-supervisor-loop.service"
 // dryRunSupervisorLoop is one pass that says what it would take: it runs
 // only read-only queries, logs nothing, fires no timer and takes no lock,
 // so it can run beside the loop.
-func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
+func (a *app) dryRunSupervisorLoop(ctx context.Context, recordDirs ...string) error {
 	l, err := a.newSupervisorLoop(true)
 	if err != nil {
 		return err
 	}
+	if len(recordDirs) > 0 {
+		l.recordDir = recordDirs[0]
+	}
 	a.now = time.Now()
-	return l.pass(ctx)
+	if err := l.pass(ctx); err != nil {
+		return err
+	}
+	if l.recordDir != "" {
+		if l.recording == nil {
+			return fmt.Errorf("no complete planner input to record")
+		}
+		return writeLoopRecording(l.recordDir, *l.recording)
+	}
+	return nil
 }
 
 // newSupervisorLoop logs the loop's start, unless it is a dry run, and
@@ -1672,7 +1690,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
-	if in.Taken, err = l.dropAdminRepairs(in.Taken, stages, stageDetail); err != nil {
+	if in.Taken, err = l.dropInvalidMergeRepairs(in.Taken, stages, stageDetail); err != nil {
 		return err
 	}
 	l.mu.Lock()
@@ -1744,9 +1762,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	tracked = slices.DeleteFunc(tracked, func(ref string) bool {
-		return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Park != nil && ag.Park.On == ref && ag.Park.RefKind == github.RefIssue
-		})
+		return !a.parkIsPull(ctx, st, ref)
 	})
 	sortTrackedPulls(in, tracked)
 	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
@@ -1778,13 +1794,6 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 		// This phase only consumes dated observations; the watcher owns IO.
 		l.lifecyclePhase("observe pull requests")
-		// Known issue parks do not enter the PR watcher. Legacy untyped parks
-		// are resolved by the batch's nullable pullRequest field, never a probe.
-		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Park != nil && ag.Park.On == ref && ag.Park.RefKind == github.RefIssue
-		}) {
-			continue
-		}
 		// A merged pull request stays merged: a worker kept for the open
 		// work it serves does not have it read again every pass.
 		l.mu.Lock()
@@ -1962,6 +1971,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	l.lifecyclePhase("plan and record heartbeat")
+	if l.dryRun {
+		l.recording = &loopRecording{Agents: st.Agents, Deliveries: st.Deliveries}
+		in = l.recording.capture(in)
+	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if err := ctx.Err(); err != nil {
 		return err
@@ -2000,8 +2013,12 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	if l.dryRun {
+		if len(unread) > 0 || l.sweepIncomplete || observationUnknown {
+			return fmt.Errorf("dry-run observations incomplete; retry later")
+		}
 		preview := *st
 		preview.Deliveries = superloop.Deliveries(in, st.Deliveries)
+		l.recording.Deliveries = preview.Deliveries
 		if len(unread) == 0 && !l.sweepIncomplete {
 			preview.DeliveriesAt = in.Now
 		}
@@ -3593,12 +3610,11 @@ Trust green CI on the exact reviewed head. Do not run local tests, lints, builds
 Inspect the code and tests. For a full review use your own worktree at the pinned head;
 for a light review read the diff, issue and CI. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. When you find
-blocking issues or nits that can be fixed in code, tests or docs, apply your own findings
-directly on the pull request branch ({{.Branch}}), push once (never force-push), and approve
-the published fixed head immediately. Do not wait for CI; the loop waits for green before merging,
-so one review round suffices without bouncing back to the worker. Request changes only when a
-finding requires a product or design decision or cannot be fixed on the branch. Open an issue
+Every finding is blocking or a nit to fix in this round; drop anything else. Review only:
+never edit, commit or push fixes to the reviewed branch ({{.Branch}}). Post findings and
+request changes; report the verdict and review URL with beekeeper agents idle --done --report
+so the supervisor forwards them to the implementing worker. Approve only the assigned,
+unchanged head when it needs no fixes. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
 An approval's nit-only push is checked by the supervisor against the approved head; do not
@@ -3606,8 +3622,7 @@ start another independent review for it. Other changes require review of the new
 
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
-regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or the
-new published head SHA in backticks when you pushed fixes, even while CI is pending).
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (the assigned head only).
 Each finding: <file>:<line>: <what is wrong> → <what would be right>.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
