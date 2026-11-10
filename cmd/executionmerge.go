@@ -167,11 +167,30 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var grant execution.MergeAuthorization
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if !supervising(me) {
-					return nil, refused("only the supervisor loop or a person (--as) controls merge authorizations, never a session")
+			if !supervising(me) {
+				return refused("only the supervisor loop or a person (--as) controls merge authorizations, never a session")
+			}
+			grant, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), args[0])
+			if err != nil {
+				return err
+			}
+			var pull struct {
+				State string `json:"state"`
+				Head  string `json:"headRefOid"`
+			}
+			if verb == "reconcile" {
+				if !grant.Consumed {
+					return refused("authorization has no merge attempt to reconcile")
 				}
+				out, readErr := github.RunGH(cmd.Context(), "pr", "view", strconv.Itoa(grant.PR), "--repo", grant.Repository, "--json", "state,headRefOid")
+				if readErr != nil {
+					return readErr
+				}
+				if json.Unmarshal(out, &pull) != nil {
+					return errors.New("invalid merge reconciliation")
+				}
+			}
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				grant, err = execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), args[0])
 				if err != nil {
 					return nil, err
@@ -182,17 +201,6 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 				case "reconcile":
 					if !grant.Consumed {
 						return nil, refused("authorization has no merge attempt to reconcile")
-					}
-					out, readErr := github.RunGH(cmd.Context(), "pr", "view", strconv.Itoa(grant.PR), "--repo", grant.Repository, "--json", "state,headRefOid")
-					if readErr != nil {
-						return nil, readErr
-					}
-					var pull struct {
-						State string `json:"state"`
-						Head  string `json:"headRefOid"`
-					}
-					if json.Unmarshal(out, &pull) != nil {
-						return nil, errors.New("invalid merge reconciliation")
 					}
 					grant.Outcome = verdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {

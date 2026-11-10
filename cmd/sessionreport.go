@@ -37,21 +37,21 @@ type sessionReport struct {
 	WorktreeBranch string
 	WorktreeHead   string
 	RefKind        string
-	ReviewHead   string
-	ReviewReason string
-	Session      state.Party
-	Record       state.Record
-	Note         state.Note
-	FoldInto     int
-	Checked      bool
-	Stage        planStage
-	Draft        noteDraft
-	Holds        bool
-	As           bool
-	Assignee     state.Party
-	Registered   bool
-	Clear        bool
-	NoteID       int
+	ReviewHead     string
+	ReviewReason   string
+	Session        state.Party
+	Record         state.Record
+	Note           state.Note
+	FoldInto       int
+	Checked        bool
+	Stage          planStage
+	Draft          noteDraft
+	Holds          bool
+	As             bool
+	Assignee       state.Party
+	Registered     bool
+	Clear          bool
+	NoteID         int
 }
 
 func (a *app) submitReport(p sessionReport) error {
