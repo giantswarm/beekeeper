@@ -217,6 +217,13 @@ func serveGitHub() int {
 			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
 			if len(b) > 0 {
 				p["headRefOid"] = strings.Repeat("f", 40)
+				raw, err = json.Marshal(p)
+				if err != nil {
+					panic(err)
+				}
+				if err = os.WriteFile(filepath.Join(root, pullJSONFile), raw, 0600); err != nil { //nolint:gosec // scratch fixture state
+					panic(err)
+				}
 			}
 			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
 				panic(err)
