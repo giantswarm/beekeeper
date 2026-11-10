@@ -339,3 +339,26 @@ func TestReviewRequestFromExitedStarterIsInactive(t *testing.T) {
 		t.Fatal("assigned review lost its reservation")
 	}
 }
+
+func TestRequireReviewCarriesApprovalOverBaseOnlyMerge(t *testing.T) {
+	for _, covered := range []bool{true, false} {
+		r := newLoopRig(t)
+		r.a.cfg.Merge.RequireReview = true
+		r.pull.Head = loopFixed
+		r.pull.Reviews = []superloop.Review{{Head: loopHead, Verdict: superloop.Approved, Body: deskReviewApproved, Member: true}}
+		r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
+			if p.Head != loopFixed || approved != loopHead {
+				t.Fatalf("wrong coverage comparison: %s..%s", approved, p.Head)
+			}
+			return covered, nil
+		}
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		why, _, err := r.a.checkMergeHeadAuthority(t.Context(), st, r.pull, r.pull.Head)
+		if err != nil || (why == "") != covered {
+			t.Fatalf("covered %v: why=%q err=%v", covered, why, err)
+		}
+	}
+}

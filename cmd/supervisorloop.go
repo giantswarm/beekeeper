@@ -170,8 +170,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 }
 
 // readBaseMerge reads whether the approval of approved covers p's head: it
-// only merges its base into approved, resolving the merge's conflicts or
-// not, or rebases approved onto it (github.ApprovalCovers).
+// only merges its base into approved with the reviewed patch unchanged.
 var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
 	r, ok := parseRef(p.Ref)
 	if !ok || p.Base == "" {
@@ -179,7 +178,7 @@ var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	only, _, err := github.ApprovalCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	only, _, err := github.BaseMergeCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
 	return only, err
 }
 
@@ -3362,7 +3361,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately park from the worktree so the loop owns CI:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
-If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
+If the new head only merges the base branch with the PR patch unchanged, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review. A rebase or a conflict resolution that changes the patch needs a new review.
 `
 
 const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}

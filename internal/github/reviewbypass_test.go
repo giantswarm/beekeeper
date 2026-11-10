@@ -13,10 +13,15 @@ const reviewRunsJSON = `[{"check_runs":[{"id":3,"name":"security-scan","status":
 
 func TestReviewOnlyBypassRequirements(t *testing.T) {
 	for _, tc := range []struct {
-		name, classic, rules, runs, statuses, failedPath string
-		wantError                                        bool
+		name, classic, rules, runs, statuses, failedPath, distance string
+		wantError                                                  bool
 	}{
 		{name: "required check passes"},
+		{name: "dismissal restriction", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"dismissal_restriction":{"users":[],"teams":[]}`, 1)},
+		{name: "strict current", rules: strings.Replace(reviewRulesJSON, `"required_status_checks":[`, `"strict_required_status_checks_policy":true,"required_status_checks":[`, 1), distance: `{"behind_by":0}`},
+		{name: "strict behind", rules: strings.Replace(reviewRulesJSON, `"required_status_checks":[`, `"strict_required_status_checks_policy":true,"required_status_checks":[`, 1), distance: `{"behind_by":2}`, wantError: true},
+		{name: "strict unreadable distance", rules: strings.Replace(reviewRulesJSON, `"required_status_checks":[`, `"strict_required_status_checks_policy":true,"required_status_checks":[`, 1), distance: `{}`, wantError: true},
+		{name: "malformed strict", rules: strings.Replace(reviewRulesJSON, `"required_status_checks":[`, `"strict_required_status_checks_policy":null,"required_status_checks":[`, 1), wantError: true},
 		{name: "missing required check beside green lint", runs: `[{"check_runs":[{"id":1,"name":"lint","status":"completed","conclusion":"success"}]}]`, wantError: true},
 		{name: "wrong integration", runs: strings.ReplaceAll(reviewRunsJSON, `"id":42`, `"id":99`), wantError: true},
 		{name: "pending", runs: strings.ReplaceAll(reviewRunsJSON, `"completed"`, `"in_progress"`), wantError: true},
@@ -67,6 +72,8 @@ func TestReviewOnlyBypassRequirements(t *testing.T) {
 					if answer == "" {
 						answer = reviewRulesJSON
 					}
+				case strings.Contains(call, "/compare/"):
+					answer = tc.distance
 				case strings.Contains(call, "commits/exact-head/check-runs"):
 					answer = tc.runs
 					if answer == "" {

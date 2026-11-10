@@ -1202,6 +1202,18 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		}
 	}
 
+	// A base-only update preserves the reviewed change even when review is
+	// mandatory. Check it before refusing an approval on an older head.
+	if approvedHead != "" && a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
+		ok, err := readBaseMerge(ctx, p, approvedHead)
+		if err != nil {
+			return "", false, err
+		}
+		if ok {
+			return "", false, nil
+		}
+	}
+
 	if a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
 		return fmt.Sprintf("head %s requires an approved independent review; an exact-head go alone is insufficient", shortSHA(head)), false, nil
 	}
