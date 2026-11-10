@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -342,5 +345,102 @@ func TestGoneLoopRetiresOnlyInactiveTask(t *testing.T) {
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.gone" })
 	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, gone.Task) {
 		t.Fatalf("gone events=%+v err=%v", evs, err)
+	}
+}
+
+func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
+	now := keepNow
+	capCfg := config.Capacity{
+		Providers: map[string]config.Provider{
+			config.AgyHarness: {},
+			codex.Harness:     {},
+		},
+	}
+	stoppedAgy := state.Agent{
+		Party:      state.Party{HostSession: agy.HostPrefix + "rev-agy", Name: "Review heatpump-bridge 196 g37"},
+		Harness:    agy.Harness,
+		Model:      "gemini-4-argon-medium",
+		Task:       "Review https://github.com/teemow/heatpump-bridge/pull/196",
+		Registered: now.Add(-10 * time.Minute),
+	}
+	idleCodex := state.Agent{
+		Party:      state.Party{HostSession: codex.HostPrefix + "rev-codex", Name: "Review beekeeper 3394 x1"},
+		Harness:    codex.Harness,
+		Model:      "gpt-6.1-sol",
+		Task:       "Review https://github.com/giantswarm/beekeeper/pull/3394",
+		Registered: now.Add(-10 * time.Minute),
+		ActivityAt: now.Add(-5 * time.Minute),
+	}
+	busyAgy := state.Agent{
+		Party:      state.Party{HostSession: agy.HostPrefix + "rev-busy", Name: "Review beekeeper 3592 g38"},
+		Harness:    agy.Harness,
+		Model:      "gemini-4-argon-medium",
+		Task:       "Review https://github.com/giantswarm/beekeeper/pull/3592",
+		Registered: now.Add(-10 * time.Minute),
+	}
+	staleIdleWorker := state.Agent{
+		Party:      state.Party{HostSession: codex.HostPrefix + "worker-codex", Name: "beekeeper 3394"},
+		Harness:    codex.Harness,
+		Model:      "gpt-6.1-sol",
+		Task:       "Work https://github.com/giantswarm/beekeeper/issues/3394",
+		Registered: now.Add(-48 * time.Hour),
+		ActivityAt: now.Add(-25 * time.Hour),
+	}
+	sessions := []*claude.Session{
+		{
+			HostID:     idleCodex.HostSession,
+			Name:       idleCodex.Name,
+			Harness:    codex.Harness,
+			State:      omp.StateIdle,
+			Started:    idleCodex.Registered,
+			LastActive: idleCodex.ActivityAt,
+		},
+		{
+			HostID:     busyAgy.HostSession,
+			Name:       busyAgy.Name,
+			Harness:    agy.Harness,
+			State:      agy.StateBusy,
+			Started:    busyAgy.Registered,
+			LastActive: now.Add(-time.Minute),
+		},
+		{
+			HostID:     staleIdleWorker.HostSession,
+			Name:       staleIdleWorker.Name,
+			Harness:    codex.Harness,
+			State:      omp.StateIdle,
+			Started:    staleIdleWorker.Registered,
+			LastActive: staleIdleWorker.ActivityAt,
+		},
+	}
+	st := &state.State{
+		Agents: []state.Agent{stoppedAgy, idleCodex, busyAgy, staleIdleWorker},
+	}
+
+	c := countAgents(st, sessions, now, nil)
+	if !slices.Equal(c.Busy, []string{busyAgy.Name}) {
+		t.Fatalf("countAgents.Busy = %v, want [%s]", c.Busy, busyAgy.Name)
+	}
+	if len(c.Gone) != 3 {
+		t.Fatalf("countAgents.Gone = %v, want 3 gone entries", c.Gone)
+	}
+	pa := countProviderAgents(st, sessions, capCfg, now, nil)
+	if !slices.Equal(pa[config.AgyHarness].Busy, []string{busyAgy.Name}) {
+		t.Fatalf("agy provider busy = %v, want [%s]", pa[config.AgyHarness].Busy, busyAgy.Name)
+	}
+	if len(pa[codex.Harness].Busy) != 0 {
+		t.Fatalf("codex provider busy = %v, want empty", pa[codex.Harness].Busy)
+	}
+	chores := planChores(st, sessions, func(string) (*claude.Record, bool) { return nil, false }, func(p state.Party) bool {
+		return p.Is(busyAgy.Party)
+	}, 24*time.Hour, now, nil)
+	var removed []string
+	for _, ch := range chores {
+		if ch.kind == choreRemove && ch.gone {
+			removed = append(removed, ch.agent.Name)
+		}
+	}
+	wantRemoved := []string{stoppedAgy.Name, idleCodex.Name, staleIdleWorker.Name}
+	if !slices.Equal(removed, wantRemoved) {
+		t.Fatalf("planChores removed = %v, want %v", removed, wantRemoved)
 	}
 }

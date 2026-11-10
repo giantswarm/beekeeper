@@ -547,7 +547,7 @@ func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
 					wantArgs = append(wantArgs, "--config", filepath.Join(repo.dir, configName))
 					label = configName
 				}
-				wantArgs = append(wantArgs, "./...")
+				wantArgs = append(wantArgs, "--allow-parallel-runners", "./...")
 				args, err := os.ReadFile(argsFile) //nolint:gosec // fixed args filename inside the test-owned temporary directory
 				if err != nil || !slices.Equal(strings.Fields(string(args)), wantArgs) {
 					t.Fatalf("lint args %q, %v; want %v", args, err, wantArgs)

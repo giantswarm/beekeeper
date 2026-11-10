@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -94,6 +95,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 		}
 		current := *a
 		current.cfg, current.now, current.loopNow = cfg, time.Now(), nil
+		github.SetDevctlSkipVersionCheck(!cfg.Hooks.GuardsEnabled())
 		_, err = d.pass(&current)
 		if err != nil {
 			var busy *state.LockBusyError

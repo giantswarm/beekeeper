@@ -105,6 +105,7 @@ func runArgv(ctx context.Context, stdin string, argv []string) (string, string, 
 		return "", "", 0, errors.New("no command")
 	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
+	c.Env = devctlCommandEnv("")
 	c.Stdin = strings.NewReader(stdin)
 	var out, errOut bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errOut
@@ -1261,6 +1262,7 @@ func (l *supervisorLoop) reloadConfig() {
 		l.a.cfg = c
 	} else {
 		l.a.cfg.GitHub.PublicOnlyOwners = slices.Clone(c.GitHub.PublicOnlyOwners)
+		l.a.cfg.Hooks.Guards = c.Hooks.Guards
 		if len(c.GitHub.AllowedOrgs) > 0 {
 			l.a.cfg.GitHub.AllowedOrgs = c.GitHub.AllowedOrgs
 		}
@@ -1277,6 +1279,7 @@ func (l *supervisorLoop) reloadConfig() {
 			l.a.cfg.Supervisor.Ownership.Team = c.Supervisor.Ownership.Team
 		}
 	}
+	github.SetDevctlSkipVersionCheck(!l.a.cfg.Hooks.GuardsEnabled())
 	l.cfgSum = sum
 }
 

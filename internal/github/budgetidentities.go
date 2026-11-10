@@ -10,11 +10,50 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const IdentityApp = "app"
 const IdentityGH = "gh"
+
+// DevctlSkipVersionCheckEnv is the devctl-owned environment variable that
+// disables devctl's interactive self-update and version gate checks when set
+// to "true".
+const DevctlSkipVersionCheckEnv = "DEVCTL_UNSAFE_SKIP_VERSION_CHECK"
+
+var devctlSkipVersionCheck atomic.Bool
+
+// SetDevctlSkipVersionCheck records whether beekeeper-owned devctl commands
+// should opt out of devctl's interactive self-update and version gate checks
+// (active only while hooks.guards is false).
+func SetDevctlSkipVersionCheck(skip bool) {
+	devctlSkipVersionCheck.Store(skip)
+}
+
+// DevctlSkipVersionCheck reports whether hooks.guards is false for
+// beekeeper-owned devctl child commands.
+func DevctlSkipVersionCheck() bool {
+	return devctlSkipVersionCheck.Load()
+}
+
+// DevctlEnv returns env with DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true when skip
+// is true, and with DEVCTL_UNSAFE_SKIP_VERSION_CHECK removed when skip is
+// false.
+func DevctlEnv(env []string, skip bool) []string {
+	prefix := DevctlSkipVersionCheckEnv + "="
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if skip {
+		out = append(out, DevctlSkipVersionCheckEnv+"=true")
+	}
+	return out
+}
 
 // BudgetAppRepo pins App credential acquisition and its REST probe to the same repository.
 const BudgetAppRepo = "giantswarm/beekeeper"
@@ -134,12 +173,12 @@ func budgetEnv(env []string) []string {
 	for _, v := range env {
 		name, _, _ := strings.Cut(v, "=")
 		switch name {
-		case "GH_TOKEN", "GITHUB_TOKEN", "GH_REPO", "DEVCTL_AUTH_EXEC_CHAIN":
+		case "GH_TOKEN", "GITHUB_TOKEN", "GH_REPO", "DEVCTL_AUTH_EXEC_CHAIN", DevctlSkipVersionCheckEnv:
 		default:
 			out = append(out, v)
 		}
 	}
-	return out
+	return DevctlEnv(out, DevctlSkipVersionCheck())
 }
 
 // Skip the devctl gh link; the personal route must reach the stored login.

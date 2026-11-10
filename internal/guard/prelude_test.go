@@ -245,3 +245,49 @@ func TestTheGHAShellResolves(t *testing.T) {
 		t.Error("with no agents.shell.path every gh is the agent's")
 	}
 }
+
+func TestDevctlVersionGateShellTogglesExportAndUnset(t *testing.T) {
+	if got := DevctlVersionGateShell(false); got != "export DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true\n" {
+		t.Fatalf("DevctlVersionGateShell(false) = %q", got)
+	}
+	if got := DevctlVersionGateShell(true); got != "unset DEVCTL_UNSAFE_SKIP_VERSION_CHECK\n" {
+		t.Fatalf("DevctlVersionGateShell(true) = %q", got)
+	}
+	for _, sh := range append([]string{"sh"}, agentShells...) {
+		bin, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed", sh)
+			continue
+		}
+		t.Run(sh, func(t *testing.T) {
+			env := filepath.Join(t.TempDir(), "env.sh")
+			if err := WritePrelude(env, Prelude(nil, false, nil, nil, "", DevctlVersionGateShell(false))); err != nil {
+				t.Fatal(err)
+			}
+			for _, rt := range []string{"", "1"} {
+				c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-}\"") //nolint:gosec // the test's own shells
+				if rt != "" {
+					c.Env = append(os.Environ(), sandbox.Runtime+"="+rt)
+				}
+				out, err := c.CombinedOutput()
+				if err != nil || string(out) != "true" {
+					t.Fatalf("guards off in %s (SANDBOX_RUNTIME=%q): %v: %q", sh, rt, err, out)
+				}
+			}
+			if err := WritePrelude(env, Prelude(nil, false, nil, nil, "", DevctlVersionGateShell(true))); err != nil {
+				t.Fatal(err)
+			}
+			for _, rt := range []string{"", "1"} {
+				c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-"+unsetCmd+"}\"") //nolint:gosec // the test's own shells
+				c.Env = append(os.Environ(), "DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true")
+				if rt != "" {
+					c.Env = append(c.Env, sandbox.Runtime+"="+rt)
+				}
+				out, err := c.CombinedOutput()
+				if err != nil || string(out) != unsetCmd {
+					t.Fatalf("guards on in %s (SANDBOX_RUNTIME=%q) did not unset inherited variable: %v: %q", sh, rt, err, out)
+				}
+			}
+		})
+	}
+}

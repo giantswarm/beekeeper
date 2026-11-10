@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/envtestassets"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -893,12 +894,15 @@ context instead. beekeeper install registers it in
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
 			globs, path := sh.Globs == config.GlobsLiteral, sh.Path
+			var envGate string
 			if !scoped {
 				// a held session outside the scope gets the sandbox's part
 				// only: its gh would otherwise resolve to the link to devctl
 				unalias, globs, path = nil, false, nil
+			} else {
+				envGate = guard.DevctlVersionGateShell(a.cfg.Hooks.GuardsEnabled())
 			}
-			if err := guard.WritePrelude(env, guard.Prelude(unalias, globs, path, drop, unheld)); err != nil {
+			if err := guard.WritePrelude(env, guard.Prelude(unalias, globs, path, drop, unheld, envGate)); err != nil {
 				return err
 			}
 			if !held {
@@ -1233,6 +1237,7 @@ func (a *app) loadConfig() error {
 		return err
 	}
 	a.loadedCfg = path
+	github.SetDevctlSkipVersionCheck(!a.cfg.Hooks.GuardsEnabled())
 	if f := os.Getenv(stateFromEnv); f != "" {
 		if err := a.stateFrom(f); err != nil {
 			return err
@@ -1247,6 +1252,30 @@ func (a *app) loadConfig() error {
 		unconfineUnheld(os.Stderr)
 	}
 	return nil
+}
+
+const beekeeperConfigEnv = "BEEKEEPER_CONFIG"
+
+// guardsEnabledForConfig reports whether hook guards are enabled for
+// configPath, falling back to $BEEKEEPER_CONFIG and the last loaded
+// configuration state when configPath is empty or synthetic.
+func guardsEnabledForConfig(configPath string) bool {
+	if configPath == "" {
+		configPath = os.Getenv(beekeeperConfigEnv)
+	}
+	if configPath != "" {
+		if cfg, err := config.Load(configPath); err == nil {
+			return cfg.Hooks.GuardsEnabled()
+		}
+	}
+	return !github.DevctlSkipVersionCheck()
+}
+
+// devctlCommandEnv returns os.Environ() with DEVCTL_UNSAFE_SKIP_VERSION_CHECK
+// set to "true" while hooks.guards is false, and removed when hooks.guards is
+// enabled.
+func devctlCommandEnv(configPath string) []string {
+	return github.DevctlEnv(os.Environ(), !guardsEnabledForConfig(configPath))
 }
 
 // ramMiB is the machine's RAM, 0 when it cannot be read.

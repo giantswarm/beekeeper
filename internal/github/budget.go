@@ -130,7 +130,7 @@ func (b Budget) SpentUntil(now time.Time) time.Time {
 // Token returns the token of the gh CLI's login.
 func Token(ctx context.Context) (string, error) {
 	c := exec.CommandContext(ctx, "gh", "auth", "token")
-	c.Env = ghEnv(os.Environ(), Repo(ctx))
+	c.Env = DevctlEnv(ghEnv(os.Environ(), Repo(ctx)), DevctlSkipVersionCheck())
 	out, err := c.Output()
 	if err != nil {
 		return "", fmt.Errorf("gh auth token: %w (log in with `gh auth login`)", err)
