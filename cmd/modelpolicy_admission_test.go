@@ -244,7 +244,6 @@ func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
 		return "", 0
 	}
 	r2.pass(t)
-	r2.pass(t)
 	if !slices.ContainsFunc(workerCapCalls, func(c []string) bool {
 		return !slices.Contains(c, loopHostFlag) && slices.Contains(c, modelFlag) && slices.Contains(c, bgModel)
 	}) {

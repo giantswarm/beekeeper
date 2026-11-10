@@ -238,9 +238,13 @@ func TestAwaitReply(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "id.jsonl")
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
 	write := func(lines string) {
-		if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		if err := root.WriteFile("id.jsonl", []byte(lines), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

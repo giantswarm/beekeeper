@@ -209,8 +209,13 @@ var mergeExts = []string{".progress.tmp", ".progress", ".json", ".log", ".rc", "
 
 // removeMergeFiles removes a merge's files.
 func removeMergeFiles(base string) {
+	root, err := os.OpenRoot(filepath.Dir(base))
+	if err != nil {
+		return
+	}
+	defer root.Close() //nolint:errcheck // best-effort cleanup
 	for _, ext := range mergeExts {
-		_ = os.Remove(base + ext)
+		_ = root.Remove(filepath.Base(base) + ext)
 	}
 }
 

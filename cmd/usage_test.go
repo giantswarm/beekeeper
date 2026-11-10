@@ -121,9 +121,14 @@ cat "` + outFile + `"
 	t0 := keepNow
 	reset5h := t0.Add(2 * time.Minute).UTC()
 	reset7d := t0.Add(72 * time.Hour).UTC()
+	payloadRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = payloadRoot.Close() })
 	writePayload := func(s string) {
 		t.Helper()
-		if err := os.WriteFile(outFile, []byte(s), 0o600); err != nil {
+		if err := payloadRoot.WriteFile("payload.json", []byte(s), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
