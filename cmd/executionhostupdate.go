@@ -28,7 +28,14 @@ import (
 // onto it.
 var (
 	coordinatorVersion = project.Version
-	installVersion     = update.InstallVersion
+	coordinatorJournal = func() (*update.Journal, error) {
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		return update.Inspect(exe)
+	}
+	installVersion = update.InstallVersion
 	// lookupRelease is the coordinator's authenticated lookup of the
 	// release a host installs; installRelease the host's install of it.
 	lookupRelease  = update.LookupVersion
@@ -93,7 +100,10 @@ fails holds the host: it takes no start until an update succeeds (exit 3),
 and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
 whenever its release differs from the coordinator's, and retries a held host
-hourly. If the coordinator rolls back during a host's probation, the host
+hourly. During the coordinator's probation, updates wait without holding
+hosts or recording a failed attempt. The next pass targets the coordinator's
+release after its verdict, including its recovery release after rollback.
+If the coordinator rolls back during a host's probation, the host
 restores its matching verified recovery release under the live state
 compatibility guard, quarantining the candidate without promoting it.
 A development build pins no release.
@@ -262,6 +272,27 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 // errHostDrains is an update that waits for the executions on a host.
 var errHostDrains = errors.New("executions run")
 
+// A deferral leaves host pins and retry timestamps untouched. Every pass reads
+// the journal again, so rollback never leaves a queued candidate as the target.
+const hostUpdateDeferred = "host update deferred"
+
+func coordinatorHostUpdateReady(version string) error {
+	j, err := coordinatorJournal()
+	if err != nil {
+		return refused("%s: cannot inspect coordinator probation: %v", hostUpdateDeferred, err)
+	}
+	if j == nil {
+		return nil // Installations predating recovery have no probation journal.
+	}
+	if j.Held() != "" {
+		return refused("%s: coordinator recovery is held: %s", hostUpdateDeferred, j.Held())
+	}
+	if j.Probation == "passed" && j.Candidate.Version == version || j.RolledBack() && j.Previous != nil && j.Previous.Version == version {
+		return nil
+	}
+	return refused("%s: coordinator %s awaits its probation verdict", hostUpdateDeferred, version)
+}
+
 // updateExecutionHost is agents hosts update: the host on this
 // coordinator's release, its digest pinned, or held with why.
 func (a *app) updateExecutionHost(ctx context.Context, selector string) (string, error) {
@@ -272,6 +303,9 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	version := coordinatorVersion()
 	if !releaseVersion(version) {
 		return "", refused("this coordinator runs %s, no release: a development build pins no execution host release", version)
+	}
+	if err := coordinatorHostUpdateReady(version); err != nil {
+		return "", err
 	}
 	if exe, err := os.Executable(); err == nil {
 		if why := update.Quarantined(exe, version); why != "" {
@@ -298,6 +332,11 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 		return "", refused("execution host %s drains: %d executions are in a turn on it (%s); it updates to %s once they are between turns", selector, n, strings.Join(hostExecutionNames(st, selector), ", "), version)
 	}
 	x, err := a.updateHost(ctx, h, version)
+	// The host may still be finishing its own probation. This refusal is
+	// temporary, not a failed installation, and must not create a hold.
+	if err != nil && strings.Contains(err.Error(), update.ErrProbationWatched.Error()) {
+		return "", refused("%s: execution host %s awaits probation: %v", hostUpdateDeferred, selector, err)
+	}
 	if err == nil && x.Busy > 0 {
 		err = fmt.Errorf("%w: %d", errHostDrains, x.Busy)
 	}

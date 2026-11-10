@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 // hostDrainRetry paces the next update of a host that answered busy while
@@ -19,6 +20,9 @@ import (
 const hostDrainRetry = 10 * time.Minute
 
 func hostHoldWait(pin state.HostPin, b *state.Budget, now time.Time) bool {
+	if strings.Contains(pin.Held, update.ErrProbationWatched.Error()) {
+		return false // Retry legacy probation holds as soon as the coordinator settles.
+	}
 	if reset, ok := hostHoldRateReset(pin.Held); ok {
 		return now.Before(reset)
 	}
@@ -56,6 +60,10 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 	if !releaseVersion(version) || st.Stop != nil || len(a.cfg.Agents.Hosts) == 0 {
 		return
 	}
+	if err := coordinatorHostUpdateReady(version); err != nil {
+		l.sayOnce("host probation "+version, "SUPERVISOR HOST WAITS: %v", err)
+		return
+	}
 	for _, selector := range slices.Sorted(maps.Keys(a.cfg.Agents.Hosts)) {
 		pin := st.HostPin(selector)
 		if pin != nil && pin.Identity != a.cfg.Agents.Hosts[selector].Identity {
@@ -78,7 +86,9 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 		out, err := l.run(ctx, agentsName, "hosts", hostUpdateCmdName, selector)
 		if err != nil {
 			l.sayOnce("host update "+selector+" "+version, "SUPERVISOR HOST WAITS %s: %v", selector, err)
-			l.noteBehind(selector, version, oneLine(err.Error()))
+			if !strings.Contains(err.Error(), hostUpdateDeferred) {
+				l.noteBehind(selector, version, oneLine(err.Error()))
+			}
 			continue
 		}
 		_, _ = fmt.Fprintln(a.out, "SUPERVISOR HOST UPDATED "+oneLine(out))
