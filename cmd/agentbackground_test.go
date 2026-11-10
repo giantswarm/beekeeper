@@ -296,11 +296,14 @@ func TestReviveBackgroundAlreadyRunning(t *testing.T) {
 
 func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 	const (
-		resumedID = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
-		nextID    = "3f2c8db8-09c9-4793-b4f4-fa08c1f4201b"
-		copyID    = "9e3d7b10"
+		resumedID            = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
+		nextID               = "3f2c8db8-09c9-4793-b4f4-fa08c1f4201b"
+		copyID               = "9e3d7b10"
+		sameJob              = "same job"
+		startedCopy          = "started copy"
+		stoppedListingFailed = "stopped listing failed"
 	)
-	for _, scenario := range []string{"same job", "copy", "stopped listing failed"} {
+	for _, scenario := range []string{sameJob, startedCopy, stoppedListingFailed} {
 		t.Run(scenario, func(t *testing.T) {
 			a, _ := stubApp(t)
 			p := state.Party{Session: resumedID, Name: "Guide run 56"}
@@ -312,13 +315,13 @@ func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 				t.Fatal(err)
 			}
 			outID := bgShortID
-			if scenario == "copy" {
+			if scenario == startedCopy {
 				outID = copyID
 			}
 			calls := stubBackground(t, "backgrounded · "+outID+" · "+p.Name+"\n")
 			bgList = func(_ context.Context, _ string, _ []string, all bool) ([]bgSession, error) {
 				if all {
-					if scenario == "stopped listing failed" {
+					if scenario == stoppedListingFailed {
 						return nil, errors.New("daemon unavailable")
 					}
 					return []bgSession{{ID: bgShortID, SessionID: resumedID, Name: p.Name, Kind: bgKind}}, nil
@@ -330,7 +333,7 @@ func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 			}
 			err := a.resumeBackground(t.Context(), wakeTarget{id: resumedID}, "resume again")
 			switch scenario {
-			case "same job":
+			case sameJob:
 				if err != nil || len(*calls) != 1 {
 					t.Fatalf("existing job stopped or refused: calls %+v, err %v", *calls, err)
 				}
@@ -341,11 +344,11 @@ func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 				if st.Guide.Holder.Session != nextID || st.Starts[0].Session != nextID || st.Guide.Run != 56 {
 					t.Fatalf("second resume lost guide identity: guide %+v, start %+v", st.Guide, st.Starts[0])
 				}
-			case "copy":
+			case startedCopy:
 				if !errors.Is(err, errResumeStartedCopy) || len(*calls) != 2 || !slices.Equal((*calls)[1].argv[1:], []string{bgStopCmd, copyID}) {
 					t.Fatalf("copy was not stopped: calls %+v, err %v", *calls, err)
 				}
-			case "stopped listing failed":
+			case stoppedListingFailed:
 				if err == nil || len(*calls) != 0 {
 					t.Fatalf("resumed without job identity: calls %+v, err %v", *calls, err)
 				}
