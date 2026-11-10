@@ -7,6 +7,7 @@ import (
 )
 
 func TestOwnDeliveryProblemsStayInTimeline(t *testing.T) {
+	const ownPRRed = "CI red on " + overlapPRBURL
 	for _, tc := range []struct {
 		name, body                                      string
 		unknown, closed, done, saved, overlap, wantFile bool
@@ -16,9 +17,9 @@ func TestOwnDeliveryProblemsStayInTimeline(t *testing.T) {
 		{name: "saved review park", body: "CI red on https://github.com/o/r/pull/8, rerunning", saved: true},
 		{name: "claimed issue", body: "Retrying cleanup for " + pr},
 		{name: "completion", body: "CI rerun for https://github.com/o/r/pull/8", done: true},
-		{name: "unknown owner", body: "CI red on https://github.com/o/r/pull/8", unknown: true, wantFile: true},
-		{name: "closed PR", body: "CI red on https://github.com/o/r/pull/8", closed: true, wantFile: true},
-		{name: "overlap waiter", body: "CI red on https://github.com/o/r/pull/8", overlap: true, wantFile: true},
+		{name: "unknown owner", body: ownPRRed, unknown: true, wantFile: true},
+		{name: "closed PR", body: ownPRRed, closed: true, wantFile: true},
+		{name: "overlap waiter", body: ownPRRed, overlap: true, wantFile: true},
 		{name: "other PR", body: "CI red on https://github.com/o/r/pull/9", wantFile: true},
 		{name: "external defect", body: "https://github.com/o/r/pull/8 fails because other/tool has a gate timeout", wantFile: true},
 		{name: "external URL defect", body: "https://github.com/o/r/pull/8 fails in https://github.com/other/tool/actions/runs/9", wantFile: true},
