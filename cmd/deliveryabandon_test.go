@@ -10,7 +10,7 @@ import (
 )
 
 func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
-	for _, protect := range []string{"none", "claim", "worker", "live record", "unknown"} {
+	for _, protect := range []string{"none", "claim", "worker", "live record", "unknown", "archived"} {
 		t.Run(protect, func(t *testing.T) {
 			a, _ := supervisorApp(t)
 			now := a.timeNow()
@@ -25,6 +25,9 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 					st.Agents = []state.Agent{{Party: by, Task: "release"}}
 				case "live record":
 					st.Records = append(st.Records, state.Record{Session: state.Party{Name: "replacement"}, Issue: refOne})
+				case "archived":
+					st.Records = nil
+					st.Archives = []state.Archive{{Party: by, Since: now.Add(-time.Hour)}}
 				case "unknown":
 					st.Records = nil
 				}
@@ -37,7 +40,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := protect == "none"
+			want := protect == "none" || protect == "archived"
 			if st.Deliveries[0].Abandoned != want {
 				t.Fatalf("delivery: %+v", st.Deliveries[0])
 			}

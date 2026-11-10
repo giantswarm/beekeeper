@@ -9,7 +9,7 @@ import (
 )
 
 // Positive local evidence is required: missing workers alone can be a partial
-// observation. A retained ended serve record and no claim end this lifecycle.
+// observation. An ended serve record or archived worker and no claim end this lifecycle.
 func abandonEndedDeliveries(st *state.State, now time.Time) []state.Event {
 	var events []state.Event
 	for i := range st.Deliveries {
@@ -22,6 +22,9 @@ func abandonEndedDeliveries(st *state.State, now time.Time) []state.Event {
 			return deliveryMatches(*d, r.Issue) && strings.EqualFold(r.Session.Name, d.Agent) && !r.Ended.IsZero() && !r.Ended.Before(d.Started)
 		})
 		live := slices.ContainsFunc(st.Records, func(r state.Record) bool { return deliveryMatches(*d, r.Issue) && r.Ended.IsZero() })
+		ended = ended || slices.ContainsFunc(st.Archives, func(a state.Archive) bool {
+			return strings.EqualFold(a.Name, d.Agent) && !a.Since.Before(d.Started)
+		})
 		if !ended || live {
 			continue
 		}
@@ -46,5 +49,6 @@ func endedTimerTarget(st *state.State, target string) bool {
 	if slices.ContainsFunc(st.Records, func(r state.Record) bool { return matches(r.Session) && r.Ended.IsZero() }) {
 		return false
 	}
-	return slices.ContainsFunc(st.Records, func(r state.Record) bool { return matches(r.Session) && !r.Ended.IsZero() })
+	return slices.ContainsFunc(st.Records, func(r state.Record) bool { return matches(r.Session) && !r.Ended.IsZero() }) ||
+		slices.ContainsFunc(st.Archives, func(a state.Archive) bool { return matches(a.Party) })
 }
