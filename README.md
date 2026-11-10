@@ -2342,7 +2342,14 @@ active named incident repairs instead allow exemption-only board discovery
 (`board next --wip-exempt-only`), retaining the existing ranking and admission
 checks, skipping the monitored queue, and never falling back to ordinary picks.
 The held limit sets no refill pause, so a completed release frees the next pass.
-It checks again immediately before dispatch.
+It checks again immediately before dispatch. With a worker brief configured,
+every pass that starts no board worker logs `SUPERVISOR REFILL started 0:` with its reason, including full or
+stale delivery admission (count, limit and last complete observation), capacity,
+GitHub budget, incident holds, board backoff or an earlier refill still running.
+Passes that fail before dispatch report that failure too. Release observations
+probe the oldest attempted releases first, with never-probed releases ahead of
+retries, so a slow pass or a few failing releases cannot starve the rest of the
+backlog and keep published deliveries occupying WIP.
 
 Reviews, forwards, fixes, wakes, rework, merges and repairs keep their existing
 admission rules. An active incident hold's named repair and a `board.order` step

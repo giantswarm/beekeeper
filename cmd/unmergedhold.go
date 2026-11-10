@@ -812,7 +812,7 @@ func (l *supervisorLoop) unmergedStart(ctx context.Context, nextRef string) erro
 		if exempt {
 			return nil
 		}
-		return errLoopLater
+		return fmt.Errorf("open pull request observation failed: %v: %w", err, errLoopLater)
 	}
 	l.clearSaid("unmerged read " + strings.ToLower(r.Repo))
 	if err := l.escalateUnmergedBacklog(r.Repo, recent, why); err != nil {
@@ -820,7 +820,7 @@ func (l *supervisorLoop) unmergedStart(ctx context.Context, nextRef string) erro
 	}
 	if why != "" && !exempt {
 		l.sayOnce("unmerged "+strings.ToLower(r.Repo), "SUPERVISOR START WAITS %s: %s", nextRef, why)
-		return errLoopLater
+		return fmt.Errorf("%s: %w", why, errLoopLater)
 	}
 	l.clearSaid("unmerged " + strings.ToLower(r.Repo))
 	return nil

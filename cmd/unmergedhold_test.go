@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -131,7 +132,7 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 		holdURL = "https://github.com/o/r/issues/42"
 	)
 	act := superloop.Action{Key: "next " + holdRef, Kind: superloop.KindNext, Ref: holdRef, URL: holdURL}
-	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); err != errLoopLater {
+	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); !errors.Is(err, errLoopLater) {
 		t.Fatalf("startItem on clogged repo = %v, want errLoopLater", err)
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR START WAITS o/r#42: held: o/r has 10 unmerged pull requests opened in the last 7d") {
@@ -139,7 +140,7 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 	}
 
 	// A second attempt in the same backlog episode does not file a duplicate guide problem.
-	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); err != errLoopLater {
+	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); !errors.Is(err, errLoopLater) {
 		t.Fatalf("second startItem on clogged repo = %v, want errLoopLater", err)
 	}
 	evs, err := r.a.store.Events(0, func(e state.Event) bool {
@@ -372,7 +373,7 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 	if err := l.unmergedStart(context.Background(), incidentRef); err != nil {
 		t.Fatalf("unmergedStart for named incident repair = %v, want nil", err)
 	}
-	if err := l.unmergedStart(context.Background(), "o/r#89"); err != errLoopLater {
+	if err := l.unmergedStart(context.Background(), "o/r#89"); !errors.Is(err, errLoopLater) {
 		t.Fatalf("unmergedStart for non-exempt issue = %v, want errLoopLater", err)
 	}
 	if err := r.a.openPullStartGate(context.Background(), "r 88", incidentURL, []string{incidentRef}, false, false, false); err != nil {
@@ -403,7 +404,7 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.unmergedStart(context.Background(), issueRef); err != errLoopLater {
+	if err := l.unmergedStart(context.Background(), issueRef); !errors.Is(err, errLoopLater) {
 		t.Fatalf("unmergedStart on PR-list error = %v, want errLoopLater", err)
 	}
 	cands := []board.Candidate{

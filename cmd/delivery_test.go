@@ -22,6 +22,7 @@ import (
 const deliveryFixtureRepo = "o/r"
 const deliveryCompareBehind = "behind"
 const deliveryFailedTag = "v8.1.1"
+const deliveryAvailableTag = "v2.0.0-rc.1"
 
 func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 	for _, tc := range []struct {
@@ -121,7 +122,7 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 	}
 	in.Now = now.Add(deliveryReleaseEvery)
 	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
-		return verdictAvailable, "v2.0.0-rc.1", nil
+		return verdictAvailable, deliveryAvailableTag, nil
 	}
 	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
@@ -553,4 +554,59 @@ func TestDeliveryMeanCycleTimeUsesFullCompletedAges(t *testing.T) {
 	if got.Released != 4 || got.CycleSamples != 2 || got.MeanCycleTime != 25*time.Hour {
 		t.Fatalf("full completed cycle statistics: %+v", got)
 	}
+}
+
+// A pass can take longer than the per-release retry interval. Ledger-order
+// probing then retries the same failures forever, leaving published releases
+// at the tail counted in WIP even though they could finish immediately.
+func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
+	a, _ := supervisorApp(t)
+	now := a.timeNow()
+	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{}}
+	seed(t, a, func(st *state.State) {
+		for i := 1; i <= deliveryReleaseReads+1; i++ {
+			ref := fmt.Sprintf("o/r#%d", i+10)
+			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: ref, Pulls: []string{ref}, Step: state.DeliveryReleasing, Started: now, Since: now})
+			in.Pulls[ref] = superloop.Pull{Ref: ref, State: superloop.Merged, MergeCommit: loopHead}
+		}
+	})
+	old := readDeliveryRelease
+	t.Cleanup(func() { readDeliveryRelease = old })
+	var probed []string
+	tail := fmt.Sprintf("o/r#%d", deliveryReleaseReads+11)
+	readDeliveryRelease = func(_ context.Context, p superloop.Pull) (string, string, error) {
+		probed = append(probed, p.Ref)
+		if p.Ref == tail {
+			return verdictAvailable, deliveryAvailableTag, nil
+		}
+		return "", "", errors.New("release observation unavailable")
+	}
+	for pass := range 2 {
+		// Restart too: fairness follows persisted attempt times, not process state.
+		in.Now = now.Add(time.Duration(pass) * (deliveryReleaseEvery + time.Minute))
+		l := &supervisorLoop{a: a, said: map[string]bool{}}
+		before := len(probed)
+		if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(probed)-before > deliveryReleaseReads {
+			t.Fatal("exceeded release probe allowance")
+		}
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range st.Deliveries {
+		if d.Ref == tail {
+			if d.Step != state.DeliveryDone {
+				t.Fatalf("published tail starved behind repeated failures: %+v; probed %v", d, probed)
+			}
+			if deliveryInFlight(st, d, in.Now, a.deliveryPolicy()) {
+				t.Fatal("completed release still occupies WIP")
+			}
+			return
+		}
+	}
+	t.Fatal("tail delivery disappeared")
 }
