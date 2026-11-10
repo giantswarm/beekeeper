@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -89,6 +90,11 @@ func (w *watcher) resumed(st *state.State, sessions []*claude.Session, entry, ex
 	}
 	if w.standby && st.Stop == nil {
 		if holder := guideRole.get(st).Holder; holder != nil {
+			for name, wake := range w.suspendRecovery {
+				if wake.guide {
+					delete(w.suspendRecovery, name)
+				}
+			}
 			w.suspendRecovery[holder.Name] = suspendWake{party: holder.Party, message: guideRole.resumeMessage("the machine resumed from suspend; check the workers and timers that passed during the gap"), guide: true}
 		}
 	}
@@ -118,7 +124,17 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 			if w.suspendRecovery == nil {
 				w.suspendRecovery = map[string]suspendWake{}
 			}
+			hasGuide := false
+			for _, wake := range w.suspendRecovery {
+				if wake.guide {
+					hasGuide = true
+					break
+				}
+			}
 			for name, wake := range failed {
+				if wake.guide && hasGuide {
+					continue
+				}
 				if _, exists := w.suspendRecovery[name]; !exists {
 					w.suspendRecovery[name] = wake
 				}
@@ -139,7 +155,19 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 		defer w.stand.inflight.Done()
 		defer w.stand.busy.Store(false)
 		failed := map[string]suspendWake{}
+		st, stateErr := w.store.Read()
+		if stateErr == nil && st.Stop != nil {
+			w.suspendResults <- failed
+			return
+		}
 		for _, wake := range pending {
+			if wake.guide && stateErr == nil {
+				holder := guideRole.get(st).Holder
+				if holder == nil {
+					continue
+				}
+				wake.party = holder.Party
+			}
 			var err error
 			if w.suspendDeliver != nil {
 				err = w.suspendDeliver(ctx, wake)
@@ -149,7 +177,9 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 				err = w.wakeAgent(ctx, watchParty, wake.party.Name, wake.message, "")
 			}
 			if err != nil {
-				failed[wake.party.Name] = wake
+				if !errors.Is(err, errResumeStartedCopy) {
+					failed[wake.party.Name] = wake
+				}
 				w.emitNow("suspend-recovery", "RESUME FAILED: %q: %v", wake.party.Name, err)
 			}
 		}
