@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -90,6 +91,29 @@ func (s *FileStore) recoverEvents() (*State, error) {
 		return nil, fmt.Errorf("recover event outbox: %w", err)
 	}
 	return st, nil
+}
+
+// recoverPendingEvents checks only the outbox field before appending an event
+// that changes no state, avoiding full State allocation when no outbox is pending.
+func (s *FileStore) recoverPendingEvents() error {
+	raw, err := os.ReadFile(s.path("state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var pending struct {
+		EventOutbox *EventOutbox `json:"eventOutbox"`
+	}
+	if err := json.Unmarshal(raw, &pending); err != nil {
+		return err
+	}
+	if pending.EventOutbox == nil {
+		return nil
+	}
+	_, err = s.recoverEvents()
+	return err
 }
 
 type outboxFile interface {

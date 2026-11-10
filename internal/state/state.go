@@ -2072,7 +2072,7 @@ func (s *FileStore) Log(events ...Event) error {
 		return err
 	}
 	defer unlock()
-	if _, err := s.recoverEvents(); err != nil {
+	if err := s.recoverPendingEvents(); err != nil {
 		return err
 	}
 	return s.append(events)
@@ -2095,7 +2095,7 @@ func (s *FileStore) RecordWithin(wait time.Duration, events ...Event) error {
 		return err
 	}
 	defer unlock()
-	if _, err := s.recoverEvents(); err != nil {
+	if err := s.recoverPendingEvents(); err != nil {
 		return err
 	}
 	return s.append(events)

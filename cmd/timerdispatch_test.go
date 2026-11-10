@@ -621,3 +621,42 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 		t.Fatalf("expected 2 wakes delivered without re-probing, got %d", wakes.Load())
 	}
 }
+
+func TestIdleWatchHealthPassesDoNotWriteState(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.GuideReportsSince = a.now
+		st.Guide = &state.Role{
+			Holder:    &state.Supervisor{Party: state.Party{Session: "g1", Name: guideName}, Since: a.now},
+			WatchSeen: a.now,
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.WriteFile(throughputObservationFile, throughputObservation{At: a.now}); err != nil {
+		t.Fatal(err)
+	}
+	store := &timerWriteCountingStore{Store: a.store}
+	a.store = store
+	if line, err := a.checkDeliveries(a.now); err != nil || line != "" {
+		t.Fatalf("checkDeliveries: %q, %v", line, err)
+	}
+	if line, err := a.checkThroughput(a.now, false); err != nil || line != "" {
+		t.Fatalf("checkThroughput initial: %q, %v", line, err)
+	}
+	if line, err := a.checkThroughput(a.now.Add(10*time.Second), false); err != nil || line != "" {
+		t.Fatalf("checkThroughput within cadence: %q, %v", line, err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := a.newWatcher(false, true)
+	w.now = a.now
+	w.guideMonitor(t.Context(), st, nil)
+	if store.updates != 0 || store.records != 0 {
+		t.Fatalf("idle watch health passes wrote state updates=%d records=%d", store.updates, store.records)
+	}
+}
