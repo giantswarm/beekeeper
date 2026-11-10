@@ -1773,7 +1773,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 		changed := loopPullChanged(in, ref)
 		if slices.Contains(swept, ref) && l.sweepReadDue(ref, changed) {
-			if sweepReads >= sweepReadsPerPass {
+			// A one-shot comparison has no later pass to read the remainder.
+			// Keep its context deadline and GitHub gates, but do not mistake
+			// the live loop's per-pass scheduling limit for a failed read.
+			if !l.dryRun && sweepReads >= sweepReadsPerPass {
 				unread[ref] = true
 				continue
 			}
@@ -2001,6 +2004,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 		preview := *st
 		preview.Deliveries = superloop.Deliveries(in, st.Deliveries)
+		l.recording.Deliveries = preview.Deliveries
 		if len(unread) == 0 && !l.sweepIncomplete {
 			preview.DeliveriesAt = in.Now
 		}

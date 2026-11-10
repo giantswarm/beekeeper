@@ -5,8 +5,11 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // Recording projects planner data into publishable JSON values. Unknown string
@@ -35,6 +38,11 @@ func (r *recorder) ref(s string) string {
 	if s == "" {
 		return ""
 	}
+	if n, ok := strings.CutPrefix(s, "#"); ok {
+		if _, err := strconv.Atoi(n); err == nil {
+			return "#" + strings.TrimLeft(strings.TrimPrefix(r.token("number:"+n), "id"), "0")
+		}
+	}
 	repo, number, hasNumber := strings.Cut(s, "#")
 	owner, name, hasRepo := strings.Cut(repo, "/")
 	if !hasRepo {
@@ -45,6 +53,69 @@ func (r *recorder) ref(s string) string {
 		result += "#" + strings.TrimPrefix(r.token("number:"+number), "id")
 	}
 	return result
+}
+
+// Action keys are structured planner input, not free text: the ledger reads
+// their heads, sweep markers and tracking episodes. Keep that grammar while
+// anonymizing identities. Unrecognized text is an opaque token, never copied.
+func (r *recorder) actionKey(s string) string {
+	key, episode := splitEpisode(s)
+	kind, rest, ok := strings.Cut(key, " ")
+	if !ok || (!slices.Contains(Verbs(), kind) && kind != "fix" && kind != "conflict") {
+		return r.token(s)
+	}
+	target, tail, _ := strings.Cut(rest, " ")
+	ref, head, hasHead := strings.Cut(target, "@")
+	var result string
+	switch {
+	case IsPull(ref):
+		result = kind + " " + r.ref(ref)
+		if hasHead {
+			result += "@" + r.token(head)
+		}
+		if tail != "" {
+			result += " " + r.actionTail(kind, tail)
+		}
+	case hasHead && slices.Contains([]string{VerbDone, VerbIdle, VerbReport, VerbProblem, VerbPark}, ref):
+		if _, err := time.Parse(time.RFC3339Nano, head); err != nil {
+			return r.token(s)
+		}
+		result = kind + " " + ref + "@" + head + " " + r.token(tail)
+	default:
+		return r.token(s)
+	}
+	if episode != "" {
+		result += episodeTag + episode
+	}
+	return result
+}
+
+func (r *recorder) actionTail(kind, tail string) string {
+	if _, err := time.Parse(time.RFC3339Nano, tail); err == nil {
+		return tail
+	}
+	if at, ok := strings.CutPrefix(tail, strings.TrimSpace(sweepTag)+" "); ok {
+		if _, err := time.Parse(time.RFC3339Nano, at); err == nil {
+			return strings.TrimSpace(sweepTag) + " " + at
+		}
+	}
+	if kind == KindAnswer && strings.HasPrefix(tail, "#") {
+		return r.ref(tail)
+	}
+	if kind == KindDone && tail == retiredWorker {
+		return retiredWorker
+	}
+	if kind == KindRed {
+		at, checks, ok := strings.Cut(tail, ": ")
+		if _, err := time.Parse(time.RFC3339Nano, at); ok && err == nil {
+			names := strings.Split(checks, redSep)
+			for i, name := range names {
+				names[i] = r.token(name)
+			}
+			return at + ": " + strings.Join(names, redSep)
+		}
+	}
+	return r.token(tail)
 }
 
 func (r *recorder) value(v reflect.Value, field string) any {
@@ -105,6 +176,16 @@ func (r *recorder) value(v reflect.Value, field string) any {
 	case reflect.String:
 		s := v.String()
 		switch field {
+		case "Key":
+			return r.actionKey(s)
+		case "Origin":
+			if s == state.DeliveryOriginObserved || s == state.DeliveryOriginStarted {
+				return s
+			}
+		case "Step":
+			if slices.Contains([]string{state.DeliveryUnknown, state.DeliveryImplementing, state.DeliveryCI, state.DeliveryReviewQueued, state.DeliveryReviewing, state.DeliveryFixing, state.DeliveryMerging, state.DeliveryReleasing, state.DeliveryDone, state.DeliveryDropped}, s) {
+				return s
+			}
 		case "Task":
 			if s != "" {
 				return "task"
@@ -124,9 +205,9 @@ func (r *recorder) value(v reflect.Value, field string) any {
 			}
 		case "Ref", "On", "ParkedOn", "Serves", "From", "Closes", "Absorbs", "Issues", "Mentions", "OpenPulls", "Review", "Never", "Admin", "Pulls":
 			return r.ref(s)
-		case "Name", "Agent", "AgentName", "Session", "Author", "Authors", "Bots", "By", "For", "Person", "Orgs", "DevctlOwners", "Team", "Head", "Heads", "ParkedHead", "ReviewHead", "Commit", "MergeCommit", "ID":
+		case "Name", "Agent", "AgentName", "Session", "HostSession", "Author", "Authors", "Bots", "By", "For", "Person", "Orgs", "DevctlOwners", "Team", "Head", "Heads", "DroppedHeads", "ParkedHead", "ReviewHead", "Commit", "MergeCommit", "ID":
 			return r.token(s)
-		case "State", "Step", "Kind", "Verb", "Verdict", "Mergeable", "MergeState", "ReviewDecision", "RefKind", "MergeMethods":
+		case "State", "Kind", "Verb", "Verdict", "Mergeable", "MergeState", "ReviewDecision", "RefKind", "MergeMethods":
 			if slices.Contains([]string{"open", "base-merged", "nits-checked", "OPEN", "CLOSED", "MERGED", "APPROVED", "REVIEW_REQUIRED", "CHANGES_REQUESTED", "CONFLICTING", "DIRTY", "CLEAN", "MERGEABLE", "UNKNOWN", "approved", "changes requested", "review-queued", "fixing", "reviewing", "merging", "pull", "issue", "squash", "merge", "rebase"}, s) || slices.Contains(Verbs(), s) || slices.Contains([]string{VerbDone, VerbIdle, VerbReport, VerbProblem, VerbPark}, s) {
 				return s
 			}

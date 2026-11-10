@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,31 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
+
+func TestDryRunRecordsBeyondOneSweepBatch(t *testing.T) {
+	r := newLoopRig(t)
+	var open []string
+	for n := range sweepReadsPerPass + 10 {
+		ref := sweepRef(100 + n)
+		open = append(open, ref)
+		r.pulls[ref] = superloop.Pull{Ref: ref, URL: fmt.Sprintf("https://github.com/o/r/pull/%d", 100+n), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	}
+	listed := readOpenPulls
+	t.Cleanup(func() { readOpenPulls = listed })
+	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
+	dir := t.TempDir()
+	if err := r.a.dryRunSupervisorLoop(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	var recorded loopRecording
+	readReplayJSON(t, filepath.Join(dir, loopRecordInputFile), &recorded)
+	if len(recorded.Planner.Pulls) != len(open) {
+		t.Fatalf("recorded %d pulls, want %d", len(recorded.Planner.Pulls), len(open))
+	}
+	if len(recorded.Deliveries) != len(open) {
+		t.Fatalf("recorded %d derived deliveries, want %d", len(recorded.Deliveries), len(open))
+	}
+}
 
 func TestLoopRecordAnonymizesAndDoesNotOverwrite(t *testing.T) {
 	const privateRef = "private-owner/private-repo#9876"
