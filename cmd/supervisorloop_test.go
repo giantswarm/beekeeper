@@ -4380,7 +4380,7 @@ func TestLoopRecoverParksAndReviewWorkersStopOnRecoveryWriterFence(t *testing.T)
 	r.answer = func(args []string) (string, int) {
 		runCalls++
 		_ = candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil })
-		return "cannot write the state: state writes fenced after binary recovery", 1
+		return "cannot write the state: " + state.ErrRecoveryWriterFenced.Error(), 1
 	}
 	err = l.endReviewWorkers(context.Background(), st)
 	if !errors.Is(err, state.ErrRecoveryWriterFenced) || runCalls != 1 {
