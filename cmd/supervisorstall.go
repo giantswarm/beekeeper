@@ -232,7 +232,7 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 	now := l.a.timeNow()
 	pending := map[string]superloop.Action{}
 	for _, act := range actions {
-		if act.Kind == superloop.KindGo {
+		if act.Kind == superloop.KindGo && !staleMergeDecision(in.Pulls[act.Ref], act.Head) {
 			pending[act.Key] = act
 		}
 	}
@@ -292,4 +292,11 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 		l.flowWaits[key] = wait
 	}
 	return nil
+}
+
+// Missing observations retain pending decisions. Only a terminal state or a
+// known replacement head proves that this merge decision has been overtaken.
+func staleMergeDecision(p superloop.Pull, head string) bool {
+	return p.State == superloop.Merged || p.State == superloop.Closed ||
+		(p.Head != "" && p.Head != head)
 }

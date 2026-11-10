@@ -147,6 +147,23 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		if d.Since.After(in.Now) {
 			continue
 		}
+		// A PR sweep establishes ownership, not intent to work. Migrate old
+		// workerless PR seeds too; a new head or explicit loop action adopts it.
+		if slices.Contains(d.Pulls, d.Ref) {
+			p, read := in.Pulls[d.Ref]
+			if read {
+				changed := d.Heads[d.Ref] != "" && p.Head != "" && d.Heads[d.Ref] != p.Head
+				engaged := d.Agent != "" || changed || len(l.rounds[d.Ref]) > 0 || l.goHead[d.Ref] != ""
+				for _, w := range in.Workers {
+					engaged = engaged || strings.EqualFold(w.Serves, d.Ref) || strings.EqualFold(w.ParkedOn, d.Ref) || slices.Contains(w.Issues, d.Ref)
+				}
+				if engaged {
+					d.Origin = state.DeliveryOriginStarted
+				} else if d.Origin == "" && (d.Step == state.DeliveryUnknown || d.Step == state.DeliveryImplementing) {
+					d.Origin = state.DeliveryOriginObserved
+				}
+			}
+		}
 		d.Heads = maps.Clone(d.Heads)
 		if d.Heads == nil {
 			d.Heads = map[string]string{}

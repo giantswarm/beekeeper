@@ -221,9 +221,103 @@ func TestWakeBackground(t *testing.T) {
 		t.Errorf("units %v, output:\n%s", l.started, out)
 	}
 
-	stubBackground(t, "backgrounded · 9e3d7b10 · "+bgName+"\n")
-	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "your task", ""); err == nil || !strings.Contains(err.Error(), "started a copy 9e3d7b10") {
+	const (
+		copyShortID       = "9e3d7b10"
+		failedCopyShortID = "7a11c302"
+	)
+	copyCalls := stubBackground(t, "backgrounded · "+copyShortID+" · "+bgName+"\n")
+	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "your task", ""); !errors.Is(err, errResumeStartedCopy) || !strings.Contains(err.Error(), copyShortID) {
 		t.Errorf("a copy: err = %v", err)
+	}
+	if len(*copyCalls) != 2 || !slices.Equal((*copyCalls)[1].argv[1:], []string{bgStopCmd, copyShortID}) {
+		t.Fatalf("copy was not stopped: %+v", *copyCalls)
+	}
+
+	failedCopyCalls := stubBackground(t, "backgrounded · "+failedCopyShortID+" · "+bgName+"\n")
+	origBgRun := bgRun
+	bgRun = func(ctx context.Context, dir string, env, argv []string) (string, error) {
+		out, _ := origBgRun(ctx, dir, env, argv)
+		if len(argv) >= 2 && argv[1] == bgFlag {
+			return out, errors.New("resume command failed after starting copy")
+		}
+		return out, nil
+	}
+	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "your task", ""); !errors.Is(err, errResumeStartedCopy) || !strings.Contains(err.Error(), failedCopyShortID) {
+		t.Errorf("failed command copy: err = %v", err)
+	}
+	if len(*failedCopyCalls) != 2 || !slices.Equal((*failedCopyCalls)[1].argv[1:], []string{bgStopCmd, failedCopyShortID}) {
+		t.Fatalf("copy from failed command was not stopped: %+v", *failedCopyCalls)
+	}
+}
+
+func TestReviveBackgroundAlreadyRunning(t *testing.T) {
+	const resumeMsg = "resume after suspend"
+	a, _ := stubApp(t)
+	p := state.Party{Session: bgID, Name: bgName}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Dir: t.TempDir(), Background: true})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	calls := stubBackground(t, "", bgSession{SessionID: bgID, Name: bgName, Kind: bgKind})
+	original := cliSend
+	t.Cleanup(func() { cliSend = original })
+	sends := 0
+	cliSend = func(_ context.Context, _ *app, to, msg string) error {
+		sends++
+		if to != bgName || msg != resumeMsg {
+			t.Fatalf("message to %q: %q", to, msg)
+		}
+		return nil
+	}
+	if err := a.reviveBackground(t.Context(), p, resumeMsg); err != nil {
+		t.Fatal(err)
+	}
+	if sends != 1 || len(*calls) != 0 {
+		t.Fatalf("sends %d, background commands %+v", sends, *calls)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide = &state.Role{
+			Holder:   &state.Supervisor{Party: state.Party{Name: "Guide run 58", Session: "current-guide-58"}},
+			Relieved: []state.Relief{{Party: p}},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reviveBackground(t.Context(), p, resumeMsg); Code(err) != ExitRefused || !strings.Contains(err.Error(), "relieved guide") {
+		t.Fatalf("relieved guide revival: %v", err)
+	}
+	if sends != 1 || len(*calls) != 0 {
+		t.Fatalf("relieved guide sends %d, background commands %+v", sends, *calls)
+	}
+}
+
+func TestResumeBackgroundRefusesUnknownOrAmbiguousLiveness(t *testing.T) {
+	for _, scenario := range []string{"listing failed", "duplicate name", "missing name"} {
+		t.Run(scenario, func(t *testing.T) {
+			a, _ := stubApp(t)
+			rows := []bgSession{{SessionID: bgID, Name: bgName}}
+			if scenario == "duplicate name" {
+				rows = append(rows, bgSession{SessionID: "another-session", Name: bgName})
+			}
+			if scenario == "missing name" {
+				rows[0].Name = ""
+			}
+			calls := stubBackground(t, "", rows...)
+			if scenario == "listing failed" {
+				bgList = func(context.Context, string, []string, bool) ([]bgSession, error) {
+					return nil, errors.New("daemon unavailable")
+				}
+			}
+			if err := a.resumeBackground(t.Context(), wakeTarget{id: bgID}, "continue"); err == nil {
+				t.Fatal("unsafe resume accepted")
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("background commands: %+v", *calls)
+			}
+		})
 	}
 }
 

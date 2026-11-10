@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/pkg/project"
 	"github.com/giantswarm/beekeeper/plugin"
 )
@@ -404,6 +405,10 @@ var verifyMarketplace = func(ctx context.Context, name string) error {
 func syncOnce(ctx context.Context, w io.Writer, dir string) (ran bool) {
 	id := binaryIdentity()
 	if id == "" || dir == "" || !runsInstalled() || !syncsUnder("") {
+		return false
+	}
+	if err := install.RefreshSkills(dir); err != nil {
+		_, _ = fmt.Fprintf(w, "Could not refresh harness skills: %v\n", err)
 		return false
 	}
 	path := filepath.Join(dir, pluginSyncFile)

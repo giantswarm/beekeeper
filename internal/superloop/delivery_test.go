@@ -422,3 +422,45 @@ func TestAbandonedDeliverySurvivesMergedPullObservation(t *testing.T) {
 		t.Fatalf("new assignment lost: %+v", got)
 	}
 }
+
+// Ownership alone must not turn an untouched external PR into desk WIP.
+func TestDeliveryPassivePullAdoption(t *testing.T) {
+	in := deliveryInput()
+	in.Workers = nil
+	p := in.Pulls[deliveryPR]
+	p.Closes = nil
+	in.Pulls[deliveryPR] = p
+	in.OpenPulls = []string{deliveryPR}
+	got := Deliveries(in, nil)
+	if len(got) != 1 || got[0].Origin != state.DeliveryOriginObserved {
+		t.Fatalf("external PR adopted: %+v", got)
+	}
+	// Legacy records and restarted observations get the same classification.
+	got[0].Origin = ""
+	got = Deliveries(in, got)
+	got = Deliveries(in, got)
+	if got[0].Origin != state.DeliveryOriginObserved {
+		t.Fatalf("passive PR changed on restart: %+v", got)
+	}
+	// Failed reads preserve the evidence rather than claiming work began.
+	saved := in.Pulls
+	in.Pulls = nil
+	got = Deliveries(in, got)
+	if got[0].Origin != state.DeliveryOriginObserved {
+		t.Fatal(got)
+	}
+	in.Pulls = saved
+	p.Head = "new-work"
+	in.Pulls[deliveryPR] = p
+	got = Deliveries(in, got)
+	got = Deliveries(in, got)
+	if got[0].Origin != state.DeliveryOriginStarted {
+		t.Fatalf("new commit not durably adopted: %+v", got)
+	}
+	in.Workers = deliveryInput().Workers
+	in.Workers[0].Serves = deliveryPR
+	got = Deliveries(in, nil)
+	if got[0].Origin != state.DeliveryOriginStarted {
+		t.Fatalf("worker PR not adopted: %+v", got)
+	}
+}

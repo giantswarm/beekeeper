@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -293,6 +294,12 @@ reset. A development build (version dev) is refused.`,
 			case res.Updated:
 				a.syncByInstalled(cmd.Context(), w, res.Path)
 			default:
+				if err := a.loadConfig(); err != nil {
+					return err
+				}
+				if err := install.RefreshSkills(a.cfg.StateDir); err != nil {
+					return err
+				}
 				syncPlugins(cmd.Context(), w, false)
 			}
 			return err
@@ -373,6 +380,11 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	}
 	if err := os.MkdirAll(a.cfg.StateDir, 0o700); err != nil {
 		return err
+	}
+	if binaryIdentity() != "" && syncsUnder(a.explicitConfig()) && runsInstalled() {
+		if err := install.RefreshSkills(a.cfg.StateDir); err != nil {
+			return err
+		}
 	}
 	switch {
 	case binaryIdentity() == "":

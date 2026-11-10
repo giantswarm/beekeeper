@@ -785,7 +785,17 @@ closures attributable without relying on that retention window.
 The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed-head <sha>`.
 The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
 uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
-names to `squash` (the default), `rebase`, or `merge`. The coordinator never passes
+names to `squash` (the default), `rebase`, or `merge`. The same setting applies to
+`emergency merge`, including its admin route. Set upstream-line forks explicitly
+to `rebase` so multi-commit changes retain the individual subjects required by
+their fork ledger:
+
+```yaml
+merge:
+  methods:
+    giantswarm/kagent-upstream: rebase
+```
+ The coordinator never passes
 `--admin`, which bypasses the required server-side merge queue.
 A refusal that names the base branch policy and suggests `--admin` is a configuration
 refusal, including when the merge state is `BEHIND`. The loop reports it once per

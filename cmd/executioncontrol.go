@@ -502,7 +502,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			}
 		}
 		reviewHead, kind := "", v.RefKind
-		if _, isRef := parseRef(v.On); isRef && ag.Execution != nil {
+		if _, isRef := parseRef(v.On); isRef && ag.Execution != nil && isDeskReviewWait(v.Waits) {
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
 				head := v.Head
 				if head == "" {
@@ -647,14 +647,15 @@ func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head
 		return ""
 	}
 	var p struct {
-		Head struct {
+		Draft bool
+		Head  struct {
 			Ref, SHA string
 			Repo     struct {
 				FullName string `json:"full_name"`
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, ref.Repo) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
+	if json.Unmarshal(out, &p) != nil || p.Draft || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, ref.Repo) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
 		return ""
 	}
 	return p.Head.SHA

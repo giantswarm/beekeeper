@@ -851,6 +851,7 @@ const (
 	reasonMergeHeadChanged = "merge head moved or current CI is not green"
 	mergeableConflicting   = "CONFLICTING"
 	mergeMethodRebase      = "rebase"
+	mergeMethodSquash      = "squash"
 )
 
 // reviewedMerge merges the reviewed green head as it stands. A behind head
@@ -860,9 +861,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	doc := github.SquashDoc{Repo: repo, Number: number, HeadSha: head, SchemaVersion: 1, Command: "pr merge", Route: reviewedMergeRoute, ExitCode: github.SquashNotApplicable}
 	method := a.cfg.Merge.Methods[repo]
 	if method == "" {
-		method = "squash"
+		method = mergeMethodSquash
 	}
-	if method != "squash" && method != mergeMethodRebase && method != superloop.KindMerge {
+	if method != mergeMethodSquash && method != mergeMethodRebase && method != superloop.KindMerge {
 		doc.ExitCode = github.SquashTooling
 		doc.Reason = "invalid configured merge method"
 		return doc

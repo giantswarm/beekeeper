@@ -34,8 +34,9 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 		if now.Before(old.At) {
 			return nil, false
 		}
-		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}}
+		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}, StallReports: map[string]state.DeliveryStallReport{}}
 		events := abandonEndedDeliveries(st, now)
+		var stalls, stallKeys []string
 		file := func(key, detail string) {
 			lines = append(lines, detail)
 			events = append(events, event(loopParty, loopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail))
@@ -48,7 +49,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			if d.Since.After(latest) {
 				latest = d.Since
 			}
-			if !d.Active() {
+			if !d.Active() || d.Origin == state.DeliveryOriginObserved && !deliveryOwned(st, d, now, a.deliveryPolicy()) {
 				continue
 			}
 			flow := classifyDelivery(st, d, now, a.deliveryPolicy())
@@ -78,16 +79,53 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 				continue
 			}
 			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))
-			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, elapsed(d.Since)).Round(time.Second), strings.TrimSpace(d.Waits+" "+d.Verdict+" "+d.Release))
-			if prev, ok := old.Episodes[key]; ok {
+			wait := strings.TrimSpace(d.Waits + " " + d.Verdict + " " + d.Release)
+			if wait == "" {
+				wait = "no worker or recorded dependency; supervisor reconciliation needed"
+				if deliveryOwned(st, d, now, a.deliveryPolicy()) {
+					wait = "worker progress; no dependency recorded"
+				}
+			}
+			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, elapsed(d.Since)).Round(time.Second), wait)
+			if prev, ok := old.Episodes[key]; ok && !strings.HasSuffix(strings.TrimSpace(prev), "waits:") {
 				next.Episodes[key] = prev
 			} else {
 				next.Episodes[key] = detail
-				file(key, detail)
+				if !ok {
+					stalls = append(stalls, detail)
+					stallKeys = append(stallKeys, key)
+				}
 			}
 		}
+		if len(stalls) > 0 {
+			key, detail := stallKeys[0], stalls[0]
+			if len(stalls) > 1 {
+				key = "stalls " + strings.Join(stallKeys, ";")
+				detail = fmt.Sprintf("DELIVERY STALLED: %d deliveries; waits: inspect delivery records for worker progress or missing dependencies; examples: %s", len(stalls), strings.Join(stalls[:min(3, len(stalls))], "; "))
+			}
+			next.StallReports[key] = state.DeliveryStallReport{Episodes: stallKeys, Detail: detail}
+			file(key, detail)
+		}
+		// Retain a batch until all of its episodes have ended. Recovery uses
+		// its exact report key so the guide settles the original finding.
+		reported := map[string]bool{}
+		for key, report := range old.StallReports {
+			active := false
+			for _, episode := range report.Episodes {
+				reported[episode] = true
+				_, present := next.Episodes[episode]
+				active = active || present
+			}
+			if active {
+				next.StallReports[key] = report
+			} else {
+				file("recovered "+key, "RECOVERED: "+report.Detail)
+			}
+		}
+		// Pre-batching episodes and missing-note findings keep their original
+		// recovery identity, including when passive PRs migrate out of WIP.
 		for key, detail := range old.Episodes {
-			if _, ok := next.Episodes[key]; !ok {
+			if _, ok := next.Episodes[key]; !ok && !reported[key] {
 				file("recovered "+key, "RECOVERED: "+detail)
 			}
 		}
@@ -118,6 +156,9 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			file("full recovered "+old.FullSignature, "RECOVERED: WIP FULL episode ended: delivery step or limit changed")
 		}
 		changed := len(events) > 0 || !maps.Equal(old.Episodes, next.Episodes) ||
+			!maps.EqualFunc(old.StallReports, next.StallReports, func(a, b state.DeliveryStallReport) bool {
+				return a.Detail == b.Detail && slices.Equal(a.Episodes, b.Episodes)
+			}) ||
 			old.FullSignature != next.FullSignature || !old.FullSince.Equal(next.FullSince) || old.FullRaised != next.FullRaised
 		st.DeliveryHealth = next
 		return events, changed

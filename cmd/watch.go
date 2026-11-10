@@ -2184,7 +2184,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
-		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
+		kl, ke := markResumable(st, w.recheckLeaseParks(st, parks), w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
 		tl, te, tf, touched := settleTimersMatching(st, found, w.now, w.cfg.Watch.Interval.Duration, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf

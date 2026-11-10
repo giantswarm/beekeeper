@@ -131,10 +131,10 @@ func TestDeliveryFullLoopReadsNothingAndReleaseHasNoPause(t *testing.T) {
 	if r.called(loopBoard) != nil || *busy != 0 || !l.fillPause.until.IsZero() {
 		t.Fatalf("full walked or paused: %v %+v", r.calls, l.fillPause)
 	}
-	if _, err := l.startNext(t.Context(), superloop.Action{}); err != errLoopLater {
+	if _, err := l.startNext(t.Context(), superloop.Action{}); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
-	if _, err := l.startItem(t.Context(), superloop.Action{}, loopBoardItem{Ref: epicTen}); err != errLoopLater {
+	if _, err := l.startItem(t.Context(), superloop.Action{}, loopBoardItem{Ref: epicTen}); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(loopBoard) != nil || r.called(agentsName) != nil {
@@ -433,7 +433,7 @@ func TestDeliveryFullMonitoredQueueCostsNoRead(t *testing.T) {
 		return nil, errors.New("unexpected queue read")
 	}
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
-	if _, err := l.nextItem(t.Context()); err != errLoopLater {
+	if _, err := l.nextItem(t.Context()); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(loopBoard) != nil {
@@ -458,7 +458,7 @@ func TestDeliveryFreshGateAfterPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.startItem(t.Context(), superloop.Action{Key: "fresh gate"}, loopBoardItem{Ref: "o/r#99"}); err != errLoopLater {
+	if _, err := l.startItem(t.Context(), superloop.Action{Key: "fresh gate"}, loopBoardItem{Ref: "o/r#99"}); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(agentsName, agentStartName) != nil {

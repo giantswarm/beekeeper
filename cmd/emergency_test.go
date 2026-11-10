@@ -86,71 +86,80 @@ func TestEmergencyRequiresGuideQuoteAndFutureExpiry(t *testing.T) {
 }
 
 func TestEmergencyMergeMatchesApprovedHeadAndAuditsFailure(t *testing.T) {
-	a := emergencyApp(t)
-	const quote = "Merge the approved pull requests now."
-	if err := emergencyCall(a, "on", emergencyReasonFlag, quote, untilFlag, "10m"); err != nil {
-		t.Fatal(err)
-	}
-	old := github.RunGH
-	t.Cleanup(func() { github.RunGH = old })
-	oldRead := readLoopPull
-	t.Cleanup(func() { readLoopPull = oldRead })
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, nil }
-	approved := false
-	fail := true
-	var calls [][]string
-	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
-		calls = append(calls, slices.Clone(args))
-		if args[1] == emergencyViewCommand {
-			decision := "REVIEW_REQUIRED"
-			if approved {
-				decision = "APPROVED"
+	for _, method := range []string{"", mergeMethodSquash, mergeMethodRebase, gitMerge} {
+		t.Run("method="+method, func(t *testing.T) {
+			flag := method
+			if flag == "" {
+				flag = mergeMethodSquash
 			}
-			return []byte(`{"state":"OPEN","reviewDecision":"` + decision + `","headRefOid":"abc123"}`), nil
-		}
-		if fail {
-			return nil, errors.New("head changed")
-		}
-		return nil, nil
-	}
-	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
-		t.Fatalf("unapproved: %v", err)
-	}
-	if len(calls) != 1 {
-		t.Fatal(calls)
-	}
-	approved = true
-	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); err == nil || err.Error() != "head changed" {
-		t.Fatal(err)
-	}
-	want := []string{"pr", gitMerge, "7", "--repo", emergencyTestRepo, "--squash", "--match-head-commit", "abc123"}
-	if !slices.Equal(calls[len(calls)-1], want) {
-		t.Fatalf("merge: %v", calls)
-	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "emergency.") })
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range evs {
-		if !strings.Contains(e.Detail, quote) {
-			t.Fatalf("missing quoted reason: %+v", e)
-		}
-	}
-	if !strings.Contains(evs[len(evs)-1].Detail, "failed: head changed") {
-		t.Fatal(evs)
-	}
-	fail = false
-	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); err != nil {
-		t.Fatalf("approved merge: %v", err)
-	}
-	// No mutation after expiry, even though GitHub still approves it.
-	a.now = a.now.Add(time.Hour)
-	before := len(calls)
-	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
-		t.Fatal(err)
-	}
-	if len(calls) != before {
-		t.Fatal("expired grant mutated GitHub")
+			a := emergencyApp(t)
+			a.cfg.Merge.Methods = map[string]string{emergencyTestRepo: method}
+			const quote = "Merge the approved pull requests now."
+			if err := emergencyCall(a, "on", emergencyReasonFlag, quote, untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			old := github.RunGH
+			t.Cleanup(func() { github.RunGH = old })
+			oldRead := readLoopPull
+			t.Cleanup(func() { readLoopPull = oldRead })
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, nil }
+			approved := false
+			fail := true
+			var calls [][]string
+			github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+				calls = append(calls, slices.Clone(args))
+				if args[1] == emergencyViewCommand {
+					decision := "REVIEW_REQUIRED"
+					if approved {
+						decision = "APPROVED"
+					}
+					return []byte(`{"state":"OPEN","reviewDecision":"` + decision + `","headRefOid":"abc123"}`), nil
+				}
+				if fail {
+					return nil, errors.New("head changed")
+				}
+				return nil, nil
+			}
+			if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
+				t.Fatalf("unapproved: %v", err)
+			}
+			if len(calls) != 1 {
+				t.Fatal(calls)
+			}
+			approved = true
+			if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); err == nil || err.Error() != "head changed" {
+				t.Fatal(err)
+			}
+			want := []string{"pr", gitMerge, "7", "--repo", emergencyTestRepo, "--" + flag, "--match-head-commit", "abc123"}
+			if !slices.Equal(calls[len(calls)-1], want) {
+				t.Fatalf("merge: %v", calls)
+			}
+			evs, err := a.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "emergency.") })
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range evs {
+				if !strings.Contains(e.Detail, quote) {
+					t.Fatalf("missing quoted reason: %+v", e)
+				}
+			}
+			if !strings.Contains(evs[len(evs)-1].Detail, "failed: head changed") {
+				t.Fatal(evs)
+			}
+			fail = false
+			if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); err != nil {
+				t.Fatalf("approved merge: %v", err)
+			}
+			// No mutation after expiry, even though GitHub still approves it.
+			a.now = a.now.Add(time.Hour)
+			before := len(calls)
+			if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
+				t.Fatal(err)
+			}
+			if len(calls) != before {
+				t.Fatal("expired grant mutated GitHub")
+			}
+		})
 	}
 }
 
@@ -367,9 +376,12 @@ const emergencyAdminHead = "abc1234"
 
 // adminMergeCall runs an admin merge of o/r#7 at the head under the person's
 // words, the pull request as given, and returns gh's merge calls.
-func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, authority bool) ([][]string, error) {
+func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, authority bool, methods ...string) ([][]string, error) {
 	t.Helper()
 	a := emergencyApp(t)
+	if len(methods) > 0 {
+		a.cfg.Merge.Methods = map[string]string{emergencyTestRepo: methods[0]}
+	}
 	if err := emergencyCall(a, "on", emergencyReasonFlag, words, untilFlag, "10m"); err != nil {
 		t.Fatal(err)
 	}
@@ -460,6 +472,52 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 			calls, err := adminMergeCall(t, tc.words, tc.pull, tc.behind, tc.authority)
 			if Code(err) != ExitRefused || len(calls) != 0 {
 				t.Fatalf("err %v, calls %v", err, calls)
+			}
+		})
+	}
+}
+
+// An unset GitHub review decision is normal when protection requires no review.
+// It still needs exact-head desk authority, green checks and the bounded grant.
+func TestEmergencyAdminMergeWithUnsetReviewDecision(t *testing.T) {
+	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
+		Mergeable: emergencyMergeable, MergeState: emergencyClean}
+	for _, name := range []string{"accepted", "unset head moved", "unset checks failing", litDraft, noteStatusClosed, "unset without authority"} {
+		t.Run(name, func(t *testing.T) {
+			p := green
+			switch name {
+			case "unset head moved":
+				p.Head = "def4567"
+			case "unset checks failing":
+				p.Green = false
+			case litDraft:
+				p.Draft = true
+			case noteStatusClosed:
+				p.State = "CLOSED"
+			}
+			calls, err := adminMergeCall(t, "Merge them all.", p, 0, name != "unset without authority")
+			if name != "accepted" {
+				if Code(err) != ExitRefused || len(calls) != 0 {
+					t.Fatalf("err %v, calls %v", err, calls)
+				}
+				return
+			}
+			want := strings.Fields("pr merge 7 " + loopRepoFlag + " " + emergencyTestRepo + " --squash --admin --match-head-commit " + emergencyAdminHead)
+			if err != nil || len(calls) != 1 || !slices.Equal(calls[0], want) {
+				t.Fatalf("err %v, calls %v", err, calls)
+			}
+		})
+	}
+}
+
+func TestEmergencyAdminMergeUsesConfiguredMethod(t *testing.T) {
+	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
+		ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: emergencyBlocked}
+	for _, method := range []string{mergeMethodSquash, mergeMethodRebase, gitMerge} {
+		t.Run(method, func(t *testing.T) {
+			calls, err := adminMergeCall(t, "Merge them all.", green, 0, true, method)
+			if err != nil || len(calls) != 1 || !slices.Contains(calls[0], "--"+method) || !slices.Contains(calls[0], "--admin") {
+				t.Fatalf("method %s: calls %v, error %v", method, calls, err)
 			}
 		})
 	}
