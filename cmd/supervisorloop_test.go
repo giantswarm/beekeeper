@@ -4302,3 +4302,55 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 		t.Fatalf("reexec after draining in-flight claim = %v, %v (execs=%d)", reexec, err, r.execs)
 	}
 }
+
+// A planned classification must re-read the park before sending a wake or
+// asking the classifier: a worker can change state during loop observations.
+func TestLoopClassifyRechecksParkState(t *testing.T) {
+	const firedTimer, oldParkTimer = "fired timer", "old park timer"
+	for _, change := range []string{"timer", "done", "removed", "replaced", "resumable", firedTimer, oldParkTimer, "unwatched"} {
+		t.Run(change, func(t *testing.T) {
+			r := newLoopRig(t)
+			at := time.Now().UTC().Add(-time.Minute)
+			r.park(t, "", at)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			seed(t, r.a, func(current *state.State) {
+				i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+				ag := &current.Agents[i]
+				switch change {
+				case "timer", firedTimer, oldParkTimer:
+					timer := state.Timer{Wake: loopWorker, At: at.Add(-time.Second), Due: at.Add(time.Hour)}
+					if change == firedTimer {
+						timer.Fired = at
+					}
+					if change == oldParkTimer {
+						timer.WakeParkAt = at.Add(-time.Hour)
+					}
+					current.Timers = append(current.Timers, timer)
+				case "done":
+					ag.Done, ag.Task, ag.Park = true, "", nil
+				case "removed":
+					current.Agents = slices.Delete(current.Agents, i, i+1)
+				case "replaced":
+					ag.Park.At = at.Add(time.Second)
+				case "resumable":
+					ag.Park.Resumable = at.Add(time.Second)
+				}
+			})
+			l := &supervisorLoop{a: r.a}
+			_, err = l.classify(t.Context(), st, superloop.Action{Agent: loopWorker, Event: &superloop.Event{At: at, Agent: loopWorker, Verb: parkEvent}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantWake := change == firedTimer || change == oldParkTimer || change == "unwatched"
+			if wake := r.called(agentsName, agentWakeName); (wake != nil) != wantWake {
+				t.Fatalf("wake %v, want wake %v", wake, wantWake)
+			}
+			if note := r.called("note", loopAdd); note != nil {
+				t.Fatalf("unexpected person note: %v", note)
+			}
+		})
+	}
+}
