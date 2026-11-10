@@ -56,7 +56,7 @@ func TestLeaseWakeRechecksQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parks := []settledPark{{party: claimMe, on: leaseParkOn(labTwo), answer: "stale"}}
+	parks := []settledPark{{party: claimMe, on: leaseParkOn(labTwo), answer: "previous queue observation"}}
 	if got := a.recheckLeaseParks(st, parks); len(got) != 0 {
 		t.Fatalf("stale queue wake: %+v", got)
 	}
@@ -67,11 +67,11 @@ func TestLabPlatformPID(t *testing.T) {
 		args []string
 		want int
 	}{
-		{[]string{"agentlab", "platform", "--lab", labOne}, 42},
-		{[]string{"/bin/agentlab", "--lab=" + labOne, "platform"}, 42},
-		{[]string{"agentlab", "platform"}, 42},
-		{[]string{"agentlab", "platform", "--lab", labTwo}, 0},
-		{[]string{"agentlab", "status", "--lab", labOne}, 0},
+		{[]string{agentlabCmd, labPlatformCommand, labSelectorFlag, labOne}, 42},
+		{[]string{"/bin/agentlab", "--lab=" + labOne, labPlatformCommand}, 42},
+		{[]string{agentlabCmd, labPlatformCommand}, 42},
+		{[]string{agentlabCmd, labPlatformCommand, labSelectorFlag, labTwo}, 0},
+		{[]string{agentlabCmd, executionStatus, labSelectorFlag, labOne}, 0},
 		{[]string{"sh", "-c", "agentlab platform"}, 0},
 	} {
 		table := proc.NewTable(&proc.Process{PID: 42, Args: tc.args})
@@ -85,10 +85,10 @@ func TestLabPlatformPID(t *testing.T) {
 // releases (or forces release of) the lab before its background command exits.
 func TestLabReleaseWaitsForPlatformExit(t *testing.T) {
 	for _, force := range []bool{false, true} {
-		t.Run(map[bool]string{false: "own", true: "forced"}[force], func(t *testing.T) {
+		t.Run(map[bool]string{false: "holder release", true: "forced"}[force], func(t *testing.T) {
 			a := claimApp(t, claimGrant(labOne, claimFirst, time.Minute))
 			holdLease(t, a, labOne, claimMe)
-			machine := restoreMachine{Machine: plat.Machine, table: proc.NewTable(&proc.Process{PID: 42, Args: []string{"agentlab", "platform", "--lab", labOne}})}
+			machine := restoreMachine{Machine: plat.Machine, table: proc.NewTable(&proc.Process{PID: 42, Args: []string{agentlabCmd, labPlatformCommand, labSelectorFlag, labOne}})}
 			plat.Machine = machine
 			args := []string{"release", labOne}
 			if force {

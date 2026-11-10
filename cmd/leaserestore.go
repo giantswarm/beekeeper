@@ -7,24 +7,29 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+const (
+	labPlatformCommand = "platform"
+	labSelectorFlag    = "--lab"
+)
+
 // A platform command can outlive its worker's turn. Keep the lease until
 // it exits, including on forced and automatic releases. Missing --lab is
 // ambiguous, so it conservatively protects every lab.
 func labPlatformPID(table *proc.Table, resource, cluster string) int {
 	for _, p := range table.ByPID {
-		if len(p.Args) < 2 || filepath.Base(p.Args[0]) != "agentlab" {
+		if len(p.Args) < 2 || filepath.Base(p.Args[0]) != agentlabCmd {
 			continue
 		}
 		platform := false
 		lab := ""
 		for i, arg := range p.Args[1:] {
-			if arg == "platform" {
+			if arg == labPlatformCommand {
 				platform = true
 			}
 			if strings.HasPrefix(arg, "--lab=") {
 				lab = strings.TrimPrefix(arg, "--lab=")
 			}
-			if arg == "--lab" && i+2 < len(p.Args) {
+			if arg == labSelectorFlag && i+2 < len(p.Args) {
 				lab = p.Args[i+2]
 			}
 		}
