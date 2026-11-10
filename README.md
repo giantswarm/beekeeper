@@ -128,12 +128,14 @@ On the person's explicit emergency authorization, the current guide can run
 and matches the observed head; it bypasses desk review and the merge lane while
 GitHub branch protection still applies. `emergency merge owner/repo 123 --admin
 --head <sha>` is the person's exception for a pull request GitHub keeps at
-REVIEW_REQUIRED: the current guide interprets the verbatim authorization, including
+REVIEW_REQUIRED or with an unset review decision (no GitHub review required):
+the current guide interprets the verbatim authorization, including
 a general merge order, and selects one PR and head per invocation. It must be
 green, mergeable and up to date with its base at that exact head, with an approved desk review or the
 loop's go. It reads the base's effective rules and requires every required
 context on that head, including any required App identity. It refuses unreadable
-requirements, classic protection, and non-review rules it cannot verify.
+requirements, classic protection, and non-review rules it cannot verify. Ruleset
+`required_reviewers` is a review requirement covered by this exception.
 `emergency hold set/lift`, `emergency
 start` (forced capacity admission; an active authenticated grant also overrides
 exhausted main-outage repair barriers, with a durable audit record), and `emergency capacity capacity.ceiling 4`

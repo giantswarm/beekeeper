@@ -477,6 +477,39 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 	}
 }
 
+// An unset GitHub review decision is normal when protection requires no review.
+// It still needs exact-head desk authority, green checks and the bounded grant.
+func TestEmergencyAdminMergeWithUnsetReviewDecision(t *testing.T) {
+	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
+		Mergeable: emergencyMergeable, MergeState: emergencyClean}
+	for _, name := range []string{"accepted", "head moved", "checks failing", "draft", "closed", "no go"} {
+		t.Run(name, func(t *testing.T) {
+			p := green
+			switch name {
+			case "head moved":
+				p.Head = "def4567"
+			case "checks failing":
+				p.Green = false
+			case "draft":
+				p.Draft = true
+			case "closed":
+				p.State = "CLOSED"
+			}
+			calls, err := adminMergeCall(t, "Merge them all.", p, 0, name != "no go")
+			if name != "accepted" {
+				if Code(err) != ExitRefused || len(calls) != 0 {
+					t.Fatalf("err %v, calls %v", err, calls)
+				}
+				return
+			}
+			want := []string{"pr", gitMerge, "7", "--repo", emergencyTestRepo, "--squash", "--admin", "--match-head-commit", emergencyAdminHead}
+			if err != nil || len(calls) != 1 || !slices.Equal(calls[0], want) {
+				t.Fatalf("err %v, calls %v", err, calls)
+			}
+		})
+	}
+}
+
 func TestEmergencyAdminMergeUsesConfiguredMethod(t *testing.T) {
 	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
 		ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: emergencyBlocked}
