@@ -398,3 +398,18 @@ func TestRestartBrokerFailureRevokesHandover(t *testing.T) {
 		t.Fatal("failed restart did not revoke its snapshot")
 	}
 }
+
+func TestWatchCancellationSkipsBackgroundStartAndPendingSteps(t *testing.T) {
+	w, _ := loopWatcher(t, "1h", "", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.ctx = ctx
+	ranBg := false
+	w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { ranBg = true })
+	w.bg.Wait()
+	if ranBg {
+		t.Fatal("canceled watcher started a background run")
+	}
+	w.exposures()
+	w.pending(ctx, nil)
+}

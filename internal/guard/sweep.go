@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"os"
@@ -27,11 +28,22 @@ var remoteCredential = regexp.MustCompile(`(?m)^\s*(?:push)?url\s*=\s*[a-z][a-z0
 // files and git repositories whose remote URL carries a credential. Symlinks
 // are not followed; unreadable directories are passed over.
 func Sweep(roots []string, depth int) []Exposure {
+	return SweepContext(context.Background(), roots, depth)
+}
+
+// SweepContext is Sweep bounded by ctx.
+func SweepContext(ctx context.Context, roots []string, depth int) []Exposure {
 	var out []Exposure
 	for _, root := range roots {
+		if ctx != nil && ctx.Err() != nil {
+			return out
+		}
 		root = filepath.Clean(root)
 		base := strings.Count(root, string(filepath.Separator))
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if ctx != nil && ctx.Err() != nil {
+				return fs.SkipAll
+			}
 			if err != nil {
 				return nil //nolint:nilerr // an unreadable entry is passed over
 			}

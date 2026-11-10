@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,12 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 	for _, result := range []string{ciSucceeded, ciLintRed} {
 		t.Run(result, func(t *testing.T) {
 			a, r := executionTestApp(t)
+			previousReviewGH := executionReviewGH
+			t.Cleanup(func() { executionReviewGH = previousReviewGH })
+			executionReviewGH = func(context.Context, ...string) ([]byte, error) {
+				return []byte(fmt.Sprintf(`{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, executionBranch(r.Ref), ciHead, r.Repository)), nil
+			}
+
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Starts[0].Execution.Request.Messaging = true
 				return nil, nil
@@ -104,30 +111,25 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			stage := execution.Stored
-			fake := &testExecutionTransport{message: func(_ context.Context, _ execution.Ref, m execution.Envelope) (execution.Ack, error) {
-				return execution.Ack{ID: m.ID, Sequence: m.Sequence, Stage: stage}, nil
-			}}
-			a.executionTransport = func(execution.Host) execution.Transport { return fake }
 			w.wakeTimer(context.Background(), fires[0])
 			stored, err := a.store.Read()
-			if err != nil || stored.Agents[0].Park == nil || len(stored.Starts[0].Execution.Messages) != 1 || len(stored.Timers) != 0 {
-				t.Fatalf("park lost before acceptance: %v", err)
+			if err != nil || stored.Agents[0].Park == nil || len(stored.Starts[0].Execution.Messages) != 0 || len(stored.Timers) != 0 {
+				t.Fatalf("CI used the old execution: %v", err)
 			}
-			// Replaying a fire after outbox insertion must reuse the receipt.
+			park := stored.Agents[0].Park
+			if result == ciSucceeded {
+				if park.Checks || park.ReviewHead != ciHead || len(stored.ReviewParks) != 1 {
+					t.Fatalf("green CI not handed to review: %+v", park)
+				}
+			} else if len(park.Continuation) != 1 {
+				t.Fatalf("red CI lost its fresh continuation: %+v", park)
+			}
 			w.wakeTimer(context.Background(), fires[0])
-			replayed, err := a.store.Read()
-			if err != nil || len(replayed.Starts[0].Execution.Messages) != 1 {
-				t.Fatalf("replayed CI wake duplicated delivery: %v", err)
+			replayed, _ := a.store.Read()
+			if len(replayed.Starts[0].Execution.Messages) != 0 || len(replayed.Agents[0].Park.Continuation) != len(park.Continuation) {
+				t.Fatal("replay duplicated a delivery")
 			}
-			stage = execution.Accepted
-			if err := a.syncExecutionMessages(context.Background(), r.Ref); err != nil {
-				t.Fatal(err)
-			}
-			accepted, err := a.store.Read()
-			if err != nil || accepted.Agents[0].Park != nil || accepted.Starts[0].Execution.Messages[0].Stage != execution.Accepted {
-				t.Fatalf("accepted CI wake did not end park: %v", err)
-			}
+
 		})
 	}
 }

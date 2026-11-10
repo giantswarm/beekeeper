@@ -19,6 +19,8 @@ const (
 	loopPhaseObserve  = "observe workers and pull requests"
 )
 
+const loopPhaseStartupHistory = "read loop startup history"
+
 // Phase transitions are bounded progress evidence. Only the loop holding
 // the exclusive loop lock writes it; failed contenders cannot overwrite it.
 // No command output, paths, configuration or lock-holder identities are saved.
@@ -32,11 +34,13 @@ type loopLifecycle struct {
 	Failure string    `json:"failure,omitempty"`
 }
 
+var loopLifecycleNow = time.Now
+
 func (l *supervisorLoop) lifecyclePhase(phase string) {
 	if l.lifecycle == nil {
 		return
 	}
-	l.lifecycle.Phase, l.lifecycle.At = phase, time.Now().UTC()
+	l.lifecycle.Phase, l.lifecycle.At = phase, loopLifecycleNow().UTC()
 	// Diagnostics must not change loop admission or turn a successful pass
 	// into a failure. Recovery reports missing evidence when this write fails.
 	_ = l.a.store.WriteFile(loopLifecycleFile, l.lifecycle)

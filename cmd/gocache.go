@@ -170,7 +170,7 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 	}
 	release, ok, err := gocache.TryTrim(r.dir)
 	if err == nil && !ok && r.before > goCacheForce(r.max) {
-		release, ok, err = r.holdForRuns()
+		release, ok, err = r.holdForRuns(a.context())
 	}
 	if err != nil || !ok {
 		r.used, r.err = err == nil, err
@@ -188,9 +188,15 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 	r.waits = builds()
 	r.forced = len(r.waits) > 0 && r.before > goCacheForce(r.max)
 	if len(r.waits) == 0 || r.forced {
-		busy := func() bool { r.waits = builds(); return len(r.waits) > 0 }
+		busy := func() bool {
+			if a.context().Err() != nil {
+				return true
+			}
+			r.waits = builds()
+			return len(r.waits) > 0
+		}
 		if r.forced {
-			busy = func() bool { return false }
+			busy = func() bool { return a.context().Err() != nil }
 		}
 		var freed int64
 		freed, r.removed, err = gocache.Trim(u, r.max*3/4, busy)
@@ -207,8 +213,8 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 
 // holdForRuns waits up to goCacheHoldWait for the beekeeper runs that hold
 // the cache, new runs waiting behind it; ok false once the wait ran out.
-func (r *goCacheRun) holdForRuns() (release func(), ok bool, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), goCacheHoldWait)
+func (r *goCacheRun) holdForRuns(parent context.Context) (release func(), ok bool, err error) {
+	ctx, cancel := context.WithTimeout(parent, goCacheHoldWait)
 	defer cancel()
 	t0 := time.Now()
 	release, err = gocache.Hold(ctx, r.dir, func() {})

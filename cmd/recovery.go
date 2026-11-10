@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +83,11 @@ var recoveryGitHubUp = func(ctx context.Context) bool {
 
 // recoveryRecord writes one recovery event; the tests replace it.
 var recoveryRecord = func(s state.Store, e state.Event) error { return s.Record(e) }
+
+var (
+	recoveryReadProcs     = proc.Read
+	recoveryProcessBinary = processBinary
+)
 
 // recoveryController supervises one candidate's probation from outside it. It
 // runs the retained last-known-good bytes in a unit of its own, so that neither
@@ -440,23 +446,27 @@ func (c *recoveryController) report(line string) error {
 // failed binary past recoveryRestartTicks is restarted, since a broken loop may
 // never reach a quiet moment. It says whether nothing is left to do.
 func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
-	t, err := proc.Read()
+	t, err := recoveryReadProcs()
 	if err != nil {
 		return attempt >= recoveryRestartTicks
 	}
-	stale := staleBinaries(t, os.Getpid(), replacedBinary)
-	_, _ = c.a.restartReplaced(c.w, c.target, t, false)
-	restartBrokerOn(ctx, c.w, c.target, time.Now(), t, false, c.a.cfg.Secret.Session)
+	due, _ := requestRestarts(c.w, c.a.cfg.StateDir, c.target, t, recoveryProcessBinary, c.now(), false)
+	var written time.Time
+	if fi, err := os.Stat(c.target); err == nil {
+		written = fi.ModTime()
+	}
+	brokerPending := !written.IsZero() && restartBrokerOn(ctx, c.w, c.target, written, t, false, c.a.cfg.Secret.Session)
+	settled := len(due) == 0 && !brokerPending
 	if !plat.Launcher.Available() {
-		return len(stale) == 0 || attempt >= recoveryRestartTicks
+		return settled || attempt >= recoveryRestartTicks
 	}
 	if !unitComingUp(plat.Launcher.State(ctx, loopUnit)) {
 		_ = plat.Launcher.Resume(ctx, loopUnit)
-	} else if attempt >= recoveryRestartTicks && len(stale) > 0 {
+	} else if attempt >= recoveryRestartTicks && slices.ContainsFunc(due, isSupervisorLoop) {
 		_ = plat.Launcher.Stop(ctx, loopUnit)
 		_ = plat.Launcher.Resume(ctx, loopUnit)
 	}
-	return len(stale) == 0 || attempt >= recoveryRestartTicks
+	return settled || attempt >= recoveryRestartTicks
 }
 
 func (c *recoveryController) promote(ctx context.Context, j *update.Journal) (bool, error) {

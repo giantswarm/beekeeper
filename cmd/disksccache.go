@@ -28,7 +28,14 @@ const sccacheStopWait = 30 * time.Second
 // size accounting starts again from the trimmed cache; one that does not
 // stop keeps the cache, and a server that starts during the trim ends it.
 func pruneSccache(r *diskRun, m diskMachine, capBytes int64, pressure bool) {
-	if m.sccache == "" {
+	pruneSccacheContext(context.Background(), r, m, capBytes, pressure)
+}
+
+func pruneSccacheContext(ctx context.Context, r *diskRun, m diskMachine, capBytes int64, pressure bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if m.sccache == "" || ctx.Err() != nil {
 		return
 	}
 	if diskprune.InUse(m.sccache, m.refs) {
@@ -38,6 +45,9 @@ func pruneSccache(r *diskRun, m diskMachine, capBytes int64, pressure bool) {
 	u, err := scanSccache(m.sccache)
 	if err != nil {
 		r.Errors = append(r.Errors, fmt.Errorf("sccache: %w", err))
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	defer recordBuiltin(r, config.DiskCacheSccache, m.sccache, u, r.Freed)
@@ -64,10 +74,15 @@ func pruneSccache(r *diskRun, m diskMachine, capBytes int64, pressure bool) {
 			return
 		}
 	}
-	freed, removed, err := gocache.Trim(u, target, func() bool { return len(servers()) > 0 })
+	if ctx.Err() != nil {
+		return
+	}
+	freed, removed, err := gocache.Trim(u, target, func() bool { return ctx.Err() != nil || len(servers()) > 0 })
 	r.Freed += freed
 	r.Removed += removed
 	switch {
+	case ctx.Err() != nil:
+		return
 	case errors.Is(err, gocache.ErrBusy):
 		r.Keep("sccache: a build started")
 	case err != nil:

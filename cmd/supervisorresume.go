@@ -30,7 +30,7 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 		return nil
 	}
 	for _, ag := range st.Agents {
-		if ag.Done || ag.Task == "" || ag.Execution != nil || roleRun(st, ag.Party) {
+		if ag.Done || ag.Task == "" || ag.Execution != nil || roleRun(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
 			continue
 		}
 		qerr := agyQuotaError(l.a.cfg, ag)
@@ -124,7 +124,7 @@ type quotaRound struct {
 // started, from the last claim the loop logged under ag's name; nil for
 // any other session.
 func (l *supervisorLoop) quotaReview(st *state.State, ag state.Agent) (*quotaRound, error) {
-	evs, err := l.a.store.Follow("supervisor-review-quota", func(e state.Event) bool { return e.By.Name == loopParty.Name && e.Verb == loopClaimVerb })
+	evs, err := state.FollowSnapshot(l.a.store, "supervisor-review-quota", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.By.Name == loopParty.Name && e.Verb == loopClaimVerb }))
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 
 func endedParkCandidate(ag state.Agent) bool {
 	_, _, nonClaude := harnessForHost(ag.HostSession)
-	return nonClaude && !ag.Done && ag.Task != "" && ag.Execution == nil && ag.Park != nil && !ag.Park.Resumable.IsZero()
+	return nonClaude && !ag.Done && ag.Task != "" && ag.Execution == nil && ag.Park != nil && !ag.Park.Resumable.IsZero() && len(ag.Park.Continuation) == 0 && !ag.Park.Continuing
 }
 
 func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref string) error {

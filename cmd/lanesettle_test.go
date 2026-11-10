@@ -59,13 +59,13 @@ func TestLaneSettleWaitsForTermedGate(t *testing.T) {
 func TestLaneSettleWaitBoundAndCancellation(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		t.Run(strconv.FormatBool(child), func(t *testing.T) {
-			m := state.Merge{Repo: "o/r", PR: 1, Phase: state.Running, PID: os.Getpid()}
+			m := state.Merge{Repo: repo, PR: 1, Phase: state.Running, PID: os.Getpid()}
 			if child {
 				m.PID, m.Child = 0, os.Getpid()
 			}
 			a := queueApp(t, m)
 			start := time.Now()
-			err := a.waitSettleRun(context.Background(), "o/r", 1, 20*time.Millisecond)
+			err := a.waitSettleRun(context.Background(), repo, 1, 20*time.Millisecond)
 			for _, want := range []string{refOne, strconv.Itoa(os.Getpid()), "still exiting", "20ms", "retry: beekeeper lanes settle o/r 1"} {
 				if err == nil || !strings.Contains(err.Error(), want) {
 					t.Fatalf("want %q in %v", want, err)
@@ -80,7 +80,7 @@ func TestLaneSettleWaitBoundAndCancellation(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if err := a.waitSettleRun(ctx, "o/r", 1, time.Minute); !errors.Is(err, context.Canceled) {
+			if err := a.waitSettleRun(ctx, repo, 1, time.Minute); !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation: %v", err)
 			}
 		})
@@ -89,9 +89,9 @@ func TestLaneSettleWaitBoundAndCancellation(t *testing.T) {
 
 // A gate can finish and remove its entry while settle waits for it.
 func TestLaneSettleWaitRereadsState(t *testing.T) {
-	a := queueApp(t, state.Merge{Repo: "o/r", PR: 1, Phase: state.Running, PID: os.Getpid()})
+	a := queueApp(t, state.Merge{Repo: repo, PR: 1, Phase: state.Running, PID: os.Getpid()})
 	done := make(chan error, 1)
-	go func() { done <- a.waitSettleRun(context.Background(), "o/r", 1, time.Second) }()
+	go func() { done <- a.waitSettleRun(context.Background(), repo, 1, time.Second) }()
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = nil
 		return nil, nil
