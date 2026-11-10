@@ -72,8 +72,10 @@ func Prelude(unalias []string, literalGlobs bool, path, drop []string, unheld st
 	if unheld != "" {
 		b.WriteString(`if [ -z "${` + sandbox.Runtime + `-}" ]; then` + "\n" + unheld)
 		writePath(&b, path)
-		b.WriteString("else\n")
-		writeDrop(&b, drop)
+		if len(drop) > 0 {
+			b.WriteString("else\n")
+			writeDrop(&b, drop)
+		}
 		b.WriteString("fi\n")
 	} else {
 		writeDrop(&b, drop)

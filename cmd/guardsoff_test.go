@@ -52,14 +52,18 @@ func TestPreToolUseGuardsOff(t *testing.T) {
 func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	t.Cleanup(func() { github.SetDevctlSkipVersionCheck(false) })
 	const (
-		optOut = github.DevctlSkipVersionCheckEnv + "=true"
-		repo   = "example/repo"
-		ver    = "v1.0.0"
+		optOut   = github.DevctlSkipVersionCheckEnv + "=true"
+		pathEnv  = "PATH=/usr/local/bin"
+		repo     = "example/repo"
+		ver      = "v1.0.0"
+		wantSkip = "SKIP"
+		wantEnf  = "ENFORCED"
 	)
 	var out bytes.Buffer
 	a, dir := scopeApp(t, &out)
 	envFile := filepath.Join(dir, "claude-env.sh")
 	t.Setenv("CLAUDE_ENV_FILE", envFile)
+	t.Setenv(beekeeperConfigEnv, a.cfgPath)
 
 	writeCfg := func(guards string) {
 		t.Helper()
@@ -97,7 +101,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if got := runSessionStart(); !strings.Contains(got, "export "+optOut) {
 		t.Fatalf("sessionstart with guards=false did not export %s:\n%s", optOut, got)
 	}
-	if env := cleanEnv([]string{"PATH=/usr/bin"}, a.cfgPath); !slices.Contains(env, optOut) {
+	if env := cleanEnv([]string{pathEnv}, a.cfgPath); !slices.Contains(env, optOut) {
 		t.Fatalf("cleanEnv with guards=false lacked %s: %v", optOut, env)
 	}
 	if env := devctlCommandEnv(a.cfgPath); !slices.Contains(env, optOut) {
@@ -106,26 +110,26 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 
 	bin := t.TempDir()
 	fakeDevctl := filepath.Join(bin, merge.Tool)
-	script := "#!/bin/sh\nif [ \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-}\" = \"true\" ]; then printf 'SKIP\\n'; else printf 'ENFORCED\\n'; fi\n"
+	script := "#!/bin/sh\nif [ \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-}\" = \"true\" ]; then printf '" + wantSkip + "\\n'; else printf '" + wantEnf + "\\n'; fi\n"
 	if err := os.WriteFile(fakeDevctl, []byte(script), 0o700); err != nil { //nolint:gosec // executable test fixture
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx := context.Background()
-	if got := strings.TrimSpace(string(releaseWait(ctx, repo, ver))); got != "SKIP" {
-		t.Fatalf("releaseWait with guards=false got %q, want SKIP", got)
+	if got := strings.TrimSpace(string(releaseWait(ctx, repo, ver))); got != wantSkip {
+		t.Fatalf("releaseWait with guards=false got %q, want %s", got, wantSkip)
 	}
-	if raw, err := waitReviewedRelease(ctx, repo, 1); err != nil || strings.TrimSpace(string(raw)) != "SKIP" {
+	if raw, err := waitReviewedRelease(ctx, repo, 1); err != nil || strings.TrimSpace(string(raw)) != wantSkip {
 		t.Fatalf("waitReviewedRelease with guards=false got %q, %v", raw, err)
 	}
-	if raw, err := readParkRelease(ctx, repo, ver); err != nil || strings.TrimSpace(string(raw)) != "SKIP" {
+	if raw, err := readParkRelease(ctx, repo, ver); err != nil || strings.TrimSpace(string(raw)) != wantSkip {
 		t.Fatalf("readParkRelease with guards=false got %q, %v", raw, err)
 	}
-	if res, err := runExecutionCIRerun(ctx, fakeDevctl, repo, 1); err != nil || strings.TrimSpace(res.Output) != "SKIP" {
+	if res, err := runExecutionCIRerun(ctx, fakeDevctl, repo, 1); err != nil || strings.TrimSpace(res.Output) != wantSkip {
 		t.Fatalf("runExecutionCIRerun with guards=false got %+v, %v", res, err)
 	}
-	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != "SKIP" {
+	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantSkip {
 		t.Fatalf("devctlToken with guards=false got %q, %v", tok, err)
 	}
 
@@ -137,16 +141,16 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if got := runSessionStart(); !strings.Contains(got, "unset "+github.DevctlSkipVersionCheckEnv) || strings.Contains(got, "export "+optOut) {
 		t.Fatalf("sessionstart with guards=true did not unset %s:\n%s", github.DevctlSkipVersionCheckEnv, got)
 	}
-	if env := cleanEnv([]string{"PATH=/usr/bin", optOut}, a.cfgPath); slices.Contains(env, optOut) {
+	if env := cleanEnv([]string{pathEnv, optOut}, a.cfgPath); slices.Contains(env, optOut) {
 		t.Fatalf("cleanEnv with guards=true kept %s: %v", optOut, env)
 	}
 	if env := devctlCommandEnv(a.cfgPath); slices.Contains(env, optOut) {
 		t.Fatalf("devctlCommandEnv with guards=true kept %s: %v", optOut, env)
 	}
-	if got := strings.TrimSpace(string(releaseWait(ctx, repo, ver))); got != "ENFORCED" {
-		t.Fatalf("releaseWait with guards=true got %q, want ENFORCED", got)
+	if got := strings.TrimSpace(string(releaseWait(ctx, repo, ver))); got != wantEnf {
+		t.Fatalf("releaseWait with guards=true got %q, want %s", got, wantEnf)
 	}
-	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != "ENFORCED" {
+	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantEnf {
 		t.Fatalf("devctlToken with guards=true got %q, %v", tok, err)
 	}
 }

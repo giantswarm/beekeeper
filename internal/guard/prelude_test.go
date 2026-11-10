@@ -271,10 +271,10 @@ func TestDevctlVersionGateShellTogglesExportAndUnset(t *testing.T) {
 			if err := WritePrelude(env, Prelude(nil, false, nil, nil, DevctlVersionGateShell(true))); err != nil {
 				t.Fatal(err)
 			}
-			c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-unset}\"") //nolint:gosec // the test's own shells
+			c := exec.Command(bin, "-c", ". "+env+"\nprintf '%s' \"${DEVCTL_UNSAFE_SKIP_VERSION_CHECK-"+unsetCmd+"}\"") //nolint:gosec // the test's own shells
 			c.Env = append(os.Environ(), "DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true")
 			out, err = c.CombinedOutput()
-			if err != nil || string(out) != "unset" {
+			if err != nil || string(out) != unsetCmd {
 				t.Fatalf("guards on in %s did not unset inherited variable: %v: %q", sh, err, out)
 			}
 		})

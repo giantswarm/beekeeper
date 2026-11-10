@@ -85,16 +85,19 @@ func TestLowestBudgetKeepsLowCounterAndHigherIdentityRefusal(t *testing.T) {
 
 func TestDevctlEnvFollowsGuardsToggle(t *testing.T) {
 	t.Cleanup(func() { SetDevctlSkipVersionCheck(false) })
-	const optOut = DevctlSkipVersionCheckEnv + "=true"
-	base := []string{"PATH=/usr/bin", optOut}
+	const (
+		optOut  = DevctlSkipVersionCheckEnv + "=true"
+		pathEnv = "PATH=/usr/bin"
+	)
+	base := []string{pathEnv, optOut}
 	if got := DevctlEnv(base, false); slices.Contains(got, optOut) {
 		t.Fatalf("DevctlEnv(skip=false) kept %s: %v", optOut, got)
 	}
-	if got := DevctlEnv([]string{"PATH=/usr/bin"}, true); !slices.Contains(got, optOut) {
+	if got := DevctlEnv([]string{pathEnv}, true); !slices.Contains(got, optOut) {
 		t.Fatalf("DevctlEnv(skip=true) lacked %s: %v", optOut, got)
 	}
 	SetDevctlSkipVersionCheck(true)
-	if got := budgetEnv([]string{"PATH=/usr/bin"}); !slices.Contains(got, optOut) {
+	if got := budgetEnv([]string{pathEnv}); !slices.Contains(got, optOut) {
 		t.Fatalf("budgetEnv with skip=true lacked %s: %v", optOut, got)
 	}
 	SetDevctlSkipVersionCheck(false)
