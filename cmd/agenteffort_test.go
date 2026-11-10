@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -150,5 +153,41 @@ func TestEffortLoopYieldsToRule(t *testing.T) {
 	call := r.called(agentsName, agentStartName)
 	if i := slices.Index(call, effortFlag); i < 0 || call[i+1] != testEffortHigh {
 		t.Fatalf("worker without a rule lost the loop default: %q", call)
+	}
+}
+
+func TestCapacityEffortAfterHarnessSelection(t *testing.T) {
+	a, _ := stubApp(t)
+	dir := t.TempDir()
+	a.cfg.Codex.ConfigFile = filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(`{"models":[{"slug":"test-model","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Harness: codex.Harness, Kind: taskKindReview, Effort: testEffortLow}}
+	for _, tc := range []struct {
+		name, kind, harness, explicit, choice, want string
+		invalid                                     bool
+	}{
+		{"worker choice", workerRole, codex.Harness, "", testEffortHigh, testEffortHigh, false},
+		{"review rule", taskKindReview, codex.Harness, "", testEffortHigh, testEffortLow, false},
+		{"explicit override", taskKindReview, codex.Harness, testEffortHigh, testEffortLow, testEffortHigh, false},
+		{"agy after codex", taskKindReview, harnessAgy, "", "", "", false},
+		{"unsupported model effort", workerRole, codex.Harness, "", testEffortMax, "", true},
+		{"explicit agy refusal", workerRole, harnessAgy, testEffortHigh, "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := a.selectedEffort("worker", tc.kind, tc.harness, "test-model", tc.explicit, tc.choice)
+			if (err != nil) != tc.invalid || got != tc.want {
+				t.Fatalf("got %q, %v; want %q, invalid=%v", got, err, tc.want, tc.invalid)
+			}
+		})
+	}
+}
+
+func TestForcedChoiceRetainsEffort(t *testing.T) {
+	v := &capacityView{Choice: &choiceView{Candidates: []choiceCandidate{{Harness: codex.Harness, Model: "test-model", Effort: testEffortHigh}}}}
+	ch, err := pickAutoChoice(v, true)
+	if err != nil || ch.Effort != testEffortHigh {
+		t.Fatalf("choice=%+v err=%v", ch, err)
 	}
 }

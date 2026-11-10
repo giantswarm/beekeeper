@@ -129,15 +129,21 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	exclude := append(slices.Clone(o.Exclude), hostUnoffered(caps)...)
 	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
+	choiceEffort := ""
 	if o.Harness == harnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
 		if err != nil {
 			return err
 		}
 		o.Harness, o.Model = choice.Harness, choice.Model
+		choiceEffort = choice.Effort
 	}
 	if !execution.SupportedHarness(o.Harness) || slices.Contains(exclude, o.Harness) || o.Model == "" {
 		return usageErr("remote %s requires an explicit --model or a configured auto choice this host offers", o.Harness)
+	}
+	o.Effort, err = a.selectedEffort(name, a.selectionKind, o.Harness, o.Model, o.Effort, choiceEffort)
+	if err != nil {
+		return err
 	}
 	if o.Harness == execution.HarnessAgy {
 		if err := refuseAgyEffort(o.Effort); err != nil {
