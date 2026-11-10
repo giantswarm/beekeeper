@@ -678,7 +678,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 	p("%s\n", intro)
 	p("## Recorded decisions\n\n%s", decisionHistoryText(decisions))
 	p("## Emergency grant\n\n%s\n", emergencyText(st, a.now))
-	p("Use a covering active grant immediately to unblock a system standstill and report the action. Relay needs no new words from the person; never extend its deadline implicitly.\n")
+	p("Check `beekeeper supervisor status` on takeover and at least every five minutes while pending work is held. When the loop holds every start or every merge for five minutes, use a covering active grant in that turn and report the command and outcome; act sooner on a known standstill. Carry its first-observed time and attempted recovery into the handover; relay never restarts the clock. Preserve the person's stops, explicit holds and CI gates. Relay needs no new words from the person; never extend the grant's deadline implicitly. Read `beekeeper answer history` before asking. Ask only when no grant covers the action, with a push notification through the configured notification channel, not background chat alone. Record notification failure as a problem and continue independent work.\n")
 	p("## Pending state, %s\n", a.stamp(a.now))
 	if s != "" {
 		section(p, "Standing instructions", false, "")
