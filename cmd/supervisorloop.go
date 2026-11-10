@@ -1598,6 +1598,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			claims[key] = loopClaim{at: e.At, target: rest}
 		case e.Verb == loopClaimEndVerb:
 			delete(claims, key)
+			delete(failures, key)
 			in.Taken = slices.DeleteFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == key })
 		case e.Verb == loopStageVerb:
 			stages[key] = true
@@ -1842,7 +1843,19 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			ref, _, ok := strings.Cut(tuple, "@")
 			head := superloop.KeyHead(key)
 			p, present := in.Pulls[ref]
-			if !ok || !present || p.State != superloop.Merged || p.Head != head {
+			if !ok || !present {
+				continue
+			}
+			if staleMergeDecision(p, head) && !(p.State == superloop.Merged && p.Head == head) {
+				why := "merge decision overtaken by " + p.State + " head " + p.Head
+				if err := a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+					return err
+				}
+				delete(claims, key)
+				delete(failures, key)
+				continue
+			}
+			if p.State != superloop.Merged || p.Head != head {
 				continue
 			}
 			act := superloop.Action{Key: key, Kind: superloop.KindGo, Ref: ref, URL: p.URL, Head: head, Agent: c.target}

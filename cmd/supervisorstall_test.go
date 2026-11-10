@@ -253,3 +253,37 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopSettlesOvertakenMergeDecisionsBeforeAlarm(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pull superloop.Pull
+	}{
+		{"merged", superloop.Pull{State: superloop.Merged, Head: stallHead}},
+		{"closed", superloop.Pull{State: superloop.Closed, Head: stallHead}},
+		{"superseded", superloop.Pull{State: superloop.Open, Head: "replacement"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := fillRig(t)
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			act := superloop.Action{Kind: superloop.KindGo, Key: "go " + epicTen + "@" + stallHead, Ref: epicTen, Head: stallHead}
+			in := superloop.Input{Pulls: map[string]superloop.Pull{epicTen: {State: superloop.Open, Head: stallHead}}}
+			if err := l.checkFlowWaits(in, []superloop.Action{act}, nil); err != nil {
+				t.Fatal(err)
+			}
+			r.a.now = r.a.now.Add(loopStallAfter)
+			in.Pulls[epicTen] = tc.pull
+			// A stale action from an earlier observation must not keep the
+			// episode alive or file an alarm at the deadline.
+			if err := l.checkFlowWaits(in, []superloop.Action{act}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(l.flowWaits) != 0 || len(r.logged(t, "supervisor.file")) != 0 {
+				t.Fatalf("overtaken merge decision remains pending: %+v", l.flowWaits)
+			}
+		})
+	}
+}
