@@ -12,11 +12,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
+const (
+	moveSourceRef = "op://Shared/db"
+	moveTeamVault = "Team Shared"
+)
+
 func TestSecretMoveOutputAndAuditNeverContainToolValues(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			a, _, _ := secretApp(t)
-			a.cfg.Secret.MoveVaults = []string{"Team Shared"}
+			a.cfg.Secret.MoveVaults = []string{moveTeamVault}
 			a.cfg.Secret.TokenFile = "/must-not-read-service-token"
 			t.Setenv(sandbox.Brokered, "1")
 			secretRun = func(context.Context, string, []string, io.Reader, string, ...string) ([]byte, error) {
@@ -25,7 +30,7 @@ func TestSecretMoveOutputAndAuditNeverContainToolValues(t *testing.T) {
 				}
 				return []byte(secretValue), nil
 			}
-			out, err := runSecret(a, secretMoveOp, "op://Shared/db", "Team Shared")
+			out, err := runSecret(a, secretMoveOp, moveSourceRef, moveTeamVault)
 			if (err != nil) != fail {
 				t.Fatalf("move outcome: %v", err)
 			}
@@ -55,7 +60,7 @@ func TestMoveBypassesVaultKeeperAndIsNeverRetried(t *testing.T) {
 			return sandbox.Reply{Code: ExitVault, Err: "session expired"}, nil
 		}
 	})
-	req := sandbox.Request{Op: sandbox.OpSecret, Args: []string{secretMoveOp, "op://Shared/db", "Team Shared"}}
+	req := sandbox.Request{Op: sandbox.OpSecret, Args: []string{secretMoveOp, moveSourceRef, moveTeamVault}}
 	if err := brokeredSecretArgs(req.Args, true, false); err != nil {
 		t.Fatal(err)
 	}
@@ -71,12 +76,12 @@ func TestSecretMoveRequiresBrokerWithoutSessionMode(t *testing.T) {
 	a, _, _ := secretApp(t)
 	t.Setenv(sandbox.Brokered, "")
 	t.Setenv(sandbox.Env, "")
-	a.cfg.Secret.MoveVaults = []string{"Team Shared"}
+	a.cfg.Secret.MoveVaults = []string{moveTeamVault}
 	secretRun = func(context.Context, string, []string, io.Reader, string, ...string) ([]byte, error) {
 		t.Fatal("move ran in caller instead of broker")
 		return nil, nil
 	}
-	_, err := runSecret(a, secretMoveOp, "op://Shared/db", "Team Shared")
+	_, err := runSecret(a, secretMoveOp, moveSourceRef, moveTeamVault)
 	if err == nil || !strings.Contains(err.Error(), "no sandbox broker") {
 		t.Fatalf("expected broker requirement: %v", err)
 	}

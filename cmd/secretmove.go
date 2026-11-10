@@ -10,6 +10,12 @@ import (
 
 const secretMoveOp = "move"
 
+type secretMoveResult struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Status      string `json:"status"`
+}
+
 func (a *app) secretMoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "move op://<source-vault>/<item> <destination-vault>",
@@ -39,7 +45,7 @@ must be updated; the moved item gets a new ID. Use the item ID when titles are a
 			if err := a.secretLog(err, secretMoveOp, "%s to %s: %s", args[0], args[1], outcome(err, "moved")); err != nil {
 				return err
 			}
-			return a.secretPrint(map[string]string{"source": args[0], "destination": args[1], "status": "moved"},
+			return a.secretPrint(secretMoveResult{Source: args[0], Destination: args[1], Status: "moved"},
 				fmt.Sprintf("moved %s to %s\n", args[0], args[1]))
 		},
 	}
