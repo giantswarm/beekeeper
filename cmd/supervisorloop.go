@@ -916,7 +916,12 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		a.loopNow = &atomic.Pointer[time.Time]{}
 	}
 	defer a.loopNow.Store(nil)
-	l, err := a.newSupervisorLoop(false)
+	if err := a.prepareEventSegmentation(); err != nil {
+		return err
+	}
+	startup := &supervisorLoop{a: a, lifecycle: life}
+	startup.lifecyclePhase(loopPhaseStartupHistory)
+	l, err := a.newSupervisorLoop(false, func() { startup.lifecyclePhase(loopPhaseStartupHistory) })
 	if err != nil {
 		return err
 	}
@@ -1060,13 +1065,17 @@ func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
 
 // newSupervisorLoop logs the loop's start, unless it is a dry run, and
 // bounds its events by its first.
-func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
+func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*supervisorLoop, error) {
 	// Every loop can run actions concurrently, including a directly constructed
 	// loop. Give all its output paths the same synchronized writer.
 	if _, ok := a.out.(*loopOutput); !ok {
 		a.out = &loopOutput{out: a.out}
 	}
-	starts, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loopStartVerb })
+	keepStart := func(e state.Event) bool { return e.Verb == loopStartVerb }
+	if len(progress) > 0 {
+		keepStart = eventProgressFilter(keepStart, progress[0], time.Now)
+	}
+	starts, err := state.FollowSnapshot(a.store, "supervisor-loop-starts", "v1", keepStart)
 	if err != nil {
 		return nil, err
 	}
@@ -1435,7 +1444,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
-	taken, err := a.store.Follow("supervisor-loop-taken", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
+	taken, err := state.FollowSnapshot(a.store, "supervisor-loop-taken", "v1", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
 	if err != nil {
 		return err
 	}
@@ -1498,7 +1507,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.stages, l.stageDetail = stages, stageDetail
 	l.mu.Unlock()
 	since := l.since
-	evs, err := a.store.Follow("supervisor-loop", l.eventHistoryFilter(func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.store, "supervisor-loop", "v1:"+l.since.Format(time.RFC3339Nano), l.eventHistoryFilter(func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
 	}))
 	if err != nil {
@@ -1541,7 +1550,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
-	answers, err := a.store.Follow("supervisor-loop-answers", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
+	answers, err := state.FollowSnapshot(a.store, "supervisor-loop-answers", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
 	if err != nil {
 		return err
 	}
@@ -1566,7 +1575,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
+	l.lifecyclePhase("discover pull requests")
 	swept := l.sweepPulls(ctx, in, tracked)
+	l.lifecyclePhase("observe repository ownership")
 	if len(tracked)+len(swept) > 0 && !l.ownership(ctx, &in.Desk) {
 		tracked = nil
 	} else {
@@ -1580,6 +1591,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// Each completed observation is progress, even when the batch takes
+		// longer than the recovery heartbeat window. Never refresh in the
+		// background while an individual observation is blocked.
+		l.lifecyclePhase("observe pull requests")
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
 		}
@@ -4689,6 +4704,9 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, fires, _ = settleTimersMatching(current, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
+		for _, line := range lines {
+			evs = append(evs, event(watchParty, "watch.timer", "%s", line))
+		}
 		return evs, nil
 	}); err != nil {
 		return err
@@ -4696,7 +4714,7 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	// Each batch keeps its own time while later passes advance the clock.
 	w := &watcher{app: a.snapshotAtNow()}
 	for _, line := range lines {
-		w.emitNow("timer", "%s", line)
+		w.outputEvent(line)
 	}
 	l.timerActs.Go(func() {
 		w.actTimers(ctx, fires)

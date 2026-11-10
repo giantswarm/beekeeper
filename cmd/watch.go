@@ -1188,14 +1188,25 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 
 // emitNow records every event immediately, then batches only known routine lines.
 func (w *watcher) emitNow(key string, format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
-	if key != "resolver" && w.resolverFailure(line) {
-		return
+	w.emitLinesNow(key, []string{fmt.Sprintf(format, args...)})
+}
+
+func (w *watcher) emitLinesNow(key string, lines []string) {
+	var evs []state.Event
+	var kept []string
+	for _, line := range lines {
+		if key != "resolver" && w.resolverFailure(line) {
+			continue
+		}
+		kept = append(kept, line)
+		evs = append(evs, event(watchParty, "watch."+key, "%s", line))
 	}
-	if w.store != nil {
-		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
+	if w.store != nil && len(evs) > 0 {
+		_ = w.store.Record(evs...)
 	}
-	w.outputEvent(line)
+	for _, line := range kept {
+		w.outputEvent(line)
+	}
 }
 
 // sample reads the machine's numbers (memory, swap, load, pressure, disk,
@@ -2126,6 +2137,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		var evs []state.Event
 		verdicts = slices.DeleteFunc(slices.Clone(st.WorkerReports), func(r state.WorkerReport) bool { return r.TellTo == (state.Party{}) })
 		lines, evs, _ = fire(st)
+		for _, l := range lines {
+			evs = append(evs, event(watchParty, "watch.pending", "%s", l))
+		}
 		w.records = st.Records
 		due = firedNow(st, w.now)
 		return evs, nil
@@ -2136,7 +2150,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.clear("state-write")
 	for _, l := range lines {
-		w.emitNow("pending", "%s", l)
+		w.outputEvent(l)
 	}
 	w.tellReviewVerdicts(ctx, verdicts)
 	for _, n := range defaulted {

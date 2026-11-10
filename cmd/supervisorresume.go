@@ -124,7 +124,7 @@ type quotaRound struct {
 // started, from the last claim the loop logged under ag's name; nil for
 // any other session.
 func (l *supervisorLoop) quotaReview(st *state.State, ag state.Agent) (*quotaRound, error) {
-	evs, err := l.a.store.Follow("supervisor-review-quota", func(e state.Event) bool { return e.By.Name == loopParty.Name && e.Verb == loopClaimVerb })
+	evs, err := state.FollowSnapshot(l.a.store, "supervisor-review-quota", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.By.Name == loopParty.Name && e.Verb == loopClaimVerb }))
 	if err != nil {
 		return nil, err
 	}

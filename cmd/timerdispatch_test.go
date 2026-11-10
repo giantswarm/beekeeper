@@ -478,11 +478,17 @@ func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
 type timerWriteCountingStore struct {
 	state.Store
 	updates int
+	records int
 }
 
 func (s *timerWriteCountingStore) Update(fn func(*state.State) ([]state.Event, error)) error {
 	s.updates++
 	return s.Store.Update(fn)
+}
+
+func (s *timerWriteCountingStore) Record(events ...state.Event) error {
+	s.records++
+	return s.Store.Record(events...)
 }
 
 func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
@@ -494,7 +500,124 @@ func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.timerActs.Wait()
-	if store.updates != 0 {
-		t.Fatalf("idle timer dispatch rewrote state %d times", store.updates)
+	if store.updates != 0 || store.records != 0 {
+		t.Fatalf("idle timer dispatch wrote state updates=%d records=%d", store.updates, store.records)
+	}
+}
+
+func TestTimerDispatchBatchesSkippedAndFailedWakeRetries(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	a.cfg.Guide.Person = personTimo
+	oldWake := wakeOwner
+	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
+		return errors.New("target off roster")
+	}
+	t.Cleanup(func() { wakeOwner = oldWake })
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{
+			Party: state.Party{Name: agentOne},
+			Park:  &state.Park{On: "#3", Waits: verbAnswer, At: a.now},
+		}}
+		for id := 1; id <= 10; id++ {
+			target := agentOne
+			if id > 5 {
+				target = timerDispatchRepairWorker
+			}
+			st.Timers = append(st.Timers, state.Timer{
+				ID:    id,
+				Due:   a.now.Add(-time.Minute),
+				Every: time.Minute,
+				Wake:  target,
+				What:  timerProofFinished,
+			})
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := &timerWriteCountingStore{Store: a.store}
+	a.store = store
+	w, err := a.dispatchTimerPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.timerActs.Wait()
+	if store.updates > 3 || store.records != 0 {
+		t.Fatalf("unbounded timer state writes: updates=%d records=%d", store.updates, store.records)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Timers) != 10 {
+		t.Fatalf("expected 10 re-armed timers, got %d: %+v", len(st.Timers), st.Timers)
+	}
+	if got := fatalTimers(st, a.now); got.overdue != 0 {
+		t.Fatalf("re-armed batch reported overdue: %+v", got)
+	}
+}
+
+func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	a.cfg.GitHub.Floor = 100
+	checked := a.now.Add(-2 * time.Minute)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Timers = []state.Timer{
+			{
+				ID:                1,
+				Due:               a.now.Add(-10 * time.Minute),
+				Checked:           checked,
+				Every:             time.Minute,
+				When:              prMerged7,
+				PendingWakeReason: timerDueEarlier,
+				Wake:              timerDispatchRepairWorker,
+			},
+			{
+				ID:                2,
+				Due:               a.now.Add(-10 * time.Minute),
+				Checked:           checked,
+				Every:             time.Minute,
+				Probe:             probeHolds,
+				PendingWakeReason: timerDueEarlier,
+				Wake:              timerDispatchRepairWorker,
+			},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldBudget, oldReadProbe, oldProbe, oldWake := readBudget, readProbe, runProbe, wakeOwner
+	readBudget = func(*app, context.Context) (github.Budget, error) {
+		t.Error("budget sampled for latched pending wake retry")
+		return github.Budget{}, errors.New("unexpected budget read")
+	}
+	readProbe = func(context.Context, string) ([]byte, error) {
+		t.Error("check probe executed for latched pending wake retry")
+		return nil, errors.New("unexpected probe")
+	}
+	runProbe = func(context.Context, string) bool {
+		t.Error("shell probe executed for latched pending wake retry")
+		return false
+	}
+	var wakes atomic.Int32
+	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
+		wakes.Add(1)
+		return nil
+	}
+	t.Cleanup(func() { readBudget, readProbe, runProbe, wakeOwner = oldBudget, oldReadProbe, oldProbe, oldWake })
+	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	w, err := a.dispatchTimerPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.timerActs.Wait()
+	if wakes.Load() != 2 {
+		t.Fatalf("expected 2 wakes delivered without re-probing, got %d", wakes.Load())
 	}
 }

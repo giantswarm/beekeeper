@@ -33,13 +33,13 @@ func TestGuideWatchSaysItsReplacedBinaryOnce(t *testing.T) {
 		t.Fatalf("a current binary's poll: %q", got)
 	}
 	replaced = true
-	got := g.lines(t.Context(), []string{"GUIDE DECISION: #2"}, nil)
+	got := append(g.refresh(t.Context()), g.lines(t.Context(), []string{"GUIDE DECISION: #2"}, nil)...)
 	want := "GUIDE WATCH STALE: this watch (pid 4242) runs " + project.Version() + "; self-update installed v9.9.9 at " + guideBinary +
 		", a re-arm picks it up: stop it, then run `beekeeper guide watch`"
 	if len(got) != 2 || got[0] != want || got[1] != "GUIDE DECISION: #2" {
 		t.Fatalf("the replaced binary's poll:\n%q\nwant %q and the feed", got, want)
 	}
-	if got := g.lines(t.Context(), nil, nil); got != nil {
+	if got := g.refresh(t.Context()); got != nil {
 		t.Fatalf("the next poll repeats the stale binary: %q", got)
 	}
 }
@@ -104,5 +104,18 @@ func TestGuideWatchReportsARefusedSave(t *testing.T) {
 	}
 	if st.Writer == nil || st.Writer.Version != newerRelease || len(st.GuideRole().Fed) != 0 {
 		t.Errorf("writer %+v, fed %q: the older release's feed saved", st.Writer, st.GuideRole().Fed)
+	}
+}
+
+func TestGuideWatchReexecutesReplacedBinary(t *testing.T) {
+	replaced := true
+	g := testGuideSelf(&replaced)
+	calls := 0
+	g.exec = func() error { calls++; return nil }
+	if lines := g.refresh(t.Context()); len(lines) != 0 || calls != 1 {
+		t.Fatalf("replacement: %q calls=%d", lines, calls)
+	}
+	if lines := g.refresh(t.Context()); len(lines) != 0 || calls != 1 {
+		t.Fatalf("replacement repeated: %q calls=%d", lines, calls)
 	}
 }

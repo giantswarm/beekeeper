@@ -9,8 +9,8 @@ import (
 )
 
 // loopStallAfter is how long the refill may not run, or a start wait with
-// room, before the loop raises the alarm; the alarm repeats each
-// loopStallAfter until the flow moves again.
+// room, before the loop raises the alarm; the alarm is raised once
+// per episode until the flow moves again.
 const loopStallAfter = 15 * time.Minute
 
 const loopStallKey = "stall starts "
@@ -81,8 +81,7 @@ func (l *supervisorLoop) reviewTried(act superloop.Action, failures map[string]l
 
 // checkReviewStall raises one alarm when a review request has waited
 // loopStallAfter without a reviewer: it names the oldest request, its
-// cause and how many wait, and repeats each loopStallAfter until no
-// request waits that long.
+// cause and how many wait, once per oldest waiting episode.
 func (l *supervisorLoop) checkReviewStall() error {
 	now := l.a.timeNow()
 	l.mu.Lock()
@@ -111,10 +110,10 @@ func (l *supervisorLoop) checkReviewStall() error {
 	n := int(now.Sub(oldest.since) / loopStallAfter)
 	raised := l.stall.reviewFiled
 	l.mu.Unlock()
-	if n <= raised {
+	if raised > 0 || n == 0 {
 		return nil
 	}
-	text := fmt.Sprintf("Reviews are stalled: %d review request(s) waited %s or longer for a reviewer; the oldest, %s, waits since %s: %s. Own the cause to the component it names; the alarm repeats every %s until a reviewer starts.", waiting, loopStallAfter, oldest.url, oldest.since.UTC().Format(time.RFC3339), oldest.why, loopStallAfter)
+	text := fmt.Sprintf("Reviews are stalled: %d review request(s) waited %s or longer for a reviewer; the oldest, %s, waits since %s: %s. Own the cause to the component it names; the alarm is delivered once per waiting episode.", waiting, loopStallAfter, oldest.url, oldest.since.UTC().Format(time.RFC3339), oldest.why)
 	line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
 	key := fmt.Sprintf("%s%s %d", loopReviewStallKey, oldest.since.UTC().Format("20060102T150405Z"), n)
 	if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: key}, line); err != nil {
@@ -165,8 +164,7 @@ func (l *supervisorLoop) stallClear() {
 // watch says as GUIDE PROBLEM, when worker starts do not move: the refill
 // has not run for loopStallAfter (the worker stream is stuck ahead of it),
 // or it had room and a board item for loopStallAfter yet started nothing.
-// The alarm names the cause it read and repeats each loopStallAfter until
-// the flow moves again.
+// The alarm names the cause it read, once per episode.
 func (l *supervisorLoop) checkStall() error {
 	if err := l.checkReviewStall(); err != nil {
 		return err
@@ -202,10 +200,10 @@ func (l *supervisorLoop) checkStall() error {
 	l.mu.Lock()
 	raised := *filed
 	l.mu.Unlock()
-	if n <= raised {
+	if raised > 0 || n == 0 {
 		return nil
 	}
-	text := fmt.Sprintf("Worker starts are stalled: %s. Own the cause to the component it names; the alarm repeats every %s until a worker starts or nothing is left to start.", cause, loopStallAfter)
+	text := fmt.Sprintf("Worker starts are stalled: %s. Own the cause to the component it names; the alarm is delivered once per waiting episode.", cause)
 	line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
 	key := fmt.Sprintf("%s%s %d", loopStallKey, since.UTC().Format("20060102T150405Z"), n)
 	if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: key}, line); err != nil {
@@ -267,7 +265,7 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 			wait.since, wait.ref = now, act.Ref
 		}
 		n := int(now.Sub(wait.since) / loopStallAfter)
-		if n > wait.filed {
+		if n > 0 && wait.filed == 0 {
 			cause := "the planner still requests this decision; no successful completion recorded"
 			l.mu.Lock()
 			failure := failures[key]
@@ -283,7 +281,7 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 			if failure.Message != "" {
 				cause = oneLine(failure.Message)
 			}
-			text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm repeats every %s until it settles.", act.Kind, act.URL, act.Head, wait.since.UTC().Format(time.RFC3339), cause, len(pending), loopStallAfter)
+			text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm is delivered once per pending head.", act.Kind, act.URL, act.Head, wait.since.UTC().Format(time.RFC3339), cause, len(pending))
 			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
 			alarmKey := fmt.Sprintf("stall decision %s %s %d", key, wait.since.UTC().Format("20060102T150405Z"), n)
 			if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: alarmKey}, line); err != nil {

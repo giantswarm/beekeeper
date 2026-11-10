@@ -40,6 +40,23 @@ jobs:
         destination: loop-workflow
     - architect/go-cache-save
 
+  test-large-history:
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.44
+      entrypoint: /bin/bash
+    resource_class: medium
+    environment:
+      BEEKEEPER_TEST_LARGE_HISTORY: "1"
+    steps:
+    - checkout
+    - architect/tools-info
+    - architect/go-cache-restore
+    - run:
+        name: Bound startup and pass latency with 450k events and 1 GiB of history
+        no_output_timeout: 25m
+        command: go test ./cmd -run '^TestLargeHistoryStartupAndPass$' -count=1 -timeout=25m -v
+    - architect/go-cache-save
+
   test-envtest:
     docker:
     - image: gsoci.azurecr.io/giantswarm/architect:8.6.44
@@ -148,6 +165,10 @@ jobs:
 workflows:
   build:
     jobs:
+    - test-large-history:
+        filters:
+          tags:
+            only: /^v.*/
     - test-envtest:
         filters:
           tags:
