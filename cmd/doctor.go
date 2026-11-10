@@ -844,6 +844,7 @@ faults but remedying none.`,
 				return err
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
+			lines = append(lines, a.doctorDeskWorkflow()...)
 			lines = append(lines, rep.appDrifts...)
 			for _, f := range rep.faults {
 				lines = append(lines, f.String())
