@@ -490,6 +490,8 @@ func TestEmergencyAdminRefusesAbsentRequiredScan(t *testing.T) {
 		switch {
 		case args[0] == "pr" && args[1] == emergencyViewCommand:
 			return []byte(`{"state":"OPEN","headRefOid":"abc1234","baseRefName":"main","reviewDecision":"REVIEW_REQUIRED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"lint","status":"COMPLETED","conclusion":"SUCCESS"}]}`), nil
+		case call == "api --paginate repos/o/r/actions/runs?head_sha="+emergencyAdminHead+"&per_page=100":
+			return []byte(`{"workflow_runs":[]}`), nil
 		case strings.Contains(call, "/compare/"):
 			return []byte("0"), nil
 		case args[1] == "graphql":
