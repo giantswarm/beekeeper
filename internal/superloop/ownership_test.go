@@ -126,9 +126,9 @@ func TestGitHubRepositoryExclusionStillApplies(t *testing.T) {
 		d := Desk{Never: []string{pattern}}
 		for _, p := range []Pull{
 			{Ref: "upstream/github#1"},
-			{Ref: "o/r#1", Title: "fix: update upstream/github"},
-			{Ref: "o/r#1", Branch: "reposetup/upstream/github"},
-			{Ref: "o/r#1", Files: []string{"repos/upstream/github/config.yaml"}},
+			{Ref: pr, Title: "fix: update upstream/github"},
+			{Ref: pr, Branch: "reposetup/upstream/github"},
+			{Ref: pr, Files: []string{"repos/upstream/github/config.yaml"}},
 		} {
 			if o, reason, _ := d.owner(p, true); o != nobodys || reason != leftNever {
 				t.Errorf("%s allowed %+v: owner=%v reason=%s", pattern, p, o, reason)
