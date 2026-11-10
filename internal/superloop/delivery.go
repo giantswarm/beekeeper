@@ -17,10 +17,37 @@ type Delivery = state.Delivery
 // Plan. Missing reads retain the previous observation, including terminal state.
 func Deliveries(in Input, prev []Delivery) []Delivery {
 	l := newLedger(in.Taken, in.Answers)
+	refs := make([]string, 0, len(in.Pulls))
+	for ref := range in.Pulls {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	pullOwner := make(map[string]owner, len(refs))
+	var absorbingRefs []string
+	absorbed := map[string]bool{}
+	for _, ref := range refs {
+		p := in.Pulls[ref]
+		o, _, _ := in.Desk.owner(p, l.overridden[ref])
+		pullOwner[ref] = o
+		if o == ours && len(p.Absorbs) > 0 {
+			absorbingRefs = append(absorbingRefs, ref)
+		}
+		if (p.State == Open || p.State == Merged) && len(p.Absorbs) > 0 {
+			baseOwner := o
+			if l.overridden[ref] {
+				baseOwner, _, _ = in.Desk.owner(p, false)
+			}
+			if baseOwner == ours {
+				for _, r := range p.Absorbs {
+					absorbed[r] = true
+				}
+			}
+		}
+	}
 	out := slices.Clone(prev)
 	out = slices.DeleteFunc(out, func(d Delivery) bool {
-		if p, ok := in.Pulls[d.Ref]; ok && slices.Contains(d.Pulls, d.Ref) {
-			o, _, _ := in.Desk.owner(p, l.overridden[d.Ref])
+		if _, ok := in.Pulls[d.Ref]; ok && slices.Contains(d.Pulls, d.Ref) {
+			o := pullOwner[d.Ref]
 			return o == nobodys || o == theirs
 		}
 		return false
@@ -39,8 +66,8 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		if reason, _ := in.Desk.unread(ref); reason != "" {
 			continue
 		}
-		if p, ok := in.Pulls[ref]; ok {
-			if o, _, _ := in.Desk.owner(p, l.overridden[ref]); o != ours {
+		if _, ok := in.Pulls[ref]; ok {
+			if pullOwner[ref] != ours {
 				continue
 			}
 		}
@@ -52,14 +79,9 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 			out[i].Pulls = []string{ref}
 		}
 	}
-	refs := make([]string, 0, len(in.Pulls))
-	for ref := range in.Pulls {
-		refs = append(refs, ref)
-	}
-	sort.Strings(refs)
 	for _, ref := range refs {
 		p := in.Pulls[ref]
-		if o, _, _ := in.Desk.owner(p, l.overridden[ref]); o != ours {
+		if pullOwner[ref] != ours {
 			continue
 		}
 		issues := slices.Clone(p.Closes)
@@ -105,12 +127,11 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		}
 		owned, excluded := false, len(d.Pulls) > 0
 		for _, ref := range d.Pulls {
-			p, ok := in.Pulls[ref]
-			if !ok {
+			if _, ok := in.Pulls[ref]; !ok {
 				excluded = false
 				continue
 			}
-			o, _, _ := in.Desk.owner(p, l.overridden[ref])
+			o := pullOwner[ref]
 			if o == ours {
 				owned = true
 			}
@@ -170,11 +191,8 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		}
 		// A combining pull carries deliveries of the original, even when GitHub
 		// no longer includes their issue links on the superseded pull.
-		for _, ref := range refs {
+		for _, ref := range absorbingRefs {
 			p := in.Pulls[ref]
-			if o, _, _ := in.Desk.owner(p, l.overridden[ref]); o != ours {
-				continue
-			}
 			if slices.ContainsFunc(p.Absorbs, func(r string) bool { return slices.Contains(d.Pulls, r) }) && !slices.Contains(d.Pulls, ref) {
 				d.Pulls = append(slices.Clone(d.Pulls), ref)
 			}
@@ -182,7 +200,7 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		var observed []Pull
 		missing := false
 		for _, ref := range d.Pulls {
-			if deliveryAbsorbed(in, ref) {
+			if absorbed[ref] {
 				continue
 			}
 			if p, ok := in.Pulls[ref]; ok {
@@ -277,15 +295,4 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 		return state.DeliveryCI
 	}
 	return state.DeliveryReviewQueued
-}
-
-func deliveryAbsorbed(in Input, ref string) bool {
-	for _, p := range in.Pulls {
-		if (p.State == Open || p.State == Merged) && slices.Contains(p.Absorbs, ref) {
-			if o, _, _ := in.Desk.owner(p, false); o == ours {
-				return true
-			}
-		}
-	}
-	return false
 }

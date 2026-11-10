@@ -154,11 +154,11 @@ func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
 	d.active.Add(1)
 	d.batches.Go(func() { defer d.active.Add(-1); w.timerActs.Wait() })
 	// Stop may have arrived while checks were running.
-	st, err = a.store.Read()
+	stopped, err := timerStopRequested(a.store)
 	if err != nil {
 		return nil, err
 	}
-	if st.Stop != nil {
+	if stopped {
 		d.close()
 		d.ctx, d.cancel = context.WithCancel(d.parent)
 	}

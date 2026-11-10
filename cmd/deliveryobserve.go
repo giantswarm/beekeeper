@@ -97,58 +97,70 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 			in.ClosedIssues[d.Ref] = true
 		}
 	}
-	// Commit discovered identities before any release probe so its reservation
-	// and step event survive a crash even for a newly observed external merge.
-	if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-		next := superloop.Deliveries(in, current.Deliveries)
-		events := deliveryObservationEvents(current.Deliveries, next, in.Now)
-		current.Deliveries = next
-		return events, nil
-	}); err != nil {
-		return err
-	}
-	st, err = l.a.store.Read()
-	if err != nil {
-		return err
-	}
-	next := st.Deliveries
-	results := map[string]deliveryReleaseResult{}
-	// One bounded attempt per pull, shared by all its issues, persisted even on
-	// error so process restarts cannot turn an outage into a request storm.
-	for _, d := range next {
-		if d.Step != state.DeliveryReleasing {
-			continue
+	preview := superloop.Deliveries(in, st.Deliveries)
+	hasReleaseProbe := ctx.Err() == nil && slices.ContainsFunc(preview, func(d state.Delivery) bool {
+		if d.Step != state.DeliveryReleasing || (!d.ReleaseChecked.IsZero() && in.Now.Sub(d.ReleaseChecked) < deliveryReleaseEvery) {
+			return false
 		}
-		for _, ref := range d.Pulls {
-			if ctx.Err() != nil || len(results) >= deliveryReleaseReads {
-				break
-			}
-			if _, ok := results[ref]; ok {
-				continue
-			}
-			if !d.ReleaseChecked.IsZero() && in.Now.Sub(d.ReleaseChecked) < deliveryReleaseEvery {
-				continue
-			}
+		return slices.ContainsFunc(d.Pulls, func(ref string) bool {
 			p, ok := in.Pulls[ref]
-			if !ok || p.State != superloop.Merged {
+			return ok && p.State == superloop.Merged
+		})
+	})
+	results := map[string]deliveryReleaseResult{}
+	if hasReleaseProbe {
+		// Commit discovered identities before any release probe so its reservation
+		// and step event survive a crash even for a newly observed external merge.
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			next := superloop.Deliveries(in, current.Deliveries)
+			events := deliveryObservationEvents(current.Deliveries, next, in.Now)
+			current.Deliveries = next
+			return events, nil
+		}); err != nil {
+			return err
+		}
+		st, err = l.a.store.Read()
+		if err != nil {
+			return err
+		}
+		next := st.Deliveries
+		// One bounded attempt per pull, shared by all its issues, persisted even on
+		// error so process restarts cannot turn an outage into a request storm.
+		for _, d := range next {
+			if d.Step != state.DeliveryReleasing {
 				continue
 			}
-			results[ref] = deliveryReleaseResult{at: in.Now}
-			if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-				for i := range current.Deliveries {
-					if slices.Contains(current.Deliveries[i].Pulls, ref) {
-						current.Deliveries[i].ReleaseChecked = in.Now
-					}
+			for _, ref := range d.Pulls {
+				if ctx.Err() != nil || len(results) >= deliveryReleaseReads {
+					break
 				}
-				return nil, nil
-			}); err != nil {
-				return err
+				if _, ok := results[ref]; ok {
+					continue
+				}
+				if !d.ReleaseChecked.IsZero() && in.Now.Sub(d.ReleaseChecked) < deliveryReleaseEvery {
+					continue
+				}
+				p, ok := in.Pulls[ref]
+				if !ok || p.State != superloop.Merged {
+					continue
+				}
+				results[ref] = deliveryReleaseResult{at: in.Now}
+				if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+					for i := range current.Deliveries {
+						if slices.Contains(current.Deliveries[i].Pulls, ref) {
+							current.Deliveries[i].ReleaseChecked = in.Now
+						}
+					}
+					return nil, nil
+				}); err != nil {
+					return err
+				}
+				verdict, tag, err := readDeliveryRelease(ctx, p)
+				if err != nil {
+					l.sayOnce("delivery release "+ref, "SUPERVISOR delivery release unread for %s: %v", ref, err)
+				}
+				results[ref] = deliveryReleaseResult{verdict: verdict, tag: tag, at: in.Now}
 			}
-			verdict, tag, err := readDeliveryRelease(ctx, p)
-			if err != nil {
-				l.sayOnce("delivery release "+ref, "SUPERVISOR delivery release unread for %s: %v", ref, err)
-			}
-			results[ref] = deliveryReleaseResult{verdict: verdict, tag: tag, at: in.Now}
 		}
 	}
 	return l.a.store.Update(func(current *state.State) ([]state.Event, error) {

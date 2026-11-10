@@ -1815,7 +1815,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	l.mu.Unlock()
-	if len(unreviewedEnded) > 0 && !l.dryRun {
+	if len(unreviewedEnded) > 0 && !l.dryRun && slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+		return unreviewedEnded[strings.ToLower(rp.On)]
+	}) {
 		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
 				return unreviewedEnded[strings.ToLower(rp.On)]

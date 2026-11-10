@@ -222,6 +222,9 @@ func (w *watcher) owedOutcomes(ctx context.Context) {
 		busy := (proc.Alive(o.Gate) || proc.Alive(o.Child)) && now.Sub(o.Since) < owedBusy
 		return !busy && now.Sub(o.Tried) >= owedRetry
 	}
+	if !slices.ContainsFunc(st.Owed, due) {
+		return
+	}
 	var claimed []state.Owed
 	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, o := range st.Owed {

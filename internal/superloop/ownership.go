@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -174,10 +175,15 @@ func (d Desk) namedNever(p Pull) string {
 	return ""
 }
 
+var nameWordCache sync.Map
+
 // nameWord matches the repository name of pattern (owner/name) as a word of
 // a text: not inside a longer run of letters and digits. * and ? match
 // what a repository name may hold.
 func nameWord(pattern string) *regexp.Regexp {
+	if cached, ok := nameWordCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp)
+	}
 	_, name, _ := strings.Cut(pattern, "/")
 	var b strings.Builder
 	for _, r := range name {
@@ -190,7 +196,9 @@ func nameWord(pattern string) *regexp.Regexp {
 			b.WriteString(regexp.QuoteMeta(string(r)))
 		}
 	}
-	return regexp.MustCompile(`(?i)(^|[^a-z0-9])` + b.String() + `($|[^a-z0-9])`)
+	re := regexp.MustCompile(`(?i)(^|[^a-z0-9])` + b.String() + `($|[^a-z0-9])`)
+	nameWordCache.Store(pattern, re)
+	return re
 }
 
 // matchesAny reports whether repo (owner/name) matches one of patterns,

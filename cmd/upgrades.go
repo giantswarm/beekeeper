@@ -167,23 +167,15 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 		}
 	}
 	var begun, ended, holds []state.Hold
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		now = w.clk().Now()
-		if w.store.Dir() == "" {
-			// Remote stores have no shared filesystem lock; retain observation
-			// on each resource-version retry instead of reusing a stale reading.
-			statuses = read(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	reconcile := func(st *state.State, at time.Time) ([]state.Event, bool) {
 		begun, ended = nil, nil
+		before := append([]state.Hold(nil), st.Holds...)
 		var ev []state.Event
 		for _, s := range statuses {
 			if s.Err != "" {
 				continue
 			}
-			b, e := upgrade.Reconcile(st, s.Installation, s.Upgrades, now, watchParty)
+			b, e := upgrade.Reconcile(st, s.Installation, s.Upgrades, at, watchParty)
 			for _, h := range b {
 				ev = append(ev, event(watchParty, "hold.set", "%s until the upgrade ends: %s", h.Target, h.Reason))
 			}
@@ -193,8 +185,42 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 			begun, ended = append(begun, b...), append(ended, e...)
 		}
 		holds = append([]state.Hold(nil), st.Holds...)
-		return ev, nil
-	})
+		changed := len(ev) > 0 || len(before) != len(st.Holds)
+		if !changed {
+			for i := range before {
+				if before[i].Target != st.Holds[i].Target || before[i].UpgradeTo != st.Holds[i].UpgradeTo {
+					changed = true
+					break
+				}
+			}
+		}
+		return ev, changed
+	}
+	needUpdate := true
+	if w.store.Dir() != "" {
+		current, readErr := w.store.Read()
+		if readErr != nil {
+			w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", readErr)
+			return
+		}
+		_, needUpdate = reconcile(&state.State{Holds: append([]state.Hold(nil), current.Holds...)}, w.clk().Now())
+	}
+	var err error
+	if needUpdate {
+		err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+			now = w.clk().Now()
+			if w.store.Dir() == "" {
+				// Remote stores have no shared filesystem lock; retain observation
+				// on each resource-version retry instead of reusing a stale reading.
+				statuses = read(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			ev, _ := reconcile(st, now)
+			return ev, nil
+		})
+	}
 	if ctx.Err() != nil {
 		return
 	}
