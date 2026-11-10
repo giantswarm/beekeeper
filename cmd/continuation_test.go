@@ -83,6 +83,8 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 		st.Agents = []state.Agent{old, next}
 		st.Records = []state.Record{{Session: old.Party, Issue: continuationTaskRef}}
 		st.Grants = []state.Grant{{Resource: labOne, To: old.Party}}
+		st.AlertOwners = []state.AlertOwner{{Alert: "fp", Name: "WorkloadDown", By: old.Party}}
+		st.Merges = []state.Merge{{Repo: "o/r", PR: 12, By: old.Party}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -102,7 +104,7 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ = r.a.store.Read()
-	if len(st.Agents) != 1 || st.Agents[0].Task != old.Task || !st.Records[0].Session.Is(next.Party) || !st.Grants[0].To.Is(next.Party) {
+	if len(st.Agents) != 1 || st.Agents[0].Task != old.Task || !st.Records[0].Session.Is(next.Party) || !st.Grants[0].To.Is(next.Party) || !st.AlertOwners[0].By.Is(next.Party) || !st.Merges[0].By.Is(next.Party) {
 		t.Fatalf("ownership not handed over: %+v", st.Agents)
 	}
 }
@@ -255,5 +257,34 @@ func TestContinuationWithoutChoicesUsesGatedDefaultStart(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("legacy desk lost its fresh continuation")
+	}
+}
+
+func TestAlertWakeAndEndedParkCandidatePreserveQueuedContinuation(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := state.Agent{
+		Party: state.Party{Name: loopWorker, HostSession: "codex_queued"},
+		Task:  parkTask,
+		Park:  &state.Park{At: r.a.now, On: "alert:WorkloadDown", Resumable: r.a.now, Continuation: []string{"alert fired"}},
+	}
+	if endedParkCandidate(ag) {
+		t.Fatal("park with queued continuation should not be recovered as an ended park candidate")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{ag}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.settleAlertWake(superloop.Action{Kind: loopAlertKind, Key: "alert wake fp " + loopWorker, Agent: loopWorker}, ag); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := r.a.store.Read()
+	if st.Agents[0].Park == nil || len(st.Agents[0].Park.Continuation) != 1 {
+		t.Fatalf("settleAlertWake cleared queued continuation: %+v", st.Agents[0].Park)
 	}
 }

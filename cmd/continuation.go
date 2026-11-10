@@ -70,11 +70,13 @@ func (a *app) adoptContinuation(by state.Party, p state.Park, message string) er
 				task = start.Task
 			}
 		}
-		for _, r := range st.Records {
-			if r.Session.Is(p.By) && r.Ended.IsZero() && r.Issue != "" {
-				task = "Continue " + r.Issue
-				if ref, ok := parseRef(r.Issue); ok && !strings.HasPrefix(r.Issue, "https://") {
-					task = "Continue " + issueURL(refName(ref))
+		if task == "" {
+			for _, r := range st.Records {
+				if r.Session.Is(p.By) && r.Ended.IsZero() && r.Issue != "" {
+					task = "Continue " + r.Issue
+					if ref, ok := parseRef(r.Issue); ok && !strings.HasPrefix(r.Issue, "https://") {
+						task = "Continue " + issueURL(refName(ref))
+					}
 				}
 			}
 		}
@@ -128,6 +130,11 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		ref := agentRef(st, ag.Name)
 		if _, ok := parseRef(ag.Park.On); ok {
 			ref = ag.Park.On
+		}
+		if _, ok := parseRef(ref); !ok {
+			if refs := namedRefs(ag.Task+" "+ag.LastTask, l.a.cfg.Board.Owner); len(refs) > 0 {
+				ref = refs[0]
+			}
 		}
 		r, ok := parseRef(ref)
 		if !ok || l.agentUnreadRepo(st, ag, ref) != "" {
@@ -305,6 +312,16 @@ func (l *supervisorLoop) finishContinuation(old state.Agent, name string) error 
 		for k := range st.Notes {
 			if st.Notes[k].By.Is(prev.Party) {
 				st.Notes[k].By = next.Party
+			}
+		}
+		for k := range st.AlertOwners {
+			if st.AlertOwners[k].By.Is(prev.Party) && st.AlertOwners[k].Ended.IsZero() {
+				st.AlertOwners[k].By = next.Party
+			}
+		}
+		for k := range st.Merges {
+			if st.Merges[k].By.Is(prev.Party) {
+				st.Merges[k].By = next.Party
 			}
 		}
 		if _, err := handClaims(st, lease.Dir(l.a.cfg.LeaseDir), prev.Party, next.Party); err != nil {

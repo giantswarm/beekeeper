@@ -306,7 +306,7 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 
 func endedParkCandidate(ag state.Agent) bool {
 	_, _, nonClaude := harnessForHost(ag.HostSession)
-	return nonClaude && !ag.Done && ag.Task != "" && ag.Execution == nil && ag.Park != nil && !ag.Park.Resumable.IsZero()
+	return nonClaude && !ag.Done && ag.Task != "" && ag.Execution == nil && ag.Park != nil && !ag.Park.Resumable.IsZero() && len(ag.Park.Continuation) == 0 && !ag.Park.Continuing
 }
 
 func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref string) error {

@@ -37,12 +37,18 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 		provider, _ := resolveAgentProviderBucket(k, s.Harness, s.Model)
 		provider = cmp.Or(provider, s.Harness, claudeComm)
 		key := s.Session + "/" + s.HostSession
+		if s.Session == "" && s.HostSession == "" {
+			key = s.Name + "/" + s.Conversation + "/" + s.At.UTC().Format(time.RFC3339Nano)
+		}
 		if s.Execution != nil {
 			key = string(s.Execution.Request.Ref.Execution)
 		}
-		if !seen[key] && !s.At.Before(now.Add(-24*time.Hour)) && !s.At.After(now) {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if !s.At.Before(now.Add(-24*time.Hour)) && !s.At.After(now) {
 			get(provider).FreshStarts++
-			seen[key] = true
 		}
 	}
 	for _, e := range events {

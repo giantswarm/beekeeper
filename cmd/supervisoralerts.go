@@ -62,7 +62,7 @@ type alertReplacement struct {
 func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 	a := l.a
 	evs, err := a.store.Follow("supervisor-alert-history", func(e state.Event) bool {
-		return e.Verb == loopAlertVerb || e.Verb == loopAlertIntent || e.Verb == loopClaimVerb || e.Verb == "agents.wake" || e.Verb == "agents.start"
+		return e.Verb == loopAlertVerb || e.Verb == loopAlertIntent || e.Verb == loopClaimVerb || e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent || e.Verb == "agents.start"
 	})
 	if err != nil {
 		return err
@@ -308,7 +308,7 @@ func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, a
 	a := l.a
 	act := superloop.Action{Kind: loopAlertKind, Key: key, Agent: ag.Name, Message: "Your parked event fired: " + f.Instance() + " " + f.Where + ". Re-query the live state of your task and continue it."}
 	if c, ok := claims[key]; ok && slices.ContainsFunc(evs, func(e state.Event) bool {
-		return e.Verb == "agents.wake" && !e.At.Before(c.at) && strings.HasPrefix(e.Detail, ag.Name+":")
+		return (e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent) && !e.At.Before(c.at) && strings.HasPrefix(e.Detail, ag.Name+":")
 	}) {
 		return l.settleAlertWake(act, ag)
 	}
@@ -354,7 +354,7 @@ func (l *supervisorLoop) settleAlertWake(act superloop.Action, ag state.Agent) e
 		var evs []state.Event
 		for i := range st.Agents {
 			current := &st.Agents[i]
-			if current.Is(ag.Party) && current.Park != nil && current.Park.On == ag.Park.On && current.Park.At.Equal(ag.Park.At) {
+			if current.Is(ag.Party) && current.Park != nil && current.Park.On == ag.Park.On && current.Park.At.Equal(ag.Park.At) && len(current.Park.Continuation) == 0 {
 				current.Park = nil
 				evs = append(evs, event(loopParty, resumedEvent, "%s: alert event fired", ag.Name))
 			}

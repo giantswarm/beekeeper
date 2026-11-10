@@ -13,7 +13,8 @@ func TestCapacityActivityCountsRetiredStartsOnceAndUsesProviderAtEvent(t *testin
 	old := state.Start{Party: state.Party{Name: "worker: task", Session: continuationOldSession}, At: now.Add(-2 * time.Hour), Harness: claudeComm}
 	fresh := state.Start{Party: state.Party{Name: old.Name, Session: continuationNewSession}, At: now.Add(-time.Hour), Harness: config.CodexHarness}
 	outside := state.Start{Party: state.Party{Name: "yesterday", Session: "yesterday"}, At: now.Add(-25 * time.Hour), Harness: claudeComm}
-	st := &state.State{Starts: []state.Start{old, fresh, outside}, EndedWorkers: []state.Start{old}}
+	outsideEnded := state.Start{Party: outside.Party, At: now.Add(-time.Hour), Harness: claudeComm}
+	st := &state.State{Starts: []state.Start{old, fresh, outside}, EndedWorkers: []state.Start{old, outsideEnded}}
 	events := []state.Event{
 		{At: now.Add(-90 * time.Minute), Verb: agentWakeEvent, Detail: old.Name + ": resumed session old headless"},
 		{At: now.Add(-30 * time.Minute), Verb: agentWakeEvent, Detail: fresh.Name + ": written to its codex inbox"},
