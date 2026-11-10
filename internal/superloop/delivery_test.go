@@ -1,6 +1,7 @@
 package superloop
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -310,5 +311,58 @@ func TestLinkedDeliveryOutsideOwnershipDoesNotCount(t *testing.T) {
 	next = Deliveries(in, next)
 	if len(next) != 1 || next[0].OutsideDesk {
 		t.Fatalf("ownership recovery not observed: %+v", next)
+	}
+}
+
+func TestDeliveriesLargeScaleAvoidsQuadraticOwnershipScan(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	never := make([]string, 0, 50)
+	for i := 1; i <= 50; i++ {
+		never = append(never, fmt.Sprintf("o/never-repo-%d", i))
+	}
+	files := make([]string, 0, 50)
+	for i := 1; i <= 50; i++ {
+		files = append(files, fmt.Sprintf("pkg/component%d/service_handler.go", i))
+	}
+	pulls := make(map[string]Pull, 150)
+	for i := 1; i <= 150; i++ {
+		ref := fmt.Sprintf("o/r#%d", 1000+i)
+		pulls[ref] = Pull{
+			Ref:          ref,
+			State:        Open,
+			Head:         fmt.Sprintf("head-%d", i),
+			Author:       deliveryDeskAuthor,
+			Title:        fmt.Sprintf("feat: update component %d behavior", i),
+			Branch:       fmt.Sprintf("feat/component-%d", i),
+			Files:        files,
+			ChangedFiles: len(files),
+			Closes:       []string{fmt.Sprintf("o/r#%d", i)},
+		}
+	}
+	prev := make([]Delivery, 0, 500)
+	for i := 1; i <= 500; i++ {
+		issueRef := fmt.Sprintf("o/r#%d", i)
+		prRef := fmt.Sprintf("o/r#%d", 1000+((i-1)%150)+1)
+		prev = append(prev, Delivery{
+			Ref:     issueRef,
+			Pulls:   []string{prRef},
+			Step:    state.DeliveryImplementing,
+			Since:   now.Add(-time.Hour),
+			Started: now.Add(-2 * time.Hour),
+		})
+	}
+	in := Input{
+		Now:   now,
+		Pulls: pulls,
+		Desk:  Desk{Authors: []string{deliveryDeskAuthor}, Never: never},
+	}
+	start := time.Now()
+	got := Deliveries(in, prev)
+	elapsed := time.Since(start)
+	if len(got) != 500 {
+		t.Fatalf("got %d deliveries, want 500", len(got))
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Deliveries took %s (> 2s); quadratic ownership or uncached regex regression", elapsed)
 	}
 }

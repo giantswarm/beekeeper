@@ -109,10 +109,12 @@ func (w *watcher) readFeedback(ctx context.Context, a *app) {
 		}
 	}
 	w.check("feedback", unreadable != nil, "FEEDBACK UNREADABLE %s: %s", fc.Context, unreadableReason(unreadable))
-	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.ReportThreads = slices.DeleteFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Posted.Before(since) })
-		return nil, nil
-	})
+	if slices.ContainsFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Posted.Before(since) }) {
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.ReportThreads = slices.DeleteFunc(st.ReportThreads, func(t state.ReportThread) bool { return t.Posted.Before(since) })
+			return nil, nil
+		})
+	}
 }
 
 // deliverFeedback delivers reply r on thread th and reports whether it was.
