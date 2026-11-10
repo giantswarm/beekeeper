@@ -2327,11 +2327,11 @@ func TestLoopLeavesANeverRepositoryAloneWhateverTheListSays(t *testing.T) {
 	r := newLoopRig(t)
 	r.ownedBy("team-a")
 	r.a.cfg.Supervisor.Ownership.Review = append(r.a.cfg.Supervisor.Ownership.Review, "o/*")
-	r.pull.Title, r.pull.Branch, r.pull.Files = "chore(repositories): update tool (team-b)", "reposetup/update-tool", []string{"repositories/team-b.yaml"}
+	r.a.cfg.Supervisor.Ownership.Never = append(r.a.cfg.Supervisor.Ownership.Never, scratchRepo)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	if c := r.called(agentsName); c != nil {
-		t.Errorf("a pull request naming a never repository ran %v", c)
+		t.Errorf("a pull request in a never repository ran %v", c)
 	}
 	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[leave o/r#7 never]") {
 		t.Errorf("leave logged as %+v", evs)
@@ -4394,5 +4394,23 @@ func TestLoopReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
 	// Once fenced, a subsequent pass stops before running any further worker commands.
 	if err := l.endReviewWorkers(context.Background(), st); err != nil || runCalls != 1 {
 		t.Fatalf("fenced endReviewWorkers = %v (runCalls=%d), want nil and no extra calls", err, runCalls)
+	}
+}
+
+func TestLoopReviewsReferencesToNeverRepositories(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy(loopTeamB)
+	r.a.cfg.Supervisor.Ownership.Review = []string{"o/*"}
+	r.pull.Title = "fix: update o/tool integration"
+	r.pull.Body = "Context: https://github.com/o/tool/issues/1"
+	r.pull.Branch = "update-tool"
+	r.pull.Files = []string{"tool/config.yaml"}
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != loopReviewer {
+		t.Fatalf("a reviewed repository naming a never repository got no reviewer: %v", r.calls)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 0 {
+		t.Errorf("references caused a leave: %+v", evs)
 	}
 }

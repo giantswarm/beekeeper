@@ -645,10 +645,9 @@ Ownership decides what the loop does with a parked pull request, before any
 review, go or forward:
 
   - outside github.allowedOrgs: nothing at all, not even a read
-  - in supervisor.ownership.never, or its title, head branch or a changed
-    path names a repository there: nothing, whatever else says
-    (a repository named github needs its qualified owner/github in metadata;
-    ordinary GitHub workflow paths and action names do not identify it)
+  - its repository matches supervisor.ownership.never: nothing, whatever
+    else says; references in titles, descriptions, branches, changed paths
+    or comments do not affect ownership
   - parked before the loop's first start: nothing; a park from before is
     no request for its review
   - opened by a login outside supervisor.ownership.authors (default: the
