@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,5 +110,67 @@ func TestDeliveryWIPLiveAgentServingLinkedPull(t *testing.T) {
 				t.Fatalf("ended agent retained abandoned delivery: %+v", v)
 			}
 		})
+	}
+}
+
+func TestPassivePullsDoNotFillWIPOrRaiseStalls(t *testing.T) {
+	a, _ := supervisorApp(t)
+	now := a.timeNow()
+	seed(t, a, func(st *state.State) {
+		st.DeliveriesAt = now
+		for i := range 30 {
+			ref := fmt.Sprintf("example/project#%d", i+1)
+			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: ref, Pulls: []string{ref}, Origin: state.DeliveryOriginObserved, Step: state.DeliveryImplementing, Since: now.Add(-48 * time.Hour)})
+		}
+	})
+	st, _ := a.store.Read()
+	if v := readDeliveryWIP(st, 30, time.Second, now); v.Count != 0 || v.Reason != "" {
+		t.Fatal(v)
+	}
+	if line, err := a.checkDeliveries(now); err != nil || line != "" {
+		t.Fatalf("passive PRs stalled: %s %v", line, err)
+	}
+}
+
+func TestDeliveryStallsAreBatchedWithWaitReasons(t *testing.T) {
+	a, _ := supervisorApp(t)
+	now := a.timeNow()
+	seed(t, a, func(st *state.State) {
+		for i := range 30 {
+			st.StartDelivery(fmt.Sprintf("example/project#%d", i+1), "gone", "", now.Add(-48*time.Hour))
+		}
+	})
+	line, err := a.checkDeliveries(now)
+	if err != nil || strings.Contains(line, "\n") || !strings.Contains(line, "30 deliveries") || strings.Contains(line, "waits: ;") || strings.HasSuffix(line, "waits: ") {
+		t.Fatalf("unbatched or empty stall: %s %v", line, err)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("got %d reports: %v", len(evs), err)
+	}
+	if line, err := a.checkDeliveries(now.Add(time.Minute)); err != nil || line != "" {
+		t.Fatalf("repeated batch: %s %v", line, err)
+	}
+	seed(t, a, func(st *state.State) {
+		for i := range st.Deliveries {
+			st.Deliveries[i].Step = state.DeliveryDone
+		}
+	})
+	if line, err := a.checkDeliveries(now.Add(2 * time.Minute)); err != nil || strings.Contains(line, "\n") || !strings.HasPrefix(line, "RECOVERED:") {
+		t.Fatalf("unbatched recovery: %s %v", line, err)
+	}
+	evs, err = a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	st := &state.State{Guide: &state.Role{}}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		key, text, ok := keyed(ev.Detail)
+		if ok {
+			retainGuideReport(st, key, text, ev.At, state.Party{})
+		}
+	}
+	if len(st.GuideWork) != 0 {
+		t.Fatalf("recovery did not settle batched guide work: %+v", st.GuideWork)
 	}
 }

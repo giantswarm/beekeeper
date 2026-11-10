@@ -62,6 +62,9 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 			return true
 		}
 	}
+	if d.Origin == state.DeliveryOriginObserved {
+		return false
+	}
 	after := p.stallAfter
 	if after <= 0 {
 		after = 24 * time.Hour
