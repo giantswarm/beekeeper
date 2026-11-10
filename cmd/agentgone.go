@@ -9,11 +9,23 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const goneActivityPrefix = "gone, last activity "
+
+// liveSession reports whether p has a running CLI session in sessions. A
+// persistent harness wrapper (omp, codex, agy) waiting idle on its inbox
+// after its turn ended is not a running CLI.
+func liveSession(sessions []*claude.Session, p state.Party) (*claude.Session, bool) {
+	s, live := claude.Live(sessions, p)
+	if !live || s.State == omp.StateIdle && len(s.Commands) == 0 {
+		return nil, false
+	}
+	return s, true
+}
 
 // agentActivity follows both the roster and the transcript, including between
 // turns when discovery has no running CLI. Unknown timestamps keep the slot.
@@ -38,7 +50,12 @@ func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Tim
 	if cfg == nil {
 		return last
 	}
-	if h, _, ok := harnessForHost(ag.HostSession); ok {
+	if h, id, ok := harnessForHost(ag.HostSession); ok {
+		if h.Name() == agy.Harness && cfg.StateDir != "" {
+			if fi, err := os.Stat(agy.StreamPath(cfg.StateDir, id)); err == nil && fi.ModTime().After(last) {
+				last = fi.ModTime()
+			}
+		}
 		for _, s := range h.Ended(cfg, nil, last) {
 			if ag.Is(s.Party()) && s.LastActive.After(last) {
 				last = s.LastActive
@@ -96,10 +113,20 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 	if staleAfter <= 0 {
 		return time.Time{}, false
 	}
-	if _, live := claude.Live(sessions, ag.Party); live || mergeInFlight(st, ag.Party, proc.Alive) {
+	if strings.HasPrefix(ag.Name, "Review ") && staleAfter > stewardQuiet {
+		staleAfter = stewardQuiet
+	}
+	if _, live := liveSession(sessions, ag.Party); live || mergeInFlight(st, ag.Party, proc.Alive) {
 		return time.Time{}, false
 	}
 	last := agentActivity(cfg, st, ag)
+	if s, ok := claude.Live(sessions, ag.Party); ok {
+		for _, at := range []time.Time{s.Started, s.LastActive} {
+			if at.After(last) {
+				last = at
+			}
+		}
+	}
 	return last, !last.IsZero() && now.Sub(last) >= staleAfter
 }
 
