@@ -656,8 +656,12 @@ it has never read the team files it acts only on review-list and
 overridden pull requests.
 
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
-.Worker. A pull request is read (one gh pr view) only while an agent is
-parked on a verified review request or the loop reviews it. A plain wait
+.Worker. One watcher reads tracked deliveries, parks and sweep pull requests
+outside the pass, in aliased GraphQL batches of up to 60. It polls every 30s
+while checks or mergeability are pending and every 2m when settled, with
+exponential failure backoff capped at 10m. Details are fetched only when the
+head or updatedAt changes. Observations older than 5m are unknown; status
+shows their age. --once and --dry-run consume the saved observations. A plain wait
 starts no review and receives no go or forwarded findings; the watch
 resumes it when the pull request merges or closes. Every transition happens once: a
 restarted loop reads its own log lines back and takes no key twice; a
@@ -697,9 +701,10 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt  time.Time
-	startsHeld bool
-	stopWatch  func()
+	releaseAt     time.Time
+	startsHeld    bool
+	stopWatch     func()
+	stopPullWatch func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release or intake stages finished, by key; stageDetail
@@ -754,9 +759,10 @@ type supervisorLoop struct {
 	opens map[string]loopOpen
 	// merged are the merged pull requests read, by reference.
 	merged map[string]superloop.Pull
-	// pulls reuses unchanged PR observations between passes. A new park,
-	// answer or reviewer report invalidates them before planning.
-	pulls map[string]loopPullObservation
+	// pulls holds the dated observations consumed by the pass. pullWatch
+	// owns their refresh independently of the pass and desk events.
+	pulls     map[string]loopPullObservation
+	pullWatch *loopPullWatcher
 	// fillPreview is the dry-run projection, used only by synchronous previews.
 	fillPreview *state.State
 	// openPulls are the desk's open pull requests the sweep last listed,
@@ -784,6 +790,10 @@ const loopOpenEvery = 10 * time.Minute
 // every loopOpenEvery; one it cannot read counts as open, said once, so no
 // worker is retired on a failed read.
 func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
+	if l.pullWatcher().knows(ref) {
+		p, err := l.readPull(ctx, ref)
+		return err != nil || p.State == superloop.Open
+	}
 	l.mu.Lock()
 	if o, ok := l.opens[ref]; ok && l.a.timeNow().Sub(o.at) < loopOpenEvery {
 		l.mu.Unlock()
@@ -814,6 +824,10 @@ func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
 // fresh live read. Unlike open, it never uses the 10-minute cache and fails
 // closed when the live state cannot be read.
 func (l *supervisorLoop) liveOpen(ctx context.Context, ref string) bool {
+	if l.pullWatcher().knows(ref) {
+		p, err := l.readPull(ctx, ref)
+		return err == nil && p.State == superloop.Open
+	}
 	r, ok := parseRef(ref)
 	if !ok {
 		return false
@@ -929,6 +943,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		return err
 	}
 	l.once = once
+	if !once {
+		l.stopPullWatch = startLoopPullWatcher(ctx, l)
+	}
+	defer func() {
+		if l.stopPullWatch != nil {
+			l.stopPullWatch()
+		}
+	}()
 	l.lifecycle = life
 	if !once && !l.dryRun {
 		l.loadCache()
@@ -1025,6 +1047,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-l.pullWatcher().ready:
+			return true
 		case <-timer.C:
 			return true
 		}
@@ -1035,6 +1059,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-l.pullWatcher().ready:
+			return true
 		case <-timer.C:
 			return true
 		case <-ticker.C:
@@ -1146,6 +1172,11 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 	if ctx.Err() != nil {
 		return false, nil
 	}
+	wasPullWatching := l.stopPullWatch != nil
+	if wasPullWatching {
+		l.stopPullWatch()
+		l.stopPullWatch = nil
+	}
 	wasWatching := l.stopWatch != nil
 	if wasWatching {
 		l.stopWatch()
@@ -1161,6 +1192,9 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.reexecFailed = true
 		l.mu.Unlock()
 		l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+		if wasPullWatching {
+			l.stopPullWatch = startLoopPullWatcher(ctx, l)
+		}
 		if wasWatching {
 			l.stopWatch = l.a.startLoopWatch(ctx)
 		}
@@ -1269,7 +1303,9 @@ func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
 	}
 	prev := l.pulls[ref]
 	prev.pull = p
-	prev.at = l.a.timeNow()
+	if prev.at.IsZero() {
+		prev.at = l.a.timeNow()
+	}
 	l.pulls[ref] = prev
 	if p.State == superloop.Merged {
 		if l.merged == nil {
@@ -1378,6 +1414,7 @@ func (l *supervisorLoop) saveCache() {
 
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) (result error) {
+	ctx = context.WithValue(ctx, loopPullContextKey{}, l)
 	dispatched := false
 	defer func() {
 		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && !dispatched {
@@ -1706,7 +1743,13 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 			}
 		}
 	}
+	tracked = slices.DeleteFunc(tracked, func(ref string) bool {
+		return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Park != nil && ag.Park.On == ref && ag.Park.RefKind == github.RefIssue
+		})
+	})
 	sortTrackedPulls(in, tracked)
+	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
@@ -1724,19 +1767,19 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	} else {
 		tracked = append(tracked, swept...)
 	}
-	sweepReads := 0
 	unread := map[string]bool{}
 	unreviewedEnded := map[string]bool{}
-	pullHeld := false
 	for _, ref := range tracked {
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		// Each completed observation is progress, even when the batch takes
-		// longer than the recovery heartbeat window. Never refresh in the
-		// background while an individual observation is blocked.
+		// This phase only consumes dated observations; the watcher owns IO.
 		l.lifecyclePhase("observe pull requests")
-		if !a.parkIsPull(ctx, st, ref) {
+		// Known issue parks do not enter the PR watcher. Legacy untyped parks
+		// are resolved by the batch's nullable pullRequest field, never a probe.
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Park != nil && ag.Park.On == ref && ag.Park.RefKind == github.RefIssue
+		}) {
 			continue
 		}
 		// A merged pull request stays merged: a worker kept for the open
@@ -1748,18 +1791,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 			in.Pulls[ref] = mergedPull
 			continue
 		}
-		if pullHeld {
-			unread[ref] = true
-			continue
-		}
 		changed := loopPullChanged(in, ref)
-		if slices.Contains(swept, ref) && l.sweepReadDue(ref, changed) {
-			if sweepReads >= sweepReadsPerPass {
-				unread[ref] = true
-				continue
-			}
-			sweepReads++
-		}
 		step := loopPullStep
 		if slices.Contains(swept, ref) {
 			step = loopSweepStep
@@ -1770,11 +1802,6 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 				return ctx.Err()
 			}
 			unread[ref] = true
-			if errors.Is(err, errLoopLater) {
-				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-				pullHeld = true
-				continue
-			}
 			observationUnknown = true
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
@@ -1840,9 +1867,6 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 			})
 			return nil, nil
 		})
-	}
-	if pullHeld && len(in.Pulls) == 0 {
-		return nil
 	}
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
@@ -2518,7 +2542,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		var p superloop.Pull
 		if !repairing {
 			var err error
-			p, err = readLoopPull(ctx, act.Ref)
+			p, err = l.readPull(ctx, act.Ref)
 			if err != nil {
 				return "", false, err
 			}
@@ -3349,7 +3373,7 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 	}
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
-			p, err := readLoopPull(ctx, act.Ref)
+			p, err := l.readPull(ctx, act.Ref)
 			if err != nil {
 				return errLoopLater
 			}
@@ -3414,7 +3438,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	}
 	var livePull superloop.Pull
 	if act.Kind != superloop.KindEnd {
-		p, err := readLoopPull(ctx, act.Ref)
+		p, err := l.readPull(ctx, act.Ref)
 		if err != nil {
 			return errLoopLater
 		}
@@ -3663,7 +3687,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	l.mu.Unlock()
 	if act.Message == "" {
-		p, err := readLoopPull(ctx, act.Ref)
+		p, err := l.readPull(ctx, act.Ref)
 		if err != nil {
 			return "", err
 		}
@@ -3686,7 +3710,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			return "", err
 		}
 	} else if rawBranch == "" {
-		if p, err := readLoopPull(ctx, act.Ref); err == nil {
+		if p, err := l.readPull(ctx, act.Ref); err == nil {
 			l.cachePull(act.Ref, p)
 			rawBranch = p.Branch
 		}
@@ -4846,7 +4870,7 @@ func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref,
 	}
 	args = append(args, "--due", l.a.cfg.Supervisor.NoteDue.String(),
 		"--status-quo", truncate(statusQuo, 2900), "--why", why, "--default", dflt,
-		"--checked", "beekeeper supervisor loop: gh pr view and the event log")
+		"--checked", "beekeeper supervisor loop: dated pull observations and the event log")
 	for _, o := range options {
 		args = append(args, "--option", o)
 	}

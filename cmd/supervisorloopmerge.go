@@ -67,7 +67,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if repairing {
 		return l.repairPull(ctx, st, act, reason)
 	}
-	p, err := readLoopPull(ctx, act.Ref)
+	p, err := l.readPull(ctx, act.Ref)
 	if err != nil {
 		return "", err
 	}
@@ -186,7 +186,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
-	p, readErr := readLoopPull(ctx, act.Ref)
+	p, readErr := l.readPull(ctx, act.Ref)
 	if readErr != nil {
 		return "", readErr
 	}
@@ -368,7 +368,7 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		l.mu.Unlock()
 		if !ok {
 			var readErr error
-			mp, readErr = readLoopPull(ctx, act.Ref)
+			mp, readErr = l.readPull(ctx, act.Ref)
 			if readErr != nil {
 				return "", readErr
 			}
@@ -574,7 +574,7 @@ func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act s
 	byPull := l.merged[by]
 	l.mu.Unlock()
 	if byPull.Ref == "" {
-		readBy, err := readLoopPull(ctx, by)
+		readBy, err := l.readPull(ctx, by)
 		if err != nil {
 			return "", err
 		}
@@ -755,7 +755,7 @@ func absorbedClosingIssues(ctx context.Context, st *state.State, absorbs []strin
 				}
 			}
 		}
-		origPull, err := readLoopPull(ctx, orig)
+		origPull, err := readLoopContextPull(ctx, orig)
 		if err != nil {
 			return nil, err
 		}

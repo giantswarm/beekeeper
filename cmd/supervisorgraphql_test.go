@@ -351,45 +351,6 @@ func healthyLoopBudget(t *testing.T, r *loopRig) {
 	}
 }
 
-func TestLoopReusesPullReadsAndRefreshesOnLocalChanges(t *testing.T) {
-	r := newLoopRig(t)
-	l, err := r.a.newSupervisorLoop(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l.once = true // These checks inspect completed pass effects.
-	reads := 0
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		reads++
-		return r.pull, nil
-	}
-	start := r.a.now
-	changed := start.Add(-time.Minute)
-	// Forty PRs over a full hour of 30-second passes use 480 reads, not
-	// 4,800. No real GitHub calls or wall-clock waits are involved.
-	for tick := 0; tick < 120; tick++ {
-		r.a.now = start.Add(time.Duration(tick) * 30 * time.Second)
-		for n := 0; n < 40; n++ {
-			ref := string(rune('A' + n))
-			if _, err := l.observePull(context.Background(), ref, changed); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if reads != 480 {
-		t.Fatalf("%d PR reads in an hour, want 480", reads)
-	}
-	// A re-park, reviewer report or recorded answer refreshes immediately,
-	// even though the five-minute interval has not elapsed.
-	changed = r.a.now
-	if _, err := l.observePull(context.Background(), "A", changed); err != nil {
-		t.Fatal(err)
-	}
-	if reads != 481 {
-		t.Fatalf("local change did not invalidate observation: %d", reads)
-	}
-}
-
 func TestLoopGraphQLFloorHoldsAllGitHubObservations(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500

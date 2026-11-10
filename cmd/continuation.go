@@ -169,7 +169,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			url := issueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
-				pull, err := readLoopPull(ctx, ref)
+				pull, err := readLoopContextPull(ctx, ref)
 				if err != nil {
 					continue
 				}
