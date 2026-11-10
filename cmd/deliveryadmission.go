@@ -159,7 +159,7 @@ func (l *supervisorLoop) deliveryStart(ref string, exempt bool) error {
 			label = "new work"
 		}
 		l.sayOnce("delivery admission "+ref, "SUPERVISOR NEXT WAITS %s: %s", label, v.Reason)
-		return errLoopLater
+		return fmt.Errorf("%s: %w", v.Reason, errLoopLater)
 	}
 	l.clearSaid("delivery admission " + ref)
 	return nil

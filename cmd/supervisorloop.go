@@ -1374,7 +1374,17 @@ func (l *supervisorLoop) saveCache() {
 }
 
 // pass is one look: gather, plan, act.
-func (l *supervisorLoop) pass(ctx context.Context) error {
+func (l *supervisorLoop) pass(ctx context.Context) (result error) {
+	dispatched := false
+	defer func() {
+		if !l.dryRun && !dispatched {
+			why := "pass ended before refill dispatch (GitHub observation held or loop stopping)"
+			if result != nil {
+				why = "pass ended before refill dispatch: " + oneLine(result.Error())
+			}
+			_, _ = fmt.Fprintf(l.a.out, refillZeroFormat, why)
+		}
+	}()
 	l.lifecyclePhase("reload configuration")
 	l.reloadConfig()
 	a := l.a.snapshotAtNow()
@@ -1975,6 +1985,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	l.lifecyclePhase("dispatch planned actions")
+	dispatched = true
 	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
 }
 
@@ -2056,7 +2067,17 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 // runPassActions runs merges, review starts, intake, worker starts and PR/worker
 // transitions independently so a merge waiting on CI or in a lane queue never
 // delays a review or worker start, and the reverse.
-func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) (result error) {
+	fillLaunched := false
+	defer func() {
+		if !fillLaunched {
+			why := "action dispatch cancelled before refill"
+			if result != nil {
+				why = "action dispatch failed before refill: " + oneLine(result.Error())
+			}
+			_, _ = fmt.Fprintf(l.a.out, refillZeroFormat, why)
+		}
+	}()
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -2190,9 +2211,15 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	// The refill alone starts board workers. Legacy done-event next actions
 	// are bookkeeping now: neither they nor intake may hold the start stream
 	// across passes, or compete with refill for the same capacity snapshot.
-	launch("stream:workers", func() error {
-		return l.fill(ctx, st, claims, taken, reservations)
-	})
+	fillLaunched = true
+	if l.beginInFlight(loopFillStream) {
+		l.passActions.Go(func() {
+			defer l.endInFlight(loopFillStream)
+			setErr(l.fill(ctx, st, claims, taken, reservations))
+		})
+	} else {
+		_, _ = fmt.Fprintln(l.a.out, "SUPERVISOR REFILL started 0: previous refill still running")
+	}
 	launch("stream:next", func() error {
 		var errs []error
 		if err := l.settleStaleNext(staleActs); err != nil {
@@ -4137,7 +4164,7 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	v := readDeliveryWIP(st, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy())
 	exemptOnly := v.Reason != ""
 	if exemptOnly && !l.a.deliveryExemptIntake(st) {
-		return nil, errLoopLater
+		return nil, fmt.Errorf("%s: %w", v.Reason, errLoopLater)
 	}
 	l.mu.Lock()
 	if l.boardNone != nil && l.boardNone.exemptOnly == exemptOnly {
@@ -4148,10 +4175,11 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	l.mu.Unlock()
 	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.timeNow()) {
 		l.mu.Lock()
-		l.boardNone = &loopBoardNone{err: errLoopLater, exemptOnly: exemptOnly}
+		wait := fmt.Errorf("GitHub budget under github.floor (%d): %w", l.a.cfg.GitHub.Floor, errLoopLater)
+		l.boardNone = &loopBoardNone{err: wait, exemptOnly: exemptOnly}
 		l.mu.Unlock()
 		l.sayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.a.cfg.GitHub.Floor)
-		return nil, errLoopLater
+		return nil, wait
 	}
 	l.clearSaid("board budget")
 	next, err := l.readNextItemSkipping(ctx, exemptOnly, l.fillSkipped())
@@ -4275,8 +4303,8 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
 		return "", err
 	}
-	if l.unreadRepo(next.Ref) != "" {
-		return "", errLoopLater
+	if why := l.unreadRepo(next.Ref); why != "" {
+		return "", fmt.Errorf("repository unread: %s: %w", why, errLoopLater)
 	}
 	if err := l.a.allowMonitoredIssue(ctx, next.Ref); err != nil {
 		return "", err
@@ -4294,13 +4322,13 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		name = "Epic owner " + next.Ref
 	}
 	if err := l.a.fatalAdmission(name, false); err != nil {
-		return "", errLoopLater
+		return "", fmt.Errorf("fatal admission: %v: %w", err, errLoopLater)
 	}
 	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
-			return "", errLoopLater
+			return "", fmt.Errorf("no room for a start on any host: %w", errLoopLater)
 		}
 		return "", err
 	}
