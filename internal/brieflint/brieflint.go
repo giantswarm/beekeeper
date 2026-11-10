@@ -7,7 +7,6 @@ package brieflint
 
 import (
 	"bufio"
-	"bytes"
 	"io"
 	"io/fs"
 	"path"
@@ -186,12 +185,12 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	text := string(raw)
+	text := WithoutData(string(raw))
 	here := post.SingleRepo(text)
 	unlinked := post.UnlinkedLines(text, here)
 	clobber := shellClobberLines(text)
 	var out []Finding
-	sc := bufio.NewScanner(bytes.NewReader(raw))
+	sc := bufio.NewScanner(strings.NewReader(text))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()

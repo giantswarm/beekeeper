@@ -331,6 +331,24 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 		}
 	}
 
+	// Only the loop's in-flight replacement of a recorded park inherits
+	// that worker's PR. A name or a PR URL in an arbitrary brief is no grant.
+	if a.as == loopParty.Name && st != nil {
+		for _, ag := range st.Agents {
+			if !freshPark(st, ag) || !ag.Park.Continuing || len(ag.Park.Continuation) == 0 || continuationName(ag) != name {
+				continue
+			}
+			if ag.Park.RefKind == github.RefPullRequest || ag.Park.ReviewHead != "" {
+				addRepairPull(ag.Park.On)
+			}
+			for _, rp := range st.ReviewParks {
+				if rp.Party.Is(ag.Party) {
+					addRepairPull(rp.On)
+				}
+			}
+		}
+	}
+
 	if a.store != nil {
 		if evs, err := a.store.Events(0, func(e state.Event) bool {
 			return e.By.Name == loopParty.Name && (e.Verb == loopClaimVerb || e.Verb == loopClaimEndVerb)

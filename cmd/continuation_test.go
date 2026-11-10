@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -286,5 +290,91 @@ func TestAlertWakeAndEndedParkCandidatePreserveQueuedContinuation(t *testing.T) 
 	st, _ := r.a.store.Read()
 	if st.Agents[0].Park == nil || len(st.Agents[0].Park.Continuation) != 1 {
 		t.Fatalf("settleAlertWake cleared queued continuation: %+v", st.Agents[0].Park)
+	}
+}
+
+// Exercise generated briefs through the real lint and duplicate-PR gate, not
+// just a fake successful start. Both timer and message delivery must replace
+// the owner of an existing PR without turning its previous transcript.
+func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
+	for _, fromTimer := range []bool{false, true} {
+		t.Run(fmt.Sprint("timer=", fromTimer), func(t *testing.T) {
+			r, _ := fillRig(t)
+			r.a.cfg.LeaseDir = t.TempDir()
+			party := state.Party{Name: holderParked, Session: continuationOldSession}
+			old := state.Agent{Party: party, Task: "Continue https://github.com/o/r/issues/12",
+				Park: &state.Park{By: party, At: r.a.now, On: loopPR, RefKind: github.RefPullRequest, Waits: "timer wakes me to verify proof, then close"}}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{old}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			const message = "Guide run 32: verify #888.\n```\nSee https://github.com/other/repo/issues/99\n```"
+			if fromTimer {
+				w := &watcher{app: r.a}
+				w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, reason: paramDue})
+			} else if err := r.a.queueContinuation(loopParty, old, message); err != nil {
+				t.Fatal(err)
+			}
+			previousRead := readRepoOpenPulls
+			t.Cleanup(func() { readRepoOpenPulls = previousRead })
+			readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) {
+				return []unmergedPull{{Number: 7, URL: "https://github.com/o/r/pull/7", Body: "Closes https://github.com/o/r/issues/12"}}, nil
+			}
+			starts := 0
+			r.answer = func(args []string) (string, int) {
+				if args[0] != agentsName || args[1] != agentStartName {
+					return "", 0
+				}
+				starts++
+				brief, err := readStateFixture(r.a.store.Dir(), args[3])
+				if err != nil {
+					t.Fatal(err)
+				}
+				findings, err := brieflint.Lint(args[3], bytes.NewReader(brief))
+				if err != nil || len(findings) != 0 || !strings.Contains(string(brief), message) {
+					t.Fatalf("quoted wake did not survive lint: %+v, %v, %s", findings, err, brief)
+				}
+				issues := briefIssues(string(brief))
+				if slices.Contains(issues, "other/repo#99") {
+					t.Fatal("quoted event assigned unrelated work")
+				}
+				previousAs := r.a.as
+				r.a.as = "unrelated worker"
+				if err := r.a.openPullStartGate(t.Context(), args[2], string(brief), issues, false, false, false); err == nil {
+					t.Fatal("non-loop caller inherited continuation exemption")
+				}
+				r.a.as = loopParty.Name
+				if err := r.a.openPullStartGate(t.Context(), "wrong successor", string(brief), issues, false, false, false); err == nil {
+					t.Fatal("wrong successor inherited continuation exemption")
+				}
+				err = r.a.openPullStartGate(t.Context(), args[2], string(brief), issues, false, false, false)
+				r.a.as = previousAs
+				if err != nil {
+					t.Fatalf("continuation refused by real PR gate: %v", err)
+				}
+				r.started(t, args[2], continuationNewSession)
+				return "", 0
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				st, _ := r.a.store.Read()
+				if err := l.continueParks(t.Context(), st); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, _ := r.a.store.Read()
+			if starts != 1 || len(st.Agents) != 1 || st.Agents[0].Session != continuationNewSession {
+				t.Fatalf("continuation not started once: %d, %+v", starts, st.Agents)
+			}
+			// The exemption must not authorize an ordinary second worker.
+			if err := r.a.openPullStartGate(t.Context(), "competing worker", old.Task, []string{continuationTaskRef}, false, false, false); err == nil {
+				t.Fatal("ordinary duplicate worker was admitted")
+			}
+		})
 	}
 }

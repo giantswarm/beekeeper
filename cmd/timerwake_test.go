@@ -499,3 +499,33 @@ func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 		t.Fatal("retry did not fire at the next interval")
 	}
 }
+
+func TestOwnedExternalWaitTimerIsItsWakeCondition(t *testing.T) {
+	owner := state.Party{Name: agentOne, Session: continuationOldSession}
+	for _, tc := range []struct {
+		name, on, waits, when, repeat string
+		by                            state.Party
+		want                          bool
+	}{
+		{name: "proof deadline on pull", on: loopPR, waits: "timer wakes me to verify proof, then close", by: owner, want: true},
+		{name: "probe on issue", on: continuationTaskRef, waits: "CI completion timer", by: owner, want: true},
+		{name: "review reminder", on: loopPR, waits: deskReviewWait, by: owner, want: true},
+		{name: "another worker", on: loopPR, by: state.Party{Name: "other"}},
+		{name: "old session", on: loopPR, by: state.Party{Name: agentOne, Session: "different-session"}},
+		{name: "repeating reminder", on: loopPR, by: owner, repeat: state.RepeatDaily},
+		{name: "different typed condition", on: loopPR, by: owner, when: "issue-closed o/r#12"},
+		{name: "note", on: "#3", by: owner},
+		{name: "person", on: loopPR, waits: "Alex's answer", by: owner},
+		{name: "hold", on: parkedHoldWait, by: owner},
+		{name: "lease", on: "lease agentlab-1", by: owner},
+		{name: "alert", on: parkedAlertWait, by: owner},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &state.Park{By: owner, On: tc.on, Waits: tc.waits}
+			timer := state.Timer{By: tc.by, When: tc.when, Repeat: tc.repeat}
+			if got := timerSettlesPark(timer, p, personTimo); got != tc.want {
+				t.Fatalf("timer settlement = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
