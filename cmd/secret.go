@@ -35,7 +35,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset, github-app; items lists a vault's item names, reveal answers configuration; store is the person's",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, move, set, capture, rotate, unset, github-app; items lists a vault's item names, reveal answers configuration; store is the person's",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -162,7 +162,7 @@ anything is not equal.`,
 		},
 	})
 	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretCaptureCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
-		a.secretItemsCmd(), a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
+		a.secretMoveCmd(), a.secretItemsCmd(), a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -184,7 +184,7 @@ anything is not equal.`,
 			if dash := cmd.ArgsLenAtDash(); cmd.Name() == "copy" && dash >= 0 {
 				beforeConsumer = args[:dash]
 			}
-			if scratch != "" || inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
+			if cmd.Name() == secretMoveOp || scratch != "" || inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -344,7 +344,7 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if err := brokeredSecretArgs(argv, inSandbox, a.cfg.Secret.Session); err != nil {
 		return refused("%v; setup runs on the host, by the person", err)
 	}
-	if !a.cfg.Secret.Session || !a.secretNeedsVault("", argv) {
+	if cmd.Name() == secretMoveOp || !a.cfg.Secret.Session || !a.secretNeedsVault("", argv) {
 		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
 	}
 	r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
