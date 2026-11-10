@@ -766,6 +766,7 @@ func (g *gateRun) step() (string, error) {
 			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
 			m.Version = project.Version()
+			m.Head = g.mergeTargetHead()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -776,7 +777,7 @@ func (g *gateRun) step() (string, error) {
 			dropped = true
 			return nil, nil
 		} else {
-			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid, Output: g.output,
+			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Head: g.mergeTargetHead(), Lane: g.lane.Name, By: g.me, PID: g.pid, Output: g.output,
 				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC(), Candidate: g.candidate})
 			detail := fmt.Sprintf("%s in lane %s", g.key(), g.lane.Name)
 			if g.pr == 0 {
@@ -1549,7 +1550,7 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 		g.drop(st)
 		if code == ExitGateRefused {
 			g.refusePair(st, why)
-			merge.Fail(st, state.Failed{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, At: g.now, Exit: code, Reason: why})
+			merge.Fail(st, state.Failed{Repo: g.repo, PR: g.pr, Head: g.mergeTargetHead(), Lane: g.lane.Name, By: g.me, At: g.now, Exit: code, Reason: why})
 		}
 		return []state.Event{event(g.me, "merge.refused", "%s: %s", g.key(), why)}, nil
 	})
@@ -2420,7 +2421,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	case out.Merged:
 		merge.Retry(st, repo, pr)
 	case r.unanswered == nil:
-		merge.Fail(st, state.Failed{Repo: repo, PR: pr, Lane: lane.Name, By: m.By, At: now, Exit: rc, Reason: r.reason})
+		merge.Fail(st, state.Failed{Repo: repo, PR: pr, Head: m.Head, Lane: lane.Name, By: m.By, At: now, Exit: rc, Reason: r.reason})
 	}
 	switch {
 	case r.unanswered != nil:
