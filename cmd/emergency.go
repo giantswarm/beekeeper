@@ -216,7 +216,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if _, err := a.emergencyAction(fmt.Sprintf("merge https://github.com/%s/pull/%d at %s", args[0], n, pr.HeadRefOid)); err != nil {
 				return err
 			}
-			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--"+cmp.Or(a.cfg.Merge.Methods[args[0]], "squash"), "--match-head-commit", pr.HeadRefOid)
+			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--"+cmp.Or(a.cfg.Merge.Methods[args[0]], mergeMethodSquash), "--match-head-commit", pr.HeadRefOid)
 			return err
 		})
 	}}
@@ -356,7 +356,7 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	if _, err := a.emergencyAction(fmt.Sprintf("admin merge %s at %s", url, p.Head)); err != nil {
 		return err
 	}
-	_, err = github.RunGH(ctx, "pr", gitMerge, strconv.Itoa(number), "--repo", repo, "--"+cmp.Or(a.cfg.Merge.Methods[repo], "squash"), "--admin", "--match-head-commit", p.Head)
+	_, err = github.RunGH(ctx, "pr", gitMerge, strconv.Itoa(number), "--repo", repo, "--"+cmp.Or(a.cfg.Merge.Methods[repo], mergeMethodSquash), "--admin", "--match-head-commit", p.Head)
 	return err
 }
 

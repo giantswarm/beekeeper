@@ -250,7 +250,8 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 func TestTheGoUsesConfiguredMergeMethod(t *testing.T) {
 	for _, method := range []string{"squash", "rebase", "merge"} {
 		t.Run(method, func(t *testing.T) {
-			in := Input{MergeMethods: map[string]string{"o/r": method}}
+			repo, _, _ := strings.Cut(pr, "#")
+			in := Input{MergeMethods: map[string]string{repo: method}}
 			base := Action{Ref: "o/r#7", Head: head1}
 			a := goAction(in, base, "approved")
 			if !strings.Contains(a.Message, "--"+method+" --match-head-commit "+head1) {

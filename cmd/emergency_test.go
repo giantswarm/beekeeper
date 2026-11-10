@@ -86,11 +86,11 @@ func TestEmergencyRequiresGuideQuoteAndFutureExpiry(t *testing.T) {
 }
 
 func TestEmergencyMergeMatchesApprovedHeadAndAuditsFailure(t *testing.T) {
-	for _, method := range []string{"", "squash", "rebase", "merge"} {
+	for _, method := range []string{"", mergeMethodSquash, mergeMethodRebase, gitMerge} {
 		t.Run("method="+method, func(t *testing.T) {
 			flag := method
 			if flag == "" {
-				flag = "squash"
+				flag = mergeMethodSquash
 			}
 			a := emergencyApp(t)
 			a.cfg.Merge.Methods = map[string]string{emergencyTestRepo: method}
@@ -480,7 +480,7 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 func TestEmergencyAdminMergeUsesConfiguredMethod(t *testing.T) {
 	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
 		ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: emergencyBlocked}
-	for _, method := range []string{"squash", "rebase", "merge"} {
+	for _, method := range []string{mergeMethodSquash, mergeMethodRebase, gitMerge} {
 		t.Run(method, func(t *testing.T) {
 			calls, err := adminMergeCall(t, "Merge them all.", green, 0, true, method)
 			if err != nil || len(calls) != 1 || !slices.Contains(calls[0], "--"+method) || !slices.Contains(calls[0], "--admin") {
