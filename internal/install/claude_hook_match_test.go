@@ -58,3 +58,32 @@ func TestClaudePreservesOtherQuotedGuard(t *testing.T) {
 		t.Error("install duplicated another binary's quoted guard")
 	}
 }
+
+func TestClaudeUpgradesFilteredHookForEveryToolRelay(t *testing.T) {
+	e, _ := env(t, t.TempDir(), platform.Stub().Setup, nil)
+	legacy := hookEntry{Matcher: "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*",
+		Hooks: []hookCommand{{Type: hookTypeCommand, Command: shellQuote(e.Exe) + " hook pretooluse", Timeout: 30}}}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, e.Settings, `{"hooks":{"PreToolUse":[`+string(raw)+`]}}`)
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	s, err := readSettings(e.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.hooks("PreToolUse")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("hook upgrade duplicated or lost entry: %s, %v", list, err)
+	}
+	var installed hookEntry
+	if err := json.Unmarshal(list[0], &installed); err != nil {
+		t.Fatal(err)
+	}
+	if installed.Matcher != "*" {
+		t.Fatalf("next Glob, WebFetch or new tool would miss relay: %q", installed.Matcher)
+	}
+}
