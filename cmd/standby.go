@@ -334,9 +334,10 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 	if a.backgroundAgent(ctx, st, holder) {
 		return a.reviveBackground(ctx, holder, msg)
 	}
-	host := "local_" + holder.Session
-	if !a.hasRow(holder.Session) {
-		if _, err := a.importRowFromWatch(ctx, holder.Session, holder.Name); err != nil {
+	host := desktopID(holder)
+	id := strings.TrimPrefix(host, "local_")
+	if !a.hasRow(id) {
+		if _, err := a.importRowFromWatch(ctx, id, holder.Name); err != nil {
 			return fmt.Errorf("%s has no row in the desktop and its import missed: %w", holder.Name, err)
 		}
 	}

@@ -3,10 +3,8 @@ package superloop
 import (
 	"fmt"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -48,7 +46,6 @@ const (
 	leftBefore  = "before"
 	leftAuthor  = "author"
 	leftTeam    = "team"
-	leftFiles   = "files"
 )
 
 // owner is whose review a pull request waits for, as the desk sees it.
@@ -107,12 +104,6 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 	if reason, why := d.unread(p.Ref); reason != "" {
 		return nobodys, reason, why
 	}
-	if n := d.namedNever(p); n != "" {
-		return nobodys, leftNever, fmt.Sprintf("its title, branch or changes name %s of supervisor.ownership.never: the desk does no work on it", n)
-	}
-	if len(d.Never) > 0 && p.ChangedFiles > len(p.Files) {
-		return nobodys, leftFiles, fmt.Sprintf("it changes %d files and gh lists %d: the rest cannot be checked against supervisor.ownership.never", p.ChangedFiles, len(p.Files))
-	}
 	if len(d.Authors) > 0 && !slices.ContainsFunc(d.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) && !d.bot(p.Author) {
 		return nobodys, leftAuthor, fmt.Sprintf("opened by %s, not by the desk (%s): it is not the desk's to review", p.Author, strings.Join(d.Authors, ", "))
 	}
@@ -153,60 +144,6 @@ func teamName(team string) string {
 		return "its owners"
 	}
 	return team
-}
-
-// namedNever is the Never pattern p's title, head branch or a changed path
-// names, "" when none does.
-func (d Desk) namedNever(p Pull) string {
-	texts := append([]string{p.Title, p.Branch}, p.Files...)
-	for _, n := range d.Never {
-		// A pattern whose name is all wildcard (org/*) names no repository
-		// in a text: it would match every title. unread covers its
-		// repositories.
-		_, name, _ := strings.Cut(n, "/")
-		if strings.Trim(name, "*?") == "" {
-			continue
-		}
-		// GitHub's name occurs in ordinary workflow paths, action titles and
-		// dependency branches. Those name the hosting platform, not a repository
-		// named github. Require the qualified repository there; unread still
-		// excludes the repository itself, including wildcard Never patterns.
-		pattern := n
-		if strings.EqualFold(name, "github") {
-			pattern = "/" + n
-		}
-		re := nameWord(pattern)
-		if slices.ContainsFunc(texts, re.MatchString) {
-			return n
-		}
-	}
-	return ""
-}
-
-var nameWordCache sync.Map
-
-// nameWord matches the repository name of pattern (owner/name) as a word of
-// a text: not inside a longer run of letters and digits. * and ? match
-// what a repository name may hold.
-func nameWord(pattern string) *regexp.Regexp {
-	if cached, ok := nameWordCache.Load(pattern); ok {
-		return cached.(*regexp.Regexp)
-	}
-	_, name, _ := strings.Cut(pattern, "/")
-	var b strings.Builder
-	for _, r := range name {
-		switch r {
-		case '*':
-			b.WriteString(`[a-z0-9._-]*`)
-		case '?':
-			b.WriteString(`[a-z0-9._-]`)
-		default:
-			b.WriteString(regexp.QuoteMeta(string(r)))
-		}
-	}
-	re := regexp.MustCompile(`(?i)(^|[^a-z0-9])` + b.String() + `($|[^a-z0-9])`)
-	nameWordCache.Store(pattern, re)
-	return re
 }
 
 // matchesAny reports whether repo (owner/name) matches one of patterns,

@@ -31,7 +31,7 @@ const (
 	// recoveryProbeEvery repeats a passed probe; a failed one repeats at once.
 	recoveryProbeEvery = 5 * time.Minute
 	// recoveryRestartTicks bounds the wait for processes to leave the failed
-	// candidate at their quiet moments, before the loop's service is restarted.
+	// candidate at their quiet moments, before their managed services restart.
 	recoveryRestartTicks = 10
 	// recoveryFailures are the failed attempts at a rollback before it holds.
 	recoveryFailures = 3
@@ -149,7 +149,7 @@ func (a *app) startRecovery(artifact, target string) error {
 // rearmRecovery starts a supervised candidate's controller again where none
 // runs: a reboot ends it, and a watch of either binary brings it back.
 func (a *app) rearmRecovery() {
-	target, err := os.Executable()
+	target, err := executablePath()
 	if err != nil || a.cfg == nil || !update.WatchedProbation(target) {
 		return
 	}
@@ -244,13 +244,36 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	s := c.signals(ctx, j)
 	o.NoteLoop(s)
 	verdict, reason := update.Decide(o, s)
+	if verdict == update.RollBack && reason == update.MissingHeartbeatReason {
+		c.refreshHeartbeat(j, &s)
+		if s.Heartbeat || s.Unproven != "" {
+			o.NoteLoop(s)
+			verdict, reason = update.Decide(o, s)
+		}
+	}
 	if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
 		return false, err
 	}
 	switch verdict {
 	case update.RollBack:
-		if reason == "no health heartbeat from the candidate's loop" {
-			reason += ": " + c.loopSilence(j.Candidate.Version, j.InstalledAt)
+		if reason == update.MissingHeartbeatReason {
+			c.refreshHeartbeat(j, &s)
+			if s.Heartbeat || s.Unproven != "" {
+				o.NoteLoop(s)
+				verdict, reason = update.Decide(o, s)
+				if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
+					return false, err
+				}
+				if verdict == update.Promote {
+					return c.promote(ctx, j)
+				}
+				if verdict != update.RollBack {
+					return false, nil
+				}
+			}
+			if reason == update.MissingHeartbeatReason {
+				reason += ": " + c.loopSilence(j.Candidate.Version, j.InstalledAt)
+			}
 		}
 		return c.rollback(ctx, j, reason)
 	case update.Promote:
@@ -294,33 +317,30 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 	}
 }
 
-// signals reads the candidate's durable health: the same streaks the watches
-// evaluate, and the heartbeat its loop writes every pass.
-func (c *recoveryController) signals(ctx context.Context, j *update.Journal) update.Signals {
-	s := update.Signals{}
-	st, err := c.store.Read()
-	if err != nil {
-		s.Unproven = "state unreadable"
-		return s
-	}
-	s.Intentional = st.Stop != nil
+// refreshHeartbeat updates s's heartbeat fields from the latest throughput
+// observation and supervisor-loop lifecycle checkpoint.
+func (c *recoveryController) refreshHeartbeat(j *update.Journal, s *update.Signals) bool {
 	version := normalizeLoopVersion(j.Candidate.Version)
 	now := c.now()
 	var obs throughputObservation
 	found, err := c.store.ReadFile(throughputObservationFile, &obs)
 	if err != nil {
 		s.Unproven = "heartbeat unreadable"
-		return s
+		return false
 	}
+	s.Heartbeat, s.HeartbeatAgo = false, 0
 	if found {
 		if obs.At.IsZero() {
 			s.Unproven = "heartbeat unreadable"
-			return s
+			return false
 		}
 		// A machine whose loop ran lately owes a heartbeat; an execution host,
 		// which runs none, has only its probe.
 		s.HeartbeatRequired = j.InstalledAt.Sub(obs.At) < recoveryLoopRecent
-		s.Heartbeat = obs.Candidate == version && !obs.At.Before(j.InstalledAt) && now.Sub(obs.At) <= 3*throughputCadence
+		s.Heartbeat = obs.Candidate == version && !obs.At.Before(j.InstalledAt) && !obs.At.After(now) && now.Sub(obs.At) <= 3*throughputCadence
+		if s.Heartbeat {
+			s.HeartbeatAgo = now.Sub(obs.At)
+		}
 	}
 	// The heartbeat's grace starts with the candidate's own loop: a loop of the
 	// old release re-executes only at its next quiet pass, minutes after the
@@ -335,18 +355,43 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 			if life.Exited && life.Code != 0 {
 				s.Heartbeat = false
 			} else if !life.Exited && life.Phase != "" && life.Phase != loopPhaseStartup && now.Sub(life.At) <= 3*throughputCadence {
+				if !s.Heartbeat || now.Sub(life.At) < s.HeartbeatAgo {
+					s.HeartbeatAgo = max(now.Sub(life.At), 0)
+				}
 				s.Heartbeat = true
 			}
 		}
 		s.LoopPending = otherAlive
 	}
-	evs, err := c.store.Events(0, func(e state.Event) bool { return e.Verb == throughputOutcomeVerb && !e.At.Before(j.InstalledAt) })
+	return true
+}
+
+// signals reads the candidate's durable health: the same streaks the watches
+// evaluate, and the heartbeat its loop writes every pass.
+func (c *recoveryController) signals(ctx context.Context, j *update.Journal) update.Signals {
+	s := update.Signals{}
+	st, err := c.store.Read()
+	if err != nil {
+		s.Unproven = "state unreadable"
+		return s
+	}
+	s.Intentional = st.Stop != nil
+	version := normalizeLoopVersion(j.Candidate.Version)
+	if !c.refreshHeartbeat(j, &s) {
+		return s
+	}
+	evs, err := state.FollowSnapshot(c.store, "recovery-throughput-outcomes", "v1", func(e state.Event) bool {
+		return e.Verb == throughputOutcomeVerb
+	})
 	if err != nil {
 		s.Unproven = "events unreadable"
 		return s
 	}
 	var outcomes []throughputOutcome
 	for _, e := range evs {
+		if e.At.Before(j.InstalledAt) {
+			continue
+		}
 		var o throughputOutcome
 		if err := json.Unmarshal([]byte(e.Detail), &o); err != nil {
 			s.Unproven = "events unreadable"
@@ -356,6 +401,12 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 			outcomes = append(outcomes, o)
 		}
 	}
+	// Re-check heartbeat after reading events so a candidate checkpoint that
+	// landed during the event scan is never missed by this tick.
+	if !c.refreshHeartbeat(j, &s) {
+		return s
+	}
+	now := c.now()
 	// Streaks only: a loop that died must not read as unknown here.
 	status, _ := evaluateThroughput(now, time.Hour, throughputObservation{At: now, Candidate: version}, outcomes, false)
 	switch {
@@ -422,7 +473,9 @@ func (c *recoveryController) finish(ctx context.Context, j *update.Journal) (boo
 	if err := c.store.CompleteRollback(j.Previous.Version, j.Candidate.Version); err != nil {
 		return false, err
 	}
-	if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
+	if err := c.observe(ctx, func(saved *update.Observed) {
+		saved.Notified, saved.Restarts, saved.Restarted = o.Notified, o.Restarts, o.Restarted
+	}); err != nil {
 		return false, err
 	}
 	return o.Notified && o.Restarted, failed
@@ -440,17 +493,20 @@ func (c *recoveryController) report(line string) error {
 	return nil
 }
 
-// restart moves what ran the failed candidate to the restored bytes, by the
-// rules of an update: a watch or loop at its quiet moment, a broker when it
-// serves no calls. A service that is down starts now; a loop still on the
-// failed binary past recoveryRestartTicks is restarted, since a broken loop may
-// never reach a quiet moment. It says whether nothing is left to do.
+// restart requests cooperative re-execution first, then restarts managed loop
+// and standby services that cannot reach a quiet point. Only a subsequent
+// process inspection can confirm that the failed binary has gone.
 func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
 	t, err := recoveryReadProcs()
 	if err != nil {
-		return attempt >= recoveryRestartTicks
+		_, _ = fmt.Fprintf(c.w, "recovery restart: read processes: %v\n", err)
+		return false
 	}
-	due, _ := requestRestarts(c.w, c.a.cfg.StateDir, c.target, t, recoveryProcessBinary, c.now(), false)
+	due, err := requestRestarts(c.w, c.a.cfg.StateDir, c.target, t, recoveryProcessBinary, c.now(), false)
+	if err != nil {
+		_, _ = fmt.Fprintf(c.w, "recovery restart: %v\n", err)
+		return false
+	}
 	var written time.Time
 	if fi, err := os.Stat(c.target); err == nil {
 		written = fi.ModTime()
@@ -458,15 +514,53 @@ func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
 	brokerPending := !written.IsZero() && restartBrokerOn(ctx, c.w, c.target, written, t, false, c.a.cfg.Secret.Session)
 	settled := len(due) == 0 && !brokerPending
 	if !plat.Launcher.Available() {
-		return settled || attempt >= recoveryRestartTicks
+		return settled
 	}
-	if !unitComingUp(plat.Launcher.State(ctx, loopUnit)) {
-		_ = plat.Launcher.Resume(ctx, loopUnit)
-	} else if attempt >= recoveryRestartTicks && slices.ContainsFunc(due, isSupervisorLoop) {
-		_ = plat.Launcher.Stop(ctx, loopUnit)
-		_ = plat.Launcher.Resume(ctx, loopUnit)
+	for _, service := range []struct {
+		unit string
+		due  func(*proc.Process) bool
+	}{
+		{loopUnit, isSupervisorLoop},
+		{standbyUnit, func(p *proc.Process) bool {
+			return slices.Contains(p.Args, watchName) && slices.Contains(p.Args, "--standby")
+		}},
+	} {
+		matched := slices.ContainsFunc(due, service.due)
+		known := false
+		if err := c.observe(ctx, func(o *update.Observed) {
+			known = slices.Contains(o.RestartServices, service.unit)
+			if matched && !known {
+				o.RestartServices = append(o.RestartServices, service.unit)
+				known = true
+			}
+		}); err != nil {
+			_, _ = fmt.Fprintf(c.w, "recovery restart journal: %v\n", err)
+			return false
+		}
+		if !known {
+			continue // Never start a service this recovery has not seen running.
+		}
+		status := plat.Launcher.State(ctx, service.unit)
+		if status == "" || status == unitNotFound {
+			settled = false
+			continue
+		}
+		if unitComingUp(status) {
+			if attempt < recoveryRestartTicks || !matched {
+				continue
+			}
+			if err := plat.Launcher.Stop(ctx, service.unit); err != nil {
+				_, _ = fmt.Fprintf(c.w, "recovery restart %s: %v\n", service.unit, err)
+				settled = false
+				continue
+			}
+		}
+		settled = false
+		if err := plat.Launcher.Resume(ctx, service.unit); err != nil {
+			_, _ = fmt.Fprintf(c.w, "recovery resume %s: %v\n", service.unit, err)
+		}
 	}
-	return settled || attempt >= recoveryRestartTicks
+	return settled
 }
 
 func (c *recoveryController) promote(ctx context.Context, j *update.Journal) (bool, error) {

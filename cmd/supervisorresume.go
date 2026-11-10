@@ -42,6 +42,10 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			continue
 		}
 		target := cmp.Or(ref, ag.Task)
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseRecover)
 		if l.dryRun {
 			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 				return err
@@ -60,6 +64,9 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			return err
 		}
 		if err := l.restartQuota(ctx, st, ag, ref, review); err != nil {
+			if errors.Is(err, state.ErrRecoveryWriterFenced) {
+				return err
+			}
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("quota later "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, no room for its replacement yet: %s waits for its re-queue", ag.Name, qerr.Error(), target)
 				continue
@@ -67,7 +74,8 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			l.sayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
 			continue
 		}
-		note, _, _ := l.a.lastNote(ag.Party, time.Time{})
+		note, _, _ := l.a.lastNote(ag.Party, time.Time{}, func() { l.lifecyclePhase(loopPhaseRecover) })
+		l.lifecyclePhase(loopPhaseRecover)
 		err = l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			// The replacement took the name, and with it the task; it
 			// serves what the old session served.
@@ -283,6 +291,10 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if l.agentUnreadRepo(st, ag, ref) != "" {
 			continue
 		}
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseRecover)
 		if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 			continue
 		}
@@ -343,6 +355,9 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 			_, err = l.run(ctx, agentsName, agentStartName, ag.Name, brief, "--harness", harnessAuto)
 		}
 		startErr = err
+	}
+	if errors.Is(startErr, state.ErrRecoveryWriterFenced) {
+		return startErr
 	}
 	// Release only a holder whose harness confirmed it gone. A partial
 	// start may already have installed a resumable replacement.

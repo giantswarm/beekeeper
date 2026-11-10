@@ -65,6 +65,10 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 		return
 	}
 	for _, selector := range slices.Sorted(maps.Keys(a.cfg.Agents.Hosts)) {
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return
+		}
+		l.lifecyclePhase(loopPhaseTidy)
 		pin := st.HostPin(selector)
 		if pin != nil && pin.Identity != a.cfg.Agents.Hosts[selector].Identity {
 			pin = nil
@@ -85,6 +89,9 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 		}
 		out, err := l.run(ctx, agentsName, "hosts", hostUpdateCmdName, selector)
 		if err != nil {
+			if errors.Is(err, state.ErrRecoveryWriterFenced) {
+				return
+			}
 			l.sayOnce("host update "+selector+" "+version, "SUPERVISOR HOST WAITS %s: %v", selector, err)
 			if !strings.Contains(err.Error(), hostUpdateDeferred) {
 				l.noteBehind(selector, version, oneLine(err.Error()))

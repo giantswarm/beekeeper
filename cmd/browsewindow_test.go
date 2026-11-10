@@ -31,6 +31,14 @@ type compositor struct {
 
 func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	switch args[len(args)-1] {
+	case "activewindow":
+		if c.down {
+			return nil, errors.New("no socket")
+		}
+		if c.window.FocusHistoryID == 0 {
+			return json.Marshal(c.window)
+		}
+		return []byte(`{"address":"0xt","class":"terminal"}`), nil
 	case "clients":
 		if c.down {
 			return nil, errors.New("no socket")
@@ -244,8 +252,8 @@ func typedAt(t *testing.T, start time.Time, last *time.Time, unreadable bool) {
 }
 
 // A browse refuses a turn while the person works at Chrome: a Chrome window
-// in their view and their input in the sample, or unreadable input; it
-// names the probe. With Chrome out of view, or the person not typing, it
+// currently focused and their input in the sample, or unreadable input; it
+// names the probe. With another window focused, or the person not typing, it
 // starts the turn.
 func TestAtChrome(t *testing.T) {
 	_, _ = stubApp(t)
@@ -262,8 +270,8 @@ func TestAtChrome(t *testing.T) {
 	}{
 		"focused and typing":         {window: focused, typed: true, quiet: time.Minute, want: "a Chrome window has the focus and their keyboard or pointer was in use"},
 		"focused and unreadable":     {window: focused, unreadable: true, quiet: time.Minute, want: "cannot be read, which counts as their input"},
-		"shown and typing":           {window: with(focused, 4), typed: true, quiet: time.Minute, want: "a Chrome window is on workspace 2, which eDP-1 shows"},
-		"focused just before typing": {window: with(hidden, 1), typed: true, quiet: time.Minute, want: "had the focus before the current window"},
+		"shown and typing":           {window: with(focused, 4), typed: true, quiet: time.Minute},
+		"focused just before typing": {window: with(hidden, 1), typed: true, quiet: time.Minute},
 		"focused and quiet":          {window: focused, quiet: time.Minute},
 		"compositor down and typing": {down: true, typed: true, quiet: time.Minute, want: "the compositor could not be asked where Chrome is"},
 		"hidden and typing":          {window: hidden, typed: true, quiet: time.Minute},
@@ -292,8 +300,7 @@ func TestAtChrome(t *testing.T) {
 func with(w hypr.Window, id int) hypr.Window { w.FocusHistoryID = id; return w }
 
 // Over the turn the watch turns the redirect off while the person types,
-// on again once they are quiet, and yields the window once they turn to its
-// workspace: the turn is cancelled as person at Chrome and the window is
+// on again once they are quiet, and yields the window once they focus Chrome: the turn is cancelled as person at Chrome and the window is
 // back at once.
 func TestFollowYieldsTheWindow(t *testing.T) {
 	_, _ = stubApp(t)
@@ -320,16 +327,20 @@ func TestFollowYieldsTheWindow(t *testing.T) {
 		t.Fatalf("typing elsewhere: redirect %v, Chrome on %+v", c.redirect, c.window.Workspace)
 	}
 	c.special = musicWS
-	if !p.follow(t.Context(), pres, time.Hour, cancel) {
-		t.Fatal("the person turned to the window's workspace and the turn did not yield")
+	if p.follow(t.Context(), pres, time.Hour, cancel) {
+		t.Fatal("typing in another window on Chrome's workspace yielded")
 	}
-	if !errors.Is(cause, errPersonAtChrome) || !strings.Contains(cause.Error(), "eDP-1 shows workspace special:music") {
+	c.window.FocusHistoryID = 0
+	if !p.follow(t.Context(), pres, time.Hour, cancel) {
+		t.Fatal("the person focused Chrome and the turn did not yield")
+	}
+	if !errors.Is(cause, errPersonAtChrome) || !strings.Contains(cause.Error(), "a Chrome window has the focus") {
 		t.Errorf("cancel cause = %v", cause)
 	}
 	if c.window.Workspace != musicWS || !c.output || c.redirect || !p.Restored || p.Watch != "" {
 		t.Errorf("after the yield: Chrome on %+v, output %v, redirect %v, placement %+v", c.window.Workspace, c.output, c.redirect, p)
 	}
-	if l := p.line(); !strings.Contains(l, "window yielded: during the turn eDP-1 shows workspace special:music") {
+	if l := p.line(); !strings.Contains(l, "window yielded: during the turn a Chrome window has the focus") {
 		t.Errorf("line = %q", l)
 	}
 	n := len(c.calls)
@@ -357,4 +368,75 @@ func TestWatchStops(t *testing.T) {
 		t.Errorf("a quiet watch yielded: %+v", p)
 	}
 	(&placement{}).watch(t.Context(), pres, time.Hour, func(error) {})()
+}
+
+// A focus snapshot from before the input sample must not refuse typing in
+// the terminal the person has since switched to.
+func TestAtChromeRechecksFocus(t *testing.T) {
+	_, _ = stubApp(t)
+	start := time.Now()
+	var last time.Time
+	typedAt(t, start, &last, false)
+	last = start.Add(time.Millisecond)
+	c := chromeOnMusic()
+	stubCompositor(t, c)
+	queries := 0
+	chromeCtl = func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[len(args)-1] == "activewindow" {
+			queries++
+			if queries > 1 {
+				c.window.FocusHistoryID = 1
+			}
+		}
+		return c.ctl(ctx, args...)
+	}
+	if _, err := atChrome(t.Context(), time.Minute); err != nil {
+		t.Fatalf("focus moved to terminal: %v", err)
+	}
+	if queries != 2 {
+		t.Fatalf("focus queries = %d, want 2", queries)
+	}
+}
+
+func TestBrowsePersonOK(t *testing.T) {
+	a, _ := browseApp(t)
+	lockScreen(t, "")
+	stubCompositor(t, chromeOnMusic())
+	var last time.Time
+	typedAt(t, time.Now(), &last, true)
+	a.cfg.Desktop.TypingQuiet.Duration = time.Minute
+	bin := t.TempDir()
+	transcript := filepath.Join(bin, "empty.jsonl")
+	writeFile(t, transcript, "")
+	writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n"+
+		"  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n"+
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\necho done\n")
+	if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	run := func(personOK bool) error {
+		c := a.browseCmd()
+		args := []string{"--dir", bin, "Open the demo page"}
+		if personOK {
+			args = append([]string{"--person-ok"}, args...)
+		}
+		c.SetArgs(args)
+		return c.ExecuteContext(t.Context())
+	}
+	if err := run(false); !errors.Is(err, errPersonAtChrome) {
+		t.Fatalf("without permission: %v", err)
+	}
+	if err := run(true); err != nil {
+		t.Fatalf("with permission: %v", err)
+	}
+	if err := run(false); !errors.Is(err, errPersonAtChrome) {
+		t.Fatalf("permission leaked into next run: %v", err)
+	}
+	lockScreen(t, hyprlock)
+	if err := run(true); !errors.Is(err, errScreenLocked) {
+		t.Fatalf("permission bypassed lock: %v", err)
+	}
 }
