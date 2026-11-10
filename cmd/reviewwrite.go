@@ -23,7 +23,9 @@ func reviewerSession(st *state.State, by state.Party) bool {
 }
 
 func (a *app) hookReviewWrite(session string) string {
-	if session == "" {
+	caller := envParty(os.Getenv)
+	caller.Session = session
+	if caller.Session == "" && caller.HostSession == "" {
 		return ""
 	}
 	store := a.store
@@ -42,7 +44,7 @@ func (a *app) hookReviewWrite(session string) string {
 	if err != nil {
 		return "Refused: cannot read the review assignment; retry when state is readable."
 	}
-	if reviewerSession(st, state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")}) {
+	if reviewerSession(st, caller) {
 		return reviewWriteRefusal
 	}
 	return ""
