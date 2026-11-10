@@ -59,11 +59,12 @@ func TestEventsCacheAppendRotateReplaceAndPartialLine(t *testing.T) {
 	if s.events[0] != cache {
 		t.Fatal("rotation replayed sealed history")
 	}
-	latest, err := s.Events(1, func(e Event) bool { return e.Verb == "fourth" })
-	if err != nil || len(latest) != 1 || latest[0].Verb != "fourth" || s.events[0] != cache {
+	const fourthVerb = "fourth"
+	latest, err := s.Events(1, func(e Event) bool { return e.Verb == fourthVerb })
+	if err != nil || len(latest) != 1 || latest[0].Verb != fourthVerb || s.events[0] != cache {
 		t.Fatalf("bounded query on newest segment evicted older cached segment: %+v %v", latest, err)
 	}
-	last, err := s.Events(1, func(e Event) bool { return e.Verb != "fourth" })
+	last, err := s.Events(1, func(e Event) bool { return e.Verb != fourthVerb })
 	if err != nil || len(last) != 1 || last[0].Verb != "third" {
 		t.Fatalf("last matching event: %+v %v", last, err)
 	}

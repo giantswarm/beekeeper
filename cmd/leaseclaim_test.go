@@ -154,11 +154,11 @@ func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	// Keep the original inode open so repeated atomic replacements cannot
 	// reuse it and hide a write during the refused claim attempts.
 	path := filepath.Join(a.store.Dir(), "state.json")
-	original, err := os.Open(path)
+	original, err := os.Open(path) //nolint:gosec // test fixture state file under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer original.Close()
+	defer func() { _ = original.Close() }()
 	before, err := original.Stat()
 	if err != nil {
 		t.Fatal(err)

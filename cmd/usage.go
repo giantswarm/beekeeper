@@ -1592,7 +1592,7 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 	w.mu.Lock()
 	last := w.lastUsage
 	w.mu.Unlock()
-	retry := min(k.Usage.EffectiveEvery(), max(w.cfg.Watch.Interval.Duration, time.Second))
+	retry := min(k.Usage.EffectiveEvery(), w.usageRetryFloor())
 	return last.IsZero() || now.Sub(last) >= retry
 }
 
@@ -1609,8 +1609,15 @@ func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now tim
 	w.mu.Lock()
 	last := w.providerLastUsage[name]
 	w.mu.Unlock()
-	retry := min(u.EffectiveEvery(), max(w.cfg.Watch.Interval.Duration, time.Second))
+	retry := min(u.EffectiveEvery(), w.usageRetryFloor())
 	return last.IsZero() || now.Sub(last) >= retry
+}
+
+func (w *watcher) usageRetryFloor() time.Duration {
+	if w.cfg != nil {
+		return max(w.cfg.Watch.Interval.Duration, time.Second)
+	}
+	return time.Second
 }
 
 // Providers are read sequentially; allow each its configured command deadline.

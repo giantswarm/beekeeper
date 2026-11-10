@@ -13,12 +13,13 @@ import (
 )
 
 func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
+	const probeProvider = "probe-provider"
 	store, err := state.OpenVersion(t.TempDir(), "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	file := usageProviderFile("fixture")
+	file := usageProviderFile(probeProvider)
 	u := config.Usage{Command: []string{"fixture-usage"}}
 	old := usageReading{At: now.Add(-6 * time.Minute), FiveHour: &usageWindow{UsedPercent: 99, ResetsAt: now.Add(time.Hour)}}
 	if err := store.WriteFile(file, old); err != nil {
@@ -66,9 +67,9 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 		}
 	}
 	w := &watcher{app: &app{store: store, now: now, readUsage: probe}, chores: true}
-	w.refreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{"fixture": {Usage: u}}})
-	if w.providerUsageErr["fixture"] != "" {
-		t.Fatalf("contended probe recorded as provider usage failure: %q", w.providerUsageErr["fixture"])
+	w.refreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{probeProvider: {Usage: u}}})
+	if w.providerUsageErr[probeProvider] != "" {
+		t.Fatalf("contended probe recorded as provider usage failure: %q", w.providerUsageErr[probeProvider])
 	}
 	close(finish)
 	if err := <-done; err != nil {
