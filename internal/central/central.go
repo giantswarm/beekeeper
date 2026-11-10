@@ -160,6 +160,14 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v a
 	req.Params.Name = "call_tool"
 	req.Params.Arguments = map[string]any{"name": c.Tool(tool), "arguments": args}
 	res, err := mc.CallTool(ctx, req)
+	if err == nil && c.authenticationRequired(res) {
+		// Muster explicitly refused before dispatch. Reattach the person's
+		// existing grant on this same session, then retry at most once.
+		if err := c.authenticate(ctx, mc, deadline); err != nil {
+			return "", err
+		}
+		res, err = mc.CallTool(ctx, req)
+	}
 	if err != nil {
 		err = c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: %s: %v", c.Tool(tool), err))
 		if u := (*Unreachable)(nil); errors.As(err, &u) {
@@ -315,6 +323,9 @@ func (c *Client) timedOut(ctx context.Context, stage string, deadline time.Durat
 // serve acted before its reply was lost.
 func (c *Client) result(tool string, res *mcp.CallToolResult, v any) (string, error) {
 	text := envelopeText(res)
+	if c.authenticationRequired(res) {
+		return "", c.signInRequired()
+	}
 	outcome, code := "", 0.0
 	if m, ok := res.StructuredContent.(map[string]any); ok {
 		outcome, _ = m["outcome"].(string)

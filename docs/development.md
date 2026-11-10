@@ -1170,6 +1170,25 @@ failure artifacts. Do not add path filters or a skip-on-missing-tool fallback.
 
 ## State/event recovery and guide continuity
 
+State-lock acquisitions join `state.lock.queue` before attempting `state.lock`.
+Each waiter publishes an already locked ticket after the visible queue tail.
+Readers may share admission with earlier readers, but wait behind an earlier
+writer; writers wait behind all earlier tickets. The ticket remains until the
+state lock is acquired, preventing repeated short holders from overtaking a
+waiting writer. Concurrent enqueues use a unique suffix to break sequence ties.
+The sequence does not depend on wall-clock time. Timeout removes the ticket;
+process death releases its OS lock so another waiter can reap it. Queue read
+errors fail acquisition rather than bypass ordering. The existing total wait
+budget covers both queue admission and state-lock acquisition.
+
+Normal `Read` calls copy the state under a shared lock and decode it after
+releasing that lock. Capacity and agent listing use this read path; idle guide
+feed polls do likewise. A guide heartbeat or newly acknowledged feed entry
+still needs a durable update. These guarantees apply to processes running the
+queue protocol: older binaries remain mutually exclusive on `state.lock`, but
+can bypass the queue until replaced or restarted. Fair admission bounds
+overtaking, not the duration of callbacks that hold the lock.
+
 `FileStore.Update` commits state and an `EventOutbox` together using an atomic
 rename after syncing the temporary file. The directory is synced after renames.
 The outbox records the event-log offset and exact serialized append. Recovery

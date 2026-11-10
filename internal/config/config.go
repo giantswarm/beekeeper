@@ -557,6 +557,9 @@ type Secret struct {
 	// or service account, such as a team's shared vault; beekeeper writes
 	// to Vault alone. The list is the person's policy.
 	Vaults []string `yaml:"vaults"`
+	// MoveVaults are the explicitly allowed destinations for whole-item moves.
+	// They do not grant field writes or reads. Empty refuses every move.
+	MoveVaults []string `yaml:"moveVaults"`
 	// TokenFile (~/ allowed) holds the vault's service account token,
 	// which beekeeper gives only to its own op calls. Agents reach it
 	// nowhere: it lies outside every agent container's mounts.
@@ -2571,8 +2574,8 @@ type Ownership struct {
 	Review []string `yaml:"review"`
 	// Never are the repositories (patterns as Review's) the desk does no
 	// work on, whatever Review or a person's override says: a pull request
-	// in one, or whose title, head branch or a changed path names one, is
-	// left alone.
+	// in one is left alone. References to these repositories in another
+	// pull request do not affect its ownership.
 	Never []string `yaml:"never"`
 	// Authors are the logins the desk opens its pull requests as (default:
 	// the login gh acts as): one anybody else opened is left alone.
@@ -4370,6 +4373,11 @@ func (c *Config) validateEach(report func(error)) {
 	for i, r := range c.Secret.FileRoots {
 		if !filepath.IsAbs(r) || r == "/" {
 			report(fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r))
+		}
+	}
+	for i, v := range c.Secret.MoveVaults {
+		if strings.TrimSpace(v) == "" || strings.ContainsAny(v, "/\x00\r\n") || c.Secret.Vault == "" {
+			report(fmt.Errorf("secret.moveVaults[%d]: %q: a vault name requires secret.vault", i, v))
 		}
 	}
 	for i, v := range c.Secret.Vaults {
