@@ -3566,12 +3566,11 @@ Trust green CI on the exact reviewed head. Do not run local tests, lints, builds
 Inspect the code and tests. For a full review use your own worktree at the pinned head;
 for a light review read the diff, issue and CI. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. When you find
-blocking issues or nits that can be fixed in code, tests or docs, apply your own findings
-directly on the pull request branch ({{.Branch}}), push once (never force-push), and approve
-the published fixed head immediately. Do not wait for CI; the loop waits for green before merging,
-so one review round suffices without bouncing back to the worker. Request changes only when a
-finding requires a product or design decision or cannot be fixed on the branch. Open an issue
+Every finding is blocking or a nit to fix in this round; drop anything else. Review only:
+never edit, commit or push fixes to the reviewed branch ({{.Branch}}). Post findings and
+request changes; report the verdict and review URL with beekeeper agents idle --done --report
+so the supervisor forwards them to the implementing worker. Approve only the assigned,
+unchanged head when it needs no fixes. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
 An approval's nit-only push is checked by the supervisor against the approved head; do not
@@ -3579,8 +3578,7 @@ start another independent review for it. Other changes require review of the new
 
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
-regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or the
-new published head SHA in backticks when you pushed fixes, even while CI is pending).
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (the assigned head only).
 Each finding: <file>:<line>: <what is wrong> → <what would be right>.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,

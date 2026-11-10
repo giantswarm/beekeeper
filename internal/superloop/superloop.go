@@ -1265,6 +1265,15 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	rs := l.rounds[ref]
+	// A verdict may not approve commits introduced after its assigned head.
+	// Sessions share a GitHub login, so author-login comparisons cannot prove
+	// independence. Fail closed on a moved approval, including legacy results.
+	for _, rd := range rs {
+		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && !sameHead(v.Head, rd.head) {
+			leave(ref, p.URL, agent, "review-moved@"+short(p.Head), "review approved a different head from its assignment; no merge go: post findings and forward them to the implementing worker")
+			return
+		}
+	}
 	// Approved heads use the merge executor's durable repair handoff, which
 	// retains the approval and retries a capacity-limited fixer only once.
 	approved := false
@@ -1284,17 +1293,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		}
 		return
 	}
-	// A reviewer publishes fixes and reports approval before CI completes.
-	// The author's saved park still names the original head. Route failures
-	// of the authenticated round verdict's current head back to that worker,
-	// using the verdict time as a stable, deduplicated CI handoff boundary.
-	ciWorker := w
-	if isParked && !sameHead(w.ParkedHead, p.Head) && len(rs) > 0 {
-		if v := p.verdict(rs[len(rs)-1], l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) {
-			ciWorker.ParkedHead, ciWorker.ParkedAt = p.Head, v.At
-		}
-	}
-	planRed(l, p, ciWorker, isParked, add)
+	planRed(l, p, w, isParked, add)
 	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && !slices.ContainsFunc(p.Reviews, func(r Review) bool {
 		return r.Verdict == ChangesRequested && (sameHead(r.Head, p.Head) || !r.At.Before(l.keys[goKey(ref, head)].At))
 	}) && in.baseMerged(p, head) {

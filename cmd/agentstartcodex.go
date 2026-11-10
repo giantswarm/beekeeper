@@ -135,6 +135,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	logPath := codex.LogPath(a.cfg.StateDir, id)
 
 	s := state.Start{
+		Kind:    sp.kind,
 		Party:   state.Party{HostSession: codex.HostPrefix + id, Name: sp.name},
 		Mode:    state.ModeBypass,
 		Dir:     dir,
