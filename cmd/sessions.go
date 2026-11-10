@@ -983,8 +983,16 @@ func (f *transcriptFinder) find(p state.Party) (path, harness string) {
 		return "", ""
 	}
 	if h, id, ok := harnessForHost(p.HostSession); ok {
+		var convID string
+		if f.a != nil && f.a.store != nil {
+			if st, err := f.a.store.Read(); err == nil {
+				if s, ok := startRecordOf(st, p); ok {
+					convID = s.Conversation
+				}
+			}
+		}
 		for _, e := range f.endedOf(h) {
-			if (e.ID == id || p.Session != "" && e.ID == p.Session || e.HostID == p.HostSession) && e.Transcript != "" {
+			if (e.ID == id || convID != "" && e.ID == convID || p.Session != "" && e.ID == p.Session || e.HostID == p.HostSession) && e.Transcript != "" {
 				return e.Transcript, e.Harness
 			}
 		}
@@ -1115,6 +1123,9 @@ func (a *app) endedSessionNamed(running []*claude.Session, st *state.State, q st
 		}
 		for _, rec := range st.Records {
 			addParty(rec.Session, cmp.Or(rec.Ended, rec.At))
+		}
+		for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
+			addParty(s.Party, s.At, s.Conversation)
 		}
 	}
 	if evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == guideStartVerb }); err == nil {

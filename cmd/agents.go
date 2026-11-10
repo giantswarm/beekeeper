@@ -564,20 +564,13 @@ func removeAgent(st *state.State, i int) {
 	ag := st.Agents[i]
 	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") {
 		task := cmp.Or(ag.Task, ag.LastTask)
+		ended := state.Start{Party: ag.Party, At: ag.Registered, Harness: ag.Harness, Model: ag.Model, Task: task}
+		if s, ok := startRecordOf(st, ag.Party); ok {
+			ended = mergeStart(ended, s)
+		}
 		if k := slices.IndexFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }); k >= 0 {
-			st.EndedWorkers[k].Task = cmp.Or(task, st.EndedWorkers[k].Task)
-			st.EndedWorkers[k].Harness = cmp.Or(ag.Harness, st.EndedWorkers[k].Harness)
-			st.EndedWorkers[k].Model = cmp.Or(ag.Model, st.EndedWorkers[k].Model)
-			if j := st.StartIndex(ag.Party); j >= 0 {
-				st.EndedWorkers[k].Dir = cmp.Or(st.EndedWorkers[k].Dir, st.Starts[j].Dir)
-				st.EndedWorkers[k].Conversation = cmp.Or(st.Starts[j].Conversation, st.EndedWorkers[k].Conversation)
-				st.EndedWorkers[k].Effort = cmp.Or(st.EndedWorkers[k].Effort, st.Starts[j].Effort)
-			}
+			st.EndedWorkers[k] = mergeStart(ended, st.EndedWorkers[k])
 		} else {
-			ended := state.Start{Party: ag.Party, At: ag.Registered, Harness: ag.Harness, Model: ag.Model, Task: task}
-			if j := st.StartIndex(ag.Party); j >= 0 {
-				ended.Dir, ended.Conversation, ended.Effort = st.Starts[j].Dir, st.Starts[j].Conversation, st.Starts[j].Effort
-			}
 			st.EndedWorkers = append(st.EndedWorkers, ended)
 		}
 	}
