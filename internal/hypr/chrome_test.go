@@ -127,6 +127,9 @@ const evalCmd = "eval"
 // chromeClass is Chrome's browser window class.
 const chromeClass = "google-chrome"
 
+// terminalClass is a non-browser window class used in tests.
+const terminalClass = "terminal"
+
 // hold bounds a test turn's redirect.
 const hold = 17 * time.Minute
 
@@ -301,7 +304,7 @@ func TestBrowserPatternMatchesSelection(t *testing.T) {
 			})
 		}
 	}
-	for _, class := range []string{"chrome-tidal.com__-Default", "Chrome-tidal.com__-Default", "Google-chrome-app", "Chromium-app", "prefix-google-chrome", "firefox", "terminal", ""} {
+	for _, class := range []string{"chrome-tidal.com__-Default", "Chrome-tidal.com__-Default", "Google-chrome-app", "Chromium-app", "prefix-google-chrome", "firefox", terminalClass, ""} {
 		if isBrowser(Window{Class: class}) || re.MatchString(class) {
 			t.Errorf("non-browser class %q selected or redirected", class)
 		}
@@ -319,7 +322,7 @@ func TestMixedCaseBrowserPopupLifecycle(t *testing.T) {
 			}
 			f.open(Window{Address: "0xe", Class: class, Floating: true})
 			f.open(Window{Address: "0xf", Class: "Chrome-tidal.com__-Default"})
-			f.open(Window{Address: "0xa", Class: "terminal"})
+			f.open(Window{Address: "0xa", Class: terminalClass})
 			if f.windows[1].Workspace != surface || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 || f.monitors[0] != laptop {
 				t.Fatalf("during redirect: windows %+v, monitors %+v", f.windows, f.monitors)
 			}
@@ -620,7 +623,7 @@ func TestFocusedChrome(t *testing.T) {
 		bad    bool
 	}{
 		"Chrome":           {answer: `{"address":"0xc","class":"google-chrome"}`, want: true},
-		"terminal":         {answer: `{"address":"0xt","class":"terminal"}`},
+		terminalClass:      {answer: `{"address":"0xt","class":"terminal"}`},
 		"no active window": {answer: `{}`},
 		"malformed":        {answer: `{`, bad: true},
 		"missing address":  {answer: `{"class":"google-chrome"}`},
