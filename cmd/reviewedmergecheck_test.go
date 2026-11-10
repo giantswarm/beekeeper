@@ -510,7 +510,7 @@ func TestFetchReviewedMergeRefsDoesNotUseCachedBase(t *testing.T) {
 // Only the real configured linter may refuse lint: repeated strings in test
 // files must not trigger an independent goconst policy before it runs.
 func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
-	for _, configName := range []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json", ""} {
+	for _, configName := range []string{golangCILintYML, golangCILintYAML, golangCILintTOML, golangCILintJSON, ""} {
 		for _, lintFails := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fails=%v", configName, lintFails), func(t *testing.T) {
 				files := map[string]string{
@@ -566,7 +566,7 @@ func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
 
 func TestMergeResultLintConfigPrecedence(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{".golangci.json", ".golangci.toml", ".golangci.yaml", ".golangci.yml"} {
+	for _, name := range []string{golangCILintJSON, golangCILintTOML, golangCILintYAML, golangCILintYML} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}

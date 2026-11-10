@@ -38,7 +38,7 @@ func repeatedLiteral(n int) string {
 	return "repeated-policy"
 }
 `,
-				".golangci.yml": fmt.Sprintf(`version: "2"
+				golangCILintYML: fmt.Sprintf(`version: "2"
 linters:
   default: none
   enable:

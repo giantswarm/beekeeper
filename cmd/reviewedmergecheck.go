@@ -269,9 +269,16 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, hea
 	return "", 0
 }
 
+const (
+	golangCILintYML  = ".golangci.yml"
+	golangCILintYAML = ".golangci.yaml"
+	golangCILintTOML = ".golangci.toml"
+	golangCILintJSON = ".golangci.json"
+)
+
 // golangCILintConfig follows golangci-lint's config extension precedence.
 func golangCILintConfig(dir string) string {
-	for _, name := range []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"} {
+	for _, name := range []string{golangCILintYML, golangCILintYAML, golangCILintTOML, golangCILintJSON} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			return name
 		}
