@@ -95,11 +95,18 @@ func (s *State) StartDelivery(ref, agent, waits string, at time.Time) {
 	}
 }
 
+// DeliveryStallReport retains the identity needed to recover one batched alert.
+type DeliveryStallReport struct {
+	Episodes []string `json:"episodes"`
+	Detail   string   `json:"detail"`
+}
+
 // DeliveryHealth is committed with alert events, shared by both watches.
 type DeliveryHealth struct {
-	At            time.Time         `json:"at,omitempty"`
-	Episodes      map[string]string `json:"episodes,omitempty"`
-	FullSignature string            `json:"fullSignature,omitempty"`
-	FullSince     time.Time         `json:"fullSince,omitempty"`
-	FullRaised    bool              `json:"fullRaised,omitempty"`
+	StallReports  map[string]DeliveryStallReport `json:"stallReports,omitempty"`
+	At            time.Time                      `json:"at,omitempty"`
+	Episodes      map[string]string              `json:"episodes,omitempty"`
+	FullSignature string                         `json:"fullSignature,omitempty"`
+	FullSince     time.Time                      `json:"fullSince,omitempty"`
+	FullRaised    bool                           `json:"fullRaised,omitempty"`
 }

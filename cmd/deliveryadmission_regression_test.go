@@ -151,4 +151,26 @@ func TestDeliveryStallsAreBatchedWithWaitReasons(t *testing.T) {
 	if line, err := a.checkDeliveries(now.Add(time.Minute)); err != nil || line != "" {
 		t.Fatalf("repeated batch: %s %v", line, err)
 	}
+	seed(t, a, func(st *state.State) {
+		for i := range st.Deliveries {
+			st.Deliveries[i].Step = state.DeliveryDone
+		}
+	})
+	if line, err := a.checkDeliveries(now.Add(2 * time.Minute)); err != nil || strings.Contains(line, "\n") || !strings.HasPrefix(line, "RECOVERED:") {
+		t.Fatalf("unbatched recovery: %s %v", line, err)
+	}
+	evs, err = a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	st := &state.State{Guide: &state.Role{}}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		key, text, ok := keyed(ev.Detail)
+		if ok {
+			retainGuideReport(st, key, text, ev.At, state.Party{})
+		}
+	}
+	if len(st.GuideWork) != 0 {
+		t.Fatalf("recovery did not settle batched guide work: %+v", st.GuideWork)
+	}
 }
