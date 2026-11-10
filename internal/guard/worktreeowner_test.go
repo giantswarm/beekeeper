@@ -79,7 +79,7 @@ func TestOwnedWorktreeCompoundPush(t *testing.T) {
 	} {
 		t.Run(command, func(t *testing.T) {
 			calls := 0
-			h := Hook{mergeSession: worktreeVisitor, Upstream: Upstream{Orgs: []string{"giantswarm"}}, WorktreeOwner: func(session, dir string, create bool) string {
+			h := Hook{mergeSession: worktreeVisitor, Upstream: Upstream{Orgs: []string{allowedOrg}}, WorktreeOwner: func(session, dir string, create bool) string {
 				calls++
 				real, err := filepath.EvalSymlinks(dir)
 				if err != nil || real != repo || session != worktreeVisitor || create {
@@ -125,7 +125,7 @@ func TestGuardedDirectoryExpansion(t *testing.T) {
 
 func TestCompoundPushStillRefusesUnknownAndExternalDirectories(t *testing.T) {
 	repo := initGitRepo(t, "feature", "https://github.com/outside/repository.git")
-	h := Hook{mergeSession: worktreeVisitor, Upstream: Upstream{Orgs: []string{"giantswarm"}}, WorktreeOwner: func(string, string, bool) string { return "" }}
+	h := Hook{mergeSession: worktreeVisitor, Upstream: Upstream{Orgs: []string{allowedOrg}}, WorktreeOwner: func(string, string, bool) string { return "" }}
 	for _, command := range []string{
 		"cd " + repo + " && git push origin feature",
 		"dir=" + repo + "; cd \"${dir:?}\" && git push origin feature",
