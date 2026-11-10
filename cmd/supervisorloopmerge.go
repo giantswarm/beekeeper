@@ -161,10 +161,13 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	// Every submitted attempt has an outcome in this pass, including waits
 	// and unreadable confirmation. A pending outcome keeps the claim open;
 	// it never grants a worker permission to bypass the gate.
+	failed := ""
 	pending := "awaiting merge confirmation"
 	defer func() {
 		verb, detail := "merge.finished", result
 		switch {
+		case failed != "":
+			verb, detail = loopMergeFailed, failed
 		case errors.Is(resultErr, errLoopLater):
 			verb, detail = "merge.pending", pending
 		case resultErr != nil:
@@ -260,6 +263,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if reply.Reason != "" {
 			out = reply.Reason
 		}
+		failed = fmt.Sprintf("merge failed (exit %d): %s; branch repair requested", code, oneLine(out))
 		return repair(code, out)
 	}
 	// An unreadable gate result supplies no merge-result proof either.

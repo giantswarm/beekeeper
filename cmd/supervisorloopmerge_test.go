@@ -1006,8 +1006,9 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 		confirmed     = "confirmed merge"
 		laneWait      = "lane wait"
 		policyRefusal = "policy refusal"
+		branchRepair  = "branch repair"
 	)
-	for _, outcome := range []string{confirmed, laneWait, "gate refusal", policyRefusal, "confirmation read failure"} {
+	for _, outcome := range []string{confirmed, laneWait, "gate refusal", policyRefusal, branchRepair, "confirmation read failure"} {
 		t.Run(outcome, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.Merge.Admin = []string{loopMergeRepo}
@@ -1027,6 +1028,8 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 					return "lane occupied by running merge", ExitGateQueued
 				case policyRefusal:
 					return adminPolicyTestReason, 1
+				case branchRepair:
+					return fmt.Sprintf(`{"route":%q,"repository":%q,"number":7,"headSha":%q,"reason":"merge-result check failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), github.SquashRed
 				case "confirmation read failure":
 					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 						return superloop.Pull{}, errors.New("confirmation unavailable")
@@ -1056,7 +1059,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 			if outcomes[0].Verb != want || outcomes[0].Subject != loopPR || !strings.Contains(outcomes[0].Detail, loopHead) {
 				t.Fatalf("incorrect outcome: %+v", outcomes[0])
 			}
-			if r.called(agentsName, agentWakeName, loopWorker) != nil {
+			if len(r.logged(t, loopGoVerb)) != 0 || outcome != branchRepair && r.called(agentsName, agentWakeName, loopWorker) != nil {
 				t.Fatal("merge outcome bypassed coordinator by waking worker")
 			}
 		})
