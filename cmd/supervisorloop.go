@@ -2594,9 +2594,11 @@ func (l *supervisorLoop) claim(act superloop.Action, target string) error {
 // when the command it ran left its line (agents start, agents wake, agents
 // remove, note add, all logged as the loop), else not, and it runs.
 func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
-	all, err := state.FollowSnapshot(l.a.store, "supervisor-loop-reconcile", "v1", l.eventHistoryFilter(func(e state.Event) bool {
+	// Reconciliation runs in background action streams. Its history reads must
+	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
+	all, err := state.FollowSnapshot(l.a.store, "supervisor-loop-reconcile", "v1", func(e state.Event) bool {
 		return e.By.Name == loopParty.Name
-	}))
+	})
 	if err != nil {
 		return "", false, err
 	}
