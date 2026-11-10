@@ -347,7 +347,15 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		return append(state.DeliveryEvents(prevDeliveries, st.Deliveries, by), evs...), nil
 	})
 	if err != nil {
-		return startedAgent{}, fmt.Errorf("%s runs as background session %s but is not recorded: %w (claude stop %s ends it)", sp.name, id, err, id[:8])
+		// The launch already succeeded. Do not leave a session outside the
+		// roster when recording times out or fails, even if the caller has
+		// since canceled its start. Keep cleanup bounded independently.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgWait)
+		defer cancel()
+		if stopErr := a.bgStop(cleanup, id); stopErr != nil {
+			return startedAgent{}, fmt.Errorf("%s background session %s is not recorded and could not be stopped: %w (claude stop %s ends it)", sp.name, id, errors.Join(err, stopErr), id[:min(8, len(id))])
+		}
+		return startedAgent{}, fmt.Errorf("%s background session %s stopped because it could not be recorded: %w", sp.name, id, err)
 	}
 	return startedAgent{id: id, dir: dir, task: reg.task, handed: handed, want: sp.model, background: true,
 		turn: "its task runs as its first turn in a background session with Remote Control (claude attach " + id[:8] + ")"}, nil
