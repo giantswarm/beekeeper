@@ -25,15 +25,16 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 	var keys, lines []string
 	var to string
 	var holder state.Party
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	step := func(st *state.State) bool {
 		keys, lines = nil, nil
 		r := st.Guide
 		if st.Stop != nil || r == nil || r.Holder == nil {
-			return nil, nil
+			return false
 		}
 		to = r.Holder.Name
 		holder = r.Holder.Party
 
+		reportsSince, workText, reportCount, deliveredBefore := st.GuideReportsSince, guideWorkText(st), len(st.GuideReports), len(r.Delivered)
 		var current []string
 		notice := func(key, text string) {
 			key = r.Holder.Session + ":" + r.Holder.HostSession + ":" + key
@@ -72,11 +73,17 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 			}
 		}
 		r.Delivered = slices.DeleteFunc(r.Delivered, func(key string) bool { return !slices.Contains(current, key) })
-		return nil, nil
-	})
-	if err != nil {
-		w.fail("guide-monitor", "cannot retain guide work: %v", err)
-		return
+		return !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st) || reportCount != len(st.GuideReports) || len(r.Delivered) != deliveredBefore
+	}
+	if step(st) {
+		err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+			step(st)
+			return nil, nil
+		})
+		if err != nil {
+			w.fail("guide-monitor", "cannot retain guide work: %v", err)
+			return
+		}
 	}
 	w.clear("guide-monitor")
 	if len(lines) == 0 {
