@@ -123,6 +123,7 @@ func TestRankInheritedAssignments(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := snapshot(t)
+			snap.Search = nil
 			// Keep the ancestors on the board without offering their children
 			// through them: the unstaffed item is itself In Progress.
 			snap.Items = []Item{

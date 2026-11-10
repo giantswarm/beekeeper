@@ -449,7 +449,7 @@ func readBoard() config.Board {
 func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	f := &fakeGH{t: t, pages: []string{
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"C"},"nodes":[` +
-			node(inProgress, "null", issue(1, `,"assignees":{"nodes":[{"login":otherAssignee}]}`)) + "," +
+			node(inProgress, "null", issue(1, `,"assignees":{"nodes":[{"login":"pat"}]}`)) + "," +
 			node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":3,"completed":1}`)) + "," +
 			`{"status":{"name":"Up Next ➡️"},"content":{}}]}}}}}`,
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[` +
