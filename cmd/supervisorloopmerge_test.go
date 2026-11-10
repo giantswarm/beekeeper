@@ -26,8 +26,14 @@ const (
 )
 
 func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
-	for _, lift := range []string{"removed", "expired"} {
-		t.Run(lift, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		expire bool
+	}{
+		{name: "hold-cleared"},
+		{name: "hold-expired", expire: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.Merge.DevctlOwners = []string{"o"}
 			r.park(t, loopPR, time.Now())
@@ -46,7 +52,7 @@ func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 				}
 				r.a.now = r.a.now.Add(time.Hour)
 			}
-			for _, verb := range []string{"merge.authorized", "merge.start", loopMergeFailed, loopFailureVerb, "supervisor.file"} {
+			for _, verb := range []string{"merge.authorized", "merge.start", loopMergeFailed, loopFailureVerb, loopFileVerb} {
 				if events := r.logged(t, verb); len(events) != 0 {
 					t.Fatalf("hold produced %s: %+v", verb, events)
 				}
@@ -55,7 +61,7 @@ func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 				t.Fatalf("hold wait was not explained: %s", r.out)
 			}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if lift == "removed" {
+				if !tc.expire {
 					st.Holds = nil
 				} else {
 					st.Holds[0].Until = time.Now().Add(-time.Second)
