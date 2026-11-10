@@ -255,8 +255,12 @@ func kindSpend(cfg *config.Config, st *state.State, ts []claude.SpendTranscript,
 
 // spendTranscripts reads every harness's transcripts over [from, to).
 func (a *app) spendTranscripts(from, to time.Time) ([]claude.SpendTranscript, error) {
+	ctx := a.context()
 	var ts []claude.SpendTranscript
 	for _, h := range harnesses {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		hs, err := h.SpendTranscripts(a.cfg, from, to)
 		if err != nil {
 			return nil, err
@@ -323,6 +327,9 @@ func (w *watcher) kindSpending(now time.Time) {
 		return
 	}
 	ts, err := w.spendTranscripts(from, now)
+	if w.context().Err() != nil {
+		return
+	}
 	if err != nil {
 		w.fail("kind-spend", "cannot sum the spend per task kind: %v", err)
 		return
