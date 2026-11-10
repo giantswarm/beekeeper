@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -149,5 +150,54 @@ func TestSuspendReportsEachCompletedGap(t *testing.T) {
 	}
 	if len(w.suspendRecovery) != 0 {
 		t.Fatal("ordinary watch queued recovery")
+	}
+}
+
+func TestSuspendRecoveryStopsOnCopyAndTargetsCurrentGuide(t *testing.T) {
+	w, out := onceWatch(t, nil)
+	w.standby = true
+	entry := w.now
+	exit := entry.Add(time.Hour)
+	worker := state.Party{Name: "copy-worker", Session: bgID}
+	oldGuide := state.Party{Name: "Guide run 56", Session: "old-guide-session"}
+	newGuide := state.Party{Name: "Guide run 57", Session: "new-guide-session"}
+	supervisedBy(t, w, oldGuide, entry.Add(-time.Minute))
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: worker, Task: suspendFixtureTask}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: entry, Entry: true}, {At: exit}}}
+	original := plat.Machine
+	plat.Machine = fixture
+	defer func() { plat.Machine = original }()
+	calls := map[string]int{}
+	w.suspendDeliver = func(_ context.Context, wake suspendWake) error {
+		calls[wake.party.Name]++
+		if wake.party.Name == worker.Name {
+			return fmt.Errorf("waking %s: %w 9e3d7b10 of session %s; stopped the copy", worker.Name, errResumeStartedCopy, worker.Session)
+		}
+		if wake.party.Name == oldGuide.Name {
+			return errors.New("temporary guide failure before handover")
+		}
+		return nil
+	}
+	w.suspends(t.Context(), entry.Add(-time.Minute), nil)
+	w.stand.inflight.Wait()
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, At: exit})
+		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: exit}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.suspends(t.Context(), exit, nil)
+	w.stand.inflight.Wait()
+	if calls[worker.Name] != 1 || calls[oldGuide.Name] != 1 || calls[newGuide.Name] != 1 {
+		t.Fatalf("deliveries: %v", calls)
+	}
+	if !strings.Contains(out.String(), "RESUME FAILED: \""+worker.Name+"\"") {
+		t.Fatalf("missing copy failure log: %s", out)
 	}
 }

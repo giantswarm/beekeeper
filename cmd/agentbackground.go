@@ -361,6 +361,10 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		turn: "its task runs as its first turn in a background session with Remote Control (claude attach " + id[:8] + ")"}, nil
 }
 
+// errResumeStartedCopy is a background resume that started a new session
+// instead of continuing the target session.
+var errResumeStartedCopy = errors.New("claude --bg --resume started a copy")
+
 // resumeBackground continues the stopped background session w with msg as
 // its next turn (claude --bg --resume), with none of the caller's session
 // variables. A running session is sent its messages by name instead:
@@ -382,7 +386,7 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 		return fmt.Errorf("checking background session before resume: %w", err)
 	}
 	for _, row := range rows {
-		if row.SessionID != w.id {
+		if w.id == "" || row.SessionID != w.id {
 			continue
 		}
 		if row.Name == "" || slices.ContainsFunc(rows, func(other bgSession) bool {
@@ -398,9 +402,9 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgWait)
 		defer cancel()
 		if stopErr := a.bgStop(cleanup, short); stopErr != nil {
-			return fmt.Errorf("claude --bg --resume started a copy %s of session %s; stopping the copy failed: %w", short, w.id, stopErr)
+			return fmt.Errorf("%w %s of session %s; stopping the copy failed: %w", errResumeStartedCopy, short, w.id, stopErr)
 		}
-		return fmt.Errorf("claude --bg --resume started a copy %s of session %s; stopped the copy", short, w.id)
+		return fmt.Errorf("%w %s of session %s; stopped the copy", errResumeStartedCopy, short, w.id)
 	}
 	if err != nil {
 		return fmt.Errorf("claude --bg --resume: %w (%s)", err, firstLines(out))
@@ -460,6 +464,11 @@ func (a *app) reviveBackground(ctx context.Context, holder state.Party, msg stri
 	st, err := a.store.Read()
 	if err != nil {
 		return err
+	}
+	for _, q := range []string{holder.Session, holder.Name} {
+		if _, err := guideMessageTarget(st, q); err != nil {
+			return err
+		}
 	}
 	w := wakeTarget{name: holder.Name, id: holder.Session}
 	if i := st.StartIndex(holder); i >= 0 {
