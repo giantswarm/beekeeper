@@ -86,7 +86,7 @@ func (a *app) deliveryCmd() *cobra.Command {
 			_, err = fmt.Fprintf(a.out, "%d released, %.2f released per day since %s; mean start to released %s (%d complete cycles)\n", v.Released, v.ReleasedPerDay, v.Since.Format(time.RFC3339), v.MeanCycleTime, v.CycleSamples)
 			return err
 		}
-		st, err := a.store.Read()
+		st, err := a.readSnapshot()
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func (a *app) deliveryDropCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		snapshot, err := a.store.Read()
+		snapshot, err := a.readSnapshot()
 		if err != nil {
 			return err
 		}

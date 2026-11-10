@@ -95,7 +95,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
@@ -366,8 +366,17 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			return cobra.ExactArgs(2)(c, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
+			if !a.queueReports {
+				defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
+			}
 			if clearOwn {
+				if a.queueReports {
+					me, err := a.caller()
+					if err != nil {
+						return err
+					}
+					return a.submitReport(sessionReport{Kind: "serve", By: me, Clear: true})
+				}
 				return a.clearRecord()
 			}
 			if strings.TrimSpace(args[1]) == "" {
@@ -376,6 +385,24 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			me, err := a.caller()
 			if err != nil {
 				return err
+			}
+			if a.queueReports {
+				st, err := a.store.Peek()
+				if err != nil {
+					return err
+				}
+				target, _, err := sessionNamed(nil, st, args[0], a.now)
+				if err != nil {
+					sessions, _, readErr := a.sessions()
+					if readErr != nil {
+						return readErr
+					}
+					target, _, err = sessionNamed(sessions, st, args[0], a.now)
+					if err != nil {
+						return err
+					}
+				}
+				return a.submitReport(sessionReport{Kind: "serve", By: me, Session: target.Party(), Record: state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}})
 			}
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -865,7 +892,7 @@ func commandName(args string) string {
 // namedSession is the session q names among sessions by sessionNamed's
 // rule, over the roster as the store holds it at now.
 func (a *app) namedSession(sessions []*claude.Session, q string, now time.Time) (*claude.Session, string, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, "", err
 	}
@@ -896,7 +923,7 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	if s.Transcript == "" {
 		return nil, fmt.Errorf("no transcript found for %q", s.Name)
 	}
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
@@ -914,7 +941,7 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 }
 
 func (a *app) tailSession(sessions []*claude.Session, q string, now time.Time) (*claude.Session, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
@@ -985,7 +1012,7 @@ func (f *transcriptFinder) find(p state.Party) (path, harness string) {
 	if h, id, ok := harnessForHost(p.HostSession); ok {
 		var convID string
 		if f.a != nil && f.a.store != nil {
-			if st, err := f.a.store.Read(); err == nil {
+			if st, err := f.a.store.Peek(); err == nil {
 				if s, ok := startRecordOf(st, p); ok {
 					convID = s.Conversation
 				}

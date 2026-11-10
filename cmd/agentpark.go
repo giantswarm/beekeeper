@@ -115,7 +115,7 @@ current capacity and provider pace, with its task, reference and event.
 The previous transcript is never resumed; a failed start retains the park.
 Role holders use their separate relay lifecycle.
 
---on names what settles the wait: a note (#12; on a machine with a central
+--on names what settles the wait: a queued note (report:<message-id>), a note (#12; on a machine with a central
 instance <context>#12 is its note, and a bare number the machine has no
 note of is the central instance's), an issue or pull request
 (owner/repo#n), a release (owner/repo@v1.2.3), or a hold (hold:<target>,
@@ -211,6 +211,8 @@ agents wake: its task is that message's first line.`,
 				on = alertParkPrefix + strings.TrimSpace(name)
 			} else if _, _, release := parseReleaseTarget(on); release {
 				// The repository and exact version are retained in On.
+			} else if strings.HasPrefix(on, reportReferencePrefix) {
+				// Resolved through the inbox receipt when the loop applies it.
 			} else if _, isNote := parkNote(on); on != "" && !isNote {
 				if _, _, central := parkCentralNote(on); !central {
 					r, ok := parseRef(on)
@@ -247,6 +249,9 @@ agents wake: its task is that message's first line.`,
 				// execution's owned branch: the workspace's own branch
 				// never is the published one, nor does the host read GitHub.
 				return a.remoteControl(cmd.Context(), "park", executionPark{External: external, On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: declaration})
+			}
+			if a.queueReports {
+				return a.submitReport(sessionReport{Kind: "park", By: me, On: on, Waits: waits, External: external, PostMerge: remaining, Worktree: reportWorktree()})
 			}
 			line, err := a.parkWithWait(me, on, waits, external, remaining...)
 			if err != nil {

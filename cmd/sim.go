@@ -333,7 +333,7 @@ problems still stand.`,
 			if !found {
 				return fmt.Errorf("no forecast saved: run beekeeper sim forecast first")
 			}
-			st, err := a.store.Read()
+			st, err := a.readSnapshot()
 			if err != nil {
 				return err
 			}
@@ -393,7 +393,7 @@ func (a *app) simItems(st *state.State) ([]sim.Item, agentCount, []string) {
 // the implementation's own verdicts, capacity and board next, run in
 // process with their JSON output.
 func (a *app) simSnapshot(ctx context.Context, stderr io.Writer, withBoard bool) (sim.Snapshot, error) {
-	st, err := a.store.Read()
+	st, err := a.readSnapshot()
 	if err != nil {
 		return sim.Snapshot{}, err
 	}

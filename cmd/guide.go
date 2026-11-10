@@ -353,7 +353,7 @@ person) follow the machine's, each named <context>#<n>; with the central
 instance unreachable, a warning says so and the machine's queue stands.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := a.store.Read()
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
@@ -571,7 +571,7 @@ file; the ordinary hand-over carries standing.md in full. A caller that has read
 the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := a.store.Read()
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
@@ -727,7 +727,7 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 	k := a.liveCapacity()
 	if len(k.Providers) > 0 {
 		if st == nil && a.store != nil {
-			st, _ = a.store.Read()
+			st, _ = a.store.Peek()
 		}
 		if st == nil {
 			st = &state.State{}
@@ -1019,7 +1019,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}

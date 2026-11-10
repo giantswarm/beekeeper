@@ -101,6 +101,9 @@ func Main() int {
 }
 
 type app struct {
+	// queueReports routes session CLI reports through the supervisor inbox.
+	// Embedded command adapters retain their synchronous transaction contract.
+	queueReports       bool
 	emergencyStart     bool // scoped to the authenticated emergency start command
 	selectionKind      string
 	selectionAuthor    string
@@ -310,6 +313,7 @@ func (a *app) load() error {
 		return err
 	}
 	a.now = time.Now()
+	a.queueReports = true
 	a.observeREST()
 	return nil
 }
