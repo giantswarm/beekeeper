@@ -94,7 +94,10 @@ func TestRefillZeroStartReasons(t *testing.T) {
 			}
 			r.answer = original
 			seed(t, r.a, func(st *state.State) {
-				st.Budget = nil
+				st.Budget = &state.Budget{
+					Remaining: 5000, Limit: 5000, At: now, Reset: now.Add(time.Hour),
+					GraphQL: &state.GraphQL{Remaining: 5000, Limit: 5000, At: now, Reset: now.Add(time.Hour)},
+				}
 				st.DeliveriesAt = now
 				for i := range st.Deliveries {
 					st.Deliveries[i].Step = state.DeliveryDone

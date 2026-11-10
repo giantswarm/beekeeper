@@ -1377,7 +1377,7 @@ func (l *supervisorLoop) saveCache() {
 func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	dispatched := false
 	defer func() {
-		if !l.dryRun && !dispatched {
+		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && !dispatched {
 			why := "pass ended before refill dispatch (GitHub observation held or loop stopping)"
 			if result != nil {
 				why = "pass ended before refill dispatch: " + oneLine(result.Error())
@@ -2070,7 +2070,7 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) (result error) {
 	fillLaunched := false
 	defer func() {
-		if !fillLaunched {
+		if l.a.cfg.Supervisor.WorkerBrief != "" && !fillLaunched {
 			why := "action dispatch cancelled before refill"
 			if result != nil {
 				why = "action dispatch failed before refill: " + oneLine(result.Error())
@@ -2217,7 +2217,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 			defer l.endInFlight(loopFillStream)
 			setErr(l.fill(ctx, st, claims, taken, reservations))
 		})
-	} else {
+	} else if l.a.cfg.Supervisor.WorkerBrief != "" {
 		_, _ = fmt.Fprintln(l.a.out, "SUPERVISOR REFILL started 0: previous refill still running")
 	}
 	launch("stream:next", func() error {

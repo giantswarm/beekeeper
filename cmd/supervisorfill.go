@@ -404,7 +404,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	startedCount := 0
 	why := "no worker brief configured"
 	defer func() {
-		if !l.dryRun && startedCount == 0 {
+		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && startedCount == 0 {
 			if result != nil {
 				why = oneLine(result.Error())
 			}
