@@ -122,7 +122,7 @@ func TestRunStats(t *testing.T) {
 	if bk.Repo != "giantswarm/beekeeper" || bk.Remote != 1 || bk.WarmCache != 1 || bk.Failed != 1 || bk.Minutes != 2 {
 		t.Fatalf("beekeeper row %+v", bk)
 	}
-	if desk.Repo != "other/repo" || desk.Local != 1 || desk.Fallback != 1 || desk.Failed != 0 || desk.Minutes != 1 {
+	if desk.Repo != rebaseOtherRepo || desk.Local != 1 || desk.Fallback != 1 || desk.Failed != 0 || desk.Minutes != 1 {
 		t.Fatalf("desk row %+v", desk)
 	}
 	if none.Repo != "" || none.Local != 1 {
@@ -184,7 +184,7 @@ func TestRunStatsWindowAndCache(t *testing.T) {
 		t.Fatalf("rows %v", got.Repositories)
 	}
 	r := got.Repositories[0]
-	if r.Repo != "other/repo" || r.Remote != 2 || r.WarmCache != 1 || r.Minutes != 11 {
+	if r.Repo != rebaseOtherRepo || r.Remote != 2 || r.WarmCache != 1 || r.Minutes != 11 {
 		t.Fatalf("row %+v: want remote 2 with one warm (the crossing run), the cold -run warm one not warm, the unfinished one absent", r)
 	}
 }

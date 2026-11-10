@@ -218,7 +218,7 @@ func TestRepositoryHoldBoardSkipsUntilLiftOrExpiry(t *testing.T) {
 	if res = nextFree(st, cands, sc); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
 		t.Fatalf("lifted hold still blocks: %+v", res)
 	}
-	for _, target := range []string{holdMerges, "lane:test", "other/repo"} {
+	for _, target := range []string{holdMerges, "lane:test", rebaseOtherRepo} {
 		st.Holds = []state.Hold{{Target: target}}
 		if why := repositoryStartReason(st, now, cands[0].Ref); why != "" {
 			t.Fatalf("%s blocks unrelated start: %s", target, why)

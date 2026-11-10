@@ -30,7 +30,16 @@ func checkDeskWorkflow(desk string, briefs []string) []string {
 			return
 		}
 		seen[name] = true
-		info, err := os.Lstat(name)
+		// Resolve each configured or discovered file within its parent directory.
+		// Rooted reads also prevent a replacement symlink from escaping it.
+		root, err := os.OpenRoot(filepath.Dir(name))
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("desk workflow: cannot read %s: %v", name, err))
+			return
+		}
+		defer func() { _ = root.Close() }()
+		base := filepath.Base(name)
+		info, err := root.Lstat(base)
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
 			return // Installed skill symlinks are references, not desk copies.
 		}
@@ -40,7 +49,7 @@ func checkDeskWorkflow(desk string, briefs []string) []string {
 		}
 		var raw []byte
 		if err == nil {
-			raw, err = os.ReadFile(name)
+			raw, err = root.ReadFile(base)
 		}
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("desk workflow: cannot read %s: %v", name, err))
