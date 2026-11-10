@@ -576,14 +576,20 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		return refused("no resume: %s (--force resumes anyway)", block)
 	}
 	if gone {
+		msg := resumeMessage
 		if target.Execution != nil {
 			// This is an explicit by-name resume, like agents wake. Keep
 			// automatic wakes from restarting an unparked finished worker.
 			if err := a.continueExecution(ctx, by, *target); err != nil {
 				return err
 			}
+			// The managed worker cannot inspect the coordinator roster to
+			// recover an assignment made after its previous turn completed.
+			if target.Task != "" {
+				msg = "Your current task is:\n" + target.Task + "\n\n" + msg
+			}
 		}
-		if err := wakeOwner(a, ctx, by, target.Name, resumeMessage, ""); err != nil {
+		if err := wakeOwner(a, ctx, by, target.Name, msg, ""); err != nil {
 			return err
 		}
 		return a.store.Record(event(by, resumedEvent, "%s: resumed from gone state", target.Name))

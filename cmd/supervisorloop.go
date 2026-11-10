@@ -2175,11 +2175,9 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
-	// When a worker finishes (KindDone) and files a follow-up issue in the
-	// same pass, intake and rank that issue before refilling the freed slot;
-	// otherwise run intake concurrently in its own stream.
-	intakeBeforeFill := len(doneActs) > 0 && len(intakeActs) > 0
-	if len(intakeActs) > 0 && !intakeBeforeFill {
+	// Intake must never hold the capacity refill, including follow-ups filed
+	// by workers retiring in this pass. Ranked follow-ups enter the next fill.
+	if len(intakeActs) > 0 {
 		launch("stream:intake", func() error {
 			for _, act := range intakeActs {
 				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
@@ -2202,45 +2200,27 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		return nil
 	})
 
-	// The refill runs in every pass with room: neither a next action that
-	// fails nor an intake still in flight keeps it from filling capacity
-	// (https://github.com/giantswarm/beekeeper/issues/3485).
+	// The refill alone starts board workers. Legacy done-event next actions
+	// are bookkeeping now: neither they nor intake may hold the start stream
+	// across passes, or compete with refill for the same capacity snapshot.
 	launch("stream:workers", func() error {
+		return l.fill(ctx, st, claims, taken, reservations)
+	})
+	launch("stream:next", func() error {
 		var errs []error
 		if err := l.settleStaleNext(staleActs); err != nil {
 			errs = append(errs, err)
 		}
-		// An intake still in flight from an earlier pass skips only this
-		// pass's intake; the follow-up issue it ranks waits for a later fill.
-		if intakeBeforeFill && l.beginInFlight("stream:intake") {
-			func() {
-				defer l.endInFlight("stream:intake")
-				for _, act := range intakeActs {
-					if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-						errs = append(errs, err)
-						return
-					}
-				}
-			}()
-		}
 		for _, act := range nextActs {
-			if err := l.execAction(ctx, st, claims, failures, act, reservations); err != nil {
-				// Its failure is the action's, never the refill's.
+			if l.isCompleted(act.Key) {
+				continue
+			}
+			if err := l.completeAction(act, "superseded by the capacity refill"); err != nil {
 				if ferr := l.nextFailed(act, failures, err); ferr != nil {
 					errs = append(errs, ferr)
 				}
-				break
-			}
-			// Every next action asks for the same thing, the board's next
-			// item: once one did not settle (its start waits, failed or
-			// backs off), the rest cannot either this pass. Walking the
-			// board for each of them kept a backlog of done events from
-			// ever reaching the refill (https://github.com/giantswarm/beekeeper/issues/3388).
-			if !l.isCompleted(act.Key) {
-				break
 			}
 		}
-		errs = append(errs, l.fill(ctx, st, claims, taken, reservations))
 		return errors.Join(errs...)
 	})
 

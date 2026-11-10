@@ -92,10 +92,12 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		}, false, func(state.Merge) string {
 			return reason
 		})
-		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 			merge.Retry(current, ref.Repo, ref.N)
 			return nil, nil
-		})
+		}); err != nil {
+			return "", err
+		}
 		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, oneLine(reason)))
 	}
 	if p.Draft || strings.EqualFold(p.Mergeable, mergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
@@ -109,9 +111,12 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	for _, f := range st.Failed {
-		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && ghMergePolicyRefused(f.Reason) {
-			// An older gate may have recorded this as a branch failure.
-			// Drop only that failed attempt so the unchanged head can rejoin.
+		if f.Repo != ref.Repo || f.PR != ref.N || f.By.Name != loopParty.Name {
+			continue
+		}
+		if f.Head != act.Head || ghMergePolicyRefused(f.Reason) {
+			// A different (or unknown legacy) head supplies no failure proof
+			// for this approved commit. Let the gate validate it again.
 			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 				merge.Retry(current, ref.Repo, ref.N)
 				return nil, nil
@@ -120,7 +125,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 			}
 			continue
 		}
-		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && (f.Exit == github.SquashNotApplicable || f.Exit == github.SquashRed) {
+		if f.Exit == github.SquashNotApplicable || f.Exit == github.SquashRed {
 			return repair(f.Exit, cmp.Or(f.Reason, "merge failed in lane"))
 		}
 	}
@@ -234,7 +239,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if reply.Reason != "" {
 			out = reply.Reason
 		}
-		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, oneLine(out)))
+		return repair(code, out)
 	}
 	// An unreadable gate result supplies no merge-result proof either.
 	// Never grant a direct worker merge as a fallback around validation.

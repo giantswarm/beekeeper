@@ -19,7 +19,7 @@ const (
 	// takes no worker start.
 	selfHostedWorker = modelPolicyPrefix + " a self-hosted choice takes task kind " + workerRole + " only when its kinds list it"
 	// choiceRule is how a start's choice is made, for every start alike.
-	choiceRule = "eligible subscription furthest behind its 7-day pace, then most 7-day budget left per hour until its reset, lower configured cost and configured order breaking ties; a self-hosted choice only when no subscription is eligible"
+	choiceRule = "eligible subscription below half its 7-day pace first, then furthest behind pace, then most 7-day budget left per hour until its reset, lower configured cost and configured order breaking ties; a self-hosted choice only when no subscription is eligible"
 )
 
 func (a *app) ruleModel(name, kind string) string {

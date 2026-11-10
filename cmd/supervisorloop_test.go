@@ -749,7 +749,17 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 	if err := r.a.store.Record(done, report); err != nil {
 		t.Fatal(err)
 	}
+	started := false
 	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity {
+			if started {
+				return loopNoRoomJSON, 0
+			}
+			return loopRoomJSON, 0
+		}
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			started = true
+		}
 		if args[0] == loopBoard {
 			return `{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9","title":"next"}}`, 0
 		}
@@ -762,7 +772,6 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 	if c := r.called("note", loopAdd); c != nil {
 		t.Errorf("the final report went to the guide: %v", c)
 	}
-	r.pass(t)
 	start := r.called(agentsName, agentStartName, "r 9")
 	if start == nil {
 		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
@@ -792,9 +801,9 @@ func (r *loopRig) sshLoopHost(t *testing.T, choices bool) {
 
 // The capacity --json answers the placement tests hand out.
 const (
-	loopRoomJSON   = `{"room": 1}`
-	loopNoRoomJSON = `{"room": 0}`
-	loopRoomJSON2  = `{"room": 2}`
+	loopRoomJSON   = `{"ceiling": 1, "room": 1}`
+	loopNoRoomJSON = `{"ceiling": 1, "room": 0}`
+	loopRoomJSON2  = `{"ceiling": 2, "room": 2}`
 	loopAsFlagArg  = "--" + asFlag
 )
 
@@ -865,6 +874,9 @@ func TestLoopStartsTheNextWorkerOnAnExecutionHost(t *testing.T) {
 		case loopBoard:
 			return loopNextPickJSON, 0, nil
 		}
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			r.started(t, args[2], "remote-next-session")
+		}
 		if e, ok := logs(args); ok {
 			if err := r.a.store.Record(e); err != nil {
 				t.Fatal(err)
@@ -877,7 +889,6 @@ func TestLoopStartsTheNextWorkerOnAnExecutionHost(t *testing.T) {
 	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
 		t.Fatalf("not taken off the roster: %v\n%s", r.calls, r.out)
 	}
-	r.pass(t)
 	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
 	if start == nil {
 		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
@@ -890,7 +901,7 @@ func TestLoopStartsTheNextWorkerOnAnExecutionHost(t *testing.T) {
 	if !slices.Contains(start, "--harness") {
 		t.Errorf("the placed start loses capacity's pick: %v", start)
 	}
-	if evs := r.logged(t, "supervisor.next"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "on "+sshTestSelector) {
+	if evs := r.logged(t, "supervisor.next"); !slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, "on "+sshTestSelector) }) {
 		t.Errorf("the next logged as %+v", evs)
 	}
 	// A restarted loop takes the transition no second time.
@@ -927,7 +938,6 @@ func TestLoopKeepsTheNextWorkerLocalWithRoom(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
-	r.pass(t)
 	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
 	if start == nil {
 		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
@@ -963,7 +973,7 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Errorf("a full desk and a full host started %v anyway", c)
 	}
-	if evs := r.logged(t, "supervisor.next"); len(evs) != 0 {
+	if evs := r.logged(t, "supervisor.next"); slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, "started on") }) {
 		t.Errorf("the wait logged as taken: %+v", evs)
 	}
 }
@@ -2022,13 +2032,22 @@ func TestLoopStartsTheNextWorkerOnCapacitysChoice(t *testing.T) {
 	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: fix it", loopWorker)); err != nil {
 		t.Fatal(err)
 	}
+	started := false
 	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity {
+			if started {
+				return loopNoRoomJSON, 0
+			}
+			return loopRoomJSON, 0
+		}
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			started = true
+		}
 		if args[0] == loopBoard {
 			return `{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9"}}`, 0
 		}
 		return "", 0
 	}
-	r.pass(t)
 	r.pass(t)
 	start := r.called(agentsName, agentStartName, "r 9")
 	if start == nil || !slices.Contains(start, harnessAuto) {
@@ -2897,7 +2916,6 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 		return loopRoomJSON
 	})
 	r.pass(t)
-	r.pass(t)
 	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
 	if start == nil {
 		t.Fatalf("the codex-eligible start waited for a Claude-only host: %v\n%s", r.calls, r.out)
@@ -2922,7 +2940,13 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 	const selfHosted = "local"
 	choices := []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: config.OmpHarness, Model: "local/qwen-fixture", Provider: selfHosted, Kinds: []string{workerRole}}}
-	verdict := func(provider string) string { return `{"room": 1, "choice": {"provider": "` + provider + `"}}` }
+	verdict := func(provider string) string {
+		harness := claudeComm
+		if provider == selfHosted {
+			harness = config.OmpHarness
+		}
+		return `{"ceiling": 1, "room": 1, "choice": {"harness": "` + harness + `", "provider": "` + provider + `"}}`
+	}
 	for _, eligible := range []bool{true, false} {
 		r := hostsFirstRig(t, choices, func(host bool, exclude []string) string {
 			switch {
@@ -2934,7 +2958,6 @@ func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 			return verdict(claudeComm)
 		})
 		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
-		r.pass(t)
 		r.pass(t)
 		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
 		if eligible {
@@ -2956,7 +2979,6 @@ func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 // hostsFirst prefers, and names no exclusion.
 func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
 	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string { return loopRoomJSON })
-	r.pass(t)
 	r.pass(t)
 	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
 	if start == nil || !slices.Contains(start, loopHostFlag) {
@@ -3017,7 +3039,6 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 		h := r.a.cfg.Agents.Hosts[sshTestSelector]
 		h.Repositories = map[string]string{"example/elsewhere": "/srv/elsewhere"}
 		r.a.cfg.Agents.Hosts[sshTestSelector] = h
-		r.pass(t)
 		r.pass(t)
 		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
 		if !room {
