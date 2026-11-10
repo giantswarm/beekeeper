@@ -123,9 +123,6 @@ func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	a.as = ""
 	settleParks(t, a)
 	settleParks(t, a)
-	want := watchParty.Name + " → " + claimMe.Name + ": Your park on lease agentlab-1 (the lease agentlab-1: my proof) is over: agentlab-1 is held by \"Agent other\" " +
-		"and no grant of it to you is left: `beekeeper lease grant agentlab-1 \"Agent me\"` queues you again. Re-query the live state of your task and continue it."
-	if !slices.Equal(*woke, []string{want}) {
-		t.Errorf("woke %q\nwant %q", *woke, want)
-	}
+	assertFreshQueue(t, &watcher{app: a}, *woke, "no grant of it to you is left")
+
 }

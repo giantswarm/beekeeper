@@ -382,6 +382,33 @@ func (w *watcher) wakeTimers(ctx context.Context, fires []timerFire) {
 }
 
 func (w *watcher) deliverWakeTimer(ctx context.Context, st *state.State, original, f timerFire) timerWakeOutcome {
+	if i, err := findAgent(st, f.t.Wake); err == nil && freshPark(st, st.Agents[i]) {
+		ag := st.Agents[i]
+		// The loop owns CI, budget retries, approval and merge for a
+		// proven review request; reminders need no worker turn.
+		if rp, ok := st.ReviewParkFor(ag.Park.On); ok && rp.Party.Is(ag.Party) && ag.Park.ReviewHead != "" && rp.ReviewHead == ag.Park.ReviewHead {
+			return timerWakeOutcome{fire: original, closeCI: true}
+		}
+		handed, err := w.handCITimerToReview(ctx, f, ag)
+		if err != nil {
+			return timerWakeOutcome{
+				fire: original, rearm: true,
+				line: fmt.Sprintf("TIMER HANDOFF FAILED: #%d: %v", f.t.ID, err),
+			}
+		}
+		if !handed {
+			quiet := *w.app
+			quiet.out = io.Discard
+			if err := quiet.queueContinuation(watchParty, ag, f.message()); err != nil {
+				return timerWakeOutcome{
+					fire: original, rearm: true,
+					line: fmt.Sprintf("TIMER CONTINUATION FAILED: #%d: %v", f.t.ID, err),
+				}
+			}
+		}
+		return timerWakeOutcome{fire: original, closeCI: true}
+	}
+
 	quiet := *w.app // the wake's own report is not a watch line
 	quiet.out = io.Discard
 	if !f.t.Due.IsZero() {
@@ -391,7 +418,7 @@ func (w *watcher) deliverWakeTimer(ctx context.Context, st *state.State, origina
 	// it. Pass the park through the durable delivery ledger so acceptance
 	// clears it, while storage or an uncertain delivery keeps it parked.
 	var wakeErr error
-	if i, findErr := findAgent(st, f.t.Wake); findErr == nil && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
+	if i, findErr := findAgent(st, f.t.Wake); findErr == nil && !freshPark(st, st.Agents[i]) && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
 		ag := st.Agents[i]
 		wakeErr = quiet.enqueueExecutionWake(ctx, watchParty, ag, f.message(), ag.Park)
 	} else {

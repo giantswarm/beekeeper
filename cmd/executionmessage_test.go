@@ -39,7 +39,7 @@ func TestExecutionMessagesRetainParkUntilHarnessAcceptance(t *testing.T) {
 	}}
 	a.executionTransport = func(execution.Host) execution.Transport { return fake }
 	st, _ := a.store.Read()
-	err := a.resumeParkedOpts(context.Background(), by, st.Agents[0].Name, false)
+	err := a.enqueueExecutionWake(context.Background(), by, st.Agents[0], parkMessage(p, by.Name), p)
 	if err == nil {
 		t.Fatal("storage counted as harness acceptance")
 	}

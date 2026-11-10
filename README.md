@@ -2658,6 +2658,23 @@ an advanced clock and no paid model calls.
 
 ### Agents started without a click
 
+A parked worker's continuation uses a fresh session chosen by current capacity and
+provider pace. Incoming events are retained with the parked task until the new
+worker accepts its brief; no previous transcript is loaded. The brief contains
+the task reference, PR/head when known, the previous wait, latest handover note
+and event. Stops, holds and capacity still apply. Role holders use their relay
+lifecycle. A park without a recorded task reference stays parked rather than
+resuming a transcript to reconstruct the task.
+
+The coordinator handles successful owned CI waits directly as desk-review
+requests, and already owns approved merges and its GitHub budget retries.
+Use a timer's `--run` for a known authorized mechanical next command; release
+and rollout probes need no model turn just to check whether they settled.
+Events that need reasoning go to a fresh worker. `beekeeper capacity` prints
+24-hour wakes, transcript resumes and fresh starts by provider (also
+`activity24h` in JSON). Starts count session identities once, including retired
+workers; events without a known provider are reported under `unknown`.
+
 Local worker starts by hand require `--dir <checkout> --branch <new-branch>`.
 The supervisor loop's starts are outside this rule: it knows a repository, not a
 checkout, so they run in `agents.dir` and their briefs say where to work.

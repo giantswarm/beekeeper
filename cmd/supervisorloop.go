@@ -1382,6 +1382,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := l.continueParks(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
 	}
@@ -2396,16 +2403,16 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 				break
 			}
 		}
-		if logged("agents.wake", opens) || logged(verbStart, opens) {
+		if logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens) || logged(verbStart, opens) {
 			if !repairing && p.State == superloop.Open && p.Head == act.Head && p.Green && !pullNeedsBranchRepair(p) {
 				return fmt.Sprintf("%s before an interruption: %s, as the log shows", loopWorkerMergeGo, c.target), true, nil
 			}
 			done = true
 		}
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed, superloop.KindOwner:
-		done = logged("agents.wake", opens) || logged(verbStart, opens)
+		done = logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
-		done = logged("agents.wake", opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
+		done = logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
 			!slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, act.Ref) }) && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
@@ -2414,7 +2421,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		// An unclassified park's wake claims the agent's name; a note for
 		// the guide claims its question.
 		if c.target == act.Agent {
-			done = logged("agents.wake", opens)
+			done = logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens)
 		} else {
 			done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 		}

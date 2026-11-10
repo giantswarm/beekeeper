@@ -347,6 +347,10 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
+	// Continuation holds events for a fresh worker, never a transcript resume.
+	Continuation []string `json:"continuation,omitempty"`
+	Continuing   bool     `json:"continuing,omitempty"`
+
 	// External marks a wait no current decision can resolve; it resumes by an explicit wake.
 	External bool `json:"external,omitempty"`
 	// Checks parks on coordinator-owned CI settlement, never PR comments or review.
@@ -861,7 +865,9 @@ type AppCreated struct {
 // existed. A session cannot add itself: its id is only ever written here by
 // the start that created it.
 type Start struct {
-	Effort string `json:"effort,omitempty"`
+	// Successor redirects late messages after a fresh continuation took the task.
+	Successor *Party `json:"successor,omitempty"`
+	Effort    string `json:"effort,omitempty"`
 	Party
 	Execution *ExecutionRecord `json:"execution,omitempty"`
 	Mode      string           `json:"mode"`

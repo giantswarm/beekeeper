@@ -335,6 +335,7 @@ func (a *app) resumeCodexUnit(ctx context.Context, id, name, msg string) error {
 		_, _ = codex.RemoveInbox(inbox)
 		return err
 	}
+	_ = a.store.Record(event(state.Party{Name: name}, transcriptResumeEvent, "%s: codex transcript resumed", name))
 	return nil
 }
 
