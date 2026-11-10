@@ -363,6 +363,9 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		run = runShell
 	}
 	rep.faults = checkFaults(ctx, a.cfg.Doctor.Faults, fix, run)
+	if ctx.Err() != nil {
+		return rep, nil
+	}
 	if r.dryRun {
 		lines, err := a.stopWorktreeOrphans(r.by, true)
 		if err != nil {
@@ -409,11 +412,17 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, rosterLines...)
+	if ctx.Err() != nil {
+		return rep, nil
+	}
 	orphanLines, err := a.stopWorktreeOrphans(r.by, false)
 	if err != nil {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, orphanLines...)
+	if ctx.Err() != nil {
+		return rep, nil
+	}
 	st, err = a.store.Read()
 	if err != nil {
 		return rep, err
@@ -948,6 +957,9 @@ func (w *watcher) doctor(ctx context.Context) {
 		defer w.bg.Done()
 		defer w.doctoring.Store(false)
 		rep, err := d.doctor(ctx, doctorRun{by: watchParty, retry: retry, loopOwned: w.loopRunning()})
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			w.emit("doctor", "DOCTOR: %v", err)
 			return

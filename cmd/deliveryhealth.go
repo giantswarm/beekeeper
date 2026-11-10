@@ -60,7 +60,13 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 				active = append(active, d)
 			}
 			failed := d.Step == state.DeliveryReleasing && (d.Verdict == state.DeliveryReleaseFailed || d.Verdict == verdictUnconfirmed)
-			if !failed && deliveryInFlight(st, d, now, a.deliveryPolicy()) && (d.Since.IsZero() || now.Sub(d.Since) < after) {
+			// Transitional steps also need time to finish; only explicit failures
+			// are actionable immediately. Never diagnose a seconds-old step.
+			stepAfter := max(after, 5*time.Minute)
+			if d.Step == state.DeliveryReleasing {
+				stepAfter = max(after, 30*time.Minute)
+			}
+			if !failed && (d.Since.IsZero() || now.Sub(d.Since) < stepAfter) {
 				continue
 			}
 			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))

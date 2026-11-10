@@ -95,6 +95,11 @@ and its candidate version, preserving eligible-PR ages and marking throughput
 unknown until planning finishes. Retained controllers recognize this progress too.
 Controllers also accept fresh, matching post-startup lifecycle progress, so a
 first pass longer than ten minutes is healthy while it advances through phases.
+Discovery and ownership have separate phase markers. The loop checkpoints between
+individual pull-request observations, so a large progressing batch cannot retain
+the earlier history marker until its heartbeat expires. Each PR observation has
+a one-minute deadline covering admission-lock waits and budget probes as well as
+the GitHub read; discovery also has a one-minute deadline.
 Failed exits override a fresh checkpoint. There is no background keepalive:
 a stalled phase's checkpoint expires after three minutes. Between-pass markers
 preserve completed planning evidence. A competing loop cannot overwrite the
@@ -307,3 +312,21 @@ including shared GitHub admission. Unread observations remain unknown and are
 retried; the backlog scan resumes after its last attempted repository. These
 deadlines inherit service cancellation. They do not refresh a blocked phase's
 heartbeat or count an incomplete observation as successful probation.
+
+Event history is sealed into immutable 64 MiB segments without deleting audit
+records. `log --since` reads both the active log and the segments. Supervisor
+readers save versioned projections and inode-checked offsets in disposable
+checkpoints, so restarting a candidate does not decode the historical prefix
+again. Corrupt or incompatible checkpoints fall back to the original history;
+initial replay checkpoints only as decoded events advance.
+
+The layout transition preserves rollback compatibility: the first archive-capable
+candidate records its verified installation-journal digest but keeps the old log
+layout while its recovery target is legacy. Rotation starts on a subsequent
+normal update whose verified recovery target has already recorded reader support.
+No journal, probation or fence is overridden to enable rotation.
+
+A dedicated CI job exercises at least 450,000 events and 1 GiB of history on
+branches and release tags. It bounds cold/restarted startup by heartbeat grace
+and pass latency by the ten-minute WIP freshness bound, and asserts that a
+checkpoint restart decodes none of the historical prefix.

@@ -61,9 +61,9 @@ type alertReplacement struct {
 
 func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 	a := l.a
-	evs, err := a.store.Follow("supervisor-alert-history", func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.store, "supervisor-alert-history", "v2", l.eventHistoryFilter(func(e state.Event) bool {
 		return e.Verb == loopAlertVerb || e.Verb == loopAlertIntent || e.Verb == loopClaimVerb || e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent || e.Verb == "agents.start"
-	})
+	}))
 	if err != nil {
 		return err
 	}
