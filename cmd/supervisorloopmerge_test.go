@@ -157,7 +157,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 					}
 				}
 				switch scenario {
-				case "conflict":
+				case litConflict:
 					r.pull.Mergeable = mergeableConflicting
 				case "moved":
 					r.pull.Head = loopFixed
@@ -996,6 +996,9 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 			}
 			if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
 				t.Fatalf("stale failure requested branch repair: %v", wake)
+			}
+			if got := len(r.logged(t, "merge.failure-dropped")); got != 1 {
+				t.Fatalf("stale failure drop logs = %d, want 1", got)
 			}
 		})
 	}

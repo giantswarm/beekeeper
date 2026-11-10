@@ -24,6 +24,7 @@ import (
 const loopWorkerMergeGo = "merge go given"
 const reviewedMergeQueued = "queued"
 const loopMergeFailed = "merge.failed"
+const loopMergeFailureDropped = "merge.failure-dropped"
 
 func pullNeedsBranchRepair(p superloop.Pull) bool {
 	return p.Draft || p.Mergeable == "CONFLICTING"
@@ -116,7 +117,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if f.Repo != ref.Repo || f.PR != ref.N || f.By.Name != loopParty.Name {
 			continue
 		}
-		if f.Head != act.Head || ghMergePolicyRefused(f.Reason) {
+		if f.Head != act.Head || staleMergeResultFailure(f.Reason, act.Head) || ghMergePolicyRefused(f.Reason) {
 			// A different (or unknown legacy) head supplies no failure proof
 			// for this approved commit. Let the gate validate it again.
 			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
@@ -124,6 +125,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 				return nil, nil
 			}); err != nil {
 				return "", err
+			}
+			if f.Head != act.Head || staleMergeResultFailure(f.Reason, act.Head) {
+				if err := l.logStaleMergeFailure(act.Ref, act.Head); err != nil {
+					return "", err
+				}
 			}
 			continue
 		}
@@ -263,6 +269,10 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if reply.Reason != "" {
 			out = reply.Reason
 		}
+		if staleMergeResultFailure(out, act.Head) {
+			pending = "stale merge-result failure dropped; awaiting fresh validation"
+			return repair(code, out)
+		}
 		failed = fmt.Sprintf("merge failed (exit %d): %s; branch repair requested", code, oneLine(out))
 		return repair(code, out)
 	}
@@ -281,23 +291,60 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
 }
 
-// dropAdminRepairs undoes a branch repair an older loop requested for a
-// merge refused by base branch policy: no branch
+// Older repair records have only the checker's diagnostic. Its head must
+// agree with the decision even if a surrounding gate record names that decision.
+// Check every diagnostic, since a tool response can contain several lines.
+func staleMergeResultFailure(reason, head string) bool {
+	for {
+		_, rest, found := strings.Cut(reason, "merge result (")
+		if !found {
+			return false
+		}
+		identity, tail, closed := strings.Cut(rest, ")")
+		_, tested, paired := strings.Cut(identity, " + ")
+		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != shortSHA(head)) {
+			return true
+		}
+		reason = tail
+	}
+}
+
+func (l *supervisorLoop) logStaleMergeFailure(ref, head string) error {
+	message := fmt.Sprintf("SUPERVISOR MERGE DROPPED stale failure for %s at %s; rechecking through the merge gate", ref, head)
+	if err := l.a.store.Record(about(event(loopParty, loopMergeFailureDropped, "%s", message), ref)); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(l.a.out, message)
+	return nil
+}
+
+// dropInvalidMergeRepairs also retires persisted repairs whose merge-result head
+// contradicts the decision. It undoes a branch repair an older loop requested
+// for a merge refused by base branch policy: no branch
 // change repairs that refusal. Its repair stage and the go it completed are
 // closed durably, so the unchanged approved head is merged again on this
 // pass without a new review or the worker's action. A repair stage for any
 // other reason stands.
-func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
+func (l *supervisorLoop) dropInvalidMergeRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
 	for stage, detail := range stageDetail {
 		key, ok := strings.CutSuffix(stage, " repair")
-		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") || !ghMergePolicyRefused(detail) {
+		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") {
 			continue
 		}
 		ref := strings.TrimPrefix(key, superloop.KindGo+" ")
+		head := ""
 		if i := strings.LastIndex(ref, "@"); i >= 0 {
+			head, _, _ = strings.Cut(ref[i+1:], " ")
 			ref = ref[:i]
 		}
+		stale := staleMergeResultFailure(detail, head)
+		if !stale && !ghMergePolicyRefused(detail) {
+			continue
+		}
 		why := "base branch policy refusal requires coordinator policy resolution"
+		if stale {
+			why = "stale merge-result failure does not describe the reviewed head"
+		}
 		// A preview reconciles only its in-memory plan. Leave the durable
 		// records for the next real pass, which holds the loop lock.
 		if !l.dryRun {
@@ -315,7 +362,11 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 			}
 			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
 		}
-		if !l.dryRun {
+		if stale && !l.dryRun {
+			if err := l.logStaleMergeFailure(ref, head); err != nil {
+				return taken, err
+			}
+		} else if !l.dryRun {
 			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; retrying with configured merge identity and policy\n", key, why)
 		}
 	}
@@ -326,6 +377,12 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 // to its worker once, recording the repair stage before waking or starting a
 // fixer so capacity waits never retry the merge command each pass.
 func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act superloop.Action, reason string) (string, error) {
+	if staleMergeResultFailure(reason, act.Head) {
+		if err := l.logStaleMergeFailure(act.Ref, act.Head); err != nil {
+			return "", err
+		}
+		return "", errLoopLater
+	}
 	repairStage := act.Key + " repair"
 	l.mu.Lock()
 	repairing := l.stages[repairStage]
