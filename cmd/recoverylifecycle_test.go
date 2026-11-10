@@ -455,3 +455,38 @@ func TestEventHistoryProgressIsRateLimited(t *testing.T) {
 		t.Fatalf("checkpoints=%d, want 1", checkpoints)
 	}
 }
+
+// A phase can take longer than the freshness bound on a loaded machine. Its
+// grace must follow the last checkpoint, even after the loop is ten minutes old.
+func TestRecoveryGraceFollowsLastCheckpoint(t *testing.T) {
+	for _, useLifecycle := range []bool{false, true} {
+		name := "throughput"
+		if useLifecycle {
+			name = "lifecycle"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, now := recoveryRig(t)
+			started := *now
+			for minute := 1; minute <= 21; minute++ {
+				*now = started.Add(time.Duration(minute) * time.Minute)
+				if minute <= 11 {
+					if useLifecycle {
+						if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: started, At: *now, Phase: "recover quota and parks"}); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := c.store.WriteFile(throughputObservationFile, throughputObservation{Candidate: recoveryBadVersion, At: *now}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				settled := c.mustTick(t)
+				if settled != (minute == 21) {
+					t.Fatalf("minute %d: settled=%v journal=%+v", minute, settled, journal(t, c))
+				}
+			}
+			j := journal(t, c)
+			if !j.RolledBack() || j.Observed.LastBeatAt != 11*time.Minute {
+				t.Fatalf("did not roll back ten minutes after last checkpoint: %+v", j)
+			}
+		})
+	}
+}

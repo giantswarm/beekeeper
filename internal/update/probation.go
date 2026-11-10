@@ -15,8 +15,8 @@ const (
 	// restores the recovery target at once, so a broken release is gone within it.
 	ProbationWindow = 30 * time.Minute
 	// HeartbeatGrace is how long a candidate's loop may stay silent before the
-	// silence counts as a failure. It counts from the candidate loop's start: a
-	// replaced loop re-executes only at a quiet pass, which can come late.
+	// silence counts as a failure. It counts from its last heartbeat, or its
+	// start before the first heartbeat; handover to a candidate can come late.
 	HeartbeatGrace = 10 * time.Minute
 	// ProbeFailures is how many consecutive failed probes fail a candidate.
 	ProbeFailures = 3
@@ -55,18 +55,30 @@ type Observed struct {
 	// Restarted says none is left on it.
 	Restarts  int  `json:"restarts,omitempty"`
 	Restarted bool `json:"restarted,omitempty"`
+	// RestartServices retains managed services seen on replaced bytes, so a
+	// failed start is retried even after their old process has stopped.
+	RestartServices []string `json:"restartServices,omitempty"`
 	// RollbackFailures counts the failed attempts at a rollback.
 	RollbackFailures int `json:"rollbackFailures,omitempty"`
 	// LoopStarted says the candidate's own loop was seen running; LoopStartedAt
 	// is the Elapsed at which it started, the start of its heartbeat grace.
 	LoopStarted   bool          `json:"loopStarted,omitempty"`
 	LoopStartedAt time.Duration `json:"loopStartedAt,omitempty"`
+	// LastBeatAt is the latest healthy checkpoint in observed time. The flag
+	// distinguishes a checkpoint at elapsed zero from an old journal with none.
+	HeartbeatSeen bool          `json:"heartbeatSeen,omitempty"`
+	LastBeatAt    time.Duration `json:"lastBeatAt,omitempty"`
 }
 
-// NoteLoop records when the candidate's loop started, once, in observed time.
-// The age is capped by the time observed so far; the controller caps it at one
-// step, so a sleep or downtime before the first sighting shortens no grace.
+// NoteLoop records the first start and latest healthy checkpoint in observed time.
+// Ages are capped by observed time. The controller also caps startup age at
+// one step, so downtime before the first sighting cannot consume startup grace.
 func (o *Observed) NoteLoop(s Signals) {
+	if s.Heartbeat {
+		beat := o.Elapsed - min(max(s.HeartbeatAgo, 0), o.Elapsed)
+		o.LastBeatAt = max(o.LastBeatAt, beat)
+		o.HeartbeatSeen = true
+	}
 	if o.LoopStarted || !s.LoopStarted {
 		return
 	}
@@ -85,6 +97,8 @@ type Signals struct {
 	Unproven string
 	// HeartbeatRequired says this machine runs a loop that must show up.
 	HeartbeatRequired, Heartbeat bool
+	// HeartbeatAgo is the age of the checkpoint, not the age of the loop.
+	HeartbeatAgo time.Duration
 	// LoopStarted says the candidate's own loop started after the install,
 	// LoopStartedAgo how long ago. LoopPending says it has not, while a loop of
 	// another version still runs and re-executes at its next quiet pass.
@@ -129,10 +143,12 @@ func Decide(o Observed, s Signals) (verdict, reason string) {
 }
 
 // heartbeatOverdue says a silent candidate loop has used up its grace. A loop
-// that started has HeartbeatGrace from its start; one an older loop has yet to
-// hand over to has the probation window; one that never started, the grace.
+// that has made progress gets HeartbeatGrace from its latest checkpoint;
+// before that, its start or the incumbent handover bounds the wait.
 func heartbeatOverdue(o Observed, s Signals) bool {
 	switch {
+	case o.HeartbeatSeen:
+		return o.Elapsed-o.LastBeatAt >= HeartbeatGrace
 	case o.LoopStarted:
 		return o.Elapsed-o.LoopStartedAt >= HeartbeatGrace
 	case s.LoopPending:
