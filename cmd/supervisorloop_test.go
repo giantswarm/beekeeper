@@ -4241,7 +4241,9 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.inFlight["stream:workers"] = true
+	if !l.beginInFlight("stream:workers") {
+		t.Fatal("failed to mark worker stream in flight")
+	}
 	alertReads := 0
 	oldAlerts := readLoopAlerts
 	t.Cleanup(func() { readLoopAlerts = oldAlerts })
@@ -4274,7 +4276,7 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 	if evs := r.logged(t, "supervisor."+superloop.KindNext); len(evs) != 0 {
 		t.Fatalf("settled stale next while draining for re-exec: %+v", evs)
 	}
-	delete(l.inFlight, "stream:workers")
+	l.endInFlight("stream:workers")
 	if reexec, err := l.reexec(context.Background()); err != nil || !reexec || r.execs != 1 {
 		t.Fatalf("reexec after draining in-flight claim = %v, %v (execs=%d)", reexec, err, r.execs)
 	}

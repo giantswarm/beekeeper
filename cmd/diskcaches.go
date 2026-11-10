@@ -175,15 +175,11 @@ func (a *app) pruneCacheRoots(r *diskRun, m diskMachine, pressure bool) {
 	}
 }
 
-// cleanCache runs a command policy's cleaner: once its root holds more than
+// cleanCacheContext runs a command policy's cleaner: once its root holds more than
 // the budget, and under disk pressure; never on a root that is a symbolic
 // link, holds protected state or that a process references, read again
 // right before the run. A dry run says it would run; what that frees is the
 // tool's to decide, so it counts nothing.
-func cleanCache(c diskCache, pressure bool, refs, protect []string, recheck func() ([]string, error), dry bool) diskprune.CacheResult {
-	return cleanCacheContext(context.Background(), c, pressure, refs, protect, recheck, dry)
-}
-
 func cleanCacheContext(parent context.Context, c diskCache, pressure bool, refs, protect []string, recheck func() ([]string, error), dry bool) diskprune.CacheResult {
 	var r diskprune.CacheResult
 	if parent != nil && parent.Err() != nil {
