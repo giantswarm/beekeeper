@@ -319,7 +319,9 @@ func (c loopCheck) superseded(checks []loopCheck) bool {
 		newRun := loopActionsRun(next.DetailsURL)
 		newRepo, _, _ := strings.Cut(next.DetailsURL, "/actions/runs/")
 		newerActionsRun := oldRun != 0 && newRun > oldRun && oldRepo == newRepo
-		sameCheck := c.Name != "" && c.Name == next.Name
+		// Job names are only unique within a workflow. Independent workflows
+		// may both have a job named test and must not replace each other.
+		sameCheck := c.Name != "" && c.Name == next.Name && c.WorkflowName == next.WorkflowName
 		sameWorkflow := c.Conclusion == "CANCELLED" && c.Status == checkCompleted && c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
 		if oldRun != 0 && newRun != 0 && oldRun != newRun && oldRepo == newRepo {
 			return (sameCheck || sameWorkflow) && newerActionsRun

@@ -153,6 +153,12 @@ func TestLoopSupersededChecks(t *testing.T) {
 	externalFailed.Conclusion = checkFailure
 	rerun := newer
 	rerun.DetailsURL = old.DetailsURL
+	otherWorkflow := newer
+	otherWorkflow.WorkflowName = "other-ci"
+	otherWorkflowPending := pending
+	otherWorkflowPending.WorkflowName = "other-ci"
+	otherWorkflowExternal := external
+	otherWorkflowExternal.WorkflowName = "other-ci"
 	delayedOld := failed
 	delayedOld.StartedAt = newer.StartedAt.Add(time.Minute)
 	for _, tt := range []struct {
@@ -173,6 +179,10 @@ func TestLoopSupersededChecks(t *testing.T) {
 		{"failed run superseded by success on same head", []loopCheck{failed, newer}, true, false},
 		{"failed run reverse order", []loopCheck{newer, failed}, true, false},
 		{"failed run superseded by queued run", []loopCheck{failed, pending}, false, false},
+		{"same name in different workflow stays red", []loopCheck{failed, otherWorkflow}, false, true},
+		{"same name in different workflow reverse order", []loopCheck{otherWorkflow, failed}, false, true},
+		{"different workflow queued job does not hide failure", []loopCheck{failed, otherWorkflowPending}, false, true},
+		{"different external workflow does not hide failure", []loopCheck{externalFailed, otherWorkflowExternal}, false, true},
 		{"different failed check stays red", []loopCheck{failed, other}, false, true},
 		{"failed job not replaced by renamed workflow job", []loopCheck{failed, workflow}, false, true},
 		{"external failure superseded by timestamp", []loopCheck{externalFailed, external}, true, false},
