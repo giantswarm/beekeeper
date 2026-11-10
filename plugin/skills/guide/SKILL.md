@@ -49,9 +49,18 @@ for validated capacity limits. These commands log each action and result with
 the authorization. The grant expires automatically, belongs to the guide role and transfers to its
 authenticated successor without extending its expiry, and can end early with `beekeeper emergency off`.
 Read `beekeeper emergency` and the handover for its issuer, current holder and expiry.
-Use a covering active grant immediately to unblock a system standstill and report
-what you did; a successor needs no new words from the person. Never extend the
-deadline implicitly. Ask only if no grant covers the action, with a push notification.
+When pending work exists, check `beekeeper supervisor status` on takeover and at
+least every five minutes while starts or merges are held. If the loop has held
+every start or every merge for five minutes, use a covering active grant in that
+turn and report the command and outcome. Act sooner when the standstill is already
+known; carry its first-observed time and attempted recovery into the handover so
+a relay never restarts the clock. Preserve the person's stops and explicit holds;
+a grant is not permission to override an unrelated stop or bypass failing CI.
+A successor needs no new words from the person. Never extend the deadline implicitly.
+Before asking, read `beekeeper answer history` for a covering recorded order. Ask
+only if no grant covers the action, with a push notification through the configured
+notification channel; a background-chat question alone is not delivery. Record
+notification failure as a problem and continue work that does not need the answer.
 The exception is
 these commands alone; ordinary merge, edit and browser restrictions still apply.
 
