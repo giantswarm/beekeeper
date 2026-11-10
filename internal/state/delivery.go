@@ -9,24 +9,29 @@ import (
 
 // Delivery steps are observations, never start or capacity admission rules.
 const (
-	DeliveryUnknown       = "unknown"
-	DeliveryImplementing  = "implementing"
-	DeliveryCI            = "ci"
-	DeliveryReviewQueued  = "review-queued"
-	DeliveryReviewing     = "reviewing"
-	DeliveryFixing        = "fixing"
-	DeliveryMerging       = "merging"
-	DeliveryReleasing     = "releasing"
-	DeliveryDone          = "done"
-	DeliveryDropped       = "dropped"
-	DeliveryStepVerb      = "delivery.step"
-	DeliveryNoRelease     = "no_release"
-	DeliveryReleaseFailed = "ci_failed"
+	DeliveryOriginObserved = "observed"
+	DeliveryOriginStarted  = "started"
+	DeliveryUnknown        = "unknown"
+	DeliveryImplementing   = "implementing"
+	DeliveryCI             = "ci"
+	DeliveryReviewQueued   = "review-queued"
+	DeliveryReviewing      = "reviewing"
+	DeliveryFixing         = "fixing"
+	DeliveryMerging        = "merging"
+	DeliveryReleasing      = "releasing"
+	DeliveryDone           = "done"
+	DeliveryDropped        = "dropped"
+	DeliveryStepVerb       = "delivery.step"
+	DeliveryNoRelease      = "no_release"
+	DeliveryReleaseFailed  = "ci_failed"
 )
 
 // Delivery is one issue (or an issue-less desk pull request) from start to release.
 // Ref and Pulls use the same canonical references as serve records.
 type Delivery struct {
+	// Origin distinguishes passive PR observations from work started by the desk
+	// or advanced by a new commit after observation. Empty is legacy/issue work.
+	Origin         string            `json:"origin,omitempty"`
 	OutsideDesk    bool              `json:"outsideDesk,omitempty"`
 	Heads          map[string]string `json:"heads,omitempty"`
 	DroppedHeads   map[string]string `json:"droppedHeads,omitempty"`

@@ -35,6 +35,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 		}
 		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}}
 		var events []state.Event
+		var stalls []string
 		file := func(key, detail string) {
 			lines = append(lines, detail)
 			events = append(events, event(loopParty, loopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail))
@@ -47,7 +48,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			if d.Since.After(latest) {
 				latest = d.Since
 			}
-			if !d.Active() {
+			if !d.Active() || d.Origin == state.DeliveryOriginObserved && !deliveryOwned(st, d, now, a.deliveryPolicy()) {
 				continue
 			}
 			flow := classifyDelivery(st, d, now, a.deliveryPolicy())
@@ -76,18 +77,38 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 				continue
 			}
 			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))
-			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, now.Sub(d.Since)).Round(time.Second), strings.TrimSpace(d.Waits+" "+d.Verdict+" "+d.Release))
-			if prev, ok := old.Episodes[key]; ok {
+			wait := strings.TrimSpace(d.Waits + " " + d.Verdict + " " + d.Release)
+			if wait == "" {
+				wait = "no worker or recorded dependency; supervisor reconciliation needed"
+				if deliveryOwned(st, d, now, a.deliveryPolicy()) {
+					wait = "worker progress; no dependency recorded"
+				}
+			}
+			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, now.Sub(d.Since)).Round(time.Second), wait)
+			if prev, ok := old.Episodes[key]; ok && !strings.HasSuffix(strings.TrimSpace(prev), "waits:") {
 				next.Episodes[key] = prev
 			} else {
 				next.Episodes[key] = detail
-				file(key, detail)
+				if !ok {
+					stalls = append(stalls, detail)
+				}
 			}
 		}
+		if len(stalls) == 1 {
+			file("stalls", stalls[0])
+		} else if len(stalls) > 1 {
+			file("stalls", fmt.Sprintf("DELIVERY STALLED: %d deliveries; waits: inspect delivery records for worker progress or missing dependencies; examples: %s", len(stalls), strings.Join(stalls[:min(3, len(stalls))], "; ")))
+		}
+		var recovered []string
 		for key, detail := range old.Episodes {
 			if _, ok := next.Episodes[key]; !ok {
-				file("recovered "+key, "RECOVERED: "+detail)
+				recovered = append(recovered, detail)
 			}
+		}
+		if len(recovered) == 1 {
+			file("recovered", "RECOVERED: "+recovered[0])
+		} else if len(recovered) > 1 {
+			file("recovered", fmt.Sprintf("RECOVERED: %d delivery episodes ended; inspect delivery records for current status", len(recovered)))
 		}
 		limit := a.cfg.Delivery.WIPLimit
 		if limit > 0 && len(active) >= limit {
