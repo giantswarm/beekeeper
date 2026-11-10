@@ -57,6 +57,7 @@ const (
 	repositoryField  = "repository"
 	sessionIDField   = "sessionId"
 	fixtureRepo      = "fixture/project"
+	pullRequestQuery = "pullRequest(number:"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -141,6 +142,20 @@ func serveGitHub() int {
 		}
 		return 0
 	}
+	observePull := func() map[string]any {
+		// Model a push between the planner's read and the merge executor's read.
+		if os.Getenv("FIXTURE_CASE") == "moved-head" {
+			countPath := filepath.Join(root, "read-count")
+			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
+			if len(b) > 0 {
+				p["headRefOid"] = strings.Repeat("f", 40)
+			}
+			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
+				panic(err)
+			}
+		}
+		return p
+	}
 	switch {
 	case starts("auth", "token"):
 		fmt.Println("fixture-token")
@@ -207,18 +222,28 @@ func serveGitHub() int {
 		fmt.Println("2026-01-01T00:00:00Z")
 		return 0
 	case starts(ghPR, "view"):
-		// Model a push between the planner's read and the merge executor's read.
-		if os.Getenv("FIXTURE_CASE") == "moved-head" {
-			countPath := filepath.Join(root, "read-count")
-			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
-			if len(b) > 0 {
-				p["headRefOid"] = strings.Repeat("f", 40)
+		return emit(observePull())
+	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, pullRequestQuery) }):
+		query := strings.Join(args, " ")
+		data := map[string]any{"rateLimit": map[string]any{"remaining": 4900}}
+		for i := range 8 {
+			alias := fmt.Sprintf("p%d", i)
+			pos := strings.Index(query, alias+":")
+			if pos < 0 {
+				continue
 			}
-			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
-				panic(err)
+			_, after, ok := strings.Cut(query[pos:], pullRequestQuery)
+			if !ok {
+				continue
 			}
+			num, _, _ := strings.Cut(after, ")")
+			var found any
+			if num == "1" {
+				found = observePull()
+			}
+			data[alias] = map[string]any{"pullRequest": found}
 		}
-		return emit(p)
+		return emit(map[string]any{dataField: data})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "fields(first:50)") }):
 		fmt.Println(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{"id":"S","name":"Status","options":[{"id":"ready","name":"Ready"}]}]}}}}}`)
 		return 0

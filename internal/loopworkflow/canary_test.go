@@ -790,6 +790,18 @@ if args[:2] == ["api", "graphql"]:
     if "issue(number:" in joined_args:
         print(json.dumps({"data": {"repository": {"issue": {"parent": None}}}}))
         sys.exit(0)
+    if "pullRequest(number:" in joined_args:
+        data = {"rateLimit": {"remaining": 4900, "resetAt": "2026-01-01T01:00:00Z", "cost": 1}}
+        for m in re.finditer(r'(p\d+):\s*repository\([^)]*\)\s*\{\s*pullRequest\(number:(\d+)\)', joined_args):
+            alias, num_s = m.group(1), int(m.group(2))
+            found = None
+            for p in prs:
+                if p["number"] == num_s:
+                    found = p
+                    break
+            data[alias] = {"pullRequest": found}
+        print(json.dumps({"data": data}))
+        sys.exit(0)
     print(json.dumps({"data": {}}))
     sys.exit(0)
 

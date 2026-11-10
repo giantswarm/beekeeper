@@ -27,7 +27,7 @@ func fakePullGraphQL(t *testing.T, answer func(string, int) map[string]any) *int
 	alias := regexp.MustCompile(`p([0-9]+): repository\(owner:"([^"]+)",name:"([^"]+)"\) \{ pullRequest\(number:([0-9]+)\)`)
 	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
 		*calls++
-		if len(args) != 4 || args[0] != "api" || args[1] != "graphql" {
+		if len(args) != 4 || args[0] != workerGitHubAPIGroup || args[1] != inventoryGraphQLCommand {
 			t.Fatalf("non-batched request: %v", args)
 		}
 		query := strings.TrimPrefix(args[3], "query=")
@@ -66,7 +66,7 @@ func pullGraphQLFixture(t *testing.T, query, status, head, updated string) map[s
 		t.Fatal(err)
 	}
 	if !strings.Contains(query, "author { login }") {
-		for _, key := range []string{"author", "title", "body", "files", "reviews", "closingIssuesReferences", "changedFiles"} {
+		for _, key := range []string{"author", publicationTitle, "body", "files", "reviews", "closingIssuesReferences", "changedFiles"} {
 			delete(p, key)
 		}
 	}
@@ -364,8 +364,8 @@ func TestPullWatcherNullReferenceDoesNotDiscardOtherPulls(t *testing.T) {
 		}
 		return pullGraphQLFixture(t, query, checkSuccess, loopHead, watchFixtureUpdated)
 	})
-	seen, err := fetchLoopPullBatch(t.Context(), []string{loopPR, "o/r#8"}, nil, 0)
-	if err != nil || !seen[loopPR].Pull.Green || seen["o/r#8"].Pull.State != "" {
+	seen, err := fetchLoopPullBatch(t.Context(), []string{loopPR, multiParkSecondPR}, nil, 0)
+	if err != nil || !seen[loopPR].Pull.Green || seen[multiParkSecondPR].Pull.State != "" {
 		t.Fatalf("partial lookup: %+v %v", seen, err)
 	}
 }

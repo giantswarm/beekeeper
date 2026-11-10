@@ -33,6 +33,7 @@ const (
 	pullEndCursor    = "endCursor"
 	pullHeadField    = "headRefOid"
 	pullUpdatedField = "updatedAt"
+	jsonNullLiteral  = "null"
 )
 
 // Only the watcher writes these observations. Consumers never renew a read's
@@ -202,6 +203,12 @@ var startLoopPullWatcher = func(ctx context.Context, l *supervisorLoop) func() {
 	return func() { cancel(); <-done }
 }
 
+var pollOncePullWatcher = func(ctx context.Context, l *supervisorLoop) {
+	var schedule loopPullSchedule
+	next, err := l.pullWatcher().poll(ctx, l)
+	schedule.after(l, next, err)
+}
+
 type loopPullSchedule struct{ failures int }
 
 func (s *loopPullSchedule) after(l *supervisorLoop, next time.Duration, err error) time.Duration {
@@ -337,7 +344,7 @@ func fetchLoopPullBatch(ctx context.Context, refs []string, previous map[string]
 		details := map[string]bool{}
 		for _, ref := range chunk {
 			_, exists := previous[ref]
-			details[ref] = !exists || previous[ref].Pull.State == "" || previous[ref].Error != ""
+			details[ref] = !exists || previous[ref].Pull.State == "" || previous[ref].Error != "" || previous[ref].Pull.Updated.IsZero()
 		}
 		first, err := queryLoopPullBatch(ctx, chunk, details, floor)
 		if err != nil {
@@ -420,7 +427,7 @@ func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]b
 }
 
 func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull, bool, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+	if len(raw) == 0 || string(raw) == jsonNullLiteral {
 		return superloop.Pull{Ref: ref}, false, nil
 	}
 	// Normalize GraphQL connections to gh pr view's representation so check,
@@ -432,6 +439,9 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 	for _, name := range []string{"files", "reviews", "closingIssuesReferences"} {
 		if !details {
 			delete(fields, name)
+			continue
+		}
+		if len(fields[name]) == 0 || fields[name][0] == '[' {
 			continue
 		}
 		var connection struct {
@@ -446,45 +456,53 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 		}
 		fields[name] = connection.Nodes
 	}
-	var commits struct {
-		Nodes []struct {
-			Commit struct {
-				Rollup *struct {
-					State    string
-					Contexts struct {
-						PageInfo struct{ HasNextPage bool }
-						Nodes    []struct {
-							loopCheck
-							CheckSuite struct {
-								WorkflowRun struct{ Workflow struct{ Name string } }
-							}
-						}
-					}
-				} `json:"statusCheckRollup"`
-			}
-		}
-	}
-	if err := json.Unmarshal(fields["commits"], &commits); err != nil {
-		return superloop.Pull{}, false, err
-	}
 	var checks []loopCheck
 	pending := true
-	if len(commits.Nodes) > 0 && commits.Nodes[0].Commit.Rollup != nil {
-		rollup := commits.Nodes[0].Commit.Rollup
-		if rollup.Contexts.PageInfo.HasNextPage {
-			return superloop.Pull{}, false, errors.New("check rollup truncated; observation unknown")
-		}
-		pending = len(rollup.Contexts.Nodes) == 0
-		for _, node := range rollup.Contexts.Nodes {
-			c := node.loopCheck
-			c.WorkflowName = node.CheckSuite.WorkflowRun.Workflow.Name
-			checks = append(checks, c)
-			if !c.concluded() {
-				pending = true
+	switch {
+	case len(fields["commits"]) > 0 && fields["commits"][0] == '{':
+		var commits struct {
+			Nodes []struct {
+				Commit struct {
+					Rollup *struct {
+						State    string
+						Contexts struct {
+							PageInfo struct{ HasNextPage bool }
+							Nodes    []struct {
+								loopCheck
+								CheckSuite struct {
+									WorkflowRun struct{ Workflow struct{ Name string } }
+								}
+							}
+						}
+					} `json:"statusCheckRollup"`
+				}
 			}
 		}
+		if err := json.Unmarshal(fields["commits"], &commits); err != nil {
+			return superloop.Pull{}, false, err
+		}
+		if len(commits.Nodes) > 0 && commits.Nodes[0].Commit.Rollup != nil {
+			rollup := commits.Nodes[0].Commit.Rollup
+			if rollup.Contexts.PageInfo.HasNextPage {
+				return superloop.Pull{}, false, errors.New("check rollup truncated; observation unknown")
+			}
+			pending = len(rollup.Contexts.Nodes) == 0
+			for _, node := range rollup.Contexts.Nodes {
+				c := node.loopCheck
+				c.WorkflowName = node.CheckSuite.WorkflowRun.Workflow.Name
+				checks = append(checks, c)
+				if !c.concluded() {
+					pending = true
+				}
+			}
+		}
+		fields["statusCheckRollup"], _ = json.Marshal(checks)
+	case len(fields["statusCheckRollup"]) > 0:
+		if err := json.Unmarshal(fields["statusCheckRollup"], &checks); err != nil {
+			return superloop.Pull{}, false, err
+		}
+		pending = len(checks) == 0 || slices.ContainsFunc(checks, func(c loopCheck) bool { return !c.concluded() })
 	}
-	fields["statusCheckRollup"], _ = json.Marshal(checks)
 	normalized, err := json.Marshal(fields)
 	if err != nil {
 		return superloop.Pull{}, false, err
@@ -530,7 +548,7 @@ func (s loopPullSnapshot) ageLine(now time.Time) string {
 }
 
 func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[string]json.RawMessage, error) {
-	raw, err := github.RunGH(ctx, "api", "graphql", "-f", "query="+query)
+	raw, err := github.RunGH(ctx, workerGitHubAPIGroup, inventoryGraphQLCommand, "-f", "query="+query)
 	if err != nil && len(raw) == 0 {
 		return nil, err
 	}
@@ -563,7 +581,7 @@ func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[strin
 // Follow overflow pages only for connections that need them. Most polls use
 // none. Never infer green or an approval from a truncated check/review list.
 func expandLoopPullConnections(ctx context.Context, ref string, raw []byte, details bool, floor int) ([]byte, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+	if len(raw) == 0 || string(raw) == jsonNullLiteral {
 		return raw, nil
 	}
 	var full map[string]any

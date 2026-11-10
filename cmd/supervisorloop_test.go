@@ -279,9 +279,12 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
-	observation, sweep, watch := readObservedLoopPull, readLoopSweep, startLoopPullWatcher
-	t.Cleanup(func() { readObservedLoopPull, readLoopSweep, startLoopPullWatcher = observation, sweep, watch })
+	observation, sweep, watch, pollOnce := readObservedLoopPull, readLoopSweep, startLoopPullWatcher, pollOncePullWatcher
+	t.Cleanup(func() {
+		readObservedLoopPull, readLoopSweep, startLoopPullWatcher, pollOncePullWatcher = observation, sweep, watch, pollOnce
+	})
 	startLoopPullWatcher = func(context.Context, *supervisorLoop) func() { return func() {} }
+	pollOncePullWatcher = func(context.Context, *supervisorLoop) {}
 	readLoopSweep = fixtureLoopSweep
 	readObservedLoopPull = fixtureLoopObservation
 	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge

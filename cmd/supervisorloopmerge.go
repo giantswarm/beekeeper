@@ -67,7 +67,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if repairing {
 		return l.repairPull(ctx, st, act, reason)
 	}
-	p, err := l.readPull(ctx, act.Ref)
+	p, err := readLoopPull(ctx, act.Ref)
 	if err != nil {
 		return "", err
 	}
@@ -186,10 +186,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
-	p, readErr := l.readPull(ctx, act.Ref)
+	p, readErr := readLoopPull(ctx, act.Ref)
 	if readErr != nil {
 		return "", readErr
 	}
+	l.cachePull(act.Ref, p)
 	if p.State == superloop.Merged {
 		// Where the base requires up-to-date branches and the desk merges
 		// without --admin, the merge brings a behind branch up to date

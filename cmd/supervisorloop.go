@@ -1750,6 +1750,9 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	})
 	sortTrackedPulls(in, tracked)
 	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
+	if l.once && a.loopNow != nil && !l.dryRun {
+		pollOncePullWatcher(ctx, l)
+	}
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
@@ -4304,7 +4307,7 @@ func (l *supervisorLoop) readNextItemSkipping(ctx context.Context, exemptOnly bo
 		}
 		return nil, fmt.Errorf("board next --json: %w", err)
 	}
-	none := string(next.Pick) == "null"
+	none := string(next.Pick) == jsonNullLiteral
 	if code != 0 {
 		// Only a document that says no pick settles a refusal.
 		if !none {
