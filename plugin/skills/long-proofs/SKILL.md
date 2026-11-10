@@ -5,7 +5,7 @@ description: Run long proofs, including full browser suites, beyond a Bash backg
 
 # long-proofs — durable runs and completion wakes
 
-Bash background jobs expire after 10 minutes, including slot waits. Use a
+Bash background jobs expire after 10 minutes, with slot waits. Use a
 `systemd-run --user` unit; save logs and exit results in task scratch.
 
 The service manager lacks session identity. In Bash, forward only set identity
@@ -28,8 +28,7 @@ systemd-run --user "${proof_identity[@]}" --unit=<unique-unit> --property=Remain
 beekeeper timer add 1m "inspect proof" --probe 'case "$(systemctl --user show <unique-unit>.service --property=SubState --value)" in exited|failed) exit 0;; *) exit 1;; esac' --wake "<agent>" --until <duration>
 ```
 
-Set the timer before parking; allow for the suite and slot wait. Both outcomes
-must wake. Inspect saved logs and `systemctl --user show <unique-unit>.service
+Set the timer before parking; allow for the suite and slot wait. Both outcomes wake. Inspect saved logs and `systemctl --user show <unique-unit>.service
 --property=Result --property=ExecMainStatus`: completion alone is not success.
 Keep `RemainAfterExit=yes`; never `--collect`. Stop with
 `systemctl --user stop <unique-unit>.service`.
