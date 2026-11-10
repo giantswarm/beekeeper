@@ -817,14 +817,14 @@ func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t 
 
 func TestHostsUpdateDefersProbationWithoutHoldingOrDelayingRetry(t *testing.T) {
 	for _, rollback := range []bool{false, true} {
-		name := "passed"
+		name := coordinatorProbationPassed
 		if rollback {
-			name = "rolled-back"
+			name = coordinatorProbationRolledBack
 		}
 		t.Run(name, func(t *testing.T) {
 			a, _ := sshStartTestApp(t)
 			withCoordinatorVersion(t, hostNewRelease)
-			j := &update.Journal{Probation: "pending", Candidate: update.Binary{Version: hostNewRelease}, Previous: &update.Binary{Version: hostOldRelease}}
+			j := &update.Journal{Probation: coordinatorProbationPending, Candidate: update.Binary{Version: hostNewRelease}, Previous: &update.Binary{Version: hostOldRelease}}
 			previous := coordinatorJournal
 			coordinatorJournal = func() (*update.Journal, error) { return j, nil }
 			t.Cleanup(func() { coordinatorJournal = previous })
@@ -843,9 +843,9 @@ func TestHostsUpdateDefersProbationWithoutHoldingOrDelayingRetry(t *testing.T) {
 				t.Fatalf("probation changed host: calls %v, pin %+v", *calls, st.HostPin(sshTestSelector))
 			}
 			version := hostNewRelease
-			j.Probation = "passed"
+			j.Probation = coordinatorProbationPassed
 			if rollback {
-				j.Probation = "rolled-back"
+				j.Probation = coordinatorProbationRolledBack
 				version = hostOldRelease
 				withCoordinatorVersion(t, version)
 			}
@@ -870,7 +870,7 @@ func TestSupervisorDefersHostsUntilCoordinatorProbationPasses(t *testing.T) {
 	r := newLoopRig(t)
 	withCoordinatorVersion(t, hostNewRelease)
 	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{sshTestSelector: {Identity: sshTestSelector}}
-	j := &update.Journal{Probation: "pending", Candidate: update.Binary{Version: hostNewRelease}}
+	j := &update.Journal{Probation: coordinatorProbationPending, Candidate: update.Binary{Version: hostNewRelease}}
 	previous := coordinatorJournal
 	coordinatorJournal = func() (*update.Journal, error) { return j, nil }
 	t.Cleanup(func() { coordinatorJournal = previous })
@@ -883,7 +883,7 @@ func TestSupervisorDefersHostsUntilCoordinatorProbationPasses(t *testing.T) {
 	if len(r.calls) != 0 || strings.Contains(r.out.String(), "HOST HELD") {
 		t.Fatalf("probation attempted updates: %v, %s", r.calls, r.out.String())
 	}
-	j.Probation = "passed"
+	j.Probation = coordinatorProbationPassed
 	l.updateHosts(t.Context(), st)
 	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, "hosts", hostUpdateCmdName, sshTestSelector}) {
 		t.Fatalf("no immediate retry after probation: %v", r.calls)
@@ -916,11 +916,11 @@ func TestHostsProbationRefusalDoesNotHoldHost(t *testing.T) {
 func TestCoordinatorHostUpdateWaitsForReadableMatchingVerdict(t *testing.T) {
 	previous := coordinatorJournal
 	t.Cleanup(func() { coordinatorJournal = previous })
-	for _, phase := range []string{"prepared", "pending", "rolling-back", "passed", "rolled-back"} {
+	for _, phase := range []string{"prepared", coordinatorProbationPending, "rolling-back", coordinatorProbationPassed, coordinatorProbationRolledBack} {
 		j := &update.Journal{Probation: phase, Candidate: update.Binary{Version: hostNewRelease}, Previous: &update.Binary{Version: hostOldRelease}}
 		coordinatorJournal = func() (*update.Journal, error) { return j, nil }
 		for _, version := range []string{hostOldRelease, hostNewRelease} {
-			want := phase == "passed" && version == hostNewRelease || phase == "rolled-back" && version == hostOldRelease
+			want := phase == coordinatorProbationPassed && version == hostNewRelease || phase == coordinatorProbationRolledBack && version == hostOldRelease
 			if err := coordinatorHostUpdateReady(version); (err == nil) != want {
 				t.Fatalf("%s on %s: %v", phase, version, err)
 			}

@@ -274,7 +274,12 @@ var errHostDrains = errors.New("executions run")
 
 // A deferral leaves host pins and retry timestamps untouched. Every pass reads
 // the journal again, so rollback never leaves a queued candidate as the target.
-const hostUpdateDeferred = "host update deferred"
+const (
+	hostUpdateDeferred             = "host update deferred"
+	coordinatorProbationPassed     = "passed"
+	coordinatorProbationPending    = "pending"
+	coordinatorProbationRolledBack = "rolled-back"
+)
 
 func coordinatorHostUpdateReady(version string) error {
 	j, err := coordinatorJournal()
@@ -287,7 +292,7 @@ func coordinatorHostUpdateReady(version string) error {
 	if j.Held() != "" {
 		return refused("%s: coordinator recovery is held: %s", hostUpdateDeferred, j.Held())
 	}
-	if j.Probation == "passed" && j.Candidate.Version == version || j.RolledBack() && j.Previous != nil && j.Previous.Version == version {
+	if j.Probation == coordinatorProbationPassed && j.Candidate.Version == version || j.RolledBack() && j.Previous != nil && j.Previous.Version == version {
 		return nil
 	}
 	return refused("%s: coordinator %s awaits its probation verdict", hostUpdateDeferred, version)
