@@ -80,7 +80,7 @@ belongs to the guide role and transfers to its authenticated successor without
 extending its expiry. The original words and issuer remain recorded.
 
 Use emergency merge <owner/repo> <number> for an approved open pull request:
-it bypasses desk review and the merge lane, using GitHub's squash merge with
+it bypasses desk review and the merge lane, using the repository's configured merge method with
 an exact head match. GitHub branch protection still applies. Every attempted
 action and its result is logged with the person's words.
 
@@ -89,7 +89,7 @@ merge order without asking them to name each pull request. The guide must
 quote the authorization verbatim when enabling the bounded grant. A pull
 request GitHub keeps at REVIEW_REQUIRED must still be open, green, mergeable
 and up to date with its base at exactly that head, with an approved desk
-review or the loop's go for it. Only then does the squash merge send --admin,
+review or the loop's go for it. Only then does the merge send --admin,
 which waives nothing but the review requirement.
 
 Other controls are
@@ -216,7 +216,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if _, err := a.emergencyAction(fmt.Sprintf("merge https://github.com/%s/pull/%d at %s", args[0], n, pr.HeadRefOid)); err != nil {
 				return err
 			}
-			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--squash", "--match-head-commit", pr.HeadRefOid)
+			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--"+cmp.Or(a.cfg.Merge.Methods[args[0]], mergeMethodSquash), "--match-head-commit", pr.HeadRefOid)
 			return err
 		})
 	}}
@@ -356,7 +356,7 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	if _, err := a.emergencyAction(fmt.Sprintf("admin merge %s at %s", url, p.Head)); err != nil {
 		return err
 	}
-	_, err = github.RunGH(ctx, "pr", gitMerge, strconv.Itoa(number), "--repo", repo, "--squash", "--admin", "--match-head-commit", p.Head)
+	_, err = github.RunGH(ctx, "pr", gitMerge, strconv.Itoa(number), "--repo", repo, "--"+cmp.Or(a.cfg.Merge.Methods[repo], mergeMethodSquash), "--admin", "--match-head-commit", p.Head)
 	return err
 }
 

@@ -322,6 +322,8 @@ type Input struct {
 	// the gate's devctl pr merge, on any other gh pr merge
 	// --match-head-commit.
 	DevctlOwners []string
+	// MergeMethods selects each repository's merge method; unset means squash.
+	MergeMethods map[string]string
 	// Admin is merge.admin: the repositories (owner/repo) whose go names
 	// gh pr merge --admin --match-head-commit to merge past their branch
 	// ruleset after the approved review.
@@ -2270,14 +2272,14 @@ func goAction(in Input, base Action, why string) Action {
 	repo, n, _ := strings.Cut(base.Ref, "#")
 	if in.gated(repo) {
 		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s`, once `gh pr view` shows head %s. Merge only this green head after the merge-result check passes; never update the branch.",
-			base.URL, base.Head, why, repo, n, short(base.Head))
+			base.URL, base.Head, why, repo, n+rebaseGoFlag(in.MergeMethods[repo]), short(base.Head))
 		return a
 	}
 	admin := ""
 	if in.admin(repo) {
 		admin = " --admin"
 	}
-	a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now with `gh pr merge %s --repo %s --squash%s --match-head-commit %s`, then report.", base.URL, base.Head, why, n, repo, admin, base.Head)
+	a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now with `gh pr merge %s --repo %s --%s%s --match-head-commit %s`, then report.", base.URL, base.Head, why, n, repo, cmp.Or(in.MergeMethods[repo], "squash"), admin, base.Head)
 	return a
 }
 
@@ -2393,4 +2395,12 @@ func ReleaseWorkers(in Input) []Action {
 	}
 	slices.SortFunc(out, func(a, b Action) int { return strings.Compare(a.Ref, b.Ref) })
 	return out
+}
+
+// rebaseGoFlag keeps devctl upstream-line merges on their configured method.
+func rebaseGoFlag(method string) string {
+	if method == "rebase" {
+		return " --rebase"
+	}
+	return ""
 }
