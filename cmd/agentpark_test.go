@@ -30,6 +30,12 @@ const (
 func parkingWatch(t *testing.T, refs map[string]string) *watcher {
 	t.Helper()
 	w, _ := overtakingWatch(t, refs)
+	beforeREST := readParkRefREST
+	t.Cleanup(func() { readParkRefREST = beforeREST })
+	readParkRefREST = func(context.Context, github.PR) (github.RefState, error) {
+		return github.RefState{}, errParkLookup
+	}
+
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: parkTask, AssignedAt: relayNow}}
 		st.Notes = []state.Note{{ID: 3, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: agentOne}}}
