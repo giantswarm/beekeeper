@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2130,7 +2131,10 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	// Releases before the refusal recorded their stale saves here instead.
-	delete(st.rest, "staleWriters")
+	if _, has := st.rest["staleWriters"]; has {
+		st.rest = maps.Clone(st.rest)
+		delete(st.rest, "staleWriters")
+	}
 	return nil
 }
 

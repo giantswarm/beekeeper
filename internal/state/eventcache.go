@@ -30,30 +30,53 @@ func (s *FileStore) cachedEvents(n int, keep func(Event) bool) ([]Event, error) 
 		return nil, err
 	}
 	defer closeEventFiles(files)
-	// Bounded queries start at the newest segment and stop as soon as
-	// satisfied. Cache at most 32 MiB of source, never a whole large archive.
-	if n > 0 {
-		slices.Reverse(files)
-	}
-	const cacheBytes = 32 << 20
-	var retained int64
-	var next []*cachedEventFile
-	var out []Event
-	for _, f := range files {
+	infos := make([]os.FileInfo, len(files))
+	for i, f := range files {
 		info, err := f.Stat()
 		if err != nil {
 			return nil, err
 		}
-		cache := retained+info.Size() <= cacheBytes
-		at := &cachedEventFile{info: info}
-		if cache {
-			for _, old := range s.events {
-				if os.SameFile(old.info, info) && info.Size() >= old.info.Size() && info.Size() >= old.offset &&
-					(info.Size() != old.info.Size() || info.ModTime().Equal(old.info.ModTime())) {
-					at = old
-					break
-				}
+		infos[i] = info
+	}
+	// Bounded queries start at the newest segment and stop as soon as
+	// satisfied. Cache at most 32 MiB of the newest segments, never a whole
+	// large archive, and keep already-cached older segments across bounded
+	// queries that stop at a newer segment.
+	const cacheBytes = 32 << 20
+	var retained int64
+	cacheable := make([]bool, len(files))
+	next := make([]*cachedEventFile, len(files))
+	for i := len(files) - 1; i >= 0; i-- {
+		info := infos[i]
+		if retained+info.Size() > cacheBytes {
+			continue
+		}
+		retained += info.Size()
+		cacheable[i] = true
+		for _, old := range s.events {
+			if os.SameFile(old.info, info) && info.Size() >= old.info.Size() && info.Size() >= old.offset &&
+				(info.Size() != old.info.Size() || info.ModTime().Equal(old.info.ModTime())) {
+				next[i] = old
+				break
 			}
+		}
+	}
+	order := make([]int, len(files))
+	for i := range order {
+		if n > 0 {
+			order[i] = len(files) - 1 - i
+		} else {
+			order[i] = i
+		}
+	}
+	var out []Event
+	for _, i := range order {
+		f := files[i]
+		info := infos[i]
+		cache := cacheable[i]
+		at := next[i]
+		if at == nil {
+			at = &cachedEventFile{info: info}
 		}
 		var hits []Event
 		add := func(e Event) {
@@ -94,8 +117,7 @@ func (s *FileStore) cachedEvents(n int, keep func(Event) bool) ([]Event, error) 
 		}
 		at.info = info
 		if cache {
-			retained += info.Size()
-			next = append(next, at)
+			next[i] = at
 		}
 		if n > 0 {
 			out = append(hits, out...)
@@ -107,6 +129,6 @@ func (s *FileStore) cachedEvents(n int, keep func(Event) bool) ([]Event, error) 
 			out = append(out, hits...)
 		}
 	}
-	s.events = next
+	s.events = slices.DeleteFunc(next, func(c *cachedEventFile) bool { return c == nil })
 	return out, nil
 }

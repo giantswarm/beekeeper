@@ -13,7 +13,7 @@ func TestChangesObserveAtomicReplacementAndCancellation(t *testing.T) {
 	path := filepath.Join(dir, "state.json")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	changes, closeChanges := Changes(ctx, path)
+	changes, closeChanges := Changes(ctx, path, filepath.Join(dir, "missing", "fixture"))
 	defer closeChanges()
 	if changes == nil {
 		t.Fatal("no filesystem subscription")

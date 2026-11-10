@@ -66,11 +66,15 @@ func TestSnapshotCacheCopiesAndInvalidates(t *testing.T) {
 }
 
 func TestSnapshotCacheDoesNotRetainFailedTransaction(t *testing.T) {
-	s, err := OpenVersion(t.TempDir(), "dev")
+	s, err := OpenVersion(t.TempDir(), "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Update(func(st *State) ([]Event, error) { st.NextNote = 7; return nil, nil }); err != nil {
+	path := filepath.Join(s.Dir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"nextNote":7,"staleWriters":["1.0.0"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Read(); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("abort")
@@ -78,7 +82,7 @@ func TestSnapshotCacheDoesNotRetainFailedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := s.Read()
-	if err != nil || st.NextNote != 7 {
+	if err != nil || st.NextNote != 7 || len(st.rest["staleWriters"]) == 0 {
 		t.Fatalf("aborted transaction mutated cache: %+v %v", st, err)
 	}
 }

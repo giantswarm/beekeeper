@@ -32,11 +32,15 @@ func Changes(ctx context.Context, paths ...string) (<-chan struct{}, func()) {
 			dirs[path] = true
 		}
 	}
+	added := 0
 	for dir := range dirs {
-		if err := watcher.Add(dir); err != nil {
-			_ = watcher.Close()
-			return nil, func() {}
+		if err := watcher.Add(dir); err == nil {
+			added++
 		}
+	}
+	if added == 0 {
+		_ = watcher.Close()
+		return nil, func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

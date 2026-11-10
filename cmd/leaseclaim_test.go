@@ -149,6 +149,10 @@ func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	a := claimApp(t)
 	holdStartingLease(t, a, graveler, claimOther)
+	before, err := a.store.Peek()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
@@ -161,6 +165,10 @@ func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, `refused: graveler is held by "Agent other"`) || !strings.HasSuffix(out, " (waited "+dur(25*time.Second)+")\n") ||
 		len(pauses) != len(want) || pauses[2] != want[2] {
 		t.Errorf("a claim that waited out: %q, exit %d, pauses %v", out, Code(err), pauses)
+	}
+	after, err := a.store.Peek()
+	if err != nil || after.UpdatedRevision != before.UpdatedRevision {
+		t.Errorf("refused claim tries rewrote state: rev %d -> %d (%v)", before.UpdatedRevision, after.UpdatedRevision, err)
 	}
 }
 

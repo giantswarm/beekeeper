@@ -65,6 +65,11 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 			t.Fatalf("contender lost existing quota limit: %+v %v", r, err)
 		}
 	}
+	w := &watcher{app: &app{store: store, now: now, readUsage: probe}, chores: true}
+	w.refreshUsage(ctx, config.Capacity{Providers: map[string]config.Provider{"fixture": {Usage: u}}})
+	if w.providerUsageErr["fixture"] != "" {
+		t.Fatalf("contended probe recorded as provider usage failure: %q", w.providerUsageErr["fixture"])
+	}
 	close(finish)
 	if err := <-done; err != nil {
 		t.Fatal(err)

@@ -350,6 +350,18 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			}
 		}
 	}
+	if cur, _ := dir.Get(res); cur != nil && !cur.Party().Is(me) {
+		if a.servedNode(res) {
+			if why, waits := a.serveModeWaitLine(res); waits {
+				return "", &claimRefusal{res: res, why: why}
+			}
+		}
+		st, err := a.store.Peek()
+		if err != nil {
+			return "", err
+		}
+		return "", a.claimHeld(st, me, sessions, *cur)
+	}
 	var msg string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		delete(st.LabIdle, res)
@@ -1154,17 +1166,26 @@ func (a *app) leaseHolderEnded(st *state.State, sessions []*claude.Session, h le
 	return true
 }
 
+var errNoEndedClaim = errors.New("no ended claim")
+
 // releaseEndedClaim checks under the state lock so a registration's handover
 // cannot race a stale release. Keep the event even if the subsequent claim is refused.
 func (a *app) releaseEndedClaim(res string, me state.Party, sessions []*claude.Session) error {
-	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		dir := lease.Dir(a.cfg.LeaseDir)
+	dir := lease.Dir(a.cfg.LeaseDir)
+	h, err := dir.Get(res)
+	if err != nil || h == nil || h.Party().Is(me) {
+		return err
+	}
+	if st, err := a.store.Peek(); err == nil && !a.leaseHolderEnded(st, sessions, *h) {
+		return nil
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		h, err := dir.Get(res)
-		if err != nil || h == nil {
+		if err != nil {
 			return nil, err
 		}
-		if h.Party().Is(me) || !a.leaseHolderEnded(st, sessions, *h) {
-			return nil, nil
+		if h == nil || h.Party().Is(me) || !a.leaseHolderEnded(st, sessions, *h) {
+			return nil, errNoEndedClaim
 		}
 		line, err := a.labRelease(dir, *h, me, false, "", true)
 		if err != nil {
@@ -1179,6 +1200,10 @@ func (a *app) releaseEndedClaim(res string, me state.Party, sessions []*claude.S
 		st.Released[res] = a.now.UTC()
 		return []state.Event{event(me, leaseReleaseGoneVerb, "released %s: holder %q's session ended%s", res, h.Name, line)}, nil
 	})
+	if errors.Is(err, errNoEndedClaim) {
+		return nil
+	}
+	return err
 }
 
 // claimHeldLine formats successful claims for both CLI and MCP.

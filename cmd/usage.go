@@ -1148,6 +1148,22 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 	if err := ctx.Err(); err != nil {
 		return usageReading{}, err
 	}
+	started := time.Now()
+	now := a.now
+	if now.IsZero() {
+		now = started
+	}
+	var cached usageReading
+	var haveCached bool
+	if a.store != nil {
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
+			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
+				applyQuotaForUsageFile(a.store, file, &cached, now)
+				return cached, nil
+			}
+			haveCached = true
+		}
+	}
 	unlock, err := a.usageRefreshLock(file)
 	if err != nil {
 		now := a.timeNow()
@@ -1159,14 +1175,9 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 	defer unlock()
 	// Recheck under the provider lock: another process may have published
 	// the reading between our caller deciding to refresh and admission.
-	started := time.Now()
-	now := a.now
-	if now.IsZero() {
-		now = started
-	}
-	var cached usageReading
-	var haveCached bool
 	if a.store != nil {
+		cached = usageReading{}
+		haveCached = false
 		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
 			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
 				applyQuotaForUsageFile(a.store, file, &cached, now)
@@ -1573,6 +1584,9 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 	var cached usageReading
 	if found, err := w.store.ReadFile(usageFile, &cached); err == nil && found &&
 		usageFresh(cached, k.Usage, now) && validateReadingAt(cached, k.Usage, now) == nil {
+		w.mu.Lock()
+		w.usageErr = ""
+		w.mu.Unlock()
 		return false
 	}
 	w.mu.Lock()
@@ -1587,6 +1601,9 @@ func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now tim
 	if found, err := w.store.ReadFile(usageProviderFile(name), &cached); err == nil && found &&
 		!w.useCodexRolloutUsage(u, cached) &&
 		usageFresh(cached, u, now) && validateReadingAt(cached, u, now) == nil {
+		w.mu.Lock()
+		delete(w.providerUsageErr, name)
+		w.mu.Unlock()
 		return false
 	}
 	w.mu.Lock()
@@ -1640,14 +1657,15 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
 			}
+			r, err := w.execUsageNow(ctx, usageProviderFile(name), p.Usage)
+			if err != nil && isProbeInProgress(err.Error()) || isProbeInProgress(r.Fallback) {
+				continue
+			}
 			w.mu.Lock()
 			if w.providerLastUsage == nil {
 				w.providerLastUsage = map[string]time.Time{}
 			}
 			w.providerLastUsage[name] = now
-			w.mu.Unlock()
-			r, err := w.execUsageNow(ctx, usageProviderFile(name), p.Usage)
-			w.mu.Lock()
 			if w.providerUsageErr == nil {
 				w.providerUsageErr = map[string]string{}
 			}
@@ -1663,18 +1681,18 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 		return
 	}
 	now := w.usageNow()
+	r, err := w.execUsageNow(ctx, usageFile, k.Usage)
+	if err != nil && isProbeInProgress(err.Error()) || isProbeInProgress(r.Fallback) {
+		return
+	}
 	w.mu.Lock()
 	w.lastUsage = now
-	w.mu.Unlock()
-	r, err := w.execUsageNow(ctx, usageFile, k.Usage)
 	if err != nil {
-		w.mu.Lock()
 		w.usageErr = err.Error()
 		w.mu.Unlock()
 		w.retainUsageStop(usageFile, err)
 		return
 	}
-	w.mu.Lock()
 	w.usageErr = r.Fallback
 	w.mu.Unlock()
 }
@@ -1709,7 +1727,7 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 // reportUsageFallback keeps unreadability visible even when starts can continue.
 // The keyed report feeds the guide's existing durable problem queue.
 func (w *watcher) reportUsageFallback(key, provider, failure string) {
-	if failure == "" {
+	if failure == "" || isProbeInProgress(failure) {
 		w.clear(key)
 		return
 	}
