@@ -1084,9 +1084,11 @@ func (a Agents) KindsOf(name string) []AgentKind {
 
 // AgentModelRule selects a model for a named task before provider selection.
 type AgentModelRule struct {
-	Match string `yaml:"match"`
-	Kind  string `yaml:"kind"`
-	Model string `yaml:"model"`
+	// Harness limits effort to this harness; model selection stays independent.
+	Harness string `yaml:"harness,omitempty"`
+	Match   string `yaml:"match"`
+	Kind    string `yaml:"kind"`
+	Model   string `yaml:"model"`
 	// Effort is the session's effort level (low, medium, high, xhigh, max);
 	// empty leaves it to a later rule or the harness default.
 	Effort string `yaml:"effort"`
@@ -1105,8 +1107,11 @@ func (a Agents) ModelFor(name, kind string) string {
 
 // EffortFor returns the first matching nonempty effort; empty keeps the
 // harness default.
-func (a Agents) EffortFor(name, kind string) string {
+func (a Agents) EffortFor(name, kind string, harness ...string) string {
 	for _, r := range a.Models {
+		if r.Harness != "" && (len(harness) == 0 || r.Harness != harness[0]) {
+			continue
+		}
 		if e := strings.TrimSpace(r.Effort); e != "" && r.matches(name, kind) {
 			return e
 		}
@@ -1485,6 +1490,8 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
+	// Effort is the session default when this capacity choice is selected.
+	Effort string `yaml:"effort,omitempty" json:"effort,omitempty"`
 	// Kinds limits this choice to task kinds; empty permits all kinds, but
 	// a choice on a self-hosted provider takes task kind worker (code
 	// changes) only when Kinds lists it.
@@ -4202,7 +4209,10 @@ func (c *Config) validateEach(report func(error)) {
 		}
 	}
 	for i, r := range c.Agents.Models {
-		if !ValidEffort(strings.TrimSpace(r.Effort)) {
+		if r.Harness != "" && !slices.Contains([]string{"claude", "codex", "agy", "omp"}, r.Harness) {
+			report(fmt.Errorf("agents.models[%d].harness: unknown harness %q", i, r.Harness))
+		}
+		if !ValidEffort(strings.TrimSpace(r.Effort)) || r.Harness == "agy" && r.Effort != "" {
 			report(fmt.Errorf("agents.models[%d].effort: invalid effort %q (low, medium, high, xhigh, max)", i, r.Effort))
 		}
 		if _, err := regexp.Compile(r.Match); err != nil {
@@ -4600,6 +4610,9 @@ func (c *Config) validateEach(report func(error)) {
 		p.validateNamedEach("capacity.providers."+name, report)
 	}
 	for i, ch := range c.Capacity.Choices {
+		if !ValidEffort(strings.TrimSpace(ch.Effort)) || ch.Harness == "agy" && ch.Effort != "" {
+			report(fmt.Errorf("capacity.choices[%d].effort: unsupported effort %q for %s", i, ch.Effort, ch.Harness))
+		}
 		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {
 			report(fmt.Errorf("capacity.choices[%d]: class and cost must be nonnegative, reviewReserve in [0, 100]", i))
 		}

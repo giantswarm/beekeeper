@@ -343,11 +343,6 @@ work, which takes no choice on a self-hosted provider.`,
 					}
 				}
 			}
-			level, err := a.startEffort(name, a.selectionKind, effortLevel)
-			if err != nil {
-				return err
-			}
-			effortLevel = level
 			harness = a.defaultStartHarness(harness, model)
 			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
 				if err := a.requireStartModel(name, ""); err != nil {
@@ -509,6 +504,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
+				choiceEffort := ""
 				if harness == harnessAuto {
 					ch, err := pickAutoChoice(v, force)
 					if err != nil {
@@ -527,6 +523,7 @@ work, which takes no choice on a self-hosted provider.`,
 					}
 					harness = ch.Harness
 					model = ch.Model
+					choiceEffort = ch.Effort
 				}
 				if over != "" {
 					if _, err := fmt.Fprintf(a.out, "dry run over %s (--force)\n", over); err != nil {
@@ -540,7 +537,11 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				level, err := a.selectedEffort(name, a.selectionKind, harness, model, effortLevel, choiceEffort)
+				if err != nil {
+					return err
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: level, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -554,6 +555,7 @@ work, which takes no choice on a self-hosted provider.`,
 			var timerLine string
 			for {
 				gateFrom := time.Now()
+				choiceEffort := ""
 				curHarness, curModel := origHarness, origModel
 				over, v, err := a.startGateWithOptions(cmd.Context(), name, curHarness, curModel, builds, force, exclude, kind)
 				gateWait := time.Since(gateFrom)
@@ -580,6 +582,13 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 					if ch.Harness == omp.Harness && a.ompStartBrokered(ch.Model) {
+						level, err := a.selectedEffort(name, a.selectionKind, ch.Harness, ch.Model, effortLevel, ch.Effort)
+						if err != nil {
+							return err
+						}
+						if err := cmd.Flags().Set("effort", level); err != nil {
+							return err
+						}
 						if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
 							return err
 						}
@@ -587,6 +596,7 @@ work, which takes no choice on a self-hosted provider.`,
 					}
 					harness = ch.Harness
 					model = ch.Model
+					choiceEffort = ch.Effort
 					choiceLine = ch.line()
 				} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
 					return err
@@ -620,6 +630,10 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
+				level, err := a.selectedEffort(name, a.selectionKind, harness, model, effortLevel, choiceEffort)
+				if err != nil {
+					return err
+				}
 				h, _ := harnessByName(harness)
 				err = a.withKindAdmission(cmd.Context(), name, func() error {
 					// Admission must precede worktree creation: a refused start
@@ -630,7 +644,7 @@ work, which takes no choice on a self-hosted provider.`,
 							return err
 						}
 					}
-					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
+					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
 					if byTimer {
 						if timerLine == "" {
 							var err error
@@ -806,6 +820,7 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer && !strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
 				return &choiceView{
 					Harness:  cand.Harness,
+					Effort:   cand.Effort,
 					Model:    cand.Model,
 					Provider: cand.Provider,
 					Bucket:   cand.Bucket,

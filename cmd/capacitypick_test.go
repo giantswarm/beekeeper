@@ -547,3 +547,38 @@ func TestCapacityPickPrioritizesBelowHalfPace(t *testing.T) {
 		t.Fatalf("underuse bypassed admission: %+v", got)
 	}
 }
+
+func TestAutoStartChoiceEffortDoesNotReachAgy(t *testing.T) {
+	r := newPickRig(t, `    - {harness: codex, model: gpt-x, effort: high}
+    - {harness: agy, model: gemini-x}
+`)
+	r.providersExtra = "    agy:\n      ceiling: 2\n      command: [read-agy]\n"
+	r.configure("")
+	if _, err := runGit(t.Context(), r.dir, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	brief := filepath.Join(r.dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalogDir := t.TempDir()
+	r.cfg.Codex.ConfigFile = filepath.Join(catalogDir, "config.toml")
+	if err := os.WriteFile(filepath.Join(catalogDir, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-x","supported_reasoning_levels":[{"effort":"high"}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, excluded := range []string{harnessAgy, codex.Harness} {
+		a, out := r.app(false)
+		c := a.agentStartCmd()
+		c.SetArgs([]string{"Picked", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag, "--exclude", excluded})
+		if err := c.Execute(); err != nil {
+			t.Fatalf("excluding %s: %v", excluded, err)
+		}
+		if excluded == harnessAgy {
+			if !strings.Contains(out.String(), `model_reasoning_effort="high"`) {
+				t.Fatalf("Codex effort missing: %s", out)
+			}
+		} else if !strings.Contains(out.String(), "choice: agy /") || strings.Contains(out.String(), "effort high") {
+			t.Fatalf("agy choice inherited effort: %s", out)
+		}
+	}
+}

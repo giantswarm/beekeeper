@@ -315,6 +315,7 @@ func providerVerdict(room int, blocks []string) string {
 
 // choiceCandidate is one evaluated entry of capacity.choices.
 type choiceCandidate struct {
+	Effort     string   `json:"effort,omitempty"`
 	Harness    string   `json:"harness"`
 	Model      string   `json:"model"`
 	Provider   string   `json:"provider"`
@@ -330,6 +331,7 @@ type choiceCandidate struct {
 
 // choiceView is the result of evaluating capacity.choices for a start.
 type choiceView struct {
+	Effort   string `json:"effort,omitempty"`
 	Harness  string `json:"harness,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
@@ -389,7 +391,7 @@ func (c *choiceView) line() string {
 		if c.Review {
 			s += ", review"
 		}
-		return s + ")"
+		return s + effortText(c.Effort) + ")"
 	}
 	if c.Reason != "" {
 		return noProblems + " (" + c.Reason + ")"
@@ -1567,7 +1569,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
-			Class: ch.Class, Cost: ch.Cost, Family: ch.Family,
+			Class: ch.Class, Cost: ch.Cost, Family: ch.Family, Effort: ch.Effort,
 			Harness:  ch.Harness,
 			Model:    ch.Model,
 			Provider: provName,
@@ -1604,6 +1606,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 				bestSubscription, bestUnderused, bestBehind, bestRate, bestCost = subscription, underused, behind, rate, ch.Cost
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
+				cv.Effort = ch.Effort
 				cv.Provider = provName
 				cv.Bucket = bucketName
 			}

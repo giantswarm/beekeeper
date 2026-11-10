@@ -2584,6 +2584,30 @@ and a crash both start a fresh session.
   When `capacity.usage.command` is configured, beekeeper runs that command (bounded by
   `capacity.usage.timeout`, default `15s`) to read the subscription's 5-hour and 7-day usage
   windows as JSON on stdout (`{"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}`, either window optional unless its bands or `highPercent` are configured), caches the reading in `usage.json` for `capacity.usage.every` (default `5m`, re-reading at once once a window's `resetsAt` passes), and derives `ceiling` from the ascending `{upTo, ceiling}` bands in `capacity.usage.fiveHour` and `capacity.usage.sevenDay` (taking the lower `ceiling` when both windows have bands, and `0` at or past a window's last `upTo`). `beekeeper capacity` appends `; usage 5h …, 7d …` to its `capacity:` line and includes `usage` in `--json`; `beekeeper snapshot` prints `usage: …` (`--json` `usage`); `beekeeper watch` prints `USAGE: …` every `capacity.usage.reportEvery` (default `30m`, negative turns periodic lines off, `watch --once` prints once). Once `fiveHour.usedPercent` reaches `capacity.usage.highPercent` (default `95`), `watch` emits `USAGE HIGH` once (`ENDED USAGE HIGH` once reset), tells each running busy worker once per window episode to finish its current step and park, and gates `capacity`, unforced `agents start`, unforced `agents resume` (`--force` overrides) and `watch`'s `autoResume` until `fiveHour.resetsAt`.
+
+Capacity choices may set a session `effort`, independently for each harness:
+
+```yaml
+capacity:
+  choices:
+    - {harness: codex, model: gpt-6-astra, effort: high}
+    - {harness: agy, model: example-model}
+agents:
+  models:
+    - {match: '.*', kind: review, harness: codex, effort: high}
+```
+
+An explicit `agents start --effort` wins, followed by the first matching effort
+rule, then the selected capacity choice's effort. A rule's optional `harness`
+limits its effort; its model selector remains independent of harness selection.
+Unscoped rules retain their existing behavior. Local and SSH starts resolve the
+effort after choosing the harness, including dry runs and quota retries. Codex
+checks the selected model's `supported_reasoning_levels` in `models_cache.json`
+beside `codex.configFile`; missing, unreadable or unknown model metadata refuses
+the start with a catalog diagnostic. Refresh the catalog with Codex before
+starting with an effort setting. agy choices must omit effort. Starts record the
+resolved effort, and resumed sessions retain it.
+
   `capacity.providers.claude: {}` defaults to `[claude, -p, /usage, --output-format, json]`.
   This local command uses no model tokens and needs no credential reader or status line. It runs
   under beekeeper's state directory at the provider's `every` (default `5m`), with its `timeout`.
