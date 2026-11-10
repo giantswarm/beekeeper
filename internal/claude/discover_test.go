@@ -174,9 +174,61 @@ func TestDiscoverFindsAWokenWorkerUnderItsID(t *testing.T) {
 	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", "woken"), "arguments": ""} {
 		got := discoverAt(t, root, records)
 		w := got[wokenPID]
-		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA || !w.Background {
+		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA || w.JobID != "dddddddd" || !w.Background {
 			t.Errorf("from its %s: sessions = %v, worker = %+v", from, got, w)
 		}
+	}
+}
+
+func TestDiscoverDropsStalePredecessorAfterResume(t *testing.T) {
+	const (
+		origID      = "7437da00-35de-44ef-b0fd-ac788ab594b7"
+		origShortID = "7437da00"
+		resumedID   = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
+		stalePID    = 4102140
+		resumedPID  = 603457
+	)
+	for _, tc := range []struct {
+		name      string
+		resumedID string
+	}{
+		{name: "same session id", resumedID: origID},
+		{name: "rebound session id", resumedID: resumedID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Claude.ProjectsDir = t.TempDir()
+			cfg.Claude.SessionsDir = t.TempDir()
+			cfg.Claude.DesktopDir = t.TempDir()
+			for _, rec := range []struct {
+				pid       int
+				sessionID string
+				name      string
+				ticks     int64
+			}{
+				{pid: stalePID, sessionID: origID, name: "Guide run 51", ticks: 100},
+				{pid: resumedPID, sessionID: tc.resumedID, name: "beekeeper guide run 51", ticks: 200},
+			} {
+				raw := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"name":%q,"jobId":%q,"procStart":"%d"}`,
+					rec.pid, rec.sessionID, rec.name, origShortID, rec.ticks)
+				if err := os.WriteFile(filepath.Join(cfg.Claude.SessionsDir, strconv.Itoa(rec.pid)+".json"), []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tab := &proc.Table{
+				ByPID: map[int]*proc.Process{
+					stalePID:   {PID: stalePID, Comm: cliComm, StartTicks: 100, Args: []string{cliComm, "--session-id", origID, "-n", "Guide run 51"}},
+					resumedPID: {PID: resumedPID, Comm: cliComm, StartTicks: 200, Args: []string{cliComm, "--resume", origID}},
+				},
+			}
+			got := Discover(cfg, tab, time.Now())
+			if len(got) != 1 || got[0].PID != resumedPID || got[0].ID != tc.resumedID || got[0].Name != "beekeeper guide run 51" {
+				t.Fatalf("Discover = %+v, want only resumed PID %d", got, resumedPID)
+			}
+			if name := RecordName(cfg, tab, tc.resumedID); name != "beekeeper guide run 51" {
+				t.Fatalf("RecordName(%s) = %q, want %q", tc.resumedID, name, "beekeeper guide run 51")
+			}
+		})
 	}
 }
 

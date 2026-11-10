@@ -226,19 +226,50 @@ func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
 			clis[p.PID] = true
 		}
 	}
-	byKey := map[string]*Session{}
-	for pid := range clis {
+	pids := slices.Collect(maps.Keys(clis))
+	slices.SortFunc(pids, func(a, b int) int { return compareProcessesDesc(t.ByPID[a], t.ByPID[b]) })
+	var out []*Session
+	for _, pid := range pids {
 		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now)
-		// A restarted CLI can overlap its predecessor for a moment:
-		// the newest process is the session.
-		if prev, ok := byKey[s.Key()]; ok && prev.Started.After(s.Started) {
+		// A restarted or resumed CLI can overlap its predecessor for a
+		// moment: the newest process is the session.
+		if slices.ContainsFunc(out, func(newer *Session) bool { return newer.supersedes(s) }) {
 			continue
 		}
-		byKey[s.Key()] = s
+		out = append(out, s)
 	}
-	out := slices.Collect(maps.Values(byKey))
-	slices.SortFunc(out, func(a, b *Session) int { return b.Started.Compare(a.Started) })
 	return out
+}
+
+// compareProcessesDesc orders processes newest first: by Start time, then
+// StartTicks, then PID.
+func compareProcessesDesc(a, b *proc.Process) int {
+	if a == nil || b == nil {
+		return 0
+	}
+	if c := b.Start.Compare(a.Start); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(b.StartTicks, a.StartTicks); c != 0 {
+		return c
+	}
+	return cmp.Compare(b.PID, a.PID)
+}
+
+// supersedes reports whether a newer CLI session s replaces old in the
+// process table: they share a key, a session id, a background job id, or
+// one resumed the other.
+func (s *Session) supersedes(old *Session) bool {
+	if s.Key() == old.Key() {
+		return true
+	}
+	if s.ID != "" && s.ID == old.ID {
+		return true
+	}
+	if s.JobID != "" && s.JobID == old.JobID {
+		return true
+	}
+	return s.resumedFrom(old.Party()) || old.resumedFrom(s.Party())
 }
 
 // cliComm is the claude binary's process name.
@@ -359,6 +390,40 @@ func ownID(args []string) string {
 	return ""
 }
 
+// resumeID is the session id --resume or -r names on args, "" for none.
+func resumeID(args []string) string {
+	for _, flag := range []string{"--resume", "-r"} {
+		if v := argValue(args, flag); v != "" && !strings.HasPrefix(v, "-") {
+			if id, ok := strings.CutSuffix(filepath.Base(v), ".jsonl"); ok {
+				return id
+			}
+			return v
+		}
+	}
+	return ""
+}
+
+// ptyJobID is the background job id from the daemon's pty socket path
+// (<dir>/pty/<jobID>.sock) on p or its bg-pty-host ancestor.
+func ptyJobID(t *proc.Table, p *proc.Process) string {
+	if t == nil || p == nil {
+		return ""
+	}
+	for _, a := range append([]*proc.Process{p}, t.Ancestors(p.PID)...) {
+		if a == nil {
+			continue
+		}
+		for _, flag := range []string{"--bg-pty-host", "--bg-spare"} {
+			if sock := argValue(a.Args, flag); sock != "" {
+				if id, ok := strings.CutSuffix(filepath.Base(sock), ".sock"); ok {
+					return id
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // cliRecord is the part of the record a running CLI keeps of the session it
 // runs (<sessions dir>/<pid>.json) that beekeeper reads. It names the session
 // the process runs now: a spare's, or a resumed CLI's that went on under a
@@ -389,49 +454,81 @@ func readCLIRecord(cfg *config.Config, p *proc.Process) (*cliRecord, bool) {
 
 // RecordName is the name in the record of the running CLI of session id, ""
 // for none: the title a `claude --bg` worker was started under, which the
-// commands its tools run do not inherit.
+// commands its tools run do not inherit. When a restarted CLI overlaps its
+// predecessor, the newest process wins.
 func RecordName(cfg *config.Config, t *proc.Table, id string) string {
+	var best *proc.Process
+	var name string
 	for _, p := range t.ByPID {
 		if !isCLI(p) && !isSpare(p) {
 			continue
 		}
 		if r, ok := readCLIRecord(cfg, p); ok && r.SessionID == id {
-			return r.Name
+			if best == nil || compareProcessesDesc(p, best) < 0 {
+				best, name = p, r.Name
+			}
 		}
 	}
-	return ""
+	return name
 }
 
 // ResumedSession reports the prior session id (--resume) and background job
 // id (jobId) of the running CLI of session id, when a resumed CLI went on
 // under a new session id.
 func ResumedSession(cfg *config.Config, t *proc.Table, id string) (prevID, jobID string) {
+	var best *proc.Process
+	var bestRec *cliRecord
 	for _, p := range t.ByPID {
 		if !isCLI(p) && !isSpare(p) {
 			continue
 		}
-		if r, ok := readCLIRecord(cfg, p); ok && r.SessionID == id {
-			prev := ownID(p.Args)
-			if prev == id {
-				prev = ""
+		if r, ok := readCLIRecord(cfg, p); ok {
+			if r.SessionID == id && (best == nil || compareProcessesDesc(p, best) < 0) {
+				best, bestRec = p, r
 			}
-			return prev, r.JobID
+			continue
+		}
+		if isCLI(p) && ownID(p.Args) == id && (best == nil || compareProcessesDesc(p, best) < 0) {
+			best, bestRec = p, nil
 		}
 	}
-	return "", ""
+	if best == nil {
+		return "", ""
+	}
+	prev := resumeID(best.Args)
+	if prev == "" {
+		prev = ownID(best.Args)
+	}
+	if prev == id {
+		prev = ""
+	}
+	if bestRec != nil {
+		jobID = bestRec.JobID
+	}
+	if jobID == "" {
+		jobID = ptyJobID(t, best)
+	}
+	return prev, jobID
 }
 
 // newSession builds the session process p runs: its record names it, else
 // its arguments and environment do.
 func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
 	argID := ownID(p.Args)
+	resID := resumeID(p.Args)
 	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: argID, Background: underDaemon(t, p)}
+	if resID != "" && resID != s.ID {
+		s.ResumedID = resID
+	}
 	s.Name = argValue(p.Args, "--name")
 	if s.Name == "" {
 		s.Name = argValue(p.Args, "-n")
 	}
 	if rec != nil {
-		if argID != "" && argID != rec.SessionID {
+		switch {
+		case resID != "" && resID != rec.SessionID:
+			s.ResumedID = resID
+		case argID != "" && argID != rec.SessionID:
 			s.ResumedID = argID
 		}
 		s.ID = rec.SessionID
@@ -439,6 +536,9 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 		if rec.Name != "" {
 			s.Name = rec.Name
 		}
+	}
+	if s.JobID == "" {
+		s.JobID = ptyJobID(t, p)
 	}
 	s.Peer = s.Name
 	if env, err := t.Environ(p.PID); err == nil {
