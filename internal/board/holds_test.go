@@ -12,6 +12,13 @@ const (
 	heldSub  = "o/r#16"
 )
 
+const (
+	otherAssignee  = "pat"
+	assignedOther  = "assigned to pat"
+	inheritedOther = "assigned to pat (sub-issue of o/r#15)"
+	inProgressStep = "In Progress"
+)
+
 // A held epic, one with an open recorded blocker, is offered as itself and
 // skipped naming its blocker, never through its sub-issues; a board item
 // under it is skipped naming the epic, whatever step offers it, except the
@@ -69,7 +76,7 @@ func TestRankSkipsSubIssuesUnderEpicAssignedOutsidePeople(t *testing.T) {
 	for i := range snap.Items {
 		switch snap.Items[i].Ref {
 		case heldEpic:
-			snap.Items[i].Assignees = []string{"pat"}
+			snap.Items[i].Assignees = []string{otherAssignee}
 		case heldSub:
 			snap.Items[i].Parent = heldEpic
 		case "o/r#13":
@@ -83,13 +90,13 @@ func TestRankSkipsSubIssuesUnderEpicAssignedOutsidePeople(t *testing.T) {
 		}
 		got[c.Ref] = c
 	}
-	if c := got[heldEpic]; c.Skip != "assigned to pat" {
+	if c := got[heldEpic]; c.Skip != assignedOther {
 		t.Errorf("assigned epic: skip %q", c.Skip)
 	}
-	if c := got[heldSub]; c.Step != backlogStep || c.Skip != "assigned to pat (sub-issue of o/r#15)" {
+	if c := got[heldSub]; c.Step != backlogStep || c.Skip != inheritedOther {
 		t.Errorf("sub-issue of assigned epic: %s, skip %q", c.Step, c.Skip)
 	}
-	if c := got["o/r#13"]; c.Step != backlogStep || c.Skip != "assigned to pat (sub-issue of o/r#15)" {
+	if c := got["o/r#13"]; c.Step != backlogStep || c.Skip != inheritedOther {
 		t.Errorf("nested sub-issue of assigned epic: %s, skip %q", c.Step, c.Skip)
 	}
 	if c := got["o/r#10"]; c.Skip != "" {
@@ -105,14 +112,14 @@ func TestRankInheritedAssignments(t *testing.T) {
 		own, parent, ancestor []string
 		want                  string
 	}{
-		{"shared ancestor", nil, nil, []string{"ME", "pat"}, ""},
-		{"own assignment", []string{"Me"}, nil, []string{"pat"}, ""},
-		{"own teammate", []string{"pat"}, nil, []string{"Me"}, "assigned to pat"},
-		{"own shared assignment", []string{"Me", "pat"}, nil, []string{"Me"}, "assigned to pat"},
-		{"teammate ancestor", nil, nil, []string{"pat"}, "assigned to pat (sub-issue of o/r#15)"},
-		{"nearer own epic", nil, []string{"Me"}, []string{"pat"}, ""},
-		{"nearer shared epic", nil, []string{"pat", "mE"}, []string{"pat"}, ""},
-		{"nearer teammate epic", nil, []string{"pat"}, []string{"Me"}, "assigned to pat (sub-issue of o/r#16)"},
+		{"shared ancestor", nil, nil, []string{"ME", otherAssignee}, ""},
+		{"own assignment", []string{"Me"}, nil, []string{otherAssignee}, ""},
+		{"own teammate", []string{otherAssignee}, nil, []string{"Me"}, assignedOther},
+		{"own shared assignment", []string{"Me", otherAssignee}, nil, []string{"Me"}, assignedOther},
+		{"teammate ancestor", nil, nil, []string{otherAssignee}, inheritedOther},
+		{"nearer own epic", nil, []string{"Me"}, []string{otherAssignee}, ""},
+		{"nearer shared epic", nil, []string{otherAssignee, "mE"}, []string{otherAssignee}, ""},
+		{"nearer teammate epic", nil, []string{otherAssignee}, []string{"Me"}, "assigned to pat (sub-issue of o/r#16)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := snapshot(t)
@@ -127,7 +134,7 @@ func TestRankInheritedAssignments(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("candidates = %+v, want one In Progress item", got)
 			}
-			if c := got[0]; c.Step != "In Progress" || c.Skip != tc.want {
+			if c := got[0]; c.Step != inProgressStep || c.Skip != tc.want {
 				t.Errorf("candidate step %q, skip %q; want In Progress, %q", c.Step, c.Skip, tc.want)
 			}
 		})

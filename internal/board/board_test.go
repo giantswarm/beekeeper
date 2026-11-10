@@ -40,7 +40,7 @@ func days(n int) time.Time { return now.Add(-time.Duration(n) * 24 * time.Hour) 
 func order() []config.BoardStep {
 	return []config.BoardStep{
 		{Name: "page", Kind: []string{"alert"}},
-		{Name: "In Progress", Status: []string{"in progress"}, SubIssues: true},
+		{Name: inProgressStep, Status: []string{"in progress"}, SubIssues: true},
 		{Name: "blocker cleared", Status: []string{"blocked"}, Unblocked: true},
 		{Name: "Up Next", Status: []string{typedNext}},
 		{Name: bugStep, Kind: []string{bugStep}},
@@ -63,7 +63,7 @@ func fixture() []Item {
 	}
 	stale := it(1, inProgress, "", 800, 400)
 	theirs := it(2, inProgress, "", 30, 1)
-	theirs.Assignees = []string{"pat"}
+	theirs.Assignees = []string{otherAssignee}
 	mine := it(3, inProgress, "", 30, 1)
 	mine.Assignees = []string{"Me"}
 	waiting := it(19, inProgress, "", 30, 1)
@@ -440,7 +440,7 @@ func node(status, kind, content string) string {
 func readBoard() config.Board {
 	return config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
 		{Name: "epics", Status: []string{"in progress"}, Kind: []string{defaultEpicKind}, SubIssues: true},
-		{Name: "In Progress", Status: []string{"progress"}},
+		{Name: inProgressStep, Status: []string{"progress"}},
 		{Name: "queue", Search: "repo:o/q"},
 		{Name: "Up Next", Status: []string{"next"}},
 	}}
@@ -449,7 +449,7 @@ func readBoard() config.Board {
 func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	f := &fakeGH{t: t, pages: []string{
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"C"},"nodes":[` +
-			node(inProgress, "null", issue(1, `,"assignees":{"nodes":[{"login":"pat"}]}`)) + "," +
+			node(inProgress, "null", issue(1, `,"assignees":{"nodes":[{"login":otherAssignee}]}`)) + "," +
 			node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":3,"completed":1}`)) + "," +
 			`{"status":{"name":"Up Next ➡️"},"content":{}}]}}}}}`,
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[` +
