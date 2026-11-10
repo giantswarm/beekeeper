@@ -54,9 +54,11 @@ const (
 type exitError struct {
 	code int
 	msg  string
+	err  error
 }
 
 func (e *exitError) Error() string { return e.msg }
+func (e *exitError) Unwrap() error { return e.err }
 
 // Code returns the exit code err asks for.
 func Code(err error) int {
@@ -366,15 +368,183 @@ func (a *app) callerSession() (state.Party, error) {
 			p.Name = r.Title
 		}
 	}
+	var t *proc.Table
 	if p.Name == "" {
-		if t, err := plat.Machine.Processes(); err == nil {
+		if tbl, err := plat.Machine.Processes(); err == nil {
+			t = tbl
 			p.Name = claude.RecordName(a.cfg, t, p.Session)
 		}
 	}
+	a.rebindCallerSession(t, &p)
 	if p.Name == "" {
 		p.Name = p.Session
 	}
 	return p, nil
+}
+
+// rebindCallerSession keeps a resumed session's recorded role and start bound
+// when its CLI came back under a new session id, and keeps its numbered run
+// title when the resumed CLI derived another.
+func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
+	if a.store == nil || p.Session == "" {
+		return
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return
+	}
+	var prevID, jobID string
+	if !hasStateSession(st, p.Session) && hasAnyStateSession(st) && hasCLISessionRecords(a.cfg) {
+		if t == nil {
+			t, _ = plat.Machine.Processes()
+		}
+		if t != nil {
+			prevID, jobID = claude.ResumedSession(a.cfg, t, p.Session)
+		}
+	}
+	var desktopInitID string
+	var priorIDs []string
+	if p.HostSession != "" {
+		desktopInitID, _ = strings.CutPrefix(p.HostSession, "local_")
+		if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok {
+			priorIDs = r.PriorCLISessionIDs
+		}
+	}
+	oldIDs := resumedStateSessions(st, p.Session, prevID, jobID, desktopInitID, priorIDs)
+	needsHost := p.HostSession != "" && slices.ContainsFunc(roles, func(rl role) bool {
+		h := rl.get(st).Holder
+		return h != nil && h.Session == p.Session && h.HostSession == ""
+	})
+	if len(oldIDs) > 0 || needsHost {
+		_ = a.store.UpdateWithin(100*time.Millisecond, func(ust *state.State) ([]state.Event, error) {
+			for _, oldID := range oldIDs {
+				rebindSessionState(ust, oldID, p.Session, p.HostSession)
+			}
+			if needsHost {
+				rebindSessionState(ust, p.Session, p.Session, p.HostSession)
+			}
+			st = ust
+			return nil, nil
+		})
+	}
+	for _, rl := range roles {
+		if h := rl.get(st).Holder; h != nil && h.Is(*p) && rl.runOf(h.Name) > 0 && rl.runOf(p.Name) == 0 {
+			p.Name = h.Name
+		}
+	}
+}
+
+func hasStateSession(st *state.State, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, s := range st.Starts {
+		if s.Session == id {
+			return true
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Session == id {
+			return true
+		}
+	}
+	for _, rl := range roles {
+		r := rl.get(st)
+		if r.Holder != nil && r.Holder.Session == id {
+			return true
+		}
+		if r.Relay != nil && (r.Relay.From.Session == id || r.Relay.To.Session == id) {
+			return true
+		}
+		for _, rf := range r.Relieved {
+			if rf.Party.Session == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasAnyStateSession(st *state.State) bool {
+	for _, s := range st.Starts {
+		if s.Session != "" {
+			return true
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Session != "" {
+			return true
+		}
+	}
+	for _, rl := range roles {
+		r := rl.get(st)
+		if r.Holder != nil && r.Holder.Session != "" {
+			return true
+		}
+		if r.Relay != nil && (r.Relay.From.Session != "" || r.Relay.To.Session != "") {
+			return true
+		}
+		for _, rf := range r.Relieved {
+			if rf.Party.Session != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasCLISessionRecords(cfg *config.Config) bool {
+	if cfg == nil || cfg.Claude.SessionsDir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(cfg.Claude.SessionsDir)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(entries, func(e os.DirEntry) bool {
+		return !e.IsDir() && strings.HasSuffix(e.Name(), ".json")
+	})
+}
+
+func resumedStateSessions(st *state.State, curID, prevID, jobID, desktopInitID string, priorIDs []string) []string {
+	match := func(id string) bool {
+		if id == "" || id == curID {
+			return false
+		}
+		if prevID != "" && id == prevID {
+			return true
+		}
+		if jobID != "" && len(id) >= 8 && strings.HasPrefix(id, jobID) {
+			return true
+		}
+		return desktopInitID != "" && (id == desktopInitID || slices.Contains(priorIDs, id))
+	}
+	var out []string
+	add := func(id string) {
+		if match(id) && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	for _, s := range st.Starts {
+		add(s.Session)
+	}
+	for _, ag := range st.Agents {
+		add(ag.Session)
+	}
+	for _, rl := range roles {
+		r := rl.get(st)
+		if r.Holder != nil {
+			add(r.Holder.Session)
+		}
+		if r.Relay != nil {
+			add(r.Relay.From.Session)
+			add(r.Relay.To.Session)
+		}
+		for _, rf := range r.Relieved {
+			add(rf.Party.Session)
+		}
+	}
+	return out
 }
 
 // envParty is the session an environment names, read with get: an omp, agy or

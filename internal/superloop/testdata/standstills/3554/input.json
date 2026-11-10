@@ -1,0 +1,19 @@
+{
+  "Planner": {
+    "Now": "2026-11-08T17:00:00Z"
+  },
+  "Agents": [
+    {
+      "name": "worker-1",
+      "session": "session-1",
+      "task": "task",
+      "park": {
+        "on": "o/r#1",
+        "at": "2026-11-08T17:00:00Z",
+        "continuation": [
+          "event"
+        ]
+      }
+    }
+  ]
+}

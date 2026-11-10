@@ -35,6 +35,8 @@ const (
 	stopGuide  = "7c3d4e5f-0000-4000-8000-000000000003"
 )
 
+const unitInactive = "inactive"
+
 // haltLauncher is systemd --user with the units in active running and
 // the installed units in installed; it records the stops and the starts.
 type haltLauncher struct {
@@ -78,7 +80,7 @@ func (l *haltLauncher) Stop(_ context.Context, name string) error {
 	l.stopped = append(l.stopped, name)
 	l.active = slices.DeleteFunc(l.active, func(u string) bool { return u == name })
 	if _, ok := l.installed[name]; ok {
-		l.installed[name] = "inactive"
+		l.installed[name] = unitInactive
 	}
 	return nil
 }

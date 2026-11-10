@@ -157,7 +157,7 @@ func (l *agyTestLauncher) Stop(_ context.Context, name string) error {
 	defer l.mu.Unlock()
 	l.stopped = append(l.stopped, name)
 	if l.states != nil {
-		l.states[name] = "inactive"
+		l.states[name] = unitInactive
 	}
 	return nil
 }

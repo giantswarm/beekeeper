@@ -37,6 +37,8 @@ type Ops struct {
 	// Vaults are the shared vaults besides Vault that an op:// reference
 	// may read from (copy, compare, fingerprint); writes go to Vault alone.
 	Vaults []string
+	// MoveVaults are the allowed destinations for whole-item moves only.
+	MoveVaults []string
 	// Token is the vault's service account token, which only op's own
 	// environment gets; empty refuses every op:// reference.
 	Token string

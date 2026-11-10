@@ -869,6 +869,8 @@ type AppCreated struct {
 // existed. A session cannot add itself: its id is only ever written here by
 // the start that created it.
 type Start struct {
+	// Kind is the immutable task kind selected when the session starts.
+	Kind string `json:"kind,omitempty"`
 	// Successor redirects late messages after a fresh continuation took the task.
 	Successor *Party `json:"successor,omitempty"`
 	Effort    string `json:"effort,omitempty"`

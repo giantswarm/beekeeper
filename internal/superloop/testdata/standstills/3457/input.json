@@ -1,0 +1,133 @@
+{
+  "Planner": {
+    "Now": "2026-11-08T17:00:00Z"
+  },
+  "Room": 20,
+  "Deliveries": [
+    {
+      "ref": "o/r#1",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#2",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#3",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#4",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#5",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#6",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#7",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#8",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#9",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#10",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#11",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#12",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#13",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#14",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#15",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#16",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#17",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#18",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#19",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#20",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#21",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#22",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#23",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#24",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    },
+    {
+      "ref": "o/r#25",
+      "step": "fixing",
+      "since": "2026-11-08T17:00:00Z"
+    }
+  ]
+}

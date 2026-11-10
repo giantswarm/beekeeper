@@ -70,11 +70,24 @@ const (
 // loopEventVerbs are the events the loop's rules act on.
 var loopEventVerbs = []string{superloop.VerbDone, superloop.VerbReport, superloop.VerbProblem, superloop.VerbPark}
 
+// executablePath returns the running binary's filesystem path, stripping the
+// Linux " (deleted)" marker when an in-place update or rollback replaced it.
+func executablePath() (string, error) {
+	if b := platform.RunningBinary(); b != nil && b.Path != "" {
+		return b.Path, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(exe, " (deleted)"), nil
+}
+
 // beekeeperRun runs this beekeeper binary with args for the loop: its
 // output (stdout, then stderr) and exit code. An error is a run that did
 // not exit.
 var beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
-	bin, err := os.Executable()
+	bin, err := executablePath()
 	if err != nil {
 		return "", 0, err
 	}
@@ -127,10 +140,7 @@ var loopBroker = func(ctx context.Context) (string, error) {
 	if err != nil {
 		return "no broker runs", nil //nolint:nilerr // no broker unit: nothing to put on the new binary
 	}
-	exe, err := os.Executable()
-	if b := platform.RunningBinary(); b != nil {
-		exe, err = b.Path, nil
-	}
+	exe, err := executablePath()
 	if err != nil {
 		return "", err
 	}
@@ -385,6 +395,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 
 func (a *app) supervisorLoopCmd() *cobra.Command {
 	var once, dryRun bool
+	var recordDir string
 	c := &cobra.Command{
 		Use:   "loop [--once] [--dry-run]",
 		Short: "Run the supervisor: a deterministic loop over beekeeper's events",
@@ -635,10 +646,9 @@ Ownership decides what the loop does with a parked pull request, before any
 review, go or forward:
 
   - outside github.allowedOrgs: nothing at all, not even a read
-  - in supervisor.ownership.never, or its title, head branch or a changed
-    path names a repository there: nothing, whatever else says
-    (a repository named github needs its qualified owner/github in metadata;
-    ordinary GitHub workflow paths and action names do not identify it)
+  - its repository matches supervisor.ownership.never: nothing, whatever
+    else says; references in titles, descriptions, branches, changed paths
+    or comments do not affect ownership
   - parked before the loop's first start: nothing; a park from before is
     no request for its review
   - opened by a login outside supervisor.ownership.authors (default: the
@@ -672,12 +682,16 @@ SUPERVISOR WOULD <KIND> and takes none: it runs read-only queries, logs nothing,
 fires no timer and takes no lock, so it can run beside the loop.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if recordDir != "" && !dryRun {
+				return fmt.Errorf("--record requires --dry-run")
+			}
 			if dryRun {
-				return a.dryRunSupervisorLoop(cmd.Context())
+				return a.dryRunSupervisorLoop(cmd.Context(), recordDir)
 			}
 			return a.runSupervisorLoop(cmd.Context(), once)
 		},
 	}
+	c.Flags().StringVar(&recordDir, "record", "", "write an anonymized planner input.json (requires --dry-run)")
 	c.Flags().BoolVar(&once, "once", false, "one pass, then exit")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: read-only capacity and board queries, no log line or timer")
 	return c
@@ -685,6 +699,8 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // supervisorLoop is one run of the loop: what it said once.
 type supervisorLoop struct {
+	recordDir string
+	recording *loopRecording
 	lifecycle *loopLifecycle
 	reviewDir string // explicit agents review checkout
 	mu        sync.Mutex
@@ -732,6 +748,8 @@ type supervisorLoop struct {
 	inFlight     map[string]bool
 	mergeActions sync.WaitGroup
 	passActions  sync.WaitGroup
+	actionCtx    context.Context
+	actionCancel context.CancelFunc
 	actionErr    error
 	completed    map[string]bool
 	// login is the login gh acts as, once read; teams the team files'
@@ -934,6 +952,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		l.loadCache()
 	}
 	defer func() {
+		l.cancelBackgroundActions()
 		cancel()
 		l.passActions.Wait()
 		l.mergeActions.Wait()
@@ -970,20 +989,26 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 				}
 				continue
 			}
-			if !lockBusy(err) || once {
+			fenced := errors.Is(err, state.ErrRecoveryWriterFenced) || state.WriterFenced(a.store)
+			if (!lockBusy(err) && !fenced) || once {
 				return err
 			}
-			// A busy state lock fails this pass, not the loop: exiting
-			// would cancel every action still running (each then fails
-			// with context canceled and backs off for up to an hour), and
-			// the next pass reads the state afresh.
-			l.sayOnce("state lock busy", "SUPERVISOR LOOP pass skipped, retrying next pass: %v", err)
+			// A busy state lock or recovery writer fence fails this pass, not
+			// the loop: exiting on a busy lock would cancel every action still
+			// running, and a fenced candidate must stay alive long enough to
+			// re-execute the restored binary on the next tick.
+			if fenced {
+				l.sayOnce("recovery writer fenced", "SUPERVISOR LOOP pass skipped while binary recovery finishes: %v", err)
+			} else {
+				l.sayOnce("state lock busy", "SUPERVISOR LOOP pass skipped, retrying next pass: %v", err)
+			}
 			if !l.waitNextPass(ctx) {
 				return nil
 			}
 			continue
 		}
 		l.clearSaid("state lock busy")
+		l.clearSaid("recovery writer fenced")
 		if !once && !l.dryRun {
 			l.saveCache()
 		}
@@ -1045,7 +1070,7 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 				l.bin = b
 				l.mu.Unlock()
 			}
-			if b != nil && b.Replaced() && !l.reexecFailed {
+			if b != nil && b.Replaced() && !l.reexecFailed && (!l.reexecBusy() || (l.a != nil && state.WriterFenced(l.a.store))) {
 				return true
 			}
 		}
@@ -1066,13 +1091,25 @@ const loopUnit = "beekeeper-supervisor-loop.service"
 // dryRunSupervisorLoop is one pass that says what it would take: it runs
 // only read-only queries, logs nothing, fires no timer and takes no lock,
 // so it can run beside the loop.
-func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
+func (a *app) dryRunSupervisorLoop(ctx context.Context, recordDirs ...string) error {
 	l, err := a.newSupervisorLoop(true)
 	if err != nil {
 		return err
 	}
+	if len(recordDirs) > 0 {
+		l.recordDir = recordDirs[0]
+	}
 	a.now = time.Now()
-	return l.pass(ctx)
+	if err := l.pass(ctx); err != nil {
+		return err
+	}
+	if l.recordDir != "" {
+		if l.recording == nil {
+			return fmt.Errorf("no complete planner input to record")
+		}
+		return writeLoopRecording(l.recordDir, *l.recording)
+	}
+	return nil
 }
 
 // newSupervisorLoop logs the loop's start, unless it is a dry run, and
@@ -1109,6 +1146,41 @@ func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*supervisorLoo
 	return l, nil
 }
 
+func (l *supervisorLoop) reexecBusy() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.inFlight) > 0
+}
+
+func (l *supervisorLoop) backgroundContext(ctx context.Context) context.Context {
+	if l == nil {
+		return ctx
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.actionCtx == nil || l.actionCtx.Err() != nil {
+		l.actionCtx, l.actionCancel = context.WithCancel(ctx)
+	}
+	return l.actionCtx
+}
+
+func (l *supervisorLoop) cancelBackgroundActions() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	cancel := l.actionCancel
+	l.actionCtx = nil
+	l.actionCancel = nil
+	l.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // reexec re-executes the loop on the binary installed over its path at a
 // quiet point (no claim in flight). It returns true when the replacement
 // binary was executed, so the caller ends the pass on the old binary.
@@ -1116,6 +1188,7 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 	if l == nil || ctx.Err() != nil || l.dryRun || l.reexecuted || l.reexecFailed {
 		return false, nil
 	}
+	fenced := l.a != nil && state.WriterFenced(l.a.store)
 	b := l.bin
 	if b == nil {
 		b = loopBinary()
@@ -1124,22 +1197,34 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.mu.Unlock()
 	}
 	if b == nil || !b.Replaced() {
+		if fenced && l.stopWatch != nil {
+			l.stopWatch()
+			l.stopWatch = nil
+		}
 		return false, nil
 	}
-	l.mu.Lock()
-	busy := len(l.inFlight) > 0
-	l.mu.Unlock()
-	if busy {
+	busy := l.reexecBusy()
+	if busy && !fenced {
 		l.sayOnce("reexec-busy", "SUPERVISOR LOOP restart held: claims are in flight; re-executing the installed binary once they finish")
 		return false, nil
+	}
+	if fenced {
+		// Once state writes are fenced after binary recovery, in-flight
+		// background actions on the failed binary cannot record completions
+		// anyway and must not hold re-execution onto the restored binary.
+		l.cancelBackgroundActions()
 	}
 	l.mergeActions.Wait()
 	l.passActions.Wait()
 	if _, err := fmt.Fprintln(l.a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 		return false, err
 	}
-	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
-		l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
+	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); (err != nil || code != 0) && ctx.Err() == nil {
+		detail := oneLine(out)
+		if detail == "" && err != nil {
+			detail = oneLine(err.Error())
+		}
+		l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, detail)
 	}
 	l.timerActs.Wait()
 	// Shutdown wins over an update, including cancellation while actions drain.
@@ -1476,9 +1561,17 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase("tidy and sync claims")
+		l.lifecyclePhase(loopPhaseTidy)
 		l.tidy(ctx, st)
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseTidy)
 		l.updateHosts(ctx, st)
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseTidy)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
@@ -1486,13 +1579,21 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 			return err
 		}
 	}
-	l.lifecyclePhase("recover quota and parks")
+	l.lifecyclePhase(loopPhaseRecover)
 	if err := l.recoverUnfinishedTurns(ctx, st); err != nil {
 		return err
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase(loopPhaseRecover)
 	if err := l.recoverQuota(ctx, st); err != nil {
 		return err
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1500,6 +1601,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if err := l.continueParks(ctx, st); err != nil {
 		return err
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1507,6 +1612,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1514,6 +1623,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if err := l.recoverReviewRequests(ctx, st); err != nil {
 		return err
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase(loopPhaseRecover)
 	st, err = a.store.Read()
 	if err != nil {
 		return err
@@ -1638,7 +1751,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
-	if in.Taken, err = l.dropAdminRepairs(in.Taken, stages, stageDetail); err != nil {
+	if in.Taken, err = l.dropInvalidMergeRepairs(in.Taken, stages, stageDetail); err != nil {
 		return err
 	}
 	l.mu.Lock()
@@ -1757,7 +1870,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 		changed := loopPullChanged(in, ref)
 		if slices.Contains(swept, ref) && l.sweepReadDue(ref, changed) {
-			if sweepReads >= sweepReadsPerPass {
+			// A one-shot comparison has no later pass to read the remainder.
+			// Keep its context deadline and GitHub gates, but do not mistake
+			// the live loop's per-pass scheduling limit for a failed read.
+			if !l.dryRun && sweepReads >= sweepReadsPerPass {
 				unread[ref] = true
 				continue
 			}
@@ -1938,6 +2054,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	l.lifecyclePhase("plan and record heartbeat")
+	if l.dryRun {
+		l.recording = &loopRecording{Agents: st.Agents, Deliveries: st.Deliveries}
+		in = l.recording.capture(in)
+	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1976,8 +2096,12 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	if l.dryRun {
+		if len(unread) > 0 || l.sweepIncomplete || observationUnknown {
+			return fmt.Errorf("dry-run observations incomplete; retry later")
+		}
 		preview := *st
 		preview.Deliveries = superloop.Deliveries(in, st.Deliveries)
+		l.recording.Deliveries = preview.Deliveries
 		if len(unread) == 0 && !l.sweepIncomplete {
 			preview.DeliveriesAt = in.Now
 		}
@@ -2100,6 +2224,10 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	if ctx.Err() != nil {
 		return nil
 	}
+	bgCtx := ctx
+	if !l.once {
+		bgCtx = l.backgroundContext(ctx)
+	}
 	current, readErr := l.a.store.Read()
 	if readErr != nil {
 		return readErr
@@ -2184,7 +2312,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 				}
 			}()
 			for _, act := range acts {
-				err := l.execAction(ctx, st, claims, failures, act)
+				err := l.execAction(bgCtx, st, claims, failures, act)
 				if err != nil {
 					setErr(err)
 					return
@@ -2196,7 +2324,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	l.reviewsPlanned(reviewActs)
 	for _, act := range reviewActs {
 		launch("review:"+act.Ref, func() error {
-			err := l.execAction(ctx, st, claims, failures, act)
+			err := l.execAction(bgCtx, st, claims, failures, act)
 			l.reviewTried(act, failures)
 			return err
 		})
@@ -2207,7 +2335,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	if len(intakeActs) > 0 {
 		launch("stream:intake", func() error {
 			for _, act := range intakeActs {
-				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+				if err := l.execAction(bgCtx, st, claims, failures, act); err != nil {
 					return err
 				}
 			}
@@ -2220,7 +2348,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	// finishes. Keep starts serialized separately across ticks.
 	launch("stream:worker-retirement", func() error {
 		for _, act := range doneActs {
-			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+			if err := l.execAction(bgCtx, st, claims, failures, act); err != nil {
 				return err
 			}
 		}
@@ -2234,7 +2362,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	if l.beginInFlight(loopFillStream) {
 		l.passActions.Go(func() {
 			defer l.endInFlight(loopFillStream)
-			setErr(l.fill(ctx, st, claims, taken, reservations))
+			setErr(l.fill(bgCtx, st, claims, taken, reservations))
 		})
 	} else if l.a.cfg.Supervisor.WorkerBrief != "" {
 		_, _ = fmt.Fprintln(l.a.out, "SUPERVISOR REFILL started 0: previous refill still running")
@@ -2277,7 +2405,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		acts := transitions[key]
 		launch(key, func() error {
 			for _, act := range acts {
-				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+				if err := l.execAction(bgCtx, st, claims, failures, act); err != nil {
 					return err
 				}
 			}
@@ -2285,7 +2413,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 	launch("stream:roster", func() error {
-		return l.roster(ctx, planned)
+		return l.roster(bgCtx, planned)
 	})
 
 	if l.once {
@@ -2502,9 +2630,19 @@ func (l *supervisorLoop) claim(act superloop.Action, target string) error {
 // when the command it ran left its line (agents start, agents wake, agents
 // remove, note add, all logged as the loop), else not, and it runs.
 func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
-	evs, err := l.a.store.Events(0, func(e state.Event) bool { return e.By.Name == loopParty.Name && !e.At.Before(c.at) })
+	// Reconciliation runs in background action streams. Its history reads must
+	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
+	all, err := state.FollowSnapshot(l.a.store, "supervisor-loop-reconcile", "v1", func(e state.Event) bool {
+		return e.By.Name == loopParty.Name
+	})
 	if err != nil {
 		return "", false, err
+	}
+	var evs []state.Event
+	for _, e := range all {
+		if !e.At.Before(c.at) {
+			evs = append(evs, e)
+		}
 	}
 	logged := func(verb string, match func(string) bool) bool {
 		return slices.ContainsFunc(evs, func(e state.Event) bool { return e.Verb == verb && match(e.Detail) })
@@ -2904,7 +3042,11 @@ func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error
 		if isLoopGitHubHeldOutput(line) {
 			return out, fmt.Errorf("beekeeper %s: %s: %w", strings.Join(args[:min(2, len(args))], " "), line, errLoopLater)
 		}
-		return out, &exitError{code: code, msg: fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, line)}
+		var wrapped error
+		if strings.Contains(line, state.ErrRecoveryWriterFenced.Error()) {
+			wrapped = state.ErrRecoveryWriterFenced
+		}
+		return out, &exitError{code: code, msg: fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, line), err: wrapped}
 	}
 	return out, nil
 }
@@ -3258,7 +3400,7 @@ func sortTrackedPulls(in superloop.Input, tracked []string) {
 
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
 	for _, ag := range st.Agents {
-		if err := ctx.Err(); err != nil {
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
 		if ag.Park == nil || ag.Park.ReviewHead == "" {
@@ -3271,6 +3413,7 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if l.dryRun || !shouldEndReviewWorker(st, ag) {
 			continue
 		}
+		l.lifecyclePhase(loopPhaseRecover)
 		if loopInTurn(l.a, ag.Party) {
 			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
 			continue
@@ -3311,6 +3454,9 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
+					if errors.Is(err, state.ErrRecoveryWriterFenced) {
+						return err
+					}
 					l.sayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
 					continue
 				}
@@ -3328,6 +3474,9 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if err := l.remove(ctx, ag.Name, "supervisor loop: desk review of "+on+" requested; its park stays saved for the review and the merge"); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if errors.Is(err, state.ErrRecoveryWriterFenced) {
+				return err
 			}
 			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
@@ -3569,12 +3718,11 @@ Trust green CI on the exact reviewed head. Do not run local tests, lints, builds
 Inspect the code and tests. For a full review use your own worktree at the pinned head;
 for a light review read the diff, issue and CI. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. When you find
-blocking issues or nits that can be fixed in code, tests or docs, apply your own findings
-directly on the pull request branch ({{.Branch}}), push once (never force-push), and approve
-the published fixed head immediately. Do not wait for CI; the loop waits for green before merging,
-so one review round suffices without bouncing back to the worker. Request changes only when a
-finding requires a product or design decision or cannot be fixed on the branch. Open an issue
+Every finding is blocking or a nit to fix in this round; drop anything else. Review only:
+never edit, commit or push fixes to the reviewed branch ({{.Branch}}). Post findings and
+request changes; report the verdict and review URL with beekeeper agents idle --done --report
+so the supervisor forwards them to the implementing worker. Approve only the assigned,
+unchanged head when it needs no fixes. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
 An approval's nit-only push is checked by the supervisor against the approved head; do not
@@ -3582,8 +3730,7 @@ start another independent review for it. Other changes require review of the new
 
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
-regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or the
-new published head SHA in backticks when you pushed fixes, even while CI is pending).
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (the assigned head only).
 Each finding: <file>:<line>: <what is wrong> → <what would be right>.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
@@ -4465,7 +4612,7 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 		return "", errLoopLater
 	}
 	// A candidate under supervision gets its verdict before the next one.
-	if exe, err := os.Executable(); err == nil && update.WatchedProbation(exe) {
+	if exe, err := executablePath(); err == nil && update.WatchedProbation(exe) {
 		return "", errLoopLater
 	}
 
@@ -4484,7 +4631,11 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 		}
 	}
 	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
-		return "", fmt.Errorf("%s installed, but budget --gate exits %d: %s", version, code, oneLine(out))
+		detail := oneLine(out)
+		if detail == "" && err != nil {
+			detail = oneLine(err.Error())
+		}
+		return "", fmt.Errorf("%s installed, but budget --gate exits %d: %s", version, code, detail)
 	}
 	what := []string{version + " installed"}
 	broker, err := loopBroker(ctx)
@@ -4914,8 +5065,12 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	for _, line := range lines {
 		w.outputEvent(line)
 	}
+	timerCtx := ctx
+	if !l.once {
+		timerCtx = l.backgroundContext(ctx)
+	}
 	l.timerActs.Go(func() {
-		w.actTimers(ctx, fires)
+		w.actTimers(timerCtx, fires)
 		w.timerActs.Wait()
 	})
 	return nil
@@ -5019,6 +5174,9 @@ func (l *supervisorLoop) holdStarts(held bool) {
 // pauseForReexec lets outstanding streams drain without launching more work
 // on a replaced binary. Only the main loop calls reexec at the quiet point.
 func (l *supervisorLoop) pauseForReexec() bool {
+	if l != nil && l.a != nil && state.WriterFenced(l.a.store) {
+		return true
+	}
 	l.mu.Lock()
 	b, failed := l.bin, l.reexecFailed
 	l.mu.Unlock()

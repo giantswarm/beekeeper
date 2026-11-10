@@ -26,7 +26,7 @@ type budgetGateKey struct{}
 type budgetDirectKey struct{}
 
 func (a *app) probeIdentities(parentCtx context.Context) (github.Budget, error) {
-	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
 	defer cancel()
 	// Every producer (watch, loop and CLI) shares this lock. Hold it from
 	// the initial cache read through publication so a delayed high response
