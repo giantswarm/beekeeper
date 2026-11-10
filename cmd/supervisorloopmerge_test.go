@@ -25,6 +25,84 @@ const (
 	reviewedRedCase     = "red"
 )
 
+func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
+	for _, lift := range []string{"removed", "expired"} {
+		t.Run(lift, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Merge.DevctlOwners = []string{"o"}
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for range 4 {
+				r.pass(t)
+				if r.called(gateCmdName) != nil {
+					t.Fatalf("held merge reached gate: %v", r.calls)
+				}
+				r.a.now = r.a.now.Add(time.Hour)
+			}
+			for _, verb := range []string{"merge.authorized", "merge.start", loopMergeFailed, loopFailureVerb, "supervisor.file"} {
+				if events := r.logged(t, verb); len(events) != 0 {
+					t.Fatalf("hold produced %s: %+v", verb, events)
+				}
+			}
+			if !strings.Contains(r.out.String(), "hold:"+loopMergeRepo) {
+				t.Fatalf("hold wait was not explained: %s", r.out)
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if lift == "removed" {
+					st.Holds = nil
+				} else {
+					st.Holds[0].Until = time.Now().Add(-time.Second)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if r.called(gateCmdName) == nil || len(r.logged(t, "merge.authorized")) != 1 {
+				t.Fatalf("lift did not resume the reviewed merge: %v\n%s", r.calls, r.out)
+			}
+			if len(r.logged(t, "supervisor.merge")) != 1 {
+				t.Fatalf("lifted merge did not finish: %s", r.out)
+			}
+			if r.called(agentsName, agentStartName) != nil {
+				t.Fatalf("lift requested another review: %v", r.calls)
+			}
+		})
+	}
+}
+
+func TestLoopReviewedMergeHonorsHoldExceptions(t *testing.T) {
+	for _, hold := range []state.Hold{
+		{Target: loopMergeRepo, Except: loopPR},
+		{Target: loopMergeRepo, ExceptSession: loopParty.Name},
+		{Target: "another/repo"},
+	} {
+		t.Run(fmt.Sprintf("%s/%s/%s", hold.Target, hold.Except, hold.ExceptSession), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Holds = append(st.Holds, hold)
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if len(r.logged(t, "merge.authorized")) != 1 {
+				t.Fatalf("nonblocking hold stopped merge: %s", r.out)
+			}
+		})
+	}
+}
+
 func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())

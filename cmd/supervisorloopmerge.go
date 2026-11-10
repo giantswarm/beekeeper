@@ -57,6 +57,15 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if st.Stop != nil {
 		return "", refused("the desk is stopped")
 	}
+	// A hold is a wait, not a failed merge attempt. Keep the exact-head
+	// review available and reconsider it on the next pass, without claiming
+	// the go, entering the gate or starting failure backoff.
+	waitKey := act.Key + " hold"
+	if h, held := merge.BlockingFor(st, a.timeNow(), loopParty.Name, ref.Repo, ref.N, a.cfg.LaneOf(ref.Repo)); held {
+		l.sayOnce(waitKey, "SUPERVISOR WAIT %s on hold:%s", act.URL, h.Target)
+		return "", errLoopLater
+	}
+	l.clearSaid(waitKey)
 	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
