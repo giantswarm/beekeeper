@@ -16,7 +16,7 @@ func TestParkPostMergeCanExplicitlyClearWork(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open})
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
-	parkReviewHead = func(string) string { return loopHead }
+	parkReviewHead = func(string) (string, string) { return loopHead, "verification unavailable" }
 	for _, step := range []struct {
 		name  string
 		flags []string

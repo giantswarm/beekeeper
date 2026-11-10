@@ -142,7 +142,7 @@ func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 				w := parkingWatch(t, map[string]string{refOne: github.Open})
 				was := parkReviewHead
 				t.Cleanup(func() { parkReviewHead = was })
-				parkReviewHead = func(string) string { return head }
+				parkReviewHead = func(string) (string, string) { return head, "verification unavailable" }
 				me := state.Party{Name: agentOne}
 				if !roster {
 					me = offSession
@@ -466,7 +466,7 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 	r.pull.Head = loopFixed
 	wasReviewHead := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = wasReviewHead })
-	parkReviewHead = func(string) string { return loopFixed }
+	parkReviewHead = func(string) (string, string) { return loopFixed, "verification unavailable" }
 	fixerParty := state.Party{Name: loopWorker, Session: "worker-session-2"}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: fixerParty, Task: "fix " + loopURL})
