@@ -21,6 +21,43 @@ const deliveryPR = "o/r#20"
 func deliveryInput() Input {
 	return Input{Now: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), Pulls: map[string]Pull{deliveryPR: {Ref: deliveryPR, State: Open, Head: deliveryFirstHead, Author: deliveryDeskAuthor, Closes: []string{deliveryIssue}}}, Desk: Desk{Authors: []string{deliveryDeskAuthor}}, Workers: []Worker{{Name: "implementer", Serves: deliveryIssue, ParkedOn: deliveryPR, ParkedHead: deliveryFirstHead}}}
 }
+
+// A never-owned repository named github must not exclude ordinary GitHub
+// workflows in a different, owned repository. Start with an unread PR seed,
+// then resolve it to its issue and plan the review from the same observation.
+func TestWorkflowDeliveryResolvesAndRequestsReview(t *testing.T) {
+	for _, title := range []string{"feat: add palette grades", "chore(deps): update GitHub artifact actions"} {
+		t.Run(title, func(t *testing.T) {
+			in := deliveryInput()
+			in.Desk.Never = []string{"upstream/github"}
+			in.OpenPulls = []string{deliveryPR}
+			p := in.Pulls[deliveryPR]
+			in.Pulls = nil
+			seed := Deliveries(in, nil)
+			if len(seed) != 1 || seed[0].Step != state.DeliveryUnknown {
+				t.Fatalf("unread seed: %+v", seed)
+			}
+			p.Title, p.Branch = title, "renovate/major-github-artifact-actions"
+			p.Files, p.ChangedFiles = []string{".github/workflows/proof.yml"}, 1
+			p.Green = true
+			in.Pulls = map[string]Pull{deliveryPR: p}
+			in.Workers[0].ReviewRequested = true
+			in.Workers[0].ParkedAt = in.Now
+			for range 2 {
+				in.Now = in.Now.Add(time.Minute)
+				got := Deliveries(in, seed)
+				if len(got) != 1 || got[0].Ref != deliveryIssue || got[0].OutsideDesk || got[0].Step != state.DeliveryReviewQueued {
+					t.Fatalf("owned workflow lost its delivery: %+v", got)
+				}
+				a := only(t, Plan(in), KindReview)
+				if a.Ref != deliveryPR || a.Head != p.Head {
+					t.Fatalf("wrong review: %+v", a)
+				}
+				seed = got
+			}
+		})
+	}
+}
 func TestDeliveryLifecycle(t *testing.T) {
 	in := deliveryInput()
 	var prev []Delivery
