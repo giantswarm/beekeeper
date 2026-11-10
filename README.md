@@ -45,6 +45,10 @@ transcripts; a worker reads and searches its own transcript and the transcripts 
 on the same repository by default, and can request expiring cross-repository or
 cross-session access from the guide (`beekeeper transcripts request` / `beekeeper transcripts grant`).
 
+See [Beekeeper and the desk](docs/desk-boundary.md) for what belongs in the
+product and what belongs in a desk's own files, and the doctor's duplicate
+workflow warnings.
+
 ## Install
 
 `beekeeper install` installs the supervisor loop, the desk's supervisor,
