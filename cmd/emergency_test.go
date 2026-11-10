@@ -482,27 +482,27 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 func TestEmergencyAdminMergeWithUnsetReviewDecision(t *testing.T) {
 	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
 		Mergeable: emergencyMergeable, MergeState: emergencyClean}
-	for _, name := range []string{"accepted", "head moved", "checks failing", "draft", "closed", "no go"} {
+	for _, name := range []string{"accepted", "unset head moved", "unset checks failing", litDraft, noteStatusClosed, "unset without authority"} {
 		t.Run(name, func(t *testing.T) {
 			p := green
 			switch name {
-			case "head moved":
+			case "unset head moved":
 				p.Head = "def4567"
-			case "checks failing":
+			case "unset checks failing":
 				p.Green = false
-			case "draft":
+			case litDraft:
 				p.Draft = true
-			case "closed":
+			case noteStatusClosed:
 				p.State = "CLOSED"
 			}
-			calls, err := adminMergeCall(t, "Merge them all.", p, 0, name != "no go")
+			calls, err := adminMergeCall(t, "Merge them all.", p, 0, name != "unset without authority")
 			if name != "accepted" {
 				if Code(err) != ExitRefused || len(calls) != 0 {
 					t.Fatalf("err %v, calls %v", err, calls)
 				}
 				return
 			}
-			want := []string{"pr", gitMerge, "7", "--repo", emergencyTestRepo, "--squash", "--admin", "--match-head-commit", emergencyAdminHead}
+			want := strings.Fields("pr merge 7 " + loopRepoFlag + " " + emergencyTestRepo + " --squash --admin --match-head-commit " + emergencyAdminHead)
 			if err != nil || len(calls) != 1 || !slices.Equal(calls[0], want) {
 				t.Fatalf("err %v, calls %v", err, calls)
 			}
