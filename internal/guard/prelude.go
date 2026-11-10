@@ -10,8 +10,19 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
+
+// DevctlVersionGateShell returns the shell statement that exports the devctl
+// version-gate opt-out while hook guards are disabled, and unsets it when hook
+// guards are enabled.
+func DevctlVersionGateShell(guardsEnabled bool) string {
+	if !guardsEnabled {
+		return "export " + github.DevctlSkipVersionCheckEnv + "=true\n"
+	}
+	return "unset " + github.DevctlSkipVersionCheckEnv + "\n"
+}
 
 // vaultEnv matches the names of the variables that carry a 1Password
 // session or token: a signed-in CLI session, a service account's token, a

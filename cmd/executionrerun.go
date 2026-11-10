@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -60,6 +61,7 @@ func (a *app) executionCIRerun(ctx context.Context, host string, req execution.C
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	github.SetDevctlSkipVersionCheck(a.cfg != nil && !a.cfg.Hooks.GuardsEnabled())
 	result, runErr := runExecutionCIRerun(ctx, a.cfg.Sandbox.Devctl, repository, request.PR)
 	logErr := a.store.Update(func(*state.State) ([]state.Event, error) {
 		return []state.Event{event(actor, "execution.ci-rerun-result", "%s: code=%d command-error=%t", on, result.Code, runErr != nil)}, nil
@@ -75,6 +77,7 @@ var runExecutionCIRerun = func(ctx context.Context, binary, repository string, p
 		binary = devctlBinary
 	}
 	child := exec.CommandContext(ctx, binary, "pr", "rerun", repository, strconv.Itoa(pr)) //nolint:gosec // configured coordinator devctl, fixed verb and validated repository/PR
+	child.Env = devctlCommandEnv("")
 	var out, errOut bytes.Buffer
 	child.Stdout, child.Stderr = &out, &errOut
 	err := child.Run()

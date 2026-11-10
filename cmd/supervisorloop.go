@@ -1194,6 +1194,7 @@ func (l *supervisorLoop) reloadConfig() {
 		l.a.cfg = c
 	} else {
 		l.a.cfg.GitHub.PublicOnlyOwners = slices.Clone(c.GitHub.PublicOnlyOwners)
+		l.a.cfg.Hooks.Guards = c.Hooks.Guards
 		if len(c.GitHub.AllowedOrgs) > 0 {
 			l.a.cfg.GitHub.AllowedOrgs = c.GitHub.AllowedOrgs
 		}
@@ -1210,6 +1211,7 @@ func (l *supervisorLoop) reloadConfig() {
 			l.a.cfg.Supervisor.Ownership.Team = c.Supervisor.Ownership.Team
 		}
 	}
+	github.SetDevctlSkipVersionCheck(!l.a.cfg.Hooks.GuardsEnabled())
 	l.cfgSum = sum
 }
 

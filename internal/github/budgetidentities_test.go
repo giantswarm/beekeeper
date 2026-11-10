@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -79,5 +80,25 @@ func TestLowestBudgetKeepsLowCounterAndHigherIdentityRefusal(t *testing.T) {
 	}
 	if len(b.Identities[IdentityGH].GraphQL.BlockedBy) != 0 {
 		t.Fatal("aggregate mutated an identity's cached reading")
+	}
+}
+
+func TestDevctlEnvFollowsGuardsToggle(t *testing.T) {
+	t.Cleanup(func() { SetDevctlSkipVersionCheck(false) })
+	const optOut = DevctlSkipVersionCheckEnv + "=true"
+	base := []string{"PATH=/usr/bin", optOut}
+	if got := DevctlEnv(base, false); slices.Contains(got, optOut) {
+		t.Fatalf("DevctlEnv(skip=false) kept %s: %v", optOut, got)
+	}
+	if got := DevctlEnv([]string{"PATH=/usr/bin"}, true); !slices.Contains(got, optOut) {
+		t.Fatalf("DevctlEnv(skip=true) lacked %s: %v", optOut, got)
+	}
+	SetDevctlSkipVersionCheck(true)
+	if got := budgetEnv([]string{"PATH=/usr/bin"}); !slices.Contains(got, optOut) {
+		t.Fatalf("budgetEnv with skip=true lacked %s: %v", optOut, got)
+	}
+	SetDevctlSkipVersionCheck(false)
+	if got := budgetEnv(base); slices.Contains(got, optOut) {
+		t.Fatalf("budgetEnv with skip=false kept %s: %v", optOut, got)
 	}
 }

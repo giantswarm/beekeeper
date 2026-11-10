@@ -37,6 +37,7 @@ var readParkRelease = func(ctx context.Context, repo, version string) ([]byte, e
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, merge.Tool, "release", "wait", repo, version, "--timeout", "5s") //nolint:gosec // validated repository and version, no shell
+	c.Env = devctlCommandEnv("")
 	raw, err := c.Output()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 2 {

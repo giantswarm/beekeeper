@@ -120,7 +120,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	codexHome := codex.HomeDir(a.cfg.StateDir)
 	sh := a.cfg.Agents.Shell
 	unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, "")
+	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, guard.DevctlVersionGateShell(a.cfg.Hooks.GuardsEnabled()))
 	if err := codex.EnsureHome(codexHome, a.cfg.Codex.AuthFile, a.cfg.Codex.ConfigFile, self, prelude); err != nil {
 		return err
 	}
@@ -275,7 +275,7 @@ func (a *app) continueCodexAgent(ctx context.Context, by state.Party, ag state.A
 	codexHome := codex.HomeDir(a.cfg.StateDir)
 	sh := a.cfg.Agents.Shell
 	unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, "")
+	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, guard.DevctlVersionGateShell(a.cfg.Hooks.GuardsEnabled()))
 	if err := codex.EnsureHome(codexHome, a.cfg.Codex.AuthFile, a.cfg.Codex.ConfigFile, self, prelude); err != nil {
 		return err
 	}
@@ -410,7 +410,7 @@ func (a *app) resumeCodexUnit(ctx context.Context, id, name, msg string) error {
 	codexHome := codex.HomeDir(a.cfg.StateDir)
 	sh := a.cfg.Agents.Shell
 	unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, "")
+	prelude := guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, nil, guard.DevctlVersionGateShell(a.cfg.Hooks.GuardsEnabled()))
 	if err := codex.EnsureHome(codexHome, a.cfg.Codex.AuthFile, a.cfg.Codex.ConfigFile, self, prelude); err != nil {
 		return err
 	}

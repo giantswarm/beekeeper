@@ -4195,9 +4195,14 @@ Unset or `true` keeps enforcement enabled. Configuration errors retain recovery
 mode; they do not silently disable guards.
 
 Instruction relay, result secret redaction, sessionstart and worktree placement
-continue independently. `beekeeper fatal` marks installed harness guard checks
-disabled rather than opening outages or repairs. `beekeeper capacity` and
-`beekeeper guide status` display `guards: off`.
+continue independently. While `hooks.guards: false`, managed worker environments
+(shell preludes, systemd units, background worker sessions and managed execution
+environments) and beekeeper-owned `devctl` child commands propagate
+`DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true` so `devctl`'s own version gate does not
+block older binaries; enabling `hooks.guards` again removes and unsets the
+variable. `beekeeper fatal` marks installed harness guard checks disabled rather
+than opening outages or repairs. `beekeeper capacity` and `beekeeper guide status`
+display `guards: off`.
 
 Automatic disk pruning releases its reclamation lock during discovery and remote
 worktree checks, so an idle supervisor does not lock out a manual prune. Under

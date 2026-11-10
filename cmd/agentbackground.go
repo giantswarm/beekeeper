@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -133,7 +134,7 @@ func cleanEnv(environ []string, config string) []string {
 		out = append(slices.DeleteFunc(out, func(kv string) bool { return strings.HasPrefix(kv, "PATH=") }),
 			"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), devBuildEnv+"=1")
 	}
-	return sshagent.Environment(out)
+	return github.DevctlEnv(sshagent.Environment(out), !guardsEnabledForConfig(config))
 }
 
 func isHarnessEnv(kv string) bool {

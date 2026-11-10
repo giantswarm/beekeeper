@@ -89,8 +89,12 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 	say(fmt.Sprintf("egress proxy on %s, its CA in %s", ln.Addr(), dir))
 	tok := &sandbox.Token{}
 	devctl := a.cfg.Sandbox.Devctl
+	cfgPath := a.explicitConfig()
+	if cfgPath == "" {
+		cfgPath = a.loadedCfg
+	}
 	go sandbox.KeepGitHub(ctx, tok, githubRenewal, func(ctx context.Context) (string, error) {
-		return devctlToken(ctx, devctl)
+		return devctlTokenEnv(ctx, devctl, devctlCommandEnv(cfgPath))
 	}, say)
 	e := &sandbox.Egress{
 		AllowedOrgs: a.cfg.GitHub.AllowedOrgs,
@@ -112,8 +116,13 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 // login, which devctl answers by naming `devctl auth login`, or devctl's
 // own error.
 func devctlToken(ctx context.Context, devctl string) (string, error) {
+	return devctlTokenEnv(ctx, devctl, devctlCommandEnv(""))
+}
+
+func devctlTokenEnv(ctx context.Context, devctl string, env []string) (string, error) {
 	var out, errOut bytes.Buffer
 	c := exec.CommandContext(ctx, devctl, "auth", "exec", "--", "printenv", "GH_TOKEN") //nolint:gosec // the configured devctl
+	c.Env = env
 	c.Stdout, c.Stderr = &out, &errOut
 	if err := c.Run(); err != nil {
 		said := strings.TrimSpace(errOut.String())

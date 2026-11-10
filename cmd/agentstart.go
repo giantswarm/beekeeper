@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -2039,7 +2040,7 @@ func handClaims(st *state.State, dir lease.Dir, from, to state.Party) ([]string,
 func (a *app) explicitConfig() string {
 	p := a.cfgPath
 	if p == "" {
-		p = os.Getenv("BEEKEEPER_CONFIG")
+		p = os.Getenv(beekeeperConfigEnv)
 	}
 	if p == "" {
 		return ""
@@ -2420,7 +2421,7 @@ func launch(unit, dir, config string, stopPost, argv []string, env ...string) er
 // $BEEKEEPER_CONFIG, a scratch state it keeps as $BEEKEEPER_STATE_FROM, and
 // env (KEY=value) is added.
 func startUnit(u platform.Unit, config string, env ...string) error {
-	u.Env = append(u.Env, env...)
+	u.Env = github.DevctlEnv(append(u.Env, env...), !guardsEnabledForConfig(config))
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
 	}
