@@ -374,7 +374,6 @@ type watcher struct {
 	suspendChecked  time.Time
 	suspendThrough  time.Time
 	suspendRecovery map[string]suspendWake
-	suspendResults  chan map[string]suspendWake
 	suspendDeliver  func(context.Context, suspendWake) error
 	// Hung checks get a fresh grace period on startup and after a suspend
 	// (or a long gap in observations). These times stay in memory so their

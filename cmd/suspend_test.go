@@ -60,15 +60,15 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	fixture.records = []machine.SuspendRecord{{At: exit}}
 	w.suspends(t.Context(), entry, nil)
 	w.stand.inflight.Wait()
-	// Overlapping journal reads must not report or deliver a successful wake twice.
+	// Overlapping journal reads must not retry even an ambiguous delivery error.
 	fixture.records = []machine.SuspendRecord{{At: entry, Entry: true}, {At: exit}}
 	w.suspends(t.Context(), exit, nil)
 	w.stand.inflight.Wait()
-	if calls[worker.Name] != 2 || calls[supervisor.Name] != 1 || len(calls) != 2 {
+	if calls[worker.Name] != 1 || calls[supervisor.Name] != 1 || len(calls) != 2 {
 		t.Fatalf("deliveries: %v", calls)
 	}
 	line := out.String()
-	if strings.Count(line, "SUSPENDED / RESUMED") != 1 || !strings.Contains(line, worker.Name) || !strings.Contains(line, "#1 fixture timer") || strings.Contains(line, "#2 later") {
+	if strings.Count(line, "RESUME FAILED") != 1 || strings.Count(line, "SUSPENDED / RESUMED") != 1 || !strings.Contains(line, worker.Name) || !strings.Contains(line, "#1 fixture timer") || strings.Contains(line, "#2 later") {
 		t.Fatalf("output: %s", line)
 	}
 }
@@ -153,7 +153,7 @@ func TestSuspendReportsEachCompletedGap(t *testing.T) {
 	}
 }
 
-func TestSuspendRecoveryStopsOnCopyAndTargetsCurrentGuide(t *testing.T) {
+func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	w.standby = true
 	entry := w.now
@@ -194,10 +194,66 @@ func TestSuspendRecoveryStopsOnCopyAndTargetsCurrentGuide(t *testing.T) {
 	}
 	w.suspends(t.Context(), exit, nil)
 	w.stand.inflight.Wait()
-	if calls[worker.Name] != 1 || calls[oldGuide.Name] != 1 || calls[newGuide.Name] != 1 {
+	if calls[worker.Name] != 1 || calls[oldGuide.Name] != 1 || calls[newGuide.Name] != 0 {
 		t.Fatalf("deliveries: %v", calls)
 	}
 	if !strings.Contains(out.String(), "RESUME FAILED: \""+worker.Name+"\"") {
 		t.Fatalf("missing copy failure log: %s", out)
+	}
+}
+
+// A relay can finish after recovery is queued but before the serialized slot
+// becomes available. Neither the old guide's roster entry nor its queued guide
+// wake may resume it, and the successor's roster entry must not double-deliver.
+func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
+	w, _ := onceWatch(t, nil)
+	w.standby = true
+	oldGuide := state.Party{Name: "Guide run 61", Session: "suspend-old-guide"}
+	newGuide := state.Party{Name: "Guide run 62", Session: "suspend-new-guide"}
+	supervisedBy(t, w, oldGuide, w.now.Add(-time.Minute))
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{
+			{Party: oldGuide, Task: suspendFixtureTask},
+			{Party: newGuide, Task: suspendFixtureTask},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.resumed(st, nil, w.now.Add(-time.Hour), w.now)
+	w.stand.busy.Store(true)
+	w.recoverSuspend(t.Context())
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, By: newGuide, At: w.now, Taken: w.now})
+		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: w.now}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]int{}
+	w.suspendDeliver = func(_ context.Context, wake suspendWake) error {
+		calls[wake.party.Session]++
+		return nil
+	}
+	w.stand.busy.Store(false)
+	w.recoverSuspend(t.Context())
+	w.stand.inflight.Wait()
+	w.recoverSuspend(t.Context())
+	w.stand.inflight.Wait()
+	if len(calls) != 1 || calls[newGuide.Session] != 1 {
+		t.Fatalf("deliveries after relay: %v", calls)
+	}
+	// A later suspend must also ignore the stale relieved roster entry.
+	st, err = w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
+	if len(w.suspendRecovery) != 1 || !w.suspendRecovery[newGuide.Name].guide {
+		t.Fatalf("queued after relay: %v", w.suspendRecovery)
 	}
 }
