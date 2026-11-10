@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,5 +128,58 @@ func TestOnlyLockBusy(t *testing.T) {
 	}
 	if unsavedBudget(nil) != nil || unsavedBudget(busy) != nil || !errors.Is(unsavedBudget(errors.Join(other, busy)), other) {
 		t.Error("unsavedBudget kept a lone busy lock or dropped another failure")
+	}
+}
+
+// A loop may hold the producer lock across network probes and state publication.
+// A gate must obtain its own bounded reading without publishing out of order.
+func TestBudgetGateFallsBackWhenProbeLockIsBusy(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		refuse, savedLow, expired bool
+	}{
+		{name: "healthy after reset", savedLow: true, expired: true},
+		{name: "GraphQL refusal", refuse: true},
+		{name: "known low window", savedLow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, out := budgetApp(t)
+			refusedGraphQL := tc.refuse
+			queries := refusingGitHub(t, &refusedGraphQL)
+			if tc.savedLow {
+				reset := time.Now().Add(time.Hour)
+				if tc.expired {
+					reset = time.Now().Add(-time.Second)
+				}
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Budget = &state.Budget{Identities: map[string]state.Budget{
+						"gh": {Identity: "gh", GraphQL: &state.GraphQL{Identity: "gh", Limit: 5000, Remaining: 10, Reset: reset, At: time.Now()}},
+					}}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lock := flock.New(filepath.Join(a.store.Dir(), "budget-probe.lock"))
+			if err := lock.Lock(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lock.Unlock() }()
+			holdStateLock(t, a)
+			c := a.budgetCmd()
+			c.SetArgs([]string{gateFlag})
+			start := time.Now()
+			err := c.Execute()
+			wantRefused := tc.refuse || tc.savedLow && !tc.expired
+			if (err != nil) != wantRefused {
+				t.Fatalf("refused=%v: %v; %s", wantRefused, err, out)
+			}
+			if time.Since(start) > 3*time.Second || *queries != 1 {
+				t.Fatalf("fallback took %s, queries %d", time.Since(start), *queries)
+			}
+			if !strings.Contains(out.String(), "fallback: direct GitHub REST and GraphQL") {
+				t.Fatalf("missing fallback warning: %s", out)
+			}
+		})
 	}
 }
