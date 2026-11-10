@@ -251,6 +251,9 @@ agents wake: its task is that message's first line.`,
 			if err != nil {
 				return err
 			}
+			if a.json {
+				return a.printJSON(map[string]string{paramMessage: line})
+			}
 			_, err = fmt.Fprintln(a.out, line)
 			return err
 		},
@@ -291,7 +294,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 	if err != nil {
 		return "", err
 	}
-	reviewHead := parkReviewHead(on)
+	reviewHead, reviewReason := parkReviewHead(on)
 	var line string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := a.callerAgent(st, me)
@@ -373,6 +376,9 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 					back += "; " + parkReviewMode(reviewHead)
 				}
 			}
+		}
+		if _, ref := parseRef(on); ref && reviewHead == "" && reviewReason != "" {
+			back += "; verification reason: " + reviewReason
 		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
 		if k := st.StartIndex(self); k >= 0 && st.Starts[k].Background {
@@ -576,14 +582,20 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		return refused("no resume: %s (--force resumes anyway)", block)
 	}
 	if gone {
+		msg := resumeMessage
 		if target.Execution != nil {
 			// This is an explicit by-name resume, like agents wake. Keep
 			// automatic wakes from restarting an unparked finished worker.
 			if err := a.continueExecution(ctx, by, *target); err != nil {
 				return err
 			}
+			// The managed worker cannot inspect the coordinator roster to
+			// recover an assignment made after its previous turn completed.
+			if target.Task != "" {
+				msg = "Your current task is:\n" + target.Task + "\n\n" + msg
+			}
 		}
-		if err := wakeOwner(a, ctx, by, target.Name, resumeMessage, ""); err != nil {
+		if err := wakeOwner(a, ctx, by, target.Name, msg, ""); err != nil {
 			return err
 		}
 		return a.store.Record(event(by, resumedEvent, "%s: resumed from gone state", target.Name))
@@ -1069,10 +1081,10 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 
 // parkReviewHead fails closed: a repository/branch name or shared GitHub
 // author alone is no evidence that this caller published the pull request.
-var parkReviewHead = func(on string) string {
+var parkReviewHead = func(on string) (string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return publishedParkHead(ctx, on, ".", runGit, github.RunGH)
+	return publishedParkVerification(ctx, on, ".", runGit, github.RunGH)
 }
 
 var parkWorktree = func(dir string) string {
@@ -1086,9 +1098,14 @@ var parkWorktree = func(dir string) string {
 }
 
 func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {
+	head, _ := publishedParkVerification(ctx, on, dir, git, gh)
+	return head
+}
+
+func publishedParkVerification(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) (string, string) {
 	r, ok := parseRef(on)
 	if !ok {
-		return ""
+		return "", "target is not an issue or pull request reference"
 	}
 	read := func(args ...string) string {
 		out, err := git(ctx, dir, args...)
@@ -1101,11 +1118,11 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 	branch := read("symbolic-ref", "--quiet", "--short", "HEAD")
 	head := read("rev-parse", "HEAD")
 	if !strings.EqualFold(repo, r.Repo) || branch == "" || head == "" {
-		return ""
+		return "", "local origin, branch or HEAD does not match the target repository"
 	}
 	out, err := gh(github.ActingOn(ctx, r.Repo), "api", fmt.Sprintf("repos/%s/pulls/%d", r.Repo, r.N))
 	if err != nil {
-		return ""
+		return "", "GitHub pull request lookup failed; retry after connectivity or budget recovery"
 	}
 	var p struct {
 		Head struct {
@@ -1118,9 +1135,9 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 	// Repair worktrees can publish to a PR from a differently named branch.
 	// The exact published commit and repository establish the match.
 	if json.Unmarshal(out, &p) != nil || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
-		return ""
+		return "", "published HEAD or head repository does not match the local checkout"
 	}
-	return head
+	return head, ""
 }
 
 // executionWorkspaceHead is the HEAD of the calling execution's workspace

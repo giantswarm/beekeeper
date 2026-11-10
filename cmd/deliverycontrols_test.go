@@ -292,7 +292,7 @@ func TestDeliveryAllStepStallsAndReleaseFailures(t *testing.T) {
 			}
 		})
 	}
-	for _, verdict := range []string{state.DeliveryReleaseFailed, verdictUnconfirmed} {
+	for _, verdict := range []string{state.DeliveryReleaseFailed} {
 		t.Run(verdict, func(t *testing.T) {
 			a, _ := supervisorApp(t)
 			now := a.timeNow()
@@ -528,5 +528,43 @@ func TestDeliveryMissingObservationAndZeroOff(t *testing.T) {
 	}
 	if v := readDeliveryWIP(st, 0, time.Second, now); v.Reason != "" {
 		t.Fatal(v)
+	}
+}
+
+func TestUnconfirmedReleaseStallGraceAndRecovery(t *testing.T) {
+	for _, completes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("completes=%t", completes), func(t *testing.T) {
+			a, _ := supervisorApp(t)
+			a.cfg.Delivery.StallAfter.Duration = time.Minute
+			now := a.timeNow()
+			seed(t, a, func(st *state.State) {
+				st.Deliveries = []state.Delivery{{Ref: refOne, Step: state.DeliveryReleasing, Since: now, Verdict: verdictUnconfirmed}}
+			})
+			for _, age := range []time.Duration{4 * time.Second, 30*time.Minute - time.Second} {
+				if line, err := a.checkDeliveries(now.Add(age)); err != nil || line != "" {
+					t.Fatalf("pending release at %s: %s %v", age, line, err)
+				}
+			}
+			if completes {
+				seed(t, a, func(st *state.State) {
+					applyDeliveryVerdict(&st.Deliveries[0], verdictAvailable, "v1.2.3", now.Add(29*time.Minute))
+				})
+			}
+			line, err := a.checkDeliveries(now.Add(30 * time.Minute))
+			if err != nil || (strings.Contains(line, "DELIVERY STALLED") != !completes) {
+				t.Fatalf("threshold: %s %v", line, err)
+			}
+			if line, err := a.checkDeliveries(now.Add(31 * time.Minute)); err != nil || line != "" {
+				t.Fatalf("duplicate: %s %v", line, err)
+			}
+			if !completes {
+				seed(t, a, func(st *state.State) {
+					applyDeliveryVerdict(&st.Deliveries[0], verdictAvailable, "v1.2.3", now.Add(32*time.Minute))
+				})
+				if line, err := a.checkDeliveries(now.Add(32 * time.Minute)); err != nil || !strings.Contains(line, "RECOVERED:") {
+					t.Fatalf("recovery: %s %v", line, err)
+				}
+			}
+		})
 	}
 }

@@ -91,13 +91,10 @@ func TestLoopRefillSurvivesNextFailureAndInflightIntake(t *testing.T) {
 				{Kind: superloop.KindIntake, Key: "intake pending"},
 			}
 			if failedNext {
-				// A claimed next action that cannot record its reconciled completion.
+				// Next bookkeeping cannot record its completion; refill still runs.
 				acts = append(acts, superloop.Action{Kind: superloop.KindNext, Key: "next failure"})
-				brief := r.a.cfg.Supervisor.WorkerBrief
-				r.a.cfg.Supervisor.WorkerBrief = ""
 				r.failRecord = func(e state.Event) bool {
 					if e.Verb == "supervisor.next" && strings.Contains(e.Detail, "next failure") {
-						r.a.cfg.Supervisor.WorkerBrief = brief
 						return true
 					}
 					return false

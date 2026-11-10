@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -332,10 +334,12 @@ func serveClaude() int {
 			name = args[idx+1]
 		}
 		rows := readSessions()
-		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
+		// Retired sessions disappear from rows; their IDs must never be reused.
+		sessionID := uuid.NewString()
+		short := sessionID[:8]
 		rows = append(rows, map[string]any{
 			"id":           short,
-			sessionIDField: short + "-0000-0000-0000-000000000001",
+			sessionIDField: sessionID,
 			nameField:      name,
 			"kind":         "bg",
 			"pid":          1,
@@ -352,11 +356,11 @@ func serveClaude() int {
 			if err != nil {
 				panic(err)
 			}
-			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: short + "-0000-0000-0000-000000000001", "type": "assistant"})
+			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: sessionID, "type": "assistant"})
 			if err != nil {
 				panic(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, short+"-0000-0000-0000-000000000001.jsonl"), append(raw, '\n'), 0600); err != nil { //nolint:gosec // isolated scratch fixture transcript
+			if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), append(raw, '\n'), 0600); err != nil { //nolint:gosec // isolated scratch fixture transcript
 				panic(err)
 			}
 		}

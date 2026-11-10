@@ -101,7 +101,19 @@ func TestEndedExecutionComesBackOnTheRosterByName(t *testing.T) {
 }
 
 func TestUnparkedExitedExecutionResumesByName(t *testing.T) {
-	a, r, _, continued := exitedExecutionApp(t)
+	a, r, fake, continued := exitedExecutionApp(t)
+	const nextTask = "Inspect the new review findings and repair the reported defect"
+	var delivered string
+	fake.message = func(_ context.Context, _ execution.Ref, m execution.Envelope) (execution.Ack, error) {
+		delivered = m.Text
+		return execution.Ack{ID: m.ID, Sequence: m.Sequence, Stage: execution.Stored}, nil
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Task = nextTask
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
 	err := a.resumeParkedOpts(context.Background(), by, r.Name, false)
 	var pending *executionDeliveryPending
@@ -112,6 +124,9 @@ func TestUnparkedExitedExecutionResumesByName(t *testing.T) {
 	x := st.Starts[0].Execution
 	if *continued != 1 || len(x.Messages) != 1 || x.Request.ConversationID != r.ConversationID || *st.Agents[0].Execution != r.Ref {
 		t.Fatalf("continued %d, execution %+v, agent %+v", *continued, x, st.Agents[0])
+	}
+	if !strings.Contains(delivered, nextTask) {
+		t.Fatalf("resumed worker did not receive its current assignment: %q", delivered)
 	}
 }
 
