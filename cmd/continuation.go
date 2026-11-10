@@ -104,6 +104,9 @@ Task: {{.Task}}
 {{.Context}}
 
 Read the issue and its acceptance criteria, the PR and current head, and repository rules.
+Start decision lookups with beekeeper answer history followed by the task issue or
+parent epic URL. Consult the wider history before refusing or asking again; do
+not load unrelated decision histories into the fresh context.
 Re-query live state before acting. Continue the existing branch in your own worktree;
 never create a competing PR or resume the previous worker's transcript. Preserve
 all remaining release, rollout and proof obligations. CI owns tests, lints and builds.
@@ -175,6 +178,9 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 					pr, ok := parseRef(rp.On)
 					if ok {
 						context += fmt.Sprintf("\nRelated PR: https://github.com/%s/pull/%d at %s", pr.Repo, pr.N, rp.ReviewHead)
+						if rp.PostMerge != nil && *rp.PostMerge != "" {
+							context += "\nRelated remaining work: " + *rp.PostMerge
+						}
 					}
 				}
 			}
