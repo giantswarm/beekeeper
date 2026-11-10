@@ -4703,6 +4703,29 @@ var loopClasses = []string{"needs-person", "blocked", "failed", "question"}
 func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	k := l.a.cfg.Supervisor
 	e := *act.Event
+	if e.Verb == parkEvent {
+		// Planning can precede a timer add, a replacement park, or idle
+		// --done. Never send a corrective wake from that old snapshot.
+		current, err := l.a.store.Read()
+		if err != nil {
+			return "", err
+		}
+		st = current
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, e.Agent) })
+		if i < 0 || st.Agents[i].Done || st.Agents[i].Park == nil {
+			return "park already ended", nil
+		}
+		ag := st.Agents[i]
+		if e.At.Before(ag.Park.At) || loopParkOn(ag.Park) != "" || !ag.Park.Resumable.IsZero() {
+			return "park already replaced or settled", nil
+		}
+		if slices.ContainsFunc(st.Timers, func(t state.Timer) bool {
+			return strings.EqualFold(t.Wake, ag.Name) && t.Fired.IsZero() &&
+				(t.WakeParkAt.IsZero() || t.WakeParkAt.Equal(ag.Park.At))
+		}) {
+			return "park has a pending wake timer", nil
+		}
+	}
 	label := "unclassified"
 	why := "beekeeper's supervisor loop has no rule for it and no classifier (supervisor.classifier)"
 	if len(k.Classifier) > 0 {
