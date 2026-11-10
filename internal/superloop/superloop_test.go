@@ -247,6 +247,24 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 	}
 }
 
+func TestTheGoUsesConfiguredMergeMethod(t *testing.T) {
+	for _, method := range []string{"squash", "rebase", "merge"} {
+		t.Run(method, func(t *testing.T) {
+			in := Input{MergeMethods: map[string]string{"o/r": method}}
+			base := Action{Ref: "o/r#7", Head: head1}
+			a := goAction(in, base, "approved")
+			if !strings.Contains(a.Message, "--"+method+" --match-head-commit "+head1) {
+				t.Fatalf("wrong method: %s", a.Message)
+			}
+			in.DevctlOwners = []string{"o"}
+			a = goAction(in, base, "approved")
+			if strings.Contains(a.Message, "--rebase") != (method == "rebase") {
+				t.Fatalf("wrong devctl method: %s", a.Message)
+			}
+		})
+	}
+}
+
 // An approved round does not use a change-request round; the fixes after
 // the final change request get the loop’s go without another review.
 func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
