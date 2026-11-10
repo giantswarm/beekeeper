@@ -282,15 +282,7 @@ var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 var readDeskLogin = func(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "api", "user", "--jq", ".login")
-	if err != nil {
-		return "", err
-	}
-	login := strings.TrimSpace(string(out))
-	if login == "" {
-		return "", errors.New("gh api user answers no login")
-	}
-	return login, nil
+	return github.ViewerLogin(ctx, github.RunGH)
 }
 
 // readTeams reads supervisor.ownership.teamFiles: the team that owns each
@@ -2246,7 +2238,10 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 		return nil
 	}
 
-	if l.a.timeNow().Before(failures[act.Key].RetryAt) {
+	// Older versions backed quota-only merge refusals off for up to an
+	// hour. Fresh budget admission and the gate decide when they can retry.
+	quotaRetry := act.Kind == superloop.KindGo && github.RateLimited(errors.New(failures[act.Key].Message))
+	if l.a.timeNow().Before(failures[act.Key].RetryAt) && !quotaRetry {
 		l.mu.Unlock()
 		return nil
 	}

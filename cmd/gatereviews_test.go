@@ -45,6 +45,7 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 		says string
 	}{
 		"changes requested": {why: changesRequested, code: ExitGateRefused, says: "o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
+		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: "reading the reviews of o/r#7 failed in transit"},
 		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: "reading the reviews of o/r#7 failed in transit"},
 		"unreadable":        {err: errFake("HTTP 404"), code: ExitGateRefused, says: "the reviews of o/r#7 cannot be read"},
 	} {
@@ -124,6 +125,7 @@ func TestGateCheckIsTheDryPath(t *testing.T) {
 		says string
 	}{
 		"changes requested": {why: changesRequested, code: ExitGateRefused, says: "refused, o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
+		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: "reading the reviews of o/r#7 failed in transit"},
 		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: "unread, reading the reviews of o/r#7 failed in transit"},
 		"nothing holds":     {says: "dry path: o/r#7 would merge as far as its reviews go"},
 	} {
