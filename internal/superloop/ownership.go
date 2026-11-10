@@ -166,7 +166,15 @@ func (d Desk) namedNever(p Pull) string {
 		if strings.Trim(name, "*?") == "" {
 			continue
 		}
-		re := nameWord(n)
+		// GitHub's name occurs in ordinary workflow paths, action titles and
+		// dependency branches. Those name the hosting platform, not a repository
+		// named github. Require the qualified repository there; unread still
+		// excludes the repository itself, including wildcard Never patterns.
+		pattern := n
+		if strings.EqualFold(name, "github") {
+			pattern = "/" + n
+		}
+		re := nameWord(pattern)
 		if slices.ContainsFunc(texts, re.MatchString) {
 			return n
 		}

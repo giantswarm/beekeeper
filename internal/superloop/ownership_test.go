@@ -121,6 +121,22 @@ func TestAWildcardNeverRepositoryNamesNothing(t *testing.T) {
 	left(t, Plan(Input{Workers: w, Rounds: 1, Desk: d, Now: t0}), leftNever)
 }
 
+func TestGitHubRepositoryExclusionStillApplies(t *testing.T) {
+	for _, pattern := range []string{"upstream/github", "up*/github"} {
+		d := Desk{Never: []string{pattern}}
+		for _, p := range []Pull{
+			{Ref: "upstream/github#1"},
+			{Ref: "o/r#1", Title: "fix: update upstream/github"},
+			{Ref: "o/r#1", Branch: "reposetup/upstream/github"},
+			{Ref: "o/r#1", Files: []string{"repos/upstream/github/config.yaml"}},
+		} {
+			if o, reason, _ := d.owner(p, true); o != nobodys || reason != leftNever {
+				t.Errorf("%s allowed %+v: owner=%v reason=%s", pattern, p, o, reason)
+			}
+		}
+	}
+}
+
 func TestUnreadTeamFilesLeaveOnlyTheReviewListAndOverrides(t *testing.T) {
 	d := desk()
 	d.TeamsUnknown = true
