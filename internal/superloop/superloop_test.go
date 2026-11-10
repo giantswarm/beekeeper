@@ -1002,17 +1002,16 @@ func TestAReplacedParkIsNoDecision(t *testing.T) {
 	}
 }
 
-// A worker that pushes while round 1 runs has its newer head reviewed: a
-// verdict on the head the worker parks on is the round's, never ignored.
-func TestAHeadPushedDuringTheRoundGetsItsGo(t *testing.T) {
+// Findings on a changed head still reach the worker, but an approval may
+// cover only the head assigned to its round.
+func TestAHeadPushedDuringTheRoundCannotBeApproved(t *testing.T) {
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
 	tk := taken(t, t0, started)
 	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
 	for _, at := range []time.Time{t0.Add(-time.Minute), t0.Add(30 * time.Second)} {
 		in := Input{Workers: parked(at), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
-		a := only(t, Plan(in), KindGo)
-		if a.Head != head2 || !strings.Contains(a.Message, "review round 1 approved head "+short(head2)+" (the round opened on head "+short(head1)+")") {
-			t.Errorf("parked %s: go = %+v", at, a)
+		if a := only(t, Plan(in), KindLeave); !strings.Contains(a.Message, "no merge go") {
+			t.Errorf("parked %s: action = %+v", at, a)
 		}
 	}
 	// No verdict yet on either head: the round runs.

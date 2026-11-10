@@ -322,7 +322,7 @@ func TestDeliveryDroppedPRSeedPreservesTombstoneWhenLinked(t *testing.T) {
 	}
 }
 
-func TestReviewerPublishedFixesCountAsCIWithoutAnotherWorkerPark(t *testing.T) {
+func TestReviewerPublishedFixesNeedRepair(t *testing.T) {
 	in := deliveryInput()
 	in.Workers[0].ReviewRequested = true
 	in.Taken = []Taken{{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliveryFirstHead), At: in.Now}}
@@ -331,7 +331,7 @@ func TestReviewerPublishedFixesCountAsCIWithoutAnotherWorkerPark(t *testing.T) {
 	p.Reviews = []Review{{Head: p.Head, Verdict: Approved, At: in.Now.Add(time.Minute)}}
 	in.Pulls[deliveryPR] = p
 	got := Deliveries(in, nil)
-	if len(got) != 1 || got[0].Step != state.DeliveryCI {
+	if len(got) != 1 || got[0].Step != state.DeliveryFixing {
 		t.Fatalf("reviewer fixes with pending CI: %+v", got)
 	}
 }
