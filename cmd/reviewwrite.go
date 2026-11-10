@@ -10,7 +10,7 @@ const reviewWriteRefusal = "Refused: review sessions cannot commit or push fixes
 
 func reviewerSession(st *state.State, by state.Party) bool {
 	for _, start := range st.Starts {
-		if start.Kind == taskKindReview && start.Party.Is(by) {
+		if start.Kind == taskKindReview && start.Is(by) {
 			return true
 		}
 	}
@@ -26,7 +26,19 @@ func (a *app) hookReviewWrite(session string) string {
 	if session == "" {
 		return ""
 	}
-	st, err := a.store.Read()
+	store := a.store
+	var err error
+	if store == nil {
+		if a.cfg == nil {
+			return ""
+		}
+		store, err = state.Open(a.cfg.StateDir)
+		a.store = store
+	}
+	var st *state.State
+	if err == nil {
+		st, err = store.Read()
+	}
 	if err != nil {
 		return "Refused: cannot read the review assignment; retry when state is readable."
 	}
