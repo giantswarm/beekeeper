@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -149,7 +151,15 @@ func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	a := claimApp(t)
 	holdStartingLease(t, a, graveler, claimOther)
-	before, err := a.store.Peek()
+	// Keep the original inode open so repeated atomic replacements cannot
+	// reuse it and hide a write during the refused claim attempts.
+	path := filepath.Join(a.store.Dir(), "state.json")
+	original, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	before, err := original.Stat()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +176,12 @@ func TestLeaseClaimWaitRunsOut(t *testing.T) {
 		len(pauses) != len(want) || pauses[2] != want[2] {
 		t.Errorf("a claim that waited out: %q, exit %d, pauses %v", out, Code(err), pauses)
 	}
-	after, err := a.store.Peek()
-	if err != nil || after.UpdatedRevision != before.UpdatedRevision {
-		t.Errorf("refused claim tries rewrote state: rev %d -> %d (%v)", before.UpdatedRevision, after.UpdatedRevision, err)
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("refused claim tries replaced the state file")
 	}
 }
 
