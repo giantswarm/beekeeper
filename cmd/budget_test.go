@@ -270,6 +270,14 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.store.WriteFile(loopRESTFile, loopRESTSpend{
+		Reset:     reset,
+		Remaining: 4500,
+		Spent:     150,
+		Steps:     map[string]int{"inventory": 100, loopSweepStep: 50},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	c := a.budgetCmd()
 	c.SetArgs(nil)
 	c.SetOut(out)
@@ -280,6 +288,10 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 	want := "loop GraphQL spend: 42 of 1500 (board 39, pull 3), resets " + clock(a.now, reset)
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("budget printed %q, want %q", out.String(), want)
+	}
+	wantREST := "loop REST spend: 150 of 1000 (inventory 100, sweep 50), resets " + clock(a.now, reset)
+	if !strings.Contains(out.String(), wantREST) {
+		t.Fatalf("budget printed %q, want %q", out.String(), wantREST)
 	}
 }
 

@@ -185,6 +185,9 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	scan := step == "inventory" || step == loopSweepStep
 	if scan {
+		if err := a.loopRESTHeld(a.timeNow()); err != nil {
+			return err
+		}
 		ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)

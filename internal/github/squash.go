@@ -66,7 +66,7 @@ var RunGH = Retrying(execGH, ReadBackoff)
 
 // execGH is one run of the gh binary.
 func execGH(ctx context.Context, args ...string) ([]byte, error) {
-	if len(args) > 1 && (args[0] == "api" && !slices.Contains(args, "graphql") || args[0] == "run" || args[0] == "workflow" || args[0] == "release" && args[1] != "list" || args[0] == "pr" && args[1] == "diff") {
+	if len(args) > 1 && (args[0] == "api" && !slices.Contains(args, "graphql") || args[0] == "run" || args[0] == "workflow" || args[0] == "search" || args[0] == "release" && args[1] != "list" || args[0] == "issue" && args[1] == "close" || args[0] == "pr" && slices.Contains([]string{"diff", "create", "edit", "merge", "review", "close"}, args[1])) {
 		observeREST()
 	}
 	var stderr bytes.Buffer

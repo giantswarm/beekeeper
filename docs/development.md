@@ -804,9 +804,14 @@ mutation child updates the branch itself, once its authority, stop and hold chec
 GitHub's update-branch
 merges the base into it, pinned to the reviewed head, and the child waits up to the squash
 timeout for the new head's checks (every check the reviewed head had, all green), confirms
-that the approval covers the new head (`github.ApprovalCovers`: it only merges the base),
+that the approval covers the new head (`github.BaseMergeCovers`: a two-parent base merge with
+the PR patch unchanged; rebases and changed conflict resolutions need a new review),
 checks the stop and holds again and merges that head. The loop accepts a merged head the
-approval covers; its planner gives the go for such a head without a fresh park. A rebase
+approval covers, including when `merge.requireReview` is enabled; its planner gives the go
+for such a head without a fresh park. Emergency review-only admin merges also allow an
+unchanged green head behind its base when effective rules do not require up-to-date
+branches. They recognize review dismissal restrictions without bypassing strict status
+checks or other non-review requirements. A rebase
 merge method cannot take a base merge, so its branch behind such a base, a conflicting or
 draft branch,
 red checks on the updated head or an updated head the approval does not cover go back to the

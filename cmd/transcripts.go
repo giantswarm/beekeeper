@@ -1016,10 +1016,25 @@ func (a *app) enrichMetaFromState(st *state.State, meta *transcripts.Meta, p sta
 		}
 	}
 
+	// Directory correlation must select the latest applicable start. Otherwise
+	// every later transcript in a shared directory inherits the first worker's
+	// identity. Without timestamps, directory alone cannot identify a worker.
+	var ompStart state.Start
+	if meta.Harness == omp.Harness && meta.Cwd != "" && !meta.StartedAt.IsZero() {
+		for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
+			if s.Harness == omp.Harness && s.Dir != "" && !s.At.IsZero() &&
+				filepath.Clean(s.Dir) == filepath.Clean(meta.Cwd) &&
+				!meta.StartedAt.Before(s.At.Add(-5*time.Second)) &&
+				(ompStart.At.IsZero() || s.At.After(ompStart.At)) {
+				ompStart = s
+			}
+		}
+	}
 	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
 		conversation := meta.ID != "" && s.Conversation == meta.ID
-		if s.Is(p) || conversation || (meta.ID != "" && s.Session == meta.ID) || (meta.HostSession != "" && s.HostSession == meta.HostSession) {
-			if conversation {
+		ompDirMatch := !ompStart.At.IsZero() && s.Is(ompStart.Party)
+		if s.Is(p) || conversation || ompDirMatch || (meta.ID != "" && s.Session == meta.ID) || (meta.HostSession != "" && s.HostSession == meta.HostSession) {
+			if conversation || ompDirMatch {
 				meta.HostSession = cmp.Or(meta.HostSession, s.HostSession)
 				p.HostSession = cmp.Or(s.HostSession, p.HostSession)
 			}

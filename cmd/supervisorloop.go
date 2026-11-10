@@ -170,8 +170,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 }
 
 // readBaseMerge reads whether the approval of approved covers p's head: it
-// only merges its base into approved, resolving the merge's conflicts or
-// not, or rebases approved onto it (github.ApprovalCovers).
+// only merges its base into approved with the reviewed patch unchanged.
 var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
 	r, ok := parseRef(p.Ref)
 	if !ok || p.Base == "" {
@@ -179,7 +178,7 @@ var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	only, _, err := github.ApprovalCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	only, _, err := github.BaseMergeCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
 	return only, err
 }
 
@@ -764,6 +763,7 @@ type supervisorLoop struct {
 	sweepIncomplete bool
 	unmerged        map[string]loopUnmergedObservation
 	unmergedCursor  string
+	defaultBranches map[string]string
 	cfgSum          [32]byte
 }
 
@@ -927,11 +927,17 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 	}
 	l.once = once
 	l.lifecycle = life
+	if !once && !l.dryRun {
+		l.loadCache()
+	}
 	defer func() {
 		cancel()
 		l.passActions.Wait()
 		l.mergeActions.Wait()
 		l.timerActs.Wait()
+		if !once && !l.dryRun {
+			l.saveCache()
+		}
 	}()
 	if !once {
 		l.stopWatch = a.startLoopWatch(ctx)
@@ -975,6 +981,9 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			continue
 		}
 		l.clearSaid("state lock busy")
+		if !once && !l.dryRun {
+			l.saveCache()
+		}
 		l.lifecyclePhase(loopPhaseBetween)
 		if _, rerr := l.reexec(ctx); rerr != nil {
 			return rerr
@@ -1143,6 +1152,7 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 	if ctx.Err() != nil {
 		return false, nil
 	}
+	l.saveCache()
 	if err := b.Exec(); err != nil {
 		l.mu.Lock()
 		l.reexecFailed = true
@@ -1267,9 +1277,98 @@ func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
 	}
 	if p.State != superloop.Open && l.unmerged != nil {
 		if r, ok := parseRef(ref); ok {
-			delete(l.unmerged, strings.ToLower(r.Repo))
+			key := strings.ToLower(r.Repo)
+			if obs, exists := l.unmerged[key]; exists {
+				obs.pulls = slices.DeleteFunc(obs.pulls, func(u unmergedPull) bool { return u.Number == r.N })
+				obs.at = time.Time{}
+				l.unmerged[key] = obs
+			}
 		}
 	}
+}
+
+const loopCacheFile = "supervisor-loop-cache.json"
+
+type cachedUnmergedObservation struct {
+	Pulls  []unmergedPull `json:"pulls,omitempty"`
+	ETag   string         `json:"etag,omitempty"`
+	At     time.Time      `json:"at,omitempty"`
+	FullAt time.Time      `json:"full_at,omitempty"`
+}
+
+type loopCache struct {
+	Login           string                               `json:"login,omitempty"`
+	Teams           map[string]string                    `json:"teams,omitempty"`
+	TeamsAt         time.Time                            `json:"teams_at,omitempty"`
+	TidyAt          time.Time                            `json:"tidy_at,omitempty"`
+	OpenPulls       []string                             `json:"open_pulls,omitempty"`
+	OpenPullsAt     time.Time                            `json:"open_pulls_at,omitempty"`
+	Unmerged        map[string]cachedUnmergedObservation `json:"unmerged,omitempty"`
+	UnmergedCursor  string                               `json:"unmerged_cursor,omitempty"`
+	DefaultBranches map[string]string                    `json:"default_branches,omitempty"`
+}
+
+func (l *supervisorLoop) loadCache() {
+	if l == nil || l.a == nil || l.a.store == nil {
+		return
+	}
+	var c loopCache
+	if ok, err := l.a.store.ReadFile(loopCacheFile, &c); err != nil || !ok {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.login == "" {
+		l.login = c.Login
+	}
+	if len(l.teams) == 0 && len(c.Teams) > 0 {
+		l.teams = maps.Clone(c.Teams)
+		l.teamsAt = c.TeamsAt
+	}
+	if l.tidyAt.IsZero() {
+		l.tidyAt = c.TidyAt
+	}
+	if len(l.openPulls) == 0 && len(c.OpenPulls) > 0 {
+		l.openPulls = slices.Clone(c.OpenPulls)
+		l.openPullsAt = c.OpenPullsAt
+	}
+	if len(l.unmerged) == 0 && len(c.Unmerged) > 0 {
+		l.unmerged = make(map[string]loopUnmergedObservation, len(c.Unmerged))
+		for k, v := range c.Unmerged {
+			l.unmerged[k] = loopUnmergedObservation{pulls: slices.Clone(v.Pulls), etag: v.ETag, at: v.At, fullAt: v.FullAt}
+		}
+	}
+	if l.unmergedCursor == "" {
+		l.unmergedCursor = c.UnmergedCursor
+	}
+	if len(l.defaultBranches) == 0 && len(c.DefaultBranches) > 0 {
+		l.defaultBranches = maps.Clone(c.DefaultBranches)
+	}
+}
+
+func (l *supervisorLoop) saveCache() {
+	if l == nil || l.dryRun || l.a == nil || l.a.store == nil {
+		return
+	}
+	l.mu.Lock()
+	c := loopCache{
+		Login:           l.login,
+		Teams:           maps.Clone(l.teams),
+		TeamsAt:         l.teamsAt,
+		TidyAt:          l.tidyAt,
+		OpenPulls:       slices.Clone(l.openPulls),
+		OpenPullsAt:     l.openPullsAt,
+		UnmergedCursor:  l.unmergedCursor,
+		DefaultBranches: maps.Clone(l.defaultBranches),
+	}
+	if len(l.unmerged) > 0 {
+		c.Unmerged = make(map[string]cachedUnmergedObservation, len(l.unmerged))
+		for k, v := range l.unmerged {
+			c.Unmerged[k] = cachedUnmergedObservation{Pulls: slices.Clone(v.pulls), ETag: v.etag, At: v.at, FullAt: v.fullAt}
+		}
+	}
+	l.mu.Unlock()
+	_ = l.a.store.WriteFile(loopCacheFile, c)
 }
 
 // pass is one look: gather, plan, act.
@@ -1312,21 +1411,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !l.dryRun {
-		if err := l.completeEpics(ctx, st); err != nil {
-			l.sayOnce("epic completion", "SUPERVISOR EPIC completion waits: %v", err)
-		} else {
-			l.clearSaid("epic completion")
-		}
-		if err := l.wakeEpicOwners(ctx, st); err != nil {
-			l.sayOnce("epic wake", "SUPERVISOR EPIC wake waits: %v", err)
-		} else {
-			l.clearSaid("epic wake")
-		}
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
-		return err
-	}
 	l.lifecyclePhase("read state and dispatch timers")
 	// Wall-clock timer jobs keep running while GitHub observations are
 	// held. Board commands they invoke still share the query admission gate.
@@ -1364,6 +1448,19 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.clearSaid("graphql allowance")
 	}
 	if !l.dryRun {
+		if err := l.completeEpics(ctx, st); err != nil {
+			l.sayOnce("epic completion", "SUPERVISOR EPIC completion waits: %v", err)
+		} else {
+			l.clearSaid("epic completion")
+		}
+		if err := l.wakeEpicOwners(ctx, st); err != nil {
+			l.sayOnce("epic wake", "SUPERVISOR EPIC wake waits: %v", err)
+		} else {
+			l.clearSaid("epic wake")
+		}
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
 		l.lifecyclePhase("tidy and sync claims")
 		l.tidy(ctx, st)
 		l.updateHosts(ctx, st)
@@ -3266,7 +3363,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately park from the worktree so the loop owns CI:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
-If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
+If the new head only merges the base branch with the PR patch unchanged, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review. A rebase or a conflict resolution that changes the patch needs a new review.
 `
 
 const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
@@ -3509,6 +3606,31 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		return "", errLoopLater
 	}
 	r, _ := parseRef(act.Ref)
+	var authorFlags []string
+	if l.a.cfg.Capacity.TaskPolicies[taskKindReview].DifferentFamily {
+		st, err := l.a.store.Read()
+		if err != nil {
+			return "", err
+		}
+		if m := reviewAuthorModel(st, act); m != "" {
+			authorFlags = []string{"--" + authorModelFlag, m}
+		} else {
+			return "", refused("model policy: review requires the author's recorded model")
+		}
+	}
+	name := superloop.ReviewerName(act.Ref, act.Round)
+	placementFlags := slices.Clone(authorFlags)
+	if l.a.cfg.Supervisor.ReviewModel != "" {
+		placementFlags = append(placementFlags, modelFlag, l.a.cfg.Supervisor.ReviewModel)
+	}
+	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, placementFlags...)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
+			return "", errLoopLater
+		}
+		return "", err
+	}
 	rawBranch := ""
 	l.mu.Lock()
 	if cached, ok := l.pulls[act.Ref]; ok {
@@ -3547,31 +3669,6 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	branch := cmp.Or(rawBranch, fmt.Sprintf("pr-%d", r.N))
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Branch: branch, Round: act.Round, Worker: act.Agent, Context: act.Message})
 	if err != nil {
-		return "", err
-	}
-	var authorFlags []string
-	if l.a.cfg.Capacity.TaskPolicies[taskKindReview].DifferentFamily {
-		st, err := l.a.store.Read()
-		if err != nil {
-			return "", err
-		}
-		if m := reviewAuthorModel(st, act); m != "" {
-			authorFlags = []string{"--" + authorModelFlag, m}
-		} else {
-			return "", refused("model policy: review requires the author's recorded model")
-		}
-	}
-	name := superloop.ReviewerName(act.Ref, act.Round)
-	placementFlags := slices.Clone(authorFlags)
-	if l.a.cfg.Supervisor.ReviewModel != "" {
-		placementFlags = append(placementFlags, modelFlag, l.a.cfg.Supervisor.ReviewModel)
-	}
-	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, placementFlags...)
-	if err != nil {
-		if errors.Is(err, errLoopLater) {
-			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
-			return "", errLoopLater
-		}
 		return "", err
 	}
 	if place.remote() {
@@ -3856,7 +3953,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		if !l.capacityRoom(ctx, append([]string{"--host", selector}, flags...)...) {
 			continue
 		}
-		ref, err := ghDefaultBranch(ctx, repo)
+		ref, err := l.defaultBranch(ctx, repo)
 		if err != nil || ref == "" {
 			l.sayOnce("branch "+repo, "SUPERVISOR HOST WAITS: %s: no default branch of %s to pin a remote start (%v)", selector, repo, err)
 			continue
@@ -3942,6 +4039,27 @@ var ghDefaultBranch = func(ctx context.Context, repo string) (string, error) {
 	defer cancel()
 	out, err := github.RunGH(ctx, "api", "repos/"+repo, "--jq", ".default_branch")
 	return strings.TrimSpace(string(out)), err
+}
+
+func (l *supervisorLoop) defaultBranch(ctx context.Context, repo string) (string, error) {
+	key := strings.ToLower(repo)
+	l.mu.Lock()
+	ref := l.defaultBranches[key]
+	l.mu.Unlock()
+	if ref != "" {
+		return ref, nil
+	}
+	ref, err := ghDefaultBranch(ctx, repo)
+	if err != nil || ref == "" {
+		return ref, err
+	}
+	l.mu.Lock()
+	if l.defaultBranches == nil {
+		l.defaultBranches = map[string]string{}
+	}
+	l.defaultBranches[key] = ref
+	l.mu.Unlock()
+	return ref, nil
 }
 
 // remoteStartRefused decides a refused placed start on a host: an

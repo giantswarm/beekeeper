@@ -132,18 +132,25 @@ unread core budget:
 			}
 			var loopSpend loopGraphQLSpend
 			_, _ = a.store.ReadFile(loopGraphQLFile, &loopSpend)
+			var restSpend loopRESTSpend
+			_, _ = a.store.ReadFile(loopRESTFile, &restSpend)
+			var loopRESTPtr *loopRESTSpend
+			if !restSpend.Reset.IsZero() && a.now.Before(restSpend.Reset) && (restSpend.Spent > 0 || len(restSpend.Steps) > 0) {
+				loopRESTPtr = &restSpend
+			}
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
 					Callers     []githubCaller    `json:"callers"`
 					RESTCallers []githubCaller    `json:"rest_callers"`
 					Loop        *loopGraphQLSpend `json:"loop,omitempty"`
+					LoopREST    *loopRESTSpend    `json:"loop_rest,omitempty"`
 					Floor       int               `json:"floor"`
 					Held        bool              `json:"held"`
 					Urgent      []state.Urgent    `json:"urgent,omitempty"`
 					Gated       []gatedParty      `json:"gated,omitempty"`
 					Pollers     []poller          `json:"pollers"`
-				}{b, callers, restCallers, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+				}{b, callers, restCallers, &loopSpend, loopRESTPtr, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				for _, warning := range b.Warnings {
 					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
@@ -162,6 +169,9 @@ unread core budget:
 					_, _ = fmt.Fprintln(a.out, l)
 				}
 				if l := loopSpendLine(a, loopSpend); l != "" {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
+				if l := loopRESTSpendLine(a, restSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
 				if l := a.heldLine(loopSpend); l != "" {
@@ -322,6 +332,25 @@ func loopSpendLine(a *app, s loopGraphQLSpend) string {
 	if !s.Reset.IsZero() {
 		line += ", resets " + clock(a.now, s.Reset)
 	}
+	return line
+}
+
+func loopRESTSpendLine(a *app, s loopRESTSpend) string {
+	if s.Reset.IsZero() || !a.now.Before(s.Reset) || (s.Spent == 0 && len(s.Steps) == 0) {
+		return ""
+	}
+	var steps []string
+	for step, requests := range s.Steps {
+		if requests > 0 {
+			steps = append(steps, fmt.Sprintf("%s %d", step, requests))
+		}
+	}
+	slices.Sort(steps)
+	line := fmt.Sprintf("loop REST spend: %d of %d", s.Spent, loopRESTLimit)
+	if len(steps) > 0 {
+		line += " (" + strings.Join(steps, ", ") + ")"
+	}
+	line += ", resets " + clock(a.now, s.Reset)
 	return line
 }
 

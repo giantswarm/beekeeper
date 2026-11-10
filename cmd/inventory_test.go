@@ -307,3 +307,63 @@ func TestLoopScanDisabledFloorRetainsUnknownSpend(t *testing.T) {
 		t.Fatalf("unreadable budget: %v", err)
 	}
 }
+
+func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = -1
+	reset := r.a.timeNow().Add(time.Hour)
+	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: reset, Spent: loopRESTLimit, Remaining: 3800}); err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		probes++
+		return github.Budget{Remaining: 3800, Reset: reset}, nil
+	}
+	if err := r.a.loopScanREST(context.Background(), "inventory", func() error {
+		t.Fatal("exhausted loopScanREST ran")
+		return nil
+	}); !errors.Is(err, errLoopLater) || probes != 0 {
+		t.Fatalf("loopScanREST probed GitHub while held: probes=%d err=%v", probes, err)
+	}
+	if err := r.a.loopGitHub(context.Background(), "inventory", func() error {
+		t.Fatal("exhausted inventory scan ran")
+		return nil
+	}); !errors.Is(err, errLoopLater) || probes != 0 {
+		t.Fatalf("loopGitHub scan probed GitHub while REST held: probes=%d err=%v", probes, err)
+	}
+
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := r.a.timeNow()
+	const cacheLogin = "fixture-user"
+	const cacheTeam = "team-a"
+	const cacheETag = `"etag-7"`
+	l.login = cacheLogin
+	l.teams = map[string]string{cacheTeam: cacheLogin}
+	l.teamsAt = now
+	l.tidyAt = now
+	l.openPulls = []string{loopPR}
+	l.openPullsAt = now
+	l.unmerged = map[string]loopUnmergedObservation{
+		repo: {pulls: []unmergedPull{{Number: 7, State: emergencyOpenState, CreatedAt: now}}, etag: cacheETag, at: now, fullAt: now},
+	}
+	l.unmergedCursor = repo
+	l.defaultBranches = map[string]string{repo: mainBranch}
+	l.cachePull(loopPR, superloop.Pull{Ref: loopPR, State: superloop.Merged})
+	if obs := l.unmerged[repo]; obs.etag != cacheETag || len(obs.pulls) != 0 || !obs.at.IsZero() {
+		t.Fatalf("cachePull did not preserve ETag while dropping merged PR: %+v", obs)
+	}
+	l.saveCache()
+
+	restarted, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.loadCache()
+	if restarted.login != cacheLogin || restarted.teams[cacheTeam] != cacheLogin || restarted.defaultBranches[repo] != mainBranch || restarted.unmerged[repo].etag != cacheETag || restarted.unmergedCursor != repo {
+		t.Fatalf("restarted loop lost persisted cache: login=%q teams=%v branches=%v unmerged=%+v", restarted.login, restarted.teams, restarted.defaultBranches, restarted.unmerged)
+	}
+}

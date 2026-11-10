@@ -61,7 +61,7 @@ func ReviewOnlyBypass(ctx context.Context, run GH, repo, base, head string) erro
 			}
 			for key, value := range rule.Parameters {
 				switch key {
-				case "required_approving_review_count", "dismiss_stale_reviews_on_push", "require_code_owner_review", "require_last_push_approval":
+				case "required_approving_review_count", "dismiss_stale_reviews_on_push", "require_code_owner_review", "require_last_push_approval", "dismissal_restriction":
 				case "allowed_merge_methods":
 					var methods []string
 					if json.Unmarshal(value, &methods) != nil || !slices.Contains(methods, "squash") {
@@ -81,6 +81,29 @@ func ReviewOnlyBypass(ctx context.Context, run GH, repo, base, head string) erro
 				case reviewRequiredChecks, "strict_required_status_checks_policy", "do_not_enforce_on_create":
 				default:
 					return fmt.Errorf("unsupported status check requirement: %s", key)
+				}
+			}
+			// Admin must not waive an up-to-date requirement. Green checks
+			// on a behind head do not prove its merge result is green.
+			var strict bool
+			if value, ok := rule.Parameters["strict_required_status_checks_policy"]; ok {
+				if err := json.Unmarshal(value, &strict); err != nil || string(value) == "null" {
+					return fmt.Errorf("up-to-date requirement is unreadable")
+				}
+			}
+			if strict {
+				raw, err := run(ctx, "api", "repos/"+repo+"/compare/"+url.PathEscape(base)+"..."+url.PathEscape(head))
+				if err != nil {
+					return fmt.Errorf("read distance from base: %w", err)
+				}
+				var distance struct {
+					Behind *int `json:"behind_by"`
+				}
+				if json.Unmarshal(raw, &distance) != nil || distance.Behind == nil || *distance.Behind < 0 {
+					return fmt.Errorf("distance from base is unreadable")
+				}
+				if *distance.Behind != 0 {
+					return fmt.Errorf("branch must be up to date: %d commits behind its base", *distance.Behind)
 				}
 			}
 			var checks []bypassCheck

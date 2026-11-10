@@ -105,9 +105,22 @@ func compare(ctx context.Context, gh GH, repo, from, to string) (comparison, err
 // patch), merged another branch, or a commit that is no merge fails; a
 // comparison at the compare API's caps proves nothing and fails too.
 func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head string) (bool, string, error) {
+	return approvalCovers(ctx, gh, repo, base, approved, head, false)
+}
+
+// BaseMergeCovers carries approval only over a merge of the base whose PR
+// patch is unchanged. Rebases and conflict resolutions need another review.
+func BaseMergeCovers(ctx context.Context, gh GH, repo, base, approved, head string) (bool, string, error) {
+	return approvalCovers(ctx, gh, repo, base, approved, head, true)
+}
+
+func approvalCovers(ctx context.Context, gh GH, repo, base, approved, head string, strict bool) (bool, string, error) {
 	added, err := compare(ctx, gh, repo, approved, head)
 	if err != nil {
 		return false, "", err
+	}
+	if strict && added.Status != compareAhead {
+		return false, "head is not a descendant of the reviewed head", nil
 	}
 	rebased := added.Status == compareDiverged
 	if added.Status != compareAhead && !rebased {
@@ -149,6 +162,21 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 	unpatched, differ, why := sameChange(was.Files, now.Files)
 	if why != "" {
 		return false, fmt.Sprintf("%s changes %s other than the approved head %s: %s", short(head), base, short(approved), why), nil
+	}
+	if strict {
+		if len(differ) != 0 {
+			return false, "base merge changes the reviewed patch", nil
+		}
+		for _, c := range own {
+			if len(c.Parents) != 2 {
+				return false, "base update is not a two-parent merge", nil
+			}
+			if ok, err := mergesBase(ctx, gh, repo, base, c.Parents); err != nil {
+				return false, "", err
+			} else if !ok {
+				return false, "update merges a branch other than the base", nil
+			}
+		}
 	}
 	// moved is what the base changed between the two merge bases: a file
 	// without a patch passes only untouched by it, and a conflict needs it.
