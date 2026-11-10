@@ -27,7 +27,7 @@ func TestStaleMergeResultFailure(t *testing.T) {
 		{"missing identity", "merge result () failed go test", true},
 		{"truncated identity", "merge result (main + ", true},
 		{"multiple results", mergeFailureForTest(loopHead) + "\n" + mergeFailureForTest(loopFixed), true},
-		{"conflict", "branch conflicts with its base", false},
+		{litConflict, "branch conflicts with its base", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := staleMergeResultFailure(tc.reason, loopHead); got != tc.stale {
@@ -66,7 +66,7 @@ func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 			if r.called(gateCmdName) == nil || r.called(agentsName, agentWakeName, loopWorker) != nil {
 				t.Fatalf("expected gate validation without repair: %v", r.calls)
 			}
-			if len(r.logged(t, "merge.failure-dropped")) != 1 || strings.Count(r.out.String(), "SUPERVISOR MERGE DROPPED") != 1 {
+			if len(r.logged(t, loopMergeFailureDropped)) != 1 || strings.Count(r.out.String(), "SUPERVISOR MERGE DROPPED") != 1 {
 				t.Fatalf("missing single drop diagnostic: %s", r.out)
 			}
 		})
@@ -96,7 +96,7 @@ func TestLoopRetiresStalePersistedRepair(t *testing.T) {
 				if stale && !dryRun {
 					want = 1
 				}
-				for _, verb := range []string{loopUnstageVerb, loopClaimEndVerb, "merge.failure-dropped"} {
+				for _, verb := range []string{loopUnstageVerb, loopClaimEndVerb, loopMergeFailureDropped} {
 					if n := len(r.logged(t, verb)); n != want {
 						t.Fatalf("%s events = %d, want %d", verb, n, want)
 					}
@@ -104,7 +104,7 @@ func TestLoopRetiresStalePersistedRepair(t *testing.T) {
 				if _, err := l.dropInvalidMergeRepairs(got, stages, details); err != nil {
 					t.Fatal(err)
 				}
-				if n := len(r.logged(t, "merge.failure-dropped")); n != want {
+				if n := len(r.logged(t, loopMergeFailureDropped)); n != want {
 					t.Fatalf("repeated drop diagnostic: %d", n)
 				}
 			})

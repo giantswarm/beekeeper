@@ -24,6 +24,7 @@ import (
 const loopWorkerMergeGo = "merge go given"
 const reviewedMergeQueued = "queued"
 const loopMergeFailed = "merge.failed"
+const loopMergeFailureDropped = "merge.failure-dropped"
 
 func pullNeedsBranchRepair(p superloop.Pull) bool {
 	return p.Draft || p.Mergeable == "CONFLICTING"
@@ -310,7 +311,7 @@ func staleMergeResultFailure(reason, head string) bool {
 
 func (l *supervisorLoop) logStaleMergeFailure(ref, head string) error {
 	message := fmt.Sprintf("SUPERVISOR MERGE DROPPED stale failure for %s at %s; rechecking through the merge gate", ref, head)
-	if err := l.a.store.Record(about(event(loopParty, "merge.failure-dropped", "%s", message), ref)); err != nil {
+	if err := l.a.store.Record(about(event(loopParty, loopMergeFailureDropped, "%s", message), ref)); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(l.a.out, message)

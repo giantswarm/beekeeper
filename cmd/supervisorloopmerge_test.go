@@ -157,7 +157,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 					}
 				}
 				switch scenario {
-				case "conflict":
+				case litConflict:
 					r.pull.Mergeable = mergeableConflicting
 				case "moved":
 					r.pull.Head = loopFixed
