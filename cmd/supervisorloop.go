@@ -4686,6 +4686,9 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, fires, _ = settleTimersMatching(current, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
+		for _, line := range lines {
+			evs = append(evs, event(watchParty, "watch.timer", "%s", line))
+		}
 		return evs, nil
 	}); err != nil {
 		return err
@@ -4693,7 +4696,7 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	// Each batch keeps its own time while later passes advance the clock.
 	w := &watcher{app: a.snapshotAtNow()}
 	for _, line := range lines {
-		w.emitNow("timer", "%s", line)
+		w.outputEvent(line)
 	}
 	l.timerActs.Go(func() {
 		w.actTimers(ctx, fires)
