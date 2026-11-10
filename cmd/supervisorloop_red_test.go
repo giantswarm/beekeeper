@@ -12,8 +12,12 @@ import (
 )
 
 const (
-	loopLintURL  = "https://github.com/o/r/actions/runs/5/job/50"
-	loopBuildURL = "https://example.com/ci/build/6"
+	loopLintURL         = "https://github.com/o/r/actions/runs/5/job/50"
+	loopBuildURL        = "https://example.com/ci/build/6"
+	loopWorkflowHead    = "head"
+	loopOtherWorkflow   = "other-ci"
+	loopWorkflowSuccess = "success"
+	loopWorkflowFailure = "failure"
 )
 
 // The rollup's red checks carry their names and URLs: a check run's name
@@ -154,11 +158,11 @@ func TestLoopSupersededChecks(t *testing.T) {
 	rerun := newer
 	rerun.DetailsURL = old.DetailsURL
 	otherWorkflow := newer
-	otherWorkflow.WorkflowName = "other-ci"
+	otherWorkflow.WorkflowName = loopOtherWorkflow
 	otherWorkflowPending := pending
-	otherWorkflowPending.WorkflowName = "other-ci"
+	otherWorkflowPending.WorkflowName = loopOtherWorkflow
 	otherWorkflowExternal := external
-	otherWorkflowExternal.WorkflowName = "other-ci"
+	otherWorkflowExternal.WorkflowName = loopOtherWorkflow
 	delayedOld := failed
 	delayedOld.StartedAt = newer.StartedAt.Add(time.Minute)
 	for _, tt := range []struct {
@@ -223,13 +227,13 @@ func TestLoopSupersededChecks(t *testing.T) {
 // A workflow may fail before it creates ci-ok. The old ci-ok success in
 // the rollup must not let that head authorize a merge.
 func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
-	old := loopWorkflowRun{ID: 10, WorkflowID: 1, Attempt: 1, Head: "head", Name: "CI", Status: "completed", Conclusion: "success"}
+	old := loopWorkflowRun{ID: 10, WorkflowID: 1, Attempt: 1, Head: loopWorkflowHead, Name: "CI", Status: workerGitHubCompleted, Conclusion: loopWorkflowSuccess}
 	newRun := old
 	newRun.ID = 20
 	other := old
 	other.WorkflowID = 2
 	other.ID = 30
-	other.Name = "other"
+	other.Name = loopOtherWorkflow
 	for _, tc := range []struct {
 		name       string
 		status     string
@@ -238,10 +242,10 @@ func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
 		green      bool
 		red        int
 	}{
-		{"failure before job creation", "completed", "failure", true, false, 1},
-		{"queued before job creation", "queued", "", true, false, 0},
-		{"successful suite missing job", "completed", "success", true, false, 0},
-		{"successful replacement", "completed", "success", false, true, 0},
+		{"failure before job creation", workerGitHubCompleted, loopWorkflowFailure, true, false, 1},
+		{"queued before job creation", epicChildQueued, "", true, false, 0},
+		{"successful suite missing job", workerGitHubCompleted, loopWorkflowSuccess, true, false, 0},
+		{"successful replacement", workerGitHubCompleted, loopWorkflowSuccess, false, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			newRun.Status, newRun.Conclusion = tc.status, tc.conclusion
@@ -261,7 +265,7 @@ func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
 					id = "20"
 				}
 				rollup := []loopCheck{{Name: "ci-ok", WorkflowName: "CI", Status: "COMPLETED", Conclusion: "SUCCESS", DetailsURL: "https://github.com/o/r/actions/runs/" + id + "/job/1"}}
-				p := superloop.Pull{Head: "head", Green: true}
+				p := superloop.Pull{Head: loopWorkflowHead, Green: true}
 				if err := applyLoopWorkflowRuns(&p, raw, rollup); err != nil {
 					t.Fatal(err)
 				}
@@ -275,7 +279,7 @@ func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
 
 func TestLoopWorkflowRunsUnreadable(t *testing.T) {
 	for _, raw := range []string{"", "{}", "{", `{"workflow_runs":[{"head_sha":"head"}]}`} {
-		p := superloop.Pull{Head: "head", Green: true}
+		p := superloop.Pull{Head: loopWorkflowHead, Green: true}
 		if err := applyLoopWorkflowRuns(&p, []byte(raw), nil); err == nil {
 			t.Fatalf("accepted %q", raw)
 		}
@@ -283,7 +287,7 @@ func TestLoopWorkflowRunsUnreadable(t *testing.T) {
 }
 
 func TestLoopWorkflowRunAttemptsAndOtherHeads(t *testing.T) {
-	p := superloop.Pull{Head: "head", Green: true}
+	p := superloop.Pull{Head: loopWorkflowHead, Green: true}
 	raw := `{"workflow_runs":[
 		{"id":20,"workflow_id":1,"run_attempt":2,"head_sha":"head","status":"completed","conclusion":"success"},
 		{"id":20,"workflow_id":1,"run_attempt":1,"head_sha":"head","status":"completed","conclusion":"failure"},
