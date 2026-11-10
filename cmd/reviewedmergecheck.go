@@ -250,6 +250,9 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, hea
 		lintArgs = append(lintArgs, "--config", filepath.Join(worktreeDir, configName))
 		configLabel = configName
 	}
+	// Independent merge worktrees may lint concurrently with other workers.
+	// Avoid the host-wide runner lock without suppressing lint findings.
+	lintArgs = append(lintArgs, "--allow-parallel-runners")
 	lintArgs = append(lintArgs, pkgs...)
 	if out, err := runMergeCheckCmd(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {

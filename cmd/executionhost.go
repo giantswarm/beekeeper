@@ -109,7 +109,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
+	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), GuardsDisabled: !a.cfg.Hooks.GuardsEnabled(), Rules: []byte(rules.String()), Launcher: plat.Launcher}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()
@@ -408,17 +408,22 @@ func (a *app) executionHostCmds() []*cobra.Command {
 			return deny()
 		}
 		var guardReq any
-		if allowed := executionGuardDecision(a.executionHook(), guardFormat, j, a.executionProtected(s))(raw); !guardDenied(allowed) {
-			_, calls := guard.GitHubCalls(raw, guardFormat)
-			_, restCalls := guard.GitHubRESTCalls(raw, guardFormat)
-			if len(calls)+len(restCalls) > 0 {
-				guardReq = executionGuardRequest{Calls: calls, RESTCalls: restCalls}
+		if a.cfg.Hooks.GuardsEnabled() {
+			if allowed := executionGuardDecision(a.executionHook(), guardFormat, j, a.executionProtected(s))(raw); !guardDenied(allowed) {
+				_, calls := guard.GitHubCalls(raw, guardFormat)
+				_, restCalls := guard.GitHubRESTCalls(raw, guardFormat)
+				if len(calls)+len(restCalls) > 0 {
+					guardReq = executionGuardRequest{Calls: calls, RESTCalls: restCalls}
+				}
 			}
 		}
 		var authority executionAuthority
 		co := s.Config.Coordinators[j.Request.Coordinator]
 		if err := execution.CoordinatorCall(cmd.Context(), co.Callback, string(j.Handle.Ref.Host), "guard", j.Handle.Ref, guardReq, j.Request.ControlKey, &authority, nil); err != nil || authority.Stopped {
 			return deny()
+		}
+		if !a.cfg.Hooks.GuardsEnabled() {
+			return nil
 		}
 		h := a.executionHook()
 		if authority.GitHubHeld {

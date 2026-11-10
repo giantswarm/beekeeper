@@ -122,7 +122,7 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 		if ag.Task != "" && !relieved(st, ag.Party) || holdsRole(st, ag.Party) || openRelayTo(st, ag.Party, now) {
 			continue
 		}
-		_, live := claude.Live(sessions, ag.Party)
+		_, live := liveSession(sessions, ag.Party)
 		idle := now.Sub(cmp.Or(ag.IdleSince, ag.Registered))
 		switch {
 		case ag.Done:
@@ -644,7 +644,7 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 			if err != nil {
 				return nil, err
 			}
-			notes[c.agent.Session] = note
+			notes[cmp.Or(c.agent.Session, c.agent.HostSession, c.agent.Name)] = note
 		}
 	}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -674,7 +674,7 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 						st.Records[j].Ended, st.Records[j].Waits = a.now.UTC(), ""
 					}
 				}
-				evs = append(evs, event(by, "agents.gone", "%s: %s; task: %s; hand-over: %s", c.agent.Name, c.why, c.agent.Task, notes[c.agent.Session]))
+				evs = append(evs, event(by, "agents.gone", "%s: %s; task: %s; hand-over: %s", c.agent.Name, c.why, c.agent.Task, notes[cmp.Or(c.agent.Session, c.agent.HostSession, c.agent.Name)]))
 			}
 			removeAgent(st, i)
 			removed = append(removed, c)

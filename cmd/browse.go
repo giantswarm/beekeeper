@@ -256,6 +256,7 @@ const browseStart = "beekeeper browse"
 func (a *app) browseCmd() *cobra.Command {
 	var model, dir, deploy, proofRepo string
 	var files []string
+	var personOK bool
 	var wait time.Duration
 	c := &cobra.Command{
 		Use:   "browse <steps>",
@@ -590,19 +591,19 @@ starts with "screen locked", names the locker and the probe to park on
 until the screen unlocks.
 
 A turn never takes the shared Chrome window from a person working at it.
-With a Chrome window in the person's view (focused, focused just before the
-current window, or on the workspace a monitor shows, a special workspace
-over it or not), browse watches their keyboards and
+With a Chrome window currently focused, browse watches their keyboards and
 pointers for ` + awaySample.String() + ` first; in use, it starts no turn and exits non-zero
 at once with an error that starts with "person at Chrome" and names the
 probe to park on, "beekeeper browse away". During the turn it keeps
 watching: while the person types or points, a window Chrome opens stays on
-their screen; once they turn to the shared window's own workspace, the
+their screen; once they focus a Chrome window, the
 turn yields: it stops, the window goes back at once, a cleanup turn closes
 the tabs the turn opened, "window yielded:" below the report says so, and
 the command fails with "person at Chrome" and the probe. Keyboards and
 pointers browse cannot read count as in use; desktop.typingQuiet below
-zero watches none. A lock that comes after the turn started moves
+zero watches none. --person-ok skips the presence guard for this run only,
+when the person explicitly permits using Chrome while they work in it.
+It does not bypass the browser lease or screen lock. A lock that comes after the turn started moves
 nothing, says "screen locked:" below the report, and a page not drawn
 fails the command with "screen locked". browse never touches the lock.
 
@@ -652,9 +653,10 @@ again once the extension is connected.`,
 			if steps == "" {
 				return usageErr("browse needs the steps to run")
 			}
-			return a.browseWithProof(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil, proofRepo)
+			return a.browseWithPersonOK(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil, proofRepo, personOK)
 		},
 	}
+	c.Flags().BoolVar(&personOK, "person-ok", false, "the person explicitly permits this run while using Chrome; skip its presence guard")
 	c.Flags().StringVar(&proofRepo, "proof-repo", "", "upload saved screenshots to this thread repository and report their Markdown links (owner/repo)")
 	c.Flags().StringVar(&model, "model", "", "the turn's model (default: Claude Code's)")
 	c.Flags().StringVar(&dir, "dir", ".", "the turn's working directory")
@@ -672,8 +674,7 @@ func (a *app) browseAwayCmd() *cobra.Command {
 		Use:   "away",
 		Short: "Exit 0 once the person no longer works at Chrome, 3 while they do",
 		Long: `browse away answers what a browse asks before its turn: whether the
-person works at Chrome, a Chrome window in their view (focused, focused just
-before the current window, or on the workspace a monitor shows) and their keyboard or
+person works at Chrome, a Chrome window currently focused and their keyboard or
 pointer in use within ` + awaySample.String() + `. It exits 0 when they do not, and 3
 (refused) with the reason when they do; it starts no turn and moves no
 window. It is the probe a browse refused with "person at Chrome" names,
@@ -743,6 +744,10 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 }
 
 func (a *app) browseWithProof(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn, proofRepo string) error {
+	return a.browseWithPersonOK(ctx, steps, dir, model, wait, deploy, files, blind, proofRepo, false)
+}
+
+func (a *app) browseWithPersonOK(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn, proofRepo string, personOK bool) error {
 	if err := a.requireClaudeLogin(); err != nil {
 		return err
 	}
@@ -762,7 +767,11 @@ func (a *app) browseWithProof(ctx context.Context, steps, dir, model string, wai
 	// it; the watch follows them over the turn.
 	watchCtx, endWatch := context.WithCancel(ctx)
 	defer endWatch()
-	pres, err := atChrome(watchCtx, a.cfg.Desktop.TypingQuiet.Duration)
+	quiet := a.cfg.Desktop.TypingQuiet.Duration
+	if personOK {
+		quiet = -time.Second
+	}
+	pres, err := atChrome(watchCtx, quiet)
 	if err != nil {
 		return err
 	}

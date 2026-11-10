@@ -29,6 +29,7 @@ const (
 // Delivery is one issue (or an issue-less desk pull request) from start to release.
 // Ref and Pulls use the same canonical references as serve records.
 type Delivery struct {
+	Abandoned bool `json:"abandoned,omitempty"`
 	// Origin distinguishes passive PR observations from work started by the desk
 	// or advanced by a new commit after observation. Empty is legacy/issue work.
 	Origin         string            `json:"origin,omitempty"`
