@@ -1282,7 +1282,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.mu.Unlock()
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
-	if reexec, err := l.reexec(ctx); err != nil || reexec {
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
 	if !l.dryRun {
@@ -1294,6 +1294,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.clearSaid("watch-conditions")
 		}
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	if !l.dryRun {
 		l.lifecyclePhase("watch alerts")
 		if err := l.watchAlerts(ctx); err != nil {
@@ -1301,6 +1304,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		} else {
 			l.clearSaid("alerts")
 		}
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
 	}
 	st, err := a.store.Read()
 	if err != nil {
@@ -1318,6 +1324,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.clearSaid("epic wake")
 		}
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	l.lifecyclePhase("read state and dispatch timers")
 	// Wall-clock timer jobs keep running while GitHub observations are
 	// held. Board commands they invoke still share the query admission gate.
@@ -1328,6 +1337,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.settleOverrides(ctx, st)
 		l.reloadConfig()
 		a = l.a.snapshotAtNow()
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
@@ -1358,7 +1370,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
-		if reexec, err := l.reexec(ctx); err != nil || reexec {
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
 	}
@@ -1389,6 +1401,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	st, err = a.store.Read()
 	if err != nil {
+		return err
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
 	l.lifecyclePhase(loopPhaseObserve)
@@ -1575,8 +1590,14 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	l.lifecyclePhase("discover pull requests")
 	swept := l.sweepPulls(ctx, in, tracked)
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	l.lifecyclePhase("observe repository ownership")
 	if len(tracked)+len(swept) > 0 && !l.ownership(ctx, &in.Desk) {
 		tracked = nil
@@ -1588,7 +1609,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	unreviewedEnded := map[string]bool{}
 	pullHeld := false
 	for _, ref := range tracked {
-		if err := ctx.Err(); err != nil {
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
 		// Each completed observation is progress, even when the batch takes
@@ -1841,6 +1862,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 		}
 		return l.fill(ctx, st, claims, in.Taken)
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
 	}
 	l.lifecyclePhase("dispatch planned actions")
 	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
@@ -2958,6 +2982,9 @@ var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
 // stale with no CLI) that superloop.Plan is not still handling in planned, and
 // archives or stops owed desktop and background sessions once their turns end.
 func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) error {
+	if l.pauseForReexec() || ctx.Err() != nil {
+		return nil
+	}
 	a := l.a.snapshotAtNow()
 	st, err := a.store.Read()
 	if err != nil {
@@ -2971,11 +2998,17 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
 	waits := sleepingWaits(st, sessions, t, inFlight, a.timeNow())
 	for _, w := range waits {
+		if l.pauseForReexec() || ctx.Err() != nil {
+			return nil
+		}
 		stopProcesses(w.pids())
 		line := "stopped " + w.String()
 		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
 			return []state.Event{event(loopParty, "agents.stop", "%s", line)}, nil
 		})
+	}
+	if l.pauseForReexec() || ctx.Err() != nil {
+		return nil
 	}
 	busy := func(p state.Party) bool {
 		if slices.ContainsFunc(waits, func(w leftWait) bool { return w.agent.Is(p) }) {
@@ -4825,4 +4858,14 @@ func (l *supervisorLoop) pauseForReexec() bool {
 	b, failed := l.bin, l.reexecFailed
 	l.mu.Unlock()
 	return !failed && b != nil && b.Replaced()
+}
+
+func (l *supervisorLoop) stopPassForReexec(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return true, err
+	}
+	return l.pauseForReexec(), nil
 }

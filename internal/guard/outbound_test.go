@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -242,5 +243,10 @@ func TestSweepFindsExposedCredentials(t *testing.T) {
 		if got[p] != w {
 			t.Errorf("%s: %q, want %q", p, got[p], w)
 		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := SweepContext(ctx, []string{home}, 5); len(got) != 0 {
+		t.Errorf("canceled SweepContext found %+v", got)
 	}
 }

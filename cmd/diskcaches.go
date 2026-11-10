@@ -150,6 +150,7 @@ func resolveDiskCaches(entries []config.DiskCache) []diskCache {
 
 // pruneCacheRoots trims every resolved cache root.
 func (a *app) pruneCacheRoots(r *diskRun, m diskMachine, pressure bool) {
+	ctx := a.context()
 	caches := slices.Clone(m.caches)
 	for _, d := range m.tmp {
 		caches = append(caches, diskCache{name: config.DiskCacheTmp, policy: diskprune.Policy{Root: d, OlderThan: time.Hour}})
@@ -159,9 +160,12 @@ func (a *app) pruneCacheRoots(r *diskRun, m diskMachine, pressure bool) {
 		recheck = func() ([]string, error) { d, err := m.refresh(); return d.refs, err }
 	}
 	for _, c := range caches {
+		if ctx.Err() != nil {
+			return
+		}
 		var res diskprune.CacheResult
 		if len(c.command) > 0 {
-			res = cleanCache(c, pressure, m.refs, m.protect, recheck, r.dry)
+			res = cleanCacheContext(ctx, c, pressure, m.refs, m.protect, recheck, r.dry)
 		} else {
 			c.policy.Recheck = recheck
 			res = diskprune.Cache(c.policy, a.now, pressure, m.refs, m.protect, r.dry)
@@ -177,7 +181,14 @@ func (a *app) pruneCacheRoots(r *diskRun, m diskMachine, pressure bool) {
 // right before the run. A dry run says it would run; what that frees is the
 // tool's to decide, so it counts nothing.
 func cleanCache(c diskCache, pressure bool, refs, protect []string, recheck func() ([]string, error), dry bool) diskprune.CacheResult {
+	return cleanCacheContext(context.Background(), c, pressure, refs, protect, recheck, dry)
+}
+
+func cleanCacheContext(parent context.Context, c diskCache, pressure bool, refs, protect []string, recheck func() ([]string, error), dry bool) diskprune.CacheResult {
 	var r diskprune.CacheResult
+	if parent != nil && parent.Err() != nil {
+		return r
+	}
 	root := c.policy.Root
 	fi, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -219,7 +230,10 @@ func cleanCache(c diskCache, pressure bool, refs, protect []string, recheck func
 			return r
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cacheCleanerTimeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, cacheCleanerTimeout)
 	defer cancel()
 	if err := runCacheCleaner(ctx, root, c.command); err != nil {
 		r.Errors = append(r.Errors, fmt.Errorf("cache cleaner: %w", err))
