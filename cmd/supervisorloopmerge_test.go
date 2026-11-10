@@ -299,7 +299,7 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 						}); err != nil {
 							t.Fatal(err)
 						}
-						return fmt.Sprintf(`{"route":"%s","repo":"%s","number":7,"headSha":"%s","reason":"merge validation failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), tc.failure
+						return fmt.Sprintf(`{"route":"%s","repository":"%s","number":7,"headSha":"%s","reason":"merge validation failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), tc.failure
 					}
 				}
 				if len(args) >= 2 && args[0] == agentsName && args[1] == agentStartName && room == 0 {
