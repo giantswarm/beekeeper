@@ -219,3 +219,80 @@ func TestLoopSupersededChecks(t *testing.T) {
 		})
 	}
 }
+
+// A workflow may fail before it creates ci-ok. The old ci-ok success in
+// the rollup must not let that head authorize a merge.
+func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
+	old := loopWorkflowRun{ID: 10, WorkflowID: 1, Attempt: 1, Head: "head", Name: "CI", Status: "completed", Conclusion: "success"}
+	newRun := old
+	newRun.ID = 20
+	other := old
+	other.WorkflowID = 2
+	other.ID = 30
+	other.Name = "other"
+	for _, tc := range []struct {
+		name       string
+		status     string
+		conclusion string
+		missing    bool
+		green      bool
+		red        int
+	}{
+		{"failure before job creation", "completed", "failure", true, false, 1},
+		{"queued before job creation", "queued", "", true, false, 0},
+		{"successful suite missing job", "completed", "success", true, false, 0},
+		{"successful replacement", "completed", "success", false, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newRun.Status, newRun.Conclusion = tc.status, tc.conclusion
+			for _, runs := range [][]loopWorkflowRun{{old, newRun, other}, {other, newRun, old}} {
+				// Separate pages ensure pagination and response order do not
+				// change which suite is authoritative.
+				var raw []byte
+				for _, run := range runs {
+					page, err := json.Marshal(map[string]any{"workflow_runs": []loopWorkflowRun{run}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw = append(raw, page...)
+				}
+				id := "10"
+				if !tc.missing {
+					id = "20"
+				}
+				rollup := []loopCheck{{Name: "ci-ok", WorkflowName: "CI", Status: "COMPLETED", Conclusion: "SUCCESS", DetailsURL: "https://github.com/o/r/actions/runs/" + id + "/job/1"}}
+				p := superloop.Pull{Head: "head", Green: true}
+				if err := applyLoopWorkflowRuns(&p, raw, rollup); err != nil {
+					t.Fatal(err)
+				}
+				if p.Green != tc.green || len(p.Red) != tc.red {
+					t.Fatalf("green %v red %+v", p.Green, p.Red)
+				}
+			}
+		})
+	}
+}
+
+func TestLoopWorkflowRunsUnreadable(t *testing.T) {
+	for _, raw := range []string{"", "{}", "{", `{"workflow_runs":[{"head_sha":"head"}]}`} {
+		p := superloop.Pull{Head: "head", Green: true}
+		if err := applyLoopWorkflowRuns(&p, []byte(raw), nil); err == nil {
+			t.Fatalf("accepted %q", raw)
+		}
+	}
+}
+
+func TestLoopWorkflowRunAttemptsAndOtherHeads(t *testing.T) {
+	p := superloop.Pull{Head: "head", Green: true}
+	raw := `{"workflow_runs":[
+		{"id":20,"workflow_id":1,"run_attempt":2,"head_sha":"head","status":"completed","conclusion":"success"},
+		{"id":20,"workflow_id":1,"run_attempt":1,"head_sha":"head","status":"completed","conclusion":"failure"},
+		{"id":30,"workflow_id":1,"run_attempt":1,"head_sha":"other","status":"completed","conclusion":"failure"}
+	]}`
+	if err := applyLoopWorkflowRuns(&p, []byte(raw), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !p.Green || len(p.Red) != 0 {
+		t.Fatalf("green %v red %+v", p.Green, p.Red)
+	}
+}
