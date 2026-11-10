@@ -65,9 +65,10 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			if deliveryInFlight(st, d, now, a.deliveryPolicy()) {
 				active = append(active, d)
 			}
-			failed := d.Step == state.DeliveryReleasing && (d.Verdict == state.DeliveryReleaseFailed || d.Verdict == verdictUnconfirmed)
+			failed := d.Step == state.DeliveryReleasing && d.Verdict == state.DeliveryReleaseFailed
 			// Transitional steps also need time to finish; only explicit failures
-			// are actionable immediately. Never diagnose a seconds-old step.
+			// are actionable immediately. An unconfirmed release is still pending,
+			// not a failed release. Never diagnose a seconds-old pending step.
 			stepAfter := max(after, 5*time.Minute)
 			if d.Step == state.DeliveryReleasing {
 				stepAfter = max(after, 30*time.Minute)
