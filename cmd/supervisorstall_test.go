@@ -259,9 +259,9 @@ func TestLoopSettlesOvertakenMergeDecisionsBeforeAlarm(t *testing.T) {
 		name string
 		pull superloop.Pull
 	}{
-		{"merged", superloop.Pull{State: superloop.Merged, Head: stallHead}},
-		{"closed", superloop.Pull{State: superloop.Closed, Head: stallHead}},
-		{"superseded", superloop.Pull{State: superloop.Open, Head: "replacement"}},
+		{"merged PR", superloop.Pull{State: superloop.Merged, Head: stallHead}},
+		{"closed PR", superloop.Pull{State: superloop.Closed, Head: stallHead}},
+		{"superseded", superloop.Pull{State: superloop.Open, Head: stallHead + "-new"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, _ := fillRig(t)

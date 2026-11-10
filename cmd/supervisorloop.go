@@ -1846,7 +1846,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			if !ok || !present {
 				continue
 			}
-			if staleMergeDecision(p, head) && !(p.State == superloop.Merged && p.Head == head) {
+			if staleMergeDecision(p, head) && (p.State != superloop.Merged || p.Head != head) {
 				why := "merge decision overtaken by " + p.State + " head " + p.Head
 				if err := a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
 					return err
