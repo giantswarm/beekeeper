@@ -367,7 +367,7 @@ func TestEndedWorkerRespectsAStartsHold(t *testing.T) {
 
 func TestEndedAgyTranscriptKeepsItsRosterName(t *testing.T) {
 	a, _ := stubApp(t)
-	endWorker(t, a, state.Party{HostSession: agy.HostPrefix + "abcdef12-3456-4000-8000-000000000001", Name: endedName}, agy.Harness)
+	endWorker(t, a, state.Party{HostSession: agy.HostPrefix + "ended-run", Name: endedName}, agy.Harness)
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
