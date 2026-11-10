@@ -255,7 +255,7 @@ agents wake: its task is that message's first line.`,
 			if a.queueReports && !central && (!isNote || !a.centralNotesOn()) {
 				dir, origin, branch, head := captureParkWorktree(waits)
 				return a.submitReport(sessionReport{
-					Kind:           "park",
+					Kind:           reportKindPark,
 					By:             me,
 					On:             on,
 					Waits:          waits,

@@ -107,7 +107,7 @@ func TestSessionReportsAndSnapshotsWithTwoMinuteWriter(t *testing.T) {
 	for _, e := range events {
 		verbs = append(verbs, e.Verb)
 	}
-	want := []string{verbServe, agentProblemEvent, "note.add", parkEvent, executionDone}
+	want := []string{verbServe, agentProblemEvent, noteAddedEvent, parkEvent, executionDone}
 	last := -1
 	for _, verb := range want {
 		i := slices.Index(verbs, verb)

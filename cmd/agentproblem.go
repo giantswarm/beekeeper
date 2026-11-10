@@ -32,7 +32,7 @@ delivers it once per worker assignment.`,
 				return err
 			}
 			if a.queueReports {
-				return a.submitReport(sessionReport{Kind: "problem", By: me, Finding: args[0]})
+				return a.submitReport(sessionReport{Kind: reportKindProblem, By: me, Finding: args[0]})
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i := a.callerAgent(st, me)

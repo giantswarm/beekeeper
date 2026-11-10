@@ -13,19 +13,19 @@ import (
 // consumption repeats validation against the current state under the writer lock.
 func (a *app) applyReport(st *state.State, p *sessionReport) ([]state.Event, error) {
 	switch p.Kind {
-	case "park":
+	case reportKindPark:
 		return a.applyParkReport(st, p)
-	case "idle":
+	case reportKindIdle:
 		return a.applyIdleReport(st, p)
-	case "problem":
+	case reportKindProblem:
 		i := a.callerAgent(st, p.By)
 		if i < 0 {
 			return nil, refused("session is no longer registered")
 		}
 		return a.recordWorkerProblem(st, &st.Agents[i], p.By, p.Finding)
-	case "note":
+	case paramNote:
 		return a.applyNoteReport(st, p)
-	case "serve":
+	case reportKindServe:
 		return a.applyServeReport(st, p)
 	}
 	return nil, refused("unknown report operation %q", p.Kind)
@@ -184,5 +184,5 @@ func (a *app) applyNoteReport(st *state.State, p *sessionReport) ([]state.Event,
 	n.ID = st.NextNote
 	p.NoteID = n.ID
 	st.Notes = append(st.Notes, n)
-	return append([]state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
+	return append([]state.Event{event(me, noteAddedEvent, "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
 }

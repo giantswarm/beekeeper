@@ -64,12 +64,18 @@ func PendingReports(store Store) ([]ReportMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
 	var out []ReportMessage
 	for _, e := range entries {
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		// Confine reads to the inbox, including when an entry is a symlink.
+		raw, err := root.ReadFile(e.Name())
 		if err != nil {
 			return nil, err
 		}

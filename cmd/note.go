@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const noteAddedEvent = "note.add"
+
 func (a *app) noteCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "note",
@@ -241,7 +243,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				} else if draft.Recommend != 0 {
 					return usageErr("--recommend is a decision's")
 				}
-				return a.submitReport(sessionReport{Kind: "note", By: me, Note: n, FoldInto: foldInto, Checked: checked, Draft: draft, Holds: holds})
+				return a.submitReport(sessionReport{Kind: paramNote, By: me, Note: n, FoldInto: foldInto, Checked: checked, Draft: draft, Holds: holds})
 			}
 			// Classified before any fold: a fold puts the ask before the
 			// open note's person as surely as a note of its own.
@@ -315,7 +317,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				}
 			}
 			if a.queueReports {
-				return a.submitReport(sessionReport{Kind: "note", By: me, Note: n, FoldInto: foldInto, Checked: checked, Stage: stage})
+				return a.submitReport(sessionReport{Kind: paramNote, By: me, Note: n, FoldInto: foldInto, Checked: checked, Stage: stage})
 			}
 			var folded *state.Note
 			fold := func(o *state.Note, why string) []state.Event {
@@ -348,7 +350,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				st.NextNote++
 				n.ID = st.NextNote
 				st.Notes = append(st.Notes, n)
-				return append([]state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
+				return append([]state.Event{event(me, noteAddedEvent, "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
 			})
 			if err != nil {
 				return err

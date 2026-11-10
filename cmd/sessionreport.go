@@ -16,6 +16,14 @@ import (
 
 const reportReferencePrefix = "report:"
 
+const (
+	reportKindPark    = "park"
+	reportKindIdle    = "idle"
+	reportKindProblem = "problem"
+	reportKindServe   = "serve"
+	gitRemoteGetURL   = "get-url"
+)
+
 // sessionReport contains command inputs, never a patch to a stale snapshot.
 // Assignment identity keeps a delayed completion from ending a later task.
 type sessionReport struct {
@@ -86,7 +94,7 @@ func (a *app) submitReport(p sessionReport) error {
 	}
 	ref := reportReferencePrefix + m.ID
 	if a.json {
-		return a.printJSON(map[string]string{"id": m.ID, "reference": ref, "status": "queued"})
+		return a.printJSON(map[string]string{"id": m.ID, "reference": ref, executionStatus: "queued"})
 	}
 	_, err = fmt.Fprintf(a.out, "%s queued: %s; the supervisor applies it in inbox order\n", p.Kind, ref)
 	return err
@@ -104,7 +112,7 @@ func (a *app) validatePendingNote(ref string, st *state.State) error {
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(messages, func(m state.ReportMessage) bool { return m.ID == id && m.Kind == "note" }) {
+	if !slices.ContainsFunc(messages, func(m state.ReportMessage) bool { return m.ID == id && m.Kind == paramNote }) {
 		return refused("unknown pending note %s", ref)
 	}
 	return nil
@@ -146,12 +154,12 @@ func (a *app) consumeReports(ctx context.Context) error {
 		}
 		var reviewBefore, reviewAfter []state.DeskReview
 		prepareErr := decodeErr
-		if prepareErr == nil && p.Kind == "idle" && p.Finished {
+		if prepareErr == nil && p.Kind == reportKindIdle && p.Finished {
 			reviewBefore = slices.Clone(st.DeskReviews)
 			prepareErr = copyApp.captureExecutionReviewReport(ctx, st, p.By, p.Text, p.At, true)
 			reviewAfter = st.DeskReviews
 		}
-		if prepareErr == nil && p.Kind == "park" && !strings.HasPrefix(p.On, reportReferencePrefix) {
+		if prepareErr == nil && p.Kind == reportKindPark && !strings.HasPrefix(p.On, reportReferencePrefix) {
 			p.RefKind, prepareErr = resolveParkRef(ctx, p.On)
 			if prepareErr == nil && isDeskReviewWait(p.Waits) && p.Worktree != "" {
 				verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -159,7 +167,7 @@ func (a *app) consumeReports(ctx context.Context) error {
 				cancel()
 			}
 		}
-		if prepareErr == nil && p.Kind == "note" && p.Draft.Kind != "" {
+		if prepareErr == nil && p.Kind == paramNote && p.Draft.Kind != "" {
 			prepareErr = copyApp.prepareNoteReport(ctx, &p)
 		}
 		err = a.store.Update(func(current *state.State) ([]state.Event, error) {
@@ -173,7 +181,7 @@ func (a *app) consumeReports(ctx context.Context) error {
 			applyErr := prepareErr
 			if applyErr == nil && p.Registered {
 				i := copyApp.callerAgent(current, p.By)
-				if i < 0 || !current.Agents[i].Party.Is(p.Assignee) || current.Agents[i].Task != p.Task || !current.Agents[i].AssignedAt.Equal(p.AssignedAt) {
+				if i < 0 || !current.Agents[i].Is(p.Assignee) || current.Agents[i].Task != p.Task || !current.Agents[i].AssignedAt.Equal(p.AssignedAt) {
 					applyErr = refused("report belongs to an ended or replaced assignment")
 				}
 			}
@@ -312,18 +320,18 @@ func captureParkWorktree(waits string) (dir, origin, branch, head string) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	return dir, read("remote", "get-url", "origin"), read("symbolic-ref", "--quiet", "--short", "HEAD"), read("rev-parse", "HEAD")
+	return dir, read("remote", gitRemoteGetURL, "origin"), read("symbolic-ref", "--quiet", "--short", workerGitHubHead), read("rev-parse", workerGitHubHead)
 }
 
 func verifyParkReportHead(ctx context.Context, p sessionReport, git worktrees.Git, gh github.GH) (string, string) {
 	if p.WorktreeOrigin != "" && p.WorktreeBranch != "" && p.WorktreeHead != "" {
 		git = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			switch {
-			case slices.Equal(args, []string{"remote", "get-url", "origin"}):
+			case slices.Equal(args, []string{"remote", gitRemoteGetURL, "origin"}):
 				return []byte(p.WorktreeOrigin), nil
-			case slices.Equal(args, []string{"symbolic-ref", "--quiet", "--short", "HEAD"}):
+			case slices.Equal(args, []string{"symbolic-ref", "--quiet", "--short", workerGitHubHead}):
 				return []byte(p.WorktreeBranch), nil
-			case slices.Equal(args, []string{"rev-parse", "HEAD"}):
+			case slices.Equal(args, []string{"rev-parse", workerGitHubHead}):
 				return []byte(p.WorktreeHead), nil
 			default:
 				return nil, fmt.Errorf("unexpected git arguments %v", args)

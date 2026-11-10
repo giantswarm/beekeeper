@@ -375,7 +375,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 					if err != nil {
 						return err
 					}
-					return a.submitReport(sessionReport{Kind: "serve", By: me, Clear: true})
+					return a.submitReport(sessionReport{Kind: reportKindServe, By: me, Clear: true})
 				}
 				return a.clearRecord()
 			}
@@ -402,7 +402,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 						return err
 					}
 				}
-				return a.submitReport(sessionReport{Kind: "serve", By: me, Session: target.Party(), Record: state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}})
+				return a.submitReport(sessionReport{Kind: reportKindServe, By: me, Session: target.Party(), Record: state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}})
 			}
 			sessions, _, err := a.sessions()
 			if err != nil {
