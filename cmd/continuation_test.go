@@ -83,8 +83,8 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 		st.Agents = []state.Agent{old, next}
 		st.Records = []state.Record{{Session: old.Party, Issue: continuationTaskRef}}
 		st.Grants = []state.Grant{{Resource: labOne, To: old.Party}}
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp", Name: "WorkloadDown", By: old.Party}}
-		st.Merges = []state.Merge{{Repo: "o/r", PR: 12, By: old.Party}}
+		st.AlertOwners = []state.AlertOwner{{Alert: "fp", Name: loopWorkloadDown, By: old.Party}}
+		st.Merges = []state.Merge{{Repo: repo, PR: 12, By: old.Party}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
