@@ -20,6 +20,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	elapsed := deliveryAwakeClock(st, now)
 	var lines []string
 	step := func(st *state.State) ([]state.Event, bool) {
 		lines = nil
@@ -72,11 +73,11 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			if d.Step == state.DeliveryReleasing {
 				stepAfter = max(after, 30*time.Minute)
 			}
-			if !failed && (d.Since.IsZero() || now.Sub(d.Since) < stepAfter) {
+			if !failed && (d.Since.IsZero() || elapsed(d.Since) < stepAfter) {
 				continue
 			}
 			key := fmt.Sprintf("%s %s %s %s", d.Ref, d.Step, d.Since.UTC().Format(time.RFC3339Nano), d.Started.UTC().Format(time.RFC3339Nano))
-			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, now.Sub(d.Since)).Round(time.Second), strings.TrimSpace(d.Waits+" "+d.Verdict+" "+d.Release))
+			detail := fmt.Sprintf("DELIVERY STALLED %s: %s for %s; waits: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, max(0, elapsed(d.Since)).Round(time.Second), strings.TrimSpace(d.Waits+" "+d.Verdict+" "+d.Release))
 			if prev, ok := old.Episodes[key]; ok {
 				next.Episodes[key] = prev
 			} else {
@@ -102,13 +103,13 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			} else if old.FullSignature != "" {
 				next.FullSince = now
 			}
-			if now.Sub(next.FullSince) >= after && !next.FullRaised {
+			if elapsed(next.FullSince) >= after && !next.FullRaised {
 				slices.SortFunc(active, func(a, b state.Delivery) int { return a.Since.Compare(b.Since) })
 				var refs []string
 				for _, d := range active[:min(5, len(active))] {
-					refs = append(refs, fmt.Sprintf("%s (%s, %s; %s %s)", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, now.Sub(d.Since).Round(time.Second), d.Waits, d.Verdict))
+					refs = append(refs, fmt.Sprintf("%s (%s, %s; %s %s)", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), d.Step, elapsed(d.Since).Round(time.Second), d.Waits, d.Verdict))
 				}
-				file("full "+next.FullSignature, fmt.Sprintf("WIP FULL: %d of %d in delivery with no step change for %s; oldest: %s", len(active), limit, now.Sub(next.FullSince).Round(time.Second), strings.Join(refs, ", ")))
+				file("full "+next.FullSignature, fmt.Sprintf("WIP FULL: %d of %d in delivery with no step change for %s; oldest: %s", len(active), limit, elapsed(next.FullSince).Round(time.Second), strings.Join(refs, ", ")))
 				next.FullRaised = true
 			}
 		}
