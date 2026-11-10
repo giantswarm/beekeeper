@@ -659,6 +659,40 @@ func staleAgySkills(dir string) []string {
 	return stale
 }
 
+// RefreshSkills updates an existing harness mirror from the complete embedded plugin.
+// It leaves machines without an installed mirror alone.
+func RefreshSkills(stateDir string) error {
+	dir := AgySkillsDir(stateDir)
+	if dir == "" {
+		return nil
+	}
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("skill mirror is not a directory: %s", dir)
+	}
+	if len(staleAgySkills(dir)) == 0 {
+		return nil
+	}
+	if err := writeEmbeddedSkills(dir); err != nil {
+		return err
+	}
+	return CheckSkillMirror(stateDir)
+}
+
+// CheckSkillMirror fails when any shipped skill or supporting file is absent or stale.
+func CheckSkillMirror(stateDir string) error {
+	if stale := staleAgySkills(AgySkillsDir(stateDir)); len(stale) > 0 {
+		return fmt.Errorf("skill mirror is missing or stale: %s; run `beekeeper install`", strings.Join(stale, ", "))
+	}
+	return nil
+}
+
 // writeEmbeddedSkills writes every file in plugin.Skills under
 // plugin.SkillsDir into dir.
 func writeEmbeddedSkills(dir string) error {
