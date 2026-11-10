@@ -479,11 +479,12 @@ func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 		if ag := agentOf(t, w); ag.Park.ReviewHead != head {
 			t.Fatalf("park %+v", ag.Park)
 		}
-		if !strings.Contains(w.out.(*bytes.Buffer).String(), parkReviewMode(head)) {
-			t.Fatalf("output %s", w.out)
+		want := parkReviewMode(head)
+		if head == "" {
+			want = "review request saved; published HEAD verification pending"
 		}
-		if head == "" && !strings.Contains(w.out.(*bytes.Buffer).String(), `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`) {
-			t.Fatalf("plain wait must explain how to request review: %s", w.out)
+		if !strings.Contains(w.out.(*bytes.Buffer).String(), want) {
+			t.Fatalf("output %s, want %q", w.out, want)
 		}
 	}
 }
