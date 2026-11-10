@@ -1002,7 +1002,12 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 }
 
 func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
-	for _, outcome := range []string{"merged", "queued", "refused", "policy", "unreadable"} {
+	const (
+		confirmed     = "confirmed merge"
+		laneWait      = "lane wait"
+		policyRefusal = "policy refusal"
+	)
+	for _, outcome := range []string{confirmed, laneWait, "gate refusal", policyRefusal, "confirmation read failure"} {
 		t.Run(outcome, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.Merge.Admin = []string{loopMergeRepo}
@@ -1015,14 +1020,14 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 					return "", 0
 				}
 				switch outcome {
-				case "merged":
+				case confirmed:
 					r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
 					return "", 0
-				case "queued":
-					return "waiting behind running merge", ExitGateQueued
-				case "policy":
+				case laneWait:
+					return "lane occupied by running merge", ExitGateQueued
+				case policyRefusal:
 					return adminPolicyTestReason, 1
-				case "unreadable":
+				case "confirmation read failure":
 					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 						return superloop.Pull{}, errors.New("confirmation unavailable")
 					}
@@ -1035,16 +1040,17 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 			readLoopPull = read
 			starts := r.logged(t, "merge.start")
 			var outcomes []state.Event
-			for _, verb := range []string{"merge.finished", "merge.pending", "merge.failed"} {
+			for _, verb := range []string{"merge.finished", "merge.pending", loopMergeFailed} {
 				outcomes = append(outcomes, r.logged(t, verb)...)
 			}
 			if len(starts) != 1 || len(outcomes) != 1 {
 				t.Fatalf("unpaired merge attempt: starts=%v outcomes=%v", starts, outcomes)
 			}
-			want := "merge.failed"
-			if outcome == "merged" {
+			want := loopMergeFailed
+			switch outcome {
+			case confirmed:
 				want = "merge.finished"
-			} else if outcome == "queued" || outcome == "policy" {
+			case laneWait, policyRefusal:
 				want = "merge.pending"
 			}
 			if outcomes[0].Verb != want || outcomes[0].Subject != loopPR || !strings.Contains(outcomes[0].Detail, loopHead) {

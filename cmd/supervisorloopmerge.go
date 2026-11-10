@@ -23,6 +23,7 @@ import (
 
 const loopWorkerMergeGo = "merge go given"
 const reviewedMergeQueued = "queued"
+const loopMergeFailed = "merge.failed"
 
 func pullNeedsBranchRepair(p superloop.Pull) bool {
 	return p.Draft || p.Mergeable == "CONFLICTING"
@@ -167,7 +168,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		case errors.Is(resultErr, errLoopLater):
 			verb, detail = "merge.pending", pending
 		case resultErr != nil:
-			verb, detail = "merge.failed", resultErr.Error()
+			verb, detail = loopMergeFailed, resultErr.Error()
 		}
 		if err := a.store.Record(about(event(loopParty, verb, "%s at %s: %s", act.URL, act.Head, oneLine(detail)), act.Ref)); err != nil {
 			resultErr = errors.Join(resultErr, err)
