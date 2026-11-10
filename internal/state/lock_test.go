@@ -197,11 +197,12 @@ func TestStateLockWriterProgressUnderShortReacquirers(t *testing.T) {
 // The helper deliberately exits without cleanup when killed. Its ticket lock
 // must protect a live waiter in another process and disappear on process death.
 func TestStateLockTicketProcess(t *testing.T) {
-	dir := os.Getenv("BEEKEEPER_TEST_LOCK_QUEUE")
-	if dir == "" {
+	if os.Getenv("BEEKEEPER_TEST_LOCK_QUEUE") != "1" {
 		return
 	}
-	s, err := Open(dir)
+	// The parent sets the helper's working directory to its temporary store;
+	// the environment selects helper mode but supplies no filesystem path.
+	s, err := Open(".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,8 @@ func TestStateLockQueueRecoversKilledProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestStateLockTicketProcess$") //nolint:gosec // the current test executable
-	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_LOCK_QUEUE="+s.Dir())
+	cmd.Dir = s.Dir()
+	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_LOCK_QUEUE=1")
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

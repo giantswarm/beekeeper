@@ -40,7 +40,9 @@ func TestIdleCommandsDoNotRequestExclusiveStateLock(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide = &state.Role{WatchSeen: a.now}
+		// A recorded run keeps the role present when the feed normalizes it;
+		// an empty role is deliberately removed and has no heartbeat to save.
+		st.Guide = &state.Role{Run: 1, WatchSeen: a.now}
 		st.GuideReportsSince = a.now
 		return nil, nil
 	}); err != nil {
