@@ -389,7 +389,11 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 		if k := st.StartIndex(self); k >= 0 && st.Starts[k].Background {
 			line += " The watch stops your background session once the turn ends, and the wake resumes it from its transcript."
 		}
-		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
+		var outcomes []state.Event
+		if i >= 0 {
+			outcomes = a.recordTaskOutcome(st, st.Agents[i], state.OutcomeParked, park.On+": "+park.Waits)
+		}
+		return append(outcomes, event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))), nil
 	})
 	if err == nil && kind == github.RefIssue {
 		if suggestion := a.parkSuggestion(me, on); suggestion != "" {

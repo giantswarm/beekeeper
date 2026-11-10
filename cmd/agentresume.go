@@ -19,6 +19,7 @@ import (
 // resumedWaitEvent is the event of a headless resume after a turn that ended
 // on a background wait.
 const resumedWaitEvent = "agent.resumed-wait"
+const noRecordedWait = "no recorded wait"
 
 // waitResumeMessage is the turn a worker whose headless turn ended on a
 // background wait is resumed with; %s names the wait.
@@ -141,7 +142,7 @@ func (a *app) endedOnWait(id, turn string) string {
 // turn ended on a background wait with its task open: the end of a headless
 // turn is the end of its process, and the wait's completion notice never
 // wakes it. turn is the unit that ran the turn, whose leftover processes
-// are waits too. Once per task, logged as agent.resumed-wait; an agent done,
+// are waits too. At most three times per task, logged as agent.resumed-wait; an agent done,
 // kept, or parked on a person (its serve record waits on one) is left alone.
 // It reports whether it resumed the agent, whose wake turn's reopen then
 // shows it in the desktop.
@@ -151,34 +152,51 @@ func (a *app) resumeOnWait(ctx context.Context, id, turn string) (bool, error) {
 		return false, err
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
-		return ag.Session == id || ag.HostSession == "local_"+id
+		return ag.Name == id || ag.Session == id || ag.HostSession == id || ag.HostSession == "local_"+id
 	})
 	if i < 0 {
 		return false, nil
 	}
 	ag := st.Agents[i]
-	if ag.Task == "" || ag.Done || pastRun(st, ag.Party, a.now) || keptBy(st, ag, a.now) != "" || resumedForTask(ag) ||
+	if st.Stop != nil || ag.Task == "" || ag.Done || roleRun(st, ag.Party) || pastRun(st, ag.Party, a.now) || keptBy(st, ag, a.now) != "" || ag.Park != nil || mergeInFlight(st, ag.Party, proc.Alive) ||
 		parkedOn(waitsOf(st.Records, ag), a.cfg.Guide.Person) != "" {
 		return false, nil
 	}
-	w, err := resolveWake(a.cfg, st, ag)
-	if err != nil {
-		return false, nil
+	on := noRecordedWait
+	if ag.Execution == nil {
+		w, err := resolveWake(a.cfg, st, ag)
+		if err != nil {
+			return false, nil
+		}
+		if wait := a.endedOnWait(w.id, turn); wait != "" {
+			on = wait
+		}
 	}
-	on := a.endedOnWait(w.id, turn)
-	if on == "" {
-		return false, nil
+	if continuationCount(ag) >= 3 {
+		if ag.Execution != nil {
+			if err := a.stopExecution(ctx, *ag.Execution, "three unfinished task continuations"); err != nil {
+				return false, err
+			}
+		}
+		return true, a.exhaustContinuation(ag)
 	}
-	if err := resumeHeadless(ctx, a, ag, fmt.Sprintf(waitResumeMessage, on)); err != nil {
+	message := fmt.Sprintf(waitResumeMessage, on)
+	if on == noRecordedWait {
+		message = "Your headless turn ended with its task open and no recorded outcome. Continue the task."
+	}
+	message += "\nTask: " + ag.Task + "\n" + taskEndings
+	if err := resumeHeadless(ctx, a, ag, message); err != nil {
 		return false, fmt.Errorf("resuming %s on its wait: %w", ag.Name, err)
 	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for k := range st.Agents {
-			if st.Agents[k].Is(ag.Party) {
+			if st.Agents[k].Is(ag.Party) && st.Agents[k].AssignedAt.Equal(ag.AssignedAt) && st.Agents[k].Task == ag.Task {
 				st.Agents[k].ResumedWait, st.Agents[k].ResumedOn = a.now.UTC(), on
+				st.Agents[k].ContinuationCount = continuationCount(ag) + 1
+				st.Agents[k].ContinuationTask = ag.AssignedAt
 			}
 		}
-		return []state.Event{event(ag.Party, resumedWaitEvent, "%s: its headless turn ended on %s with its task open: resumed it headless once to wait in the foreground", ag.Name, on)}, nil
+		return []state.Event{event(ag.Party, resumedWaitEvent, "%s: its headless turn ended on %s with its task open: resumed it headless to finish with an explicit outcome", ag.Name, on)}, nil
 	})
 	if err != nil {
 		return true, err
@@ -190,4 +208,41 @@ func (a *app) resumeOnWait(ctx context.Context, id, turn string) (bool, error) {
 // resumeHeadless resumes ag with msg as agents wake does; tests replace it.
 var resumeHeadless = func(ctx context.Context, a *app, ag state.Agent, msg string) error {
 	return a.wakeAgent(ctx, ag.Party, ag.Name, msg, "")
+}
+
+func continuationCount(ag state.Agent) int {
+	if !ag.ContinuationTask.Equal(ag.AssignedAt) {
+		return 0
+	}
+	return ag.ContinuationCount
+}
+
+func (a *app) exhaustContinuation(ag state.Agent) error {
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Agents {
+			cur := &st.Agents[i]
+			if !cur.Is(ag.Party) || !cur.AssignedAt.Equal(ag.AssignedAt) || cur.Done || cur.Park != nil || keptBy(st, *cur, a.now) != "" || st.Stop != nil {
+				continue
+			}
+			cur.ContinuationExhausted = a.now.UTC()
+			reason := "three continuations ended without a task outcome"
+			for _, report := range st.WorkerReports {
+				if report.By.Is(ag.Party) && !report.At.Before(ag.AssignedAt) {
+					reason = "three continuations ended without a task outcome; last report: " + report.Text
+				}
+			}
+			events := a.recordTaskOutcome(st, *cur, state.OutcomeStalled, reason)
+			if cur.Execution != nil {
+				reportIdle(cur, a.now)
+				cur.Done = true
+			}
+			for j := range st.Records {
+				if st.Records[j].Session.Is(ag.Party) {
+					st.Records[j].Ended = a.now.UTC()
+				}
+			}
+			return append(events, event(ag.Party, "agent.continuations-exhausted", "%s: %s; task: %s", ag.Name, reason, ag.Task)), nil
+		}
+		return nil, nil
+	})
 }

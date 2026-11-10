@@ -1487,6 +1487,9 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	l.lifecyclePhase("recover quota and parks")
+	if err := l.recoverUnfinishedTurns(ctx, st); err != nil {
+		return err
+	}
 	if err := l.recoverQuota(ctx, st); err != nil {
 		return err
 	}
@@ -3607,6 +3610,15 @@ func (l *supervisorLoop) brief(file, def, key string, d briefData) (string, erro
 	var b bytes.Buffer
 	if err := t.Execute(&b, d); err != nil {
 		return "", err
+	}
+	if st, err := l.a.store.Read(); err != nil {
+		return "", err
+	} else {
+		for _, delivery := range st.Deliveries {
+			if delivery.Outcome == state.OutcomeStalled && (deliveryURL(delivery.Ref, false) == d.URL || delivery.Ref == key) {
+				fmt.Fprintf(&b, "\nPrevious worker exhausted its continuations. Last evidence: %s\n", delivery.Evidence)
+			}
+		}
 	}
 	dir := filepath.Join(l.a.store.Dir(), "supervisor-loop")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
