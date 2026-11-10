@@ -158,7 +158,7 @@ var readParkRefREST = func(ctx context.Context, r github.PR) (github.RefState, e
 	if err := json.Unmarshal(out, &item); err != nil {
 		return github.RefState{}, fmt.Errorf("gh api %s: %w", path, err)
 	}
-	if item.State != "open" && item.State != "closed" {
+	if item.State != strings.ToLower(github.Open) && item.State != strings.ToLower(github.Closed) {
 		return github.RefState{}, fmt.Errorf("gh api %s: missing or invalid state", path)
 	}
 	result := github.RefState{Kind: github.RefIssue, State: strings.ToUpper(item.State)}

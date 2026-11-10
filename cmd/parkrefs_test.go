@@ -442,8 +442,8 @@ func TestParkReferenceRESTFailures(t *testing.T) {
 		{name: "rate limit", err: errors.New("HTTP 429: rate limit exceeded")},
 		{name: "malformed", body: "{"},
 		{name: "missing", body: `{}`},
-		{name: "closed", body: `{"state":"closed","pull_request":{"merged_at":null}}`},
-		{name: "merged", body: `{"state":"closed","pull_request":{"merged_at":"2026-01-01T00:00:00Z"}}`},
+		{name: "closed target", body: `{"state":"closed","pull_request":{"merged_at":null}}`},
+		{name: "merged target", body: `{"state":"closed","pull_request":{"merged_at":"2026-01-01T00:00:00Z"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := parkingWatch(t, nil)
@@ -454,7 +454,7 @@ func TestParkReferenceRESTFailures(t *testing.T) {
 			if err == nil {
 				t.Fatal("failed or settled read accepted")
 			}
-			if tc.name != "closed" && tc.name != "merged" && (!strings.Contains(err.Error(), "repos/o/r/issues/1") || !strings.Contains(err.Error(), errParkLookup.Error())) {
+			if tc.name != "closed target" && tc.name != "merged target" && (!strings.Contains(err.Error(), "repos/o/r/issues/1") || !strings.Contains(err.Error(), errParkLookup.Error())) {
 				t.Fatal(err)
 			}
 			if tc.err != nil && !strings.Contains(err.Error(), tc.err.Error()) {
