@@ -627,6 +627,10 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 }
 
 func TestMergeReviewRequirementAcceptsCurrentDeskReviewFormat(t *testing.T) {
+	previous := readBaseMerge
+	t.Cleanup(func() { readBaseMerge = previous })
+	// The stale review belongs to an unrelated head, not a base-only update.
+	readBaseMerge = func(context.Context, superloop.Pull, string) (bool, error) { return false, nil }
 	a := emergencyApp(t)
 	a.cfg.Merge.RequireReview = true
 	st, err := a.store.Read()
