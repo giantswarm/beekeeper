@@ -400,10 +400,25 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 		}
 		return cliSend(ctx, a, row.Name, msg)
 	}
+	// A resumed CLI can change its session id while the daemon keeps the
+	// original job id. Read the stopped job before launching so a later
+	// resume is not mistaken for a copy of the rebound session.
+	all, err := bgList(ctx, bin, env, true)
+	if err != nil {
+		return fmt.Errorf("checking stopped background session before resume: %w", err)
+	}
+	var jobID string
+	for _, row := range all {
+		if bgRowMatches(row, w.id) {
+			jobID = row.ID
+			break
+		}
+	}
+	expectedID := cmp.Or(jobID, w.id)
 	out, err := bgRun(ctx, w.dir, env, bgResumeArgv(bin, w.id, msg))
 	short := bgShort(out)
 	// Even a failed call may have launched a copy before reporting failure.
-	if short != "" && !strings.HasPrefix(w.id, short) {
+	if short != "" && !strings.HasPrefix(expectedID, short) {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgWait)
 		defer cancel()
 		if stopErr := a.bgStop(cleanup, short); stopErr != nil {
@@ -419,7 +434,7 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 	}
 	if rows, err := bgList(ctx, bin, env, false); err == nil {
 		for _, row := range rows {
-			if bgRowMatches(row, w.id) {
+			if bgRowMatches(row, w.id) || (jobID != "" && row.ID == jobID) {
 				if err := a.rebindBackgroundSession(w.id, row.SessionID); err != nil {
 					return err
 				}
