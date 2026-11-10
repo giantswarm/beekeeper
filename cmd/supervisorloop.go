@@ -302,11 +302,12 @@ func (c loopCheck) concluded() bool {
 	return slices.Contains([]string{checkSuccess, checkFailure, checkError}, c.State)
 }
 
-// superseded reports only cancellations replaced on this head's rollup.
-// Failures and timeouts remain red even when a later run exists. Actions run
-// IDs also order queued replacements whose startedAt has not been set yet.
+// superseded reports check runs replaced on this head's rollup. Only the
+// newest run of a named check counts, regardless of its outcome. A cancelled
+// job can also be replaced by a newer workflow run with renamed jobs. Actions
+// run IDs order queued replacements whose startedAt has not been set yet.
 func (c loopCheck) superseded(checks []loopCheck) bool {
-	if c.Conclusion != "CANCELLED" || c.Status != checkCompleted {
+	if c.Status == "" {
 		return false
 	}
 	oldRun := loopActionsRun(c.DetailsURL)
@@ -319,8 +320,11 @@ func (c loopCheck) superseded(checks []loopCheck) bool {
 		newRepo, _, _ := strings.Cut(next.DetailsURL, "/actions/runs/")
 		newerActionsRun := oldRun != 0 && newRun > oldRun && oldRepo == newRepo
 		sameCheck := c.Name != "" && c.Name == next.Name
-		sameWorkflow := c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
-		return (sameCheck || sameWorkflow) && (newerActionsRun || !c.StartedAt.IsZero() && next.StartedAt.After(c.StartedAt))
+		sameWorkflow := c.Conclusion == "CANCELLED" && c.Status == checkCompleted && c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
+		if oldRun != 0 && newRun != 0 && oldRun != newRun && oldRepo == newRepo {
+			return (sameCheck || sameWorkflow) && newerActionsRun
+		}
+		return sameCheck && !c.StartedAt.IsZero() && next.StartedAt.After(c.StartedAt)
 	})
 }
 

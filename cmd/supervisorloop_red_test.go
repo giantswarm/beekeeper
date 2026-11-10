@@ -124,7 +124,7 @@ func TestLoopWakesAWorkerOnARedCheck(t *testing.T) {
 }
 
 // Parsing feeds both the wake decision and the approved head's green gate.
-func TestLoopSupersededCancellations(t *testing.T) {
+func TestLoopSupersededChecks(t *testing.T) {
 	old := loopCheck{Name: "test-check", WorkflowName: "ci", Status: checkCompleted, Conclusion: "CANCELLED", StartedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), DetailsURL: "https://github.com/o/r/actions/runs/10/job/1"}
 	newer := old
 	newer.StartedAt = old.StartedAt.Add(time.Minute)
@@ -149,6 +149,12 @@ func TestLoopSupersededCancellations(t *testing.T) {
 	failed.Conclusion = checkFailure
 	timedOut := old
 	timedOut.Conclusion = "TIMED_OUT"
+	externalFailed := externalOld
+	externalFailed.Conclusion = checkFailure
+	rerun := newer
+	rerun.DetailsURL = old.DetailsURL
+	delayedOld := failed
+	delayedOld.StartedAt = newer.StartedAt.Add(time.Minute)
 	for _, tt := range []struct {
 		name       string
 		checks     []loopCheck
@@ -164,8 +170,17 @@ func TestLoopSupersededCancellations(t *testing.T) {
 		{"different check", []loopCheck{old, other}, false, true},
 		{"same workflow newer run", []loopCheck{old, workflow}, true, false},
 		{"same workflow same run", []loopCheck{old, sameRun}, false, true},
-		{"failure stays red", []loopCheck{failed, newer}, false, true},
-		{"timeout stays red", []loopCheck{timedOut, newer}, false, true},
+		{"failed run superseded by success on same head", []loopCheck{failed, newer}, true, false},
+		{"failed run reverse order", []loopCheck{newer, failed}, true, false},
+		{"failed run superseded by queued run", []loopCheck{failed, pending}, false, false},
+		{"different failed check stays red", []loopCheck{failed, other}, false, true},
+		{"failed job not replaced by renamed workflow job", []loopCheck{failed, workflow}, false, true},
+		{"external failure superseded by timestamp", []loopCheck{externalFailed, external}, true, false},
+		{"same workflow run rerun by timestamp", []loopCheck{failed, rerun}, true, false},
+		{"run ID orders delayed starts", []loopCheck{delayedOld, newer}, true, false},
+		{"timeout superseded by success", []loopCheck{timedOut, newer}, true, false},
+		{"newer failure wins", []loopCheck{older, failed}, false, true},
+		{"newer queued run supersedes green", []loopCheck{older, pending}, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newLoopRig(t)
