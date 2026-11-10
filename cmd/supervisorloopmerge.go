@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -42,7 +43,7 @@ func ghMergePolicyRefused(reason string) bool {
 // mergePull executes the planner's exact-head decision in the coordinator,
 // including for workers on an execution host. Failed or unreadable validation
 // never delegates a direct merge around the required server-side queue.
-func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (string, error) {
+func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (result string, resultErr error) {
 	a := l.a
 	ref, ok := parseRef(act.Ref)
 	if !ok || act.Head == "" {
@@ -156,6 +157,22 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
+	// Every submitted attempt has an outcome in this pass, including waits
+	// and unreadable confirmation. A pending outcome keeps the claim open;
+	// it never grants a worker permission to bypass the gate.
+	pending := "awaiting merge confirmation"
+	defer func() {
+		verb, detail := "merge.finished", result
+		switch {
+		case errors.Is(resultErr, errLoopLater):
+			verb, detail = "merge.pending", pending
+		case resultErr != nil:
+			verb, detail = "merge.failed", resultErr.Error()
+		}
+		if err := a.store.Record(about(event(loopParty, verb, "%s at %s: %s", act.URL, act.Head, oneLine(detail)), act.Ref)); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
@@ -191,6 +208,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		policyReason = reply.Reason
 	}
 	if ghMergePolicyRefused(policyReason) {
+		pending = "repository merge policy refused; retrying next round: " + oneLine(policyReason)
 		stage := act.Key + " admin configuration"
 		l.mu.Lock()
 		reported := l.stages[stage]
@@ -212,6 +230,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
+		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, oneLine(out))
 		return "", errLoopLater
 	}
 	if err == nil && (code == ExitGateUnread || code == ExitGateRefused) || mutationResult && code == github.SquashRefused {
@@ -221,6 +240,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", refused("merge gate refused: %s", oneLine(out))
 	}
 	if code == 0 && mutationResult && reply.Verdict == reviewedMergeQueued {
+		pending = "server-side merge queued; awaiting merge-result checks: " + oneLine(reply.Reason)
 		return "", errLoopLater
 	}
 	if mutationResult && code == github.SquashTooling {

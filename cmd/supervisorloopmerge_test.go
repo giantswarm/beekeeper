@@ -1000,3 +1000,59 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
+	for _, outcome := range []string{"merged", "queued", "refused", "policy", "unreadable"} {
+		t.Run(outcome, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Merge.Admin = []string{loopMergeRepo}
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			read := readLoopPull
+			r.answer = func(args []string) (string, int) {
+				if len(args) == 0 || args[0] != gateCmdName {
+					return "", 0
+				}
+				switch outcome {
+				case "merged":
+					r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
+					return "", 0
+				case "queued":
+					return "waiting behind running merge", ExitGateQueued
+				case "policy":
+					return adminPolicyTestReason, 1
+				case "unreadable":
+					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						return superloop.Pull{}, errors.New("confirmation unavailable")
+					}
+					return "", 0
+				default:
+					return "held by release window", ExitGateRefused
+				}
+			}
+			r.pass(t)
+			readLoopPull = read
+			starts := r.logged(t, "merge.start")
+			var outcomes []state.Event
+			for _, verb := range []string{"merge.finished", "merge.pending", "merge.failed"} {
+				outcomes = append(outcomes, r.logged(t, verb)...)
+			}
+			if len(starts) != 1 || len(outcomes) != 1 {
+				t.Fatalf("unpaired merge attempt: starts=%v outcomes=%v", starts, outcomes)
+			}
+			want := "merge.failed"
+			if outcome == "merged" {
+				want = "merge.finished"
+			} else if outcome == "queued" || outcome == "policy" {
+				want = "merge.pending"
+			}
+			if outcomes[0].Verb != want || outcomes[0].Subject != loopPR || !strings.Contains(outcomes[0].Detail, loopHead) {
+				t.Fatalf("incorrect outcome: %+v", outcomes[0])
+			}
+			if r.called(agentsName, agentWakeName, loopWorker) != nil {
+				t.Fatal("merge outcome bypassed coordinator by waking worker")
+			}
+		})
+	}
+}
