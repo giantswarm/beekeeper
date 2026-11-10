@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -200,4 +202,169 @@ func TestSuspendRecoveryStopsOnCopyAndTargetsCurrentGuide(t *testing.T) {
 	if !strings.Contains(out.String(), "RESUME FAILED: \""+worker.Name+"\"") {
 		t.Fatalf("missing copy failure log: %s", out)
 	}
+}
+
+type staticProcMachine struct {
+	platform.Machine
+	table *proc.Table
+}
+
+func (m staticProcMachine) Processes() (*proc.Table, error) {
+	return m.table, nil
+}
+
+func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
+	const (
+		origID      = "a2e980cb-6c26-411f-a3fd-45bc0a0ebde0"
+		origShortID = "a2e980cb"
+		resumedID   = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
+		resumedName = "beekeeper resume after suspend"
+		guideName56 = "Guide run 56"
+	)
+
+	t.Run("background guide resumed with new session id in daemon listing", func(t *testing.T) {
+		a, _ := stubApp(t)
+		plat.Machine = tableMachine{plat.Machine}
+		dir := t.TempDir()
+		guide := state.Party{Name: guideName56, Session: origID}
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 56}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: "follow up after suspend", Due: a.now, By: guide}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: "Proceed with the fix?", At: a.now.Add(-time.Minute)}}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		stubBackground(t, "note: woke session "+origShortID+" with its saved options.\nbackgrounded · "+origShortID+" · "+resumedName+"\n")
+		woke := false
+		origRun := bgRun
+		bgRun = func(ctx context.Context, d string, env, argv []string) (string, error) {
+			woke = true
+			return origRun(ctx, d, env, argv)
+		}
+		bgList = func(context.Context, string, []string, bool) ([]bgSession, error) {
+			if !woke {
+				return nil, nil
+			}
+			return []bgSession{{ID: origShortID, SessionID: resumedID, Name: resumedName, Kind: bgKind}}, nil
+		}
+		if err := a.reviveBackground(t.Context(), guide, "beekeeper: the machine resumed from suspend"); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CLAUDE_CODE_SESSION_ID", resumedID)
+		t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumedName)
+
+		workCmd := a.guideWorkCmd()
+		workCmd.SetArgs([]string{paramDone, "1", "--reason", "closed after suspend"})
+		if err := workCmd.Execute(); err != nil {
+			t.Fatalf("guide work done: %v", err)
+		}
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, "yes, proceed", false, answerNoteOpts{}); err != nil {
+			t.Fatalf("answer: %v", err)
+		}
+		if err := a.runStart(t.Context(), guideRole, false); err != nil {
+			t.Fatalf("guide start: %v", err)
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Guide == nil || st.Guide.Holder == nil || st.Guide.Holder.Session != resumedID || st.Guide.Holder.Name != guideName56 || st.Guide.Run != 56 {
+			t.Fatalf("guide state after resume: %+v", st.Guide)
+		}
+	})
+
+	t.Run("background guide resumed with new session id in cli record", func(t *testing.T) {
+		a, _ := stubApp(t)
+		dir := t.TempDir()
+		guide := state.Party{Name: guideName56, Session: origID}
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 56}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: "follow up after suspend", Due: a.now, By: guide}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: "Proceed with the fix?", At: a.now.Add(-time.Minute)}}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(a.cfg.Claude.SessionsDir, "4242.json"),
+			`{"pid":4242,"sessionId":"`+resumedID+`","name":"`+resumedName+`","jobId":"`+origShortID+`","procStart":"100"}`)
+		plat.Machine = staticProcMachine{
+			Machine: plat.Machine,
+			table: &proc.Table{
+				ByPID: map[int]*proc.Process{
+					4242: {PID: 4242, Comm: "claude", StartTicks: 100, Args: []string{"claude bg-spare", "--bg-spare"}},
+				},
+			},
+		}
+		t.Setenv("CLAUDE_CODE_SESSION_ID", resumedID)
+		t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumedName)
+
+		workCmd := a.guideWorkCmd()
+		workCmd.SetArgs([]string{paramDone, "1", "--reason", "closed after suspend"})
+		if err := workCmd.Execute(); err != nil {
+			t.Fatalf("guide work done: %v", err)
+		}
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, "yes, proceed", false, answerNoteOpts{}); err != nil {
+			t.Fatalf("answer: %v", err)
+		}
+		if err := a.runStart(t.Context(), guideRole, false); err != nil {
+			t.Fatalf("guide start: %v", err)
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Guide == nil || st.Guide.Holder == nil || st.Guide.Holder.Session != resumedID || st.Guide.Holder.Name != guideName56 || st.Guide.Run != 56 {
+			t.Fatalf("guide state after resume: %+v", st.Guide)
+		}
+	})
+
+	t.Run("desktop guide started without prior holder and resumed with new session id", func(t *testing.T) {
+		a, _ := stubApp(t)
+		plat.Machine = tableMachine{plat.Machine}
+		hostID := "local_" + origID
+		seed := state.Party{Name: guideName56, Session: origID, HostSession: hostID}
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = []state.Start{{Party: seed, Mode: state.ModeBypass, Role: guideRole.name, At: a.now.Add(-time.Hour)}}
+			st.Guide = &state.Role{
+				Relay: &state.Relay{To: seed, At: a.now.Add(-time.Minute), Expires: a.now.Add(10 * time.Minute)},
+				Run:   56,
+			}
+			_, evs, err := guideRole.start(st, state.Party{Name: guideName56, Session: origID}, false, false, a.now)
+			if err != nil {
+				return nil, err
+			}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: "follow up after suspend", Due: a.now, By: seed}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: "Proceed with the fix?", At: a.now.Add(-time.Minute)}}
+			return evs, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CLAUDE_CODE_SESSION_ID", resumedID)
+		t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", hostID)
+		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumedName)
+
+		workCmd := a.guideWorkCmd()
+		workCmd.SetArgs([]string{paramDone, "1", "--reason", "closed after suspend"})
+		if err := workCmd.Execute(); err != nil {
+			t.Fatalf("guide work done: %v", err)
+		}
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, "yes, proceed", false, answerNoteOpts{}); err != nil {
+			t.Fatalf("answer: %v", err)
+		}
+		if err := a.runStart(t.Context(), guideRole, false); err != nil {
+			t.Fatalf("guide start: %v", err)
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Guide == nil || st.Guide.Holder == nil || st.Guide.Holder.HostSession != hostID || st.Guide.Holder.Name != guideName56 || st.Guide.Run != 56 {
+			t.Fatalf("guide state after resume: %+v", st.Guide)
+		}
+	})
 }

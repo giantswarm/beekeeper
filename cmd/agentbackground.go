@@ -386,19 +386,23 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 		return fmt.Errorf("checking background session before resume: %w", err)
 	}
 	for _, row := range rows {
-		if w.id == "" || row.SessionID != w.id {
+		if !bgRowMatches(row, w.id) {
 			continue
 		}
 		if row.Name == "" || slices.ContainsFunc(rows, func(other bgSession) bool {
-			return other.Name == row.Name && other.SessionID != w.id
+			return other.Name == row.Name && !bgSameRow(other, row)
 		}) {
 			return fmt.Errorf("running background session %s has no unique messaging name", w.id)
+		}
+		if err := a.rebindBackgroundSession(w.id, row.SessionID); err != nil {
+			return err
 		}
 		return cliSend(ctx, a, row.Name, msg)
 	}
 	out, err := bgRun(ctx, w.dir, env, bgResumeArgv(bin, w.id, msg))
+	short := bgShort(out)
 	// Even a failed call may have launched a copy before reporting failure.
-	if short := bgShort(out); short != "" && !strings.HasPrefix(w.id, short) {
+	if short != "" && !strings.HasPrefix(w.id, short) {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgWait)
 		defer cancel()
 		if stopErr := a.bgStop(cleanup, short); stopErr != nil {
@@ -409,10 +413,99 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 	if err != nil {
 		return fmt.Errorf("claude --bg --resume: %w (%s)", err, firstLines(out))
 	}
-	if bgShort(out) == "" {
+	if short == "" {
 		return fmt.Errorf("claude --bg --resume named no session (%s)", firstLines(out))
 	}
+	if rows, err := bgList(ctx, bin, env, false); err == nil {
+		for _, row := range rows {
+			if bgRowMatches(row, w.id) {
+				if err := a.rebindBackgroundSession(w.id, row.SessionID); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
 	return nil
+}
+
+func bgRowMatches(row bgSession, id string) bool {
+	if id == "" {
+		return false
+	}
+	if row.SessionID == id {
+		return true
+	}
+	return len(id) >= 8 && row.ID != "" && strings.HasPrefix(id, row.ID)
+}
+
+func bgSameRow(a, b bgSession) bool {
+	if a.SessionID != "" && a.SessionID == b.SessionID {
+		return true
+	}
+	return a.ID != "" && a.ID == b.ID
+}
+
+// rebindBackgroundSession updates a background session's recorded session id
+// when the claude daemon resumed its job under a new sessionId.
+func (a *app) rebindBackgroundSession(oldID, newID string) error {
+	if a.store == nil || oldID == "" || newID == "" || oldID == newID {
+		return nil
+	}
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rebindSessionState(st, oldID, newID, "")
+		return nil, nil
+	})
+}
+
+func rebindSessionState(st *state.State, oldID, newID, hostID string) bool {
+	if oldID == "" || newID == "" {
+		return false
+	}
+	changed := false
+	rebindParty := func(p *state.Party) {
+		if p.Session != oldID {
+			return
+		}
+		if p.Session != newID {
+			p.Session = newID
+			changed = true
+		}
+		if hostID != "" && p.HostSession == "" {
+			p.HostSession = hostID
+			changed = true
+		}
+	}
+	for i := range st.Starts {
+		rebindParty(&st.Starts[i].Party)
+	}
+	for i := range st.Agents {
+		rebindParty(&st.Agents[i].Party)
+	}
+	for _, rl := range roles {
+		rl.update(st, func(r *state.Role) {
+			if r.Holder != nil {
+				rebindParty(&r.Holder.Party)
+			}
+			if r.CLI != nil {
+				rebindParty(&r.CLI.Supervisor)
+			}
+			if r.WorkChecked != nil {
+				rebindParty(r.WorkChecked)
+			}
+			if r.Relay != nil {
+				rebindParty(&r.Relay.From)
+				rebindParty(&r.Relay.To)
+			}
+			if r.RelayDue != nil {
+				rebindParty(&r.RelayDue.Supervisor)
+			}
+			for i := range r.Relieved {
+				rebindParty(&r.Relieved[i].Party)
+			}
+		})
+	}
+	return changed
 }
 
 // wakeBackground wakes the background session w, whose CLI does not run,

@@ -366,15 +366,106 @@ func (a *app) callerSession() (state.Party, error) {
 			p.Name = r.Title
 		}
 	}
-	if p.Name == "" {
-		if t, err := plat.Machine.Processes(); err == nil {
+	var t *proc.Table
+	if tbl, err := plat.Machine.Processes(); err == nil {
+		t = tbl
+		if p.Name == "" {
 			p.Name = claude.RecordName(a.cfg, t, p.Session)
 		}
 	}
+	a.rebindCallerSession(t, &p)
 	if p.Name == "" {
 		p.Name = p.Session
 	}
 	return p, nil
+}
+
+// rebindCallerSession keeps a resumed session's recorded role and start bound
+// when its CLI came back under a new session id, and keeps its numbered run
+// title when the resumed CLI derived another.
+func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
+	if a.store == nil || p.Session == "" {
+		return
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return
+	}
+	var prevID, jobID string
+	if t != nil {
+		prevID, jobID = claude.ResumedSession(a.cfg, t, p.Session)
+	}
+	var desktopInitID string
+	var priorIDs []string
+	if p.HostSession != "" {
+		desktopInitID, _ = strings.CutPrefix(p.HostSession, "local_")
+		if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok {
+			priorIDs = r.PriorCLISessionIDs
+		}
+	}
+	oldIDs := resumedStateSessions(st, p.Session, prevID, jobID, desktopInitID, priorIDs)
+	needsHost := p.HostSession != "" && slices.ContainsFunc(roles, func(rl role) bool {
+		h := rl.get(st).Holder
+		return h != nil && h.Session == p.Session && h.HostSession == ""
+	})
+	if len(oldIDs) > 0 || needsHost {
+		_ = a.store.Update(func(ust *state.State) ([]state.Event, error) {
+			for _, oldID := range oldIDs {
+				rebindSessionState(ust, oldID, p.Session, p.HostSession)
+			}
+			if needsHost {
+				rebindSessionState(ust, p.Session, p.Session, p.HostSession)
+			}
+			st = ust
+			return nil, nil
+		})
+	}
+	for _, rl := range roles {
+		if h := rl.get(st).Holder; h != nil && h.Is(*p) && rl.runOf(h.Name) > 0 && rl.runOf(p.Name) == 0 {
+			p.Name = h.Name
+		}
+	}
+}
+
+func resumedStateSessions(st *state.State, curID, prevID, jobID, desktopInitID string, priorIDs []string) []string {
+	match := func(id string) bool {
+		if id == "" || id == curID {
+			return false
+		}
+		if prevID != "" && id == prevID {
+			return true
+		}
+		if jobID != "" && len(id) >= 8 && strings.HasPrefix(id, jobID) {
+			return true
+		}
+		return desktopInitID != "" && (id == desktopInitID || slices.Contains(priorIDs, id))
+	}
+	var out []string
+	add := func(id string) {
+		if match(id) && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	for _, s := range st.Starts {
+		add(s.Session)
+	}
+	for _, ag := range st.Agents {
+		add(ag.Session)
+	}
+	for _, rl := range roles {
+		r := rl.get(st)
+		if r.Holder != nil {
+			add(r.Holder.Session)
+		}
+		if r.Relay != nil {
+			add(r.Relay.From.Session)
+			add(r.Relay.To.Session)
+		}
+		for _, rf := range r.Relieved {
+			add(rf.Party.Session)
+		}
+	}
+	return out
 }
 
 // envParty is the session an environment names, read with get: an omp, agy or
