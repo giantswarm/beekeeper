@@ -1865,6 +1865,11 @@ type FileStore struct {
 	stopMu        sync.Mutex
 	stopFile      os.FileInfo
 	stopRequested bool
+	eventsMu      sync.Mutex
+	events        []*cachedEventFile
+	snapshotMu    sync.Mutex
+	snapshotFile  os.FileInfo
+	snapshot      *State
 }
 
 // followed is how far a Follow reader has read the log, and what it kept.
@@ -1896,8 +1901,8 @@ func (s *FileStore) Dir() string { return s.dir }
 
 func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name) }
 
-// Read copies the current state under a shared lock, then decodes the snapshot
-// after releasing it. Large read-only views must not hold up writers while
+// Read opens the current state under a shared lock, then decodes or clones
+// the cached snapshot after releasing it. Large read-only views must not hold up writers while
 // allocating and decoding the retained history. Pending outbox recovery still
 // re-reads the latest state under the exclusive lock before changing anything.
 func (s *FileStore) Read() (*State, error) {
@@ -1905,7 +1910,7 @@ func (s *FileStore) Read() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(s.path("state.json"))
+	f, err := os.Open(s.path("state.json"))
 	unlock()
 	if errors.Is(err, os.ErrNotExist) {
 		return &State{}, nil
@@ -1913,7 +1918,8 @@ func (s *FileStore) Read() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.decode(raw)
+	defer func() { _ = f.Close() }()
+	st, err := s.readSnapshot(f)
 	if err != nil || st.EventOutbox == nil {
 		return st, err
 	}
@@ -2190,14 +2196,15 @@ func command(args []string) string {
 }
 
 func (s *FileStore) load() (*State, error) {
-	raw, err := os.ReadFile(s.path("state.json"))
+	f, err := os.Open(s.path("state.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return &State{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return s.decode(raw)
+	defer func() { _ = f.Close() }()
+	return s.readSnapshot(f)
 }
 
 func (s *FileStore) decode(raw []byte) (*State, error) {
@@ -2291,33 +2298,7 @@ func endLine(f *os.File) error {
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
 func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
-	files, err := s.eventFiles()
-	if err != nil {
-		return nil, err
-	}
-	defer closeEventFiles(files)
-	var out []Event
-	for _, f := range files {
-		reader := bufio.NewReader(f)
-		for {
-			line, readErr := reader.ReadBytes('\n')
-			var e Event
-			line = bytes.TrimLeft(line, "\x00")
-			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
-				out = append(out, e)
-				if n > 0 && len(out) > n {
-					out = out[len(out)-n:]
-				}
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			if readErr != nil {
-				return out, readErr
-			}
-		}
-	}
-	return out, nil
+	return s.cachedEvents(n, keep)
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

@@ -1141,6 +1141,24 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 }
 
 func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+	return a.resolveReadingAt(ctx, file, u, nil)
+}
+
+func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage, completed func() time.Time) (usageReading, error) {
+	if err := ctx.Err(); err != nil {
+		return usageReading{}, err
+	}
+	unlock, err := a.usageRefreshLock(file)
+	if err != nil {
+		now := a.timeNow()
+		if now.IsZero() {
+			now = time.Now()
+		}
+		return a.cachedUsageReading(file, u, now, err)
+	}
+	defer unlock()
+	// Recheck under the provider lock: another process may have published
+	// the reading between our caller deciding to refresh and admission.
 	started := time.Now()
 	now := a.now
 	if now.IsZero() {
@@ -1159,6 +1177,9 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	}
 	r, err := a.execUsage(ctx, u)
 	now = now.Add(max(0, time.Since(started)))
+	if completed != nil {
+		now = completed()
+	}
 	if !a.now.IsZero() {
 		a.now = now
 	}
@@ -1596,21 +1617,17 @@ func (w *watcher) usageNow() time.Time {
 // execUsageNow gives each provider its own observation time, then validates at
 // completion. A refresh can spend minutes on earlier providers; its scheduling
 // time must not make a newly written Codex event appear to be in the future.
-func (w *watcher) execUsageNow(ctx context.Context, u config.Usage) (usageReading, error) {
+func (w *watcher) execUsageNow(ctx context.Context, file string, u config.Usage) (usageReading, error) {
 	started := w.clk().Now()
 	obs := w.usageNow()
 	reader := w.snapshotAtNow()
 	reader.now = obs
-	r, err := reader.execUsage(ctx, u)
-	if err != nil {
-		return usageReading{}, err
-	}
-	now := obs.Add(max(0, w.clk().Now().Sub(started)))
-	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
-		now = w.clk().Now()
-	}
-	r.At = now.UTC()
-	return r, validateReadingAt(r, u, now)
+	return reader.resolveReadingAt(ctx, file, u, func() time.Time {
+		if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+			return w.clk().Now()
+		}
+		return obs.Add(max(0, w.clk().Now().Sub(started)))
+	})
 }
 
 // refreshUsage stamps every provider read with its own observation time: a
@@ -1629,7 +1646,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 			}
 			w.providerLastUsage[name] = now
 			w.mu.Unlock()
-			r, err := w.execUsageNow(ctx, p.Usage)
+			r, err := w.execUsageNow(ctx, usageProviderFile(name), p.Usage)
 			w.mu.Lock()
 			if w.providerUsageErr == nil {
 				w.providerUsageErr = map[string]string{}
@@ -1640,9 +1657,8 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 				w.retainUsageStop(usageProviderFile(name), err)
 				continue
 			}
-			w.providerUsageErr[name] = ""
+			w.providerUsageErr[name] = r.Fallback
 			w.mu.Unlock()
-			_ = w.store.WriteFile(usageProviderFile(name), r)
 		}
 		return
 	}
@@ -1650,7 +1666,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 	w.mu.Lock()
 	w.lastUsage = now
 	w.mu.Unlock()
-	r, err := w.execUsageNow(ctx, k.Usage)
+	r, err := w.execUsageNow(ctx, usageFile, k.Usage)
 	if err != nil {
 		w.mu.Lock()
 		w.usageErr = err.Error()
@@ -1658,9 +1674,8 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 		w.retainUsageStop(usageFile, err)
 		return
 	}
-	_ = w.store.WriteFile(usageFile, r)
 	w.mu.Lock()
-	w.usageErr = ""
+	w.usageErr = r.Fallback
 	w.mu.Unlock()
 }
 

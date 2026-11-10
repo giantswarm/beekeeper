@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -192,7 +193,7 @@ Only a held claim of a kind lab prints the export line of its kubeconfig,
 after the held line. Gate the work on the exit code (claim && work).
 
 A claim does not wait by itself: queued or refused, it exits at once.
---wait <duration> claims again every 10s until the claim is held or the
+--wait <duration> wakes on lease or queue changes, and at least every 10s, until the claim is held or the
 duration has passed, then says the last outcome. It runs in the foreground
 and is at most 9m: a background wait does not outlive a desktop turn.
 
@@ -238,6 +239,12 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 			if err != nil {
 				return err
 			}
+			var changes <-chan struct{}
+			if wait > 0 {
+				var closeChanges func()
+				changes, closeChanges = state.Changes(cmd.Context(), filepath.Join(a.store.Dir(), "state.json"), filepath.Join(a.cfg.LeaseDir, res))
+				defer closeChanges()
+			}
 			msg, err := a.claimLocal(res, purpose, me, budget)
 			var r *claimRefusal
 			for waited := time.Duration(0); wait > 0 && errors.As(err, &r); {
@@ -246,11 +253,12 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 					break
 				}
 				step := min(claimPoll, wait-waited)
-				if err := claimPause(cmd.Context(), step); err != nil {
-					return err
+				elapsed, pauseErr := claimPause(cmd.Context(), step, changes)
+				if pauseErr != nil {
+					return pauseErr
 				}
-				waited += step
-				a.now = a.now.Add(step)
+				waited += elapsed
+				a.now = a.now.Add(elapsed)
 				msg, err = a.claimLocal(res, purpose, me, budget)
 			}
 			if errors.As(err, &r) {
@@ -282,7 +290,7 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 	}
 	c.Flags().StringVarP(&purpose, "purpose", "p", "", "what the resource is for (required)")
 	c.Flags().IntVar(&gib, "gib", 0, "model-server only: the GiB your models may hold (default ollama.budgetGiB)")
-	c.Flags().DurationVar(&wait, "wait", 0, "claim again every 10s until held or this long has passed, at most 9m (0: claim once)")
+	c.Flags().DurationVar(&wait, "wait", 0, "wake on lease changes (10s fallback) until held or this long has passed, at most 9m (0: claim once)")
 	c.Flags().BoolVar(&park, "park", false, "park the calling agent on a queued claim: the watch resumes it once the lease is its to claim")
 	return c
 }
@@ -512,14 +520,20 @@ func (a *app) parkClaim(me state.Party, r *claimRefusal, purpose string) string 
 }
 
 // claimPause waits d between the tries of a claim with --wait.
-var claimPause = func(ctx context.Context, d time.Duration) error {
+var claimPause = func(ctx context.Context, d time.Duration, changes <-chan struct{}) (time.Duration, error) {
+	started := time.Now()
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return time.Since(started), ctx.Err()
 	case <-t.C:
-		return nil
+		return d, nil
+	case <-changes:
+		if !pauseChange(ctx) {
+			return time.Since(started), ctx.Err()
+		}
+		return time.Since(started), nil
 	}
 }
 

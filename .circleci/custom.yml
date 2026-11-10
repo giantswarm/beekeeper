@@ -55,6 +55,18 @@ jobs:
         name: Bound startup and pass latency with 450k events and 1 GiB of history
         no_output_timeout: 25m
         command: go test ./cmd -run '^TestLargeHistoryStartupAndPass$' -count=1 -timeout=25m -v
+    - run:
+        name: Bound capacity latency with a large snapshot and event log
+        command: go test ./cmd -run '^TestCapacityLargeSnapshotLatency$' -count=1 -timeout=2m -v
+    - run:
+        name: Record cached state and event read cost
+        command: |
+          set -o pipefail
+          mkdir -p /tmp/state-performance
+          go test ./internal/state -run '^$' -bench '^Benchmark(UnchangedSnapshot|CachedEvents)$' -benchtime=1s -benchmem | tee /tmp/state-performance/benchmarks.txt
+    - store_artifacts:
+        path: /tmp/state-performance
+        destination: state-performance
     - architect/go-cache-save
 
   test-envtest:

@@ -131,12 +131,12 @@ func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
-	claimPause = func(_ context.Context, d time.Duration) error {
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) {
 		pauses = append(pauses, d)
 		if len(pauses) == 2 {
-			return lease.Dir(a.cfg.LeaseDir).Release(labOne)
+			return d, lease.Dir(a.cfg.LeaseDir).Release(labOne)
 		}
-		return nil
+		return d, nil
 	}
 	out, err := runLease(a, "claim", labOne, "-p", "my proof", "--wait", "5m")
 	if err != nil || !strings.HasPrefix(out, "held by you since 02:00: claimed agentlab-1") || len(pauses) != 2 {
@@ -152,7 +152,10 @@ func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
-	claimPause = func(_ context.Context, d time.Duration) error { pauses = append(pauses, d); return nil }
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) {
+		pauses = append(pauses, d)
+		return d, nil
+	}
 	out, err := runLease(a, "claim", graveler, "-p", "my proof", "--wait", "25s")
 	want := []time.Duration{claimPoll, claimPoll, 5 * time.Second}
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, `refused: graveler is held by "Agent other"`) || !strings.HasSuffix(out, " (waited "+dur(25*time.Second)+")\n") ||
