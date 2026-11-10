@@ -58,8 +58,21 @@ func (a *app) completionOutcome(ctx context.Context, st *state.State, ag state.A
 	default:
 		for _, i := range indices {
 			d := st.Deliveries[i]
-			merged := false
+			merged := d.Outcome == state.OutcomeMerged
+			if merged {
+				ref := d.Evidence
+				if ref == "" && len(d.Pulls) > 0 {
+					ref = deliveryURL(d.Pulls[0], true)
+				}
+				if ref == "" {
+					ref = deliveryURL(d.Ref, true)
+				}
+				evidence = strings.TrimSpace(evidence + " " + ref)
+			}
 			for _, ref := range d.Pulls {
+				if merged {
+					break
+				}
 				r, ok := parseRef(ref)
 				if !ok {
 					continue
@@ -128,6 +141,12 @@ func (a *app) recordTaskOutcome(st *state.State, ag state.Agent, outcome, eviden
 	prev := slices.Clone(st.Deliveries)
 	for _, i := range workerDeliveries(st, ag) {
 		d := &st.Deliveries[i]
+		if d.Outcome == state.OutcomeMerged && outcome == state.OutcomeParked {
+			continue
+		}
+		if d.Outcome == outcome && d.Evidence == evidence {
+			continue
+		}
 		d.Outcome, d.Evidence, d.OutcomeAt = outcome, evidence, a.now.UTC()
 		switch outcome {
 		case state.OutcomeNoChange:

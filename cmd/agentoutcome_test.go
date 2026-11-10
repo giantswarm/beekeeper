@@ -18,8 +18,8 @@ func TestWorkerCompletionOutcomes(t *testing.T) {
 		done, blocked, merged  bool
 	}{
 		{name: "unexplained", done: true},
-		{name: "no change", done: true, reason: "already fixed by commit abc123, verified issue response", want: state.OutcomeNoChange},
-		{name: "merged", done: true, merged: true, want: state.OutcomeMerged},
+		{name: state.OutcomeNoChange, done: true, reason: "already fixed by commit abc123, verified issue response", want: state.OutcomeNoChange},
+		{name: state.OutcomeMerged, done: true, merged: true, want: state.OutcomeMerged},
 		{name: "blocked note", blocked: true, by: "#7", want: state.OutcomeBlocked},
 		{name: "missing note", blocked: true, by: "#8"},
 	} {
@@ -30,7 +30,7 @@ func TestWorkerCompletionOutcomes(t *testing.T) {
 			st.StartDelivery(heldRef, ag.Name, "", a.now)
 			f := useFakeBoard(t, a, map[int]string{7: holdWorking})
 			if tc.merged {
-				st.Deliveries[0].Pulls = []string{"o/r#9"}
+				st.Deliveries[0].Pulls = []string{alsoHeldRef}
 				prev := refStates
 				t.Cleanup(func() { refStates = prev })
 				refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
@@ -71,7 +71,7 @@ func TestWorkerCompletionOutcomes(t *testing.T) {
 
 func TestParkRecordsDeliveryOutcome(t *testing.T) {
 	a, _ := stubApp(t)
-	ag := state.Agent{Party: state.Party{Name: "parked worker"}, AssignedAt: a.now}
+	ag := state.Agent{Party: state.Party{Name: outcomeWorkerName}, AssignedAt: a.now}
 	st := &state.State{}
 	st.StartDelivery(heldRef, ag.Name, "", a.now)
 	events := a.recordTaskOutcome(st, ag, state.OutcomeParked, "#7: decision")
