@@ -61,7 +61,7 @@ func ReviewOnlyBypass(ctx context.Context, run GH, repo, base, head string) erro
 			}
 			for key, value := range rule.Parameters {
 				switch key {
-				case "required_approving_review_count", "dismiss_stale_reviews_on_push", "require_code_owner_review", "require_last_push_approval", "dismissal_restriction":
+				case "required_approving_review_count", "dismiss_stale_reviews_on_push", "require_code_owner_review", "require_last_push_approval", "dismissal_restriction", "required_reviewers":
 				case "allowed_merge_methods":
 					var methods []string
 					if json.Unmarshal(value, &methods) != nil || !slices.Contains(methods, "squash") {

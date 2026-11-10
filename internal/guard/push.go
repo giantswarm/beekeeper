@@ -814,12 +814,12 @@ func expandDirWord(word string, vars map[string]string) (string, bool) {
 		if name == "" {
 			name = sub[3]
 		}
-		if sub[2] != "" {
+		if sub[2] != "" && !strings.HasPrefix(sub[2], ":?") && !strings.HasPrefix(sub[2], "?") {
 			ok = false
 			return ""
 		}
 		val, exists := vars[name]
-		if !exists {
+		if !exists || (strings.HasPrefix(sub[2], ":?") && val == "") {
 			ok = false
 			return ""
 		}

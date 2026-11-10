@@ -87,8 +87,8 @@ action and its result is logged with the person's words.
 With --admin --head <sha> the current guide can act on the person's general
 merge order without asking them to name each pull request. The guide must
 quote the authorization verbatim when enabling the bounded grant. A pull
-request GitHub keeps at REVIEW_REQUIRED must still be open, green, mergeable
-and up to date with its base at exactly that head, with an approved desk
+request with REVIEW_REQUIRED or an unset review decision must still be open,
+green, mergeable and up to date with its base at exactly that head, with an approved desk
 review or the loop's go for it. Only then does the merge send --admin,
 which waives nothing but the review requirement.
 
@@ -220,7 +220,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			return err
 		})
 	}}
-	merge.Flags().BoolVar(&admin, "admin", false, "merge past REVIEW_REQUIRED under the current guide's bounded emergency grant")
+	merge.Flags().BoolVar(&admin, "admin", false, "merge with REVIEW_REQUIRED or an unset review decision under the current guide's bounded emergency grant")
 	merge.Flags().StringVar(&adminHead, "head", "", "with --admin: the exact head the decision is for")
 	hold := a.holdCmd()
 	for _, sub := range hold.Commands() {
@@ -366,7 +366,7 @@ func adminMergeBlock(p superloop.Pull) string {
 	switch {
 	case p.Base == "":
 		return "its base branch is unknown"
-	case p.ReviewDecision != emergencyReviewRequired && p.ReviewDecision != emergencyApproved:
+	case p.ReviewDecision != "" && p.ReviewDecision != emergencyReviewRequired && p.ReviewDecision != emergencyApproved:
 		return "its review decision is " + cmp.Or(p.ReviewDecision, "unset")
 	case p.Mergeable != emergencyMergeable:
 		return "it is not mergeable: " + cmp.Or(p.Mergeable, "unknown")

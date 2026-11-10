@@ -1000,3 +1000,68 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
+	const (
+		confirmed     = "confirmed merge"
+		laneWait      = "lane wait"
+		policyRefusal = "policy refusal"
+		branchRepair  = "branch repair"
+	)
+	for _, outcome := range []string{confirmed, laneWait, "gate refusal", policyRefusal, branchRepair, "confirmation read failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Merge.Admin = []string{loopMergeRepo}
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			read := readLoopPull
+			r.answer = func(args []string) (string, int) {
+				if len(args) == 0 || args[0] != gateCmdName {
+					return "", 0
+				}
+				switch outcome {
+				case confirmed:
+					r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
+					return "", 0
+				case laneWait:
+					return "lane occupied by running merge", ExitGateQueued
+				case policyRefusal:
+					return adminPolicyTestReason, 1
+				case branchRepair:
+					return fmt.Sprintf(`{"route":%q,"repository":%q,"number":7,"headSha":%q,"reason":"merge-result check failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), github.SquashRed
+				case "confirmation read failure":
+					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						return superloop.Pull{}, errors.New("confirmation unavailable")
+					}
+					return "", 0
+				default:
+					return "held by release window", ExitGateRefused
+				}
+			}
+			r.pass(t)
+			readLoopPull = read
+			starts := r.logged(t, "merge.start")
+			var outcomes []state.Event
+			for _, verb := range []string{"merge.finished", "merge.pending", loopMergeFailed} {
+				outcomes = append(outcomes, r.logged(t, verb)...)
+			}
+			if len(starts) != 1 || len(outcomes) != 1 {
+				t.Fatalf("unpaired merge attempt: starts=%v outcomes=%v", starts, outcomes)
+			}
+			want := loopMergeFailed
+			switch outcome {
+			case confirmed:
+				want = "merge.finished"
+			case laneWait, policyRefusal:
+				want = "merge.pending"
+			}
+			if outcomes[0].Verb != want || outcomes[0].Subject != loopPR || !strings.Contains(outcomes[0].Detail, loopHead) {
+				t.Fatalf("incorrect outcome: %+v", outcomes[0])
+			}
+			if len(r.logged(t, loopGoVerb)) != 0 || outcome != branchRepair && r.called(agentsName, agentWakeName, loopWorker) != nil {
+				t.Fatal("merge outcome bypassed coordinator by waking worker")
+			}
+		})
+	}
+}

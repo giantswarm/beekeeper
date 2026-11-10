@@ -186,6 +186,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	const pushed = "2222222222222222222222222222222222222222"
 	pr := sshTestRepository + "#7"
 	branch, repo, prHead := executionBranch(r.Ref), sshTestRepository, loopHead
+	draft := false
 	was := executionReviewGH
 	t.Cleanup(func() { executionReviewGH = was })
 	reads := 0
@@ -194,7 +195,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		if strings.Join(args, " ") != "api repos/"+sshTestRepository+"/pulls/7" {
 			t.Fatalf("read %v", args)
 		}
-		return fmt.Appendf(nil, `{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, branch, prHead, repo), nil
+		return fmt.Appendf(nil, `{"draft":%t,"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, draft, branch, prHead, repo), nil
 	}
 	park := func(p executionPark) string {
 		t.Helper()
@@ -220,6 +221,15 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		}
 		return got
 	}
+	n := reads
+	if got := park(executionPark{On: pr, Waits: "image rebuild completion timer 3155", Head: loopHead}); got != "" || reads != n {
+		t.Fatalf("plain park recorded %q after %d reads", got, reads-n)
+	}
+	draft = true
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != "" {
+		t.Fatalf("draft park recorded %q", got)
+	}
+	draft = false
 	// The workspace's HEAD is the published head of the execution's own
 	// branch: a review request, whatever the host's branch is called.
 	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != loopHead {
@@ -249,7 +259,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("a fork's pull request recorded %q", got)
 	}
 	repo = sshTestRepository
-	n := reads
+	n = reads
 	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}); got != "" || reads != n {
 		t.Fatalf("another repository's pull request recorded %q after %d reads", got, reads-n)
 	}

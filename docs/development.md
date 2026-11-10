@@ -14,7 +14,12 @@ freshly fetched base in a temporary worktree of the repository's local checkout 
 in `disk.checkouts`, `agents.dir` or `agents.roots`, `~/` expanded, as `<root>`,
 `<root>/<name>` or `<root>/<owner>/<name>`) whenever the base has moved past the head.
 For Go modules it runs configured lint and `go test ./...`, including unchanged tests and
-reverse dependents even for dependency-only changes; `golangci-lint` must be on PATH. A
+reverse dependents even for dependency-only changes; `golangci-lint` must be on PATH.
+Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or
+`.golangci.json` explicitly (in that order), without additional linters or a separate
+goconst pre-check. Without a repository config it uses `--no-config` and the tool's
+default linters, preventing inherited home or parent-directory policy. A lint refusal
+names the selected config (or the explicit default). A
 failing combination goes back to its owner. A failed fetch, a reviewed commit that cannot
 be read or a missing lint tool refuses the merge with
 `merge-result validation unavailable: <the condition that failed>`. A repository with no
