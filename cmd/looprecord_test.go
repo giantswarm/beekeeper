@@ -25,7 +25,7 @@ func TestLoopRecordAnonymizesAndDoesNotOverwrite(t *testing.T) {
 	if err := writeLoopRecording(dir, input); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "input.json"))
+	data, err := os.ReadFile(filepath.Join(dir, loopRecordInputFile)) //nolint:gosec // test TempDir fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestStandstillReplay(t *testing.T) {
 
 func readReplayJSON(t *testing.T, path string, value any) {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // testdata replay fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestDryRunWritesRecordingWithoutActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var recorded loopRecording
-	readReplayJSON(t, filepath.Join(dir, "input.json"), &recorded)
+	readReplayJSON(t, filepath.Join(dir, loopRecordInputFile), &recorded)
 	if len(recorded.Planner.Workers) == 0 {
 		t.Fatal("no planner workers recorded")
 	}

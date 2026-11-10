@@ -9,6 +9,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const (
+	loopRecordInputFile = "input.json"
+	loopFactBaseMerged  = "base-merged"
+	loopFactNitsChecked = "nits-checked"
+)
+
 // loopRecording includes the data for the pure planner and the separate
 // continuation/reservation planners. No configuration or credentials are copied.
 type loopRecording struct {
@@ -28,7 +34,7 @@ func writeLoopRecording(dir string, in loopRecording) error {
 		return err
 	}
 	// Refuse to overwrite a previous incident's evidence.
-	file, err := os.OpenFile(filepath.Join(dir, "input.json"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) //nolint:gosec // explicit recording destination
+	file, err := os.OpenFile(filepath.Join(dir, loopRecordInputFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) //nolint:gosec // explicit recording destination
 	if err != nil {
 		return err
 	}
@@ -53,7 +59,7 @@ func (r *loopRecording) capture(in superloop.Input) superloop.Input {
 	if query := in.Open; query != nil {
 		in.Open = func(ref string) bool {
 			value := query(ref)
-			r.Facts = append(r.Facts, loopRecordedFact{Ref: ref, Kind: "open", Value: value})
+			r.Facts = append(r.Facts, loopRecordedFact{Ref: ref, Kind: noteStatusOpen, Value: value})
 			return value
 		}
 	}
@@ -67,8 +73,8 @@ func (r *loopRecording) capture(in superloop.Input) superloop.Input {
 			return value
 		}
 	}
-	in.BaseMerged = wrap("base-merged", in.BaseMerged)
-	in.NitsChecked = wrap("nits-checked", in.NitsChecked)
+	in.BaseMerged = wrap(loopFactBaseMerged, in.BaseMerged)
+	in.NitsChecked = wrap(loopFactNitsChecked, in.NitsChecked)
 	r.Planner = in
 	return in
 }
@@ -83,8 +89,8 @@ func (r *loopRecording) replayInput() superloop.Input {
 		}
 		return false
 	}
-	in.Open = func(ref string) bool { return lookup("open", ref, "") }
-	in.BaseMerged = func(p superloop.Pull, approved string) bool { return lookup("base-merged", p.Ref, approved) }
-	in.NitsChecked = func(p superloop.Pull, approved string) bool { return lookup("nits-checked", p.Ref, approved) }
+	in.Open = func(ref string) bool { return lookup(noteStatusOpen, ref, "") }
+	in.BaseMerged = func(p superloop.Pull, approved string) bool { return lookup(loopFactBaseMerged, p.Ref, approved) }
+	in.NitsChecked = func(p superloop.Pull, approved string) bool { return lookup(loopFactNitsChecked, p.Ref, approved) }
 	return in
 }

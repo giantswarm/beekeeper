@@ -10,7 +10,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
-const loopComparisonTimeout = 90 * time.Second
+const (
+	loopComparisonTimeout      = 90 * time.Second
+	loopContinuationTransition = "continuation"
+)
 
 // Separate from the small offline canary probes: each full pass has its own
 // deadline and neither process is allowed to mutate the desk.
@@ -20,9 +23,9 @@ var runLoopComparison = func(ctx context.Context, binary string, args ...string)
 }
 
 func compareLoopPasses(ctx context.Context, current, candidate, config string) error {
-	args := []string{"supervisor", "loop", "--once", "--dry-run"}
+	args := strings.Fields("supervisor loop --once --dry-run")
 	if config != "" {
-		args = append([]string{"--config", config}, args...)
+		args = append([]string{workerGitHubConfigOption, config}, args...)
 	}
 	type result struct {
 		counts map[string]int
@@ -54,7 +57,7 @@ func compareLoopPasses(ctx context.Context, current, candidate, config string) e
 	if next.err != nil {
 		return fmt.Errorf("candidate dry-run unavailable (retryable): %w", next.err)
 	}
-	for _, kind := range []string{"start", "continuation", "review", "merge"} {
+	for _, kind := range []string{labStart, loopContinuationTransition, taskKindReview, gitMerge} {
 		if old.counts[kind] > 0 && next.counts[kind] == 0 {
 			return fmt.Errorf("candidate dry-run lost %s transitions (running release: %d); retry or use --allow-loop-regression for an intentional change", kind, old.counts[kind])
 		}
@@ -74,20 +77,20 @@ func loopTransitionCounts(output string) (map[string]int, error) {
 		}
 		switch fields[2] {
 		case "REVIEW":
-			counts["review"]++
+			counts[taskKindReview]++
 		case "GO", "MERGE":
-			counts["merge"]++
+			counts[gitMerge]++
 		case "CONTINUE", "RESUME":
-			counts["continuation"]++
+			counts[loopContinuationTransition]++
 		case "NEXT":
 			if len(fields) >= 5 && fields[3] == "fill" {
 				n, err := strconv.Atoi(fields[4])
 				if err != nil {
 					return nil, fmt.Errorf("invalid dry-run start count: %w", err)
 				}
-				counts["start"] += n
+				counts[labStart] += n
 			} else if len(fields) > 3 && fields[3] != "skip" && fields[3] != "wait:" {
-				counts["start"]++
+				counts[labStart]++
 			}
 		}
 	}
