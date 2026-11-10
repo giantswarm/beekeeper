@@ -71,7 +71,7 @@ func execGH(ctx context.Context, args ...string) ([]byte, error) {
 	}
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number
-	c.Env = ghEnv(os.Environ(), Repo(ctx))
+	c.Env = DevctlEnv(ghEnv(os.Environ(), Repo(ctx)), DevctlSkipVersionCheck())
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {

@@ -926,8 +926,10 @@ func (g *gateRun) reloadQueueConfig() error {
 	}
 	next := *g.cfg
 	next.GitHub.PublicOnlyOwners = c.GitHub.PublicOnlyOwners
+	next.Hooks.Guards = c.Hooks.Guards
 	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
 	g.cfg = &next
+	github.SetDevctlSkipVersionCheck(!g.cfg.Hooks.GuardsEnabled())
 	g.lane = lane
 	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
 	return nil
@@ -986,6 +988,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	defer cancel()
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
+	c.Env = devctlCommandEnv("")
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if candidate, ok := merge.ParsePromoteCandidate(out); ok {
@@ -2847,7 +2850,9 @@ func (a *app) installTool(ctx context.Context, by state.Party, verb, what string
 func toolUpdate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, merge.Tool, "version", "update").CombinedOutput() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, err := c.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, truncate(strings.TrimSpace(string(out)), 200))
 	}
@@ -2858,7 +2863,9 @@ func toolUpdate(ctx context.Context) error {
 func toolVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, merge.Tool, "version").Output() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, err := c.Output()
 	if err != nil {
 		return ""
 	}
@@ -2875,7 +2882,9 @@ func toolVersion(ctx context.Context) string {
 func toolAcceptsRed(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help").Output() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, _ := c.Output()
 	return strings.Contains(string(out), merge.AcceptRedFlag)
 }
 
@@ -2951,6 +2960,7 @@ func runChild(argv []string, out io.Writer) int {
 		return guard.ExitNotFound
 	}
 	c := exec.Command(path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
+	c.Env = devctlCommandEnv("")
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, out, os.Stderr
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)

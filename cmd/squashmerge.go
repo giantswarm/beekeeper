@@ -49,6 +49,11 @@ func (a *app) squashMergeCmd() *cobra.Command {
 				_, _ = os.Stdout.Write(append(raw, '\n'))
 				return exitCode(doc.ExitCode)
 			}
+			skip := os.Getenv(github.DevctlSkipVersionCheckEnv) == "true"
+			if a.cfgPath != "" || os.Getenv(beekeeperConfigEnv) != "" {
+				skip = !guardsEnabledForConfig(a.cfgPath)
+			}
+			github.SetDevctlSkipVersionCheck(skip)
 			doc := github.Squash{GH: github.RunGH, Repo: args[0], Number: n, Timeout: timeout, Poll: squashPoll,
 				Progress: os.Stderr, Now: time.Now, Sleep: time.Sleep}.Run(cmd.Context())
 			raw, _ := json.MarshalIndent(doc, "", "  ")
