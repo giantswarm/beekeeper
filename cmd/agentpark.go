@@ -463,8 +463,12 @@ func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string,
 	if _, ok := upgrade.Held(st, res, a.now); ok {
 		return "", false
 	}
-	if _, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Now: a.now, TTL: a.cfg.GrantTTL.Duration}); err != nil {
+	idx, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+	if err != nil {
 		return "", false
+	}
+	if idx < 0 {
+		return fmt.Sprintf("%s has no grant of it to you left: `beekeeper lease grant %s %q` queues you again", res, res, ag.Name), true
 	}
 	claim := fmt.Sprintf("beekeeper lease claim %s -p \"<purpose>\"", res)
 	return fmt.Sprintf("%s is free and yours: claim it now with `%s`, within %s", res, claim, dur(a.cfg.GrantTTL.Duration)), true
@@ -1008,6 +1012,23 @@ func parkedAgents(st *state.State) []state.Agent {
 	return out
 }
 
+// recheckLeaseParks validates lease wakes under the state lock. Other parks
+// may require remote probes; a lease's holder and queue can change during them.
+func (a *app) recheckLeaseParks(st *state.State, parks []settledPark) []settledPark {
+	out := make([]settledPark, 0, len(parks))
+	for _, p := range parks {
+		if res, ok := parkLease(p.on); ok {
+			answer, ready := a.leaseSettled(st, state.Agent{Party: p.party}, res)
+			if !ready {
+				continue
+			}
+			p.answer = answer
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // markResumable marks the parks of st among settled resumable and returns
 // their watch lines and events: one AGENT RESUMABLE line per park, since
 // the mark is in the state. A park ended or moved meanwhile is left alone.
@@ -1015,6 +1036,16 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 	var lines []string
 	var evs []state.Event
 	mark := func(name string, p *state.Park, s settledPark, routed bool) {
+		// The wake promises a full claim window, even if the grant was
+		// nearly expired when this poll observed it.
+		if res, ok := parkLease(s.on); ok && strings.Contains(s.answer, "is free and yours:") {
+			for i := range st.Grants {
+				if g := &st.Grants[i]; g.Resource == res && g.To.Is(s.party) {
+					g.Reserved = now.UTC()
+					break
+				}
+			}
+		}
 		p.Resumable, p.Answer = now.UTC(), s.answer
 		next := fmt.Sprintf("beekeeper agents resume %q", name)
 		switch {

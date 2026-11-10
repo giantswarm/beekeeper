@@ -228,6 +228,8 @@ func (st *State) SetGuideRole(r Role) {
 
 // Grant is the supervisor's word that a session may claim a resource.
 type Grant struct {
+	// Reserved is the start of the claim window promised by a queue wake.
+	Reserved time.Time `json:"reserved,omitempty"`
 	Resource string    `json:"resource"`
 	To       Party     `json:"to"`
 	By       Party     `json:"by"`
