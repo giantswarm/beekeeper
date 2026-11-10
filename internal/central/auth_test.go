@@ -23,7 +23,7 @@ func TestCallReusesGrantAfterAuthenticationRefusal(t *testing.T) {
 				if req.GetString("name", "") == "core_auth_login" {
 					logins.Add(1)
 					args, _ := req.GetArguments()["arguments"].(map[string]any)
-					if args["server"] != "beekeeper" {
+					if args["server"] != beekeeperServer {
 						t.Errorf("login arguments = %v", args)
 					}
 					return mcp.NewToolResultText("Successfully connected"), nil
@@ -49,7 +49,7 @@ func TestCallReusesGrantAfterAuthenticationRefusal(t *testing.T) {
 
 func centralAuthChallenge() *mcp.CallToolResult {
 	res := mcp.NewToolResultError("auth_required: server 'beekeeper' requires authentication before its tools can be called (this session is not authenticated to it)")
-	res.StructuredContent = map[string]any{"status": "auth_required", "server": "beekeeper"}
+	res.StructuredContent = map[string]any{"status": "auth_required", "server": beekeeperServer}
 	return res
 }
 
