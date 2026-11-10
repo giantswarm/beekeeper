@@ -135,7 +135,13 @@ func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Deliveries[0].Step != state.DeliveryImplementing {
-		t.Fatal("failed issue read ended its delivery")
+	for _, d := range st.Deliveries {
+		if d.Ref == epicTen {
+			if d.Step != state.DeliveryImplementing {
+				t.Fatalf("failed issue read changed its delivery: %+v", d)
+			}
+			return
+		}
 	}
+	t.Fatal("failed issue read removed its delivery")
 }
