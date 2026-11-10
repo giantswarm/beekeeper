@@ -49,14 +49,21 @@ func assignedOutside(it Item, people []string) []string {
 	return slices.DeleteFunc(slices.Clone(it.Assignees), func(a string) bool { return containsFold(people, a) })
 }
 
-// assignedAbove is the skip reason of an issue under one assigned outside
-// people: the nearest issue above it through up, among byRef, with an
-// assignee outside people; "" for none.
-func assignedAbove(ref string, up func(string) string, byRef map[string]Item, people []string) string {
-	seen := map[string]bool{strings.ToLower(ref): true}
-	for at := up(ref); at != "" && !seen[strings.ToLower(at)] && len(seen) <= maxDepth; at = up(at) {
+// assignedAbove inherits ownership only for an unassigned item. The nearest
+// assigned ancestor decides; shared ownership with people leaves work available.
+func assignedAbove(it Item, up func(string) string, byRef map[string]Item, people []string) string {
+	if len(it.Assignees) > 0 {
+		return ""
+	}
+	seen := map[string]bool{strings.ToLower(it.Ref): true}
+	for at := up(it.Ref); at != "" && !seen[strings.ToLower(at)] && len(seen) <= maxDepth; at = up(at) {
 		seen[strings.ToLower(at)] = true
-		if p, ok := byRef[strings.ToLower(at)]; ok {
+		if p, ok := byRef[strings.ToLower(at)]; ok && len(p.Assignees) > 0 {
+			for _, a := range p.Assignees {
+				if containsFold(people, a) {
+					return ""
+				}
+			}
 			if others := assignedOutside(p, people); len(others) > 0 {
 				return fmt.Sprintf("assigned to %s (sub-issue of %s)", strings.Join(others, ", "), p.Ref)
 			}

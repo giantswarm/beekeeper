@@ -69,7 +69,7 @@ func TestRankSkipsSubIssuesUnderEpicAssignedOutsidePeople(t *testing.T) {
 	for i := range snap.Items {
 		switch snap.Items[i].Ref {
 		case heldEpic:
-			snap.Items[i].Assignees = []string{"Me", "pat"}
+			snap.Items[i].Assignees = []string{"pat"}
 		case heldSub:
 			snap.Items[i].Parent = heldEpic
 		case "o/r#13":
@@ -94,5 +94,42 @@ func TestRankSkipsSubIssuesUnderEpicAssignedOutsidePeople(t *testing.T) {
 	}
 	if c := got["o/r#10"]; c.Skip != "" {
 		t.Errorf("unassigned item skipped: %q", c.Skip)
+	}
+}
+
+// Explicit assignments win over inherited ownership. For unassigned work the
+// nearest assigned ancestor decides, including when ownership is shared.
+func TestRankInheritedAssignments(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		own, parent, ancestor []string
+		want                  string
+	}{
+		{"shared ancestor", nil, nil, []string{"ME", "pat"}, ""},
+		{"own assignment", []string{"Me"}, nil, []string{"pat"}, ""},
+		{"own teammate", []string{"pat"}, nil, []string{"Me"}, "assigned to pat"},
+		{"own shared assignment", []string{"Me", "pat"}, nil, []string{"Me"}, "assigned to pat"},
+		{"teammate ancestor", nil, nil, []string{"pat"}, "assigned to pat (sub-issue of o/r#15)"},
+		{"nearer own epic", nil, []string{"Me"}, []string{"pat"}, ""},
+		{"nearer shared epic", nil, []string{"pat", "mE"}, []string{"pat"}, ""},
+		{"nearer teammate epic", nil, []string{"pat"}, []string{"Me"}, "assigned to pat (sub-issue of o/r#16)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := snapshot(t)
+			// Keep the ancestors on the board without offering their children
+			// through them: the unstaffed item is itself In Progress.
+			snap.Items = []Item{
+				{Ref: heldEpic, Assignees: tc.ancestor},
+				{Ref: heldSub, Parent: heldEpic, Assignees: tc.parent},
+				{Ref: "o/r#13", Parent: heldSub, Assignees: tc.own, OnBoard: true, Status: inProgress, Created: days(1), Updated: days(1)},
+			}
+			got := Rank(snap, deskBoard(), now)
+			if len(got) != 1 {
+				t.Fatalf("candidates = %+v, want one In Progress item", got)
+			}
+			if c := got[0]; c.Step != "In Progress" || c.Skip != tc.want {
+				t.Errorf("candidate step %q, skip %q; want In Progress, %q", c.Step, c.Skip, tc.want)
+			}
+		})
 	}
 }
