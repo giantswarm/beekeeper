@@ -9,26 +9,38 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const (
+	abandonNoOwner     = "released owner"
+	abandonClaimed     = "retained claim"
+	abandonRoster      = "assigned owner"
+	abandonLive        = "live serve record"
+	abandonUnknown     = "missing end evidence"
+	abandonArchive     = "archived owner"
+	abandonName        = "abandonment-fixture-worker"
+	abandonSession     = "abandonment-fixture-session"
+	abandonReplacement = "abandonment-fixture-successor"
+)
+
 func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
-	for _, protect := range []string{"none", "claim", "worker", "live record", "unknown", "archived"} {
+	for _, protect := range []string{abandonNoOwner, abandonClaimed, abandonRoster, abandonLive, abandonUnknown, abandonArchive} {
 		t.Run(protect, func(t *testing.T) {
 			a, _ := supervisorApp(t)
 			now := a.timeNow()
-			by := state.Party{Name: "ended-worker", Session: "ended-session"}
+			by := state.Party{Name: abandonName, Session: abandonSession}
 			seed(t, a, func(st *state.State) {
 				st.Deliveries = []state.Delivery{{Ref: refOne, Agent: by.Name, Step: state.DeliveryReleasing, Started: now.Add(-48 * time.Hour), Since: now.Add(-25 * time.Hour)}}
 				st.Records = []state.Record{{Session: by, Issue: refOne, Ended: now.Add(-time.Hour)}}
 				switch protect {
-				case "claim":
+				case abandonClaimed:
 					st.Claims = []state.Claim{{Issue: refOne, Session: by}}
-				case "worker":
+				case abandonRoster:
 					st.Agents = []state.Agent{{Party: by, Task: "release"}}
-				case "live record":
-					st.Records = append(st.Records, state.Record{Session: state.Party{Name: "replacement"}, Issue: refOne})
-				case "archived":
+				case abandonLive:
+					st.Records = append(st.Records, state.Record{Session: state.Party{Name: abandonReplacement}, Issue: refOne})
+				case abandonArchive:
 					st.Records = nil
 					st.Archives = []state.Archive{{Party: by, Since: now.Add(-time.Hour)}}
-				case "unknown":
+				case abandonUnknown:
 					st.Records = nil
 				}
 			})
@@ -40,7 +52,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := protect == "none" || protect == "archived"
+			want := protect == abandonNoOwner || protect == abandonArchive
 			if st.Deliveries[0].Abandoned != want {
 				t.Fatalf("delivery: %+v", st.Deliveries[0])
 			}
@@ -52,7 +64,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 				if next[0].Active() {
 					t.Fatalf("reopened: %+v", next)
 				}
-				st.StartDelivery(refOne, "replacement", "", now.Add(time.Hour))
+				st.StartDelivery(refOne, abandonReplacement, "", now.Add(time.Hour))
 				if !st.Deliveries[0].Active() || st.Deliveries[0].Abandoned {
 					t.Fatal(st.Deliveries)
 				}
@@ -63,7 +75,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 
 func TestEndedWorkerTimersAreCancelled(t *testing.T) {
 	now := time.Now().UTC()
-	by := state.Party{Name: "ended-worker", Session: "ended-session"}
+	by := state.Party{Name: abandonName, Session: abandonSession}
 	st := &state.State{Records: []state.Record{{Session: by, Ended: now.Add(-time.Hour)}}, Timers: []state.Timer{
 		{ID: 1, Wake: by.Name, Due: now.Add(-time.Minute), Repeat: state.RepeatDaily},
 		{ID: 2, Wake: by.Session, Due: now.Add(time.Hour)},
