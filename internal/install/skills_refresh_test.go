@@ -30,7 +30,7 @@ func TestRefreshSkillsRepairsCompleteMirror(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		got, err := os.ReadFile(filepath.Join(stateDir, filepath.FromSlash(path)))
+		got, err := os.ReadFile(filepath.Join(stateDir, filepath.FromSlash(path))) //nolint:gosec // embedded names and fixtures inside t.TempDir()
 		if err != nil {
 			return err
 		}
@@ -41,7 +41,7 @@ func TestRefreshSkillsRepairsCompleteMirror(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "custom", "SKILL.md"))
+	raw, err := os.ReadFile(filepath.Join(dir, "custom", "SKILL.md")) //nolint:gosec // embedded names and fixtures inside t.TempDir()
 	if err != nil || string(raw) != "keep" {
 		t.Fatalf("custom skill changed: %q, %v", raw, err)
 	}

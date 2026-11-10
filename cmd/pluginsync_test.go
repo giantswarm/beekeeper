@@ -616,7 +616,7 @@ func TestSyncOnceRepairsHarnessMirrorBeforeMarker(t *testing.T) {
 	}
 	syncOnce(context.Background(), io.Discard, dir)
 	for _, name := range plugin.SkillNames() {
-		got, err := os.ReadFile(filepath.Join(mirror, name, "SKILL.md"))
+		got, err := os.ReadFile(filepath.Join(mirror, name, "SKILL.md")) //nolint:gosec // embedded names and fixtures inside t.TempDir()
 		if err != nil || !bytes.Equal(got, plugin.SkillFile(name)) {
 			t.Errorf("%s missing or stale: %v", name, err)
 		}
