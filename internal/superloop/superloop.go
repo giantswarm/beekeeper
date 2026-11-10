@@ -138,9 +138,8 @@ type Pull struct {
 	Checks  []string
 	Reviews []Review // oldest first
 	// Author is the login that opened it; Title, Body, Branch (its head branch)
-	// and Files (the paths it changes, ChangedFiles of them in all, which
-	// gh may list only in part) are what may name a repository the desk
-	// does no work on.
+	// and Files describe the change. ChangedFiles is the total count; gh
+	// may list only some paths. Ownership exclusions use Ref alone.
 	Author, Title, Body, Branch string
 	Files                       []string
 	ChangedFiles                int

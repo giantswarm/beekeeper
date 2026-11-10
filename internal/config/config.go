@@ -2574,8 +2574,8 @@ type Ownership struct {
 	Review []string `yaml:"review"`
 	// Never are the repositories (patterns as Review's) the desk does no
 	// work on, whatever Review or a person's override says: a pull request
-	// in one, or whose title, head branch or a changed path names one, is
-	// left alone.
+	// in one is left alone. References to these repositories in another
+	// pull request do not affect its ownership.
 	Never []string `yaml:"never"`
 	// Authors are the logins the desk opens its pull requests as (default:
 	// the login gh acts as): one anybody else opened is left alone.
