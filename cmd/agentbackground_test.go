@@ -781,7 +781,7 @@ func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 type backgroundRecordStore struct{ state.Store }
 
 func (s backgroundRecordStore) Update(fn func(*state.State) ([]state.Event, error)) error {
-	return s.Store.UpdateWithin(10*time.Millisecond, fn)
+	return s.UpdateWithin(10*time.Millisecond, fn)
 }
 
 func TestStartBackgroundStopsWhenRecordingLosesTheLock(t *testing.T) {
@@ -831,7 +831,7 @@ func TestStartBackgroundStopsWhenRecordingLosesTheLock(t *testing.T) {
 				}
 				return out, err
 			}
-			_, err := a.startBackground(ctx, agentStart{name: bgName, task: bgTask}, t.TempDir(), nil, state.Party{Name: "supervisor"}, func(state.Party) bool { return false })
+			_, err := a.startBackground(ctx, agentStart{name: bgName, task: bgTask}, t.TempDir(), nil, state.Party{Name: supervisorCommand}, func(state.Party) bool { return false })
 			var busy *state.LockBusyError
 			if !errors.As(err, &busy) {
 				t.Fatalf("start error = %v, want the lock failure", err)
