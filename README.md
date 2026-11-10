@@ -3985,7 +3985,14 @@ muster, so two people's machines see one holder; its tools, as a model reads the
 on: `lease claim|release|status` of a name that is none of the machine's own resources
 (`resources`, the model server, the browser) goes to the central instance as the person, through
 muster's `call_tool` (`x_<central.server>_<tool>`). The person signs in once with `muster auth login --context <context>`; each call takes the context's endpoint and the person's token from
-`muster` and keeps neither. `lease list` shows the machine's leases, then the central ones. A
+`muster` and keeps neither. If muster refuses a call with `auth_required`, beekeeper
+asks `core_auth_login` on that same connection to reuse the person's existing grant,
+then retries the refused call once only after muster confirms the connection. It
+never retries an ambiguous failure or opens a browser. If a grant cannot be reused,
+the error names `muster auth login --context <context> --server <server>`; for an
+SSO server, renewing the muster sign-in with `--force` may be needed. Authentication
+refusals say the requested operation did not run, rather than suggesting an answer
+or claim may have been recorded. `lease list` shows the machine's leases, then the central ones. A
 claim another person's agent holds is refused (exit 3) with its holder, `"<person>/<agent>"`; a
 name the central instance does not know is a usage error (exit 2). As a local claim, a central
 claim needs no grant: a free resource is the claimant's.
