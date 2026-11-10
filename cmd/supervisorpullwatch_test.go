@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -389,4 +390,14 @@ func TestPullWatcherHasOneFetchAndCancelsOnStop(t *testing.T) {
 	<-entered
 	l.pullWatcher().set([]string{loopPR}, nil, nil, 0, nil)
 	stop()
+
+	polledOnce := false
+	pollOncePullWatcher = func(context.Context, *supervisorLoop) { polledOnce = true }
+	l.once = true
+	now := r.a.now
+	r.a.loopNow = &atomic.Pointer[time.Time]{}
+	r.a.loopNow.Store(&now)
+	if err := l.pass(t.Context()); err != nil || !polledOnce {
+		t.Fatalf("once pass poll: polled=%v err=%v", polledOnce, err)
+	}
 }

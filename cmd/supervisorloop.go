@@ -1750,7 +1750,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	})
 	sortTrackedPulls(in, tracked)
 	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
-	if l.once && a.loopNow != nil && !l.dryRun {
+	if l.once && l.a.loopNow != nil && !l.dryRun {
 		pollOncePullWatcher(ctx, l)
 	}
 	// The sweep reads the desk's open pull requests that nothing tracks:
