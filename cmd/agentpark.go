@@ -154,7 +154,8 @@ The coordinator records a pr-checks timer. End the turn; owned green CI goes
 directly to desk review, while red CI goes to a fresh worker with the failures.
 An unverified head remains a plain wait and grants no review authority.
 
-A park from the pull request's own worktree at its published HEAD records
+An explicit "desk review" park on a non-draft pull request from its own
+worktree at its published HEAD records
 a CI and independent review request, retained per pull request. Push and park
 immediately without local tests or lints or waiting for CI; the loop returns
 CI failures to the worker and starts review only on green. Park from each
@@ -294,7 +295,11 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 	if err != nil {
 		return "", err
 	}
-	reviewHead, reviewReason := parkReviewHead(on)
+	var reviewHead, reviewReason string
+	if isDeskReviewWait(waits) {
+		reviewHead, reviewReason = parkReviewHead(on)
+	}
+	reviewPending := isDeskReviewWait(waits) && reviewReason != parkDraftReason
 	var line string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := a.callerAgent(st, me)
@@ -370,7 +375,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 			if i < 0 && reviewHead != "" {
 				back += "; plain wait off the roster; no supervisor review requested"
 			} else {
-				if reviewHead == "" && i >= 0 && isDeskReviewWait(waits) {
+				if reviewHead == "" && i >= 0 && reviewPending {
 					back += "; review request saved; published HEAD verification pending; the supervisor loop retries automatically (including after GitHub budget recovery)"
 				} else {
 					back += "; " + parkReviewMode(reviewHead)
@@ -1125,7 +1130,8 @@ func publishedParkVerification(ctx context.Context, on, dir string, git worktree
 		return "", "GitHub pull request lookup failed; retry after connectivity or budget recovery"
 	}
 	var p struct {
-		Head struct {
+		Draft bool
+		Head  struct {
 			SHA  string
 			Repo struct {
 				FullName string `json:"full_name"`
@@ -1136,6 +1142,9 @@ func publishedParkVerification(ctx context.Context, on, dir string, git worktree
 	// The exact published commit and repository establish the match.
 	if json.Unmarshal(out, &p) != nil || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
 		return "", "published HEAD or head repository does not match the local checkout"
+	}
+	if p.Draft {
+		return "", parkDraftReason
 	}
 	return head, ""
 }
@@ -1161,6 +1170,8 @@ func (a *app) executionWorkspaceHead(ctx context.Context, on string) string {
 	}
 	return head
 }
+
+const parkDraftReason = "draft pull request; mark it ready and park again for desk review"
 
 func parkReviewMode(head string) string {
 	if head != "" {
