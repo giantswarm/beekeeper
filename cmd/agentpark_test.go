@@ -419,9 +419,10 @@ func TestPublishedParkHead(t *testing.T) {
 	const repo = "o/r"
 	for _, tc := range []struct {
 		name, localBranch, remoteBranch, localHead, remoteHead, remoteRepo string
-		readErr                                                            bool
+		readErr, draft                                                     bool
 		want                                                               string
 	}{
+		{name: "draft published branch", draft: true, localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
 		{name: "published branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
 		{name: "repair branch same published commit", localBranch: repairBranch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
 		{name: "repair branch unpushed commit", localBranch: repairBranch, remoteBranch: branch, localHead: loopFixed, remoteHead: loopHead, remoteRepo: repo},
@@ -453,7 +454,7 @@ func TestPublishedParkHead(t *testing.T) {
 				if tc.readErr {
 					return nil, fmt.Errorf("unreachable")
 				}
-				return []byte(fmt.Sprintf(`{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, tc.remoteBranch, tc.remoteHead, tc.remoteRepo)), nil
+				return []byte(fmt.Sprintf(`{"draft":%t,"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, tc.draft, tc.remoteBranch, tc.remoteHead, tc.remoteRepo)), nil
 			}
 			got, reason := publishedParkVerification(context.Background(), loopPR, ".", git, gh)
 			if (got == "") != (reason != "") {
@@ -472,7 +473,7 @@ func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 	for _, head := range []string{"", loopHead} {
 		w := parkingWatch(t, map[string]string{refOne: github.Open})
 		parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
-		if err := park(t, w, "--on", refOne, "waiting"); err != nil {
+		if err := park(t, w, "--on", refOne, deskReviewWait); err != nil {
 			t.Fatal(err)
 		}
 		if ag := agentOf(t, w); ag.Park.ReviewHead != head {
@@ -656,7 +657,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	for _, head := range []string{"", loopHead} {
 		w := parkingWatch(t, map[string]string{refOne: github.Open})
 		parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
-		line, err := w.park(offSession, refOne, "waiting")
+		line, err := w.park(offSession, refOne, deskReviewWait)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -877,5 +878,39 @@ func TestDeskReviewParkJSONExplainsPendingVerification(t *testing.T) {
 	}
 	if !strings.Contains(result["message"], "GitHub pull request lookup failed") || !strings.Contains(result["message"], "retries automatically") {
 		t.Fatalf("JSON: %v", result)
+	}
+}
+
+func TestMatchingHeadWithNonReviewReasonStaysPlain(t *testing.T) {
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	parkReviewHead = func(string) (string, string) { t.Fatal("plain wait verified review head"); return loopHead, "" }
+	w := parkingWatch(t, map[string]string{refOne: github.Open})
+	if err := park(t, w, "--on", refOne, "image rebuild completion timer 3155"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentOf(t, w).Park.ReviewHead != "" || len(st.ReviewParks) != 0 {
+		t.Fatal("plain park requested review")
+	}
+	if !strings.Contains(w.out.(*bytes.Buffer).String(), "plain wait recorded") {
+		t.Fatalf("output %s", w.out)
+	}
+}
+
+func TestDraftReviewParkExplainsPlainWait(t *testing.T) {
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	parkReviewHead = func(string) (string, string) { return "", parkDraftReason }
+	w := parkingWatch(t, map[string]string{refOne: github.Open})
+	if err := park(t, w, "--on", refOne, deskReviewWait); err != nil {
+		t.Fatal(err)
+	}
+	out := w.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, "plain wait recorded") || !strings.Contains(out, parkDraftReason) || strings.Contains(out, "verification pending") {
+		t.Fatalf("output %s", out)
 	}
 }

@@ -2941,7 +2941,8 @@ Review-raised issues use the `follow-up` label, stay unranked in backlog and are
 never attached as epic sub-issues. `board next` skips that label by default.
 
 A park on a pull request requests the supervisor loop's independent review only
-when run from that pull request's worktree branch at its published HEAD. The
+when its reason starts with "desk review", the pull request is not a draft,
+and it runs from that pull request's worktree branch at its published HEAD. The
 command records and prints the verified head. Other parks, including older parks
 without this evidence, are plain waits: no reviewer, merge go or findings
 forwarded; the watch resumes them when the pull request merges or closes. If
