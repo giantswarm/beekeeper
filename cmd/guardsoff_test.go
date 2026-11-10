@@ -61,6 +61,9 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	)
 	var out bytes.Buffer
 	a, dir := scopeApp(t, &out)
+	// Keep fixture writes independent of configuration loaded by the app.
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	a.cfgPath = cfgPath
 	envFile := filepath.Join(dir, "claude-env.sh")
 	t.Setenv("CLAUDE_ENV_FILE", envFile)
 	t.Setenv(beekeeperConfigEnv, a.cfgPath)
@@ -71,7 +74,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 		if guards != "" {
 			body += "hooks:\n  guards: " + guards + "\n"
 		}
-		if err := os.WriteFile(a.cfgPath, []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
