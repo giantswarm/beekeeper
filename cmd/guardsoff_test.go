@@ -74,7 +74,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 		if guards != "" {
 			body += "hooks:\n  guards: " + guards + "\n"
 		}
-		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil { // #nosec G703 -- test fixture under t.TempDir()
 			t.Fatal(err)
 		}
 	}

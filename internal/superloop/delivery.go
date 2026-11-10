@@ -206,6 +206,15 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		if worker != nil {
 			d.Agent, d.Waits = worker.Name, worker.Waits
 		}
+		// A released, ended worker's delivery stays terminal across pull sweeps.
+		// A new assignment explicitly opens a fresh lifecycle.
+		if d.Abandoned {
+			if worker == nil || worker.Saved {
+				continue
+			}
+			d.Abandoned = false
+			d.Started = in.Now
+		}
 		// A combining pull carries deliveries of the original, even when GitHub
 		// no longer includes their issue links on the superseded pull.
 		for _, ref := range absorbingRefs {

@@ -391,7 +391,7 @@ func TestWorkerRulesLeaveTopicHeadroom(t *testing.T) {
 func TestOperationalTopicRules(t *testing.T) {
 	for topic, rules := range map[string][]string{
 		"alerts":      {"KUBECONFIG=", "beekeeper alerts snapshot", "never Alertmanager/Mimir"},
-		"long-proofs": {"10 minutes", "slot wait", "systemd-run --user", "beekeeper timer add", "--probe", "--wake", "RemainAfterExit=yes", "SubState", "exited|failed", "ExecMainStatus"},
+		"long-proofs": {"10 minutes", "slot wait", "systemd-run --user", "--setenv", "beekeeper secret copy", "beekeeper timer add", "--probe", "--wake", "RemainAfterExit=yes", "SubState", "exited|failed", "ExecMainStatus"},
 	} {
 		text := strings.Join(strings.Fields(Skill(topic)), " ")
 		for _, rule := range rules {
