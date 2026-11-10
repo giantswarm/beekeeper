@@ -35,7 +35,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 			return nil, false
 		}
 		next := state.DeliveryHealth{At: now, Episodes: map[string]string{}, StallReports: map[string]state.DeliveryStallReport{}}
-		var events []state.Event
+		events := abandonEndedDeliveries(st, now)
 		var stalls, stallKeys []string
 		file := func(key, detail string) {
 			lines = append(lines, detail)
