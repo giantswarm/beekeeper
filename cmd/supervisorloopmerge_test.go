@@ -243,10 +243,12 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 		mergeable string
 		repark    bool
 		wantGates int
+		failure   int
 	}{
 		{name: "without_repark", mergeable: mergeableConflicting, repark: false, wantGates: 1},
 		{name: "with_repark", mergeable: mergeableConflicting, repark: true, wantGates: 1},
-		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2},
+		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashNotApplicable},
+		{name: "gate_red_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashRed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
@@ -283,6 +285,22 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 			r.answer = func(args []string) (string, int) {
 				if len(args) > 0 && args[0] == gateCmdName {
 					gateRuns++
+					if gateRuns == 1 && tc.failure != 0 {
+						// Model the real synchronous gate: it persists its failed
+						// outcome before returning the squash document to the loop.
+						if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+							st.Merges = append(st.Merges, state.Merge{Repo: loopMergeRepo, PR: 7, Head: loopHead, By: loopParty})
+							evs := recordRun(st, len(st.Merges)-1, config.Lane{Name: loopMergeRepo}, loopParty,
+								runOutcome{rc: tc.failure, reason: "merge validation failed"}, r.a.now, "")
+							if len(st.Failed) != 1 || st.Failed[0].Head != loopHead {
+								t.Fatalf("gate lost the tested head: %+v", st.Failed)
+							}
+							return evs, nil
+						}); err != nil {
+							t.Fatal(err)
+						}
+						return fmt.Sprintf(`{"route":"%s","repository":"%s","number":7,"headSha":"%s","reason":"merge validation failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), tc.failure
+					}
 				}
 				if len(args) >= 2 && args[0] == agentsName && args[1] == agentStartName && room == 0 {
 					return "no room for a start", ExitRefused
@@ -309,6 +327,14 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 			fixerStart := r.called(agentsName, agentStartName, loopWorker)
 			if fixerStart == nil || len(r.logged(t, "supervisor.merge")) != 1 {
 				t.Fatalf("expected fixer start for conflict repair, got %v\n%s", r.calls, r.out)
+			}
+
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Failed) != 0 {
+				t.Fatalf("repair left a stale gate failure: %+v", st.Failed)
 			}
 
 			// Pass 5: fixer rebases onto main to resolve the conflict (loopFixed); CI is still pending.
@@ -434,6 +460,7 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Failed = append(st.Failed, state.Failed{
 				Repo:   loopMergeRepo,
+				Head:   loopHead,
 				PR:     7,
 				Lane:   loopMergeRepo,
 				By:     loopParty,
@@ -947,5 +974,29 @@ func TestReopenedPullMergeAuthority(t *testing.T) {
 	}
 	if why, explicit, err := r.a.checkMergeHeadAuthority(t.Context(), nil, r.pull, loopFixed); err != nil || why == "" || explicit {
 		t.Fatalf("closed episode retained authority: why=%q explicit=%v err=%v", why, explicit, err)
+	}
+}
+
+func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
+	for _, head := range []string{"", loopFixed} {
+		t.Run("failed_head_"+head, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Failed = append(st.Failed, state.Failed{Repo: loopMergeRepo, PR: 7, Head: head, By: loopParty, Exit: github.SquashRed})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if r.called(gateCmdName) == nil {
+				t.Fatalf("stale failure prevented gate validation: %v", r.calls)
+			}
+			if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
+				t.Fatalf("stale failure requested branch repair: %v", wake)
+			}
+		})
 	}
 }
