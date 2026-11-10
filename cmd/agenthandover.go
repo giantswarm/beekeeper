@@ -267,9 +267,27 @@ func (a *app) readHandover(q string) (handover, error) {
 
 // lastNote is p's latest hand-over note logged at or after since.
 func (a *app) lastNote(p state.Party, since time.Time) (string, bool, error) {
-	notes, err := a.store.Events(1, func(e state.Event) bool {
+	return a.lastNoteContext(context.Background(), p, since)
+}
+
+func (a *app) lastNoteContext(ctx context.Context, p state.Party, since time.Time) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	read := a.store.Events
+	if cancellable, ok := a.store.(interface {
+		EventsContext(context.Context, int, func(state.Event) bool) ([]state.Event, error)
+	}); ok {
+		read = func(n int, keep func(state.Event) bool) ([]state.Event, error) {
+			return cancellable.EventsContext(ctx, n, keep)
+		}
+	}
+	notes, err := read(1, func(e state.Event) bool {
 		return e.Verb == verbNote && e.By.Is(p) && !e.At.Before(since)
 	})
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil || len(notes) == 0 {
 		return "", false, err
 	}

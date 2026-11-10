@@ -134,6 +134,9 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		return nil
 	}
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !freshPark(st, ag) || len(ag.Park.Continuation) == 0 {
 			continue
 		}
@@ -200,7 +203,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 					}
 				}
 			}
-			note, _, err := l.a.lastNote(ag.Party, ag.AssignedAt)
+			note, _, err := l.a.lastNoteContext(ctx, ag.Party, ag.AssignedAt)
 			if err != nil {
 				return err
 			}

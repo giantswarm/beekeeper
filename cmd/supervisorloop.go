@@ -1481,6 +1481,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	l.lifecyclePhase("continue settled parks")
 	if err := l.continueParks(ctx, st); err != nil {
 		return err
 	}
@@ -1488,6 +1489,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	l.lifecyclePhase("recover ended parks")
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
 	}
@@ -1495,6 +1497,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	l.lifecyclePhase("recover review requests")
 	if err := l.recoverReviewRequests(ctx, st); err != nil {
 		return err
 	}
@@ -1502,6 +1505,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	l.lifecyclePhase("end review workers")
 	if err := l.endReviewWorkers(ctx, st); err != nil {
 		return err
 	}

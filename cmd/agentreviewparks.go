@@ -70,6 +70,9 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		return nil
 	}
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		p := ag.Park
 		if ag.Done || ag.Execution != nil || p == nil || p.External || p.Checks || p.ReviewHead != "" || !isDeskReviewWait(p.Waits) {
 			continue

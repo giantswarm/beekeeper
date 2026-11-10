@@ -96,8 +96,12 @@ func (s *FileStore) rotateEventsAbove(limit int64) error {
 // eventFiles pins the inodes while holding the layout lock. Decoding happens
 // after releasing it, so slow history readers never block append/rotation.
 func (s *FileStore) eventFiles() ([]*os.File, error) {
+	return s.eventFilesContext(context.Background())
+}
+
+func (s *FileStore) eventFilesContext(ctx context.Context) ([]*os.File, error) {
 	lock := flock.New(s.path("events-layout.lock"))
-	ctx, cancel := context.WithTimeout(context.Background(), lockWait)
+	ctx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
 	held, err := lock.TryRLockContext(ctx, 10*time.Millisecond)
 	if err != nil {
@@ -115,6 +119,10 @@ func (s *FileStore) eventFiles() ([]*os.File, error) {
 	paths = append(paths, s.path("events.jsonl"))
 	var files []*os.File
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			closeEventFiles(files)
+			return nil, err
+		}
 		f, err := os.Open(path) //nolint:gosec // paths come only from this store's fixed archive glob and active log
 		if errors.Is(err, os.ErrNotExist) {
 			continue

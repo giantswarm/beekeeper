@@ -2304,7 +2304,16 @@ func endLine(f *os.File) error {
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
 func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
-	files, err := s.eventFiles()
+	return s.EventsContext(context.Background(), n, keep)
+}
+
+// EventsContext abandons history replay when its caller stops. Partial history
+// is never returned as a successful read.
+func (s *FileStore) EventsContext(ctx context.Context, n int, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	files, err := s.eventFilesContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2313,7 +2322,13 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	for _, f := range files {
 		reader := bufio.NewReader(f)
 		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			line, readErr := reader.ReadBytes('\n')
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			var e Event
 			line = bytes.TrimLeft(line, "\x00")
 			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
@@ -2329,6 +2344,9 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 				return out, readErr
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
