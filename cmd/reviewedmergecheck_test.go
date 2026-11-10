@@ -539,7 +539,7 @@ func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
 				}
 				t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 				reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
-				wantArgs := []string{"run", "--max-issues-per-linter=0", "--max-same-issues=0"}
+				wantArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
 				label := "no repository config"
 				if configName == "" {
 					wantArgs = append(wantArgs, "--no-config")
@@ -548,7 +548,7 @@ func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
 					label = configName
 				}
 				wantArgs = append(wantArgs, "./...")
-				args, err := os.ReadFile(argsFile)
+				args, err := os.ReadFile(argsFile) //nolint:gosec // fixed args filename inside the test-owned temporary directory
 				if err != nil || !slices.Equal(strings.Fields(string(args)), wantArgs) {
 					t.Fatalf("lint args %q, %v; want %v", args, err, wantArgs)
 				}
