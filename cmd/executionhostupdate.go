@@ -29,7 +29,7 @@ import (
 var (
 	coordinatorVersion = project.Version
 	coordinatorJournal = func() (*update.Journal, error) {
-		exe, err := os.Executable()
+		exe, err := executablePath()
 		if err != nil {
 			return nil, err
 		}

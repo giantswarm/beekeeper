@@ -567,3 +567,60 @@ func TestRecoveryRestartMovesOnlyRestartableProcesses(t *testing.T) {
 		t.Fatalf("stopped=%v resumed=%v, want [%s] and [%s]", l.stopped, l.resumed, loopUnit, loopUnit)
 	}
 }
+
+func TestRecoveryRefreshesHeartbeatBeforeRollingBack(t *testing.T) {
+	c, now := recoveryRig(t)
+	started := now.Add(10 * time.Second)
+	staleAt := started.Add(10 * time.Second)
+	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{
+		Version: normalizeLoopVersion(recoveryBadVersion),
+		Started: started,
+		At:      staleAt,
+		Phase:   "recover quota and parks",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	*now = staleAt.Add(3*throughputCadence + time.Minute)
+	if err := update.Observe(t.Context(), c.target, func(j *update.Journal) error {
+		j.Observed = &update.Observed{
+			Elapsed:             update.HeartbeatGrace - time.Minute,
+			CandidateLoopAt:     time.Minute,
+			CandidateLoopWait:   update.HeartbeatGrace - time.Minute,
+			HeartbeatSeen:       true,
+			LastHeartbeatAt:     time.Minute,
+			HeartbeatRequired:   true,
+			ProbePassed:         true,
+			ProbedAt:            update.HeartbeatGrace - time.Minute,
+			LastPassAt:          update.HeartbeatGrace - time.Minute,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	c.now = func() time.Time {
+		reads++
+		// Simulate the candidate writing a fresh lifecycle checkpoint while the
+		// controller evaluates the tick after the initial stale read.
+		if reads == 2 {
+			freshAt := now.Add(-3 * time.Second)
+			_ = c.store.WriteFile(loopLifecycleFile, loopLifecycle{
+				Version: normalizeLoopVersion(recoveryBadVersion),
+				Started: started,
+				At:      freshAt,
+				Phase:   "observe repository backlogs",
+			})
+		}
+		return *now
+	}
+	if c.mustTick(t) {
+		t.Fatal("settled probation on a tick whose candidate wrote a fresh checkpoint")
+	}
+	if got := installed(t, c); got != recoveryBadBytes {
+		t.Fatalf("rolled back a candidate with a 3s-old checkpoint: installed=%q", got)
+	}
+	j := journal(t, c)
+	if !j.Pending() || j.Observed == nil || j.Observed.LastHeartbeatAt != j.Observed.Elapsed {
+		t.Fatalf("expected refreshed heartbeat recorded on journal, got %+v", j.Observed)
+	}
+}

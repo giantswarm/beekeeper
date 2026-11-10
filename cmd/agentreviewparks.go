@@ -86,6 +86,10 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		if dir == "" {
 			continue
 		}
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase("recover quota and parks")
 		verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		head := recoverParkReviewHead(verifyCtx, p.On, dir)
 		cancel()

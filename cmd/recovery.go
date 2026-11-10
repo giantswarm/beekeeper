@@ -149,7 +149,7 @@ func (a *app) startRecovery(artifact, target string) error {
 // rearmRecovery starts a supervised candidate's controller again where none
 // runs: a reboot ends it, and a watch of either binary brings it back.
 func (a *app) rearmRecovery() {
-	target, err := os.Executable()
+	target, err := executablePath()
 	if err != nil || a.cfg == nil || !update.WatchedProbation(target) {
 		return
 	}
@@ -244,13 +244,34 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	s := c.signals(ctx, j)
 	o.NoteLoop(s)
 	verdict, reason := update.Decide(o, s)
+	if verdict == update.RollBack && reason == "no health heartbeat from the candidate's loop" {
+		if c.refreshHeartbeat(j, &s) && s.Heartbeat {
+			o.NoteLoop(s)
+			verdict, reason = update.Decide(o, s)
+		}
+	}
 	if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
 		return false, err
 	}
 	switch verdict {
 	case update.RollBack:
 		if reason == "no health heartbeat from the candidate's loop" {
-			reason += ": " + c.loopSilence(j.Candidate.Version, j.InstalledAt)
+			if c.refreshHeartbeat(j, &s) && s.Heartbeat {
+				o.NoteLoop(s)
+				verdict, reason = update.Decide(o, s)
+				if err := c.observe(ctx, func(saved *update.Observed) { *saved = o }); err != nil {
+					return false, err
+				}
+				if verdict == update.Promote {
+					return c.promote(ctx, j)
+				}
+				if verdict != update.RollBack {
+					return false, nil
+				}
+			}
+			if reason == "no health heartbeat from the candidate's loop" {
+				reason += ": " + c.loopSilence(j.Candidate.Version, j.InstalledAt)
+			}
 		}
 		return c.rollback(ctx, j, reason)
 	case update.Promote:
@@ -294,28 +315,22 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 	}
 }
 
-// signals reads the candidate's durable health: the same streaks the watches
-// evaluate, and the heartbeat its loop writes every pass.
-func (c *recoveryController) signals(ctx context.Context, j *update.Journal) update.Signals {
-	s := update.Signals{}
-	st, err := c.store.Read()
-	if err != nil {
-		s.Unproven = "state unreadable"
-		return s
-	}
-	s.Intentional = st.Stop != nil
+// refreshHeartbeat updates s's heartbeat fields from the latest throughput
+// observation and supervisor-loop lifecycle checkpoint.
+func (c *recoveryController) refreshHeartbeat(j *update.Journal, s *update.Signals) bool {
 	version := normalizeLoopVersion(j.Candidate.Version)
 	now := c.now()
 	var obs throughputObservation
 	found, err := c.store.ReadFile(throughputObservationFile, &obs)
 	if err != nil {
 		s.Unproven = "heartbeat unreadable"
-		return s
+		return false
 	}
+	s.Heartbeat = false
 	if found {
 		if obs.At.IsZero() {
 			s.Unproven = "heartbeat unreadable"
-			return s
+			return false
 		}
 		// A machine whose loop ran lately owes a heartbeat; an execution host,
 		// which runs none, has only its probe.
@@ -340,13 +355,35 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 		}
 		s.LoopPending = otherAlive
 	}
-	evs, err := c.store.Events(0, func(e state.Event) bool { return e.Verb == throughputOutcomeVerb && !e.At.Before(j.InstalledAt) })
+	return true
+}
+
+// signals reads the candidate's durable health: the same streaks the watches
+// evaluate, and the heartbeat its loop writes every pass.
+func (c *recoveryController) signals(ctx context.Context, j *update.Journal) update.Signals {
+	s := update.Signals{}
+	st, err := c.store.Read()
+	if err != nil {
+		s.Unproven = "state unreadable"
+		return s
+	}
+	s.Intentional = st.Stop != nil
+	version := normalizeLoopVersion(j.Candidate.Version)
+	if !c.refreshHeartbeat(j, &s) {
+		return s
+	}
+	evs, err := state.FollowSnapshot(c.store, "recovery-throughput-outcomes", "v1", func(e state.Event) bool {
+		return e.Verb == throughputOutcomeVerb
+	})
 	if err != nil {
 		s.Unproven = "events unreadable"
 		return s
 	}
 	var outcomes []throughputOutcome
 	for _, e := range evs {
+		if e.At.Before(j.InstalledAt) {
+			continue
+		}
 		var o throughputOutcome
 		if err := json.Unmarshal([]byte(e.Detail), &o); err != nil {
 			s.Unproven = "events unreadable"
@@ -356,6 +393,12 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 			outcomes = append(outcomes, o)
 		}
 	}
+	// Re-check heartbeat after reading events so a candidate checkpoint that
+	// landed during the event scan is never missed by this tick.
+	if !c.refreshHeartbeat(j, &s) {
+		return s
+	}
+	now := c.now()
 	// Streaks only: a loop that died must not read as unknown here.
 	status, _ := evaluateThroughput(now, time.Hour, throughputObservation{At: now, Candidate: version}, outcomes, false)
 	switch {

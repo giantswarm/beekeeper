@@ -82,7 +82,7 @@ unread core budget:
 ` + "`beekeeper budget --gate --bucket code_search && gh search code …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 			defer cancel()
 			if a.managedExecutionID() != "" {
 				return a.remoteGitHubBudget(ctx, workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
