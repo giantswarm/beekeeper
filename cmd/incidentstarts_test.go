@@ -76,11 +76,11 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 		}
 	}
 	other := loopMergeRepo + "#999"
-	if why := incidentStartReason(st, time.Now(), other); why == "" {
+	if why := repositoryStartReason(st, time.Now(), other); why == "" {
 		t.Fatal("unrelated work admitted")
 	}
 	for _, ref := range []string{loopPR, "another/repo#999"} {
-		if why := incidentStartReason(st, time.Now(), ref); why != "" {
+		if why := repositoryStartReason(st, time.Now(), ref); why != "" {
 			t.Fatalf("%s blocked: %s", ref, why)
 		}
 	}
@@ -103,19 +103,19 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 	// A repair merging does not remove the hold. Only the release/proof's
 	// explicit lift (or successful configured probe) restores dispatch.
 	r.pull.State = superloop.Merged
-	if err := l.incidentStart(other); !errors.Is(err, errLoopLater) {
+	if err := l.repositoryStart(other); !errors.Is(err, errLoopLater) {
 		t.Fatalf("merged prematurely resumed starts: %v", err)
 	}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Holds = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.incidentStart(other); err != nil {
+	if err := l.repositoryStart(other); err != nil {
 		t.Fatal(err)
 	}
 	h.Incident = false
 	st.Holds = []state.Hold{h}
-	if why := incidentStartReason(st, time.Now(), other); why != "" {
-		t.Fatalf("ordinary hold blocked starts: %s", why)
+	if why := repositoryStartReason(st, time.Now(), other); why == "" {
+		t.Fatal("ordinary repository hold admitted a start")
 	}
 }
 
@@ -123,71 +123,174 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 // No real capacity command, GitHub request, or agent start is performed.
 func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 	for _, kind := range []string{workerRole, litReviewer, incidentFixerKind} {
-		for _, repair := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/repair=%t", kind, repair), func(t *testing.T) {
-				r, _ := fillRig(t)
-				r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Model: litTestModel}}
-				inserted := false
-				setHold := func() {
-					inserted = true
-					except := incidentRepairIssue
-					if repair {
-						except = loopPR
-					}
-					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-						st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Except: except, Incident: true, Reason: incidentReason})
-						return nil, nil
-					}); err != nil {
-						t.Fatal(err)
-					}
-				}
-				r.answer = func(args []string) (string, int) {
-					if args[0] == loopCapacity {
-						if kind != incidentFixerKind {
-							setHold()
+		for _, incident := range []bool{false, true} {
+			for _, repair := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/incident=%t/repair=%t", kind, incident, repair), func(t *testing.T) {
+					r, _ := fillRig(t)
+					r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Model: litTestModel}}
+					inserted := false
+					setHold := func() {
+						inserted = true
+						except := incidentRepairIssue
+						if repair {
+							except = loopPR
 						}
-						return incidentRoomJSON, 0
+						if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+							st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Except: except, Incident: incident, Reason: incidentReason})
+							return nil, nil
+						}); err != nil {
+							t.Fatal(err)
+						}
 					}
-					return "", 0
-				}
-				if kind == incidentFixerKind {
-					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
-						setHold()
-						return r.pull, nil
+					r.answer = func(args []string) (string, int) {
+						if args[0] == loopCapacity {
+							if kind != incidentFixerKind {
+								setHold()
+							}
+							return incidentRoomJSON, 0
+						}
+						return "", 0
 					}
-				}
-				l := &supervisorLoop{a: r.a, said: map[string]bool{}}
-				act := superloop.Action{Ref: loopPR, URL: loopURL, Key: "incident preparation", Head: loopHead, Round: 1}
-				var err error
-				switch kind {
-				case workerRole:
-					_, err = l.startItem(context.Background(), act, loopBoardItem{Ref: loopPR, URL: loopURL})
-				case litReviewer:
-					_, err = l.startReviewer(context.Background(), act)
-				case incidentFixerKind:
-					err = l.startFixer(context.Background(), &state.State{}, act)
-				}
-				if !inserted {
-					t.Fatal("test did not reach the preparation read")
-				}
-				if repair {
-					if err != nil || len(r.logged(t, loopClaimVerb)) != 1 || r.called(agentsName, agentStartName) == nil {
-						t.Fatalf("repair should start: %v; calls %v", err, r.calls)
+					if kind == incidentFixerKind {
+						readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+							setHold()
+							return r.pull, nil
+						}
 					}
-					return
-				}
-				if !errors.Is(err, errLoopLater) {
-					t.Fatalf("held start returned %v, want errLoopLater", err)
-				}
-				if len(r.logged(t, loopClaimVerb)) != 0 {
-					t.Fatal("held start claimed the action")
-				}
-				for _, args := range r.calls {
-					if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
-						t.Fatalf("held start dispatched: %v", args)
+					l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+					act := superloop.Action{Ref: loopPR, URL: loopURL, Key: "incident preparation", Head: loopHead, Round: 1}
+					var err error
+					switch kind {
+					case workerRole:
+						_, err = l.startItem(context.Background(), act, loopBoardItem{Ref: loopPR, URL: loopURL})
+					case litReviewer:
+						_, err = l.startReviewer(context.Background(), act)
+					case incidentFixerKind:
+						err = l.startFixer(context.Background(), &state.State{}, act)
 					}
-				}
-			})
+					if !inserted {
+						t.Fatal("test did not reach the preparation read")
+					}
+					if repair {
+						if err != nil || len(r.logged(t, loopClaimVerb)) != 1 || r.called(agentsName, agentStartName) == nil {
+							t.Fatalf("repair should start: %v; calls %v", err, r.calls)
+						}
+						return
+					}
+					if !errors.Is(err, errLoopLater) {
+						t.Fatalf("held start returned %v, want errLoopLater", err)
+					}
+					if len(r.logged(t, loopClaimVerb)) != 0 {
+						t.Fatal("held start claimed the action")
+					}
+					for _, args := range r.calls {
+						if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+							t.Fatalf("held start dispatched: %v", args)
+						}
+					}
+				})
+			}
 		}
+	}
+}
+
+func TestRepositoryHoldBoardSkipsUntilLiftOrExpiry(t *testing.T) {
+	now := time.Now()
+	st := &state.State{Holds: []state.Hold{{Target: "O/R", Reason: incidentReason}}}
+	sc := pickScope{listed: now, alive: func(state.Party) bool { return false }}
+	cands := boardCandidates(3)
+	cands[2] = board.Candidate{Item: board.Item{Ref: "other/repo#1"}, Step: stepUpNext}
+	res := nextFree(st, cands, sc)
+	if res.Pick == nil || res.Pick.Ref != cands[2].Ref || len(res.Skipped) != 2 {
+		t.Fatalf("held repository not skipped: %+v", res)
+	}
+	for _, c := range res.Skipped {
+		if !strings.Contains(c.Skip, "held: repository O/R: "+incidentReason) {
+			t.Fatalf("skip does not name hold: %+v", c)
+		}
+	}
+	st.Holds[0].Until = now.Add(-time.Second)
+	if res = nextFree(st, cands, sc); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
+		t.Fatalf("expired hold still blocks: %+v", res)
+	}
+	st.Holds = nil
+	if res = nextFree(st, cands, sc); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
+		t.Fatalf("lifted hold still blocks: %+v", res)
+	}
+	for _, target := range []string{holdMerges, "lane:test", "other/repo"} {
+		st.Holds = []state.Hold{{Target: target}}
+		if why := repositoryStartReason(st, now, cands[0].Ref); why != "" {
+			t.Fatalf("%s blocks unrelated start: %s", target, why)
+		}
+	}
+}
+
+func TestRepositoryHoldBoardSkipLoggedOnceAndResetAfterLift(t *testing.T) {
+	r, _ := fillRig(t)
+	held := true
+	r.answer = func(args []string) (string, int) {
+		if args[0] != loopBoard {
+			return "", 0
+		}
+		if held {
+			return `{"pick":null,"skipped":[{"ref":"o/r#1","skip":"held: repository o/r: maintenance"}]}`, ExitRefused
+		}
+		return `{"pick":{"ref":"o/r#1"}}`, 0
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	for range 2 {
+		if next, err := l.readNextItem(t.Context()); next != nil || err != nil {
+			t.Fatalf("held board: %v, %v", next, err)
+		}
+	}
+	const line = "SUPERVISOR NEXT SKIPS o/r#1: held: repository o/r: maintenance"
+	if got := strings.Count(r.out.String(), line); got != 1 {
+		t.Fatalf("skip logged %d times: %s", got, r.out)
+	}
+	held = false
+	if next, err := l.readNextItem(t.Context()); next == nil || next.Ref != "o/r#1" || err != nil {
+		t.Fatalf("lifted board: %v, %v", next, err)
+	}
+	held = true
+	if _, err := l.readNextItem(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(r.out.String(), line); got != 2 {
+		t.Fatalf("new hold logged %d times: %s", got, r.out)
+	}
+}
+
+func TestRepositoryHoldLiftRetriesBoardOnNextPass(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds = []state.Hold{{Target: loopMergeRepo, Reason: incidentReason}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before := *reads
+	if before == 0 {
+		t.Fatal("board was not read")
+	}
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if *reads != before {
+		t.Fatal("unchanged hold did not preserve board backoff")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if *reads != before+1 {
+		t.Fatalf("lift did not retry board on next pass: %d -> %d", before, *reads)
 	}
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -3402,7 +3403,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if l.unreadRepo(act.Ref) != "" {
 		return errLoopLater
 	}
-	if err := l.incidentStart(act.Ref); err != nil {
+	if err := l.repositoryStart(act.Ref); err != nil {
 		return err
 	}
 	if l.holdingStarts() {
@@ -3510,8 +3511,8 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
-	// Placement and preparation may block while an incident hold is set.
-	if err := l.incidentStart(act.Ref); err != nil {
+	// Placement and preparation may block while a repository hold is set.
+	if err := l.repositoryStart(act.Ref); err != nil {
 		return err
 	}
 	if err := l.claim(act, name); err != nil {
@@ -3624,7 +3625,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if l.unreadRepo(act.Ref) != "" {
 		return "", errLoopLater
 	}
-	if err := l.incidentStart(act.Ref); err != nil {
+	if err := l.repositoryStart(act.Ref); err != nil {
 		return "", err
 	}
 	if l.holdingStarts() {
@@ -3717,8 +3718,8 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
-	// Placement and preparation may block while an incident hold is set.
-	if err := l.incidentStart(act.Ref); err != nil {
+	// Placement and preparation may block while a repository hold is set.
+	if err := l.repositoryStart(act.Ref); err != nil {
 		return "", err
 	}
 	if err := l.a.reserveReview(act); err != nil {
@@ -4272,13 +4273,23 @@ func (l *supervisorLoop) readNextItemSkipping(ctx context.Context, exemptOnly bo
 	}
 	// The output is stdout and then stderr: the document is its first value.
 	var next struct {
-		Pick json.RawMessage `json:"pick"`
+		Pick      json.RawMessage   `json:"pick"`
+		Skipped   []board.Candidate `json:"skipped"`
+		AfterPick []board.Candidate `json:"after_pick"`
 	}
 	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
 		if code != 0 {
 			return nil, failed()
 		}
 		return nil, fmt.Errorf("board next --json: %w", err)
+	}
+	for _, c := range append(next.Skipped, next.AfterPick...) {
+		key := "repository hold " + c.Ref
+		if strings.HasPrefix(c.Skip, "held: repository ") || strings.HasPrefix(c.Skip, "held: merge incident ") {
+			l.sayOnce(key, "SUPERVISOR NEXT SKIPS %s: %s", c.Ref, c.Skip)
+		} else {
+			l.clearSaid(key)
+		}
 	}
 	none := string(next.Pick) == "null"
 	if code != 0 {
@@ -4298,6 +4309,7 @@ func (l *supervisorLoop) readNextItemSkipping(ctx context.Context, exemptOnly bo
 	if _, ok := parseRef(pick.Ref); !ok {
 		return nil, fmt.Errorf("board next: invalid item ref %q", pick.Ref)
 	}
+	l.clearSaid("repository hold " + pick.Ref)
 	return &pick, nil
 }
 
@@ -4325,7 +4337,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.a.allowMonitoredIssue(ctx, next.Ref); err != nil {
 		return "", err
 	}
-	if err := l.incidentStart(next.Ref); err != nil {
+	if err := l.repositoryStart(next.Ref); err != nil {
 		return "", err
 	}
 	if err := l.unmergedStart(ctx, next.Ref); err != nil {
@@ -4375,7 +4387,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	}
 	args = append(args, place.excludeFlags()...)
 	// Placement and preparation may block while admission changes.
-	if err := l.incidentStart(next.Ref); err != nil {
+	if err := l.repositoryStart(next.Ref); err != nil {
 		return "", err
 	}
 	if err := l.unmergedStart(ctx, next.Ref); err != nil {
