@@ -43,7 +43,7 @@ func timerSettlesPark(t state.Timer, p *state.Park, person string) bool {
 	}
 	kind, ref, _ := strings.Cut(t.When, " ")
 	switch kind {
-	case "pr-merged", "pr-checks", "issue-closed":
+	case "pr-merged", timerPRChecks, "issue-closed":
 		return strings.TrimSpace(ref) == p.On
 	}
 	return false

@@ -655,6 +655,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	interval := w.cfg.Watch.Interval.Duration
 	if once {
+		w.ctx = ctx
 		w.upgradeCycle(ctx)
 		w.sample(ctx)
 		w.lastSweep = time.Now() // swept here, not in the poll's background
@@ -674,14 +675,15 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.worktreesOn = true
 	w.slotsOn = true
 	w.readFreeMark()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	w.ctx = ctx
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
 	// The first sample comes before the reads start: they begin knowing
 	// whether the machine is strained. The loop's own first sample is one
 	// interval later: two samples in a row span one (CPU PRESSURE).
 	w.sample(ctx)
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	if w.batchEvery > 0 {
@@ -817,7 +819,7 @@ func (w *watcher) readCtx(ctx context.Context) context.Context {
 // and the next poll skips it instead of starting a second one. fn keeps
 // running on ctx, within its own timeouts.
 func (w *watcher) inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn func(context.Context)) {
-	if !running.CompareAndSwap(false, true) {
+	if ctx.Err() != nil || !running.CompareAndSwap(false, true) {
 		return
 	}
 	done := make(chan struct{})
@@ -1186,14 +1188,25 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 
 // emitNow records every event immediately, then batches only known routine lines.
 func (w *watcher) emitNow(key string, format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
-	if key != "resolver" && w.resolverFailure(line) {
-		return
+	w.emitLinesNow(key, []string{fmt.Sprintf(format, args...)})
+}
+
+func (w *watcher) emitLinesNow(key string, lines []string) {
+	var evs []state.Event
+	var kept []string
+	for _, line := range lines {
+		if key != "resolver" && w.resolverFailure(line) {
+			continue
+		}
+		kept = append(kept, line)
+		evs = append(evs, event(watchParty, "watch."+key, "%s", line))
 	}
-	if w.store != nil {
-		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
+	if w.store != nil && len(evs) > 0 {
+		_ = w.store.Record(evs...)
 	}
-	w.outputEvent(line)
+	for _, line := range kept {
+		w.outputEvent(line)
+	}
 }
 
 // sample reads the machine's numbers (memory, swap, load, pressure, disk,
@@ -1419,6 +1432,9 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 
 // pollSessions does what the process table and the sessions in it tell.
 func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Table) {
+	if ctx.Err() != nil {
+		return
+	}
 	w.table = t
 	sessions := discover(w.cfg, t, w.now)
 	owners := make(map[int]string, len(sessions))
@@ -1430,14 +1446,26 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
 	w.tendFeedback(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	w.pending(ctx, sessions)
+	if ctx.Err() != nil {
+		return
+	}
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
 	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
 	w.twins(sessions, t)
 	w.ungated(sessions, t)
+	if ctx.Err() != nil {
+		return
+	}
 	w.sameTitles(w.stopRevived(ctx, sessions))
+	if ctx.Err() != nil {
+		return
+	}
 	w.staleWatches(ctx, t)
 }
 
@@ -1513,6 +1541,9 @@ func (w *watcher) poll(ctx context.Context) {
 		w.clear("proc")
 		w.pollSessions(ctx, since, t)
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	w.staleMerges()
 	w.lostMerges(ctx)
 	w.owedOutcomes(ctx)
@@ -1521,6 +1552,9 @@ func (w *watcher) poll(ctx context.Context) {
 	w.slotHolds()
 	w.unbrokered()
 	w.vaultWaits()
+	if ctx.Err() != nil {
+		return
+	}
 	w.sink(ctx)
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
@@ -1561,6 +1595,9 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
 		w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	w.saveMark()
 	if w.notifier != nil {
@@ -1663,12 +1700,16 @@ const exposedKey = "exposed "
 // EXPOSED line naming the file when it is found, never its content, and one
 // ENDED line once it is fixed.
 func (w *watcher) exposures() {
+	ctx := w.context()
 	o := w.cfg.Outbound
 	found := map[string]bool{}
-	for _, e := range guard.Sweep(o.SweepRoots, o.SweepDepth) {
+	for _, e := range guard.SweepContext(ctx, o.SweepRoots, o.SweepDepth) {
 		key := exposedKey + e.Path
 		found[key] = true
 		w.emit(key, "EXPOSED %s: %s", e.Path, e.What)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	w.clearMissing(exposedKey, found)
 }
@@ -2010,6 +2051,9 @@ var watchParty = state.Party{Name: "beekeeper watch"}
 // The state keeps that they were reported, so each is one line however many
 // watches run; the state is written only then.
 func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
+	if ctx.Err() != nil {
+		return
+	}
 	st, err := w.store.Read()
 	if err != nil {
 		w.fail("state-read", "cannot read the state: %v", err)
@@ -2017,11 +2061,21 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.clear("state-read")
 	if w.chores {
-		defer w.claims(ctx)
+		defer func() {
+			if ctx.Err() == nil {
+				w.claims(ctx)
+			}
+		}()
 	}
 	st = w.syncExecutions(ctx, st)
+	if ctx.Err() != nil {
+		return
+	}
 	w.records = st.Records
 	supervised := w.checkLoop(ctx, st)
+	if ctx.Err() != nil {
+		return
+	}
 	if w.standby {
 		w.guideGone(ctx, st, sessions)
 		w.resumeRestarted(ctx, guideRole, st, sessions)
@@ -2036,10 +2090,16 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if w.standby && supervised {
 		return // the supervisor loop's watch reports them
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	w.sayStop(st)
 	w.noteAnswers(st)
 	w.refusals()
 	u := w.watchUsage(ctx, st, sessions)
+	if ctx.Err() != nil {
+		return
+	}
 	if w.chores && (u == nil || !u.High) {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
@@ -2049,13 +2109,22 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if st.Stop == nil {
 		w.stoppedAgents(st, sessions) // STOPPED names the sessions the stop ended
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
 	w.rowlessAgents(st)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
+	if ctx.Err() != nil {
+		return
+	}
 	var over, kept []overtake
 	if len(overtakeRefs(st)) > 0 {
 		readRefs := func() error {
@@ -2070,7 +2139,13 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 			_ = readRefs()
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	parks := w.settledParks(ctx, st)
+	if ctx.Err() != nil {
+		return
+	}
 	if !w.chores {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
@@ -2082,8 +2157,14 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	} else {
 		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	if w.chores {
 		w.overrides(ctx, githubHeld)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	var settles func(state.Timer) bool // nil: a running watch settles every timer
 	if !w.chores {
@@ -2124,6 +2205,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		var evs []state.Event
 		verdicts = slices.DeleteFunc(slices.Clone(st.WorkerReports), func(r state.WorkerReport) bool { return r.TellTo == (state.Party{}) })
 		lines, evs, _ = fire(st)
+		for _, l := range lines {
+			evs = append(evs, event(watchParty, "watch.pending", "%s", l))
+		}
 		w.records = st.Records
 		due = firedNow(st, w.now)
 		return evs, nil
@@ -2134,7 +2218,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.clear("state-write")
 	for _, l := range lines {
-		w.emitNow("pending", "%s", l)
+		w.outputEvent(l)
 	}
 	w.tellReviewVerdicts(ctx, verdicts)
 	for _, n := range defaulted {

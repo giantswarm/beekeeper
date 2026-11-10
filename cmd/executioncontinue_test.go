@@ -65,18 +65,14 @@ func TestParkedExecutionResumesAfterItsProcessExited(t *testing.T) {
 		t.Fatal(err)
 	}
 	by := state.Party{Session: sshMessageSenderSession, Name: sshMessageSender, Host: sshTestCoordinator}
-	err := a.resumeParkedOpts(context.Background(), by, r.Name, false)
-	var pending *executionDeliveryPending
-	if !errors.As(err, &pending) {
-		t.Fatalf("a message waiting for the new runner reads as pending, got %v", err)
+	if err := a.resumeParkedOpts(context.Background(), by, r.Name, false); err != nil {
+		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
-	if *continued != 1 || len(st.Starts[0].Execution.Messages) != 1 || st.Agents[0].Park == nil {
-		t.Fatalf("continued %d, messages %d, park %v", *continued, len(st.Starts[0].Execution.Messages), st.Agents[0].Park)
+	if *continued != 0 || len(st.Starts[0].Execution.Messages) != 0 || st.Agents[0].Park == nil || len(st.Agents[0].Park.Continuation) != 1 {
+		t.Fatalf("old runner continued: %d; park %+v", *continued, st.Agents[0].Park)
 	}
-	if x := st.Starts[0].Execution; x.Settled || x.TranscriptCollected {
-		t.Fatal("the new run's end would not be collected")
-	}
+
 }
 
 func TestEndedExecutionComesBackOnTheRosterByName(t *testing.T) {

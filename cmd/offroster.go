@@ -34,6 +34,10 @@ func (a *app) wakeParty(st *state.State, q string) (state.Agent, bool, error) {
 	if err != nil {
 		return state.Agent{}, false, err
 	}
+	q, err = continuationTarget(st, q)
+	if err != nil {
+		return state.Agent{}, false, err
+	}
 	i, err := findAgent(st, q)
 	if err == nil {
 		return st.Agents[i], true, nil
@@ -43,6 +47,38 @@ func (a *app) wakeParty(st *state.State, q string) (state.Agent, bool, error) {
 		return state.Agent{}, false, err
 	}
 	return state.Agent{Party: p}, false, nil
+}
+
+// continuationTarget follows durable task handoffs, including a stale timer
+// or result addressed to the previous session ID. No old transcript is a
+// fallback when its successor is known. A live reused name wins by itself.
+func continuationTarget(st *state.State, q string) (string, error) {
+	seen := map[string]bool{}
+	for {
+		if _, err := findAgent(st, q); err == nil {
+			return q, nil
+		}
+		if seen[q] {
+			return "", refused("continuation destination cycle")
+		}
+		seen[q] = true
+		var latest *state.Start
+		starts := slices.Concat(st.Starts, st.EndedWorkers)
+		for i := range starts {
+			s := &starts[i]
+			matches := strings.EqualFold(s.Name, q) || s.Session == q && q != "" || s.HostSession == q && q != ""
+			if s.Execution != nil {
+				matches = matches || string(s.Execution.Request.Ref.Execution) == q
+			}
+			if matches && s.Successor != nil && (latest == nil || !s.At.Before(latest.At)) {
+				latest = s
+			}
+		}
+		if latest == nil {
+			return q, nil
+		}
+		q = cmp.Or(latest.Successor.HostSession, latest.Successor.Session, latest.Successor.Name)
+	}
 }
 
 // offRosterParty is the session off the roster q addresses: a role's holder

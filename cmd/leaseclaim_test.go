@@ -220,14 +220,8 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	}
 	settleParks(t, a)
 	settleParks(t, a)
-	want := watchParty.Name + " → " + claimMe.Name + ": Your park on lease agentlab-1 (the lease agentlab-1: my proof) is over: agentlab-1 is free and yours: " +
-		"claim it now with `beekeeper lease claim agentlab-1 -p \"<purpose>\"`, within 30m. Re-query the live state of your task and continue it."
-	if !slices.Equal(*woke, []string{want}) {
-		t.Errorf("woke %q\nwant %q", *woke, want)
-	}
-	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil || ag.Task != parkTask {
-		t.Errorf("after the wake: task %q park %+v", ag.Task, ag.Park)
-	}
+	assertFreshQueue(t, &watcher{app: a}, *woke, "free and yours")
+
 	if out, err := runLease(a, "claim", labOne, "-p", "my proof"); err != nil || !strings.HasPrefix(out, "held by you since") {
 		t.Errorf("the claim after the wake: %q, %v", out, err)
 	}

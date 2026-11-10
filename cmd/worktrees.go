@@ -409,7 +409,7 @@ func (a *app) trimWorktrees(dryRun bool, read func() (worktreeMachine, error)) w
 		r.err = err
 		return r
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), worktreesTimeout)
+	ctx, cancel := context.WithTimeout(a.context(), worktreesTimeout)
 	defer cancel()
 	if m.retire == nil {
 		runner := remotebuild.Runner{StateDir: a.cfg.StateDir, Stdout: a.out}
@@ -429,12 +429,16 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 	var errs []error
 	var finished []string
 	defer func() {
-		if m.retire != nil {
+		if m.retire != nil && (ctx.Err() == nil || len(finished) > 0) {
 			r.err = errors.Join(r.err, m.retire(ctx, finished, r.dryRun))
 		}
 	}()
 	live := diskprune.NewRefs(append(slices.Clone(m.live), m.refs...))
 	for _, d := range m.dirs {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
 		if live.Holds(d) {
 			r.kept[worktrees.KeptLive]++
 			continue
@@ -465,6 +469,10 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			heads = append(heads, github.Head{Repo: t.Repo, Branch: t.HeadBranch()})
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		r.err = errors.Join(errs...)
+		return
+	}
 	var pulls map[github.Head]github.HeadPull
 	if len(heads) > 0 {
 		var err error
@@ -474,6 +482,10 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		}
 	}
 	for _, t := range trees {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
 		var pull *github.HeadPull
 		if p, ok := pulls[github.Head{Repo: t.Repo, Branch: t.HeadBranch()}]; ok {
 			pull = &p
@@ -740,6 +752,9 @@ func (w *watcher) worktrees(now time.Time) {
 			return
 		}
 		r := w.trimWorktrees(false, func() (worktreeMachine, error) { return liveWorktrees(&d) })
+		if d.context().Err() != nil {
+			return
+		}
 		if r.locked {
 			w.worktreesNext = now.Add(goCacheRetry)
 			return

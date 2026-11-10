@@ -115,12 +115,8 @@ func TestReleaseParkWakesOnce(t *testing.T) {
 	for range 3 {
 		w.pending(context.Background(), nil)
 	}
-	if len(*woke) != 1 || !strings.Contains((*woke)[0], "release "+target+" is available") {
-		t.Fatalf("wakes %v", *woke)
-	}
-	if ag := agentOf(t, w); ag.Park != nil || ag.Task != parkTask {
-		t.Fatalf("agent %+v", ag)
-	}
+	assertFreshQueue(t, w, *woke, "release "+target+" is available")
+
 }
 
 func TestExecutionParkReleaseTarget(t *testing.T) {

@@ -916,7 +916,12 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		a.loopNow = &atomic.Pointer[time.Time]{}
 	}
 	defer a.loopNow.Store(nil)
-	l, err := a.newSupervisorLoop(false)
+	if err := a.prepareEventSegmentation(); err != nil {
+		return err
+	}
+	startup := &supervisorLoop{a: a, lifecycle: life}
+	startup.lifecyclePhase(loopPhaseStartupHistory)
+	l, err := a.newSupervisorLoop(false, func() { startup.lifecyclePhase(loopPhaseStartupHistory) })
 	if err != nil {
 		return err
 	}
@@ -1060,13 +1065,17 @@ func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
 
 // newSupervisorLoop logs the loop's start, unless it is a dry run, and
 // bounds its events by its first.
-func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
+func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*supervisorLoop, error) {
 	// Every loop can run actions concurrently, including a directly constructed
 	// loop. Give all its output paths the same synchronized writer.
 	if _, ok := a.out.(*loopOutput); !ok {
 		a.out = &loopOutput{out: a.out}
 	}
-	starts, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loopStartVerb })
+	keepStart := func(e state.Event) bool { return e.Verb == loopStartVerb }
+	if len(progress) > 0 {
+		keepStart = eventProgressFilter(keepStart, progress[0], time.Now)
+	}
+	starts, err := state.FollowSnapshot(a.store, "supervisor-loop-starts", "v1", keepStart)
 	if err != nil {
 		return nil, err
 	}
@@ -1273,7 +1282,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.mu.Unlock()
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
-	if reexec, err := l.reexec(ctx); err != nil || reexec {
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
 	if !l.dryRun {
@@ -1285,6 +1294,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.clearSaid("watch-conditions")
 		}
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	if !l.dryRun {
 		l.lifecyclePhase("watch alerts")
 		if err := l.watchAlerts(ctx); err != nil {
@@ -1292,6 +1304,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		} else {
 			l.clearSaid("alerts")
 		}
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
 	}
 	st, err := a.store.Read()
 	if err != nil {
@@ -1309,6 +1324,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.clearSaid("epic wake")
 		}
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	l.lifecyclePhase("read state and dispatch timers")
 	// Wall-clock timer jobs keep running while GitHub observations are
 	// held. Board commands they invoke still share the query admission gate.
@@ -1319,6 +1337,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.settleOverrides(ctx, st)
 		l.reloadConfig()
 		a = l.a.snapshotAtNow()
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
@@ -1349,12 +1370,19 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
-		if reexec, err := l.reexec(ctx); err != nil || reexec {
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
 	}
 	l.lifecyclePhase("recover quota and parks")
 	if err := l.recoverQuota(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := l.continueParks(ctx, st); err != nil {
 		return err
 	}
 	st, err = a.store.Read()
@@ -1380,6 +1408,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	st, err = a.store.Read()
 	if err != nil {
+		return err
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
 	l.lifecyclePhase(loopPhaseObserve)
@@ -1435,7 +1466,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
-	taken, err := a.store.Follow("supervisor-loop-taken", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
+	taken, err := state.FollowSnapshot(a.store, "supervisor-loop-taken", "v1", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
 	if err != nil {
 		return err
 	}
@@ -1498,7 +1529,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.stages, l.stageDetail = stages, stageDetail
 	l.mu.Unlock()
 	since := l.since
-	evs, err := a.store.Follow("supervisor-loop", l.eventHistoryFilter(func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.store, "supervisor-loop", "v1:"+l.since.Format(time.RFC3339Nano), l.eventHistoryFilter(func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
 	}))
 	if err != nil {
@@ -1541,7 +1572,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
-	answers, err := a.store.Follow("supervisor-loop-answers", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
+	answers, err := state.FollowSnapshot(a.store, "supervisor-loop-answers", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
 	if err != nil {
 		return err
 	}
@@ -1566,7 +1597,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase("discover pull requests")
 	swept := l.sweepPulls(ctx, in, tracked)
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
+	l.lifecyclePhase("observe repository ownership")
 	if len(tracked)+len(swept) > 0 && !l.ownership(ctx, &in.Desk) {
 		tracked = nil
 	} else {
@@ -1577,6 +1616,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	unreviewedEnded := map[string]bool{}
 	pullHeld := false
 	for _, ref := range tracked {
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		// Each completed observation is progress, even when the batch takes
+		// longer than the recovery heartbeat window. Never refresh in the
+		// background while an individual observation is blocked.
+		l.lifecyclePhase("observe pull requests")
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
 		}
@@ -1607,6 +1653,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p, err := l.observePullStep(ctx, ref, changed, step)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
@@ -1760,6 +1809,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	l.lifecyclePhase("plan and record heartbeat")
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !l.dryRun {
 		l.lifecyclePhase("observe deliveries")
 		if err := l.observeDeliveries(ctx, in, unread); err != nil {
@@ -1818,6 +1870,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		return l.fill(ctx, st, claims, in.Taken)
 	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
+	}
 	l.lifecyclePhase("dispatch planned actions")
 	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
 }
@@ -1842,7 +1897,7 @@ func (l *supervisorLoop) endInFlight(key string) {
 }
 
 func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action, reserved ...[]string) error {
-	if l.pauseForReexec() {
+	if l.pauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
 	// An earlier pass can finish after this pass took its snapshot.
@@ -1901,6 +1956,9 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 // transitions independently so a merge waiting on CI or in a lane queue never
 // delays a review or worker start, and the reverse.
 func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+	if ctx.Err() != nil {
+		return nil
+	}
 	current, readErr := l.a.store.Read()
 	if readErr != nil {
 		return readErr
@@ -2345,16 +2403,16 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 				break
 			}
 		}
-		if logged("agents.wake", opens) || logged(verbStart, opens) {
+		if logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens) || logged(verbStart, opens) {
 			if !repairing && p.State == superloop.Open && p.Head == act.Head && p.Green && !pullNeedsBranchRepair(p) {
 				return fmt.Sprintf("%s before an interruption: %s, as the log shows", loopWorkerMergeGo, c.target), true, nil
 			}
 			done = true
 		}
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed, superloop.KindOwner:
-		done = logged("agents.wake", opens) || logged(verbStart, opens)
+		done = logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
-		done = logged("agents.wake", opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
+		done = logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
 			!slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, act.Ref) }) && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
@@ -2363,7 +2421,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		// An unclassified park's wake claims the agent's name; a note for
 		// the guide claims its question.
 		if c.target == act.Agent {
-			done = logged("agents.wake", opens)
+			done = logged(agentWakeEvent, opens) || logged(continuationQueuedEvent, opens)
 		} else {
 			done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 		}
@@ -2931,6 +2989,9 @@ var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
 // stale with no CLI) that superloop.Plan is not still handling in planned, and
 // archives or stops owed desktop and background sessions once their turns end.
 func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) error {
+	if l.pauseForReexec() || ctx.Err() != nil {
+		return nil
+	}
 	a := l.a.snapshotAtNow()
 	st, err := a.store.Read()
 	if err != nil {
@@ -2944,11 +3005,17 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
 	waits := sleepingWaits(st, sessions, t, inFlight, a.timeNow())
 	for _, w := range waits {
+		if l.pauseForReexec() || ctx.Err() != nil {
+			return nil
+		}
 		stopProcesses(w.pids())
 		line := "stopped " + w.String()
 		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
 			return []state.Event{event(loopParty, "agents.stop", "%s", line)}, nil
 		})
+	}
+	if l.pauseForReexec() || ctx.Err() != nil {
+		return nil
 	}
 	busy := func(p state.Party) bool {
 		if slices.ContainsFunc(waits, func(w leftWait) bool { return w.agent.Is(p) }) {
@@ -2975,6 +3042,11 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 
 func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
 	if ag.Park == nil || ag.Park.ReviewHead == "" || loopParkOn(ag.Park) == "" {
+		return false
+	}
+	if slices.ContainsFunc(st.Timers, func(t state.Timer) bool {
+		return t.Fired.IsZero() && t.Wake != "" && (strings.EqualFold(t.Wake, ag.Name) || ag.Is(state.Party{Name: t.Wake, Session: t.Wake, HostSession: t.Wake}))
+	}) {
 		return false
 	}
 	k := st.StartIndex(ag.Party)
@@ -3059,6 +3131,9 @@ func sortTrackedPulls(in superloop.Input, tracked []string) {
 
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if ag.Park == nil || ag.Park.ReviewHead == "" {
 			continue
 		}
@@ -3106,6 +3181,9 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if ref := ag.Execution; ref != nil {
 			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
 				if _, err := l.run(ctx, agentsName, loopStop, ag.Name, "--reason", "supervisor loop: desk review requested"); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
 					l.sayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
 					continue
 				}
@@ -3121,6 +3199,9 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 			}
 		}
 		if err := l.remove(ctx, ag.Name, "supervisor loop: desk review of "+on+" requested; its park stays saved for the review and the merge"); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
 		}
@@ -4663,6 +4744,9 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, fires, _ = settleTimersMatching(current, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
+		for _, line := range lines {
+			evs = append(evs, event(watchParty, "watch.timer", "%s", line))
+		}
 		return evs, nil
 	}); err != nil {
 		return err
@@ -4670,7 +4754,7 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	// Each batch keeps its own time while later passes advance the clock.
 	w := &watcher{app: a.snapshotAtNow()}
 	for _, line := range lines {
-		w.emitNow("timer", "%s", line)
+		w.outputEvent(line)
 	}
 	l.timerActs.Go(func() {
 		w.actTimers(ctx, fires)
@@ -4781,4 +4865,14 @@ func (l *supervisorLoop) pauseForReexec() bool {
 	b, failed := l.bin, l.reexecFailed
 	l.mu.Unlock()
 	return !failed && b != nil && b.Replaced()
+}
+
+func (l *supervisorLoop) stopPassForReexec(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return true, err
+	}
+	return l.pauseForReexec(), nil
 }

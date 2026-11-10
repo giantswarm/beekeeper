@@ -74,10 +74,9 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	answer(t, w)
 	w.pending(context.Background(), nil)
 	w.pending(context.Background(), nil)
-	if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) {
-		t.Fatalf("answer should start exactly one turn: %v", *woke)
-	}
-	t.Log("eight simulated hours: zero model turns before the answer; exactly one after")
+	assertFreshQueue(t, w, *woke, parkAnswer)
+	t.Log("eight simulated hours: no transcript resumes; answer retained for a fresh worker")
+
 }
 
 func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
@@ -128,9 +127,18 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			fakeRead(t, func(string) ([]byte, error) { return ciAnswer("OPEN", ciLintRed), nil })
 			w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 1, Wake: q, When: tc.when}, reason: "holds"})
-			if (len(*woke) == 1) != tc.wantWake {
+			st, _ := w.store.Read()
+			delivered := len(*woke) == 1
+			for _, ag := range st.Agents {
+				delivered = delivered || ag.Park != nil && len(ag.Park.Continuation) == 1
+			}
+			if delivered != tc.wantWake {
 				t.Fatalf("wake=%v, want delivery=%v", *woke, tc.wantWake)
+			}
+			if !tc.guide && !tc.offRoster && len(*woke) > 0 {
+				t.Fatal("parked worker resumed")
 			}
 		})
 	}
@@ -261,7 +269,7 @@ func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		w.wakeTimer(t.Context(), timerFire{t: timer, reason: "due"})
+		w.wakeTimer(t.Context(), timerFire{t: timer, reason: paramDue})
 		if len(*woke) == 0 || !strings.Contains((*woke)[len(*woke)-1], name+"-session") {
 			t.Fatalf("timer did not reach current holder: %v", *woke)
 		}
@@ -281,7 +289,7 @@ func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: "due"})
+	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: paramDue})
 	if len(*woke) != 0 {
 		t.Fatalf("woke without a holder: %v", *woke)
 	}
@@ -296,6 +304,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 			for _, repeat := range []string{"", state.RepeatDaily} {
 				t.Run("repeat="+repeat, func(t *testing.T) {
 					w, _, _ := notifyingWatch(t, t.TempDir(), false)
+					w.clock = timerRetryClock{w: w}
 					w.cfg.Guide.Person = personTimo
 					old := wakeOwner
 					calls := 0
@@ -362,6 +371,7 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 
 func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	w.clock = timerRetryClock{w: w}
 	woke := stubWakes(t)
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Park: &state.Park{On: "#3", Waits: verbAnswer, At: relayNow}}}
@@ -410,6 +420,7 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
 		t.Run("repeat="+repeat, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
+			w.clock = timerRetryClock{w: w}
 			woke := stubWakes(t)
 			var initial timerFire
 			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -448,5 +459,43 @@ func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 				t.Fatalf("retry leaked into next occurrence: %+v", st.Timers)
 			}
 		})
+	}
+}
+
+// Keep existing simulated tick tests explicit about their delivery clock.
+type timerRetryClock struct {
+	wallClock
+	w *watcher
+}
+
+func (c timerRetryClock) Now() time.Time { return c.w.now }
+
+func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	clock := newFakeClock(t)
+	clock.now = relayNow.Add(4 * time.Minute)
+	w.clock = clock
+	timer := state.Timer{ID: 42, Due: relayNow, Wake: agentOne, Every: time.Minute}
+	rearmed, err := w.rearmTimer(timerFire{t: timer, reason: paramDue}, "wake skipped")
+	if err != nil || !rearmed {
+		t.Fatalf("rearm: %v, %v", rearmed, err)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Timers) != 1 || !st.Timers[0].Checked.Equal(clock.Now()) {
+		t.Fatalf("retry timestamp must reflect delivery: %+v", st.Timers)
+	}
+	if got := fatalTimers(st, clock.Now()); got.overdue != 0 {
+		t.Fatalf("fresh delivery reported overdue: %+v", got)
+	}
+	_, _, fires, _ := settleTimers(st, nil, clock.Now().Add(30*time.Second))
+	if len(fires) != 0 {
+		t.Fatal("retry did not wait a full interval")
+	}
+	_, _, fires, _ = settleTimers(st, nil, clock.Now().Add(time.Minute))
+	if len(fires) != 1 {
+		t.Fatal("retry did not fire at the next interval")
 	}
 }

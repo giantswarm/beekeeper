@@ -120,6 +120,7 @@ type app struct {
 
 	cfg   *config.Config
 	store state.Store
+	ctx   context.Context
 	now   time.Time
 	// loopNow advances the long-running supervisor clock without mutating now
 	// while actions from earlier passes still use the app.
@@ -186,6 +187,13 @@ func (a *app) requesterOrigin(pid int, keys []string) (string, []string, error) 
 		return a.origin(pid, keys)
 	}
 	return sandbox.Origin("/proc", pid, keys)
+}
+
+func (a *app) context() context.Context {
+	if a != nil && a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
 }
 
 // New returns the root command.

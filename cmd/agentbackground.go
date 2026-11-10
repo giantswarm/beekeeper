@@ -459,7 +459,7 @@ const parkStoppedEvent = "agents.parkstop"
 func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time) []state.Party {
 	var out []state.Party
 	for _, ag := range st.Agents {
-		if ag.Park == nil || !ag.Park.Resumable.IsZero() || ag.Execution != nil || ag.Session == "" {
+		if ag.Park == nil || !ag.Park.Resumable.IsZero() && len(ag.Park.Continuation) == 0 || ag.Execution != nil || ag.Session == "" {
 			continue
 		}
 		if i := st.StartIndex(ag.Party); i < 0 || !st.Starts[i].Background {
@@ -662,7 +662,7 @@ func samePark(seen, st *state.State, p state.Party) bool {
 		return nil
 	}
 	was, now := park(seen), park(st)
-	return was != nil && now != nil && now.At.Equal(was.At) && now.On == was.On && now.Waits == was.Waits && now.Resumable.IsZero()
+	return was != nil && now != nil && now.At.Equal(was.At) && now.On == was.On && now.Waits == was.Waits && (now.Resumable.IsZero() || len(now.Continuation) > 0)
 }
 
 // waitExit waits up to bgExitWait for the processes pids to exit.

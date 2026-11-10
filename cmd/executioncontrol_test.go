@@ -181,8 +181,6 @@ func TestExecutionCoordinatorRefusesWrongIdentityAndLiveStop(t *testing.T) {
 }
 
 // deskReviewWait is the wait a worker parks with for its desk review.
-const deskReviewWait = "desk review"
-
 func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	a, r := executionTestApp(t)
 	const pushed = "2222222222222222222222222222222222222222"

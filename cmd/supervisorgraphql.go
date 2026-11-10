@@ -331,6 +331,13 @@ func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed ti
 
 // Orphan detail reads share scan admission; tracked pulls keep their own path.
 func (l *supervisorLoop) observePullStep(ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
+	// Bound the entire observation, including shared admission-lock waits
+	// and budget probes, rather than only the eventual gh pr view.
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return superloop.Pull{}, err
+	}
 	if seen, ok := l.pulls[ref]; ok && seen.changed.Equal(changed) && l.a.timeNow().Sub(seen.at) < loopPullEvery {
 		return seen.pull, nil
 	}
@@ -371,6 +378,9 @@ func loopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
 func (a *app) loopTimerChecks(ctx context.Context, timers []state.Timer, now time.Time, held bool) map[int]checkResult {
 	var local, remote []state.Timer
 	for _, t := range timers {
+		if !timerDispatchCheckDue(t, now) {
+			continue
+		}
 		if checkOf(t).github {
 			remote = append(remote, t)
 		} else {

@@ -25,27 +25,16 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 	var keys, lines []string
 	var to string
 	var holder state.Party
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	step := func(st *state.State) bool {
 		keys, lines = nil, nil
 		r := st.Guide
 		if st.Stop != nil || r == nil || r.Holder == nil {
-			return nil, nil
+			return false
 		}
 		to = r.Holder.Name
 		holder = r.Holder.Party
-		for _, e := range guideReportEvents(st, events, w.now) {
-			key, text, ok := keyed(e.Detail)
-			if !ok || !strings.Contains(text, fileReportSeparator) || slices.Contains(st.GuideReports, key) {
-				continue
-			}
-			st.GuideReports = append(st.GuideReports, key)
-			if slices.Contains(r.Fed, "problem:"+key) {
-				continue
-			}
-			r.WorkChecked = nil
-			st.NextGuideWork++
-			st.GuideWork = append(st.GuideWork, state.GuideWork{ID: st.NextGuideWork, Kind: paramTask, Text: text, By: r.Holder.Party, Due: w.now.UTC(), Source: key})
-		}
+
+		reportsSince, workText, reportCount, deliveredBefore := st.GuideReportsSince, guideWorkText(st), len(st.GuideReports), len(r.Delivered)
 		var current []string
 		notice := func(key, text string) {
 			key = r.Holder.Session + ":" + r.Holder.HostSession + ":" + key
@@ -60,25 +49,41 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 			since = r.Holder.Since
 		}
 		grace := max(2*time.Minute, 3*w.cfg.Watch.Interval.Duration)
+		// Both consumers retain reports under the same lock; the first owns
+		// delivery and the other observes the durable report key.
+		for _, e := range guideReportEvents(st, events, w.now) {
+			key, text, ok := keyed(e.Detail)
+			if !ok || !strings.Contains(text, fileReportSeparator) {
+				continue
+			}
+			retainGuideReport(st, key, text, e.At, r.Holder.Party)
+		}
+
 		if !since.IsZero() && w.now.Sub(since) > grace {
 			notice("watch:"+since.String(), "GUIDE WATCH LAPSED: the independent desk watch has seen no guide feed heartbeat since "+since.Format(time.RFC3339)+"; re-arm `beekeeper guide watch` and read `beekeeper guide work`.")
 		}
 		for _, n := range st.Notes {
-			if guides(w.cfg.Guide.Person, &n) {
+			if guides(w.cfg.Guide.Person, &n) && !slices.Contains(r.Fed, fmt.Sprintf("note#%d", n.ID)) {
 				notice(fmt.Sprintf("note:%d:%s", n.ID, n.At.String()), fmt.Sprintf("GUIDE DECISION: note %d is waiting; run `beekeeper guide next` and ask in conversation without a blocking tool.", n.ID))
 			}
 		}
 		for _, work := range st.GuideWork {
-			if guideWorkBlocks(work, w.now) {
+			if guideWorkBlocks(work, w.now) && !slices.Contains(r.Fed, "problem:"+work.Source) {
 				notice(fmt.Sprintf("work:%d:%s", work.ID, work.Due.String()), fmt.Sprintf("GUIDE WORK DUE: %d [%s] %s; run `beekeeper guide work`.", work.ID, work.Kind, escapedLine(work.Text)))
 			}
 		}
 		r.Delivered = slices.DeleteFunc(r.Delivered, func(key string) bool { return !slices.Contains(current, key) })
-		return nil, nil
-	})
-	if err != nil {
-		w.fail("guide-monitor", "cannot retain guide work: %v", err)
-		return
+		return !reportsSince.Equal(st.GuideReportsSince) || workText != guideWorkText(st) || reportCount != len(st.GuideReports) || len(r.Delivered) != deliveredBefore
+	}
+	if step(st) {
+		err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+			step(st)
+			return nil, nil
+		})
+		if err != nil {
+			w.fail("guide-monitor", "cannot retain guide work: %v", err)
+			return
+		}
 	}
 	w.clear("guide-monitor")
 	if len(lines) == 0 {

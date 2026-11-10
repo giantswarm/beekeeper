@@ -101,8 +101,8 @@ func TestLoopAlarmsWhenWorkerStartsStall(t *testing.T) {
 	for range int(loopStallAfter / (30 * time.Second)) {
 		r.loopPass(t, l)
 	}
-	if got := stalls(); len(got) != 2 {
-		t.Fatalf("%d alarms after 2×%s, want the alarm repeated once", len(got), loopStallAfter)
+	if got := stalls(); len(got) != 1 {
+		t.Fatalf("%d alarms after 2×%s, want only the original alarm", len(got), loopStallAfter)
 	}
 	*fail = false
 	// The refill's pause after the failed reads ends within its backoff.
@@ -197,8 +197,8 @@ func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
 	for range int(loopStallAfter / time.Minute) {
 		pass(acts)
 	}
-	if got := stalls(); len(got) != 2 {
-		t.Fatalf("%d alarms after 2×%s, want the alarm repeated once", len(got), loopStallAfter)
+	if got := stalls(); len(got) != 1 {
+		t.Fatalf("%d alarms after 2×%s, want only the original alarm", len(got), loopStallAfter)
 	}
 	pass(nil)
 	if !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED: no review request waits") {
@@ -243,8 +243,8 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 			check(superloop.Input{}, nil)
 			r.a.now = r.a.now.Add(loopStallAfter)
 			check(in, []superloop.Action{act})
-			if got := r.logged(t, "supervisor.file"); len(got) != 2 {
-				t.Fatalf("want repeated alarm after unread observation: %+v", got)
+			if got := r.logged(t, "supervisor.file"); len(got) != 1 {
+				t.Fatalf("unread observation must retain the original alarm: %+v", got)
 			}
 			check(in, nil)
 			if len(l.flowWaits) != 0 || !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED") {

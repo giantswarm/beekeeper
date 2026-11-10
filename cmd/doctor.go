@@ -363,6 +363,9 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		run = runShell
 	}
 	rep.faults = checkFaults(ctx, a.cfg.Doctor.Faults, fix, run)
+	if ctx.Err() != nil {
+		return rep, nil
+	}
 	if r.dryRun {
 		lines, err := a.stopWorktreeOrphans(r.by, true)
 		if err != nil {
@@ -409,11 +412,17 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, rosterLines...)
+	if ctx.Err() != nil {
+		return rep, nil
+	}
 	orphanLines, err := a.stopWorktreeOrphans(r.by, false)
 	if err != nil {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, orphanLines...)
+	if ctx.Err() != nil {
+		return rep, nil
+	}
 	st, err = a.store.Read()
 	if err != nil {
 		return rep, err
@@ -600,7 +609,7 @@ const whyReportedDone = "it reported its work done"
 // off the roster, "" while its reservation or run continues. An
 // execution has no local desktop session to archive or retitle.
 func stoppedExecutionWhy(st *state.State, ag state.Agent) string {
-	if ag.Execution == nil || holdsRole(st, ag.Party) {
+	if ag.Execution == nil || holdsRole(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
 		return ""
 	}
 	r, _ := executionRecord(st, *ag.Execution)
@@ -948,6 +957,9 @@ func (w *watcher) doctor(ctx context.Context) {
 		defer w.bg.Done()
 		defer w.doctoring.Store(false)
 		rep, err := d.doctor(ctx, doctorRun{by: watchParty, retry: retry, loopOwned: w.loopRunning()})
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			w.emit("doctor", "DOCTOR: %v", err)
 			return

@@ -290,7 +290,7 @@ func (a *app) pruneDockerForPressure(dryRun, pressure bool, holds func() string)
 		return r
 	}
 	defer func() { _ = lock.Unlock() }()
-	ctx, cancel := context.WithTimeout(context.Background(), dockerTimeout)
+	ctx, cancel := context.WithTimeout(a.context(), dockerTimeout)
 	defer cancel()
 	r.before, r.err = dockerprune.ReadUsage(ctx, d)
 	r.after = r.before
@@ -414,6 +414,9 @@ func (w *watcher) docker(now time.Time) {
 			return
 		}
 		r := w.pruneDocker(false, w.dockerHolds)
+		if w.context().Err() != nil {
+			return
+		}
 		switch {
 		case r.locked:
 			w.dockerNext = now.Add(goCacheRetry)

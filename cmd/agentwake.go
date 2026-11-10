@@ -26,6 +26,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const agentWakeEvent = "agents.wake"
+
 func (a *app) agentWakeCmd() *cobra.Command {
 	var mode string
 	c := &cobra.Command{
@@ -34,6 +36,12 @@ func (a *app) agentWakeCmd() *cobra.Command {
 		Long: `wake delivers a message to a registered agent without Claude Desktop's
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
+
+For a parked worker, wake persists the message for the supervisor loop.
+The loop selects a fresh worker against current provider pace and gives it
+the task, PR/head, previous wait and event. The old transcript stays parked;
+a failed start retains the task and message for retry. Role holders use
+their separate relay lifecycle.
 
 A session off the roster is reached the same way: a role's holder by its
 name or ids, or any session by its own id (a
@@ -51,9 +59,11 @@ worker wakes nobody.
 
 An SSH worker whose process exited goes on the same way, on or off the
 roster: its host runs the same unit again in the same workspace and
-conversation, and the message is its next turn. A parked one goes on for a
-settled wait too. That takes a claude, codex or agy execution, on the rules
-it ran under, that nobody stopped and no retirement reached; anything else
+conversation, and the message is its next turn. A parked worker instead
+queues its event for a fresh continuation on the provider current capacity
+selects; its old transcript never resumes. An unparked resume takes a claude,
+codex or agy execution, on the rules it ran under, that nobody stopped and
+no retirement reached; anything else
 is refused, and the refusal names its stored transcript.
 For an SSH worker off the roster, its full execution ID selects that worker
 even when a later worker reused its name.
@@ -171,6 +181,19 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err != nil {
 		return err
 	}
+	if !ag.Is(by) {
+		msg = fromLine(replyAddress(st, by), ag.Name, msg)
+	}
+	if !rostered && !roleRun(st, ag.Party) {
+		if i, ok := offRosterPark(st, q); ok {
+			return a.adoptContinuation(by, st.Parks[i], msg)
+		}
+	}
+	// A parked worker relinquished its turn. Persist the event for the loop,
+	// which selects a fresh worker against current provider pace.
+	if rostered && freshPark(st, ag) {
+		return a.queueContinuation(by, ag, msg)
+	}
 	if rostered && ag.Done {
 		if err := a.fatalAdmission(ag.Name, false); err != nil {
 			return err
@@ -180,9 +203,6 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	// an agent on its task keeps getting its own wakes.
 	if h := startsHold(st, a.now); h != nil && rostered && ag.Done {
 		return refused("waking %s refused: it is done and %s", ag.Name, a.startsHeldText(h))
-	}
-	if !ag.Is(by) {
-		msg = fromLine(replyAddress(st, by), ag.Name, msg)
 	}
 	// Reserve the local entry before delivering a wake so retirement cannot
 	// race a turn's startup. A failed delivery restores the previous age.
@@ -562,10 +582,14 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 }
 
 // sendCodex writes msg to the inbox of the codex agent name, started under id;
-// one whose unit ended is refused.
+// one whose unit ended is resumed on its recorded thread when possible, else
+// refused.
 func (a *app) sendCodex(name, id, msg string) error {
 	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, codex.ErrNotRunning) {
+		if rerr := a.resumeCodexUnit(context.Background(), id, name, msg); rerr == nil {
+			return nil
+		}
 		return goneRefusal("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
 	}
 	if err != nil {
