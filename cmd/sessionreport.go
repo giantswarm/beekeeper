@@ -320,14 +320,14 @@ func captureParkWorktree(waits string) (dir, origin, branch, head string) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	return dir, read("remote", gitRemoteGetURL, "origin"), read("symbolic-ref", "--quiet", "--short", workerGitHubHead), read("rev-parse", workerGitHubHead)
+	return dir, read("remote", gitRemoteGetURL, workerGitHubOrigin), read("symbolic-ref", "--quiet", "--short", workerGitHubHead), read("rev-parse", workerGitHubHead)
 }
 
 func verifyParkReportHead(ctx context.Context, p sessionReport, git worktrees.Git, gh github.GH) (string, string) {
 	if p.WorktreeOrigin != "" && p.WorktreeBranch != "" && p.WorktreeHead != "" {
 		git = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			switch {
-			case slices.Equal(args, []string{"remote", gitRemoteGetURL, "origin"}):
+			case slices.Equal(args, []string{"remote", gitRemoteGetURL, workerGitHubOrigin}):
 				return []byte(p.WorktreeOrigin), nil
 			case slices.Equal(args, []string{"symbolic-ref", "--quiet", "--short", workerGitHubHead}):
 				return []byte(p.WorktreeBranch), nil

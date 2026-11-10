@@ -177,8 +177,8 @@ func matchesReviewedRepo(ctx context.Context, dir, repo string) bool {
 		return false
 	}
 	for _, args := range [][]string{
-		{"remote", "get-url", "origin"},
-		{"remote", "get-url", "--push", "origin"},
+		{"remote", "get-url", workerGitHubOrigin},
+		{"remote", "get-url", "--push", workerGitHubOrigin},
 	} {
 		out, err := runGit(ctx, dir, args...)
 		if err == nil && strings.EqualFold(worktrees.RepoOf(strings.TrimSpace(string(out))), repo) {
