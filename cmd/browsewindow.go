@@ -101,7 +101,7 @@ var errPersonAtChrome = errors.New("person at Chrome")
 const awayProbe = "beekeeper browse away"
 
 // awaySample is how long browse watches the person's input before a turn
-// on a Chrome window in their view; presencePoll paces the watch over the
+// on a focused Chrome window; presencePoll paces the watch over the
 // turn. Tests shorten both.
 var (
 	awaySample   = 5 * time.Second
@@ -161,11 +161,9 @@ func personAtChromeErr(why string) error {
 		errPersonAtChrome, why, awayProbe, awayProbe)
 }
 
-// atChrome watches the person's input from now until ctx ends and refuses a
-// turn while they work at Chrome: a Chrome window in their view (focused,
-// focused just before, or on a workspace a monitor shows) and their input within awaySample. With no
-// Chrome window in view it starts the turn without waiting. Not under
-// Hyprland, it watches nothing and refuses nothing.
+// atChrome watches input until ctx ends and refuses only while Chrome has
+// focus now and input is recent. Focus is checked again after sampling.
+// Outside Hyprland it watches nothing and refuses nothing.
 func atChrome(ctx context.Context, quiet time.Duration) (presence, error) {
 	if !hyprRunning() {
 		return presence{}, nil
@@ -174,13 +172,7 @@ func atChrome(ctx context.Context, quiet time.Duration) (presence, error) {
 	if !p.watched {
 		return p, nil
 	}
-	vctx, cancel := context.WithTimeout(ctx, windowWait)
-	why, err := hypr.InView(vctx, chromeCtl)
-	cancel()
-	if err != nil {
-		// A compositor that cannot be asked counts as Chrome in view.
-		why = fmt.Sprintf("the compositor could not be asked where Chrome is (%v)", err)
-	}
+	why := chromeFocus(ctx)
 	if why == "" {
 		return p, nil
 	}
@@ -196,12 +188,27 @@ func atChrome(ctx context.Context, quiet time.Duration) (presence, error) {
 	if !p.typing(time.Now()) {
 		return p, nil
 	}
+	if why = chromeFocus(ctx); why == "" {
+		return p, nil
+	}
 	return p, personAtChromeErr(fmt.Sprintf("%s and %s", why, p.how()))
+}
+
+// chromeFocus keeps an unreadable compositor conservative without treating
+// focus history or a visible background window as current focus.
+func chromeFocus(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, windowWait)
+	defer cancel()
+	why, err := hypr.FocusedChrome(ctx, chromeCtl)
+	if err != nil {
+		return fmt.Sprintf("the compositor could not be asked where Chrome is (%v)", err)
+	}
+	return why
 }
 
 // watch follows the person over the turn until the returned stop: while
 // they type or point, the windows Chrome opens stay on their screen, and
-// once they turn to the shared window's workspace the turn yields, cancel
+// once they focus a Chrome window the turn yields, cancel
 // stops it with errPersonAtChrome and the window goes back at once. stop
 // waits for the watch to end, so the placement is the caller's again.
 func (p *placement) watch(ctx context.Context, pres presence, hold time.Duration, cancel context.CancelCauseFunc) (stop func()) {
@@ -240,7 +247,7 @@ func (p *placement) follow(ctx context.Context, pres presence, hold time.Duratio
 	if !typing {
 		return false
 	}
-	turned, err := p.shown.Turned(ctx, chromeCtl)
+	turned, err := hypr.FocusedChrome(ctx, chromeCtl)
 	if err != nil || turned == "" {
 		return false
 	}

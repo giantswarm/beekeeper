@@ -476,7 +476,9 @@ func opVault(ctx context.Context, env string, args ...string) error {
 func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Handler) sandbox.Handler {
 	waits := &vaultWaits{}
 	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
-		if !a.cfg.Secret.Session {
+		// Moves use desktop app approval, never the cached vault session or
+		// its automatic sign-in/retry path (a move must not run twice).
+		if len(req.Args) > 0 && req.Args[0] == secretMoveOp || !a.cfg.Secret.Session {
 			return call(nil)(ctx, pid, req)
 		}
 		start := time.Now()

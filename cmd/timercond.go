@@ -167,6 +167,11 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 	changed := false
 	kept := st.Timers[:0]
 	for _, t := range st.Timers {
+		if endedTimerTarget(st, t.Wake) {
+			changed = true
+			evs = append(evs, event(watchParty, "timer.cancelled", "#%d: wake target ended: %s", t.ID, t.Wake))
+			continue
+		}
 		if (accept != nil && !accept(t)) || !t.Auto() || t.Due.After(now) {
 			kept = append(kept, t)
 			continue
@@ -329,6 +334,10 @@ func (w *watcher) wakeTimers(ctx context.Context, fires []timerFire) {
 	var deliveries []wakeDelivery
 	for _, f := range fires {
 		original := f
+		if endedTimerTarget(st, f.t.Wake) {
+			immediate = append(immediate, timerWakeOutcome{fire: original, closeCI: true})
+			continue
+		}
 		if strings.EqualFold(f.t.Wake, guideRoleAlias) {
 			h := guideRole.get(st).Holder
 			if h == nil {

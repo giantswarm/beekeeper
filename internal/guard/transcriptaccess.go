@@ -348,7 +348,9 @@ func (a transcriptAccess) candidateDenied(candidate string, dirs []string, recur
 			candidate = strings.ReplaceAll(candidate, "$"+env, home)
 		}
 	}
-	explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, geminiDir) || strings.HasPrefix(candidate, ".omp")
+	explicitHome := slices.ContainsFunc(strings.FieldsFunc(candidate, func(r rune) bool { return r == filepath.Separator }), func(part string) bool {
+		return strings.HasPrefix(part, ".") && part != "." && part != ".."
+	})
 	recurse := recursive || explicitHome && !strings.ContainsAny(candidate, "*?[")
 	for _, dir := range dirs {
 		p := wordPath(candidate, dir)

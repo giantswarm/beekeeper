@@ -385,7 +385,14 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 	if l.fillPreview != nil {
 		st = l.fillPreview
 	}
-	room := l.deliveryFillRoom(l.fillRoom(l.fillCapacity(ctx)), st)
+	capacity, err := l.readFillCapacity(ctx)
+	if err != nil {
+		return err
+	}
+	if l.recording != nil {
+		l.recording.Room = l.fillRoom(capacity)
+	}
+	room := l.deliveryFillRoom(l.fillRoom(capacity), st)
 	if room <= 0 {
 		return nil
 	}

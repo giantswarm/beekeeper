@@ -81,6 +81,7 @@ func (a *app) selfUpdateCmd() *cobra.Command {
 	var check, pluginsOnly, completeProbation, rollback, controller, clearHold, canaryRecorded bool
 	var rollbackReason, version, recoveryTarget, recoverJudge string
 	var stageCanary, canaryBundle, canaryRepo, canaryAllowOrg, canaryRun, canaryScenario, canaryOutput string
+	var allowLoopRegression bool
 	var canaryProject int
 	var canarySiblings []string
 	var every, step time.Duration
@@ -248,7 +249,17 @@ reset. A development build (version dev) is refused.`,
 			ctx := update.WithOptions(cmd.Context(), update.Options{
 				Version: version,
 				Canary: func(ctx context.Context, path, version string) error {
-					return a.canaryRelease(ctx, w, path, version)
+					if err := a.canaryRelease(ctx, w, path, version); err != nil {
+						return err
+					}
+					if allowLoopRegression {
+						return nil
+					}
+					current, err := os.Executable()
+					if err != nil {
+						return fmt.Errorf("locating running release for dry-run comparison: %w", err)
+					}
+					return compareLoopPasses(ctx, current, path, a.cfgPath)
 				},
 				Health: func(ctx context.Context, path, _ string) error {
 					return probationHealth(ctx, a.cfgPath, path)
@@ -313,6 +324,7 @@ reset. A development build (version dev) is refused.`,
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
 	c.Flags().BoolVar(&clearHold, "clear-recovery-hold", false, "lift the hold of a failed recovery once its cause is dealt with")
+	c.Flags().BoolVar(&allowLoopRegression, "allow-loop-regression", false, "install despite an intentional dry-run transition regression (signature and canary checks still apply)")
 	c.Flags().StringVar(&stageCanary, "stage-canary", "", "run a staged release candidate through the isolated sandbox canary and emit canary evidence")
 	c.Flags().StringVar(&canaryBundle, "canary-bundle", "", "cosign bundle to verify against the staged candidate before running the canary")
 	c.Flags().BoolVar(&canaryRecorded, "canary-recorded", false, "run the staged canary against the isolated recorded fixture origin")
