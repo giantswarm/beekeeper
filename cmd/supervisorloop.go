@@ -1555,6 +1555,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 				w.Issues = append(w.Issues, record.Issue)
 			}
 		}
+		if len(w.Issues) == 0 && ag.Done {
+			if served := loopTaskServes(ag, w.ParkedOn); served != "" {
+				w.Issues = append(w.Issues, served)
+			}
+		}
 		if !ag.Done {
 			w.Mentions = namedRefs(ag.Task, a.cfg.Board.Owner)
 		}
@@ -1935,6 +1940,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	l.lifecyclePhase("plan and record heartbeat")
+	in.ClosedIssues = l.closedIssues(in.Now)
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if err := ctx.Err(); err != nil {
 		return err
@@ -2117,7 +2123,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		otherActs  []superloop.Action
 	)
 	for _, act := range actions {
-		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
+		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone || act.Kind == superloop.KindProgress {
 			planned[act.Agent] = true
 		}
 		switch act.Kind {

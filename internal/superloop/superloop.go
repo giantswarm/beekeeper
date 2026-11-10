@@ -1124,11 +1124,11 @@ func Plan(in Input) []Action {
 		return ""
 	}
 	progress := func(e Event) bool {
-		key := eventKey(KindProgress, e)
-		if l.has(key) {
+		key := progressKey(e)
+		if l.has(key) || l.has(eventKey(KindProgress, e)) {
 			return true
 		}
-		if !ownDeliveryProblem(in, workers[e.Agent], e) {
+		if !ownDeliveryProblem(in, l, e) {
 			return false
 		}
 		ev := e
