@@ -139,7 +139,7 @@ func TestBudgetGateFallsBackWhenProbeLockIsBusy(t *testing.T) {
 		refuse, savedLow, expired bool
 	}{
 		{name: "healthy after reset", savedLow: true, expired: true},
-		{name: "refused", refuse: true},
+		{name: "GraphQL refusal", refuse: true},
 		{name: "known low window", savedLow: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
