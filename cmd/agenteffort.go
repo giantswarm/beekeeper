@@ -87,7 +87,7 @@ func (a *app) selectedEffort(name, kind, harness, model, explicit, choice string
 			return "", err
 		}
 	}
-	if harness == "codex" && level != "" {
+	if harness == codex.Harness && level != "" {
 		if err := codex.ValidateEffort(filepath.Join(filepath.Dir(a.cfg.Codex.ConfigFile), "models_cache.json"), model, level); err != nil {
 			return "", usageErr("%v", err)
 		}

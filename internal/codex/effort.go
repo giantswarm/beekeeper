@@ -39,7 +39,7 @@ func ValidateEffort(cache, model, level string) error {
 			}
 			levels = append(levels, l.Effort)
 		}
-		return fmt.Errorf("Codex model %s does not support effort %q (supported: %s)", model, level, strings.Join(levels, ", "))
+		return fmt.Errorf("codex model %s does not support effort %q (supported: %s)", model, level, strings.Join(levels, ", "))
 	}
-	return fmt.Errorf("Codex model %s is absent from the model catalog; refresh it before setting effort", model)
+	return fmt.Errorf("codex model %s is absent from the model catalog; refresh it before setting effort", model)
 }

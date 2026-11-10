@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -162,16 +163,16 @@ func TestCapacityEffortAfterHarnessSelection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(`{"models":[{"slug":"test-model","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Harness: "codex", Kind: taskKindReview, Effort: testEffortLow}}
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Harness: codex.Harness, Kind: taskKindReview, Effort: testEffortLow}}
 	for _, tc := range []struct {
 		name, kind, harness, explicit, choice, want string
 		invalid                                     bool
 	}{
-		{"worker choice", workerRole, "codex", "", testEffortHigh, testEffortHigh, false},
-		{"review rule", taskKindReview, "codex", "", testEffortHigh, testEffortLow, false},
-		{"explicit override", taskKindReview, "codex", testEffortHigh, testEffortLow, testEffortHigh, false},
+		{"worker choice", workerRole, codex.Harness, "", testEffortHigh, testEffortHigh, false},
+		{"review rule", taskKindReview, codex.Harness, "", testEffortHigh, testEffortLow, false},
+		{"explicit override", taskKindReview, codex.Harness, testEffortHigh, testEffortLow, testEffortHigh, false},
 		{"agy after codex", taskKindReview, harnessAgy, "", "", "", false},
-		{"unsupported model effort", workerRole, "codex", "", testEffortMax, "", true},
+		{"unsupported model effort", workerRole, codex.Harness, "", testEffortMax, "", true},
 		{"explicit agy refusal", workerRole, harnessAgy, testEffortHigh, "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,7 +185,7 @@ func TestCapacityEffortAfterHarnessSelection(t *testing.T) {
 }
 
 func TestForcedChoiceRetainsEffort(t *testing.T) {
-	v := &capacityView{Choice: &choiceView{Candidates: []choiceCandidate{{Harness: "codex", Model: "test-model", Effort: testEffortHigh}}}}
+	v := &capacityView{Choice: &choiceView{Candidates: []choiceCandidate{{Harness: codex.Harness, Model: "test-model", Effort: testEffortHigh}}}}
 	ch, err := pickAutoChoice(v, true)
 	if err != nil || ch.Effort != testEffortHigh {
 		t.Fatalf("choice=%+v err=%v", ch, err)

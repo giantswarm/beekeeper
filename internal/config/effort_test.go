@@ -79,10 +79,10 @@ const (
 )
 
 func TestHarnessScopedEffort(t *testing.T) {
-	a := Agents{Models: []AgentModelRule{{Match: ".*", Harness: "codex", Effort: testHighEffort}}}
-	for _, harness := range []string{"codex", "agy", "claude", ""} {
+	a := Agents{Models: []AgentModelRule{{Match: ".*", Harness: CodexHarness, Effort: testHighEffort}}}
+	for _, harness := range []string{CodexHarness, AgyHarness, "claude", ""} {
 		want := ""
-		if harness == "codex" {
+		if harness == CodexHarness {
 			want = testHighEffort
 		}
 		if got := a.EffortFor("worker", testWorkerKind, harness); got != want {
@@ -97,7 +97,7 @@ func TestCapacityChoiceEffortConfiguration(t *testing.T) {
 		harness, effort string
 		invalid         bool
 	}{
-		{"codex", testHighEffort, false}, {"agy", "", false}, {"agy", testHighEffort, true}, {"codex", "typo", true},
+		{CodexHarness, testHighEffort, false}, {AgyHarness, "", false}, {AgyHarness, testHighEffort, true}, {CodexHarness, "invalid-selector", true},
 	} {
 		raw := fmt.Sprintf("capacity:\n  providers:\n    %s: {}\n  choices:\n    - {harness: %s, model: test-model, effort: %q}\n", tc.harness, tc.harness, tc.effort)
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {

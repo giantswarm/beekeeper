@@ -549,9 +549,10 @@ func TestCapacityPickPrioritizesBelowHalfPace(t *testing.T) {
 }
 
 func TestAutoStartChoiceEffortDoesNotReachAgy(t *testing.T) {
-	r := newPickRig(t, `    - {harness: codex, model: gpt-x, effort: high}
+	r := newPickRig(t, subscriptionChoices)
+	r.choices = `    - {harness: codex, model: gpt-x, effort: high}
     - {harness: agy, model: gemini-x}
-`)
+`
 	r.providersExtra = "    agy:\n      ceiling: 2\n      command: [read-agy]\n"
 	r.configure("")
 	if _, err := runGit(t.Context(), r.dir, "init", "-b", "main"); err != nil {
@@ -569,7 +570,7 @@ func TestAutoStartChoiceEffortDoesNotReachAgy(t *testing.T) {
 	for _, excluded := range []string{harnessAgy, codex.Harness} {
 		a, out := r.app(false)
 		c := a.agentStartCmd()
-		c.SetArgs([]string{"Picked", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag, "--exclude", excluded})
+		c.SetArgs([]string{"EffortChoice", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag, "--exclude", excluded})
 		if err := c.Execute(); err != nil {
 			t.Fatalf("excluding %s: %v", excluded, err)
 		}

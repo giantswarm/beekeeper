@@ -4209,10 +4209,10 @@ func (c *Config) validateEach(report func(error)) {
 		}
 	}
 	for i, r := range c.Agents.Models {
-		if r.Harness != "" && !slices.Contains([]string{"claude", "codex", "agy", "omp"}, r.Harness) {
+		if r.Harness != "" && !slices.Contains([]string{ClaudeHarness, CodexHarness, AgyHarness, "omp"}, r.Harness) {
 			report(fmt.Errorf("agents.models[%d].harness: unknown harness %q", i, r.Harness))
 		}
-		if !ValidEffort(strings.TrimSpace(r.Effort)) || r.Harness == "agy" && r.Effort != "" {
+		if !ValidEffort(strings.TrimSpace(r.Effort)) || r.Harness == AgyHarness && r.Effort != "" {
 			report(fmt.Errorf("agents.models[%d].effort: invalid effort %q (low, medium, high, xhigh, max)", i, r.Effort))
 		}
 		if _, err := regexp.Compile(r.Match); err != nil {
@@ -4610,7 +4610,7 @@ func (c *Config) validateEach(report func(error)) {
 		p.validateNamedEach("capacity.providers."+name, report)
 	}
 	for i, ch := range c.Capacity.Choices {
-		if !ValidEffort(strings.TrimSpace(ch.Effort)) || ch.Harness == "agy" && ch.Effort != "" {
+		if !ValidEffort(strings.TrimSpace(ch.Effort)) || ch.Harness == AgyHarness && ch.Effort != "" {
 			report(fmt.Errorf("capacity.choices[%d].effort: unsupported effort %q for %s", i, ch.Effort, ch.Harness))
 		}
 		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {

@@ -207,6 +207,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		serves: testIssueRef,
 		dir:    root,
 		model:  testCodexModel,
+		effort: testEffortHigh,
 	}
 	if err := a.startCodexAgent(context.Background(), sp); err != nil {
 		t.Fatalf("startCodexAgent: %v", err)
@@ -245,8 +246,16 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	}
 	if st, rerr := store.Read(); rerr != nil {
 		t.Fatal(rerr)
-	} else if len(st.Starts) != 1 || st.Starts[0].Conversation != "thread-1234" {
+	} else if len(st.Starts) != 1 || st.Starts[0].Conversation != "thread-1234" || st.Starts[0].Effort != testEffortHigh {
 		t.Errorf("Starts = %+v, want Conversation=thread-1234", st.Starts)
+	}
+
+	events, err := store.Events(0, func(e state.Event) bool { return e.Verb == verbStart })
+	if err != nil || len(events) != 1 || !strings.Contains(events[0].Detail, "effort "+testEffortHigh) {
+		t.Fatalf("Codex effort event: %+v, %v", events, err)
+	}
+	if !strings.Contains(out.String(), `model_reasoning_effort="high"`) {
+		t.Fatalf("Codex effort launch missing: %s", &out)
 	}
 
 	// Verify isolated CODEX_HOME files were generated.
