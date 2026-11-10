@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const parkVerificationUnavailable = "verification unavailable"
+
 const (
 	parkTask   = "beekeeper#86: agents park"
 	resumer    = "the supervisor"
@@ -469,7 +471,7 @@ func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 	t.Cleanup(func() { parkReviewHead = was })
 	for _, head := range []string{"", loopHead} {
 		w := parkingWatch(t, map[string]string{refOne: github.Open})
-		parkReviewHead = func(string) (string, string) { return head, "verification unavailable" }
+		parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 		if err := park(t, w, "--on", refOne, "waiting"); err != nil {
 			t.Fatal(err)
 		}
@@ -653,7 +655,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	t.Cleanup(func() { parkReviewHead = was })
 	for _, head := range []string{"", loopHead} {
 		w := parkingWatch(t, map[string]string{refOne: github.Open})
-		parkReviewHead = func(string) (string, string) { return head, "verification unavailable" }
+		parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 		line, err := w.park(offSession, refOne, "waiting")
 		if err != nil {
 			t.Fatal(err)
@@ -835,7 +837,7 @@ func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open})
 	oldHead, oldWorktree := parkReviewHead, parkWorktree
 	t.Cleanup(func() { parkReviewHead, parkWorktree = oldHead, oldWorktree })
-	parkReviewHead = func(string) (string, string) { return "", "verification unavailable" }
+	parkReviewHead = func(string) (string, string) { return "", parkVerificationUnavailable }
 	parkWorktree = func(string) string { return pendingReviewWorktree }
 	if err := park(t, w, "--on", refOne, "--post-merge", "prove", deskReviewWait); err != nil {
 		t.Fatal(err)

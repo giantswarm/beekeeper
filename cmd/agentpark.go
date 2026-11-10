@@ -252,7 +252,7 @@ agents wake: its task is that message's first line.`,
 				return err
 			}
 			if a.json {
-				return a.printJSON(map[string]string{"message": line})
+				return a.printJSON(map[string]string{paramMessage: line})
 			}
 			_, err = fmt.Fprintln(a.out, line)
 			return err
