@@ -430,6 +430,12 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 			}
 		})
 	}
+	t.Run("behind without strict protection", func(t *testing.T) {
+		calls, err := adminMergeCall(t, generalGrant, green, 2, true)
+		if err != nil || len(calls) != 1 {
+			t.Fatalf("behind merge refused: %v, calls %v", err, calls)
+		}
+	})
 	with := func(change func(*superloop.Pull)) superloop.Pull {
 		p := green
 		change(&p)
@@ -441,15 +447,14 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 		behind    int
 		authority bool
 	}{
-		"head moved":         {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Head = "def4567" }), authority: true},
-		"checks failing":     {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Green = false }), authority: true},
-		"draft":              {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Draft = true }), authority: true},
-		"no go":              {words: generalGrant, pull: green},
-		"behind state":       {words: generalGrant, pull: with(func(p *superloop.Pull) { p.MergeState = mergeStateBehind }), authority: true},
-		"blocked and behind": {words: generalGrant, pull: green, behind: 2, authority: true},
-		"conflicting":        {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Mergeable = mergeableConflicting }), authority: true},
-		"review refused":     {words: generalGrant, pull: with(func(p *superloop.Pull) { p.ReviewDecision = "CHANGES_REQUESTED" }), authority: true},
-		"no base":            {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Base = "" }), authority: true},
+		"head moved":     {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Head = "def4567" }), authority: true},
+		"checks failing": {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Green = false }), authority: true},
+		"draft":          {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Draft = true }), authority: true},
+		"no go":          {words: generalGrant, pull: green},
+		"behind state":   {words: generalGrant, pull: with(func(p *superloop.Pull) { p.MergeState = mergeStateBehind }), authority: true},
+		"conflicting":    {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Mergeable = mergeableConflicting }), authority: true},
+		"review refused": {words: generalGrant, pull: with(func(p *superloop.Pull) { p.ReviewDecision = "CHANGES_REQUESTED" }), authority: true},
+		"no base":        {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Base = "" }), authority: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls, err := adminMergeCall(t, tc.words, tc.pull, tc.behind, tc.authority)

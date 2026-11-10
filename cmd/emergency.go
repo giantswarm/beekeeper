@@ -340,15 +340,6 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	if why := adminMergeBlock(p); why != "" {
 		return refused("admin merge of %s: %s", ref, why)
 	}
-	// GitHub reports BLOCKED, not BEHIND, while a review is also missing, so
-	// only the comparison says whether the head has its base.
-	behind, err := readReviewedBehind(ctx, p)
-	if err != nil {
-		return err
-	}
-	if behind != 0 {
-		return refused("admin merge of %s: %s is %d commits behind its base; update the branch, then have the new head reviewed", ref, shortSHA(p.Head), behind)
-	}
 	why, _, err := a.checkMergeHeadAuthority(ctx, st, p, p.Head)
 	if err != nil {
 		return err

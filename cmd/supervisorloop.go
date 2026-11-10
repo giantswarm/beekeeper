@@ -170,8 +170,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 }
 
 // readBaseMerge reads whether the approval of approved covers p's head: it
-// only merges its base into approved, resolving the merge's conflicts or
-// not, or rebases approved onto it (github.ApprovalCovers).
+// only merges its base into approved with the reviewed patch unchanged.
 var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
 	r, ok := parseRef(p.Ref)
 	if !ok || p.Base == "" {
@@ -179,7 +178,7 @@ var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	only, _, err := github.ApprovalCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	only, _, err := github.BaseMergeCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
 	return only, err
 }
 
