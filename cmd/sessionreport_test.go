@@ -16,7 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-func reportFixture(t *testing.T) *app {
+func sessionReportFixture(t *testing.T) *app {
 	t.Helper()
 	a, _ := noteApp(t)
 	a.queueReports = true
@@ -50,7 +50,7 @@ func reportCommand(t *testing.T, a *app, c *cobra.Command, args ...string) {
 // This deliberately holds the actual exclusive file lock for the full two
 // minutes from the acceptance criterion. No writer can rescue these commands.
 func TestSessionReportsAndSnapshotsWithTwoMinuteWriter(t *testing.T) {
-	a := reportFixture(t)
+	a := sessionReportFixture(t)
 	lock := flock.New(filepath.Join(a.store.Dir(), "state.lock"))
 	if err := lock.Lock(); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestSessionReportsAndSnapshotsWithTwoMinuteWriter(t *testing.T) {
 }
 
 func TestSessionReportReceiptSurvivesUnremovedMessage(t *testing.T) {
-	a := reportFixture(t)
+	a := sessionReportFixture(t)
 	reportCommand(t, a, a.agentsCmd(), "problem", midtaskFinding)
 	messages, err := state.PendingReports(a.store)
 	if err != nil || len(messages) != 1 {
@@ -156,7 +156,7 @@ func TestSessionReportReceiptSurvivesUnremovedMessage(t *testing.T) {
 }
 
 func TestDelayedReportCannotCompleteAnotherAssignment(t *testing.T) {
-	a := reportFixture(t)
+	a := sessionReportFixture(t)
 	reportCommand(t, a, a.agentsCmd(), "idle", "--done", "--report", "fixture done", "--problem", "none")
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Task = "replacement task"

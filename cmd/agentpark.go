@@ -250,8 +250,22 @@ agents wake: its task is that message's first line.`,
 				// never is the published one, nor does the host read GitHub.
 				return a.remoteControl(cmd.Context(), "park", executionPark{External: external, On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: declaration})
 			}
-			if a.queueReports {
-				return a.submitReport(sessionReport{Kind: "park", By: me, On: on, Waits: waits, External: external, PostMerge: remaining, Worktree: reportWorktree()})
+			_, isNote := parkNote(on)
+			_, _, central := parkCentralNote(on)
+			if a.queueReports && !central && (!isNote || !a.centralNotesOn()) {
+				dir, origin, branch, head := captureParkWorktree(waits)
+				return a.submitReport(sessionReport{
+					Kind:           "park",
+					By:             me,
+					On:             on,
+					Waits:          waits,
+					External:       external,
+					PostMerge:      remaining,
+					Worktree:       dir,
+					WorktreeOrigin: origin,
+					WorktreeBranch: branch,
+					WorktreeHead:   head,
+				})
 			}
 			line, err := a.parkWithWait(me, on, waits, external, remaining...)
 			if err != nil {

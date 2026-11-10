@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 const reportReferencePrefix = "report:"
@@ -18,21 +19,24 @@ const reportReferencePrefix = "report:"
 // sessionReport contains command inputs, never a patch to a stale snapshot.
 // Assignment identity keeps a delayed completion from ending a later task.
 type sessionReport struct {
-	Kind         string
-	By           state.Party
-	At           time.Time
-	AssignedAt   time.Time
-	Task         string
-	Finding      string
-	Text         string
-	Problems     []string
-	Finished     bool
-	On           string
-	Waits        string
-	External     bool
-	PostMerge    []string
-	Worktree     string
-	RefKind      string
+	Kind           string
+	By             state.Party
+	At             time.Time
+	AssignedAt     time.Time
+	Task           string
+	Finding        string
+	Text           string
+	Problems       []string
+	Finished       bool
+	On             string
+	Waits          string
+	External       bool
+	PostMerge      []string
+	Worktree       string
+	WorktreeOrigin string
+	WorktreeBranch string
+	WorktreeHead   string
+	RefKind        string
 	ReviewHead   string
 	ReviewReason string
 	Session      state.Party
@@ -151,7 +155,7 @@ func (a *app) consumeReports(ctx context.Context) error {
 			p.RefKind, prepareErr = resolveParkRef(ctx, p.On)
 			if prepareErr == nil && isDeskReviewWait(p.Waits) && p.Worktree != "" {
 				verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				p.ReviewHead, p.ReviewReason = publishedParkVerification(verifyCtx, p.On, p.Worktree, runGit, github.RunGH)
+				p.ReviewHead, p.ReviewReason = verifyParkReportHead(verifyCtx, p, runGit, github.RunGH)
 				cancel()
 			}
 		}
@@ -286,4 +290,45 @@ func (a *app) prepareNoteReport(ctx context.Context, p *sessionReport) error {
 func reportWorktree() string {
 	dir, _ := os.Getwd()
 	return dir
+}
+
+// captureParkWorktree records the local checkout state when the session invokes
+// agents park for desk review, before the caller leaves or switches the branch.
+// Network verification against GitHub remains in consumeReports.
+func captureParkWorktree(waits string) (dir, origin, branch, head string) {
+	dir = reportWorktree()
+	if !isDeskReviewWait(waits) {
+		return dir, "", "", ""
+	}
+	if root := parkWorktree("."); root != "" {
+		dir = root
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	read := func(args ...string) string {
+		out, err := runGit(ctx, dir, args...)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	return dir, read("remote", "get-url", "origin"), read("symbolic-ref", "--quiet", "--short", "HEAD"), read("rev-parse", "HEAD")
+}
+
+func verifyParkReportHead(ctx context.Context, p sessionReport, git worktrees.Git, gh github.GH) (string, string) {
+	if p.WorktreeOrigin != "" && p.WorktreeBranch != "" && p.WorktreeHead != "" {
+		git = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			switch {
+			case slices.Equal(args, []string{"remote", "get-url", "origin"}):
+				return []byte(p.WorktreeOrigin), nil
+			case slices.Equal(args, []string{"symbolic-ref", "--quiet", "--short", "HEAD"}):
+				return []byte(p.WorktreeBranch), nil
+			case slices.Equal(args, []string{"rev-parse", "HEAD"}):
+				return []byte(p.WorktreeHead), nil
+			default:
+				return nil, fmt.Errorf("unexpected git arguments %v", args)
+			}
+		}
+	}
+	return publishedParkVerification(ctx, p.On, p.Worktree, git, gh)
 }
