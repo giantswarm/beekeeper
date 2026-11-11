@@ -132,7 +132,7 @@ func budgetDevctl() (string, error) {
 	if path, err := exec.LookPath("devctl"); err == nil {
 		return path, nil
 	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
@@ -173,7 +173,7 @@ func budgetEnv(env []string) []string {
 	for _, v := range env {
 		name, _, _ := strings.Cut(v, "=")
 		switch name {
-		case "GH_TOKEN", "GITHUB_TOKEN", "GH_REPO", "DEVCTL_AUTH_EXEC_CHAIN", DevctlSkipVersionCheckEnv:
+		case "GH_TOKEN", "GITHUB_TOKEN", ghRepoEnv, "DEVCTL_AUTH_EXEC_CHAIN", DevctlSkipVersionCheckEnv:
 		default:
 			out = append(out, v)
 		}
@@ -183,7 +183,7 @@ func budgetEnv(env []string) []string {
 
 // Skip the devctl gh link; the personal route must reach the stored login.
 func budgetGH() (string, error) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
