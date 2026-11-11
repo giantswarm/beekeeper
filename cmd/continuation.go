@@ -225,7 +225,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			if err != nil {
 				return err
 			}
-			if err := l.incidentStart(ref); err != nil {
+			if err := l.repositoryStart(ref); err != nil {
 				continue
 			}
 			args := []string{agentsName, agentStartName, name, brief}
