@@ -96,7 +96,9 @@ func TestRepositoryFileChangesErrorsAndAbsence(t *testing.T) {
 			return fileResponse(200, `"created"`, ""), nil
 		}
 	}, func() time.Time { return now })
-	read := func() ([]byte, error) { return rawFile(t.Context(), cache.call, cacheTestRepo, cacheTestFile, mainBranch) }
+	read := func() ([]byte, error) {
+		return rawFile(t.Context(), cache.call, cacheTestRepo, cacheTestFile, mainBranch)
+	}
 	for _, want := range []string{"first-body", "second-body"} {
 		body, err := read()
 		if err != nil || string(body) != want {
