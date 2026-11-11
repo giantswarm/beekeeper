@@ -140,7 +140,7 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 			var out bytes.Buffer
 			c := New()
 			c.SetOut(&out)
-			c.SetArgs([]string{workerGitHubConfigOption, path, "fatal", "--state-dir", dir, "scan"})
+			c.SetArgs([]string{workerGitHubConfigOption, path, "fatal", fatalStateDirOption, dir, "scan"})
 			if err := c.ExecuteContext(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -379,7 +379,7 @@ func TestFatalMalformedConfigStillDetectsWithoutSupervisor(t *testing.T) {
 	var out bytes.Buffer
 	c := New()
 	c.SetOut(&out)
-	c.SetArgs([]string{workerGitHubConfigOption, path, "fatal", "--state-dir", dir, executionStatus})
+	c.SetArgs([]string{workerGitHubConfigOption, path, "fatal", fatalStateDirOption, dir, executionStatus})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -546,8 +546,8 @@ func TestFatalMainRecoversLaterHeadAfterGateTimeout(t *testing.T) {
 		return `{"total_count":2,"check_runs":[{"conclusion":"success"},{"conclusion":"skipped"}]}`, "", 0, nil
 	}
 	q.Observe(fatalMain(t.Context(), "example/tool", "/config.yaml"), a.now)
-	if err := q.Barrier("ordinary"); err != nil {
-		t.Fatal("green later HEAD did not resume admission", err)
+	if _, held := q.MainOutage("example/tool"); held {
+		t.Fatal("green later HEAD did not release publication barrier")
 	}
 }
 
@@ -563,35 +563,27 @@ func TestFatalMainRespectsBudgetRefusal(t *testing.T) {
 	}
 }
 
-func TestEmergencyStartOverridesOnlyExhaustedMainWithActiveGrant(t *testing.T) {
+func TestFatalMainStartsNeedNoEmergencyGrant(t *testing.T) {
 	a := emergencyApp(t)
-	if err := emergencyCall(a, "on", emergencyReasonFlag, "Repair main.", untilFlag, "10m"); err != nil {
-		t.Fatal(err)
-	}
 	q := fatal.Queue{}
 	q.Observe(fatal.Observation{ID: fatalTestMainIncident, Failed: true}, a.now)
-	for _, tc := range []struct {
-		id                 string
-		attempts           int
-		emergency, allowed bool
-	}{
-		{fatalTestMainIncident, 3, false, false},
-		{fatalTestMainIncident, 2, true, false},
-		{"guard:codex", 3, true, false},
-		{fatalTestMainIncident, 3, true, true},
-	} {
-		q.Incidents[0].ID, q.Incidents[0].Attempts = tc.id, tc.attempts
+	for _, attempts := range []int{0, 2, 3} {
+		q.Incidents[0].Attempts = attempts
 		if err := q.Save(a.store.Dir()); err != nil {
 			t.Fatal(err)
 		}
-		a.emergencyStart = tc.emergency
-		if err := a.fatalAdmission("repair", false); (err == nil) != tc.allowed {
-			t.Fatalf("%+v: %v", tc, err)
+		if err := a.fatalAdmission("ordinary", false); err != nil {
+			t.Fatalf("main with %d attempts blocked start: %v", attempts, err)
 		}
 	}
-	// Revalidate at admission even if authorization expired during setup.
-	a.now = a.now.Add(time.Hour)
-	if err := a.fatalAdmission("repair", false); err == nil {
-		t.Fatal("expired grant bypassed outage")
+	q.Observe(fatal.Observation{ID: "guard:codex", Failed: true}, a.now)
+	if err := q.Save(a.store.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Repair main.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.fatalAdmission("ordinary", false); err == nil {
+		t.Fatal("emergency grant bypassed infrastructure outage")
 	}
 }

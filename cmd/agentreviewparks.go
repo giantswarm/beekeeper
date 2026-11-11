@@ -96,6 +96,7 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		if head == "" {
 			continue
 		}
+		verified := false
 		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			for i := range current.Agents {
 				a := &current.Agents[i]
@@ -104,11 +105,17 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 				}
 				a.Park.ReviewHead, a.Park.Worktree, a.Park.RefKind = head, dir, github.RefPullRequest
 				recordAgentReviewPark(current, *a)
+				verified = true
 				return []state.Event{event(loopParty, "agents.review-verified", "%s: review request verified for %s at pushed HEAD %s", a.Name, p.On, head)}, nil
 			}
 			return nil, nil
 		}); err != nil {
 			return err
+		}
+		if verified {
+			if err := l.a.recordFatalRepair(ag.Name, p.On); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

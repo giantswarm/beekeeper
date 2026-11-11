@@ -728,6 +728,9 @@ func (g *gateRun) step() (string, error) {
 			return why, err
 		}
 	}
+	if err := g.fatalPublicationBarrier(); err != nil {
+		return "", g.refuse("%v", err)
+	}
 	var q merge.Lane
 	var hold state.Hold
 	var held bool
@@ -1866,6 +1869,9 @@ func (g *gateRun) runMerge() error {
 	}
 	if err := g.awaitReleases(); err != nil {
 		return err
+	}
+	if err := g.fatalPublicationBarrier(); err != nil {
+		return g.refuseRunning("%v", err)
 	}
 	base, err := g.mergeFiles()
 	if err != nil {
