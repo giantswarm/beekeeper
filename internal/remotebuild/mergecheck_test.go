@@ -129,15 +129,17 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 	tools := t.TempDir()
 	shim := strings.ReplaceAll(lintShim, "/work/tools", tools)
 	installed := filepath.Join(tools, "v2.14.0", "golangci-lint")
-	lint := "#!/bin/sh\necho \"linted by $0 $*\"\n"
-	install := "#!/bin/sh\n[ \"$*\" = 'install " + GolangCILintModule + "' ] || exit 1\nmkdir -p \"$GOBIN\" && printf '%s' '" + lint + "' > \"$GOBIN/golangci-lint\" && chmod 700 \"$GOBIN/golangci-lint\"\n"
+	lint := "#!/bin/sh\necho \"linted by $0 $* cache=$GOLANGCI_LINT_CACHE\"\n"
+	// The install must not touch the image's GOPATH, which the builder's
+	// non-root user cannot write.
+	install := "#!/bin/sh\n[ \"$*\" = 'install " + GolangCILintModule + "' ] && [ \"$GOPATH\" = '" + filepath.Join(tools, "gopath") + "' ] && [ -z \"$GOFLAGS\" ] || exit 1\nmkdir -p \"$GOBIN\" && printf '%s' '" + lint + "' > \"$GOBIN/golangci-lint\" && chmod 700 \"$GOBIN/golangci-lint\"\n"
 	for _, tc := range []struct {
 		name, image, goScript, want string
 		rc                          int
 	}{
-		{name: "image linter", image: lint, want: "linted by IMAGE/golangci-lint run ./..."},
-		{name: "install", goScript: install, want: "linted by " + installed + " run ./..."},
-		{name: "already installed", want: "linted by " + installed + " run ./..."},
+		{name: "image linter", image: lint, want: "linted by IMAGE/golangci-lint run ./... cache=" + filepath.Join(tools, "lint-cache")},
+		{name: "install", goScript: install, want: "linted by " + installed + " run ./... cache=" + filepath.Join(tools, "lint-cache")},
+		{name: "already installed", want: "linted by " + installed + " run ./... cache=" + filepath.Join(tools, "lint-cache")},
 		{name: "install fails", goScript: "#!/bin/sh\nexit 1\n", want: "installing " + GolangCILintModule + " failed", rc: 125},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,7 +159,7 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 			}
 			var out bytes.Buffer
 			c := exec.CommandContext(t.Context(), bash, "-c", shim, "golangci-lint", GolangCILintModule, "run", "./...") //nolint:gosec // test-owned shim and fixtures
-			c.Env = []string{"PATH=" + image + ":/usr/bin:/bin"}
+			c.Env = []string{"PATH=" + image + ":/usr/bin:/bin", "GOPATH=/read-only-image-gopath", "GOFLAGS=-mod=mod"}
 			c.Stdout, c.Stderr = &out, &out
 			rc := 0
 			var exit *exec.ExitError

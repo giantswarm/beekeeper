@@ -103,8 +103,12 @@ const GolangCILintModule = "github.com/golangci/golangci-lint/v2/cmd/golangci-li
 
 // lintShim runs the image's golangci-lint, or installs GolangCILintModule into
 // the pod's workspace first. A failed install exits 125, a checker environment
-// failure, so it is never read as lint findings.
-const lintShim = `lint=golangci-lint
+// failure, so it is never read as lint findings. The builder runs as a
+// non-root user, so an image's GOPATH (where Go keeps its checksum database
+// cache) and the user's cache directory may be read-only: both move into the
+// workspace.
+const lintShim = `export GOPATH=/work/tools/gopath GOLANGCI_LINT_CACHE=${GOLANGCI_LINT_CACHE:-/work/tools/lint-cache}
+lint=golangci-lint
 if ! command -v golangci-lint >/dev/null 2>&1; then
  bin=/work/tools/${1##*@}
  if [ ! -x "$bin/golangci-lint" ]; then
