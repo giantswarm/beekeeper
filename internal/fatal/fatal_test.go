@@ -1,8 +1,10 @@
 package fatal
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,5 +112,34 @@ func TestFatalFlappingProbeKeepsItsRepairOwner(t *testing.T) {
 	}
 	if next := q.Reserve(now.Add(time.Hour), func(string) bool { return false }); next == nil || next.Attempts != 1 {
 		t.Fatal("later episode inherited exhausted budget")
+	}
+}
+
+func TestMainScopeSurvivesLegacyJournalAndUnknownProbe(t *testing.T) {
+	q := Queue{Incidents: []Incident{{ID: "main:example/repo", Owner: "repair", Attempts: 3}}}
+	if err := q.Barrier("ordinary"); err != nil {
+		t.Fatal(err)
+	}
+	q.Observe(Observation{ID: "main:example/repo", Unknown: true}, time.Now())
+	if _, held := q.MainOutage("EXAMPLE/REPO"); !held {
+		t.Fatal("unknown cleared publication barrier")
+	}
+	if _, held := q.MainOutage("other/repo"); held {
+		t.Fatal("main outage leaked to another repository")
+	}
+	raw, err := json.Marshal(q)
+	if err != nil || !strings.Contains(string(raw), `"scope":"default-branch merges and releases in example/repo"`) {
+		t.Fatalf("scope absent: %s %v", raw, err)
+	}
+	q.Observe(Observation{ID: "guard:codex", Failed: true}, time.Now())
+	if err := q.Barrier("repair"); err == nil || !strings.Contains(err.Error(), "all ordinary worker starts") {
+		t.Fatalf("main repair bypassed infrastructure outage: %v", err)
+	}
+	q.Observe(Observation{ID: "main:example/repo"}, time.Now())
+	if _, held := q.MainOutage("example/repo"); held {
+		t.Fatal("healthy probe did not clear repository barrier")
+	}
+	if err := q.Barrier("ordinary"); err == nil {
+		t.Fatal("main recovery cleared unrelated guard outage")
 	}
 }

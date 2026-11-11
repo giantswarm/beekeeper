@@ -563,35 +563,27 @@ func TestFatalMainRespectsBudgetRefusal(t *testing.T) {
 	}
 }
 
-func TestEmergencyStartOverridesOnlyExhaustedMainWithActiveGrant(t *testing.T) {
+func TestFatalMainStartsNeedNoEmergencyGrant(t *testing.T) {
 	a := emergencyApp(t)
-	if err := emergencyCall(a, "on", emergencyReasonFlag, "Repair main.", untilFlag, "10m"); err != nil {
-		t.Fatal(err)
-	}
 	q := fatal.Queue{}
 	q.Observe(fatal.Observation{ID: fatalTestMainIncident, Failed: true}, a.now)
-	for _, tc := range []struct {
-		id                 string
-		attempts           int
-		emergency, allowed bool
-	}{
-		{fatalTestMainIncident, 3, false, false},
-		{fatalTestMainIncident, 2, true, false},
-		{"guard:codex", 3, true, false},
-		{fatalTestMainIncident, 3, true, true},
-	} {
-		q.Incidents[0].ID, q.Incidents[0].Attempts = tc.id, tc.attempts
+	for _, attempts := range []int{0, 2, 3} {
+		q.Incidents[0].Attempts = attempts
 		if err := q.Save(a.store.Dir()); err != nil {
 			t.Fatal(err)
 		}
-		a.emergencyStart = tc.emergency
-		if err := a.fatalAdmission("repair", false); (err == nil) != tc.allowed {
-			t.Fatalf("%+v: %v", tc, err)
+		if err := a.fatalAdmission("ordinary", false); err != nil {
+			t.Fatalf("main with %d attempts blocked start: %v", attempts, err)
 		}
 	}
-	// Revalidate at admission even if authorization expired during setup.
-	a.now = a.now.Add(time.Hour)
-	if err := a.fatalAdmission("repair", false); err == nil {
-		t.Fatal("expired grant bypassed outage")
+	q.Observe(fatal.Observation{ID: "guard:codex", Failed: true}, a.now)
+	if err := q.Save(a.store.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Repair main.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.fatalAdmission("ordinary", false); err == nil {
+		t.Fatal("emergency grant bypassed infrastructure outage")
 	}
 }

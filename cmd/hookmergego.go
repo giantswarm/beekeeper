@@ -107,6 +107,9 @@ func (a *app) hookMergeGo(session, repo string, pr int, head string) string {
 	if err != nil {
 		return "merge head and CI cannot be checked: " + err.Error()
 	}
+	if err := a.fatalPublicationBarrier(ctx, st, repo, pr); err != nil {
+		return err.Error()
+	}
 	if pull.State != superloop.Open || pull.Head != head || !pull.Green {
 		return "merge head moved or current CI is not green; park for a new exact-head go"
 	}

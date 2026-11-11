@@ -126,6 +126,15 @@ merges retain their own admission. Supervisor status names the scan hold.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+`beekeeper fatal status` reports each outage's scope. A red repository default
+branch holds merges into that branch, except the reserved repair PR, and release
+promotions from that repository. Workers in that repository and other repositories
+keep starting; other repositories' merges and releases continue. The repair PR
+keeps its exception through review and worker handoffs, but still requires green
+CI and merge-result validation, independent review, and the normal stop and hold
+checks. Infrastructure outages retain the global ordinary-start barrier. A
+successful probe clears only its own outage; an unreadable probe clears none.
+
 On the person's explicit emergency authorization, the current guide can run
 `beekeeper emergency on --reason "<their verbatim words>" --until 30m`, then
 `beekeeper emergency merge owner/repo 123`. The merge requires GitHub approval
@@ -141,8 +150,7 @@ context on that head, including any required App identity. It refuses unreadable
 requirements, classic protection, and non-review rules it cannot verify. Ruleset
 `required_reviewers` is a review requirement covered by this exception.
 `emergency hold set/lift`, `emergency
-start` (forced capacity admission; an active authenticated grant also overrides
-exhausted main-outage repair barriers, with a durable audit record), and `emergency capacity capacity.ceiling 4`
+start` (forced capacity admission, retaining infrastructure outage barriers), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.
 Under an active grant, admin merge attempts and results also name the full PR URL and exact head,
 including refused or failed attempts; a moved head requires a new invocation
