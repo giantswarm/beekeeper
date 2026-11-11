@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const deliveryTestIssue = "example/project#1"
@@ -172,5 +174,23 @@ func TestDeliveryStallsAreBatchedWithWaitReasons(t *testing.T) {
 	}
 	if len(st.GuideWork) != 0 {
 		t.Fatalf("recovery did not settle batched guide work: %+v", st.GuideWork)
+	}
+}
+
+// A delivery's pull request in a repository the desk leaves unread is never
+// observed by the watcher. Tracking it anyway kept every pass's delivery
+// observation incomplete, so admission said "wip stale" forever.
+func TestDeliveryTrackedPullsSkipsUnreadRepositories(t *testing.T) {
+	desk := superloop.Desk{Orgs: []string{"example", "other"}, Never: []string{"example/skipped"}}
+	deliveries := []state.Delivery{
+		{Ref: "example/skipped#1", Step: state.DeliveryReleasing, OutsideDesk: true, Pulls: []string{"example/skipped#2"}},
+		{Ref: "elsewhere/project#1", Step: state.DeliveryReviewQueued, OutsideDesk: true, Pulls: []string{"elsewhere/project#2"}},
+		{Ref: deliveryTestIssue, Step: state.DeliveryReviewQueued, Pulls: []string{deliveryTestPull, "other/project#3"}},
+		{Ref: "example/project#4", Step: state.DeliveryDone, Pulls: []string{"example/project#5"}},
+	}
+	got := deliveryTrackedPulls([]string{"other/project#3"}, deliveries, desk)
+	want := []string{"other/project#3", deliveryTestPull}
+	if !slices.Equal(got, want) {
+		t.Fatalf("tracked = %v, want %v", got, want)
 	}
 }

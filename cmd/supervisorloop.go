@@ -1968,16 +1968,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	in.PullReadAt = map[string]time.Time{}
-	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
-	for _, d := range st.Deliveries {
-		if d.Active() {
-			for _, ref := range d.Pulls {
-				if !slices.Contains(tracked, ref) {
-					tracked = append(tracked, ref)
-				}
-			}
-		}
-	}
+	tracked := deliveryTrackedPulls(superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk), st.Deliveries, in.Desk)
 	tracked = slices.DeleteFunc(tracked, func(ref string) bool {
 		return !a.parkIsPull(ctx, st, ref)
 	})
