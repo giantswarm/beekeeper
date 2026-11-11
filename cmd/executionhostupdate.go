@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
@@ -199,6 +200,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 		},
 	})
 	install := func(ctx context.Context) (update.Result, error) { return installVersion(ctx, io.Discard, version) }
+	var wantTools map[string]string
 	if len(given) > 0 {
 		// Not strict: the host runs the older release while it updates,
 		// and a newer coordinator may send more than it knows.
@@ -209,6 +211,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 		if rel.Tag != version {
 			return fail(fmt.Errorf("the coordinator sent release %q, not %s", rel.Tag, version))
 		}
+		wantTools = rel.Tools
 		install = func(ctx context.Context) (update.Result, error) { return installRelease(ctx, io.Discard, rel) }
 	}
 	s, err := a.hostRuntime()
@@ -229,11 +232,11 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 		out.Busy, out.Executions = len(refs), refs
 		return out
 	}
+	if err := s.ProvisionToolsFor(ctx, wantTools); err != nil {
+		release()
+		return fail(err)
+	}
 	if s.Version == version {
-		if err := s.ProvisionTools(ctx); err != nil {
-			release()
-			return fail(err)
-		}
 		release()
 		digest, err := s.Prepare(s.Policy())
 		if err != nil {
@@ -347,9 +350,12 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	if err == nil && x.Busy > 0 {
 		err = fmt.Errorf("%w: %d", errHostDrains, x.Busy)
 	}
+	var caps execution.Capabilities
 	if err == nil {
 		h.PolicyDigest = x.PolicyDigest
-		if _, perr := a.probeExecution(ctx, h); perr != nil {
+		var perr error
+		caps, perr = a.probeExecution(ctx, h)
+		if perr != nil {
 			err = fmt.Errorf("its check with the prepared policy failed: %w", perr)
 		}
 	}
@@ -379,7 +385,7 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 			pin.Held, pin.HeldVersion = oneLine(err.Error()), version
 			return []state.Event{event(by, "agents.host-held", "%s on %s: %s", selector, version, pin.Held)}, nil
 		}
-		pin.Version, pin.PolicyDigest, pin.PinnedAt = version, x.PolicyDigest, now
+		pin.Version, pin.PolicyDigest, pin.Tools, pin.PinnedAt = version, x.PolicyDigest, maps.Clone(caps.Tools), now
 		pin.Held, pin.HeldAt, pin.HeldVersion, pin.Reported = "", time.Time{}, "", false
 		pin.Behind, pin.BehindReported = "", false
 		return []state.Event{event(by, "agents.host-pinned", "%s on %s, policy %s", selector, version, x.PolicyDigest)}, nil
@@ -487,6 +493,13 @@ func (a *app) updateHost(ctx context.Context, h execution.Host, version string) 
 		if a.store != nil && rel.Tag == version && len(rel.Assets) > 0 {
 			_ = a.store.WriteFile(hostReleaseCacheFile, rel)
 		}
+	}
+	need, err := a.hostRequiredTools(h)
+	if err != nil {
+		return execution.HostUpdate{}, err
+	}
+	if goVer := need[execution.ToolGo]; goVer != "" {
+		rel.Tools = map[string]string{execution.ToolGo: goVer}
 	}
 	given, err := json.Marshal(rel)
 	if err != nil {

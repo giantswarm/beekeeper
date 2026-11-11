@@ -217,7 +217,7 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 	routed := map[string]string{
 		"TMPDIR": temporary, "TMP": temporary, "TEMP": temporary, "GOTMPDIR": temporary,
 		"XDG_CACHE_HOME": cache, "GOCACHE": filepath.Join(cache, "go-build"),
-		"GOPATH": gopath, "GOMODCACHE": filepath.Join(gopath, "pkg", "mod"),
+		"GOPATH": gopath, "GOMODCACHE": filepath.Join(gopath, "pkg", "mod"), "GOTOOLCHAIN": "auto",
 		"XDG_STATE_HOME": state, "CARGO_HOME": cargo,
 	}
 	home, err := s.ownedHome(j, env)

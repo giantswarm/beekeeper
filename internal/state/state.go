@@ -1490,11 +1490,12 @@ type HostPlacement struct {
 // recorded when it last updated the host, in place of a hand-kept
 // agents.hosts digest, and the hold of a host whose update failed.
 type HostPin struct {
-	Selector     string           `json:"selector"`
-	Identity     execution.HostID `json:"identity"`
-	Version      string           `json:"version,omitempty"`
-	PolicyDigest string           `json:"policyDigest,omitempty"`
-	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
+	Selector     string            `json:"selector"`
+	Identity     execution.HostID  `json:"identity"`
+	Version      string            `json:"version,omitempty"`
+	PolicyDigest string            `json:"policyDigest,omitempty"`
+	Tools        map[string]string `json:"tools,omitempty"`
+	PinnedAt     time.Time         `json:"pinnedAt,omitzero"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
 	// UpdateError is a release lookup failure before contacting the host.

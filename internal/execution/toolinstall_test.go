@@ -156,3 +156,76 @@ func TestInstallPinnedToolVerifiesBeforeInstalling(t *testing.T) {
 		}
 	}
 }
+
+func TestProvisionToolsRaisesGoPinForServedRepositories(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("execution hosts require Linux")
+	}
+	const newGoVersion = "1.27.4"
+	archiveName := "go" + newGoVersion + ".linux-" + runtime.GOARCH + ".tar.gz"
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	executable := []byte("#!/bin/sh\necho go version go" + newGoVersion + " linux/" + runtime.GOARCH + "\n")
+	if err := tw.WriteHeader(&tar.Header{Name: goArchivePrefix + "bin/go", Mode: 0o755, Size: int64(len(executable))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(executable); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+	sum := fmt.Sprintf("%x", sha256.Sum256(data))
+	prevClient := toolHTTPClient
+	t.Cleanup(func() { toolHTTPClient = prevClient })
+	toolHTTPClient = &http.Client{Transport: toolRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body := data
+		if r.URL.Host == "go.dev" && r.URL.Path == "/dl/" {
+			body = []byte(fmt.Sprintf(`[{"files":[{"filename":%q,"sha256":%q}]}]`, archiveName, sum))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})}
+
+	f := testFixture(t)
+	toolsParent := filepath.Join(t.TempDir(), "tools")
+	oldExe := filepath.Join(toolsParent, "go"+fixtureGoVersion, toolBinDirectory, ToolGo)
+	newExe := filepath.Join(toolsParent, "go"+newGoVersion, toolBinDirectory, ToolGo)
+	if err := os.MkdirAll(filepath.Dir(oldExe), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldExe, []byte("old-go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Config.Tools[ToolGo] = ToolConfig{Executable: oldExe, Version: fixtureGoVersion}
+	next := f.s.Command
+	f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+		switch bin {
+		case oldExe:
+			return []byte("go version go" + fixtureGoVersion + " linux/amd64\n"), nil
+		case newExe:
+			if _, err := os.Stat(newExe); err != nil {
+				return nil, err
+			}
+			return []byte("go version go" + newGoVersion + " linux/amd64\n"), nil
+		}
+		return next(ctx, dir, env, bin, args...)
+	}
+	if err := f.s.ProvisionToolsFor(context.Background(), map[string]string{ToolGo: newGoVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.s.Config.Tools[ToolGo]; got != (ToolConfig{Executable: newExe, Version: newGoVersion}) {
+		t.Fatalf("provisioned go tool = %+v, want %s at %s", got, newGoVersion, newExe)
+	}
+	if _, err := f.s.Prepare(f.s.Policy()); err != nil {
+		t.Fatal(err)
+	}
+	caps, err := f.s.Check(context.Background())
+	if err != nil || caps.Tools[ToolGo] != newGoVersion {
+		t.Fatalf("Check after raising Go pin = %+v, %v", caps.Tools, err)
+	}
+}

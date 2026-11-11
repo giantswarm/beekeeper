@@ -110,6 +110,9 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, err
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), GuardsDisabled: !a.cfg.Hooks.GuardsEnabled(), Rules: []byte(rules.String()), Launcher: plat.Launcher}
+	if err := s.LoadPinnedTools(); err != nil {
+		return nil, err
+	}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()
@@ -684,7 +687,54 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if err := c.Resources.Validate(time.Now()); err != nil {
 		return c, refused("%v", err)
 	}
+	if len(c.Tools) > 0 {
+		need, err := a.hostRequiredTools(h)
+		if err != nil {
+			return c, err
+		}
+		if err := execution.CheckTools(c.Tools, need); err != nil {
+			return c, refused("%v", err)
+		}
+	}
 	return c, nil
+}
+
+func (a *app) hostRequiredTools(h execution.Host) (map[string]string, error) {
+	repos := map[string]string{}
+	projectsDir := ""
+	if a.cfg != nil && a.cfg.Projects.Dir != "" {
+		projectsDir = homePath(a.cfg.Projects.Dir)
+	}
+	for repo, hostPath := range h.Repositories {
+		if projectsDir != "" {
+			coordPath := filepath.Join(projectsDir, repoName(repo))
+			if _, err := os.Lstat(filepath.Join(coordPath, "go.mod")); err == nil {
+				repos[repo] = coordPath
+				continue
+			}
+		}
+		if _, err := os.Lstat(filepath.Join(hostPath, "go.mod")); err == nil {
+			repos[repo] = hostPath
+		}
+	}
+	if len(h.RepositoryOrgs) > 0 && projectsDir != "" && a.cfg != nil {
+		var candidates []string
+		candidates = append(candidates, a.cfg.Plans.Repositories...)
+		candidates = append(candidates, a.cfg.Fatal.Repositories...)
+		for _, l := range a.cfg.Lanes {
+			candidates = append(candidates, l.Repositories...)
+		}
+		for _, repo := range candidates {
+			if !strings.Contains(repo, "/") || !h.AdmitsRepository(repo) || repos[repo] != "" {
+				continue
+			}
+			coordPath := filepath.Join(projectsDir, repoName(repo))
+			if _, err := os.Lstat(filepath.Join(coordPath, "go.mod")); err == nil {
+				repos[repo] = coordPath
+			}
+		}
+	}
+	return execution.RepositoriesTools(repos)
 }
 
 func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord, int) {
