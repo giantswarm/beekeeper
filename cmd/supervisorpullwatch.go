@@ -145,29 +145,35 @@ func (w *loopPullWatcher) setBots(bots []string, desk superloop.Desk, teams map[
 }
 
 // readBotPulls lists the open pull requests of the watcher's bots in orgs
-// that are in a repository of the desk's, and whether GitHub's search
-// stopped short of all of them.
-func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out []string, short bool, err error) {
+// that are in a repository of the desk's, the bots whose search stopped
+// short of all of theirs, and the bots whose search failed with its error.
+// Each bot is searched on its own: one bot's failure (a login GitHub's
+// search refuses, a transient error) leaves the others' listed.
+func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out, short, listedBots []string, failed map[string]error) {
 	w.mu.Lock()
 	bots, desk, teams, known := slices.Clone(w.bots), w.botDesk, maps.Clone(w.teams), w.teamsKnown
 	w.mu.Unlock()
-	if len(bots) == 0 {
-		return nil, false, nil
-	}
-	logins := make([]string, 0, len(bots))
 	for _, b := range bots {
-		logins = append(logins, superloop.BotLogin(b))
-	}
-	listed, err := readOpenPulls(ctx, func() ([]string, error) { return logins, nil }, orgs)
-	if err != nil {
-		return nil, false, err
-	}
-	for _, ref := range listed {
-		if r, ok := parseRef(ref); ok && desk.BotRepo(r.Repo, teams[strings.ToLower(r.Repo)], known) {
-			out = append(out, ref)
+		login := superloop.BotLogin(b)
+		listed, err := readOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, orgs)
+		if err != nil {
+			if failed == nil {
+				failed = map[string]error{}
+			}
+			failed[login] = err
+			continue
+		}
+		listedBots = append(listedBots, login)
+		if len(listed) >= sweepListLimit {
+			short = append(short, login)
+		}
+		for _, ref := range listed {
+			if r, ok := parseRef(ref); ok && desk.BotRepo(r.Repo, teams[strings.ToLower(r.Repo)], known) {
+				out = append(out, ref)
+			}
 		}
 	}
-	return out, len(listed) >= sweepListLimit, nil
+	return out, short, listedBots, failed
 }
 
 func (w *loopPullWatcher) needsPoll(tracked []string, now time.Time) bool {
@@ -336,13 +342,19 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 		}, orgs)
 		incomplete := len(open) >= sweepListLimit
 		if err == nil {
-			// A bot's pull requests beyond the search's limit leave the
-			// desk's own listing whole: the sweep takes the rest as their
-			// pull requests merge.
-			var bots []string
-			var short bool
-			if bots, short, err = w.readBotPulls(ctx, orgs); short {
-				l.sayOnce("sweep bot limit", "SUPERVISOR SWEEP bot pull requests in %s reach GitHub's search limit of %d: the sweep sees only the most recent", strings.Join(orgs, ", "), sweepListLimit)
+			// A bot's pull requests beyond the search's limit, or a bot's
+			// failed search, leave the desk's own listing whole: the sweep
+			// takes the rest as their pull requests merge, and the next
+			// listing searches the failed bot again.
+			bots, short, listedBots, failed := w.readBotPulls(ctx, orgs)
+			if len(short) > 0 {
+				l.sayOnce("sweep bot limit", "SUPERVISOR SWEEP pull requests of %s in %s reach GitHub's search limit of %d: the sweep sees only the most recent", strings.Join(short, ", "), strings.Join(orgs, ", "), sweepListLimit)
+			}
+			for _, login := range slices.Sorted(maps.Keys(failed)) {
+				l.sayOnce("sweep bot search "+login, "SUPERVISOR SWEEP cannot list the pull requests of %s of supervisor.ownership.bots (%v): the sweep lists the desk's own without them", login, failed[login])
+			}
+			for _, login := range listedBots {
+				l.clearSaid("sweep bot search " + login)
 			}
 			open = append(open, bots...)
 			slices.Sort(open)

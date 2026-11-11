@@ -480,6 +480,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	listed, batch := readOpenPulls, readLoopPullBatch
 	t.Cleanup(func() { readOpenPulls, readLoopPullBatch = listed, batch })
 	var searched []string
+	var botFails bool
 	readOpenPulls = func(_ context.Context, authors func() ([]string, error), orgs []string) ([]string, error) {
 		logins, err := authors()
 		if err != nil {
@@ -489,6 +490,9 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 			t.Errorf("orgs = %v", orgs)
 		}
 		searched = append(searched, logins...)
+		if botFails && slices.Equal(logins, []string{"app/renovat"}) {
+			return nil, errors.New("the listed users cannot be searched")
+		}
 		if slices.Equal(logins, []string{"app/renovate"}) {
 			return []string{idleRef, "o/other#3", botPull, "o/tool#6"}, nil
 		}
@@ -525,6 +529,29 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	if w.view().Incomplete {
 		t.Error("a short bot listing marked the desk's incomplete")
 	}
+	// One bot's failed search (a login GitHub's search refuses) leaves the
+	// desk's own listing and the other bots' whole, and is said once.
+	botFails = true
+	searched = nil
+	w.setBots([]string{"renovat", botName}, desk, map[string]string{"o/r": botTeam}, true)
+	for range 2 {
+		if _, err := w.poll(t.Context(), l); err != nil {
+			t.Fatal(err)
+		}
+		if v := w.view(); v.ListedAt.IsZero() || v.Incomplete || !slices.Equal(v.Open, []string{reserveIssue, idleRef, botPull}) {
+			t.Errorf("a bot's search failed: listed %v, incomplete %v, open %v", v.ListedAt, v.Incomplete, v.Open)
+		}
+		w.mu.Lock()
+		w.snapshot.ListedAt = time.Time{}
+		w.mu.Unlock()
+	}
+	if !slices.Equal(searched, []string{"me", "app/renovat", "app/renovate", "me", "app/renovat", "app/renovate"}) {
+		t.Errorf("a bot's search failed: searched %v", searched)
+	}
+	if n := strings.Count(r.out.String(), "cannot list the pull requests of app/renovat "); n != 1 {
+		t.Errorf("a bot's failed search said %d times, want once:\n%s", n, r.out.String())
+	}
+	botFails = false
 	// No bots: one search, the desk's.
 	searched = nil
 	w.setBots(nil, desk, nil, true)
