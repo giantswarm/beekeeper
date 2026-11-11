@@ -419,3 +419,16 @@ func TestBudgetPublishesAfterTransientStateContention(t *testing.T) {
 		t.Fatalf("budget not published: %+v, %v", st, err)
 	}
 }
+
+// A reading of a window with a lower count on record keeps the lower count
+// and is fresh: the old time held the loop on a stale reading (#3724).
+func TestObservedGraphQLKeepsTheLowCountAtTheReadingsTime(t *testing.T) {
+	now := time.Now().UTC()
+	reset := now.Add(30 * time.Minute)
+	old := state.GraphQL{Login: "fixture", Remaining: 900, Limit: 5000, Reset: reset, At: now.Add(-10 * time.Minute)}
+	g, _ := observedGraphQL(state.Budget{Windows: map[string]state.GraphQL{"old": old}},
+		&state.GraphQL{Login: "fixture", Remaining: 4000, Limit: 5000, Reset: reset, At: now}, now)
+	if g.Remaining != 900 || !g.At.Equal(now) {
+		t.Fatalf("window reading = %d at %s, want 900 at %s", g.Remaining, g.At, now)
+	}
+}

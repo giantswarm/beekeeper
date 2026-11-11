@@ -289,7 +289,8 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("budget printed %q, want %q", out.String(), want)
 	}
-	wantREST := "loop REST spend: 150 of 1000 (inventory 100, sweep 50), resets " + clock(a.now, reset)
+	// Half of the 4650 the window holds besides others, above the floor 2500.
+	wantREST := "loop REST spend: 150 of 1075 (inventory 100, sweep 50), resets " + clock(a.now, reset)
 	if !strings.Contains(out.String(), wantREST) {
 		t.Fatalf("budget printed %q, want %q", out.String(), wantREST)
 	}
