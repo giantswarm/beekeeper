@@ -254,11 +254,11 @@ func sameBinaryFile(a, b string) bool {
 	if resolvedPath(a) == resolvedPath(b) {
 		return true
 	}
-	fa, err := os.Stat(a)
+	fa, err := os.Stat(a) // #nosec G703 -- running or installed beekeeper binary path
 	if err != nil {
 		return false
 	}
-	fb, err := os.Stat(b)
+	fb, err := os.Stat(b) // #nosec G703 -- running or installed beekeeper binary path
 	if err != nil {
 		return false
 	}

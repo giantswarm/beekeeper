@@ -28,6 +28,9 @@ func TestDecideBoundaries(t *testing.T) {
 		{"a loop never handed over rolls back at the window", Observed{Elapsed: ProbationWindow}, Signals{HeartbeatRequired: true, LoopPending: true}, RollBack},
 		{"a late loop within its own grace waits", Observed{Elapsed: HeartbeatGrace + 5*time.Minute, LoopStarted: true, LoopStartedAt: 8 * time.Minute}, silent, Wait},
 		{"a late loop at its own grace rolls back", Observed{Elapsed: HeartbeatGrace + 8*time.Minute, LoopStarted: true, LoopStartedAt: 8 * time.Minute}, silent, RollBack},
+		{"progress renews grace after startup", Observed{Elapsed: 15 * time.Minute, LoopStarted: true, HeartbeatSeen: true, LastBeatAt: 11 * time.Minute}, silent, Wait},
+		{"latest checkpoint grace expires", Observed{Elapsed: 21 * time.Minute, LoopStarted: true, HeartbeatSeen: true, LastBeatAt: 11 * time.Minute}, silent, RollBack},
+		{"stale heartbeat cannot promote at window", Observed{Elapsed: ProbationWindow, ProbePassed: true, HeartbeatSeen: true, LastBeatAt: 26 * time.Minute}, silent, Wait},
 		{"a host owes no heartbeat", Observed{Elapsed: HeartbeatGrace, ProbePassed: true}, Signals{}, Wait},
 		{"one second short of the window waits", Observed{Elapsed: ProbationWindow - time.Second, ProbePassed: true}, loop, Wait},
 		{"the window end promotes", Observed{Elapsed: ProbationWindow, ProbePassed: true}, loop, Promote},
@@ -60,6 +63,24 @@ func TestNoteLoopKeepsTheFirstStartInObservedTime(t *testing.T) {
 	o.NoteLoop(Signals{LoopStarted: true})
 	if o.LoopStartedAt != 8*time.Minute {
 		t.Fatalf("start moved: %+v", o)
+	}
+}
+
+func TestNoteLoopTracksCheckpointAgeWithoutRenewingAnOldBeat(t *testing.T) {
+	o := Observed{Elapsed: 12 * time.Minute, LoopStarted: true}
+	o.NoteLoop(Signals{Heartbeat: true, HeartbeatAgo: time.Minute})
+	if !o.HeartbeatSeen || o.LastBeatAt != 11*time.Minute {
+		t.Fatalf("lost checkpoint age: %+v", o)
+	}
+	// Re-reading the same checkpoint two minutes later must not buy more time.
+	o.Elapsed += 2 * time.Minute
+	o.NoteLoop(Signals{Heartbeat: true, HeartbeatAgo: 3 * time.Minute})
+	if o.LastBeatAt != 11*time.Minute {
+		t.Fatalf("renewed an old checkpoint: %+v", o)
+	}
+	o.NoteLoop(Signals{})
+	if o.LastBeatAt != 11*time.Minute {
+		t.Fatalf("silence changed heartbeat history: %+v", o)
 	}
 }
 

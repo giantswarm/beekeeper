@@ -651,6 +651,10 @@ if args[:2] == ["api", "-i"]:
 
 if args[:2] == ["api", "--paginate"]:
     endpoint = args[2]
+    # These fixtures model external checks through the PR rollup.
+    if any(endpoint == "repos/" + repo + "/actions/runs?head_sha=" + p["headRefOid"] + "&per_page=100" for p in prs):
+        print(json.dumps({"workflow_runs": []}))
+        sys.exit(0)
     if "/pulls" in endpoint and "/reviews" not in endpoint and "/comments" not in endpoint:
         open_prs = []
         for p in prs:
