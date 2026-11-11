@@ -21,8 +21,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// fatalProbeTimeout bounds each probe; a variable only so tests can shorten it.
+var fatalProbeTimeout = 20 * time.Second
+
 const (
-	fatalProbeTimeout      = 20 * time.Second
 	fatalSentinelName      = "fatal sentinel"
 	fatalAsFlag            = "--as"
 	fatalBudgetCommand     = "budget"
@@ -114,6 +116,11 @@ func fatalProbe(ctx context.Context, argv ...string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
 	defer cancel()
 	_, _, code, err := fatalRun(ctx, "", argv)
+	// A probe killed at its deadline exits -1 without an error of its own; it
+	// timed out and did not fail, so report the context's error instead.
+	if err == nil && code != 0 && ctx.Err() != nil {
+		return code, ctx.Err()
+	}
 	return code, err
 }
 
