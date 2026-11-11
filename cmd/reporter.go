@@ -82,7 +82,7 @@ func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) 
 	if !w.standby || !rc.Enabled() {
 		return
 	}
-	st, err := w.store.Read()
+	st, err := w.store.Peek()
 	if err != nil {
 		return // pending says it
 	}

@@ -166,7 +166,7 @@ func (a *app) syncClaimsNow(ctx context.Context) error {
 // released. GitHub's answers are written back to the state; an error names
 // each claim that failed, the rest stand.
 func (a *app) syncClaimsLocked(ctx context.Context) error {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return err
 	}

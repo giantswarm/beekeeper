@@ -1613,6 +1613,12 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("apply session reports")
+		if err := a.consumeReports(ctx); err != nil {
+			return err
+		}
+	}
+	if !l.dryRun {
 		l.lifecyclePhase("watch conditions")
 		if err := l.watchConditions(ctx); err != nil {
 			l.holdStarts(true)
@@ -1728,7 +1734,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase(loopPhaseRecover)
+	l.lifecyclePhase(loopPhaseContinueParks)
 	if !l.dryRun {
 		st, err = a.store.Read()
 		if err != nil {
@@ -1741,7 +1747,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase(loopPhaseRecover)
+	l.lifecyclePhase(loopPhaseRecoverParks)
 	if !l.dryRun {
 		st, err = a.store.Read()
 		if err != nil {
@@ -1754,7 +1760,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase(loopPhaseRecover)
+	l.lifecyclePhase(loopPhaseRecoverReviews)
 	if !l.dryRun {
 		st, err = a.store.Read()
 		if err != nil {
@@ -1767,7 +1773,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	l.lifecyclePhase(loopPhaseRecover)
+	l.lifecyclePhase(loopPhaseEndReviews)
 	if !l.dryRun {
 		st, err = a.store.Read()
 		if err != nil {
@@ -3547,7 +3553,7 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if l.dryRun || !shouldEndReviewWorker(st, ag) {
 			continue
 		}
-		l.lifecyclePhase(loopPhaseRecover)
+		l.lifecyclePhase(loopPhaseEndReviews)
 		if loopInTurn(l.a, ag.Party) {
 			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
 			continue

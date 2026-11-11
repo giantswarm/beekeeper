@@ -245,7 +245,7 @@ func (a *app) isWorker(me state.Party) (bool, error) {
 	if a.managedExecutionID() != "" {
 		return true, nil
 	}
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return false, err
 	}

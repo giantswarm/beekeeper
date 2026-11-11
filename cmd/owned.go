@@ -109,7 +109,7 @@ var yieldPoll = 5 * time.Second
 func (a *app) yieldToMerges(ctx context.Context, argv []string) error {
 	said := false
 	for {
-		st, err := a.store.Read()
+		st, err := a.store.Peek()
 		if err != nil {
 			return nil
 		}
