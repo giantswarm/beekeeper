@@ -200,6 +200,12 @@ func (a *app) loopWaitLines() (held, pulls string) {
 	if found, err := a.store.ReadFile(loopSweepFile, &count); err == nil && found {
 		pulls = count.line(a)
 	}
+	var snapshot loopPullSnapshot
+	if found, err := a.store.ReadFile(loopPullWatchFile, &snapshot); found && err == nil {
+		if line := snapshot.ageLine(a.timeNow()); line != "" {
+			pulls = strings.TrimSpace(pulls + "\n" + line)
+		}
+	}
 	return held, pulls
 }
 

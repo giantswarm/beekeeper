@@ -106,8 +106,16 @@ or missing previously configured identity holds the gate. Refusals on a
 higher-balance identity also hold it without hiding the lowest counter.
 Loop spend tracks each identity's counter separately; selecting another
 minimum or a GitHub window resetting never replenishes its own hourly allowance.
-Unchanged PR observations last five minutes; a new park, a report from that
-PR's reviewer or an answer on its thread invalidates them immediately.
+One independent watcher reads the pull requests of active deliveries, parks and
+sweep discoveries in GraphQL batches of up to 60. It polls every 30 seconds while
+checks or mergeability are pending and every two minutes when settled. Files,
+body and reviews refresh only when the head or `updatedAt` changes. Errors and
+rate limits are logged once per episode and back off exponentially to ten minutes,
+respecting `github.floor`. The pass never waits on these reads: it consumes dated
+observations, treating nonterminal ones older than five minutes as unknown.
+`beekeeper supervisor status` shows observation age; `--once` and `--dry-run`
+consume the watcher's saved observations. Terminal pull requests leave the poll
+set after their final read.
 Repository backlog inventories use paged GraphQL connections instead of REST
 search. The loop reuses each inventory for five minutes, then checks the latest
 updated pull in all states with an ETag: an unchanged response costs no REST
