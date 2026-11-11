@@ -6,7 +6,6 @@
 #
 
 name: check-readme-links
-
 # Checks the links in README.md: dead URLs, relative paths that do not exist
 # in the repository, reversed link syntax. A pull request that breaks a link
 # goes red. The weekly run catches links whose target moved without the
@@ -18,7 +17,6 @@ name: check-readme-links
 # Switch the check off for this repository with
 # `devctl gen workflows --check-readme-links=false`, in giantswarm/github
 # `gen.checkReadmeLinks: false` on the repository entry.
-
 on:
   pull_request:
     branches:
@@ -29,18 +27,16 @@ on:
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch: {}
-
+  merge_group: {}
 permissions: {}
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   check-readme-links:
     uses: giantswarm/github-workflows/.github/workflows/check-readme-links.yaml@main
     with:
-      fail_on_error: ${{ github.event_name == 'pull_request' }}
+      fail_on_error: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     permissions:
       contents: read
       issues: write
