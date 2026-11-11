@@ -96,8 +96,8 @@ Other controls are
 emergency hold set/lift, emergency start (capacity --force), and emergency
 capacity <capacity.key> <value> (validated configuration). Standing stop and
 starts holds still apply; lift a starts hold explicitly when authorized. Emergency
-start can override exhausted main-outage repair barriers under the active grant;
-other fatal outages remain barriers. Each override is audited.
+start retains infrastructure outage barriers. Repository main outages do not
+block starts and need no emergency override.
 
 Emergency auto-install pause/resume is independent of the grant: it only
 pauses the supervisor's release installation, leaving its other work running.
@@ -236,8 +236,6 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if err := cmd.Flags().Set("force", "true"); err != nil {
 				return err
 			}
-			a.emergencyStart = true
-			defer func() { a.emergencyStart = false }()
 			return runStart(cmd, args)
 		})
 	}
@@ -397,6 +395,9 @@ func (a *app) emergencyMergePolicy(repo string, number int) error {
 			return err
 		}
 		st.Holds = append(st.Holds, holds...)
+	}
+	if err := a.fatalPublicationBarrier(a.context(), st, repo, number); err != nil {
+		return refused("%v", err)
 	}
 	if h, held := merge.BlockingFor(st, emergencyNow(), me.Name, repo, number, lane); held {
 		return refused("emergency merge is held on %s: %s; lift the hold explicitly", h.Target, h.Reason)

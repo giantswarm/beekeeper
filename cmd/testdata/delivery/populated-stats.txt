@@ -1,3 +1,4 @@
+outcome merged: 1
 ci: median 2h0m0s, worst 2h0m0s (1 observations)
 implementing: median 2h30m0s, worst 3h0m0s (2 observations)
 1 released, 1.00 released per day since 2026-01-01T00:00:00Z; mean start to released 3h0m0s (1 complete cycles)

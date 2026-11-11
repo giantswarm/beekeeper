@@ -50,6 +50,16 @@ window callers include admitted worker shell calls and native beekeeper calls
 by source function, retained after processes exit. Counts are invocations,
 not measured requests (pagination and retries can spend more); arguments,
 endpoints and credentials are never recorded. Recorded
+background invocations also share a durable allowance, capped at 2000 or
+less than half the observed REST limit. Unknown windows admit only 100
+bootstrap calls. Background reads stop at the shared floor or half the
+window's limit, whichever protects more requests. Worker calls keep their
+existing gate. The background_rest ledger lists each source's calls;
+pagination and retries mean invocation counts are not measured REST points.
+Repository default-branch commits are cached for an hour in each process;
+file reads cache for a minute, then refresh using ETags. Missing files cache
+for five minutes. Caches are bounded and scoped by repository, ref, path and
+credential routing metadata. Recorded
 GraphQL invocations name sessions and command classes in the current limit
 window (reset minus one hour), heavy calls first, even after a process exits.
 With no active reset known, show the last hour. Counts are invocations, not
@@ -82,7 +92,7 @@ unread core budget:
 ` + "`beekeeper budget --gate --bucket code_search && gh search code …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 			defer cancel()
 			if a.managedExecutionID() != "" {
 				return a.remoteGitHubBudget(ctx, workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
@@ -145,22 +155,29 @@ unread core budget:
 			var restSpend loopRESTSpend
 			_, _ = a.store.ReadFile(loopRESTFile, &restSpend)
 			var loopRESTPtr *loopRESTSpend
+			var backgroundSpend backgroundRESTSpend
+			_, _ = a.store.ReadFile(backgroundRESTFile, &backgroundSpend)
+			var backgroundPtr *backgroundRESTSpend
+			if a.now.Before(backgroundSpend.Reset) {
+				backgroundPtr = &backgroundSpend
+			}
 			if !restSpend.Reset.IsZero() && a.now.Before(restSpend.Reset) && (restSpend.Spent > 0 || len(restSpend.Steps) > 0) {
 				loopRESTPtr = &restSpend
 			}
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
-					Callers     []githubCaller    `json:"callers"`
-					RESTCallers []githubCaller    `json:"rest_callers"`
-					Loop        *loopGraphQLSpend `json:"loop,omitempty"`
-					LoopREST    *loopRESTSpend    `json:"loop_rest,omitempty"`
-					Floor       int               `json:"floor"`
-					Held        bool              `json:"held"`
-					Urgent      []state.Urgent    `json:"urgent,omitempty"`
-					Gated       []gatedParty      `json:"gated,omitempty"`
-					Pollers     []poller          `json:"pollers"`
-				}{b, callers, restCallers, &loopSpend, loopRESTPtr, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+					Callers        []githubCaller       `json:"callers"`
+					RESTCallers    []githubCaller       `json:"rest_callers"`
+					Loop           *loopGraphQLSpend    `json:"loop,omitempty"`
+					LoopREST       *loopRESTSpend       `json:"loop_rest,omitempty"`
+					BackgroundREST *backgroundRESTSpend `json:"background_rest,omitempty"`
+					Floor          int                  `json:"floor"`
+					Held           bool                 `json:"held"`
+					Urgent         []state.Urgent       `json:"urgent,omitempty"`
+					Gated          []gatedParty         `json:"gated,omitempty"`
+					Pollers        []poller             `json:"pollers"`
+				}{b, callers, restCallers, &loopSpend, loopRESTPtr, backgroundPtr, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				for _, warning := range b.Warnings {
 					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
@@ -183,6 +200,9 @@ unread core budget:
 				}
 				if l := loopRESTSpendLine(a, restSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)
+				}
+				if backgroundPtr != nil {
+					_, _ = fmt.Fprintf(a.out, "background REST invocations: %d of %d, resets %s\n", backgroundSpend.Calls, backgroundSpend.Limit, clock(a.now, backgroundSpend.Reset))
 				}
 				if l := a.heldLine(loopSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)

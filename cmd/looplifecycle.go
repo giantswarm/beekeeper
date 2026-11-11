@@ -17,6 +17,8 @@ const (
 	loopPhaseStartup  = "startup"
 	loopPhaseBetween  = "between passes"
 	loopPhaseObserve  = "observe workers and pull requests"
+	loopPhaseRecover  = "recover quota and parks"
+	loopPhaseTidy     = "tidy and sync claims"
 )
 
 const loopPhaseStartupHistory = "read loop startup history"

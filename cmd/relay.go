@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -80,15 +81,27 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	switch {
 	case prev == nil:
 		if r.Relay != nil && r.Relay.From == (state.Party{}) && takesRelay(r.Relay.To, me) {
+			me.HostSession = cmp.Or(me.HostSession, r.Relay.To.HostSession)
+			if rl.runOf(me.Name) == 0 && rl.runOf(r.Relay.To.Name) > 0 {
+				me.Name = r.Relay.To.Name
+			}
 			r.Relay = nil
 		}
 	case prev.Is(me):
-		// A restart of the same holder keeps an open relay.
+		// A restart of the same holder keeps an open relay, its desktop id
+		// and its numbered run title when the resumed CLI derived another.
+		me.HostSession = cmp.Or(me.HostSession, prev.HostSession)
+		if rl.runOf(me.Name) == 0 && rl.runOf(prev.Name) > 0 {
+			me.Name = prev.Name
+		}
 	case r.Relay.Open(now) && r.Relay.From.Is(prev.Party) && takesRelay(r.Relay.To, me):
 		// The start runs in my headless first turn, which knows no desktop
 		// id: the relay's keeps the role addressable until my desktop CLI
 		// runs.
 		me.HostSession = cmp.Or(me.HostSession, r.Relay.To.HostSession)
+		if rl.runOf(me.Name) == 0 && rl.runOf(r.Relay.To.Name) > 0 {
+			me.Name = r.Relay.To.Name
+		}
 		r.Relay.Taken = now.UTC()
 		r.Relieved = append(dropRelief(r.Relieved, prev.Party),
 			state.Relief{Party: prev.Party, By: me, At: r.Relay.At, Taken: r.Relay.Taken})
@@ -111,11 +124,24 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		r.Relay = nil
 		how = fmt.Sprintf(" (taking over from %q)", prev.Name)
 	}
+	if s, ok := st.BypassStartOf(me); ok && s.Role == rl.name {
+		me.HostSession = cmp.Or(me.HostSession, s.HostSession)
+		if rl.runOf(me.Name) == 0 && rl.runOf(s.Name) > 0 {
+			me.Name = s.Name
+		}
+	}
 	// Holding the role again ends my relief; a relief nobody asked about
 	// for reliefTTL is dropped.
 	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > reliefTTL })
 	restart, last := prev != nil && prev.Is(me), rl.lastRun(r)
 	r.Holder = &state.Supervisor{Party: me, Since: now.UTC()}
+	if r.CLI != nil && r.CLI.Supervisor.Is(me) {
+		r.CLI.Supervisor.Session = cmp.Or(me.Session, r.CLI.Supervisor.Session)
+		r.CLI.Supervisor.HostSession = cmp.Or(me.HostSession, r.CLI.Supervisor.HostSession)
+		if rl.runOf(me.Name) > 0 {
+			r.CLI.Supervisor.Name = me.Name
+		}
+	}
 	// The start that took the role keeps its session the person's to close
 	// once relieved or taken over (keepsRole).
 	if i := st.StartIndex(me); i >= 0 {
@@ -267,6 +293,7 @@ func (v supervision) down() bool { return v.sup != nil && !v.live && !v.restarti
 // session back with a new PID is a restart, logged once. It reports whether
 // st changed.
 func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.Time) (changed bool, evs []state.Event) {
+	var oldID, newID, hostID string
 	rl.update(st, func(r *state.Role) {
 		sup := r.Holder
 		if sup == nil {
@@ -284,6 +311,9 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 			evs = append(evs, event(sup.Party, rl.name+".rename", "%q is now %q", old, sup.Name))
 		}
 		s, live := claude.Live(sessions, sup.Party)
+		if live && s.ID != "" && s.ID != sup.Session && (s.ResumedID == sup.Session || (s.JobID != "" && len(sup.Session) >= 8 && strings.HasPrefix(sup.Session, s.JobID))) {
+			oldID, newID, hostID = sup.Session, s.ID, s.HostID
+		}
 		switch {
 		case live && s.PID != c.PID:
 			if c.PID != 0 {
@@ -301,6 +331,9 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 			c.Gone, changed = now.UTC(), true
 		}
 	})
+	if oldID != "" && rebindSessionState(st, oldID, newID, hostID) {
+		changed = true
+	}
 	return changed, evs
 }
 

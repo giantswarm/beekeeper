@@ -40,6 +40,8 @@ const (
 	ghFlagField    = "--field"
 	ghFlagRawField = "--raw-field"
 	ghFlagTemplate = "--template"
+	ghFlagInclude  = "--include"
+	acceptRaw      = "Accept: application/vnd.github.raw"
 )
 
 var shapers = map[string]bool{"-q": true, ghFlagJQ: true, "-t": true, ghFlagTemplate: true}
@@ -241,7 +243,7 @@ func parseAPI(args []string) apiCall {
 		name, value, inline := strings.Cut(x, "=")
 		if !apiValued[name] {
 			switch name {
-			case "--silent", "-i", "--include", "--paginate":
+			case "--silent", "-i", ghFlagInclude, "--paginate":
 				a.shaped = true
 			}
 			continue

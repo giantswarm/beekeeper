@@ -279,6 +279,14 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
+	observation, sweep, watch, pollOnce := readObservedLoopPull, readLoopSweep, startLoopPullWatcher, pollOncePullWatcher
+	t.Cleanup(func() {
+		readObservedLoopPull, readLoopSweep, startLoopPullWatcher, pollOncePullWatcher = observation, sweep, watch, pollOnce
+	})
+	startLoopPullWatcher = func(context.Context, *supervisorLoop) func() { return func() {} }
+	pollOncePullWatcher = func(context.Context, *supervisorLoop) {}
+	readLoopSweep = fixtureLoopSweep
+	readObservedLoopPull = fixtureLoopObservation
 	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge
 	t.Cleanup(func() {
 		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
@@ -2905,9 +2913,7 @@ func hostsFirstRig(t *testing.T, choices []config.Choice, answer func(host bool,
 // no host has an adapter for.
 var mixedChoices = []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: "gpt-fixture"}}
 
-// The mixed queue under hostsFirst: no host has room, so the Claude choice
-// waits for one, but the codex choice no host can run starts locally, the
-// host-run choice excluded from the local start.
+// When no host has room, local fallback retains every eligible choice.
 func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
 		if host {
@@ -2923,20 +2929,15 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	if slices.Contains(start, loopHostFlag) {
 		t.Errorf("a full host took the start: %v", start)
 	}
-	if i := slices.Index(start, "--"+excludeFlag); i < 0 || i+1 >= len(start) || start[i+1] != claudeComm+"/"+bgModel {
-		t.Errorf("the local start does not leave the Claude choice to the hosts: %v", start)
+	if slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("local fallback must preserve capacity choices: %v", start)
 	}
 	if !slices.Contains(start, harnessAuto) {
 		t.Errorf("the local start loses capacity's pick: %v", start)
 	}
 }
 
-// A Claude choice a host runs and a self-hosted omp choice no host runs:
-// with no host room, leaving Claude to the hosts must not make the
-// self-hosted model the local pick while the subscription is eligible
-// (the local verdict picks Claude), so the start waits; only when no
-// subscription is eligible (the local verdict picks the self-hosted choice
-// itself) does the local start take it.
+// Local fallback must not exclude an eligible subscription choice.
 func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 	const selfHosted = "local"
 	choices := []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: config.OmpHarness, Model: "local/qwen-fixture", Provider: selfHosted, Kinds: []string{workerRole}}}
@@ -2960,11 +2961,8 @@ func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
 		r.pass(t)
 		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
-		if eligible {
-			if start != nil {
-				t.Errorf("an eligible subscription: the loop started %v on the self-hosted choice", start)
-			}
-			continue
+		if start != nil && slices.Contains(start, "--"+excludeFlag) {
+			t.Errorf("fallback changed the subscription pick: %v", start)
 		}
 		if start == nil {
 			t.Fatalf("no subscription eligible: the self-hosted start waited: %v\n%s", r.calls, r.out)
@@ -2994,10 +2992,7 @@ func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
 // Claude-only one.
 func TestLoopHostsFirstWaitsWithoutLocalRoomForLocalOnlyKinds(t *testing.T) {
 	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
-		if host || len(exclude) > 0 {
-			return loopNoRoomJSON
-		}
-		return loopRoomJSON
+		return loopNoRoomJSON
 	})
 	r.pass(t)
 	r.pass(t)
@@ -3006,9 +3001,8 @@ func TestLoopHostsFirstWaitsWithoutLocalRoomForLocalOnlyKinds(t *testing.T) {
 	}
 }
 
-// A desk whose every choice a host runs keeps hostsFirst as it was: no
-// host room, the start waits even with local room.
-func TestLoopHostsFirstWaitsForAHostWhenEveryKindRunsThere(t *testing.T) {
+// Full hosts leave the ordinary local capacity available as fallback.
+func TestLoopHostsFirstFallsBackWhenEveryKindRunsThere(t *testing.T) {
 	r := hostsFirstRig(t, []config.Choice{{Harness: claudeComm, Model: bgModel}}, func(host bool, exclude []string) string {
 		if host {
 			return loopNoRoomJSON
@@ -3016,9 +3010,8 @@ func TestLoopHostsFirstWaitsForAHostWhenEveryKindRunsThere(t *testing.T) {
 		return loopRoomJSON
 	})
 	r.pass(t)
-	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c != nil {
-		t.Errorf("hostsFirst started %v locally while a host could run it", c)
+	if c := r.called(agentsName, agentStartName); c == nil || slices.Contains(c, loopHostFlag) {
+		t.Errorf("full hosts did not leave a local fallback: %v", c)
 	}
 }
 
@@ -3056,8 +3049,8 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 	}
 }
 
-// Reviewers of a mixed queue use local choices unsupported by the full host.
-func TestLoopHostsFirstReviewerExcludesHostedChoices(t *testing.T) {
+// Reviewers fall back with unchanged choices and review capacity flags.
+func TestLoopHostsFirstReviewerPreservesChoices(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.HostsFirst = true
 	r.sshLoopHost(t, true)
@@ -3084,8 +3077,8 @@ func TestLoopHostsFirstReviewerExcludesHostedChoices(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, "--"+excludeFlag) {
-		t.Errorf("the reviewer start = %v, want local with host choices excluded", start)
+	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local with unchanged choices", start)
 	}
 }
 
@@ -4303,6 +4296,100 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 	}
 }
 
+func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) {
+	r := newLoopRig(t)
+	r.replaced = true
+	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.a.store = candidateStore
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !state.WriterFenced(r.a.store) {
+		t.Fatal("expected candidate store to be fenced after recovery")
+	}
+	bgCtx := l.backgroundContext(context.Background())
+	if !l.beginInFlight("stream:workers") {
+		t.Fatal("failed to mark worker stream in flight")
+	}
+	l.passActions.Go(func() {
+		defer l.endInFlight("stream:workers")
+		<-bgCtx.Done()
+	})
+	reexec, err := l.reexec(context.Background())
+	if err != nil || !reexec || r.execs != 1 {
+		t.Fatalf("fenced reexec with in-flight action = %v, %v (execs=%d)", reexec, err, r.execs)
+	}
+	if strings.Contains(r.out.String(), "SUPERVISOR LOOP restart held: claims are in flight") {
+		t.Fatalf("fenced candidate held re-exec on in-flight claims: %s", r.out.String())
+	}
+}
+
+func TestLoopReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
+	r := newLoopRig(t)
+	candidateStore, err := state.OpenVersion(r.a.store.Dir(), recoveryBadVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.a.store = candidateStore
+	now := time.Now().UTC()
+	if err := candidateStore.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{
+			{
+				Party: state.Party{Name: "w1", HostSession: "s1"},
+				Task:  "Work https://github.com/org/repo/issues/1",
+				Park:  &state.Park{At: now, On: loopPR, Waits: deskReviewWait, ReviewHead: loopHead, Worktree: "/tmp/wt1"},
+			},
+			{
+				Party: state.Party{Name: "w2", HostSession: "s2"},
+				Task:  "Work https://github.com/org/repo/issues/2",
+				Park:  &state.Park{At: now, On: "org/repo#13", Waits: deskReviewWait, ReviewHead: loopHead, Worktree: "/tmp/wt2"},
+			},
+		}
+		for _, ag := range st.Agents {
+			st.Starts = append(st.Starts, state.Start{Party: ag.Party, Dir: ag.Park.Worktree})
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.lifecycle = &loopLifecycle{Version: recoveryBadVersion, Started: now}
+	prevInTurn := loopInTurn
+	t.Cleanup(func() { loopInTurn = prevInTurn })
+	loopInTurn = func(*app, state.Party) bool { return false }
+
+	st, err := candidateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCalls := 0
+	r.answer = func(args []string) (string, int) {
+		runCalls++
+		if err := candidateStore.RecoverVersion(recoveryGoodVersion, recoveryBadVersion, func() error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return "cannot write the state: " + state.ErrRecoveryWriterFenced.Error(), 1
+	}
+	err = l.endReviewWorkers(context.Background(), st)
+	if !errors.Is(err, state.ErrRecoveryWriterFenced) || runCalls != 1 {
+		t.Fatalf("endReviewWorkers error = %v (runCalls=%d), want %v and 1 call", err, runCalls, state.ErrRecoveryWriterFenced)
+	}
+	// Once fenced, a subsequent pass stops before running any further worker commands.
+	if err := l.endReviewWorkers(context.Background(), st); err != nil || runCalls != 1 {
+		t.Fatalf("fenced endReviewWorkers = %v (runCalls=%d), want nil and no extra calls", err, runCalls)
+	}
+}
+
 func TestLoopReviewsReferencesToNeverRepositories(t *testing.T) {
 	r := newLoopRig(t)
 	r.ownedBy(loopTeamB)
@@ -4318,5 +4405,66 @@ func TestLoopReviewsReferencesToNeverRepositories(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.leave"); len(evs) != 0 {
 		t.Errorf("references caused a leave: %+v", evs)
+	}
+}
+
+// A planned classification must re-read the park before sending a wake or
+// asking the classifier: a worker can change state during loop observations.
+func TestLoopClassifyRechecksParkState(t *testing.T) {
+	const (
+		activeTimer    = "active timer"
+		workerDone     = "worker done"
+		workerRemoved  = "worker removed"
+		parkReplaced   = "park replaced"
+		parkResumable  = "park resumable"
+		firedTimer     = "fired timer"
+		oldParkTimer   = "old park timer"
+		stillUnwatched = "still unwatched"
+	)
+	for _, change := range []string{activeTimer, workerDone, workerRemoved, parkReplaced, parkResumable, firedTimer, oldParkTimer, stillUnwatched} {
+		t.Run(change, func(t *testing.T) {
+			r := newLoopRig(t)
+			at := time.Now().UTC().Add(-time.Minute)
+			r.park(t, "", at)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			seed(t, r.a, func(current *state.State) {
+				i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+				ag := &current.Agents[i]
+				switch change {
+				case activeTimer, firedTimer, oldParkTimer:
+					timer := state.Timer{Wake: loopWorker, At: at.Add(-time.Second), Due: at.Add(time.Hour)}
+					if change == firedTimer {
+						timer.Fired = at
+					}
+					if change == oldParkTimer {
+						timer.WakeParkAt = at.Add(-time.Hour)
+					}
+					current.Timers = append(current.Timers, timer)
+				case workerDone:
+					ag.Done, ag.Task, ag.Park = true, "", nil
+				case workerRemoved:
+					current.Agents = slices.Delete(current.Agents, i, i+1)
+				case parkReplaced:
+					ag.Park.At = at.Add(time.Second)
+				case parkResumable:
+					ag.Park.Resumable = at.Add(time.Second)
+				}
+			})
+			l := &supervisorLoop{a: r.a}
+			_, err = l.classify(t.Context(), st, superloop.Action{Agent: loopWorker, Event: &superloop.Event{At: at, Agent: loopWorker, Verb: parkEvent}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantWake := change == firedTimer || change == oldParkTimer || change == stillUnwatched
+			if wake := r.called(agentsName, agentWakeName); (wake != nil) != wantWake {
+				t.Fatalf("wake %v, want wake %v", wake, wantWake)
+			}
+			if note := r.called(loopNote, loopAdd); note != nil {
+				t.Fatalf("unexpected person note: %v", note)
+			}
+		})
 	}
 }

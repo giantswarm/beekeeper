@@ -70,6 +70,10 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
+	if err := a.fatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
+		l.sayOnce(waitKey, "SUPERVISOR WAIT %s: %v", act.URL, err)
+		return "", errLoopLater
+	}
 	repairStage := act.Key + " repair"
 	l.mu.Lock()
 	repairing, reason := l.stages[repairStage], l.stageDetail[repairStage]
@@ -205,6 +209,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if readErr != nil {
 		return "", readErr
 	}
+	l.cachePull(act.Ref, p)
 	if p.State == superloop.Merged {
 		// Where the base requires up-to-date branches and the desk merges
 		// without --admin, the merge brings a behind branch up to date
@@ -434,7 +439,7 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		l.mu.Unlock()
 		if !ok {
 			var readErr error
-			mp, readErr = readLoopPull(ctx, act.Ref)
+			mp, readErr = l.readPull(ctx, act.Ref)
 			if readErr != nil {
 				return "", readErr
 			}
@@ -640,7 +645,7 @@ func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act s
 	byPull := l.merged[by]
 	l.mu.Unlock()
 	if byPull.Ref == "" {
-		readBy, err := readLoopPull(ctx, by)
+		readBy, err := l.readPull(ctx, by)
 		if err != nil {
 			return "", err
 		}
@@ -821,7 +826,7 @@ func absorbedClosingIssues(ctx context.Context, st *state.State, absorbs []strin
 				}
 			}
 		}
-		origPull, err := readLoopPull(ctx, orig)
+		origPull, err := readLoopContextPull(ctx, orig)
 		if err != nil {
 			return nil, err
 		}
@@ -1267,6 +1272,11 @@ func latestReviewRequestsChanges(p superloop.Pull) bool {
 // only from a login the desk trusts (trustedReview): on a public repository
 // anyone can post "Review: approved".
 func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p superloop.Pull, targetHead string) (why string, hasExplicitGo bool, err error) {
+	if ref, ok := parseRef(p.Ref); ok {
+		if err := a.fatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
+			return err.Error(), false, nil
+		}
+	}
 	head := cmp.Or(targetHead, p.Head)
 	if head == "" {
 		return "pull request has no head commit", false, nil
