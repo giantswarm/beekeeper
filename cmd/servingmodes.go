@@ -240,7 +240,7 @@ func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provi
 
 // busyOnProvider are the busy agents that run on the self-hosted provider.
 func (a *app) busyOnProvider(name string) ([]string, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +596,7 @@ func (a *app) switchServeMode(ctx context.Context, name, mode string, timeout ti
 // self-hosted provider: the switch that takes the model down runs never
 // from one of its own sessions.
 func (a *app) callerRunsOnProvider(name string) bool {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return false
 	}

@@ -1613,6 +1613,12 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	if !l.dryRun {
+		l.lifecyclePhase("apply session reports")
+		if err := a.consumeReports(ctx); err != nil {
+			return err
+		}
+	}
+	if !l.dryRun {
 		l.lifecyclePhase("watch conditions")
 		if err := l.watchConditions(ctx); err != nil {
 			l.holdStarts(true)

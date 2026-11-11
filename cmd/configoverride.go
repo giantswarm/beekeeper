@@ -268,7 +268,7 @@ func overrideChecks(st *state.State) []state.Timer {
 // that end them. Taking an override is one state write, so of the watch and
 // the loop only one restores it. It returns the lines to say.
 func (a *app) settleOverrides(ctx context.Context, by state.Party, check func([]state.Timer) map[int]checkResult) ([]string, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil || len(st.Overrides) == 0 {
 		return nil, err
 	}

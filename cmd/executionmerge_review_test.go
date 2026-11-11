@@ -292,7 +292,7 @@ func TestExecutionMergeReviewerCannotBeImpersonatedWithAs(t *testing.T) {
 	}
 	a.as = name
 	c := a.agentsCmd()
-	c.SetArgs([]string{verbIdle, "--done", "--report", "Review: approved https://github.com/giantswarm/beekeeper/pull/7#pullrequestreview-100", "--problem", ghNone})
+	c.SetArgs([]string{verbIdle, flagDone, flagReport, "Review: approved https://github.com/giantswarm/beekeeper/pull/7#pullrequestreview-100", flagProblem, ghNone})
 	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "assigned session") {
 		t.Fatalf("--as was not refused by reviewer session authentication: %v", err)
 	}

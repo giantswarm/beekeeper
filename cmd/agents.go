@@ -329,6 +329,9 @@ completion is refused under --as.`,
 			if err != nil {
 				return err
 			}
+			if a.queueReports && !blocked {
+				return a.submitReport(sessionReport{Kind: reportKindIdle, By: me, Text: report, Problems: found, Finished: finished, NoChange: noChange})
+			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i := a.callerAgent(st, me)
 				if i < 0 {
