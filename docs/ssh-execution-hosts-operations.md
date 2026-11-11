@@ -939,7 +939,8 @@ a repository whose whole history exceeds the bound starts on a host whose source
 holds most of it. An unmapped repository, or a host without the basis call,
 receives the whole history. A start whose bundle exceeds the bound even against
 the host's source is refused and names the repository: bring that source up to
-date on the host. `agents hosts check` lists every mapped source under
+date on the host. `agents hosts check` on a reachable, compatible host lists
+every mapped source under
 `sources` with its checked-out commit and how many commits of the repository's
 default branch it lacks (`missingCommits`, compared on GitHub), and names a
 source lacking more than 1000 as a `problem`; such a source does not fail the
