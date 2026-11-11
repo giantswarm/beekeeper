@@ -150,10 +150,10 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 	r.reset7d = r.t0.Add(167 * time.Hour)
 	r.claude[1], r.codex[1] = 1, 1
 	claudeProv := r.cfg.Capacity.Providers[claudeComm]
-	claudeProv.PaceCaps = []config.UsageBand{{UpTo: 0, Ceiling: 0}}
+	claudeProv.PaceCaps = []config.PaceCap{{OverBy: 0, Ceiling: 0}}
 	r.cfg.Capacity.Providers[claudeComm] = claudeProv
 	codexProv := r.cfg.Capacity.Providers["codex"]
-	codexProv.PaceCaps = []config.UsageBand{{UpTo: 0, Ceiling: 0}}
+	codexProv.PaceCaps = []config.PaceCap{{OverBy: 0, Ceiling: 0}}
 	r.cfg.Capacity.Providers["codex"] = codexProv
 	a, _ = r.app(false)
 	a.cfgPath = ""
