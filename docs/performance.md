@@ -40,8 +40,12 @@ times the size, its reads:
 [the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657).
 The idle pass's CPU and processes were known under the same issue until the
 loop stopped re-verifying unverified review requests every pass; their
-budgets now hold. The grown-log CPU budget now holds too, after the loop's
-lane views stopped searching the whole event log on every poll.
+budgets now hold. Since the loop's lane views stopped searching the whole
+event log on every poll, the grown-log CPU budget holds over the nightly
+two-minute window (0.442 s). Over a pull request's 30-second window it is
+still over (0.835 s), because the same reads are spread over a quarter of the
+passes. It stays known under that issue on pull requests, and the nightly
+run enforces it.
 The runner units of parked and off-roster sessions were known until
 [runner units outliving their sessions](https://github.com/giantswarm/beekeeper/issues/3675)
 was fixed; their budget of zero now holds.
