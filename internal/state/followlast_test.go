@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+// followLastWanted is the verb a FollowLast reader asks for; every other
+// event in its log is followLastOther.
+const (
+	followLastWanted = "wanted"
+	followLastOther  = "noise"
+)
+
 // FollowLast answers as Events(n, keep) does, reading each line once: a
 // verb that was never logged costs only what was appended since.
 func TestFollowLastReadsOnlyAppendedHistory(t *testing.T) {
@@ -14,11 +21,11 @@ func TestFollowLastReadsOnlyAppendedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Record(Event{Verb: "other"}, Event{Verb: "other"}); err != nil {
+	if err := s.Record(Event{Verb: followLastOther}, Event{Verb: followLastOther}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
-	keep := func(e Event) bool { calls++; return e.Verb == "wanted" }
+	keep := func(e Event) bool { calls++; return e.Verb == followLastWanted }
 	if got, err := FollowLast(s, "reader", 1, keep); err != nil || len(got) != 0 || calls != 2 {
 		t.Fatalf("cold: %+v calls=%d err=%v", got, calls, err)
 	}
@@ -26,7 +33,7 @@ func TestFollowLastReadsOnlyAppendedHistory(t *testing.T) {
 	if got, err := FollowLast(s, "reader", 1, keep); err != nil || len(got) != 0 || calls != 0 {
 		t.Fatalf("unchanged log read again: %+v calls=%d err=%v", got, calls, err)
 	}
-	if err := s.Record(Event{Verb: "wanted", Detail: "1"}, Event{Verb: "other"}, Event{Verb: "wanted", Detail: "2"}); err != nil {
+	if err := s.Record(Event{Verb: followLastWanted, Detail: "1"}, Event{Verb: followLastOther}, Event{Verb: followLastWanted, Detail: "2"}); err != nil {
 		t.Fatal(err)
 	}
 	calls = 0
@@ -56,7 +63,7 @@ func TestFollowSnapshotThrottlesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpoint := func() eventCheckpoint {
-		raw, err := os.ReadFile(filepath.Join(dir, "event-checkpoints", "reader.json"))
+		raw, err := os.ReadFile(filepath.Join(dir, "event-checkpoints", "reader.json")) //nolint:gosec // the test's own checkpoint
 		if err != nil {
 			t.Fatal(err)
 		}
