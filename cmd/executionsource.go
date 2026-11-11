@@ -41,6 +41,10 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	if _, err = publishGit(ctx, dir, "init", "--bare", repo); err != nil {
 		return r, nil, err
 	}
+	// The start's fetch fills the cache a later publication negotiates from,
+	// outside the publication's deadline.
+	cache := a.publicationCache(ctx, r.Repository)
+	borrowPublicationCache(repo, cache)
 	remote := "https://github.com/" + r.Repository + ".git"
 	if _, err = publishGit(ctx, repo, "fetch", "--no-tags", "--", remote, r.GitRef); err != nil {
 		return r, nil, err
@@ -52,6 +56,7 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	if _, err = publishGit(ctx, repo, "update-ref", "refs/heads/execution-source", head); err != nil {
 		return r, nil, err
 	}
+	keepInPublicationCache(ctx, cache, repo, "refs/heads/execution-source", publicationCacheSourceRef)
 	prerequisites := sourcePrerequisites(ctx, repo, head, basis)
 	if _, err = publishGit(ctx, repo, append([]string{gitBundle, workerGitHubCreate, stagedBundle, "refs/heads/execution-source"}, prerequisites...)...); err != nil {
 		return r, nil, err

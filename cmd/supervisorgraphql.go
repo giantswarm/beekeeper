@@ -119,8 +119,8 @@ func (a *app) heldLine(s loopGraphQLSpend) string {
 	switch {
 	case s.floorHeld(now, a.cfg.GitHub.Floor):
 		return fmt.Sprintf("loop GitHub held: GraphQL under github.floor %d, no loop read until it recovers", a.cfg.GitHub.Floor)
-	case restErr == nil && now.Before(rest.Reset) && rest.Spent+loopRESTReserve > loopRESTLimit:
-		return fmt.Sprintf("loop background scans held: REST %d of %d spent until %s; pull reads, reviews and merges go on", rest.Spent, loopRESTLimit, clock(a.now, rest.Reset))
+	case restErr == nil && now.Before(rest.Reset) && rest.held(a.cfg.GitHub.Floor):
+		return fmt.Sprintf("loop background scans held: REST %d of %d spent until %s; pull reads, reviews and merges go on", rest.Spent, rest.allowance(a.cfg.GitHub.Floor), clock(a.now, rest.Reset))
 	case s.boardHeld(st.Budget, loopBoard, a.cfg.GitHub.Floor, now, a.loopGraphQLCap()):
 		return fmt.Sprintf("loop GitHub held: board reads wait until %s (%d of %d spent, supervisor.graphQLLimit); pull reads, reviews and merges go on", clock(a.now, s.Reset), s.Spent, a.loopGraphQLCap())
 	}
@@ -348,15 +348,32 @@ func (l *supervisorLoop) observePullStep(ctx context.Context, ref string, change
 	return seen.pull, nil
 }
 
-// A reset is not evidence of recovery: wait for the watch to publish a
-// reading from the new window. Unknown and stale observations fail closed.
+// A reset is not evidence of recovery: wait for a reading from the new
+// window, the watch's or the held pass's own (refreshLoopBudget). Unknown
+// and stale observations fail closed.
 func loopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
 	if b == nil || b.GraphQL == nil {
 		return true
 	}
 	g := b.GraphQL
-	return boardBudgetLow(b, floor, now) || g.Remaining <= floor ||
-		now.Sub(g.At) > time.Minute || (!g.Reset.IsZero() && !now.Before(g.Reset))
+	return boardBudgetLow(b, floor, now) || g.Remaining <= floor || loopReadingStale(b, now)
+}
+
+// loopReadingStale: the saved GraphQL reading is missing, older than a
+// minute or of a window that has reset; no reading the loop can hold on.
+func loopReadingStale(b *state.Budget, now time.Time) bool {
+	if b == nil || b.GraphQL == nil {
+		return true
+	}
+	g := b.GraphQL
+	return now.Sub(g.At) > time.Minute || (!g.Reset.IsZero() && !now.Before(g.Reset))
+}
+
+// refreshLoopBudget takes and saves a fresh budget reading, the rate limit
+// reads alone: it spends no allowance and is not admitted under the floor.
+var refreshLoopBudget = func(a *app, ctx context.Context) error {
+	_, err := readLoopGraphQLBudget(a, ctx)
+	return err
 }
 
 // Shell probes and local conditions stay outside the GitHub lock. Only

@@ -376,7 +376,7 @@ func loopRESTSpendLine(a *app, s loopRESTSpend) string {
 		}
 	}
 	slices.Sort(steps)
-	line := fmt.Sprintf("loop REST spend: %d of %d", s.Spent, loopRESTLimit)
+	line := fmt.Sprintf("loop REST spend: %d of %d", s.Spent, s.allowance(a.cfg.GitHub.Floor))
 	if len(steps) > 0 {
 		line += " (" + strings.Join(steps, ", ") + ")"
 	}

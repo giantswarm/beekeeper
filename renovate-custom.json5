@@ -1,2 +1,18 @@
 // Repo-owned Renovate overrides. Edit this file; devctl preserves it.
-{}
+{
+  customManagers: [
+    {
+      // Merge validation installs this golangci-lint into builder images
+      // without one; keep it with the version CI's pre-commit workflow pins.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^internal/remotebuild/run\\.go$/',
+      ],
+      matchStrings: [
+        'github\\.com/golangci/golangci-lint/v2/cmd/golangci-lint@(?<currentValue>v[0-9.]+)',
+      ],
+      depNameTemplate: 'golangci/golangci-lint',
+      datasourceTemplate: 'github-releases',
+    },
+  ],
+}
