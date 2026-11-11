@@ -314,3 +314,34 @@ func deliveryObservationEvents(prev, next []state.Delivery, now time.Time) []sta
 	}
 	return state.DeliveryEvents(prev, eventNext, loopParty)
 }
+
+// deliveryTrackedPulls adds the pull requests of active deliveries to the
+// pass's tracked references. A pull request the desk leaves unread (outside
+// github.allowedOrgs or in supervisor.ownership.never) stays out: the watcher
+// never observes it, so tracking it would leave it unread in every pass and
+// no delivery observation would ever complete ("wip stale").
+func deliveryTrackedPulls(tracked []string, deliveries []state.Delivery, desk superloop.Desk) []string {
+	for _, d := range deliveries {
+		if !d.Active() {
+			continue
+		}
+		for _, ref := range d.Pulls {
+			if deliveryPullUnread(desk, ref) || slices.Contains(tracked, ref) {
+				continue
+			}
+			tracked = append(tracked, ref)
+		}
+	}
+	return tracked
+}
+
+// deliveryPullUnread reports whether desk leaves the pull request ref unread,
+// judged on its normalized repository name as supervisorLoop.unreadRepo does.
+func deliveryPullUnread(desk superloop.Desk, ref string) bool {
+	r, ok := parseRef(ref)
+	if !ok {
+		return false
+	}
+	reason, _ := desk.Unread(refName(r))
+	return reason != ""
+}
