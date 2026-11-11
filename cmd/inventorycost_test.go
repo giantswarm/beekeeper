@@ -110,6 +110,7 @@ func TestInventoryFailureNeverServesStalePullsAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.loadCache()
 	pulls, _, err := l.repoRecentUnmerged(t.Context(), repo)
 	if err == nil || err.Error() != failure.Error() || len(pulls) != 0 || reads != 1 {
 		t.Fatalf("restart lost cached failure: %v, %v; %d reads", pulls, err, reads)
