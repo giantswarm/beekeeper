@@ -25,7 +25,7 @@ func hostHoldBlocks(pin state.HostPin) bool {
 	if pin.Held == "" || strings.Contains(pin.Held, update.ErrProbationWatched.Error()) {
 		return false
 	}
-	return !strings.HasPrefix(pin.Held, "looking up release ") || !github.RateLimited(errors.New(pin.Held))
+	return !strings.HasPrefix(pin.Held, "looking up release ") && !github.RateLimited(errors.New(pin.Held))
 }
 
 func hostHoldWait(pin state.HostPin, b *state.Budget, now time.Time) bool {
