@@ -56,16 +56,17 @@ func TestAgentsReviewCommandTreeRelaysAndCompletes(t *testing.T) {
 	t.Cleanup(func() { github.RunGH, readDeskReview = oldGH, oldReview })
 	posts := 0
 	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
-		switch strings.Join(args[:2], " ") {
-		case "pr view":
+		cmdline := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(cmdline, "pr view"):
 			return []byte(`{"title":"assigned review","closingIssuesReferences":[]}`), nil
-		case "pr diff":
-			return []byte("assigned diff"), nil
+		case strings.HasPrefix(cmdline, "pr diff"):
+			return []byte("assigned review diff"), nil
 		default:
-			if len(args) == 4 && args[2] == "--paginate" {
+			if len(args) == 4 {
 				return []byte(`[[]]`), nil
 			}
-			want := []string{workerGitHubAPIGroup, "repos/" + r.Repository + "/pulls/7/reviews", "--method", "POST", reviewRelayRawField, "event=COMMENT", reviewRelayRawField, "commit_id=" + pull.Head, reviewRelayRawField, "body=" + body}
+			want := append(strings.Fields("api repos/"+r.Repository+"/pulls/7/reviews --method POST --raw-field event=COMMENT --raw-field commit_id="+pull.Head+" --raw-field"), "body="+body)
 			if strings.Join(args, "\n") != strings.Join(want, "\n") {
 				t.Fatalf("unexpected review write: %v", args)
 			}
@@ -78,8 +79,8 @@ func TestAgentsReviewCommandTreeRelaysAndCompletes(t *testing.T) {
 		want string
 	}{
 		{nil, "assigned review"},
-		{[]string{"--diff"}, "assigned diff"},
-		{[]string{"--body-file", bodyPath}, url},
+		{strings.Fields("--diff"), "assigned review diff"},
+		{strings.Fields("--body-file " + bodyPath), url},
 	} {
 		root := reviewCommandTree(t, a)
 		var out bytes.Buffer
@@ -96,13 +97,13 @@ func TestAgentsReviewCommandTreeRelaysAndCompletes(t *testing.T) {
 		t.Fatalf("posted %d reviews, want one", posts)
 	}
 	readDeskReview = func(_ context.Context, repo string, pr int, id string) (superloop.Review, error) {
-		if repo != r.Repository || pr != 7 || id != "100" {
+		if repo != r.Repository || pr != 7 || id != testReviewID {
 			t.Fatal("completion read a different review")
 		}
 		return superloop.Review{ID: id, URL: url, Author: "fixture-reviewer", Head: pull.Head, Commit: pull.Head, Body: body, Verdict: superloop.Approved, At: time.Now()}, nil
 	}
 	root := reviewCommandTree(t, a)
-	root.SetArgs([]string{agentsName, verbIdle, "--done", "--report", "Review: approved\n" + url, "--problem", ghNone})
+	root.SetArgs([]string{agentsName, verbIdle, flagDone, flagReport, "Review: approved\n" + url, flagProblem, ghNone})
 	if err := root.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +124,16 @@ func TestAgentsReviewCommandTreePreservesCoordinatorAndRejectsMixedForms(t *test
 	if err := root.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), "CI must be green") {
 		t.Fatalf("coordinator review did not enforce green CI: %v", err)
 	}
-	for _, args := range [][]string{
-		{loopPR, "--diff"}, {loopPR, "--body-file", "unused.md"},
-		{"--model", defaultReviewModel}, {"--verdict"}, {"--nits-of", loopHead}, {"--light-lines", "10"},
-		{loopPR, loopPR},
+	for _, line := range []string{
+		loopPR + " --diff",
+		loopPR + " --body-file unused.md",
+		modelFlag + " " + defaultReviewModel,
+		"--verdict",
+		"--nits-of " + loopHead,
+		"--light-lines 10",
+		loopPR + " " + loopPR,
 	} {
+		args := strings.Fields(line)
 		root = reviewCommandTree(t, r.a)
 		root.SetArgs(append([]string{agentsName, taskKindReview}, args...))
 		if err := root.ExecuteContext(t.Context()); err == nil {

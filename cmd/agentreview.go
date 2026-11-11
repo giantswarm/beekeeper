@@ -41,9 +41,9 @@ with execution review flags.`,
 			if err := cobra.MaximumNArgs(1)(cmd, args); err != nil {
 				return err
 			}
-			flags := []string{"model", "nits-of", "light-lines", "verdict"}
+			flags := strings.Fields("model nits-of light-lines verdict")
 			if len(args) == 1 {
-				flags = []string{"diff", "body-file"}
+				flags = strings.Fields("diff body-file")
 			}
 			for _, flag := range flags {
 				if cmd.Flags().Changed(flag) {
