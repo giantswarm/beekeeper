@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -54,9 +55,13 @@ func TestFatalHarnessHealthPrecedesSlowOptionalProbes(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	if err := a.fatalScan(t.Context(), dir); err != nil {
-		t.Fatal(err)
-	}
+	// Advance the observation deadline only when the slow probe blocks. Real
+	// configuration I/O and CI scheduling must not consume this test budget.
+	synctest.Test(t, func(t *testing.T) {
+		if err := a.fatalScan(t.Context(), dir); err != nil {
+			t.Fatal(err)
+		}
+	})
 	if starts != 1 {
 		t.Fatalf("verified harness did not receive recovery: %d starts", starts)
 	}
