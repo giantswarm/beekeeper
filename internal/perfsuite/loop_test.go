@@ -16,9 +16,10 @@ import (
 )
 
 // loopIssue is the open issue that has the loop over its budgets today: on an
-// event log four times the size, an idle pass reads several times as much and
-// costs more CPU than the budget. Idle passes on the desk of record are within
-// their CPU and process budgets since its review-recovery backoff.
+// event log four times the size, an idle pass reads several times as much,
+// and over the short windows it still costs more CPU than the budget. Idle
+// passes on the desk of record are within their CPU and process budgets since
+// its review-recovery backoff.
 const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 
 // Loop budgets per pass of the supervisor loop on the desk of record. An
@@ -26,7 +27,7 @@ const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 // 30-second production interval its CPU is a few percent of one core.
 var (
 	loopIdleCPU      = limit{Max: 0.5}
-	loopGrownCPU     = limit{Max: loopIdleCPU.Max, Known: loopIssue}
+	loopGrownCPU     = limit{Max: loopIdleCPU.Max}
 	loopIdleRead     = limit{Max: 8}
 	loopIdleChildren = limit{Max: 5}
 	// The event log grows; an idle pass must not: at most this factor of
@@ -174,7 +175,13 @@ func TestLoopBudgets(t *testing.T) {
 	cpu, read, write, children = l.window(t, win, o.loopInterval)
 	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack, Known: loopIssue}
 	rep.check(t, "idle pass, 4x event log", "read", read, grown)
-	rep.check(t, "idle pass, 4x event log", "cpu", cpu, loopGrownCPU)
+	// The long windows hold the grown log's CPU budget; the 30-second ones
+	// still measure it over (CircleCI, 0.87 s), known.
+	grownCPU := loopGrownCPU
+	if win < 2*time.Minute {
+		grownCPU.Known = loopIssue
+	}
+	rep.check(t, "idle pass, 4x event log", "cpu", cpu, grownCPU)
 	rep.check(t, "idle pass, 4x event log", "write", write, measured)
 	rep.check(t, "idle pass, 4x event log", "children", children, loopIdleChildren)
 	if idleRead > 0 {

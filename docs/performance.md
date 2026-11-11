@@ -36,8 +36,9 @@ A budget that an open issue already exceeds today carries that issue
 (`limit.Known`). The report shows it without failing. The test fails once
 the value is within budget, so the marker is removed and the budget holds
 from then on. Today's known one: an idle loop pass on an event log four
-times the size, its reads and CPU:
+times the size, its reads, and its CPU over 30-second windows:
 [the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657).
+Over the long windows that CPU budget holds.
 The idle pass's CPU and processes were known under the same issue until the
 loop stopped re-verifying unverified review requests every pass; their
 budgets now hold.
