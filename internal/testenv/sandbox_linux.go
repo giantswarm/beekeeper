@@ -83,6 +83,7 @@ func WorkflowEnv() []string {
 		"XDG_STATE_HOME=/work/home/state",
 		"XDG_CACHE_HOME=/work/home/cache",
 		"BEEKEEPER_CONFIG=/work/config.yaml",
+		"BEEKEEPER_LOADAVG=0.10 0.10 0.10",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_ALLOW_PROTOCOL=file:https",

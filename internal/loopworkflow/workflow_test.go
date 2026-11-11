@@ -84,7 +84,7 @@ func runWorkflow(t *testing.T, binary, scenario string) {
 	must(os.Symlink(realGo, filepath.Join(dir, "bin", "go")))
 	env := []string{
 		"HOME=" + filepath.Join(dir, "home"), "XDG_CONFIG_HOME=" + filepath.Join(dir, "home"), "XDG_STATE_HOME=" + filepath.Join(dir, "home"),
-		"PATH=" + filepath.Join(dir, "bin"), "LANG=C.UTF-8", "TZ=UTC", "BEEKEEPER_CONFIG=" + filepath.Join(dir, "config.yaml"),
+		"PATH=" + filepath.Join(dir, "bin"), "LANG=C.UTF-8", "TZ=UTC", envLoadavg, "BEEKEEPER_CONFIG=" + filepath.Join(dir, "config.yaml"),
 		"FIXTURE_DIR=" + dir, "FIXTURE_GIT=" + realGit, "FIXTURE_CASE=" + scenario,
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_ALLOW_PROTOCOL=file", "GIT_TERMINAL_PROMPT=0",
 		"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid",

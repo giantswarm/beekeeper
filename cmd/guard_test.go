@@ -78,6 +78,7 @@ func TestMain(m *testing.M) {
 	// gives it a machine.
 	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
 	liveDisk = func(*app) (diskMachine, error) { return diskMachine{}, errors.New("no disk machine in a test") }
+	mergeReadLoad = func() ([3]float64, error) { return [3]float64{}, nil }
 	// Nor does a doctor move the machine's claude daemon: it finds none in
 	// a beekeeper unit; a test of the move names its own.
 	liveDaemonsInUnits = func(*proc.Table) []daemonUnit { return nil }
