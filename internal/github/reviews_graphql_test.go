@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	graphReviewHead      = `{"data":{"viewer":{"login":"fixture-person"},"repository":{"pullRequest":{"id":"P7","headRefOid":"h","author":{"login":"fixture-person","type":"User"},"commits":{"nodes":[{"commit":{"oid":"h","committedDate":"2026-10-21T08:00:00Z"}}]}}}}`
+	graphReviewHead      = `{"data":{"viewer":{"login":"fixture-person"},"repository":{"pullRequest":{"id":"P7","headRefOid":"h","author":{"login":"fixture-person","type":"User"},"commits":{"nodes":[{"commit":{"oid":"h","committedDate":"2026-10-21T08:00:00Z"}}]}}}}}`
 	associationNone      = "NONE"
 	deskChangesRequested = "Review: changes requested"
 )
