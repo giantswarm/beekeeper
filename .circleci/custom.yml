@@ -147,7 +147,10 @@ jobs:
     - architect/go-cache-restore
     - run:
         name: Run the unit tests linked with a stable release's version, as a stable tag's go-build does
-        command: make test VERSION=v1.0.0
+        # Compilation plus the cmd suite can exceed the default 10m silence
+        # limit. Keep Go's test timeouts and bound the whole make invocation.
+        no_output_timeout: 20m
+        command: timeout 25m make test VERSION=v1.0.0
 
   chart-test:
     docker:
