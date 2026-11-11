@@ -22,6 +22,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const mergeReconcile = "reconcile"
+
 func (a *app) mergeAuthorityRoot() string {
 	return filepath.Join(a.cfg.StateDir, "execution-merge-authority")
 }
@@ -161,17 +163,36 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 	}}
 	issue.Flags().StringVar(&head, "head", "", "independently reviewed exact head")
 	c.AddCommand(issue)
-	for _, verb := range []string{"inspect", "revoke", "reconcile"} {
+	for _, verb := range []string{"inspect", "revoke", mergeReconcile} {
 		c.AddCommand(&cobra.Command{Use: verb + " <authorization>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
 			}
-			var grant execution.MergeAuthorization
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if !supervising(me) {
-					return nil, refused("only the supervisor loop or a person (--as) controls merge authorizations, never a session")
+			if !supervising(me) {
+				return refused("only the supervisor loop or a person (--as) controls merge authorizations, never a session")
+			}
+			grant, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), args[0])
+			if err != nil {
+				return err
+			}
+			var pull struct {
+				State string `json:"state"`
+				Head  string `json:"headRefOid"`
+			}
+			if verb == mergeReconcile {
+				if !grant.Consumed {
+					return refused("authorization has no merge attempt to reconcile")
 				}
+				out, readErr := github.RunGH(cmd.Context(), "pr", "view", strconv.Itoa(grant.PR), "--repo", grant.Repository, "--json", "state,headRefOid")
+				if readErr != nil {
+					return readErr
+				}
+				if json.Unmarshal(out, &pull) != nil {
+					return errors.New("invalid merge reconciliation")
+				}
+			}
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				grant, err = execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), args[0])
 				if err != nil {
 					return nil, err
@@ -179,20 +200,9 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 				switch verb {
 				case "revoke":
 					grant.Revoked = true
-				case "reconcile":
+				case mergeReconcile:
 					if !grant.Consumed {
 						return nil, refused("authorization has no merge attempt to reconcile")
-					}
-					out, readErr := github.RunGH(cmd.Context(), "pr", "view", strconv.Itoa(grant.PR), "--repo", grant.Repository, "--json", "state,headRefOid")
-					if readErr != nil {
-						return nil, readErr
-					}
-					var pull struct {
-						State string `json:"state"`
-						Head  string `json:"headRefOid"`
-					}
-					if json.Unmarshal(out, &pull) != nil {
-						return nil, errors.New("invalid merge reconciliation")
 					}
 					grant.Outcome = verdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {

@@ -2520,7 +2520,7 @@ const toolCheckEvery = 30 * time.Second
 // step. The gate whose run of the window's merge ended calls closeToolWindow
 // at once instead.
 func (a *app) pollToolWindow(ctx context.Context, by state.Party) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil || !toolWindowOpen(st) {
 		return
 	}

@@ -14,6 +14,9 @@ every session does. What must be shared lives in a small state directory that su
 restarts: the supervisor, grants, holds, registered agents, notes, timers and session records. Every session and the
 supervisor use the same binary.
 
+Local [session reports](docs/session-reports.md) use a durable supervisor inbox;
+read-only status commands read the last atomic snapshot without the state lock.
+
 The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned

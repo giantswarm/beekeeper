@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const noteAddedEvent = "note.add"
+
 func (a *app) noteCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "note",
@@ -222,6 +224,27 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 					return refused("--holds with --fold-into: the open note's hold stands; file the hold on a note of its own")
 				}
 			}
+			if a.queueReports && a.managedExecutionID() == "" && !into.Central && !a.centralNote(&n, holds, foldInto) {
+				checked := guides(person, &n)
+				if checked {
+					if missing := draft.missing(); len(missing) > 0 {
+						return usageErr("note refused, it lacks: %s", strings.Join(missing, "; "))
+					}
+				} else if missing := draft.unanswered(); n.Kind == noteDecision && len(missing) > 0 {
+					return usageErr("note refused, it lacks: %s", strings.Join(missing, "; "))
+				}
+				if n.Kind == noteDecision {
+					if missing := draft.unrenderable(forWho); len(missing) > 0 {
+						return usageErr("note refused: %s", strings.Join(missing, "; "))
+					}
+					if len(linked) == 0 {
+						return usageErr("decision needs --ref")
+					}
+				} else if draft.Recommend != 0 {
+					return usageErr("--recommend is a decision's")
+				}
+				return a.submitReport(sessionReport{Kind: paramNote, By: me, Note: n, FoldInto: foldInto, Checked: checked, Draft: draft, Holds: holds})
+			}
 			// Classified before any fold: a fold puts the ask before the
 			// open note's person as surely as a note of its own.
 			if n.Kind == noteDecision {
@@ -285,13 +308,16 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				}
 			}
 			if holds {
-				st, err := a.store.Read()
+				st, err := a.store.Peek()
 				if err != nil {
 					return err
 				}
 				if err = a.holdAll(cmd.Context(), st.Notes, &n, linked); err != nil {
 					return err
 				}
+			}
+			if a.queueReports {
+				return a.submitReport(sessionReport{Kind: paramNote, By: me, Note: n, FoldInto: foldInto, Checked: checked, Stage: stage})
 			}
 			var folded *state.Note
 			fold := func(o *state.Note, why string) []state.Event {
@@ -324,7 +350,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				st.NextNote++
 				n.ID = st.NextNote
 				st.Notes = append(st.Notes, n)
-				return append([]state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
+				return append([]state.Event{event(me, noteAddedEvent, "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
 			})
 			if err != nil {
 				return err
@@ -484,7 +510,7 @@ naming both. --post is the machine's notes' only.`,
 			if err != nil {
 				return err
 			}
-			st, err := a.store.Read()
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
@@ -726,7 +752,7 @@ events in the audit log. Logs note.reopened.`,
 // noteList prints the open notes, those for forWho alone with it set;
 // full prints each note's whole text and what it names.
 func (a *app) noteList(stderr io.Writer, forWho string, full bool) error {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return err
 	}
@@ -785,7 +811,7 @@ func (a *app) doneSources(named []noteID) (local, central []int, err error) {
 	if a.centralNotesOn() && slices.ContainsFunc(named, func(id noteID) bool { return id.Bare }) {
 		open, cerr = a.listCentralNotes()
 	}
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, nil, err
 	}

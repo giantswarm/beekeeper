@@ -203,7 +203,7 @@ func (g *gateRun) recordTakenMerge(p github.Pull, handCut string) error {
 }
 
 func (w *watcher) staleMerges() {
-	st, err := w.store.Read()
+	st, err := w.store.Peek()
 	if err != nil {
 		return
 	}

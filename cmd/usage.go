@@ -230,7 +230,7 @@ func (a *app) syncAgyQuotaFromState(st *state.State, now time.Time) {
 		return
 	}
 	if st == nil && a.store != nil {
-		st, _ = a.store.Read()
+		st, _ = a.store.Peek()
 	}
 	if st == nil {
 		return
@@ -1326,7 +1326,7 @@ func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessi
 func (a *app) providersUsageHighBlockForAgent(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session, ag *state.Agent) string {
 	if ag != nil {
 		if st == nil && a.store != nil {
-			st, _ = a.store.Read()
+			st, _ = a.store.Peek()
 		}
 		if st == nil {
 			st = &state.State{}

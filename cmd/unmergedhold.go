@@ -314,7 +314,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 	}
 	var st *state.State
 	if a.store != nil {
-		st, _ = a.store.Read()
+		st, _ = a.store.Peek()
 	}
 	addRepairPull := func(raw string) {
 		r, ok := parseRef(raw)
@@ -641,7 +641,7 @@ func (a *app) skipUnmergedBacklog(ctx context.Context, warn io.Writer, cands []b
 	now := a.timeNow()
 	var st *state.State
 	if a.store != nil {
-		st, _ = a.store.Read()
+		st, _ = a.store.Peek()
 	}
 	checked := map[string]string{}
 	for {
