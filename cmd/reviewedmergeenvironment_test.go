@@ -19,12 +19,12 @@ import (
 
 func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 	const (
-		modeQuotaPass        = "quota then pass"
-		modeQuotaCI          = "quota then CI"
-		modeQuotaPersists    = "quota persists"
-		modeCodeFailure      = "code failure"
-		modeRunnerDown       = "runner unavailable"
-		modeCIAlreadyGreen   = "CI already green"
+		modeQuotaPass      = "quota then pass"
+		modeQuotaCI        = "quota then CI"
+		modeQuotaPersists  = "quota persists"
+		modeCodeFailure    = "code failure"
+		modeRunnerDown     = "runner unavailable"
+		modeCIAlreadyGreen = "CI already green"
 	)
 	for _, mode := range []string{modeQuotaPass, modeQuotaCI, modeQuotaPersists, modeCodeFailure, modeRunnerDown, modeCIAlreadyGreen} {
 		t.Run(mode, func(t *testing.T) {
