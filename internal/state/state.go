@@ -425,10 +425,13 @@ type Agent struct {
 	// while it waits; nil: none waits.
 	Import *ImportWait `json:"import,omitempty"`
 	// ResumedWait is when the reopen after a headless turn that ended on a
-	// background wait, its task open, resumed the agent headless (once per
-	// task), and ResumedOn the wait it named; zero: never.
-	ResumedWait time.Time `json:"resumedWait,omitzero"`
-	ResumedOn   string    `json:"resumedOn,omitempty"`
+	// unfinished task resumed the agent headless, and ResumedOn the wait
+	// it named; zero: never. Continuations are bounded per assignment.
+	ContinuationCount     int       `json:"continuationCount,omitempty"`
+	ContinuationTask      time.Time `json:"continuationTask,omitzero"`
+	ContinuationExhausted time.Time `json:"continuationExhausted,omitzero"`
+	ResumedWait           time.Time `json:"resumedWait,omitzero"`
+	ResumedOn             string    `json:"resumedOn,omitempty"`
 	// Undelivered is why agents start delivered no turn of the agent's
 	// task, which waits until agents wake delivers one; empty: delivered.
 	Undelivered string `json:"undelivered,omitempty"`
