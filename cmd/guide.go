@@ -678,7 +678,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardH
 	p("%s\n", intro)
 	p("## Recorded decisions\n\n%s", decisionHistoryText(decisions))
 	p("## Emergency grant\n\n%s\n", emergencyText(st, a.now))
-	p("Use a covering active grant immediately to unblock a system standstill and report the action. Relay needs no new words from the person; never extend its deadline implicitly.\n")
+	p("Check `beekeeper supervisor status` on takeover and at least every five minutes while pending work is held. When the loop holds every start or every merge for five minutes, use a covering active grant in that turn and report the command and outcome; act sooner on a known standstill. Carry its first-observed time and attempted recovery into the handover; relay never restarts the clock. Preserve the person's stops, explicit holds and CI gates. Relay needs no new words from the person; never extend the grant's deadline implicitly. Read `beekeeper answer history` before asking. Ask only when no grant covers the action, with a push notification through the configured notification channel, not background chat alone. Record notification failure as a problem and continue independent work.\n")
 	p("## Pending state, %s\n", a.stamp(a.now))
 	if s != "" {
 		section(p, "Standing instructions", false, "")
@@ -978,6 +978,8 @@ lines that save would have recorded, again only when those lines change.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			changes, closeChanges := state.Changes(ctx, filepath.Join(a.store.Dir(), "state.json"), filepath.Join(a.store.Dir(), "events.jsonl"))
+			defer closeChanges()
 			tick := time.NewTicker(a.cfg.Watch.Interval.Duration)
 			defer tick.Stop()
 			if a.cfg.Guide.Person == "" {
@@ -1004,6 +1006,11 @@ lines that save would have recorded, again only when those lines change.`,
 				case <-ctx.Done():
 					return nil
 				case <-tick.C:
+				case <-changes:
+					// Coalesce a transaction's outbox writes before rereading.
+					if !pauseChange(ctx) {
+						return nil
+					}
 				}
 			}
 		},
@@ -1192,7 +1199,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	if len(gone) == 0 {
 		return out, nil
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.store, "guide-closed-notes", "v1", func(e state.Event) bool {
 		return e.Verb == answerRecorded || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken
 	})
 	if err != nil {

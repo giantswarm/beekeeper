@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -65,7 +67,20 @@ type deliveryReleaseResult struct {
 	at           time.Time
 }
 
+func (l *supervisorLoop) closedIssues(now time.Time) map[string]bool {
+	closed := map[string]bool{}
+	l.mu.Lock()
+	for ref, o := range l.opens {
+		if !o.open && now.Sub(o.at) < loopOpenEvery {
+			closed[ref] = true
+		}
+	}
+	l.mu.Unlock()
+	return closed
+}
+
 func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Input, unread map[string]bool) error {
+	commitCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, loopPlanningObservationTimeout)
 	defer cancel()
 	l.mu.Lock()
@@ -75,28 +90,27 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 	if err != nil {
 		return err
 	}
-	in.ClosedIssues = map[string]bool{}
 	// Reuse successful issue observations and the existing fail-open issue reader.
 	// An unreadable issue is never evidence that its delivery ended.
-	l.mu.Lock()
-	for ref, o := range l.opens {
-		if !o.open && in.Now.Sub(o.at) < loopOpenEvery {
-			in.ClosedIssues[ref] = true
-		}
-	}
-	l.mu.Unlock()
+	in.ClosedIssues = l.closedIssues(in.Now)
+	// Leave half the planning allowance for release probes. Otherwise slow
+	// issue reads can consume the whole context before any release gets a
+	// turn, retaining completed deliveries in WIP indefinitely.
+	issueCtx, cancelIssues := context.WithTimeout(ctx, loopPlanningObservationTimeout/2)
+	defer cancelIssues()
 	issueReads := 0
 	for _, d := range st.Deliveries {
-		if ctx.Err() != nil || issueReads >= sweepReadsPerPass {
+		if issueCtx.Err() != nil || issueReads >= sweepReadsPerPass {
 			break
 		}
 		if d.Active() && len(d.Pulls) == 0 {
 			issueReads++
 		}
-		if d.Active() && len(d.Pulls) == 0 && !l.open(ctx, d.Ref) {
+		if d.Active() && len(d.Pulls) == 0 && !l.open(issueCtx, d.Ref) {
 			in.ClosedIssues[d.Ref] = true
 		}
 	}
+	cancelIssues()
 	preview := superloop.Deliveries(in, st.Deliveries)
 	hasReleaseProbe := ctx.Err() == nil && slices.ContainsFunc(preview, func(d state.Delivery) bool {
 		if d.Step != state.DeliveryReleasing || (!d.ReleaseChecked.IsZero() && in.Now.Sub(d.ReleaseChecked) < deliveryReleaseEvery) {
@@ -111,19 +125,22 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 	if hasReleaseProbe {
 		// Commit discovered identities before any release probe so its reservation
 		// and step event survive a crash even for a newly observed external merge.
-		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-			next := superloop.Deliveries(in, current.Deliveries)
-			events := deliveryObservationEvents(current.Deliveries, next, in.Now)
-			current.Deliveries = next
-			return events, nil
-		}); err != nil {
+		if err := updateDeliveryObservation(ctx, l.a.store, in, nil, false); err != nil {
 			return err
 		}
 		st, err = l.a.store.Read()
 		if err != nil {
 			return err
 		}
-		next := st.Deliveries
+		next := slices.Clone(st.Deliveries)
+		// Old failures must not repeatedly consume the bounded probe allowance.
+		// With a backlog, a pass can outlast deliveryReleaseEvery: iterating in
+		// ledger order then retries its first entries forever while later
+		// published releases keep occupying WIP. Oldest attempts go first;
+		// zero timestamps naturally put never-probed releases ahead of retries.
+		slices.SortStableFunc(next, func(a, b state.Delivery) int {
+			return a.ReleaseChecked.Compare(b.ReleaseChecked)
+		})
 		// One bounded attempt per pull, shared by all its issues, persisted even on
 		// error so process restarts cannot turn an outage into a request storm.
 		for _, d := range next {
@@ -163,9 +180,21 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 			}
 		}
 	}
-	return l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-		// Derive again under the lock: concurrent starts and gate verdicts survive.
-		next := superloop.Deliveries(in, current.Deliveries)
+	complete := len(unread) == 0 && !l.sweepIncomplete
+	for _, ref := range in.OpenPulls {
+		if reason, _ := in.Desk.Unread(ref); reason != "" {
+			continue
+		}
+		if _, ok := in.Pulls[ref]; !ok {
+			complete = false
+		}
+	}
+	return updateDeliveryObservation(commitCtx, l.a.store, in, results, complete)
+}
+
+func updateDeliveryObservation(ctx context.Context, store state.Store, in superloop.Input, results map[string]deliveryReleaseResult, complete bool) error {
+	return commitDeliveryObservation(ctx, store, in.Now, complete, func(prev []state.Delivery) []state.Delivery {
+		next := superloop.Deliveries(in, prev)
 		for i := range next {
 			for _, ref := range next[i].Pulls {
 				if r, ok := results[ref]; ok {
@@ -176,22 +205,46 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 				}
 			}
 		}
-		events := deliveryObservationEvents(current.Deliveries, next, in.Now)
-		current.Deliveries = next
-		complete := len(unread) == 0 && !l.sweepIncomplete
-		for _, ref := range in.OpenPulls {
-			if reason, _ := in.Desk.Unread(ref); reason != "" {
-				continue
-			}
-			if _, ok := in.Pulls[ref]; !ok {
-				complete = false
-			}
-		}
-		if complete {
-			current.DeliveriesAt = in.Now
-		}
-		return events, nil
+		return next
 	})
+}
+
+var errDeliveryObservationChanged = errors.New("delivery records changed during observation")
+
+// Ownership classification and event derivation can be expensive on a large
+// desk. Do both without the exclusive state lock, then compare only the records
+// they depended on. Other state writers (agents, timers, notes) never invalidate
+// the result and their changes are retained by the commit. A concurrent delivery
+// writer requires a fresh derivation, never an overwrite of its verdict/identity.
+func commitDeliveryObservation(ctx context.Context, store state.Store, now time.Time, complete bool, derive func([]state.Delivery) []state.Delivery) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		st, err := store.Read()
+		if err != nil {
+			return err
+		}
+		next := derive(st.Deliveries)
+		events := deliveryObservationEvents(st.Deliveries, next, now)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err = store.Update(func(current *state.State) ([]state.Event, error) {
+			if !reflect.DeepEqual(current.Deliveries, st.Deliveries) {
+				return nil, errDeliveryObservationChanged
+			}
+			current.Deliveries = next
+			if complete && current.DeliveriesAt.Before(now) {
+				current.DeliveriesAt = now
+			}
+			return events, nil
+		})
+		if !errors.Is(err, errDeliveryObservationChanged) {
+			return err
+		}
+	}
+	return errDeliveryObservationChanged
 }
 
 func applyDeliveryVerdict(d *state.Delivery, verdict, tag string, now time.Time) {

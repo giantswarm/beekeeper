@@ -8,6 +8,17 @@ linters:
     - gosec
     - goconst
     - govet
+  settings:
+    gosec:
+      excludes:
+        # G703 varies on identical trees with golangci-lint 2.14.0:
+        # 11bb848e passed, while its identical squash tree dc2a3841 failed.
+        # Pass: https://github.com/giantswarm/beekeeper/actions/runs/42914026530
+        # Fail: https://github.com/giantswarm/beekeeper/actions/runs/42919437147
+        # Upstream taint traversal: https://github.com/securego/gosec/issues/1712
+        # Re-enable once the pinned analyzer is verified deterministic here.
+        # Keep G304 and every other gosec rule enabled.
+        - G703
 
 issues:
   max-issues-per-linter: 0

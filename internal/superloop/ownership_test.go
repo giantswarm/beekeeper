@@ -82,34 +82,6 @@ func TestANeverRepositoryIsLeftAloneWhateverElseSays(t *testing.T) {
 		t.Errorf("a never repository is read: %v", got)
 	}
 	left(t, Plan(Input{Workers: w, Rounds: 1, Desk: d, Now: t0}), leftNever)
-	// A pull request elsewhere that names it: its title, its branch or a
-	// path it changes, overridden or not.
-	for _, p := range []Pull{{Title: "chore: update tool (team-b)"}, {Branch: "reposetup/update-tool"}, {Files: []string{"tool/values.yaml"}}} {
-		pulls := owned(ourTeam)
-		q := pulls[pr]
-		q.Title, q.Branch, q.Files = p.Title, p.Branch, p.Files
-		pulls[pr] = q
-		in := Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0,
-			Taken: taken(t, t0, Action{Key: overrideKey(pr), Kind: KindOverride, Ref: pr})}
-		if a := left(t, Plan(in), leftNever); !strings.Contains(a.Message, tool) {
-			t.Errorf("leave = %+v", a)
-		}
-	}
-	// A name inside a longer one names nothing.
-	pulls := owned(ourTeam)
-	q := pulls[pr]
-	q.Title, q.Files = "fix the toolbox", []string{".toolrc", "tools/x"}
-	pulls[pr] = q
-	only(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), KindReview)
-	// Changes gh lists only in part cannot be checked: left alone.
-	q.ChangedFiles = 300
-	pulls[pr] = q
-	if a := left(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), leftFiles); !strings.Contains(a.Message, "300 files and gh lists 2") {
-		t.Errorf("leave = %+v", a)
-	}
-	// Without a never list there is nothing to check them against.
-	d.Never = nil
-	only(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), KindReview)
 }
 
 func TestAWildcardNeverRepositoryNamesNothing(t *testing.T) {
@@ -119,22 +91,6 @@ func TestAWildcardNeverRepositoryNamesNothing(t *testing.T) {
 	only(t, Plan(Input{Workers: parked(t0), Pulls: owned(ourTeam), Rounds: 1, Desk: d, Now: t0}), KindReview)
 	w := []Worker{{Name: worker, ReviewRequested: true, ParkedOn: "x/anything#2", ParkedAt: t0}}
 	left(t, Plan(Input{Workers: w, Rounds: 1, Desk: d, Now: t0}), leftNever)
-}
-
-func TestGitHubRepositoryExclusionStillApplies(t *testing.T) {
-	for _, pattern := range []string{"upstream/github", "up*/github"} {
-		d := Desk{Never: []string{pattern}}
-		for _, p := range []Pull{
-			{Ref: "upstream/github#1"},
-			{Ref: pr, Title: "fix: update upstream/github"},
-			{Ref: pr, Branch: "reposetup/upstream/github"},
-			{Ref: pr, Files: []string{"repos/upstream/github/config.yaml"}},
-		} {
-			if o, reason, _ := d.owner(p, true); o != nobodys || reason != leftNever {
-				t.Errorf("%s allowed %+v: owner=%v reason=%s", pattern, p, o, reason)
-			}
-		}
-	}
 }
 
 func TestUnreadTeamFilesLeaveOnlyTheReviewListAndOverrides(t *testing.T) {
@@ -372,20 +328,52 @@ func TestOverrides(t *testing.T) {
 	}
 }
 
-func TestNameWord(t *testing.T) {
-	for text, want := range map[string]bool{
-		"chore(repositories): update nancy-fixer (team-shield)": true,
-		"reposetup/update-nancy-fixer":                          true,
-		"nancy-fixer/values.yaml":                               true,
-		".nancy-ignore":                                         false,
-		"nancy-fixers":                                          false,
-		"xnancy-fixer":                                          false,
+func TestNeverReferencesStillReceiveReviewAndGo(t *testing.T) {
+	for _, p := range []Pull{
+		{Title: "fix: update o/tool"},
+		{Body: "Context: https://github.com/o/tool/issues/1"},
+		{Branch: "reposetup/update-tool"},
+		{Files: []string{"repos/o/tool/values.yaml"}, ChangedFiles: 300},
+		{Reviews: []Review{{Body: "See https://github.com/o/tool/issues/1"}}},
 	} {
-		if got := nameWord("o/nancy-fixer").MatchString(text); got != want {
-			t.Errorf("nameWord(nancy-fixer) on %q = %v, want %v", text, got, want)
+		d := desk()
+		d.Review = []string{"o/*"}
+		p.Ref, p.URL, p.State, p.Head = pr, prURL, Open, head1
+		p.Author, p.Green = me, true
+		in := Input{Workers: parked(t0), Pulls: map[string]Pull{pr: p}, Rounds: 1, Desk: d, Now: t0}
+		a := only(t, Plan(in), KindReview)
+		in.Taken = taken(t, t0, a)
+		p.Reviews = append(p.Reviews, Review{ID: "R1", Head: head1, Verdict: Approved, At: t1})
+		in.Pulls[pr] = p
+		in.Now = t1
+		only(t, Plan(in), KindGo)
+	}
+}
+
+func TestRecordedLeaveDoesNotBlockReevaluation(t *testing.T) {
+	for _, head := range []string{head1, head2} {
+		in := Input{Workers: parked(t0), Pulls: owned(ourTeam), Rounds: 1, Desk: desk(), Now: t1,
+			Taken: taken(t, t0, Action{Key: leaveKey(pr, leftNever), Kind: KindLeave, Ref: pr, Agent: worker, Head: head1})}
+		p := in.Pulls[pr]
+		p.Head = head
+		p.Body = "Context: https://github.com/o/tool/issues/1"
+		in.Pulls[pr] = p
+		if a := only(t, Plan(in), KindReview); a.Head != head {
+			t.Errorf("review head = %s, want %s", a.Head, head)
+		}
+		// The repository exclusion still wins over an old leave and a new head.
+		in.Desk.Never = []string{repoOf(pr)}
+		if acts := Plan(in); slices.Contains(kinds(acts), KindReview) || slices.Contains(kinds(acts), KindGo) {
+			t.Errorf("excluded repository got %+v", acts)
 		}
 	}
-	if !nameWord("o/nancy-*").MatchString("bump nancy-fixer") {
-		t.Error("a pattern names nothing")
+}
+
+func TestNeverRepositoryPatternsOutrankOverrides(t *testing.T) {
+	for _, pattern := range []string{"upstream/github", "up*/github", "UPSTREAM/*"} {
+		d := Desk{Never: []string{pattern}, Review: []string{"*/*"}}
+		if o, reason, _ := d.owner(Pull{Ref: "upstream/github#1"}, true); o != nobodys || reason != leftNever {
+			t.Errorf("%s allowed excluded repository: owner=%v reason=%s", pattern, o, reason)
+		}
 	}
 }

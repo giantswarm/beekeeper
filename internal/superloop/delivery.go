@@ -120,6 +120,9 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		d := &out[i]
 		d.Pulls = slices.Clone(d.Pulls)
 		before := d.Step
+		if d.Outcome == state.OutcomeNoChange || d.Outcome == state.OutcomeBlocked || d.Outcome == state.OutcomeStalled {
+			continue
+		}
 		// Preserve unknown ownership on partial reads; positive exclusion applies
 		// to linked issue deliveries as well as temporary PR seeds.
 		if reason, _ := in.Desk.unread(d.Ref); reason != "" {
@@ -146,6 +149,23 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		}
 		if d.Since.After(in.Now) {
 			continue
+		}
+		// A PR sweep establishes ownership, not intent to work. Migrate old
+		// workerless PR seeds too; a new head or explicit loop action adopts it.
+		if slices.Contains(d.Pulls, d.Ref) {
+			p, read := in.Pulls[d.Ref]
+			if read {
+				changed := d.Heads[d.Ref] != "" && p.Head != "" && d.Heads[d.Ref] != p.Head
+				engaged := d.Agent != "" || changed || len(l.rounds[d.Ref]) > 0 || l.goHead[d.Ref] != ""
+				for _, w := range in.Workers {
+					engaged = engaged || strings.EqualFold(w.Serves, d.Ref) || strings.EqualFold(w.ParkedOn, d.Ref) || slices.Contains(w.Issues, d.Ref)
+				}
+				if engaged {
+					d.Origin = state.DeliveryOriginStarted
+				} else if d.Origin == "" && (d.Step == state.DeliveryUnknown || d.Step == state.DeliveryImplementing) {
+					d.Origin = state.DeliveryOriginObserved
+				}
+			}
 		}
 		d.Heads = maps.Clone(d.Heads)
 		if d.Heads == nil {
@@ -189,6 +209,15 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		if worker != nil {
 			d.Agent, d.Waits = worker.Name, worker.Waits
 		}
+		// A released, ended worker's delivery stays terminal across pull sweeps.
+		// A new assignment explicitly opens a fresh lifecycle.
+		if d.Abandoned {
+			if worker == nil || worker.Saved {
+				continue
+			}
+			d.Abandoned = false
+			d.Started = in.Now
+		}
 		// A combining pull carries deliveries of the original, even when GitHub
 		// no longer includes their issue links on the superseded pull.
 		for _, ref := range absorbingRefs {
@@ -231,6 +260,16 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 				}
 			case missing: // a failed read never proves an end
 			case merged:
+				d.Outcome = state.OutcomeMerged
+				if d.Evidence == "" || before != state.DeliveryReleasing && before != state.DeliveryDone {
+					d.OutcomeAt = in.Now
+					for _, p := range observed {
+						if p.State == Merged {
+							d.Evidence = p.URL
+							break
+						}
+					}
+				}
 				if d.Step != state.DeliveryDone {
 					d.Step = state.DeliveryReleasing
 				}
@@ -275,6 +314,9 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 	rs := l.rounds[p.Ref]
 	if len(rs) > 0 {
 		rd := rs[len(rs)-1]
+		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && !sameHead(v.Head, rd.head) {
+			return state.DeliveryFixing
+		}
 		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested && (sameHead(v.Head, p.Head) || !requested) {
 			return state.DeliveryFixing
 		}

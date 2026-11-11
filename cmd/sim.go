@@ -143,7 +143,7 @@ func (a *app) simCmd() *cobra.Command {
 		Short: "Simulate how an issue should flow from its start to its release, measure how it flowed, and rank what would gain the most",
 		Long: `The flow of an issue as the supervisor loop is meant to run it: a worker
 starts when a slot is free and pushes a pull request; CI runs; once it is
-green the loop starts a reviewer, which fixes its own findings; the lane
+green the loop starts a reviewer, which posts findings for the implementing worker; the lane
 merges one pull request at a time; the release rolls out. The loop drives
 every step but the worker's and the reviewer's turns, so while it is down
 nothing starts, is reviewed or merges.
@@ -709,7 +709,7 @@ func (a *app) printModel(m sim.Model) error {
 		sim.StageImplementing: "the worker's turn until it pushes and parks",
 		sim.StageCI:           "a CI run on the head",
 		sim.StageReviewQueued: "green CI until the reviewer runs (the loop's pass and the start)",
-		sim.StageReviewing:    "the reviewer's turn, fixing its findings on the branch",
+		sim.StageReviewing:    "the reviewer's turn, reporting findings to the worker",
 		sim.StageFixing:       "a fixer's turn after red CI or a change request",
 		sim.StageMerging:      "the gate's run: devctl pr merge with the merge-result check",
 		sim.StageReleasing:    "the release workflow and the rollout",
@@ -743,6 +743,9 @@ func (a *app) printRun(r sim.Result) error {
 
 func (a *app) printObserved(o sim.Observed) error {
 	w := a.table()
+	for _, outcome := range slices.Sorted(maps.Keys(o.Outcomes)) {
+		_, _ = fmt.Fprintf(w, "outcome %s: %d\n", outcome, o.Outcomes[outcome])
+	}
 	_, _ = fmt.Fprintf(w, "%s to %s (%.1f days): %d deliveries seen, %d started, %d released, %d dropped: %.1f started and %.1f released a day\n", clock(a.now, o.Since), clock(a.now, o.Until), o.Days, o.Deliveries, o.Started, o.Released, o.Dropped, o.StartedPerDay, o.ReleasedPerDay)
 	_, _ = fmt.Fprintf(w, "loop up %.0f%%, down %s", 100*o.LoopUptime, dur(o.LoopDown))
 	for i, g := range o.Outages {

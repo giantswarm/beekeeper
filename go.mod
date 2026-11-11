@@ -2,7 +2,7 @@ module github.com/giantswarm/beekeeper
 
 go 1.26.7
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	charm.land/bubbletea/v2 v2.1.1
@@ -11,9 +11,10 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/giantswarm/go-selfupdate v1.7.6
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/giantswarm/go-selfupdate v1.7.7
 	github.com/giantswarm/mcp-toolkit v0.5.3
-	github.com/giantswarm/selfupdate-cosign v0.3.27
+	github.com/giantswarm/selfupdate-cosign v0.3.28
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-logr/logr v1.4.4
 	github.com/godbus/dbus/v5 v5.2.4

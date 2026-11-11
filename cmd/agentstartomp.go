@@ -31,7 +31,7 @@ const modelFlag = "--model"
 const inboxWait = 30 * time.Second
 
 // ompUnit is the transient user unit an omp agent runs in.
-func ompUnit(id string) string { return "beekeeper-omp-" + id[:8] }
+func ompUnit(id string) string { return "beekeeper-omp-" + id[:min(8, len(id))] }
 
 // startOmpAgent reads the agent's provider key, records and registers the
 // agent, starts it in a transient user unit with its stdin on its inbox,
@@ -98,7 +98,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if err := omp.MakeInbox(inbox); err != nil {
 		return err
 	}
-	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model, Effort: sp.effort}
+	s := state.Start{Kind: sp.kind, Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model, Effort: sp.effort}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)

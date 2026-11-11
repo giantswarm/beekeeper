@@ -39,11 +39,10 @@ func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{ID: "worker-review", Head: head, Verdict: superloop.Approved, At: now.Add(time.Second)}}}
-	old, login, fixed := readLoopPull, readDeskLogin, readReviewerFixedHead
-	t.Cleanup(func() { readLoopPull, readDeskLogin, readReviewerFixedHead = old, login, fixed })
+	old, login := readLoopPull, readDeskLogin
+	t.Cleanup(func() { readLoopPull, readDeskLogin = old, login })
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
 	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
-	readReviewerFixedHead = func(context.Context, string, string, string) (bool, error) { return true, nil }
 	use := execution.MergeUse{ID: "review-grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	assignMergeReview(t, a, use, 1)
 	return a, use, pull
@@ -586,7 +585,7 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	}
 }
 
-func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T) {
+func TestExecutionMergeRefusesReviewerSelfApproval(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	fixedHead := strings.Repeat("c", 40)
 	pull.Head = fixedHead
@@ -613,23 +612,11 @@ func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		round := executionReviewRound(st, use)
 		return nil, a.captureExecutionReviewReport(context.Background(), st, round.Reviewer, "Desk review (opus): approved\n"+review.URL, time.Now(), true)
-	}); err != nil {
-		t.Fatalf("reviewer approval of fixed head refused: %v", err)
+	}); err == nil {
+		t.Fatal("reviewer approved commits beyond the assigned head")
 	}
-	st, err := a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := executionReviewRound(st, use).Result.Head; got != fixedHead {
-		t.Fatalf("Result.Head = %q, want %q", got, fixedHead)
-	}
-	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, fixedHead, loopParty)
-	if err != nil {
-		t.Fatalf("issueExecutionMerge on reviewer-fixed head failed: %v", err)
-	}
-	use.ID = grant.ID
-	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
-		t.Fatalf("executionMergeLive on reviewer-fixed head failed: %v", err)
+	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, fixedHead, loopParty); err == nil {
+		t.Fatal("reviewer-fixed head received a merge grant")
 	}
 }
 
@@ -687,7 +674,7 @@ func TestReview3325RemoteReviewerAuthorBranchSelfFix(t *testing.T) {
 	if _, err := a.publishExecutionWithMode(context.Background(), st, reviewerRef, executionPublication{
 		Head:  strings.Repeat("d", 40),
 		Title: "feat: attempt metadata change",
-	}, false); err == nil || !strings.Contains(err.Error(), "not create or edit pull request metadata") {
+	}, false); err == nil || !strings.Contains(err.Error(), "review sessions cannot commit or push fixes") {
 		t.Fatalf("reviewer publication with --title should be refused, got %v", err)
 	}
 }

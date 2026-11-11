@@ -54,13 +54,21 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 		return false
 	}
 	for _, ag := range st.Agents {
-		serves := loopServes(st, ag)
-		if !ag.Done && ag.Task != "" && (strings.EqualFold(ag.Name, d.Agent) && d.Agent != "" ||
-			strings.EqualFold(serves, d.Ref) ||
-			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) }) ||
-			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) })) {
+		if ag.Done || ag.Task == "" {
+			continue
+		}
+		if d.Agent != "" && strings.EqualFold(ag.Name, d.Agent) {
 			return true
 		}
+		serves := loopServes(st, ag)
+		if serves != "" && (strings.EqualFold(serves, d.Ref) ||
+			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) })) ||
+			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) }) {
+			return true
+		}
+	}
+	if d.Origin == state.DeliveryOriginObserved {
+		return false
 	}
 	after := p.stallAfter
 	if after <= 0 {
@@ -159,7 +167,7 @@ func (l *supervisorLoop) deliveryStart(ref string, exempt bool) error {
 			label = "new work"
 		}
 		l.sayOnce("delivery admission "+ref, "SUPERVISOR NEXT WAITS %s: %s", label, v.Reason)
-		return errLoopLater
+		return fmt.Errorf("%s: %w", v.Reason, errLoopLater)
 	}
 	l.clearSaid("delivery admission " + ref)
 	return nil

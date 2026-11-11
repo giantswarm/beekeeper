@@ -117,6 +117,9 @@ func (v labConfigView) Text() string {
 // with force, left for the next claim as not declared. It refuses a change
 // neither restored nor declared. It returns what the release line adds.
 func (a *app) labRelease(dir lease.Dir, cur lease.Holder, me state.Party, restore bool, keep string, force bool) (string, error) {
+	if err := a.labReleaseReady(cur.Env); err != nil {
+		return "", err
+	}
 	if cur.LabConfig == nil {
 		return "", nil
 	}

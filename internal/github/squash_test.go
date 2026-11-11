@@ -163,7 +163,7 @@ func TestSquashRefusesAnUnansweredReview(t *testing.T) {
 		}
 		if tc.want == SquashRefused {
 			prefix := "unanswered review: 1 item(s)"
-			if doc.UnansweredReviews[0].State == "CHANGES_REQUESTED" {
+			if doc.UnansweredReviews[0].State == changesRequested {
 				prefix = "changes requested: review CHANGES_REQUESTED by pat"
 			}
 			if !strings.HasPrefix(doc.Reason, prefix) || !strings.Contains(doc.Reason, "by pat") {

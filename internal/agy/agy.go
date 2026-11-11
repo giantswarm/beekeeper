@@ -113,6 +113,12 @@ func convArg(args []string) string {
 	return ""
 }
 
+// ReadConv returns the conversationId for an agent start id from its .conv link
+// file or from the init event in its stream log.
+func ReadConv(stateDir, id string) string {
+	return resolveAgentConv(stateDir, id)
+}
+
 // resolveAgentConv returns the conversationId for an agent start id from its
 // .conv link file or from the init event in its stream log.
 func resolveAgentConv(stateDir, id string) string {
@@ -266,11 +272,6 @@ func Discover(brainDir, stateDir string, t *proc.Table, now time.Time) []*claude
 	}
 	slices.SortFunc(procs, func(a, b *proc.Process) int { return b.Start.Compare(a.Start) })
 
-	files := transcriptFiles(brainDir, procs[len(procs)-1].Start.Add(-startSlack))
-	byConv := make(map[string]tfile, len(files))
-	for _, f := range files {
-		byConv[f.id] = f
-	}
 	taken := map[string]bool{}
 	explicit := map[int]tfile{}
 	envByPID := map[int]map[string]string{}
@@ -289,11 +290,6 @@ func Discover(brainDir, stateDir string, t *proc.Table, now time.Time) []*claude
 			convID = convArg(p.Args)
 		}
 		if convID != "" {
-			if f, ok := byConv[convID]; ok {
-				taken[f.path] = true
-				explicit[p.PID] = f
-				continue
-			}
 			tp := TranscriptPath(brainDir, convID)
 			if fi, err := os.Stat(tp); err == nil {
 				h, _ := readHead(tp, convID)
@@ -307,7 +303,11 @@ func Discover(brainDir, stateDir string, t *proc.Table, now time.Time) []*claude
 		}
 		unassigned = append(unassigned, p)
 	}
-	assigned := assignTranscripts(files, unassigned, taken, t.Cwd)
+	var assigned map[int]tfile
+	if len(unassigned) > 0 {
+		files := transcriptFiles(brainDir, procs[len(procs)-1].Start.Add(-startSlack))
+		assigned = assignTranscripts(files, unassigned, taken, t.Cwd)
+	}
 
 	var out []*claude.Session
 	for _, p := range procs {

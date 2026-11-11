@@ -106,3 +106,19 @@ func TestExecutionHostConfigValidatesCatalogWithoutChangingLocalDefaults(t *test
 		})
 	}
 }
+
+func TestHostsFirstDefaultsAndExplicitOverride(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{"", true},
+		{"supervisor:\n  hostsFirst: false\n", false},
+		{"supervisor:\n  hostsFirst: true\n", true},
+	} {
+		cfg, err := parse(filepath.Join(t.TempDir(), "config.yaml"), []byte(tc.raw))
+		if err != nil || cfg.Supervisor.HostsFirst != tc.want {
+			t.Fatalf("config %q: %v, %v", tc.raw, cfg, err)
+		}
+	}
+}

@@ -125,11 +125,12 @@ const loopLaunchdLabel = "com.giantswarm.beekeeper.supervisor-loop"
 
 // supervisorView is the supervisor's status for --json.
 type supervisorView struct {
-	Epics    string        `json:"epics"`
-	Delivery *deliveryView `json:"delivery,omitempty"`
-	Loop     bool          `json:"loop"`
-	PID      int           `json:"pid,omitempty"`
-	Version  string        `json:"version,omitempty"`
+	Hosts    []hostPlacementView `json:"hosts,omitempty"`
+	Epics    string              `json:"epics"`
+	Delivery *deliveryView       `json:"delivery,omitempty"`
+	Loop     bool                `json:"loop"`
+	PID      int                 `json:"pid,omitempty"`
+	Version  string              `json:"version,omitempty"`
 	// Held says what the loop holds of its GitHub reads, Pulls the open
 	// pull requests nobody owns: both for whoever waits on the loop.
 	Held  string `json:"held,omitempty"`
@@ -154,7 +155,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		ver = a.loopVersion(c, pid)
 	}
 	held, pulls := a.loopWaitLines()
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return err
 	}
@@ -164,7 +165,12 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		return err
 	}
 	if a.json {
-		return a.printJSON(supervisorView{Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
+		return a.printJSON(supervisorView{Hosts: a.hostPlacementViews(st), Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
+	}
+	for _, host := range a.hostPlacementViews(st) {
+		if _, err := fmt.Fprintln(a.out, host.line()); err != nil {
+			return err
+		}
 	}
 	if pid == 0 {
 		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n%s\n%s\n", loopServiceHint(), delivery.line(), epics)
@@ -199,6 +205,12 @@ func (a *app) loopWaitLines() (held, pulls string) {
 	var count loopSweepCount
 	if found, err := a.store.ReadFile(loopSweepFile, &count); err == nil && found {
 		pulls = count.line(a)
+	}
+	var snapshot loopPullSnapshot
+	if found, err := a.store.ReadFile(loopPullWatchFile, &snapshot); found && err == nil {
+		if line := snapshot.ageLine(a.timeNow()); line != "" {
+			pulls = strings.TrimSpace(pulls + "\n" + line)
+		}
 	}
 	return held, pulls
 }
@@ -248,11 +260,11 @@ func sameBinaryFile(a, b string) bool {
 	if resolvedPath(a) == resolvedPath(b) {
 		return true
 	}
-	fa, err := os.Stat(a)
+	fa, err := os.Stat(a) // #nosec G703 -- running or installed beekeeper binary path
 	if err != nil {
 		return false
 	}
-	fb, err := os.Stat(b)
+	fb, err := os.Stat(b) // #nosec G703 -- running or installed beekeeper binary path
 	if err != nil {
 		return false
 	}

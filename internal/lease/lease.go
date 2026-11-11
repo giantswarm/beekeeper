@@ -280,6 +280,9 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 		return false
 	}
 	from := g.At
+	if g.Reserved.After(from) {
+		from = g.Reserved
+	}
 	if r := st.Released[g.Resource]; r.After(from) {
 		from = r
 	}

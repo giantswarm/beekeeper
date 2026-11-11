@@ -1,0 +1,62 @@
+# The long performance budgets (docs/performance.md): the loop over longer
+# windows and the per-session footprint, which needs a systemd user manager
+# that CircleCI's containers lack. Nightly, by hand, and on pull requests
+# that change the suite. Never on a desk's machine.
+name: performance
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+    paths:
+      - internal/perfsuite/**
+      - .github/workflows/performance.yaml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      BEEKEEPER_PERF_LONG: "1"
+      BEEKEEPER_PERF_SYSTEMD: "1"
+      BEEKEEPER_PERF_REPORT: /tmp/performance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go environment
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27"
+          cache: false
+      - name: Start a systemd user manager for the runner units
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$(id -un)"
+          uid=$(id -u)
+          for _ in $(seq 60); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user show-environment > /dev/null
+      - name: Performance budgets, long windows and the session footprint
+        run: make test-performance
+      - name: Report
+        if: always()
+        run: |
+          if [ -f /tmp/performance/report.md ]; then cat /tmp/performance/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: performance
+          path: /tmp/performance
+          if-no-files-found: ignore

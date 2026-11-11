@@ -20,8 +20,9 @@ func (a *app) holdCmd() *cobra.Command {
 		Use:   "hold",
 		Short: "Stop merges into a repository or a lane, or all GitHub work, until lifted",
 		Long: `A hold stops work on a target until it is lifted or its time passes:
-"owner/repo" stops merges into that repository (a semantic conflict being
-fixed on main), "lane:<name>" (--lane) the merges of one lane (a proving
+"owner/repo" stops merges and new supervisor workers, reviewers and fixers
+in that repository; board next skips its items until the hold lifts.
+"lane:<name>" (--lane) stops the merges of one lane (a proving
 window, such as a model load on an installation's GPU pool, stops the lane
 whose components it exercises and not the others), "merges" every merge,
 "github" every GitHub call (the budget is spent), "starts" every new
@@ -61,8 +62,8 @@ supervisor's successors all go on. beekeeper status starts with STARTS HELD,
 who set it and why. Unlike beekeeper stop it ends no session and holds no
 merge or GitHub call.
 
-A repository hold with --incident also stops the supervisor's new workers,
-reviewers and fixers in that repository except the repair named by --except.
+A repository hold with --incident requires a repair named by --except.
+That repair alone may start while the repository is held.
 Board selection skips its other issues so other repositories keep moving.
 There is no timed expiry: lift it only after the repair is merged, released
 and proven, or use --lift-when with a probe of that completed proof. The

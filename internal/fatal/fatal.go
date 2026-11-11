@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,7 @@ type Incident struct {
 	ID          string    `json:"id"`
 	Evidence    string    `json:"evidence"`
 	Owner       string    `json:"owner,omitempty"`
+	Repair      string    `json:"repair,omitempty"`
 	Opened      time.Time `json:"opened"`
 	Resolved    time.Time `json:"resolved,omitzero"`
 	LastAttempt time.Time `json:"lastAttempt,omitzero"`
@@ -117,7 +119,7 @@ func (q *Queue) Observe(o Observation, now time.Time) string {
 		}
 		// A flapping probe must not orphan a repair still in review/proof.
 		// New episodes get a new budget, retaining the owner and rate limit.
-		*x = Incident{ID: o.ID, Evidence: o.Evidence, Opened: now, Owner: x.Owner, LastAttempt: x.LastAttempt}
+		*x = Incident{ID: o.ID, Evidence: o.Evidence, Opened: now, Owner: x.Owner, Repair: x.Repair, LastAttempt: x.LastAttempt}
 		return "fatal detected: " + o.ID
 	}
 	if o.Unknown || o.Disabled || !o.Failed {
@@ -127,22 +129,64 @@ func (q *Queue) Observe(o Observation, now time.Time) string {
 	return "fatal detected: " + o.ID
 }
 
-// Barrier leaves existing work running, admitting only the reserved repair
-// owner while an outage stands. A display name cannot grant stop/hold bypass.
+// Repository identifies a default-branch outage. Other incidents concern the
+// execution infrastructure and retain the global ordinary-start barrier.
+func (x Incident) Repository() string {
+	repo, ok := strings.CutPrefix(x.ID, "main:")
+	if !ok {
+		return ""
+	}
+	return repo
+}
+
+// Scope is derived from the incident ID, including for journals from older
+// versions. A stored display field can never weaken admission.
+func (x Incident) Scope() string {
+	if repo := x.Repository(); repo != "" {
+		return "default-branch merges and releases in " + repo
+	}
+	return "all ordinary worker starts"
+}
+
+func (x Incident) MarshalJSON() ([]byte, error) {
+	type incident Incident
+	return json.Marshal(struct {
+		incident
+		Scope string `json:"scope"`
+	}{incident: incident(x), Scope: x.Scope()})
+}
+
+func (x Incident) Refusal() error {
+	return fmt.Errorf("fatal outage %s takes priority; scope: %s (repair owner %q, pull request %q): beekeeper fatal status", x.ID, x.Scope(), x.Owner, x.Repair)
+}
+
+// Barrier leaves existing work running. Repository CI outages never prevent
+// workers from starting, even in that repository or after failed repairs.
+// A reserved infrastructure repair may start despite other global outages.
 func (q Queue) Barrier(name string) error {
 	if name != "" {
 		for _, x := range q.Incidents {
-			if x.Owner == name && x.Resolved.IsZero() {
+			if x.Owner == name && x.Resolved.IsZero() && x.Repository() == "" {
 				return nil
 			}
 		}
 	}
 	for _, x := range q.Incidents {
-		if x.Resolved.IsZero() {
-			return fmt.Errorf("fatal outage %s takes priority (owner %q): beekeeper fatal status", x.ID, x.Owner)
+		if x.Resolved.IsZero() && x.Repository() == "" {
+			return x.Refusal()
 		}
 	}
 	return nil
+}
+
+// MainOutage returns the unresolved publication barrier for exactly repo.
+func (q Queue) MainOutage(repo string) (Incident, bool) {
+	for _, x := range q.Incidents {
+		if x.Resolved.IsZero() && x.Repository() != "" && strings.EqualFold(x.Repository(), repo) {
+			return x, true
+		}
+	}
+	return Incident{}, false
 }
 
 // Reserve chooses at most one repair, with a global owner and a bounded retry

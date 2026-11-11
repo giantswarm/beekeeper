@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -133,7 +134,7 @@ func cleanEnv(environ []string, config string) []string {
 		out = append(slices.DeleteFunc(out, func(kv string) bool { return strings.HasPrefix(kv, "PATH=") }),
 			"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), devBuildEnv+"=1")
 	}
-	return sshagent.Environment(out)
+	return github.DevctlEnv(sshagent.Environment(out), !guardsEnabledForConfig(config))
 }
 
 func isHarnessEnv(kv string) bool {
@@ -361,6 +362,10 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		turn: "its task runs as its first turn in a background session with Remote Control (claude attach " + id[:8] + ")"}, nil
 }
 
+// errResumeStartedCopy is a background resume that started a new session
+// instead of continuing the target session.
+var errResumeStartedCopy = errors.New("claude --bg --resume started a copy")
+
 // resumeBackground continues the stopped background session w with msg as
 // its next turn (claude --bg --resume), with none of the caller's session
 // variables. A running session is sent its messages by name instead:
@@ -374,17 +379,149 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 	if err != nil {
 		return err
 	}
-	out, err := bgRun(ctx, w.dir, cleanEnv(os.Environ(), a.explicitConfig()), bgResumeArgv(bin, w.id, msg))
+	env := cleanEnv(os.Environ(), a.explicitConfig())
+	// Poll-time process observations can be stale after suspend. Ask the
+	// daemon immediately before resuming, and fail closed if it cannot answer.
+	rows, err := bgList(ctx, bin, env, false)
+	if err != nil {
+		return fmt.Errorf("checking background session before resume: %w", err)
+	}
+	for _, row := range rows {
+		if !bgRowMatches(row, w.id) {
+			continue
+		}
+		if row.Name == "" || slices.ContainsFunc(rows, func(other bgSession) bool {
+			return other.Name == row.Name && !bgSameRow(other, row)
+		}) {
+			return fmt.Errorf("running background session %s has no unique messaging name", w.id)
+		}
+		if err := a.rebindBackgroundSession(w.id, row.SessionID); err != nil {
+			return err
+		}
+		return cliSend(ctx, a, row.Name, msg)
+	}
+	// A resumed CLI can change its session id while the daemon keeps the
+	// original job id. Read the stopped job before launching so a later
+	// resume is not mistaken for a copy of the rebound session.
+	all, err := bgList(ctx, bin, env, true)
+	if err != nil {
+		return fmt.Errorf("checking stopped background session before resume: %w", err)
+	}
+	var jobID string
+	for _, row := range all {
+		if bgRowMatches(row, w.id) {
+			jobID = row.ID
+			break
+		}
+	}
+	expectedID := cmp.Or(jobID, w.id)
+	out, err := bgRun(ctx, w.dir, env, bgResumeArgv(bin, w.id, msg))
+	short := bgShort(out)
+	// Even a failed call may have launched a copy before reporting failure.
+	if short != "" && !strings.HasPrefix(expectedID, short) {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), bgWait)
+		defer cancel()
+		if stopErr := a.bgStop(cleanup, short); stopErr != nil {
+			return fmt.Errorf("%w %s of session %s; stopping the copy failed: %w", errResumeStartedCopy, short, w.id, stopErr)
+		}
+		return fmt.Errorf("%w %s of session %s; stopped the copy", errResumeStartedCopy, short, w.id)
+	}
 	if err != nil {
 		return fmt.Errorf("claude --bg --resume: %w (%s)", err, firstLines(out))
 	}
-	switch short := bgShort(out); {
-	case short == "":
+	if short == "" {
 		return fmt.Errorf("claude --bg --resume named no session (%s)", firstLines(out))
-	case !strings.HasPrefix(w.id, short):
-		return fmt.Errorf("claude --bg --resume started a copy %s of session %s instead of continuing it (%s): claude stop %s ends the copy", short, w.id, firstLines(out), short)
+	}
+	if rows, err := bgList(ctx, bin, env, false); err == nil {
+		for _, row := range rows {
+			if bgRowMatches(row, w.id) || (jobID != "" && row.ID == jobID) {
+				if err := a.rebindBackgroundSession(w.id, row.SessionID); err != nil {
+					return err
+				}
+				break
+			}
+		}
 	}
 	return nil
+}
+
+func bgRowMatches(row bgSession, id string) bool {
+	if id == "" {
+		return false
+	}
+	if row.SessionID == id {
+		return true
+	}
+	return len(id) >= 8 && row.ID != "" && strings.HasPrefix(id, row.ID)
+}
+
+func bgSameRow(a, b bgSession) bool {
+	if a.SessionID != "" && a.SessionID == b.SessionID {
+		return true
+	}
+	return a.ID != "" && a.ID == b.ID
+}
+
+// rebindBackgroundSession updates a background session's recorded session id
+// when the claude daemon resumed its job under a new sessionId.
+func (a *app) rebindBackgroundSession(oldID, newID string) error {
+	if a.store == nil || oldID == "" || newID == "" || oldID == newID {
+		return nil
+	}
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rebindSessionState(st, oldID, newID, "")
+		return nil, nil
+	})
+}
+
+func rebindSessionState(st *state.State, oldID, newID, hostID string) bool {
+	if oldID == "" || newID == "" {
+		return false
+	}
+	changed := false
+	rebindParty := func(p *state.Party) {
+		if p.Session != oldID {
+			return
+		}
+		if p.Session != newID {
+			p.Session = newID
+			changed = true
+		}
+		if hostID != "" && p.HostSession == "" {
+			p.HostSession = hostID
+			changed = true
+		}
+	}
+	for i := range st.Starts {
+		rebindParty(&st.Starts[i].Party)
+	}
+	for i := range st.Agents {
+		rebindParty(&st.Agents[i].Party)
+	}
+	for _, rl := range roles {
+		rl.update(st, func(r *state.Role) {
+			if r.Holder != nil {
+				rebindParty(&r.Holder.Party)
+			}
+			if r.CLI != nil {
+				rebindParty(&r.CLI.Supervisor)
+			}
+			if r.WorkChecked != nil {
+				rebindParty(r.WorkChecked)
+			}
+			if r.Relay != nil {
+				rebindParty(&r.Relay.From)
+				rebindParty(&r.Relay.To)
+			}
+			if r.RelayDue != nil {
+				rebindParty(&r.RelayDue.Supervisor)
+			}
+			for i := range r.Relieved {
+				rebindParty(&r.Relieved[i].Party)
+			}
+		})
+	}
+	return changed
 }
 
 // wakeBackground wakes the background session w, whose CLI does not run,
@@ -436,6 +573,25 @@ func (a *app) reviveBackground(ctx context.Context, holder state.Party, msg stri
 	st, err := a.store.Read()
 	if err != nil {
 		return err
+	}
+	// Independent crash recovery and suspend recovery can arrive together.
+	// Serialize with ordinary wakes, then recheck the current role and daemon.
+	unlock, err := a.lockForWake(ctx, st, holder)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "reviving "+holder.Name); err != nil {
+		return err
+	}
+	for _, q := range []string{holder.Session, holder.Name} {
+		if _, err := guideMessageTarget(st, q); err != nil {
+			return err
+		}
 	}
 	w := wakeTarget{name: holder.Name, id: holder.Session}
 	if i := st.StartIndex(holder); i >= 0 {
@@ -593,6 +749,30 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 		}
 		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
 		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
+	}
+	for _, ag := range st.Agents {
+		if ag.Park == nil || !ag.Park.Resumable.IsZero() && len(ag.Park.Continuation) == 0 || ag.Execution != nil || keepsRole(st, ag.Party) {
+			continue
+		}
+		h, id, ok := harnessOf(ag.Party)
+		if !ok {
+			continue
+		}
+		if _, busy := turnRunning(sessions, t, ag.Party, w.now); busy {
+			continue
+		}
+		unit := h.Unit(id)
+		if plat.Launcher.State(ctx, unit) != holdActive {
+			continue
+		}
+		key := "park-stop-" + unit
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			w.fail(key, "PARKED SESSION STAYS %q: its %s unit %s keeps its memory: %v", ag.Name, h.Name(), unit, err)
+			continue
+		}
+		w.clear(key)
+		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
+		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
 	}
 }
 

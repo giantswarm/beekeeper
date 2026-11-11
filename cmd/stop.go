@@ -19,8 +19,11 @@ const standbyUnit = "beekeeper-notify.service"
 
 const timerDispatcherUnit = "beekeeper-timers.service"
 
-// unitActive is the ActiveState of a running unit.
-const unitActive = "active"
+// Unit states reported by the service launcher.
+const (
+	unitActive   = "active"
+	unitNotFound = "not-found"
+)
 
 // stopHolds are the holds a stop sets: every merge and every GitHub call.
 var stopHolds = []string{holdMerges, holdGitHub}

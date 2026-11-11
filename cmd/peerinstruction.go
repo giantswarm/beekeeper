@@ -107,7 +107,7 @@ func relayInstructionOutcome(status string) string {
 	case relayInstructionConsumed:
 		return "consumed by a beekeeper hook; recipient acknowledgement unconfirmed"
 	default:
-		return "queued for a beekeeper hook; consumption unconfirmed; without hooks read beekeeper log --verb " + relayMessageVerb
+		return "queued for a beekeeper hook; instruction not delivered to the recipient hook at send completion; delivery remains pending and is not guaranteed; recover the message with beekeeper log --verb " + relayMessageVerb
 	}
 }
 

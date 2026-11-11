@@ -28,7 +28,14 @@ import (
 // onto it.
 var (
 	coordinatorVersion = project.Version
-	installVersion     = update.InstallVersion
+	coordinatorJournal = func() (*update.Journal, error) {
+		exe, err := executablePath()
+		if err != nil {
+			return nil, err
+		}
+		return update.Inspect(exe)
+	}
+	installVersion = update.InstallVersion
 	// lookupRelease is the coordinator's authenticated lookup of the
 	// release a host installs; installRelease the host's install of it.
 	lookupRelease  = update.LookupVersion
@@ -84,7 +91,7 @@ host answers its release and policy digest; once its check (agents hosts
 check) passes with that digest, the digest is the host's pin.
 
 While executions are in a turn on the host nothing changes and the host
-drains: it takes no new start until it runs this release (exit 3). An
+waits to update (exit 3); compatible hosts still take new starts. An
 execution between turns, a parked worker's waiting for its wake, does not
 hold the update back: the host updates under it, its next turn begins on the
 updated host, and the coordinator rebinds it to the pinned policy (as agents
@@ -93,7 +100,12 @@ fails holds the host: it takes no start until an update succeeds (exit 3),
 and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
 whenever its release differs from the coordinator's, and retries a held host
-hourly. If the coordinator rolls back during a host's probation, the host
+hourly. During the coordinator's probation, updates wait without holding
+hosts or recording a failed attempt. Compatible older hosts keep taking starts;
+their live protocol, identity, capabilities and pinned policy are still checked.
+The next pass targets the coordinator's
+release after its verdict, including its recovery release after rollback.
+If the coordinator rolls back during a host's probation, the host
 restores its matching verified recovery release under the live state
 compatibility guard, quarantining the candidate without promoting it.
 A development build pins no release.
@@ -103,8 +115,8 @@ The coordinator looks the release up on GitHub itself, with the gh login
 anonymously, and hands it to the host: the host downloads the binary and
 its bundle from the release's public download URLs and asks GitHub's API
 nothing, so a host without a GitHub login, whose anonymous API limit its IP
-may share, updates all the same. A lookup GitHub refuses holds the host,
-a rate limit named with its reset.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+may share, updates all the same. A failed lookup delays only the update,
+a rate limit named with its reset; the current host policy remains admitted.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		line, err := a.updateExecutionHost(cmd.Context(), args[0])
 		if err != nil {
 			return err
@@ -262,6 +274,32 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 // errHostDrains is an update that waits for the executions on a host.
 var errHostDrains = errors.New("executions run")
 
+// A deferral leaves host pins and retry timestamps untouched. Every pass reads
+// the journal again, so rollback never leaves a queued candidate as the target.
+const (
+	hostUpdateDeferred             = "host update deferred"
+	coordinatorProbationPassed     = "passed"
+	coordinatorProbationPending    = "pending"
+	coordinatorProbationRolledBack = "rolled-back"
+)
+
+func coordinatorHostUpdateReady(version string) error {
+	j, err := coordinatorJournal()
+	if err != nil {
+		return refused("%s: cannot inspect coordinator probation: %v", hostUpdateDeferred, err)
+	}
+	if j == nil {
+		return nil // Installations predating recovery have no probation journal.
+	}
+	if j.Held() != "" {
+		return refused("%s: coordinator recovery is held: %s", hostUpdateDeferred, j.Held())
+	}
+	if j.Probation == coordinatorProbationPassed && j.Candidate.Version == version || j.RolledBack() && j.Previous != nil && j.Previous.Version == version {
+		return nil
+	}
+	return refused("%s: coordinator %s awaits its probation verdict", hostUpdateDeferred, version)
+}
+
 // updateExecutionHost is agents hosts update: the host on this
 // coordinator's release, its digest pinned, or held with why.
 func (a *app) updateExecutionHost(ctx context.Context, selector string) (string, error) {
@@ -272,6 +310,9 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	version := coordinatorVersion()
 	if !releaseVersion(version) {
 		return "", refused("this coordinator runs %s, no release: a development build pins no execution host release", version)
+	}
+	if err := coordinatorHostUpdateReady(version); err != nil {
+		return "", err
 	}
 	if exe, err := os.Executable(); err == nil {
 		if why := update.Quarantined(exe, version); why != "" {
@@ -298,6 +339,11 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 		return "", refused("execution host %s drains: %d executions are in a turn on it (%s); it updates to %s once they are between turns", selector, n, strings.Join(hostExecutionNames(st, selector), ", "), version)
 	}
 	x, err := a.updateHost(ctx, h, version)
+	// The host may still be finishing its own probation. This refusal is
+	// temporary, not a failed installation, and must not create a hold.
+	if err != nil && strings.Contains(err.Error(), update.ErrProbationWatched.Error()) {
+		return "", refused("%s: execution host %s awaits probation: %v", hostUpdateDeferred, selector, err)
+	}
 	if err == nil && x.Busy > 0 {
 		err = fmt.Errorf("%w: %d", errHostDrains, x.Busy)
 	}
@@ -307,6 +353,8 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 			err = fmt.Errorf("its check with the prepared policy failed: %w", perr)
 		}
 	}
+	var lookupErr hostReleaseLookupError
+	lookupFailed := errors.As(err, &lookupErr)
 	now := a.now.UTC()
 	by, _ := a.caller()
 	if serr := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -316,6 +364,11 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 			pin = &st.HostPins[len(st.HostPins)-1]
 		}
 		pin.Identity, pin.Tried = h.Identity, now
+		if lookupFailed {
+			pin.UpdateError, pin.UpdateVersion = oneLine(err.Error()), version
+			return []state.Event{event(by, "agents.host-update-waits", "%s on %s: %s", selector, version, pin.UpdateError)}, nil
+		}
+		pin.UpdateError, pin.UpdateVersion = "", ""
 		switch {
 		case errors.Is(err, errHostDrains):
 			return nil, nil
@@ -334,6 +387,8 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 		return "", serr
 	}
 	switch {
+	case lookupFailed:
+		return "", refused("%s: release lookup for %s failed; host %s keeps its current policy: %v", hostUpdateDeferred, version, selector, err)
 	case errors.Is(err, errHostDrains):
 		var names []string
 		for _, ref := range x.Executions {
@@ -410,8 +465,11 @@ func (a *app) rebindHostExecutions(ctx context.Context, selector string, h execu
 
 const hostReleaseCacheFile = "host-release.json"
 
-// updateHost has host h install and prepare release version, which the
-// coordinator looks up for it.
+// hostReleaseLookupError precedes any contact with the host. A failed lookup
+// must not revoke its already prepared policy or hold new starts.
+type hostReleaseLookupError struct{ error }
+
+// updateHost has host h install and prepare the release looked up here.
 func (a *app) updateHost(ctx context.Context, h execution.Host, version string) (execution.HostUpdate, error) {
 	var rel update.Release
 	var cached bool
@@ -424,7 +482,7 @@ func (a *app) updateHost(ctx context.Context, h execution.Host, version string) 
 		var err error
 		rel, err = lookupRelease(ctx, version)
 		if err != nil {
-			return execution.HostUpdate{}, err
+			return execution.HostUpdate{}, hostReleaseLookupError{err}
 		}
 		if a.store != nil && rel.Tag == version && len(rel.Assets) > 0 {
 			_ = a.store.WriteFile(hostReleaseCacheFile, rel)
@@ -482,8 +540,8 @@ func pinnedHost(st *state.State, selector string, h execution.Host) execution.Ho
 }
 
 // admitExecution says whether the host selector takes a new start: not
-// while it is held, and, on a coordinator that runs a release, not before
-// the host runs that release (it drains, then updates).
+// while an installation is held. Release equality is not compatibility:
+// probeExecution checks the live protocol, capabilities, identity and policy.
 func (a *app) admitExecution(selector string, h execution.Host) error {
 	st, err := a.store.Peek()
 	if err != nil {
@@ -493,11 +551,8 @@ func (a *app) admitExecution(selector string, h execution.Host) error {
 	if pin != nil && pin.Identity != h.Identity {
 		pin = nil
 	}
-	if pin != nil && pin.Held != "" {
+	if pin != nil && hostHoldBlocks(*pin) {
 		return refused("execution host %s is held since %s, it takes no start: %s (beekeeper agents hosts update %s lifts it)", selector, pin.HeldAt.Format(time.RFC3339), pin.Held, selector)
-	}
-	if version := coordinatorVersion(); releaseVersion(version) && (pin == nil || pin.Version != version) {
-		return refused("execution host %s does not run this coordinator's %s yet, it takes no start until beekeeper agents hosts update %s pins it", selector, version, selector)
 	}
 	return nil
 }

@@ -252,3 +252,25 @@ echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"s
 		t.Fatalf("relay: %s, %v", status, err)
 	}
 }
+
+// A peer ping without a recipient hook must tell the sender that the actual
+// instruction has not been delivered, even though the durable copy is queued.
+func TestRelayWithoutRecipientHookReportsUndelivered(t *testing.T) {
+	a, _ := noteApp(t)
+	a.cfg.StateDir = t.TempDir()
+	fakeRelay(t, false)
+	status, err := a.relayInstruction(t.Context(), "waiting", "recipient", "operational instruction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := relayInstructionOutcome(status)
+	for _, want := range []string{"not delivered", "delivery remains pending", "beekeeper log --verb agents.message"} {
+		if !strings.Contains(outcome, want) {
+			t.Fatalf("sender was not told delivery failed: %q", outcome)
+		}
+	}
+	out, err := peer.InstructionHook(a.cfg.StateDir, "waiting", "PreToolUse")
+	if err != nil || !strings.Contains(string(out), "operational instruction") {
+		t.Fatalf("next tool lost pending instruction: %s, %v", out, err)
+	}
+}

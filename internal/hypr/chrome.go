@@ -188,52 +188,21 @@ func (l layout) view() []Monitor {
 	return v
 }
 
-// inView says how a Chrome browser window is in the person's view, "" when
-// none is: focused, focused just before the window that has the focus now,
-// or on the workspace one of their monitors shows, a special workspace
-// shown over it or not. A window on the output is the turn's.
-func (l layout) inView() string {
-	for _, w := range l.windows {
-		if !isBrowser(w) || w.Workspace.Name == Surface {
-			continue
-		}
-		switch w.FocusHistoryID {
-		case 0:
-			return "a Chrome window has the focus"
-		case 1:
-			return "a Chrome window had the focus before the current window"
-		}
-	}
-	for _, w := range l.windows {
-		if !isBrowser(w) || w.Workspace.Name == Surface {
-			continue
-		}
-		if m := l.showing(w.Workspace); m != nil {
-			return fmt.Sprintf("a Chrome window is on workspace %s, which %s shows", w.Workspace.Name, m.Name)
-		}
-	}
-	return ""
-}
-
-// showing is the person's monitor that shows ws, a special workspace shown
-// over it or not; nil when none does.
-func (l layout) showing(ws Workspace) *Monitor {
-	for i, m := range l.monitors {
-		if m.Name != Output && (m.ActiveWorkspace.ID == ws.ID || m.SpecialWorkspace.ID != 0 && m.SpecialWorkspace.ID == ws.ID) {
-			return &l.monitors[i]
-		}
-	}
-	return nil
-}
-
-// InView says how a Chrome browser window is in the person's view, "" when
-// none is (layout.inView).
-func InView(ctx context.Context, ctl Ctl) (string, error) {
-	l, err := read(ctx, ctl)
+// FocusedChrome reports whether the current active window is a Chrome browser.
+// Focus history and visible workspaces cannot identify where input goes now.
+func FocusedChrome(ctx context.Context, ctl Ctl) (string, error) {
+	b, err := ctl(ctx, "-j", "activewindow")
 	if err != nil {
 		return "", err
 	}
-	return l.inView(), nil
+	var w Window
+	if err := json.Unmarshal(b, &w); err != nil {
+		return "", err
+	}
+	if w.Address != "" && isBrowser(w) {
+		return "a Chrome window has the focus", nil
+	}
+	return "", nil
 }
 
 func isBrowser(w Window) bool {
@@ -400,32 +369,6 @@ func (s *Shown) Redirect(ctx context.Context, ctl Ctl, on bool, hold time.Durati
 	}
 	s.redirecting = true
 	return nil
-}
-
-// Turned says how the person turned to the shared window during the turn,
-// "" when they did not: one of their monitors shows the window's own
-// workspace, where it was moved from or is drawn on, a special workspace
-// shown over it or not.
-func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
-	if s == nil {
-		return "", nil
-	}
-	l, err := read(ctx, ctl)
-	if err != nil {
-		return "", err
-	}
-	if m := l.showing(s.Before.Workspace); m != nil {
-		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
-	}
-	for _, w := range l.windows {
-		if w.Address == s.Before.Address {
-			if m := l.showing(w.Workspace); m != nil {
-				return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, w.Workspace.Name), nil
-			}
-			break
-		}
-	}
-	return "", nil
 }
 
 // checkOutput refuses an output that changed the person's view from

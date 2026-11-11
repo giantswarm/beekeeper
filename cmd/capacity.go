@@ -28,6 +28,7 @@ import (
 // capacityView is what capacity shows: the roster's busy, parked and idle
 // agents against the target, the headroom a new start needs and the verdict.
 type capacityView struct {
+	Hosts              []hostPlacementView          `json:"hosts,omitempty"`
 	Activity           map[string]*providerActivity `json:"activity24h,omitempty"`
 	WorkerCeiling      int                          `json:"workerCeiling"`
 	ReviewHeadroom     int                          `json:"reviewHeadroom"`
@@ -315,6 +316,7 @@ func providerVerdict(room int, blocks []string) string {
 
 // choiceCandidate is one evaluated entry of capacity.choices.
 type choiceCandidate struct {
+	Effort     string   `json:"effort,omitempty"`
 	Harness    string   `json:"harness"`
 	Model      string   `json:"model"`
 	Provider   string   `json:"provider"`
@@ -330,6 +332,7 @@ type choiceCandidate struct {
 
 // choiceView is the result of evaluating capacity.choices for a start.
 type choiceView struct {
+	Effort   string `json:"effort,omitempty"`
 	Harness  string `json:"harness,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
@@ -389,7 +392,7 @@ func (c *choiceView) line() string {
 		if c.Review {
 			s += ", review"
 		}
-		return s + ")"
+		return s + effortText(c.Effort) + ")"
 	}
 	if c.Reason != "" {
 		return noProblems + " (" + c.Reason + ")"
@@ -1567,7 +1570,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
-			Class: ch.Class, Cost: ch.Cost, Family: ch.Family,
+			Class: ch.Class, Cost: ch.Cost, Family: ch.Family, Effort: ch.Effort,
 			Harness:  ch.Harness,
 			Model:    ch.Model,
 			Provider: provName,
@@ -1604,6 +1607,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 				bestSubscription, bestUnderused, bestBehind, bestRate, bestCost = subscription, underused, behind, rate, ch.Cost
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
+				cv.Effort = ch.Effort
 				cv.Provider = provName
 				cv.Bucket = bucketName
 			}
@@ -2026,6 +2030,17 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if host != "" && host != executionLocal {
+				h, err := a.executionHost(host)
+				if err != nil {
+					return err
+				}
+				unlock, err := a.probeLock("capacity-host-" + unsafeKey.ReplaceAllString(string(h.Identity), "_") + ".lock")
+				if err != nil {
+					return refused("capacity: %v", err)
+				}
+				defer unlock()
+			}
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
 			if a.selectionKind == taskKindReview {
 				review = true
@@ -2033,7 +2048,7 @@ nothing; it makes no GitHub call.`,
 			if a.selectionAuthor != "" && !review && !ofSelfHosted {
 				return usageErr(authorNeedsReview)
 			}
-			st, err := a.store.Read()
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
@@ -2043,7 +2058,7 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
 					return err
@@ -2068,13 +2083,14 @@ nothing; it makes no GitHub call.`,
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
-			events, err := a.store.Follow("capacity-activity", func(e state.Event) bool {
+			events, err := state.FollowSnapshot(a.store, "capacity-activity", "v1", func(e state.Event) bool {
 				return e.Verb == agentWakeEvent || e.Verb == resumedEvent || e.Verb == transcriptResumeEvent
 			})
 			if err != nil {
 				return err
 			}
 			v.Activity = activityCounts(st, events, liveCap, a.now)
+			v.Hosts = a.hostPlacementViews(st)
 			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
@@ -2095,6 +2111,9 @@ nothing; it makes no GitHub call.`,
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
 			if v.Local != nil {
 				p("local: %s", v.Local.line())
+			}
+			for _, host := range v.Hosts {
+				p("%s", host.line())
 			}
 			for _, name := range liveCap.ProviderNames() {
 				if pv := v.Providers[name]; pv != nil {
@@ -2490,7 +2509,7 @@ func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude
 }
 
 func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, kind startFor, wantModel string) (*capacityView, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}

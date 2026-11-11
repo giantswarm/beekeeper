@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -151,6 +152,10 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			continue
 		}
 		ref = refName(r)
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseRecover)
 		if l.dryRun {
 			l.sayOnce("continue "+ag.Name, "SUPERVISOR WOULD CONTINUE %s with a fresh worker for %s", ag.Name, ref)
 			continue
@@ -169,7 +174,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			url := issueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
-				pull, err := readLoopPull(ctx, ref)
+				pull, err := readLoopContextPull(ctx, ref)
 				if err != nil {
 					continue
 				}
@@ -200,10 +205,11 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 					}
 				}
 			}
-			note, _, err := l.a.lastNote(ag.Party, ag.AssignedAt)
+			note, _, err := l.a.lastNote(ag.Party, ag.AssignedAt, func() { l.lifecyclePhase(loopPhaseRecover) })
 			if err != nil {
 				return err
 			}
+			l.lifecyclePhase(loopPhaseRecover)
 			if note != "" {
 				context += "\nLatest handover note (full record in beekeeper log --verb agents.note):\n" + truncate(note, 8192)
 			}
@@ -219,7 +225,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			if err != nil {
 				return err
 			}
-			if err := l.incidentStart(ref); err != nil {
+			if err := l.repositoryStart(ref); err != nil {
 				continue
 			}
 			args := []string{agentsName, agentStartName, name, brief}
@@ -236,9 +242,15 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 				}
 				return nil, refused("continuation changed before startup")
 			}); err != nil {
+				if errors.Is(err, state.ErrRecoveryWriterFenced) {
+					return err
+				}
 				continue
 			}
 			if _, err := l.run(ctx, args...); err != nil {
+				if errors.Is(err, state.ErrRecoveryWriterFenced) {
+					return err
+				}
 				_ = l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 					if !slices.ContainsFunc(st.Agents, func(cur state.Agent) bool { return cur.Name == name }) {
 						for k := range st.Agents {
@@ -252,10 +264,14 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 				l.sayOnce("continue start "+ag.Name, "SUPERVISOR CONTINUATION WAITS %s: %v", ag.Name, err)
 				continue
 			}
+			l.lifecyclePhase(loopPhaseRecover)
 		}
 		if i >= 0 && current.Agents[i].Execution != nil {
 			if rec, _ := executionRecord(current, *current.Agents[i].Execution); rec != nil && unactivated(rec) {
 				if _, err := l.remoteStartRefused(ctx, name); err != nil {
+					if errors.Is(err, state.ErrRecoveryWriterFenced) {
+						return err
+					}
 					continue
 				}
 			}
@@ -263,6 +279,9 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		if i >= 0 && current.Agents[i].Execution == nil && current.Agents[i].Undelivered != "" {
 			message := ag.Task + "\n" + strings.Join(ag.Park.Continuation, "\n")
 			if _, err := l.run(ctx, agentsName, agentWakeName, name, message); err != nil {
+				if errors.Is(err, state.ErrRecoveryWriterFenced) {
+					return err
+				}
 				continue
 			}
 		}
@@ -358,6 +377,9 @@ func (l *supervisorLoop) finishContinuation(old state.Agent, name string) error 
 		return []state.Event{e}, nil
 	})
 	if err == nil && finished {
+		if h, id, ok := harnessOf(old.Party); ok {
+			_ = plat.Launcher.Stop(context.Background(), h.Unit(id))
+		}
 		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
 	}
 	return err

@@ -351,7 +351,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 	}
 
 	if a.store != nil {
-		if evs, err := a.store.Events(0, func(e state.Event) bool {
+		if evs, err := state.FollowSnapshot(a.store, "start-gate-loop-claims", "v1", func(e state.Event) bool {
 			return e.By.Name == loopParty.Name && (e.Verb == loopClaimVerb || e.Verb == loopClaimEndVerb)
 		}); err == nil {
 			settled := map[string]bool{}
@@ -812,7 +812,7 @@ func (l *supervisorLoop) unmergedStart(ctx context.Context, nextRef string) erro
 		if exempt {
 			return nil
 		}
-		return errLoopLater
+		return fmt.Errorf("open pull request observation failed: %v: %w", err, errLoopLater)
 	}
 	l.clearSaid("unmerged read " + strings.ToLower(r.Repo))
 	if err := l.escalateUnmergedBacklog(r.Repo, recent, why); err != nil {
@@ -820,7 +820,7 @@ func (l *supervisorLoop) unmergedStart(ctx context.Context, nextRef string) erro
 	}
 	if why != "" && !exempt {
 		l.sayOnce("unmerged "+strings.ToLower(r.Repo), "SUPERVISOR START WAITS %s: %s", nextRef, why)
-		return errLoopLater
+		return fmt.Errorf("%s: %w", why, errLoopLater)
 	}
 	l.clearSaid("unmerged " + strings.ToLower(r.Repo))
 	return nil

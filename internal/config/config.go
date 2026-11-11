@@ -557,6 +557,9 @@ type Secret struct {
 	// or service account, such as a team's shared vault; beekeeper writes
 	// to Vault alone. The list is the person's policy.
 	Vaults []string `yaml:"vaults"`
+	// MoveVaults are the explicitly allowed destinations for whole-item moves.
+	// They do not grant field writes or reads. Empty refuses every move.
+	MoveVaults []string `yaml:"moveVaults"`
 	// TokenFile (~/ allowed) holds the vault's service account token,
 	// which beekeeper gives only to its own op calls. Agents reach it
 	// nowhere: it lies outside every agent container's mounts.
@@ -1084,9 +1087,11 @@ func (a Agents) KindsOf(name string) []AgentKind {
 
 // AgentModelRule selects a model for a named task before provider selection.
 type AgentModelRule struct {
-	Match string `yaml:"match"`
-	Kind  string `yaml:"kind"`
-	Model string `yaml:"model"`
+	// Harness limits effort to this harness; model selection stays independent.
+	Harness string `yaml:"harness,omitempty"`
+	Match   string `yaml:"match"`
+	Kind    string `yaml:"kind"`
+	Model   string `yaml:"model"`
 	// Effort is the session's effort level (low, medium, high, xhigh, max);
 	// empty leaves it to a later rule or the harness default.
 	Effort string `yaml:"effort"`
@@ -1105,8 +1110,11 @@ func (a Agents) ModelFor(name, kind string) string {
 
 // EffortFor returns the first matching nonempty effort; empty keeps the
 // harness default.
-func (a Agents) EffortFor(name, kind string) string {
+func (a Agents) EffortFor(name, kind string, harness ...string) string {
 	for _, r := range a.Models {
+		if r.Harness != "" && (len(harness) == 0 || r.Harness != harness[0]) {
+			continue
+		}
 		if e := strings.TrimSpace(r.Effort); e != "" && r.matches(name, kind) {
 			return e
 		}
@@ -1485,6 +1493,8 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
+	// Effort is the session default when this capacity choice is selected.
+	Effort string `yaml:"effort,omitempty" json:"effort,omitempty"`
 	// Kinds limits this choice to task kinds; empty permits all kinds, but
 	// a choice on a self-hosted provider takes task kind worker (code
 	// changes) only when Kinds lists it.
@@ -2484,19 +2494,15 @@ type Supervisor struct {
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
 	// Hosts are execution host selectors (agents.hosts) the loop's worker
-	// starts may be placed on, in order of preference: when
-	// the local machine leaves no room for the start, or always with
-	// HostsFirst. A host must map the item's repository and pass its own
+	// starts may be placed on, in order of preference. HostsFirst defaults
+	// to true. A host must map the item's repository and pass its own
 	// check (capacity --host); the start is pinned to the repository's
-	// default branch. Reviewers, releases and the loop stay on the coordinator.
+	// default branch. Reviewers follow the same preferences unless a local
+	// review directory is required; releases and the loop stay local.
 	Hosts []string `yaml:"hosts"`
-	// HostsFirst places a start on the first host of Hosts with room,
-	// whatever the local machine's room is, for what a host can run: a
-	// start a mapped host could run waits without room on any host, as it
-	// does on a full machine; a repository no host maps, or a choice of a
-	// harness no host has an adapter for (every harness but Claude Code),
-	// starts locally within the local room (capacity.local.ceiling among
-	// its guards).
+	// HostsFirst prefers execution hosts and falls back to the coordinator
+	// within its ordinary capacity guards. Defaults to true; explicit false
+	// retains local-first placement.
 	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
@@ -2564,8 +2570,8 @@ type Ownership struct {
 	Review []string `yaml:"review"`
 	// Never are the repositories (patterns as Review's) the desk does no
 	// work on, whatever Review or a person's override says: a pull request
-	// in one, or whose title, head branch or a changed path names one, is
-	// left alone.
+	// in one is left alone. References to these repositories in another
+	// pull request do not affect its ownership.
 	Never []string `yaml:"never"`
 	// Authors are the logins the desk opens its pull requests as (default:
 	// the login gh acts as): one anybody else opened is left alone.
@@ -3566,7 +3572,7 @@ func Load(path string) (*Config, error) {
 // parse is the configuration raw holds, read from path, with the defaults
 // applied and validated.
 func parse(path string, raw []byte) (*Config, error) {
-	c := &Config{}
+	c := &Config{Supervisor: Supervisor{HostsFirst: true}}
 	if err := yaml.Unmarshal(raw, c); err != nil {
 		var doc yaml.Node
 		if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) > 0 {
@@ -4202,7 +4208,10 @@ func (c *Config) validateEach(report func(error)) {
 		}
 	}
 	for i, r := range c.Agents.Models {
-		if !ValidEffort(strings.TrimSpace(r.Effort)) {
+		if r.Harness != "" && !slices.Contains([]string{ClaudeHarness, CodexHarness, AgyHarness, "omp"}, r.Harness) {
+			report(fmt.Errorf("agents.models[%d].harness: unknown harness %q", i, r.Harness))
+		}
+		if !ValidEffort(strings.TrimSpace(r.Effort)) || r.Harness == AgyHarness && r.Effort != "" {
 			report(fmt.Errorf("agents.models[%d].effort: invalid effort %q (low, medium, high, xhigh, max)", i, r.Effort))
 		}
 		if _, err := regexp.Compile(r.Match); err != nil {
@@ -4360,6 +4369,11 @@ func (c *Config) validateEach(report func(error)) {
 	for i, r := range c.Secret.FileRoots {
 		if !filepath.IsAbs(r) || r == "/" {
 			report(fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r))
+		}
+	}
+	for i, v := range c.Secret.MoveVaults {
+		if strings.TrimSpace(v) == "" || strings.ContainsAny(v, "/\x00\r\n") || c.Secret.Vault == "" {
+			report(fmt.Errorf("secret.moveVaults[%d]: %q: a vault name requires secret.vault", i, v))
 		}
 	}
 	for i, v := range c.Secret.Vaults {
@@ -4600,6 +4614,9 @@ func (c *Config) validateEach(report func(error)) {
 		p.validateNamedEach("capacity.providers."+name, report)
 	}
 	for i, ch := range c.Capacity.Choices {
+		if !ValidEffort(strings.TrimSpace(ch.Effort)) || ch.Harness == AgyHarness && ch.Effort != "" {
+			report(fmt.Errorf("capacity.choices[%d].effort: unsupported effort %q for %s", i, ch.Effort, ch.Harness))
+		}
 		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {
 			report(fmt.Errorf("capacity.choices[%d]: class and cost must be nonnegative, reviewReserve in [0, 100]", i))
 		}

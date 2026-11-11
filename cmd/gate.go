@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -728,6 +729,9 @@ func (g *gateRun) step() (string, error) {
 			return why, err
 		}
 	}
+	if err := g.fatalPublicationBarrier(); err != nil {
+		return "", g.refuse("%v", err)
+	}
 	var q merge.Lane
 	var hold state.Hold
 	var held bool
@@ -926,8 +930,10 @@ func (g *gateRun) reloadQueueConfig() error {
 	}
 	next := *g.cfg
 	next.GitHub.PublicOnlyOwners = c.GitHub.PublicOnlyOwners
+	next.Hooks.Guards = c.Hooks.Guards
 	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
 	g.cfg = &next
+	github.SetDevctlSkipVersionCheck(!g.cfg.Hooks.GuardsEnabled())
 	g.lane = lane
 	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
 	return nil
@@ -986,6 +992,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	defer cancel()
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
+	c.Env = devctlCommandEnv("")
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if candidate, ok := merge.ParsePromoteCandidate(out); ok {
@@ -1346,7 +1353,7 @@ func (g *gateRun) checkReviews(refuse func(code int, format string, args ...any)
 	}
 	why, err := g.reviewHold()
 	switch {
-	case err != nil && merge.Transient(err):
+	case err != nil && (merge.Transient(err) || github.RateLimited(err)):
 		return refuse(ExitGateUnread, "reading the reviews of %s failed in transit (%v), nothing merged: run the same command again once GitHub answers", g.key(), err)
 	case err != nil:
 		return refuse(ExitGateRefused, "the reviews of %s cannot be read (%v), nothing merged: run the same command again", g.key(), err)
@@ -1863,6 +1870,9 @@ func (g *gateRun) runMerge() error {
 	}
 	if err := g.awaitReleases(); err != nil {
 		return err
+	}
+	if err := g.fatalPublicationBarrier(); err != nil {
+		return g.refuseRunning("%v", err)
 	}
 	base, err := g.mergeFiles()
 	if err != nil {
@@ -2736,13 +2746,16 @@ func unsavedBudget(err error) error {
 }
 
 // onlyLockBusy says every leaf of err, through wrapping and joining, is a
-// LockBusyError.
+// LockBusyError or coordinator lease commit lock contention.
 func onlyLockBusy(err error) bool {
 	switch e := err.(type) {
 	case *state.LockBusyError:
 		return true
 	case interface{ Unwrap() []error }:
 		errs := e.Unwrap()
+		if len(errs) == 2 && errors.Is(errs[0], execution.ErrCoordinatorBusy) && errors.Is(errs[1], context.DeadlineExceeded) {
+			return true
+		}
 		for _, inner := range errs {
 			if !onlyLockBusy(inner) {
 				return false
@@ -2752,7 +2765,7 @@ func onlyLockBusy(err error) bool {
 	case interface{ Unwrap() error }:
 		return onlyLockBusy(e.Unwrap())
 	}
-	return false
+	return errors.Is(err, execution.ErrCoordinatorBusy)
 }
 
 // capRuns counts the machine's devctl merges and promotes, a running
@@ -2847,7 +2860,9 @@ func (a *app) installTool(ctx context.Context, by state.Party, verb, what string
 func toolUpdate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, merge.Tool, "version", "update").CombinedOutput() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, err := c.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, truncate(strings.TrimSpace(string(out)), 200))
 	}
@@ -2858,7 +2873,9 @@ func toolUpdate(ctx context.Context) error {
 func toolVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, merge.Tool, "version").Output() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, err := c.Output()
 	if err != nil {
 		return ""
 	}
@@ -2875,7 +2892,9 @@ func toolVersion(ctx context.Context) string {
 func toolAcceptsRed(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help").Output() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, _ := c.Output()
 	return strings.Contains(string(out), merge.AcceptRedFlag)
 }
 
@@ -2951,6 +2970,7 @@ func runChild(argv []string, out io.Writer) int {
 		return guard.ExitNotFound
 	}
 	c := exec.Command(path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
+	c.Env = devctlCommandEnv("")
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, out, os.Stderr
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)

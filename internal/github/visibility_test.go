@@ -7,7 +7,7 @@ import (
 )
 
 const visibilityFixtureRepo = "team/repo"
-const nullResponseFixture = "null"
+const nullResponseFixture = jsonNull
 
 func TestVisibilityPolicy(t *testing.T) {
 	for _, tc := range []struct {
