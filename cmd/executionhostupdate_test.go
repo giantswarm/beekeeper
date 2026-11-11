@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -307,9 +308,9 @@ func TestHostsUpdatePinsTheDigestInStateWithoutAConfiguredOne(t *testing.T) {
 	if err := a.admitExecution(sshTestSelector, got); err != nil {
 		t.Errorf("the pinned host takes no start: %v", err)
 	}
-	// The coordinator moves on: the host takes no start until it follows.
+	// A newer coordinator does not revoke the already pinned host policy.
 	withCoordinatorVersion(t, "v0.7.0")
-	if err := a.admitExecution(sshTestSelector, got); Code(err) != ExitRefused || !strings.Contains(err.Error(), "v0.7.0") {
+	if err := a.admitExecution(sshTestSelector, got); err != nil {
 		t.Errorf("a host behind the coordinator: %v", err)
 	}
 }
@@ -695,7 +696,7 @@ func TestHostSelfUpdateRefusesALookupOfAnotherRelease(t *testing.T) {
 	}
 }
 
-func TestHostsUpdateHoldsAHostWhoseReleaseLookupFails(t *testing.T) {
+func TestHostsUpdateRetainsAHostWhoseReleaseLookupFails(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, hostNewRelease)
 	calls := stubHostUpdates(t, a, nil)
@@ -708,8 +709,15 @@ func TestHostsUpdateHoldsAHostWhoseReleaseLookupFails(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Errorf("the host was asked to update without the coordinator's lookup: %v", *calls)
 	}
-	if st, _ := a.store.Read(); st.HostPin(sshTestSelector) == nil || st.HostPin(sshTestSelector).Held == "" {
-		t.Errorf("a refused lookup left the host unheld")
+	if st, _ := a.store.Read(); st.HostPin(sshTestSelector) == nil || st.HostPin(sshTestSelector).Held != "" || st.HostPin(sshTestSelector).UpdateError == "" {
+		t.Errorf("a refused lookup must defer only the update")
+	}
+	h, err := a.executionHost(sshTestSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.admitExecution(sshTestSelector, h); err != nil {
+		t.Fatalf("lookup failure blocked starts: %v", err)
 	}
 }
 
@@ -811,5 +819,122 @@ func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t 
 	l.updateHosts(context.Background(), st)
 	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, hostFixtureCommand, hostUpdateCmdName, sshTestSelector}) {
 		t.Fatalf("rate-limited host did not retry immediately after reset: %v", r.calls)
+	}
+}
+
+func TestHostsUpdateDefersProbationWithoutHoldingOrDelayingRetry(t *testing.T) {
+	for _, rollback := range []bool{false, true} {
+		name := coordinatorProbationPassed
+		if rollback {
+			name = coordinatorProbationRolledBack
+		}
+		t.Run(name, func(t *testing.T) {
+			a, _ := sshStartTestApp(t)
+			withCoordinatorVersion(t, hostNewRelease)
+			j := &update.Journal{Probation: coordinatorProbationPending, Candidate: update.Binary{Version: hostNewRelease}, Previous: &update.Binary{Version: hostOldRelease}}
+			previous := coordinatorJournal
+			coordinatorJournal = func() (*update.Journal, error) { return j, nil }
+			t.Cleanup(func() { coordinatorJournal = previous })
+			digest := execution.Digest([]byte("settled policy"))
+			calls := stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){sshTestSelector: pinnedAnswer(sshTestSelector, digest)})
+			for range 2 {
+				if _, err := a.updateExecutionHost(t.Context(), sshTestSelector); err == nil || !strings.Contains(err.Error(), hostUpdateDeferred) {
+					t.Fatalf("probation update: %v", err)
+				}
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(*calls) != 0 || st.HostPin(sshTestSelector) != nil {
+				t.Fatalf("probation changed host: calls %v, pin %+v", *calls, st.HostPin(sshTestSelector))
+			}
+			version := hostNewRelease
+			j.Probation = coordinatorProbationPassed
+			if rollback {
+				j.Probation = coordinatorProbationRolledBack
+				version = hostOldRelease
+				withCoordinatorVersion(t, version)
+			}
+			if _, err := a.updateExecutionHost(t.Context(), sshTestSelector); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(*calls, []string{sshTestSelector + " " + version}) {
+				t.Fatalf("updated releases %v", *calls)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pin := st.HostPin(sshTestSelector); pin == nil || pin.Held != "" || pin.Version != version {
+				t.Fatalf("settled pin %+v", pin)
+			}
+		})
+	}
+}
+
+func TestSupervisorDefersHostsUntilCoordinatorProbationPasses(t *testing.T) {
+	r := newLoopRig(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{sshTestSelector: {Identity: sshTestSelector}}
+	j := &update.Journal{Probation: coordinatorProbationPending, Candidate: update.Binary{Version: hostNewRelease}}
+	previous := coordinatorJournal
+	coordinatorJournal = func() (*update.Journal, error) { return j, nil }
+	t.Cleanup(func() { coordinatorJournal = previous })
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.updateHosts(t.Context(), st)
+	if len(r.calls) != 0 || strings.Contains(r.out.String(), "HOST HELD") {
+		t.Fatalf("probation attempted updates: %v, %s", r.calls, r.out.String())
+	}
+	j.Probation = coordinatorProbationPassed
+	l.updateHosts(t.Context(), st)
+	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, "hosts", hostUpdateCmdName, sshTestSelector}) {
+		t.Fatalf("no immediate retry after probation: %v", r.calls)
+	}
+}
+
+func TestHostsProbationRefusalDoesNotHoldHost(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){
+		sshTestSelector: func(string) (execution.HostUpdate, error) {
+			return execution.HostUpdate{}, fmt.Errorf("install refused: %w", update.ErrProbationWatched)
+		},
+	})
+	if _, err := a.updateExecutionHost(t.Context(), sshTestSelector); err == nil || !strings.Contains(err.Error(), hostUpdateDeferred) {
+		t.Fatalf("host probation: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin := st.HostPin(sshTestSelector); pin != nil {
+		t.Fatalf("probation created pin or hold: %+v", pin)
+	}
+	if hostHoldWait(state.HostPin{Held: update.ErrProbationWatched.Error(), Tried: a.now}, nil, a.now) {
+		t.Fatal("legacy probation hold delays retry")
+	}
+}
+
+func TestCoordinatorHostUpdateWaitsForReadableMatchingVerdict(t *testing.T) {
+	previous := coordinatorJournal
+	t.Cleanup(func() { coordinatorJournal = previous })
+	for _, phase := range []string{"prepared", coordinatorProbationPending, "rolling-back", coordinatorProbationPassed, coordinatorProbationRolledBack} {
+		j := &update.Journal{Probation: phase, Candidate: update.Binary{Version: hostNewRelease}, Previous: &update.Binary{Version: hostOldRelease}}
+		coordinatorJournal = func() (*update.Journal, error) { return j, nil }
+		for _, version := range []string{hostOldRelease, hostNewRelease} {
+			want := phase == coordinatorProbationPassed && version == hostNewRelease || phase == coordinatorProbationRolledBack && version == hostOldRelease
+			if err := coordinatorHostUpdateReady(version); (err == nil) != want {
+				t.Fatalf("%s on %s: %v", phase, version, err)
+			}
+		}
+	}
+	coordinatorJournal = func() (*update.Journal, error) { return nil, errors.New("unreadable journal") }
+	if err := coordinatorHostUpdateReady(hostNewRelease); err == nil {
+		t.Fatal("unreadable probation allowed an update")
 	}
 }

@@ -109,7 +109,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
+	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), GuardsDisabled: !a.cfg.Hooks.GuardsEnabled(), Rules: []byte(rules.String()), Launcher: plat.Launcher}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()
@@ -408,17 +408,22 @@ func (a *app) executionHostCmds() []*cobra.Command {
 			return deny()
 		}
 		var guardReq any
-		if allowed := executionGuardDecision(a.executionHook(), guardFormat, j, a.executionProtected(s))(raw); !guardDenied(allowed) {
-			_, calls := guard.GitHubCalls(raw, guardFormat)
-			_, restCalls := guard.GitHubRESTCalls(raw, guardFormat)
-			if len(calls)+len(restCalls) > 0 {
-				guardReq = executionGuardRequest{Calls: calls, RESTCalls: restCalls}
+		if a.cfg.Hooks.GuardsEnabled() {
+			if allowed := executionGuardDecision(a.executionHook(), guardFormat, j, a.executionProtected(s))(raw); !guardDenied(allowed) {
+				_, calls := guard.GitHubCalls(raw, guardFormat)
+				_, restCalls := guard.GitHubRESTCalls(raw, guardFormat)
+				if len(calls)+len(restCalls) > 0 {
+					guardReq = executionGuardRequest{Calls: calls, RESTCalls: restCalls}
+				}
 			}
 		}
 		var authority executionAuthority
 		co := s.Config.Coordinators[j.Request.Coordinator]
 		if err := execution.CoordinatorCall(cmd.Context(), co.Callback, string(j.Handle.Ref.Host), "guard", j.Handle.Ref, guardReq, j.Request.ControlKey, &authority, nil); err != nil || authority.Stopped {
 			return deny()
+		}
+		if !a.cfg.Hooks.GuardsEnabled() {
+			return nil
 		}
 		h := a.executionHook()
 		if authority.GitHubHeld {
@@ -444,7 +449,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionReviewCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
+	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -525,7 +530,7 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if b := caps.PolicyBundle; b != nil && b.Problem != "" {
 			return refused("execution host %s cannot run the coordinator policy bundle: %s", h.Identity, b.Problem)
 		}
-		return checkHostRelease(caps.Version)
+		return nil
 	}})
 	var releaseEvidence bool
 	reconcile := &cobra.Command{Use: "reconcile <host> <execution> <generation>", Short: "Reconcile one terminal execution; retain recovery work", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
@@ -689,12 +694,4 @@ func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord
 		}
 	}
 	return nil, -1
-}
-
-func checkHostRelease(version string) error {
-	want := coordinatorVersion()
-	if releaseVersion(want) && version != want {
-		return refused("execution host runs %s, coordinator runs %s; run beekeeper agents hosts update <host>", version, want)
-	}
-	return nil
 }

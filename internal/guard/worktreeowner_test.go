@@ -2,6 +2,7 @@ package guard
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,5 +58,90 @@ func TestWorktreeOwnerHook(t *testing.T) {
 	}
 	if out := string(h.Decide(raw)); !strings.Contains(out, "owner-session") || !strings.Contains(out, "deny") {
 		t.Fatal(out)
+	}
+}
+
+// Exercise both guards with real Git discovery, including a beekeeper-named
+// path and a launch directory different from the worker's repository.
+func TestOwnedWorktreeCompoundPush(t *testing.T) {
+	launch := t.TempDir()
+	repo := initGitRepo(t, "feature", "https://github.com/giantswarm/beekeeper.git")
+	link := filepath.Join(t.TempDir(), "beekeeper")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		"cd " + link + " && git push origin feature",
+		"cd \"" + link + "\" && git push origin feature",
+		"dir=" + link + "; cd \"${dir:?}\" && git push origin feature",
+		"dir=" + link + "; cd \"${dir:?worktree required}\" && git push origin feature",
+		"git -C " + link + " push origin feature",
+	} {
+		t.Run(command, func(t *testing.T) {
+			calls := 0
+			h := Hook{mergeSession: worktreeVisitor, Upstream: Upstream{Orgs: []string{allowedOrg}}, WorktreeOwner: func(session, dir string, create bool) string {
+				calls++
+				real, err := filepath.EvalSymlinks(dir)
+				if err != nil || real != repo || session != worktreeVisitor || create {
+					t.Fatalf("owner check: %q %q %v, %v", session, dir, create, err)
+				}
+				return ""
+			}}
+			if w := h.Upstream.bashWrite(command, launch); w != nil {
+				t.Fatalf("upstream refused: %+v", w)
+			}
+			if r := h.pushRefusal(command, launch); r != "" || calls != 1 {
+				t.Fatalf("push: %q, owner calls: %d", r, calls)
+			}
+			h.WorktreeOwner = func(string, string, bool) string { return "Refused: another owner" }
+			if r := h.pushRefusal(command, launch); !strings.Contains(r, "another owner") {
+				t.Fatalf("foreign worktree: %q", r)
+			}
+		})
+	}
+}
+
+func TestGuardedDirectoryExpansion(t *testing.T) {
+	for _, tc := range []struct {
+		word, value string
+		bound, want bool
+	}{
+		{"${dir:?}", "/worktree", true, true},
+		{"${dir?required}", "/worktree", true, true},
+		{"${dir:?required}", "", true, false},
+		{"${dir:?required}", "", false, false},
+		{"${dir:-/fallback}", "", false, false},
+	} {
+		vars := map[string]string{}
+		if tc.bound {
+			vars["dir"] = tc.value
+		}
+		got, ok := expandDirWord(tc.word, vars)
+		if ok != tc.want || (ok && got != tc.value) {
+			t.Errorf("%q: got %q, %v", tc.word, got, ok)
+		}
+	}
+}
+
+func TestCompoundPushStillRefusesUnknownAndExternalDirectories(t *testing.T) {
+	repo := initGitRepo(t, "feature", "https://github.com/outside/repository.git")
+	h := Hook{mergeSession: worktreeVisitor, Upstream: Upstream{Orgs: []string{allowedOrg}}, WorktreeOwner: func(string, string, bool) string { return "" }}
+	for _, command := range []string{
+		"cd " + repo + " && git push origin feature",
+		"dir=" + repo + "; cd \"${dir:?}\" && git push origin feature",
+		"cd \"${UNBOUND_WORKTREE:?}\" && git push origin feature",
+		"dir=; cd \"${dir:?}\" && git push origin feature",
+	} {
+		if w := h.Upstream.bashWrite(command, t.TempDir()); w == nil {
+			t.Errorf("upstream allowed %q", command)
+		}
+	}
+	for _, command := range []string{
+		"cd \"${UNBOUND_WORKTREE:?}\" && git push origin feature",
+		"dir=; cd \"${dir:?}\" && git push origin feature",
+	} {
+		if r := h.pushRefusal(command, t.TempDir()); r == "" {
+			t.Errorf("owner allowed %q", command)
+		}
 	}
 }

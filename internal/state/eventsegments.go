@@ -14,7 +14,7 @@ import (
 	"github.com/gofrs/flock"
 )
 
-const eventSegmentBytes = 64 << 20
+const eventSegmentBytes = 8 << 20
 
 // Rotation only changes the log layout, never its contents or retention. The
 // state lock serializes appends/outbox recovery; this separate lock lets readers

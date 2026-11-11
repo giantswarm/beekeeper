@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -131,12 +133,12 @@ func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
-	claimPause = func(_ context.Context, d time.Duration) error {
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) {
 		pauses = append(pauses, d)
 		if len(pauses) == 2 {
-			return lease.Dir(a.cfg.LeaseDir).Release(labOne)
+			return d, lease.Dir(a.cfg.LeaseDir).Release(labOne)
 		}
-		return nil
+		return d, nil
 	}
 	out, err := runLease(a, "claim", labOne, "-p", "my proof", "--wait", "5m")
 	if err != nil || !strings.HasPrefix(out, "held by you since 02:00: claimed agentlab-1") || len(pauses) != 2 {
@@ -149,15 +151,37 @@ func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	a := claimApp(t)
 	holdStartingLease(t, a, graveler, claimOther)
+	// Keep the original inode open so repeated atomic replacements cannot
+	// reuse it and hide a write during the refused claim attempts.
+	path := filepath.Join(a.store.Dir(), "state.json")
+	original, err := os.Open(path) //nolint:gosec // test fixture state file under t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = original.Close() }()
+	before, err := original.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
-	claimPause = func(_ context.Context, d time.Duration) error { pauses = append(pauses, d); return nil }
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) {
+		pauses = append(pauses, d)
+		return d, nil
+	}
 	out, err := runLease(a, "claim", graveler, "-p", "my proof", "--wait", "25s")
 	want := []time.Duration{claimPoll, claimPoll, 5 * time.Second}
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, `refused: graveler is held by "Agent other"`) || !strings.HasSuffix(out, " (waited "+dur(25*time.Second)+")\n") ||
 		len(pauses) != len(want) || pauses[2] != want[2] {
 		t.Errorf("a claim that waited out: %q, exit %d, pauses %v", out, Code(err), pauses)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("refused claim tries replaced the state file")
 	}
 }
 

@@ -322,11 +322,11 @@ func (s *server) handle(t serveTool) mcpserver.ToolHandlerFunc {
 		s.log.Info("call", "caller", who.Email, "team", who.Team, "agent", c.me.Name, "tool", t.tool.Name, "outcome", outcome, "detail", firstLine(text))
 		if err != nil {
 			res := mcp.NewToolResultError(text)
-			res.StructuredContent = map[string]any{"outcome": outcome, "message": text, "code": Code(err)}
+			res.StructuredContent = map[string]any{"outcome": outcome, paramMessage: text, "code": Code(err)}
 			return res, nil
 		}
 		if structured == nil {
-			structured = map[string]string{"message": text}
+			structured = map[string]string{paramMessage: text}
 		}
 		return mcp.NewToolResultStructured(structured, text), nil
 	}

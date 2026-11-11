@@ -24,7 +24,7 @@ func TestHandoverNoteLookupPropagatesShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	r.a.store = cancelingNoteStore{Store: r.a.store, cancel: cancel}
-	_, found, err := r.a.lastNoteContext(ctx, state.Party{Name: "worker"}, time.Time{})
+	_, found, err := r.a.lastNoteContext(ctx, state.Party{Name: holderParked}, time.Time{})
 	if !errors.Is(err, context.Canceled) || found {
 		t.Fatalf("note lookup = %t, %v", found, err)
 	}

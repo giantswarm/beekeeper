@@ -602,3 +602,23 @@ func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
 		})
 	}
 }
+
+// A prior Claude sync marker must not hide missing harness skills. No Claude
+// discovery is needed to repair a Codex-only installation.
+func TestSyncOnceRepairsHarnessMirrorBeforeMarker(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	mirror := filepath.Join(dir, plugin.SkillsDir)
+	if err := os.MkdirAll(mirror, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pluginSyncFile), []byte(newBinary+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncOnce(context.Background(), io.Discard, dir)
+	for _, name := range plugin.SkillNames() {
+		got, err := os.ReadFile(filepath.Join(mirror, name, "SKILL.md")) //nolint:gosec // embedded names and fixtures inside t.TempDir()
+		if err != nil || !bytes.Equal(got, plugin.SkillFile(name)) {
+			t.Errorf("%s missing or stale: %v", name, err)
+		}
+	}
+}

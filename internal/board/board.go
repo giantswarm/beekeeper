@@ -213,7 +213,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			return snap.Parent(ref)
 		}
-		out = append(out, Candidate{Item: it, Step: step.Name, WIPExempt: step.WIPExempt, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now), assignedAbove(it.Ref, up, byRef, b.People))})
+		out = append(out, Candidate{Item: it, Step: step.Name, WIPExempt: step.WIPExempt, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now), assignedAbove(it, up, byRef, b.People))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
@@ -227,7 +227,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				continue
 			}
 			m := matched(st, it)
-			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 || len(assignedOutside(it, b.People)) > 0 || assignedAbove(it.Ref, snap.Parent, byRef, b.People) != "" {
+			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 || len(assignedOutside(it, b.People)) > 0 || assignedAbove(it, snap.Parent, byRef, b.People) != "" {
 				offer(it, st, m, "", "")
 				continue
 			}

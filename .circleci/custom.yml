@@ -16,6 +16,14 @@
 # chart-test lints helm/beekeeper and runs its helm-unittest suites, in a plain
 # container: the dependencies are helm and its plugin, not Go tooling. The
 # versions are pinned so a plugin release cannot turn an unrelated PR red.
+#
+# test-performance runs the performance budgets (docs/performance.md) on a
+# generated desk, never on a desk's machine: CLI calls, the idle loop and
+# concurrent calls, its report in the job output and artifacts. Its control
+# step proves the loop budgets reject main before the fix of
+# https://github.com/giantswarm/beekeeper/issues/3657. The session footprint
+# needs a systemd user manager and runs nightly in GitHub Actions
+# (.github/workflows/performance.yaml).
 version: 2.1
 
 jobs:
@@ -32,9 +40,19 @@ jobs:
     - architect/tools-info
     - architect/go-cache-restore
     - run:
+        name: Prove merge-result goconst honors ignore-tests with the real linter
+        command: |
+          set -euo pipefail
+          golangci-lint version
+          BEEKEEPER_TEST_REAL_LINT=1 go test ./cmd -run '^TestMergeResultRealLintIgnoreTests$' -count=1 -timeout=5m -v
+    - run:
         name: Exercise the real supervisor binary and historical parser control
         no_output_timeout: 15m
         command: timeout 15m make test-loop-workflow
+    - run:
+        name: Replay standstills and reject the historical defects
+        no_output_timeout: 30m
+        command: bash .circleci/standstill-controls.sh
     - store_artifacts:
         path: /tmp/loop-workflow-artifacts
         destination: loop-workflow
@@ -55,6 +73,42 @@ jobs:
         name: Bound startup and pass latency with 450k events and 1 GiB of history
         no_output_timeout: 25m
         command: go test ./cmd -run '^TestLargeHistoryStartupAndPass$' -count=1 -timeout=25m -v
+    - run:
+        name: Bound capacity latency with a large snapshot and event log
+        command: go test ./cmd -run '^TestCapacityLargeSnapshotLatency$' -count=1 -timeout=2m -v
+    - run:
+        name: Record cached state and event read cost
+        command: |
+          set -o pipefail
+          mkdir -p /tmp/state-performance
+          go test ./internal/state -run '^$' -bench '^Benchmark(UnchangedSnapshot|CachedEvents)$' -benchtime=1s -benchmem | tee /tmp/state-performance/benchmarks.txt
+    - store_artifacts:
+        path: /tmp/state-performance
+        destination: state-performance
+    - architect/go-cache-save
+
+  test-performance:
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.45
+      entrypoint: /bin/bash
+    resource_class: medium
+    environment:
+      BEEKEEPER_PERF_REPORT: /tmp/performance
+    steps:
+    - checkout
+    - architect/tools-info
+    - architect/go-cache-restore
+    - run:
+        name: Budgets for CLI calls, the idle loop and concurrent calls on a generated desk
+        no_output_timeout: 20m
+        command: make test-performance
+    - run:
+        name: Reject the idle loop's re-reads of main before the fix (control)
+        no_output_timeout: 20m
+        command: bash .circleci/performance-control.sh
+    - store_artifacts:
+        path: /tmp/performance
+        destination: performance
     - architect/go-cache-save
 
   test-envtest:
@@ -166,6 +220,10 @@ workflows:
   build:
     jobs:
     - test-large-history:
+        filters:
+          tags:
+            only: /^v.*/
+    - test-performance:
         filters:
           tags:
             only: /^v.*/

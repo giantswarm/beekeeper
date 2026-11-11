@@ -81,6 +81,7 @@ const (
 	daemonNotifyCgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/beekeeper-notify.service"
 	daemonOwnScope     = "/user.slice/user-1000.slice/user@1000.service/app.slice/claude-daemon-1.scope"
 	daemonRunScope     = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-1.scope"
+	daemonMemLimit     = "MemoryMax 256M"
 	// daemonArg and daemonRunArg are the claude daemon's subcommand and verb.
 	daemonArg    = "daemon"
 	daemonRunArg = "run"
@@ -111,7 +112,7 @@ func TestDaemonsInUnits(t *testing.T) {
 	table, cgroups := daemonTable()
 	limits := func(cg string) []string {
 		if cg == daemonNotifyCgroup {
-			return []string{"MemoryMax 256M", "CPUQuota 50%"}
+			return []string{daemonMemLimit, "CPUQuota 50%"}
 		}
 		return nil
 	}
@@ -151,7 +152,7 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app{cfg: cfg, store: store, out: io.Discard, now: relayNow}
-	found := []daemonUnit{{pid: 10, cgroup: daemonNotifyCgroup, unit: "beekeeper-notify.service", limits: []string{"MemoryMax 256M"}, pids: []int{10, 11, 12}}}
+	found := []daemonUnit{{pid: 10, cgroup: daemonNotifyCgroup, unit: "beekeeper-notify.service", limits: []string{daemonMemLimit}, pids: []int{10, 11, 12}}}
 	cgroups := map[int]string{10: daemonNotifyCgroup, 11: daemonNotifyCgroup, 12: daemonNotifyCgroup}
 	cgroupOf := func(pid int) string { return cgroups[pid] }
 
@@ -297,6 +298,44 @@ func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 			}
 			if len(lines) != 1 || !strings.Contains(lines[0], want) || len(l.moved) != moves {
 				t.Fatalf("lines %v, moves %v; want %q and %d moves", lines, l.moved, want, moves)
+			}
+		})
+	}
+}
+
+func TestDaemonMigrationIncludesForeignServicesAndScopes(t *testing.T) {
+	for _, unit := range []string{"claude-bg-daemon.service", "other-agent.service", "app-desktop.scope", "session-42.scope", "claude-daemon-old.service"} {
+		t.Run(unit, func(t *testing.T) {
+			table, cgroups := daemonTable()
+			foreign := filepath.Join(filepath.Dir(daemonNotifyCgroup), unit)
+			for _, pid := range []int{10, 11, 12} {
+				cgroups[pid] = foreign
+			}
+			cg := func(pid int) string { return cgroups[pid] }
+			found := daemonsInUnits(table, cg, func(string) []string { return []string{daemonMemLimit} })
+			if len(found) != 1 || found[0].unit != unit || !slices.Equal(found[0].pids, []int{10, 11, 12}) {
+				t.Fatalf("foreign daemon not found: %+v", found)
+			}
+			old := plat.Machine
+			t.Cleanup(func() { plat.Machine = old })
+			plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) { return table, nil }}
+			store, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := &scopeLauncher{afterMove: func(pids []int, _ string) {
+				for _, pid := range pids {
+					cgroups[pid] = daemonOwnScope
+				}
+			}}
+			useLauncher(t, l)
+			a := &app{store: store}
+			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			if len(lines) != 1 || !strings.HasPrefix(lines[0], "moved ") || len(l.moved) != 1 {
+				t.Fatalf("migration: %v, moves %v", lines, l.moved)
+			}
+			if cgroups[13] != daemonRunScope || cgroups[20] != daemonNotifyCgroup || cgroups[30] != daemonNotifyCgroup {
+				t.Fatal("moved an unrelated process or an explicitly capped build")
 			}
 		})
 	}

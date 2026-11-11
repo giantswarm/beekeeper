@@ -62,6 +62,9 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 			return true
 		}
 	}
+	if d.Origin == state.DeliveryOriginObserved {
+		return false
+	}
 	after := p.stallAfter
 	if after <= 0 {
 		after = 24 * time.Hour
@@ -159,7 +162,7 @@ func (l *supervisorLoop) deliveryStart(ref string, exempt bool) error {
 			label = "new work"
 		}
 		l.sayOnce("delivery admission "+ref, "SUPERVISOR NEXT WAITS %s: %s", label, v.Reason)
-		return errLoopLater
+		return fmt.Errorf("%s: %w", v.Reason, errLoopLater)
 	}
 	l.clearSaid("delivery admission " + ref)
 	return nil

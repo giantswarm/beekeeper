@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -22,6 +23,8 @@ import (
 
 const loopWorkerMergeGo = "merge go given"
 const reviewedMergeQueued = "queued"
+const loopMergeFailed = "merge.failed"
+const loopMergeFailureDropped = "merge.failure-dropped"
 
 func pullNeedsBranchRepair(p superloop.Pull) bool {
 	return p.Draft || p.Mergeable == "CONFLICTING"
@@ -42,7 +45,7 @@ func ghMergePolicyRefused(reason string) bool {
 // mergePull executes the planner's exact-head decision in the coordinator,
 // including for workers on an execution host. Failed or unreadable validation
 // never delegates a direct merge around the required server-side queue.
-func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (string, error) {
+func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (result string, resultErr error) {
 	a := l.a
 	ref, ok := parseRef(act.Ref)
 	if !ok || act.Head == "" {
@@ -55,7 +58,20 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if st.Stop != nil {
 		return "", refused("the desk is stopped")
 	}
+	// A hold is a wait, not a failed merge attempt. Keep the exact-head
+	// review available and reconsider it on the next pass, without claiming
+	// the go, entering the gate or starting failure backoff.
+	waitKey := act.Key + " hold"
+	if h, held := merge.BlockingFor(st, a.timeNow(), loopParty.Name, ref.Repo, ref.N, a.cfg.LaneOf(ref.Repo)); held {
+		l.sayOnce(waitKey, "SUPERVISOR WAIT %s on hold:%s", act.URL, h.Target)
+		return "", errLoopLater
+	}
+	l.clearSaid(waitKey)
 	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) || a.resetFirst(st) {
+		return "", errLoopLater
+	}
+	if err := a.fatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
+		l.sayOnce(waitKey, "SUPERVISOR WAIT %s: %v", act.URL, err)
 		return "", errLoopLater
 	}
 	repairStage := act.Key + " repair"
@@ -114,7 +130,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if f.Repo != ref.Repo || f.PR != ref.N || f.By.Name != loopParty.Name {
 			continue
 		}
-		if f.Head != act.Head || ghMergePolicyRefused(f.Reason) {
+		if f.Head != act.Head || staleMergeResultFailure(f.Reason, act.Head) || ghMergePolicyRefused(f.Reason) {
 			// A different (or unknown legacy) head supplies no failure proof
 			// for this approved commit. Let the gate validate it again.
 			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
@@ -122,6 +138,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 				return nil, nil
 			}); err != nil {
 				return "", err
+			}
+			if f.Head != act.Head || staleMergeResultFailure(f.Reason, act.Head) {
+				if err := l.logStaleMergeFailure(act.Ref, act.Head); err != nil {
+					return "", err
+				}
 			}
 			continue
 		}
@@ -156,6 +177,25 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
+	// Every submitted attempt has an outcome in this pass, including waits
+	// and unreadable confirmation. A pending outcome keeps the claim open;
+	// it never grants a worker permission to bypass the gate.
+	failed := ""
+	pending := "awaiting merge confirmation"
+	defer func() {
+		verb, detail := "merge.finished", result
+		switch {
+		case failed != "":
+			verb, detail = loopMergeFailed, failed
+		case errors.Is(resultErr, errLoopLater):
+			verb, detail = "merge.pending", pending
+		case resultErr != nil:
+			verb, detail = loopMergeFailed, resultErr.Error()
+		}
+		if err := a.store.Record(about(event(loopParty, verb, "%s at %s: %s", act.URL, act.Head, oneLine(detail)), act.Ref)); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
@@ -169,6 +209,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if readErr != nil {
 		return "", readErr
 	}
+	l.cachePull(act.Ref, p)
 	if p.State == superloop.Merged {
 		// Where the base requires up-to-date branches and the desk merges
 		// without --admin, the merge brings a behind branch up to date
@@ -191,6 +232,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		policyReason = reply.Reason
 	}
 	if ghMergePolicyRefused(policyReason) {
+		pending = "repository merge policy refused; retrying next round: " + oneLine(policyReason)
 		stage := act.Key + " admin configuration"
 		l.mu.Lock()
 		reported := l.stages[stage]
@@ -212,6 +254,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
+		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, oneLine(out))
 		return "", errLoopLater
 	}
 	if err == nil && (code == ExitGateUnread || code == ExitGateRefused) || mutationResult && code == github.SquashRefused {
@@ -221,6 +264,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", refused("merge gate refused: %s", oneLine(out))
 	}
 	if code == 0 && mutationResult && reply.Verdict == reviewedMergeQueued {
+		pending = "server-side merge queued; awaiting merge-result checks: " + oneLine(reply.Reason)
 		return "", errLoopLater
 	}
 	if mutationResult && code == github.SquashTooling {
@@ -239,6 +283,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if reply.Reason != "" {
 			out = reply.Reason
 		}
+		if staleMergeResultFailure(out, act.Head) {
+			pending = "stale merge-result failure dropped; awaiting fresh validation"
+			return repair(code, out)
+		}
+		failed = fmt.Sprintf("merge failed (exit %d): %s; branch repair requested", code, oneLine(out))
 		return repair(code, out)
 	}
 	// An unreadable gate result supplies no merge-result proof either.
@@ -256,23 +305,60 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
 }
 
-// dropAdminRepairs undoes a branch repair an older loop requested for a
-// merge refused by base branch policy: no branch
+// Older repair records have only the checker's diagnostic. Its head must
+// agree with the decision even if a surrounding gate record names that decision.
+// Check every diagnostic, since a tool response can contain several lines.
+func staleMergeResultFailure(reason, head string) bool {
+	for {
+		_, rest, found := strings.Cut(reason, "merge result (")
+		if !found {
+			return false
+		}
+		identity, tail, closed := strings.Cut(rest, ")")
+		_, tested, paired := strings.Cut(identity, " + ")
+		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != shortSHA(head)) {
+			return true
+		}
+		reason = tail
+	}
+}
+
+func (l *supervisorLoop) logStaleMergeFailure(ref, head string) error {
+	message := fmt.Sprintf("SUPERVISOR MERGE DROPPED stale failure for %s at %s; rechecking through the merge gate", ref, head)
+	if err := l.a.store.Record(about(event(loopParty, loopMergeFailureDropped, "%s", message), ref)); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(l.a.out, message)
+	return nil
+}
+
+// dropInvalidMergeRepairs also retires persisted repairs whose merge-result head
+// contradicts the decision. It undoes a branch repair an older loop requested
+// for a merge refused by base branch policy: no branch
 // change repairs that refusal. Its repair stage and the go it completed are
 // closed durably, so the unchanged approved head is merged again on this
 // pass without a new review or the worker's action. A repair stage for any
 // other reason stands.
-func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
+func (l *supervisorLoop) dropInvalidMergeRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
 	for stage, detail := range stageDetail {
 		key, ok := strings.CutSuffix(stage, " repair")
-		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") || !ghMergePolicyRefused(detail) {
+		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") {
 			continue
 		}
 		ref := strings.TrimPrefix(key, superloop.KindGo+" ")
+		head := ""
 		if i := strings.LastIndex(ref, "@"); i >= 0 {
+			head, _, _ = strings.Cut(ref[i+1:], " ")
 			ref = ref[:i]
 		}
+		stale := staleMergeResultFailure(detail, head)
+		if !stale && !ghMergePolicyRefused(detail) {
+			continue
+		}
 		why := "base branch policy refusal requires coordinator policy resolution"
+		if stale {
+			why = "stale merge-result failure does not describe the reviewed head"
+		}
 		// A preview reconciles only its in-memory plan. Leave the durable
 		// records for the next real pass, which holds the loop lock.
 		if !l.dryRun {
@@ -290,7 +376,11 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 			}
 			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
 		}
-		if !l.dryRun {
+		if stale && !l.dryRun {
+			if err := l.logStaleMergeFailure(ref, head); err != nil {
+				return taken, err
+			}
+		} else if !l.dryRun {
 			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; retrying with configured merge identity and policy\n", key, why)
 		}
 	}
@@ -301,6 +391,12 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 // to its worker once, recording the repair stage before waking or starting a
 // fixer so capacity waits never retry the merge command each pass.
 func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act superloop.Action, reason string) (string, error) {
+	if staleMergeResultFailure(reason, act.Head) {
+		if err := l.logStaleMergeFailure(act.Ref, act.Head); err != nil {
+			return "", err
+		}
+		return "", errLoopLater
+	}
 	repairStage := act.Key + " repair"
 	l.mu.Lock()
 	repairing := l.stages[repairStage]
@@ -343,7 +439,7 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		l.mu.Unlock()
 		if !ok {
 			var readErr error
-			mp, readErr = readLoopPull(ctx, act.Ref)
+			mp, readErr = l.readPull(ctx, act.Ref)
 			if readErr != nil {
 				return "", readErr
 			}
@@ -549,7 +645,7 @@ func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act s
 	byPull := l.merged[by]
 	l.mu.Unlock()
 	if byPull.Ref == "" {
-		readBy, err := readLoopPull(ctx, by)
+		readBy, err := l.readPull(ctx, by)
 		if err != nil {
 			return "", err
 		}
@@ -730,7 +826,7 @@ func absorbedClosingIssues(ctx context.Context, st *state.State, absorbs []strin
 				}
 			}
 		}
-		origPull, err := readLoopPull(ctx, orig)
+		origPull, err := readLoopContextPull(ctx, orig)
 		if err != nil {
 			return nil, err
 		}
@@ -851,6 +947,7 @@ const (
 	reasonMergeHeadChanged = "merge head moved or current CI is not green"
 	mergeableConflicting   = "CONFLICTING"
 	mergeMethodRebase      = "rebase"
+	mergeMethodSquash      = "squash"
 )
 
 // reviewedMerge merges the reviewed green head as it stands. A behind head
@@ -860,9 +957,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	doc := github.SquashDoc{Repo: repo, Number: number, HeadSha: head, SchemaVersion: 1, Command: "pr merge", Route: reviewedMergeRoute, ExitCode: github.SquashNotApplicable}
 	method := a.cfg.Merge.Methods[repo]
 	if method == "" {
-		method = "squash"
+		method = mergeMethodSquash
 	}
-	if method != "squash" && method != mergeMethodRebase && method != superloop.KindMerge {
+	if method != mergeMethodSquash && method != mergeMethodRebase && method != superloop.KindMerge {
 		doc.ExitCode = github.SquashTooling
 		doc.Reason = "invalid configured merge method"
 		return doc
@@ -1065,6 +1162,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if a.cfg.Merge.DevctlServes(repo) {
 		argv = append([]string{devctlBinary, "auth", "exec", "--"}, argv...)
 	}
+	if a.cfg != nil {
+		github.SetDevctlSkipVersionCheck(!a.cfg.Hooks.GuardsEnabled())
+	}
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
 	if runErr != nil {
@@ -1172,6 +1272,11 @@ func latestReviewRequestsChanges(p superloop.Pull) bool {
 // only from a login the desk trusts (trustedReview): on a public repository
 // anyone can post "Review: approved".
 func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p superloop.Pull, targetHead string) (why string, hasExplicitGo bool, err error) {
+	if ref, ok := parseRef(p.Ref); ok {
+		if err := a.fatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
+			return err.Error(), false, nil
+		}
+	}
 	head := cmp.Or(targetHead, p.Head)
 	if head == "" {
 		return "pull request has no head commit", false, nil

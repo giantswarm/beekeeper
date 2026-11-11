@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 const (
@@ -589,6 +591,20 @@ func TestOwnedEnvironmentRoutesWorkerPaths(t *testing.T) {
 		if len(values) != 1 || !strictlyWithin(dir, values[0]) {
 			t.Fatalf("%s = %v, want one path inside %s", key, values, dir)
 		}
+	}
+	const optOut = github.DevctlSkipVersionCheckEnv + "=true"
+	if slices.Contains(env, optOut) {
+		t.Fatalf("ownedEnvironment set %s with guards enabled: %v", optOut, env)
+	}
+	f.s.GuardsDisabled = true
+	disabledEnv, err := f.s.ownedEnvironment(Journal{Handle: h}, []string{workerGitHubTestPath})
+	if err != nil || !slices.Contains(disabledEnv, optOut) {
+		t.Fatalf("ownedEnvironment with GuardsDisabled lacked %s: %v, %v", optOut, disabledEnv, err)
+	}
+	f.s.GuardsDisabled = false
+	enabledAgain, err := f.s.ownedEnvironment(Journal{Handle: h}, disabledEnv)
+	if err != nil || slices.Contains(enabledAgain, optOut) {
+		t.Fatalf("ownedEnvironment with GuardsDisabled=false kept %s: %v, %v", optOut, enabledAgain, err)
 	}
 }
 

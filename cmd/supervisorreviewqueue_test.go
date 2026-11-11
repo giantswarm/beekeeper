@@ -24,7 +24,7 @@ const (
 // A pile of ownerless pull requests costs a pass a bounded number of reads,
 // least recently read first, so reviews still start; every one gets its
 // turn, its stretch runs on while it waits, and the pile is counted.
-func TestSweepBoundsItsReadsAndCountsThePile(t *testing.T) {
+func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 	r := newLoopRig(t)
 	total := sweepReadsPerPass + 10
 	var open []string
@@ -56,18 +56,18 @@ func TestSweepBoundsItsReadsAndCountsThePile(t *testing.T) {
 	}
 	r.loopPass(t, l)
 	settled()
-	if n := reads.Load(); n != sweepReadsPerPass {
-		t.Fatalf("first pass read %d, want %d", n, sweepReadsPerPass)
+	if n := reads.Load(); n != int32(total) {
+		t.Fatalf("first pass read %d, want %d", n, total)
 	}
 	var count loopSweepCount
 	if found, err := r.a.store.ReadFile(loopSweepFile, &count); err != nil || !found {
 		t.Fatalf("no count: %v", err)
 	}
-	if count.Listed != total || count.Ownerless != sweepReadsPerPass || count.Unread != 10 || count.Oldest.IsZero() {
+	if count.Listed != total || count.Ownerless != total || count.Unread != 0 || count.Oldest.IsZero() {
 		t.Fatalf("count = %+v", count)
 	}
 	line := count.line(r.a)
-	for _, want := range []string{fmt.Sprintf("%d listed", total), fmt.Sprintf("%d without a live owner", sweepReadsPerPass), "10 not read yet"} {
+	for _, want := range []string{fmt.Sprintf("%d listed", total), fmt.Sprintf("%d without a live owner", total)} {
 		if !strings.Contains(line, want) {
 			t.Errorf("line %q lacks %q", line, want)
 		}
@@ -75,12 +75,12 @@ func TestSweepBoundsItsReadsAndCountsThePile(t *testing.T) {
 	if !strings.Contains(r.out.String(), "SUPERVISOR SWEEP") {
 		t.Errorf("the pile went unsaid:\n%s", r.out)
 	}
-	// The next pass reads the ten left over; the fresh ones cost nothing.
+	// The next pass reuses all observations.
 	reads.Store(0)
 	r.loopPass(t, l)
 	settled()
-	if n := reads.Load(); n != 10 {
-		t.Fatalf("second pass read %d, want the 10 left over", n)
+	if n := reads.Load(); n != 0 {
+		t.Fatalf("second pass read %d, want none", n)
 	}
 	count = loopSweepCount{}
 	if _, err := r.a.store.ReadFile(loopSweepFile, &count); err != nil {

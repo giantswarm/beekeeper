@@ -247,6 +247,25 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 	}
 }
 
+func TestTheGoUsesConfiguredMergeMethod(t *testing.T) {
+	for _, method := range []string{"squash", "rebase", "merge"} {
+		t.Run(method, func(t *testing.T) {
+			repo, _, _ := strings.Cut(pr, "#")
+			in := Input{MergeMethods: map[string]string{repo: method}}
+			base := Action{Ref: "o/r#7", Head: head1}
+			a := goAction(in, base, "approved")
+			if !strings.Contains(a.Message, "--"+method+" --match-head-commit "+head1) {
+				t.Fatalf("wrong method: %s", a.Message)
+			}
+			in.DevctlOwners = []string{"o"}
+			a = goAction(in, base, "approved")
+			if strings.Contains(a.Message, "--rebase") != (method == "rebase") {
+				t.Fatalf("wrong devctl method: %s", a.Message)
+			}
+		})
+	}
+}
+
 // An approved round does not use a change-request round; the fixes after
 // the final change request get the loop’s go without another review.
 func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
@@ -983,17 +1002,16 @@ func TestAReplacedParkIsNoDecision(t *testing.T) {
 	}
 }
 
-// A worker that pushes while round 1 runs has its newer head reviewed: a
-// verdict on the head the worker parks on is the round's, never ignored.
-func TestAHeadPushedDuringTheRoundGetsItsGo(t *testing.T) {
+// Findings on a changed head still reach the worker, but an approval may
+// cover only the head assigned to its round.
+func TestAHeadPushedDuringTheRoundCannotBeApproved(t *testing.T) {
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
 	tk := taken(t, t0, started)
 	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
 	for _, at := range []time.Time{t0.Add(-time.Minute), t0.Add(30 * time.Second)} {
 		in := Input{Workers: parked(at), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
-		a := only(t, Plan(in), KindGo)
-		if a.Head != head2 || !strings.Contains(a.Message, "review round 1 approved head "+short(head2)+" (the round opened on head "+short(head1)+")") {
-			t.Errorf("parked %s: go = %+v", at, a)
+		if a := only(t, Plan(in), KindLeave); !strings.Contains(a.Message, "no merge go") {
+			t.Errorf("parked %s: action = %+v", at, a)
 		}
 	}
 	// No verdict yet on either head: the round runs.
@@ -1400,8 +1418,9 @@ func TestMutualOverlapRequiresObservedOwnedTarget(t *testing.T) {
 		{"other author", func(_ *Input, p *Pull) { p.Author = "other-author" }},
 		{"other team", func(_ *Input, p *Pull) { p.Team = teamB }},
 		{"unknown teams", func(in *Input, _ *Pull) { in.Desk.TeamsUnknown = true }},
-		{"named never", func(_ *Input, p *Pull) { p.Title = "update o/tool" }},
-		{"incomplete files", func(_ *Input, p *Pull) { p.ChangedFiles = 1 }},
+		{"allowed named never", func(_ *Input, p *Pull) { p.Title = "update o/tool" }},
+		{"allowed incomplete files", func(_ *Input, p *Pull) { p.ChangedFiles = 1 }},
+		{"never repository", func(in *Input, _ *Pull) { in.Desk.Never = append(in.Desk.Never, repoOf(targetRef)) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Input{
@@ -1424,7 +1443,7 @@ func TestMutualOverlapRequiresObservedOwnedTarget(t *testing.T) {
 			}
 			var acts []Action
 			planOverlap(in, ledger{}, overlapPRB, in.Pulls[overlapPRB], nil, func(string) bool { return false }, func(a Action) { acts = append(acts, a) })
-			if tc.name != "allowed" {
+			if !strings.HasPrefix(tc.name, "allowed") {
 				if len(acts) != 0 {
 					t.Fatalf("unsafe handoff: %+v", acts)
 				}

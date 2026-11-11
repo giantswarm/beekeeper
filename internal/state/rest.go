@@ -133,6 +133,7 @@ type (
 	plainRoleLine          RoleLine
 	plainPair              Pair
 	plainStop              Stop
+	plainHostPlacement     HostPlacement
 	plainHostPin           HostPin
 	plainTranscriptGrant   TranscriptGrant
 	plainTranscriptRequest TranscriptRequest
@@ -304,3 +305,10 @@ func (v *GuideWork) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainGuideWork)(v), &v.rest)
 }
 func (v GuideWork) MarshalJSON() ([]byte, error) { return encodeKeeping(plainGuideWork(v), v.rest) }
+
+func (v *HostPlacement) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainHostPlacement)(v), &v.rest)
+}
+func (v HostPlacement) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainHostPlacement(v), v.rest)
+}

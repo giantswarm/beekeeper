@@ -26,6 +26,7 @@ const sshTestConfig = "/etc/beekeeper/config.yaml"
 const sshTestSelector = "host-a"
 const sshTestRepository = "giantswarm/beekeeper"
 const sshTestTask = "implement the fixture task"
+const completedFixtureTask = "Completed the fixture task"
 
 func executionTestApp(t *testing.T) (*app, execution.StartRequest) {
 	t.Helper()
@@ -117,7 +118,7 @@ func TestExecutionCoordinatorReceiptsSurviveLostReplies(t *testing.T) {
 	request.ID = "report-one"
 	request.Sequence++
 	request.Operation = execution.ControlReport
-	request.Data = mustExecutionJSON(t, executionReport{Finished: true, Text: "Completed the fixture task", Problems: []string{ghNone}})
+	request.Data = mustExecutionJSON(t, executionReport{Finished: true, Text: completedFixtureTask, Problems: []string{ghNone}})
 	if err := coordinatorTestCall(t, &restarted, r, "control", request, &result, true); err == nil {
 		t.Fatal("lost report reply reported success")
 	}
@@ -186,6 +187,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	const pushed = "2222222222222222222222222222222222222222"
 	pr := sshTestRepository + "#7"
 	branch, repo, prHead := executionBranch(r.Ref), sshTestRepository, loopHead
+	draft := false
 	was := executionReviewGH
 	t.Cleanup(func() { executionReviewGH = was })
 	reads := 0
@@ -194,7 +196,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		if strings.Join(args, " ") != "api repos/"+sshTestRepository+"/pulls/7" {
 			t.Fatalf("read %v", args)
 		}
-		return fmt.Appendf(nil, `{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, branch, prHead, repo), nil
+		return fmt.Appendf(nil, `{"draft":%t,"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, draft, branch, prHead, repo), nil
 	}
 	park := func(p executionPark) string {
 		t.Helper()
@@ -220,6 +222,15 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		}
 		return got
 	}
+	n := reads
+	if got := park(executionPark{On: pr, Waits: "image rebuild completion timer 3155", Head: loopHead}); got != "" || reads != n {
+		t.Fatalf("plain park recorded %q after %d reads", got, reads-n)
+	}
+	draft = true
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != "" {
+		t.Fatalf("draft park recorded %q", got)
+	}
+	draft = false
 	// The workspace's HEAD is the published head of the execution's own
 	// branch: a review request, whatever the host's branch is called.
 	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != loopHead {
@@ -249,7 +260,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("a fork's pull request recorded %q", got)
 	}
 	repo = sshTestRepository
-	n := reads
+	n = reads
 	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}); got != "" || reads != n {
 		t.Fatalf("another repository's pull request recorded %q after %d reads", got, reads-n)
 	}
@@ -328,5 +339,46 @@ func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
 				t.Fatalf("mismatched park: %v", err)
 			}
 		})
+	}
+}
+
+func TestRemoteCompletionRequiresAndRecordsDeliveryEvidence(t *testing.T) {
+	a, r := executionTestApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.StartDelivery("giantswarm/beekeeper#1711", r.Name, "", a.now)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := execution.ControlRequest{Ref: r.Ref, ID: "outcome-refused", Sequence: 1, Operation: execution.ControlReport,
+		Data: mustExecutionJSON(t, executionReport{Finished: true, Text: completedFixtureTask, Problems: []string{ghNone}})}
+	var result execution.ControlResult
+	if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Error, taskEndings) {
+		t.Fatalf("unexplained completion accepted: %+v", result)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Done || st.Agents[0].Task == "" {
+		t.Fatal("refused report released task")
+	}
+	request.ID, request.Sequence = "outcome-proven", 2
+	request.Data = mustExecutionJSON(t, executionReport{Finished: true, NoChange: "operation verified in the issue response", Text: completedFixtureTask, Problems: []string{ghNone}})
+	// Successful receipts omit Error; decode into a fresh result so the
+	// previous refusal cannot survive JSON decoding of the corrected report.
+	result = execution.ControlResult{}
+	if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil || result.Error != "" {
+		t.Fatalf("no-change: %v %+v", err, result)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Agents[0].Done || st.Deliveries[0].Outcome != state.OutcomeNoChange || st.Deliveries[0].Evidence == "" {
+		t.Fatalf("missing remote outcome: %+v", st.Deliveries)
 	}
 }

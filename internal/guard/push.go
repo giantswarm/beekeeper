@@ -256,6 +256,11 @@ const unknownBranchReason = "Refused: the guard cannot tell which branch this pu
 
 func (h Hook) checkGitPush(gitWords []string, cwd string, known, hasCDOnLine bool, vars map[string]string, hasFakeGit bool) string {
 	args, gitDir, dirKnown, explicitC := parseGitGlobal(gitWords, cwd, known, vars, hasFakeGit)
+	if len(args) > 0 && (args[0] == pushSubcmd || args[0] == worktreeCommit) && h.ReviewWrite != nil {
+		if r := h.ReviewWrite(h.mergeSession); r != "" {
+			return r
+		}
+	}
 	if r := h.checkWorktreeOwner(args, gitDir, dirKnown); r != "" {
 		return r
 	}
@@ -814,12 +819,12 @@ func expandDirWord(word string, vars map[string]string) (string, bool) {
 		if name == "" {
 			name = sub[3]
 		}
-		if sub[2] != "" {
+		if sub[2] != "" && !strings.HasPrefix(sub[2], ":?") && !strings.HasPrefix(sub[2], "?") {
 			ok = false
 			return ""
 		}
 		val, exists := vars[name]
-		if !exists {
+		if !exists || (strings.HasPrefix(sub[2], ":?") && val == "") {
 			ok = false
 			return ""
 		}

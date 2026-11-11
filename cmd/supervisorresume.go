@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -45,6 +47,10 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			continue
 		}
 		target := cmp.Or(ref, ag.Task)
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseRecover)
 		if l.dryRun {
 			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 				return err
@@ -63,6 +69,9 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			return err
 		}
 		if err := l.restartQuota(ctx, st, ag, ref, review); err != nil {
+			if errors.Is(err, state.ErrRecoveryWriterFenced) {
+				return err
+			}
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("quota later "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, no room for its replacement yet: %s waits for its re-queue", ag.Name, qerr.Error(), target)
 				continue
@@ -70,7 +79,8 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			l.sayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
 			continue
 		}
-		note, _, _ := l.a.lastNoteContext(ctx, ag.Party, time.Time{})
+		note, _, _ := l.a.lastNoteContext(ctx, ag.Party, time.Time{}, func() { l.lifecyclePhase(loopPhaseRecover) })
+		l.lifecyclePhase(loopPhaseRecover)
 		err = l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			// The replacement took the name, and with it the task; it
 			// serves what the old session served.
@@ -292,6 +302,10 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if l.agentUnreadRepo(st, ag, ref) != "" {
 			continue
 		}
+		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+			return err
+		}
+		l.lifecyclePhase(loopPhaseRecoverParks)
 		if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 			continue
 		}
@@ -353,6 +367,9 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 		}
 		startErr = err
 	}
+	if errors.Is(startErr, state.ErrRecoveryWriterFenced) {
+		return startErr
+	}
 	// Release only a holder whose harness confirmed it gone. A partial
 	// start may already have installed a resumable replacement.
 	gone := ag.Party
@@ -385,4 +402,69 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 		}
 		return nil, nil
 	})
+}
+
+// Persistent inbox harnesses do not run the Claude stop-post hook. Resume
+// only a positively observed ended turn, once per observed turn timestamp.
+func (l *supervisorLoop) recoverUnfinishedTurns(ctx context.Context, st *state.State) error {
+	if l.dryRun || st.Stop != nil || l.holdingStarts() {
+		return nil
+	}
+	sessions, _, err := freshSessions(l.a)
+	if err != nil {
+		return err
+	}
+	for _, ag := range st.Agents {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		h, _, ok := harnessForHost(ag.HostSession)
+		if !ok && ag.Execution == nil || ag.Done || ag.Task == "" || ag.Park != nil || roleRun(st, ag.Party) || !ag.ContinuationExhausted.IsZero() {
+			continue
+		}
+		if keptBy(st, ag, l.a.now) != "" || agyQuotaError(l.a.cfg, ag) != nil {
+			continue
+		}
+		if ag.Execution != nil {
+			r, _ := executionRecord(st, *ag.Execution)
+			if r == nil || !r.Request.Messaging || r.Completed || r.StopRequest != nil || r.Observation.StopAcknowledged || !r.Observation.Ready || r.Observation.Reachability != execution.Reachable || executionInTurn(st, ag.Party, l.a.now) {
+				continue
+			}
+			if h, ok := l.a.cfg.Agents.Hosts[r.Selector]; !ok || h.Identity != r.Handle.Ref.Host {
+				continue
+			}
+			o := r.Observation
+			if !o.BetweenTurns() || o.LastActive.IsZero() || !ag.ResumedWait.IsZero() && !o.LastActive.After(ag.ResumedWait) {
+				continue
+			}
+			if _, err := l.a.resumeOnWait(ctx, ag.Name, ""); err != nil && !isUnreachable(err) && !errors.Is(err, execution.ErrUnsupported) {
+				return err
+			}
+			continue
+		}
+		endedAt := ag.AssignedAt
+		ended := false
+		for _, s := range sessions {
+			if s.Party().Is(ag.Party) && s.State == omp.StateIdle && len(s.Commands) == 0 {
+				ended, endedAt = true, s.LastActive
+			}
+		}
+		if !ended {
+			if _, live := liveSession(sessions, ag.Party); live {
+				continue
+			}
+			for _, s := range h.Ended(l.a.cfg, sessions, ag.AssignedAt) {
+				if s.Party().Is(ag.Party) {
+					ended, endedAt = true, s.LastActive
+				}
+			}
+		}
+		if !ended || endedAt.IsZero() || !ag.ResumedWait.IsZero() && !endedAt.After(ag.ResumedWait) {
+			continue
+		}
+		if _, err := l.a.resumeOnWait(ctx, ag.HostSession, ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }

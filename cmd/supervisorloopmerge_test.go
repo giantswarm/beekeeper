@@ -25,6 +25,90 @@ const (
 	reviewedRedCase     = "red"
 )
 
+func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		expire bool
+	}{
+		{name: "hold-cleared"},
+		{name: "hold-expired", expire: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Merge.DevctlOwners = []string{"o"}
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for range 4 {
+				r.pass(t)
+				if r.called(gateCmdName) != nil {
+					t.Fatalf("held merge reached gate: %v", r.calls)
+				}
+				r.a.now = r.a.now.Add(time.Hour)
+			}
+			for _, verb := range []string{"merge.authorized", "merge.start", loopMergeFailed, loopFailureVerb, loopFileVerb} {
+				if events := r.logged(t, verb); len(events) != 0 {
+					t.Fatalf("hold produced %s: %+v", verb, events)
+				}
+			}
+			if !strings.Contains(r.out.String(), "hold:"+loopMergeRepo) {
+				t.Fatalf("hold wait was not explained: %s", r.out)
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if !tc.expire {
+					st.Holds = nil
+				} else {
+					st.Holds[0].Until = time.Now().Add(-time.Second)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if r.called(gateCmdName) == nil || len(r.logged(t, "merge.authorized")) != 1 {
+				t.Fatalf("lift did not resume the reviewed merge: %v\n%s", r.calls, r.out)
+			}
+			if len(r.logged(t, "supervisor.merge")) != 1 {
+				t.Fatalf("lifted merge did not finish: %s", r.out)
+			}
+			if r.called(agentsName, agentStartName) != nil {
+				t.Fatalf("lift requested another review: %v", r.calls)
+			}
+		})
+	}
+}
+
+func TestLoopReviewedMergeHonorsHoldExceptions(t *testing.T) {
+	for _, hold := range []state.Hold{
+		{Target: loopMergeRepo, Except: loopPR},
+		{Target: loopMergeRepo, ExceptSession: loopParty.Name},
+		{Target: "another/repo"},
+	} {
+		t.Run(fmt.Sprintf("%s/%s/%s", hold.Target, hold.Except, hold.ExceptSession), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Holds = append(st.Holds, hold)
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if len(r.logged(t, "merge.authorized")) != 1 {
+				t.Fatalf("nonblocking hold stopped merge: %s", r.out)
+			}
+		})
+	}
+}
+
 func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -157,7 +241,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 					}
 				}
 				switch scenario {
-				case "conflict":
+				case litConflict:
 					r.pull.Mergeable = mergeableConflicting
 				case "moved":
 					r.pull.Head = loopFixed
@@ -996,6 +1080,74 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 			}
 			if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
 				t.Fatalf("stale failure requested branch repair: %v", wake)
+			}
+			if got := len(r.logged(t, "merge.failure-dropped")); got != 1 {
+				t.Fatalf("stale failure drop logs = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
+	const (
+		confirmed     = "confirmed merge"
+		laneWait      = "lane wait"
+		policyRefusal = "policy refusal"
+		branchRepair  = "branch repair"
+	)
+	for _, outcome := range []string{confirmed, laneWait, "gate refusal", policyRefusal, branchRepair, "confirmation read failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Merge.Admin = []string{loopMergeRepo}
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			read := readLoopPull
+			r.answer = func(args []string) (string, int) {
+				if len(args) == 0 || args[0] != gateCmdName {
+					return "", 0
+				}
+				switch outcome {
+				case confirmed:
+					r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
+					return "", 0
+				case laneWait:
+					return "lane occupied by running merge", ExitGateQueued
+				case policyRefusal:
+					return adminPolicyTestReason, 1
+				case branchRepair:
+					return fmt.Sprintf(`{"route":%q,"repository":%q,"number":7,"headSha":%q,"reason":"merge-result check failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), github.SquashRed
+				case "confirmation read failure":
+					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						return superloop.Pull{}, errors.New("confirmation unavailable")
+					}
+					return "", 0
+				default:
+					return "held by release window", ExitGateRefused
+				}
+			}
+			r.pass(t)
+			readLoopPull = read
+			starts := r.logged(t, "merge.start")
+			var outcomes []state.Event
+			for _, verb := range []string{"merge.finished", "merge.pending", loopMergeFailed} {
+				outcomes = append(outcomes, r.logged(t, verb)...)
+			}
+			if len(starts) != 1 || len(outcomes) != 1 {
+				t.Fatalf("unpaired merge attempt: starts=%v outcomes=%v", starts, outcomes)
+			}
+			want := loopMergeFailed
+			switch outcome {
+			case confirmed:
+				want = "merge.finished"
+			case laneWait, policyRefusal:
+				want = "merge.pending"
+			}
+			if outcomes[0].Verb != want || outcomes[0].Subject != loopPR || !strings.Contains(outcomes[0].Detail, loopHead) {
+				t.Fatalf("incorrect outcome: %+v", outcomes[0])
+			}
+			if len(r.logged(t, loopGoVerb)) != 0 || outcome != branchRepair && r.called(agentsName, agentWakeName, loopWorker) != nil {
+				t.Fatal("merge outcome bypassed coordinator by waking worker")
 			}
 		})
 	}

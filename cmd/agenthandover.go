@@ -266,32 +266,34 @@ func (a *app) readHandover(q string) (handover, error) {
 }
 
 // lastNote is p's latest hand-over note logged at or after since.
-func (a *app) lastNote(p state.Party, since time.Time) (string, bool, error) {
-	return a.lastNoteContext(context.Background(), p, since)
+func (a *app) lastNote(p state.Party, since time.Time, progress ...func()) (string, bool, error) {
+	return a.lastNoteContext(context.Background(), p, since, progress...)
 }
 
-func (a *app) lastNoteContext(ctx context.Context, p state.Party, since time.Time) (string, bool, error) {
+func (a *app) lastNoteContext(ctx context.Context, p state.Party, since time.Time, progress ...func()) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
-	read := a.store.Events
-	if cancellable, ok := a.store.(interface {
-		EventsContext(context.Context, int, func(state.Event) bool) ([]state.Event, error)
-	}); ok {
-		read = func(n int, keep func(state.Event) bool) ([]state.Event, error) {
-			return cancellable.EventsContext(ctx, n, keep)
-		}
+	keep := func(e state.Event) bool {
+		return e.Verb == verbNote
 	}
-	notes, err := read(1, func(e state.Event) bool {
-		return e.Verb == verbNote && e.By.Is(p) && !e.At.Before(since)
-	})
+	if len(progress) > 0 && progress[0] != nil {
+		keep = eventProgressFilter(keep, progress[0], time.Now)
+	}
+	notes, err := state.FollowSnapshotContext(ctx, a.store, "agent-notes", "v1", keep)
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err != nil || len(notes) == 0 {
+	if err != nil {
 		return "", false, err
 	}
-	return notes[0].Detail, true, nil
+	for i := len(notes) - 1; i >= 0; i-- {
+		e := notes[i]
+		if e.By.Is(p) && !e.At.Before(since) {
+			return e.Detail, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // briefOf is the brief of a session's first prompt: the brief a hand-over

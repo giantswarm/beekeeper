@@ -175,19 +175,22 @@ func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
 
 var errParkLookup = errors.New("GitHub lookup unavailable")
 
-func TestParkRecordsFailedLookupThenClassifies(t *testing.T) {
+func TestParkRefusesFailedReadsThenRetries(t *testing.T) {
 	for _, kind := range []string{github.RefIssue, github.RefPullRequest} {
 		t.Run(kind, func(t *testing.T) {
 			w := parkingWatch(t, nil)
 			refStates = func(context.Context, []github.PR) (map[github.PR]github.RefState, error) { return nil, errParkLookup }
-			if err := park(t, w, "--on", refOne, "waiting for GitHub"); err != nil {
-				t.Fatal(err)
+			if err := park(t, w, "--on", refOne, "waiting for GitHub"); err == nil {
+				t.Fatal("failed reads accepted")
 			}
-			if p := agentOf(t, w).Park; p == nil || p.On != refOne || p.RefKind != "" {
+			if p := agentOf(t, w).Park; p != nil {
 				t.Fatalf("unresolved park %+v", p)
 			}
 			refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 				return map[github.PR]github.RefState{refs[0]: {Kind: kind, State: github.Open}}, nil
+			}
+			if err := park(t, w, "--on", refOne, "waiting for GitHub"); err != nil {
+				t.Fatal(err)
 			}
 			st, _ := w.store.Read()
 			if out := w.settledParks(t.Context(), st); len(out) != 0 {
@@ -209,8 +212,11 @@ func TestManagedParkRecordsFailedLookupThenClassifies(t *testing.T) {
 	before := refStates
 	t.Cleanup(func() { refStates = before })
 	refStates = func(context.Context, []github.PR) (map[github.PR]github.RefState, error) { return nil, errParkLookup }
+	beforeREST := readParkRefREST
+	t.Cleanup(func() { readParkRefREST = beforeREST })
+	readParkRefREST = func(context.Context, github.PR) (github.RefState, error) { return github.RefState{}, errParkLookup }
 	kind, err := resolveParkRef(t.Context(), refOne)
-	if err != nil || kind != "" {
+	if err == nil || !strings.Contains(err.Error(), errParkLookup.Error()) {
 		t.Fatalf("managed resolution %q %v", kind, err)
 	}
 	postMerge := "remaining proof"
@@ -394,6 +400,68 @@ func TestParkRefusesSettledReference(t *testing.T) {
 				if settled := w.settledParks(t.Context(), st); len(settled) != 0 {
 					t.Fatalf("refused park can resume: %+v", settled)
 				}
+			}
+		})
+	}
+}
+
+func TestParkReferenceRESTFallback(t *testing.T) {
+	originalHead := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = originalHead })
+	parkReviewHead = func(string) (string, string) { return loopHead, "" }
+	originalREST, originalGH := readParkRefREST, github.RunGH
+	t.Cleanup(func() { github.RunGH = originalGH })
+	for _, on := range []string{refOne, "https://github.com/o/r/pull/1"} {
+		t.Run(on, func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			readParkRefREST = originalREST
+			github.RunGH = func(ctx context.Context, args ...string) ([]byte, error) {
+				if github.Repo(ctx) != "o/r" || strings.Join(args, " ") != "api repos/o/r/issues/1" {
+					t.Fatalf("identity %q args %v", github.Repo(ctx), args)
+				}
+				return []byte(`{"state":"open","pull_request":{"merged_at":null}}`), nil
+			}
+			if err := park(t, w, "--on", on, "desk review"); err != nil {
+				t.Fatal(err)
+			}
+			if p := agentOf(t, w).Park; p == nil || p.On != refOne || p.RefKind != github.RefPullRequest || p.ReviewHead != loopHead {
+				t.Fatalf("park %+v", p)
+			}
+		})
+	}
+}
+
+func TestParkReferenceRESTFailures(t *testing.T) {
+	originalREST, originalGH := readParkRefREST, github.RunGH
+	t.Cleanup(func() { github.RunGH = originalGH })
+	for _, tc := range []struct {
+		name, body string
+		err        error
+	}{
+		{name: "access", err: errors.New("HTTP 403: access denied")},
+		{name: "rate limit", err: errors.New("HTTP 429: rate limit exceeded")},
+		{name: "malformed", body: "{"},
+		{name: "missing", body: `{}`},
+		{name: "closed target", body: `{"state":"closed","pull_request":{"merged_at":null}}`},
+		{name: "merged target", body: `{"state":"closed","pull_request":{"merged_at":"2026-01-01T00:00:00Z"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			readParkRefREST = originalREST
+			refStates = func(context.Context, []github.PR) (map[github.PR]github.RefState, error) { return nil, errParkLookup }
+			github.RunGH = func(context.Context, ...string) ([]byte, error) { return []byte(tc.body), tc.err }
+			err := park(t, w, "--on", refOne, "desk review")
+			if err == nil {
+				t.Fatal("failed or settled read accepted")
+			}
+			if tc.name != "closed target" && tc.name != "merged target" && (!strings.Contains(err.Error(), "repos/o/r/issues/1") || !strings.Contains(err.Error(), errParkLookup.Error())) {
+				t.Fatal(err)
+			}
+			if tc.err != nil && !strings.Contains(err.Error(), tc.err.Error()) {
+				t.Fatal(err)
+			}
+			if agentOf(t, w).Park != nil {
+				t.Fatal("failed read recorded a park")
 			}
 		})
 	}

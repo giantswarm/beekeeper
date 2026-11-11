@@ -12,7 +12,7 @@ func TestEventsContextStopsDuringReplayWithoutReturningPartialHistory(t *testing
 		t.Fatal(err)
 	}
 	for range 3 {
-		if err := s.Record(Event{Verb: "fixture"}); err != nil {
+		if err := s.Record(Event{Verb: "cancel-fixture"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -31,6 +31,21 @@ func TestEventsContextStopsDuringReplayWithoutReturningPartialHistory(t *testing
 	events, err = s.Events(0, nil)
 	if err != nil || len(events) != 3 {
 		t.Fatalf("subsequent replay = %v, %v", events, err)
+	}
+	snapshotCtx, snapshotCancel := context.WithCancel(t.Context())
+	defer snapshotCancel()
+	snapshotCalls := 0
+	events, err = s.FollowSnapshotContext(snapshotCtx, "cancel-reader", "v1", func(Event) bool {
+		snapshotCalls++
+		snapshotCancel()
+		return true
+	})
+	if !errors.Is(err, context.Canceled) || len(events) != 0 || snapshotCalls != 1 {
+		t.Fatalf("snapshot replay = %v, %v; decoded %d events", events, err, snapshotCalls)
+	}
+	events, err = s.FollowSnapshot("cancel-reader", "v1", nil)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("subsequent snapshot = %v, %v", events, err)
 	}
 }
 
