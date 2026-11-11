@@ -1021,6 +1021,10 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			panic(crash)
 		}
 	}()
+	// The stop signal bounds the exit, however the pass is stuck.
+	shutdownDone := make(chan struct{})
+	defer close(shutdownDone)
+	go boundLoopShutdown(ctx, shutdownDone, a.store, a.out)
 	// Observers read a PID marker instead of briefly contending for this lock.
 	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		return err
