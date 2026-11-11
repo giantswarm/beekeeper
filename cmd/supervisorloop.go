@@ -1972,6 +1972,12 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	for _, d := range st.Deliveries {
 		if d.Active() {
 			for _, ref := range d.Pulls {
+				// As in superloop.Tracked: the watcher never observes a pull
+				// request the desk does not read, so tracking one would leave
+				// every pass, and every --dry-run, with an unread observation.
+				if l.unreadRepo(ref) != "" {
+					continue
+				}
 				if !slices.Contains(tracked, ref) {
 					tracked = append(tracked, ref)
 				}
