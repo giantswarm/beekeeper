@@ -119,7 +119,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				}
 				verb := execution.GitHubGitVerb(args)
 				request.Write = verb == workerGitHubPush
-				needsToken = verb == workerGitHubPush || verb == "fetch" || verb == "pull" || verb == "ls-remote"
+				needsToken = verb == workerGitHubPush || verb == gitFetch || verb == "pull" || verb == "ls-remote"
 				if needsToken && (len(args) == 0 || args[0] != verb) {
 					return refused("network git cannot override the owned workspace or configuration")
 				}

@@ -2208,6 +2208,32 @@ func (s *FileStore) Exclusive(fn func() error) error {
 	return fn()
 }
 
+// Quiesce holds this process's writes for an exit that does not wait for
+// them: the state lock when it frees within wait, so no append or update is
+// under way, and always the commit lock, so no commit is half written. A
+// state lock still busy after wait is no failure: an update holding it has
+// not begun its commit, and its commit then waits behind the commit lock.
+// release frees both; an exit without it frees them too.
+func (s *FileStore) Quiesce(wait time.Duration) (release func(), err error) {
+	unlock, err := s.lock(false, wait)
+	var busy *LockBusyError
+	switch {
+	case errors.As(err, &busy):
+		unlock = func() {}
+	case err != nil:
+		return nil, err
+	}
+	commitUnlock, err := s.commitLock(context.Background())
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	return func() {
+		commitUnlock()
+		unlock()
+	}, nil
+}
+
 // VerbStaleWriter is the event of an older release's first refused save
 // after a newer one wrote the state.
 const VerbStaleWriter = "state.stale-writer"

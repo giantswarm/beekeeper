@@ -20,8 +20,9 @@ type Desk struct {
 	// Authors are the logins the desk opens its pull requests as; empty:
 	// anybody's.
 	Authors []string
-	// Bots are the logins of bots whose pull requests the loop reviews on
-	// request: a park on one, as the sweep never lists them.
+	// Bots are the logins of bots whose pull requests the loop reviews like
+	// the desk's own: on a park on one, or through the sweep, which lists
+	// them in the repositories BotRepo admits.
 	Bots []string
 	// Team is the desk's team as the team files name it; empty: every
 	// repository in Orgs is the desk's.
@@ -118,6 +119,27 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 	}
 	return theirs, leftTeam, fmt.Sprintf("%s: its review is theirs; the loop starts no reviewer and gives no go", ownedBy(p.Team, repo))
 }
+
+// BotRepo reports whether repo (owner/name) is one where the sweep lists
+// Bots' pull requests: read by the desk, and its own by Review, by having
+// no Team, or by the team files, which name team as repo's owner ("" for
+// none). Until they are read (teamsKnown false) only Review admits one, so
+// the listing never reads another team's bot pull requests.
+func (d Desk) BotRepo(repo, team string, teamsKnown bool) bool {
+	if reason, _ := d.unread(repo); reason != "" {
+		return false
+	}
+	switch {
+	case d.Team == "", matchesAny(d.Review, repo):
+		return true
+	case !teamsKnown:
+		return false
+	}
+	return strings.EqualFold(team, d.Team)
+}
+
+// BotLogin is bot's login as GitHub's search names an app: app/<name>.
+func BotLogin(bot string) string { return "app/" + botName(bot) }
 
 // bot says whether author is one of Bots. gh names a bot app/<name> and the
 // GitHub API <name>[bot]: either matches, as does the bare name.

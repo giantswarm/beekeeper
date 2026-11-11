@@ -134,19 +134,32 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	c.Env = append(c.Env, "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
+	// A fetch that runs out of time says how much it received: a slow link and
+	// a transfer too large for the deadline look the same otherwise.
+	received := int64(-1)
+	if len(args) > 0 && args[0] == gitFetch {
+		received = publicationObjectBytes(dir)
+	}
 	out, err := c.Output()
 	if err != nil {
-		return nil, publicationGitFailure(ctx, args, stderr.String())
+		failure := publicationGitFailure(ctx, args, stderr.String())
+		if received >= 0 && ctx.Err() != nil {
+			if after := publicationObjectBytes(dir); after >= 0 {
+				return nil, fmt.Errorf("%w after receiving %d bytes", failure, max(after-received, 0))
+			}
+		}
+		return nil, failure
 	}
 	return out, nil
 }
 
 // publicationGitStages are the Git subcommands publication runs; any other
 // argument is never echoed back as a stage.
-var publicationGitStages = []string{"init", "fetch", "push", gitBundle, "cat-file", "rev-parse", gitRevList, "merge-base", "log", gitMerge, "diff", "update-ref"}
+var publicationGitStages = []string{"init", gitFetch, "push", gitBundle, "cat-file", "rev-parse", gitRevList, "merge-base", "log", gitMerge, "diff", "update-ref"}
 
 const (
 	gitBundle  = "bundle"
+	gitFetch   = "fetch"
 	gitRevList = "rev-list"
 	gitMerge   = "merge"
 	gitVerify  = "verify"
@@ -448,6 +461,8 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if _, err = publishGit(ctx, dir, "init", "--bare", repo); err != nil {
 		return result, err
 	}
+	cache := a.publicationCache(ctx, r.Request.Repository)
+	borrowPublicationCache(repo, cache)
 	sourceBundle := filepath.Join(a.cfg.StateDir, "execution-sources", string(ref.Execution), "source.bundle")
 	if data, readErr := readPublicationBundle(sourceBundle); readErr == nil && (r.Request.SourceDigest == "" || execution.Digest(data) == r.Request.SourceDigest) {
 		_, _ = publishGit(ctx, repo, "fetch", "--no-tags", "--", sourceBundle, "refs/heads/execution-source:refs/heads/source")
@@ -470,6 +485,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if _, err = publishGit(ctx, repo, "fetch", "--no-tags", remote, "refs/heads/"+base+":refs/heads/base"); err != nil {
 		return result, err
 	}
+	keepInPublicationCache(ctx, cache, repo, "refs/heads/base", "refs/heads/"+base)
 	bundlePath := filepath.Join(dir, "commits.bundle")
 	result.Branch = executionOwnedBranch(r)
 	ensureCommit := func(commit string) {
@@ -673,25 +689,8 @@ func (a *app) findStrandedPublication(ctx context.Context, r *state.ExecutionRec
 	if r.Published == nil {
 		return executionPublication{}, false
 	}
-	transferDir := filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(r.Handle.Ref.Execution), fmt.Sprint(r.Handle.Ref.Generation))
-	entries, err := os.ReadDir(transferDir)
-	if err != nil {
-		return executionPublication{}, false
-	}
-	var newestName string
-	var newestTime time.Time
-	for _, entry := range entries {
-		if entry.IsDir() || len(entry.Name()) != 64 {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		if newestName == "" || info.ModTime().After(newestTime) {
-			newestName, newestTime = entry.Name(), info.ModTime()
-		}
-	}
+	transferDir := a.publicationTransferDir(r.Handle.Ref)
+	newestName := newestPublicationTransfer(transferDir)
 	if newestName == "" {
 		return executionPublication{}, false
 	}
@@ -720,17 +719,39 @@ func (a *app) hasUnrecoveredPublication(r *state.ExecutionRecord) bool {
 	if r.Published == nil {
 		return false
 	}
-	transferDir := filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(r.Handle.Ref.Execution), fmt.Sprint(r.Handle.Ref.Generation))
-	entries, err := os.ReadDir(transferDir)
+	// Each publication leaves its transfer; a later one supersedes the
+	// earlier, so only the newest can still hold a stranded publication.
+	newest := newestPublicationTransfer(a.publicationTransferDir(r.Handle.Ref))
+	return newest != "" && "sha256:"+newest != r.RecoveredTransfer
+}
+
+func (a *app) publicationTransferDir(ref execution.Ref) string {
+	return filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(ref.Execution), fmt.Sprint(ref.Generation))
+}
+
+// newestPublicationTransfer names the most recently written publication
+// bundle in dir, "" when it holds none. Stranded-publication recovery,
+// its recovered mark and the retirement gate all judge this one transfer.
+func newestPublicationTransfer(dir string) string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return ""
 	}
+	var newestName string
+	var newestTime time.Time
 	for _, entry := range entries {
-		if !entry.IsDir() && len(entry.Name()) == 64 && "sha256:"+entry.Name() != r.RecoveredTransfer {
-			return true
+		if entry.IsDir() || len(entry.Name()) != 64 {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if newestName == "" || info.ModTime().After(newestTime) {
+			newestName, newestTime = entry.Name(), info.ModTime()
 		}
 	}
-	return false
+	return newestName
 }
 
 func (a *app) recoverExecutionPublication(ctx context.Context, ref execution.Ref, auto bool) (executionPublicationResult, bool, error) {
@@ -748,13 +769,8 @@ func (a *app) recoverExecutionPublication(ctx context.Context, ref execution.Ref
 				r.PendingPublication = nil
 			}
 			if r.Published != nil {
-				transferDir := filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(ref.Execution), fmt.Sprint(ref.Generation))
-				if entries, readErr := os.ReadDir(transferDir); readErr == nil {
-					for _, e := range entries {
-						if !e.IsDir() && len(e.Name()) == 64 {
-							r.RecoveredTransfer = "sha256:" + e.Name()
-						}
-					}
+				if newest := newestPublicationTransfer(a.publicationTransferDir(ref)); newest != "" {
+					r.RecoveredTransfer = "sha256:" + newest
 				}
 			}
 			return nil, nil

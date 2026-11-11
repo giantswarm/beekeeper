@@ -11,32 +11,38 @@ version: 2.1
 setup: true
 orbs:
   continuation: circleci/continuation@2.0.1
-
 jobs:
   setup:
     executor: continuation/default
     resource_class: small
     steps:
-    - checkout
-    - run:
-        name: Merge optional custom.yml into generated workflows.yml
-        # yq `*+` deep-merge: maps merge, lists append -- custom workflow
-        # entries are appended to the generated job lists. A malformed
-        # custom.yml fails here, on the PR that introduced it.
-        command: |
-          if [ -f .circleci/custom.yml ]; then
-            yq eval-all '. as $item ireduce ({}; . *+ $item)' \
-              .circleci/workflows.yml .circleci/custom.yml > .circleci/continue.yml
-          else
-            cp .circleci/workflows.yml .circleci/continue.yml
-          fi
-    - continuation/continue:
-        configuration_path: .circleci/continue.yml
-
+      - checkout
+      - run:
+          command: |
+            set -euo pipefail
+            if [[ "${CIRCLE_BRANCH:-}" == gh-readonly-queue/* ]]; then
+              test -n "${CIRCLE_SHA1:-}"
+              test "$(git rev-parse HEAD)" = "$CIRCLE_SHA1"
+            fi
+          name: Batch CI checkout and admission
+      - run:
+          name: Merge optional custom.yml into generated workflows.yml
+          # yq `*+` deep-merge: maps merge, lists append -- custom workflow
+          # entries are appended to the generated job lists. A malformed
+          # custom.yml fails here, on the PR that introduced it.
+          command: |
+            if [ -f .circleci/custom.yml ]; then
+              yq eval-all '. as $item ireduce ({}; . *+ $item)' \
+                .circleci/workflows.yml .circleci/custom.yml > .circleci/continue.yml
+            else
+              cp .circleci/workflows.yml .circleci/continue.yml
+            fi
+      - continuation/continue:
+          configuration_path: .circleci/continue.yml
 workflows:
   setup:
     jobs:
-    - setup:
-        filters:
-          tags:
-            only: /^v.*/
+      - setup:
+          filters:
+            tags:
+              only: /^v.*/

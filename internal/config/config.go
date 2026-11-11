@@ -2578,8 +2578,9 @@ type Ownership struct {
 	// the login gh acts as): one anybody else opened is left alone.
 	Authors []string `yaml:"authors"`
 	// Bots are the bot logins (renovate, dependabot) whose pull requests
-	// the loop reviews and gives the go for once a worker parks on one for
-	// desk review: the route of a green bot pull request. Their reviews
+	// the loop reviews and gives the go for like the desk's own: the sweep
+	// lists them in the repositories the desk owns and reviews one without
+	// a live owner, or a worker parks on one for desk review. Their reviews
 	// count for nothing, and Never, the team rule and the gate still apply.
 	Bots []string `yaml:"bots"`
 	// OwnerWait is how long a worker parked on another team's pull request

@@ -20,8 +20,9 @@ substitute for validation; green PR-head checks alone are insufficient.
 
 For Go modules it runs configured lint and `go test -short ./...`, including
 unchanged tests and reverse dependents even for dependency-only changes.
-With `run.remote.enabled`, both commands use the configured Go builder image
-(which must contain `golangci-lint`), never a local fallback. Otherwise local
+With `run.remote.enabled`, both commands use the configured Go builder image,
+never a local fallback; an image without `golangci-lint` gets the pinned one
+installed into the builder's workspace first. Otherwise local
 checks require load below the CPU count and at least 8 GiB free on the check
 filesystem. Their scratch files and caches are isolated under the state directory.
 An environment failure (quota, clone, missing tools, transport or timeout) records

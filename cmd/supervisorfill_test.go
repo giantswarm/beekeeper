@@ -935,6 +935,59 @@ func TestLoopReadsNoBoardUntilTheGraphQLReset(t *testing.T) {
 	}
 }
 
+// A hold on a stale or unknown reading takes the reading that ends it: no
+// watch sample comes, and the pass the hold ends early reads the budget
+// itself (#3724). A fresh low reading still holds, without another read.
+func TestLoopHeldOnAStaleReadingReadsTheBudgetItself(t *testing.T) {
+	for _, low := range []bool{false, true} {
+		t.Run(fmt.Sprint("low=", low), func(t *testing.T) {
+			r, l, reads := emptyBoardFill(t)
+			r.a.cfg.GitHub.Floor = 1000
+			stale := r.a.now.Add(-20 * time.Minute)
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Budget = &state.Budget{Remaining: 4800, Limit: 5000, Reset: r.a.now.Add(time.Hour), At: stale,
+					GraphQL: &state.GraphQL{Remaining: 4076, Limit: 5000, Reset: r.a.now.Add(10 * time.Minute), At: stale}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			old := refreshLoopBudget
+			t.Cleanup(func() { refreshLoopBudget = old })
+			refreshes := 0
+			refreshLoopBudget = func(a *app, _ context.Context) error {
+				refreshes++
+				remaining := 4076
+				if low {
+					remaining = 400
+				}
+				return a.store.Update(func(st *state.State) ([]state.Event, error) {
+					now := a.timeNow()
+					st.Budget = &state.Budget{Remaining: 4800, Limit: 5000, Reset: now.Add(time.Hour), At: now,
+						GraphQL: &state.GraphQL{Remaining: remaining, Limit: 5000, Reset: now.Add(50 * time.Minute), At: now}}
+					return nil, nil
+				})
+			}
+			r.loopPass(t, l)
+			if refreshes != 1 {
+				t.Fatalf("the held pass read the budget %d times, want 1", refreshes)
+			}
+			if low {
+				if *reads != 0 || !strings.Contains(r.out.String(), "SUPERVISOR GITHUB HELD") {
+					t.Fatalf("a fresh low reading did not hold: %d board reads\n%s", *reads, r.out)
+				}
+				r.loopPass(t, l)
+				if refreshes != 1 {
+					t.Fatalf("a fresh low reading was read again: %d reads", refreshes)
+				}
+				return
+			}
+			if *reads != 1 {
+				t.Fatalf("a fresh reading above the floor kept the hold: %d board reads\n%s", *reads, r.out)
+			}
+		})
+	}
+}
+
 // Consecutive empty reads double the refill's pause up to four times
 // supervisor.fillRetryEvery; a change that ends the pause starts it over.
 func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
