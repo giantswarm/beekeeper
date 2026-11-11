@@ -14,7 +14,7 @@ import (
 // Count the budget queries as well as inventory queries: even an unchanged
 // REST response or a failed read has two fresh GraphQL budget samples.
 func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
-	for _, failure := range []string{"", "revision", "inventory"} {
+	for _, failure := range []string{"", "revision", "full inventory"} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.GitHub.Floor = 1000
@@ -36,11 +36,11 @@ func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
 				if failure == "revision" {
 					return "", false, errors.New("repository unavailable")
 				}
-				return "revision", etag != "", nil
+				return "inventory-validator", etag != "", nil
 			}
 			readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) {
 				calls++
-				if failure == "inventory" {
+				if failure == "full inventory" {
 					return nil, errors.New("GraphQL inventory unavailable")
 				}
 				return nil, nil
@@ -79,14 +79,14 @@ func TestInventoryFailureNeverServesStalePullsAndRecovers(t *testing.T) {
 	}
 	now := r.a.now
 	l.unmerged = map[string]loopUnmergedObservation{repo: {
-		pulls: []unmergedPull{{Number: 1, CreatedAt: now}}, etag: "old",
+		pulls: []unmergedPull{{Number: 1, CreatedAt: now}}, etag: "inventory-cost-etag",
 		at: now.Add(-unmergedCacheTTL), fullAt: now,
 	}}
 	failure := errors.New("revision unavailable")
 	reads := 0
 	readRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
 		reads++
-		if etag != "old" {
+		if etag != "inventory-cost-etag" {
 			t.Fatalf("lost last successful validator: %q", etag)
 		}
 		return etag, true, failure
@@ -104,9 +104,19 @@ func TestInventoryFailureNeverServesStalePullsAndRecovers(t *testing.T) {
 	if reads != 1 {
 		t.Fatalf("failure retried %d times", reads)
 	}
+	// Restarting must not turn the failed observation into fresh usable data.
+	l.saveCache()
+	l, err = r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulls, _, err := l.repoRecentUnmerged(t.Context(), repo)
+	if err == nil || err.Error() != failure.Error() || len(pulls) != 0 || reads != 1 {
+		t.Fatalf("restart lost cached failure: %v, %v; %d reads", pulls, err, reads)
+	}
 	failure = nil
 	r.a.now = now.Add(unmergedCacheTTL)
-	pulls, _, err := l.repoRecentUnmerged(t.Context(), repo)
+	pulls, _, err = l.repoRecentUnmerged(t.Context(), repo)
 	if err != nil || len(pulls) != 1 || reads != 2 {
 		t.Fatalf("recovery: %v, %v; %d reads", pulls, err, reads)
 	}
