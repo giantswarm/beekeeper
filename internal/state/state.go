@@ -1351,6 +1351,11 @@ type State struct {
 	// update): the release each runs and the policy digest its starts are
 	// pinned to, or why it is held.
 	HostPins []HostPin `json:"hostPins,omitempty"`
+	// HostPlacements retain the last placement verdict, not an admission grant.
+	HostPlacements      map[string]HostPlacement `json:"hostPlacements,omitempty"`
+	HostIdleSince       time.Time                `json:"hostIdleSince,omitzero"`
+	HostLastRemoteStart time.Time                `json:"hostLastRemoteStart,omitzero"`
+	HostIdleReported    bool                     `json:"hostIdleReported,omitempty"`
 	// TranscriptGrants are the guide's expiring grants of wider transcript
 	// access to workers.
 	TranscriptGrants []TranscriptGrant `json:"transcriptGrants,omitempty"`
@@ -1397,6 +1402,14 @@ type TranscriptRequest struct {
 	rest rest
 }
 
+// HostPlacement is the last dated placement decision for a configured host.
+type HostPlacement struct {
+	At         time.Time `json:"at"`
+	Repository string    `json:"repository"`
+	Reason     string    `json:"reason"`
+	rest       rest
+}
+
 // HostPin is an execution host's release and the policy digest beekeeper
 // recorded when it last updated the host, in place of a hand-kept
 // agents.hosts digest, and the hold of a host whose update failed.
@@ -1408,6 +1421,10 @@ type HostPin struct {
 	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
+	// UpdateError is a release lookup failure before contacting the host.
+	// It delays update retries but does not block starts on a compatible host.
+	UpdateError   string `json:"updateError,omitempty"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
 	// Held is why the host takes no start: its update to HeldVersion
 	// failed, since HeldAt. The next successful update lifts it.
 	Held        string    `json:"held,omitempty"`

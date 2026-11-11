@@ -188,7 +188,7 @@ never updated, and beekeeper's recorded pin replaces it.
 
 ### Host updates follow the coordinator
 
-Hosts run the coordinator's release. `agents hosts update <host>` connects
+Host updates follow the coordinator's release after probation. `agents hosts update <host>` connects
 over the host's SSH route and runs `agents hosts self-update --version
 <coordinator release>` there. With no execution running, the host holds its
 admission, installs exactly that release once its Sigstore bundle verifies (as
@@ -207,8 +207,8 @@ The coordinator looks the release up on GitHub itself, with its gh login (or
 on the SSH command's standard input: the host downloads the binary and its
 bundle from the release's public download URLs and asks GitHub's API nothing,
 so a host without a GitHub login updates all the same, and no token leaves the
-coordinator. A lookup GitHub refuses holds the host, a rate limit named with
-its reset. A host whose installed release predates this looks the release up
+coordinator. A lookup failure delays the update, with a rate limit named with
+its reset; the current host policy remains admitted. A host whose installed release predates this looks the release up
 on its own once more.
 The coordinator then runs `hosts check` with the digest the host answered and
 records the release and digest in its state (`hostPins`): every start on the
@@ -216,11 +216,12 @@ host is pinned to it. No configuration change and no person is involved.
 
 The supervisor loop runs the update for every `agents.hosts` entry whose pin
 is not the coordinator's release, so a coordinator self-update carries the
-hosts with it. A coordinator that runs a release starts nothing on a host
-until the host runs that release:
+hosts with it. During coordinator probation only updates wait. Starts continue
+on older releases that pass the live protocol, capability, identity and pinned
+policy checks; release equality is not the compatibility boundary:
 
-- a host with an execution in a turn drains: no new start there, and it
-  updates once no execution is in a turn. An execution between turns (a
+- a host with an execution in a turn waits to update; compatible starts remain
+  admitted. It updates once no execution is in a turn. An execution between turns (a
   parked worker waiting for its wake: ready, no turn running, no wake
   stored, no delivery uncertain) does not hold the update back. The host
   holds its admission through the install, so the next turn begins only
@@ -247,8 +248,7 @@ A host first needs a release with `agents hosts self-update` installed by
 hand; from then on it follows the coordinator. A development build of the
 coordinator updates no host and gates no start on a host's release.
 
-`hosts check` reports each host's release and tool versions, refuses a release
-that differs from a released coordinator, and still requires
+`hosts check` reports each host's release and tool versions and requires
 the expected identity, protocol, pinned policy, harness and fresh resource
 observation.
 
@@ -554,16 +554,18 @@ host's physical guards. A host does not create another subscription budget.
 `supervisor loop` places its worker starts on execution hosts. With
 `supervisor.hosts` naming execution hosts (in order of preference), a start
 whose repository a host maps, and for which `capacity --host <selector>` has
-room, runs there pinned to the repository's default branch — while the
-coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
-check weighs only the choices it can run (Claude Code, Codex, omp, and
-Antigravity where configured and offered). `hostsFirst` prefers
-hosts only for what a host can run: without room on any host a supported start
-waits, while a repository no host maps, or a choice of a harness no host has
-an adapter for, starts on the coordinator within its local
-room; for the latter the local start excludes the choices a host runs, and
-waits instead when that exclusion alone would make a self-hosted choice the pick
-while a subscription is eligible. A desk
+room, runs there pinned to the repository's default branch. This is the default
+(`supervisor.hostsFirst: true`); explicit false retains local-first placement.
+When no host can take the start, the coordinator is the fallback within its
+ordinary local, provider, model and resource guards. Fallback preserves the
+eligible model choices. A host's check weighs only the harnesses it can run.
+`beekeeper capacity` and `beekeeper supervisor status` include each configured
+host's last dated placement reason, repository and any update failure. A dated
+placement is an observation, not a fresh capacity or admission grant. Hosts
+absent from `supervisor.hosts` are identified as disabled for placement.
+If no host takes a start for an hour while local workers have started, the loop
+records one standing `GUIDE PROBLEM` per episode, retaining it across restarts
+and coordinator releases. A successful remote start ends the episode. A desk
 without `capacity.choices` never places remotely. Reviewers (including Codex)
 follow the same host preferences and retain review capacity accounting, even
 without `github.workerApp`. On the execution host, `beekeeper agents review`
