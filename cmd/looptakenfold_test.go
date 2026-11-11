@@ -12,7 +12,7 @@ import (
 func TestTakenFoldFoldsOnlyAppendedHistory(t *testing.T) {
 	at := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 	ev := func(i int, verb, detail string) state.Event {
-		return state.Event{At: at.Add(time.Duration(i) * time.Second), By: loopParty, Verb: verb, Subject: "o/r#1", Detail: detail}
+		return state.Event{At: at.Add(time.Duration(i) * time.Second), By: loopParty, Verb: verb, Subject: reserveIssue, Detail: detail}
 	}
 	history := []state.Event{
 		ev(0, loopClaimVerb, "[go o/r#1] o/r#1"),
@@ -32,7 +32,7 @@ func TestTakenFoldFoldsOnlyAppendedHistory(t *testing.T) {
 
 	var f takenFold
 	first := f.fold(history)
-	if len(first.taken) != 1 || !first.stages["release o/r"] || first.claims["go o/r#1"].target != "o/r#1" {
+	if len(first.taken) != 1 || !first.stages["release o/r"] || first.claims["go o/r#1"].target != reserveIssue {
 		t.Fatalf("first fold = %+v", first)
 	}
 	// A pass changes its copy; the fold keeps what the history says.
@@ -51,7 +51,7 @@ func TestTakenFoldFoldsOnlyAppendedHistory(t *testing.T) {
 	if got, want := f.fold(other), fresh.fold(other); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fold of another history = %+v, want %+v", got, want)
 	}
-	if got := f.fold(history[:2]); len(got.stages) != 1 || !got.stages["release o/r"] || got.claims["go o/r#1"].target != "o/r#1" {
+	if got := f.fold(history[:2]); len(got.stages) != 1 || !got.stages["release o/r"] || got.claims["go o/r#1"].target != reserveIssue {
 		t.Fatalf("fold of a shorter history = %+v", got)
 	}
 }
