@@ -170,3 +170,19 @@ version and observation window, outcome counts, proof that no terminal
 `delivery.step` event lacks an outcome, and the share of started issue
 deliveries ending without a pull request, grouped by their recorded reasons.
 Passing synthetic tests alone does not establish this live acceptance.
+
+## Idle inventory and GraphQL budget
+
+Pull inventory observations are shared by repository for five minutes. A failed
+repository observation is cached for the same interval: idle passes return that
+failure without repeating the inventory request or its two fresh GraphQL budget
+probes. Starts still require a successful observation; old pulls are retained
+only so a later successful conditional read can recover without a full fetch.
+Admission holds and canceled passes are not cached as repository failures.
+
+The inventory cost regression simulates an hour of 30-second idle passes with
+three repositories. It bounds the inventory path to zero GraphQL calls between
+refreshes and at most nine calls on a refresh pass, including budget probes,
+even when every repository read fails. This bounds inventory retries, not all
+worker activity or all loop queries. A release still needs a 24-hour live
+observation of budget holds and refill stalls to establish the end-to-end result.

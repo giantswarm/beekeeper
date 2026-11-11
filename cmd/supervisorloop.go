@@ -1524,6 +1524,7 @@ type cachedUnmergedObservation struct {
 	ETag   string         `json:"etag,omitempty"`
 	At     time.Time      `json:"at,omitempty"`
 	FullAt time.Time      `json:"full_at,omitempty"`
+	Error  string         `json:"error,omitempty"`
 }
 
 type loopCache struct {
@@ -1565,7 +1566,11 @@ func (l *supervisorLoop) loadCache() {
 	if len(l.unmerged) == 0 && len(c.Unmerged) > 0 {
 		l.unmerged = make(map[string]loopUnmergedObservation, len(c.Unmerged))
 		for k, v := range c.Unmerged {
-			l.unmerged[k] = loopUnmergedObservation{pulls: slices.Clone(v.Pulls), etag: v.ETag, at: v.At, fullAt: v.FullAt}
+			obs := loopUnmergedObservation{pulls: slices.Clone(v.Pulls), etag: v.ETag, at: v.At, fullAt: v.FullAt}
+			if v.Error != "" {
+				obs.err = errors.New(v.Error)
+			}
+			l.unmerged[k] = obs
 		}
 	}
 	if l.unmergedCursor == "" {
@@ -1594,7 +1599,11 @@ func (l *supervisorLoop) saveCache() {
 	if len(l.unmerged) > 0 {
 		c.Unmerged = make(map[string]cachedUnmergedObservation, len(l.unmerged))
 		for k, v := range l.unmerged {
-			c.Unmerged[k] = cachedUnmergedObservation{Pulls: slices.Clone(v.pulls), ETag: v.etag, At: v.at, FullAt: v.fullAt}
+			obs := cachedUnmergedObservation{Pulls: slices.Clone(v.pulls), ETag: v.etag, At: v.at, FullAt: v.fullAt}
+			if v.err != nil {
+				obs.Error = v.err.Error()
+			}
+			c.Unmerged[k] = obs
 		}
 	}
 	l.mu.Unlock()
