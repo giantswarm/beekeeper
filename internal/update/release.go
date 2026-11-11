@@ -21,12 +21,13 @@ import (
 // GitHub's API rate limits do not cover, and verified against their bundles
 // on the host as any download is.
 type Release struct {
-	Tag        string    `json:"tag"`
-	ID         int64     `json:"id"`
-	URL        string    `json:"url"`
-	Published  time.Time `json:"published"`
-	Prerelease bool      `json:"prerelease"`
-	Assets     []Asset   `json:"assets"`
+	Tag        string            `json:"tag"`
+	ID         int64             `json:"id"`
+	URL        string            `json:"url"`
+	Published  time.Time         `json:"published"`
+	Prerelease bool              `json:"prerelease"`
+	Assets     []Asset           `json:"assets"`
+	Tools      map[string]string `json:"tools,omitempty"`
 }
 
 // Asset is one binary or bundle of a Release.

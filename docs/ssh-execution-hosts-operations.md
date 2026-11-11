@@ -69,11 +69,16 @@ named `go` or `gh` and the version it reports (`go version` with
 `GOTOOLCHAIN=local`, `gh --version`). `agents hosts check`, and every start,
 refuses a host whose required tool is unpinned, reports another version than its
 pin, or is older than a served `go.mod` asks for, naming each one; a passing
-check lists the pinned versions under `tools`. The runner puts each tool's
-directory on the worker's PATH right after the component's, so a worker runs
-`go` and `gh` by bare name. The tools are part of the pinned policy: changing
-one, or raising Go when a `go.mod` moves to a newer toolchain, needs a new
-`prepare` and digest.
+check lists the pinned versions under `tools`. the runner puts each tool's directory on the worker's PATH right after the
+component's, so a worker runs `go` and `gh` by bare name. The tools are part of
+the pinned policy: when a served repository's `go.mod` moves to a newer Go
+release, `agents hosts update` (or `agents hosts provision-tools` followed by
+`prepare`) installs the newer release next to the existing one under the same
+tools directory, records the raised pin in `<state>/execution/tools.json`, and
+prepares the updated policy digest. Workers also run with `GOTOOLCHAIN=auto`
+and `GOPATH`/`GOMODCACHE` routed into `<workspaceRoot>/<execution>/go`, so a
+branch or pull request that bumps `toolchain` downloads into the execution's
+owned root and retires with it.
 
 Provision SSH authentication and known-host keys separately in both directions:
 the coordinator calls the host's component, and the managed worker calls the

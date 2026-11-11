@@ -169,11 +169,25 @@ func TestToolPathFollowsTheComponent(t *testing.T) {
 func TestWorkspaceChecksActualGoRequirement(t *testing.T) {
 	f := testFixture(t)
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example/third\n\ngo 1.26.0\n\ntoolchain go1.27.3\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example/third\n\ngo 1.26.0\n\ntoolchain go1.27.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.checkWorkspaceTools(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "go: not provisioned") {
 		t.Fatalf("workspace without Go: %v", err)
+	}
+	// Once Go is provisioned on the host, a workspace whose go.mod names a
+	// newer toolchain runs with Go's own toolchain download into the
+	// execution-owned GOPATH/GOMODCACHE.
+	next := f.s.Command
+	f.s.Command = func(ctx context.Context, cmdDir string, env []string, bin string, args ...string) ([]byte, error) {
+		if bin == fixtureGoExecutable {
+			return []byte("go version go" + fixtureGoVersion + " linux/amd64\n"), nil
+		}
+		return next(ctx, cmdDir, env, bin, args...)
+	}
+	setTool(t, f, ToolGo, ToolConfig{Executable: fixtureGoExecutable, Version: fixtureGoVersion})
+	if err := f.s.checkWorkspaceTools(context.Background(), dir); err != nil {
+		t.Fatalf("workspace with newer toolchain and provisioned Go: %v", err)
 	}
 	// A module file must never follow a link out of the source tree.
 	linkDir := t.TempDir()
@@ -182,5 +196,40 @@ func TestWorkspaceChecksActualGoRequirement(t *testing.T) {
 	}
 	if err := f.s.checkWorkspaceTools(context.Background(), linkDir); err == nil {
 		t.Fatal("linked go.mod accepted")
+	}
+}
+
+func TestRaiseGoToolAndLoadPinnedTools(t *testing.T) {
+	base := ToolConfig{Executable: "/srv/tools/go1.27.3/bin/go", Version: "1.27.3"}
+	raised, err := RaiseGoTool(base, "1.27.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ToolConfig{Executable: "/srv/tools/go1.27.4/bin/go", Version: "1.27.4"}
+	if raised != want {
+		t.Fatalf("RaiseGoTool = %+v, want %+v", raised, want)
+	}
+	if same, err := RaiseGoTool(base, "1.27.3"); err != nil || same != base {
+		t.Fatalf("RaiseGoTool same version = %+v, %v", same, err)
+	}
+	f := testFixture(t)
+	f.s.Config.Tools[ToolGo] = base
+	if err := atomicFile(filepath.Join(f.s.Root, PinnedToolsFile), mustJSON(map[string]ToolConfig{ToolGo: want})); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.LoadPinnedTools(); err != nil {
+		t.Fatal(err)
+	}
+	if f.s.Config.Tools[ToolGo] != want {
+		t.Fatalf("loaded tool = %+v, want %+v", f.s.Config.Tools[ToolGo], want)
+	}
+	findings, err := f.s.AuditResources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range findings {
+		if filepath.Base(row.Path) == PinnedToolsFile && row.State != resourceShared {
+			t.Fatalf("tools.json audit finding = %+v, want %s", row, resourceShared)
+		}
 	}
 }

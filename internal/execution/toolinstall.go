@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path"
@@ -18,6 +19,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -26,12 +29,43 @@ const (
 	goArchivePrefix  = "go/"
 )
 
-// ProvisionTools installs missing pinned tools, never changing a configured
-// version or overwriting an existing installation. Call only while admission
-// is quiesced. Installed tools are shared host state, not worker scratch.
+var toolHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+
+// ProvisionTools installs missing pinned tools, raising the Go pin when the
+// served repositories require a newer release and never overwriting an existing
+// installation. Call only while admission is quiesced. Installed tools are
+// shared host state, not worker scratch.
 func (s *Server) ProvisionTools(ctx context.Context) error {
+	return s.ProvisionToolsFor(ctx, nil)
+}
+
+// ProvisionToolsFor installs missing pinned tools and raises the Go pin to the
+// highest version named by the host's served repositories or required.
+func (s *Server) ProvisionToolsFor(ctx context.Context, required map[string]string) error {
+	if err := s.LoadPinnedTools(); err != nil {
+		return err
+	}
+	need, err := s.requiredTools()
+	if err != nil {
+		return err
+	}
+	wantGo := need[ToolGo]
+	if v := required[ToolGo]; v != "" && (wantGo == "" || semver.Compare(goSemver(v), goSemver(wantGo)) > 0) {
+		wantGo = v
+	}
+	tools := maps.Clone(s.Config.Tools)
+	baseGo, hasGo := tools[ToolGo]
+	raisedGo := false
+	if hasGo && wantGo != "" && semver.Compare(goSemver(wantGo), goSemver(baseGo.Version)) > 0 {
+		next, err := RaiseGoTool(baseGo, wantGo)
+		if err != nil {
+			return err
+		}
+		tools[ToolGo] = next
+		raisedGo = true
+	}
 	for _, name := range []string{ToolGo, ToolGitHub} {
-		tool, ok := s.Config.Tools[name]
+		tool, ok := tools[name]
 		if !ok {
 			continue
 		}
@@ -50,6 +84,17 @@ func (s *Server) ProvisionTools(ctx context.Context) error {
 		if err := s.probeTool(ctx, name, tool); err != nil {
 			return err
 		}
+	}
+	if raisedGo {
+		if s.Root != "" {
+			if err := ownedDirectory(s.Root); err != nil {
+				return err
+			}
+			if err := atomicFile(filepath.Join(s.Root, PinnedToolsFile), mustJSON(map[string]ToolConfig{ToolGo: tools[ToolGo]})); err != nil {
+				return err
+			}
+		}
+		s.Config.Tools = tools
 	}
 	return nil
 }
@@ -78,7 +123,7 @@ func toolDownload(ctx context.Context, client *http.Client, url string, limit in
 }
 
 func installTool(ctx context.Context, name string, tool ToolConfig) error {
-	return installToolWithClient(ctx, name, tool, &http.Client{Timeout: 5 * time.Minute})
+	return installToolWithClient(ctx, name, tool, toolHTTPClient)
 }
 
 func installToolWithClient(ctx context.Context, name string, tool ToolConfig, client *http.Client) error {

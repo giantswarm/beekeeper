@@ -9,11 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
+
+func (a *app) hostPinToolsCurrent(pin state.HostPin, h execution.Host) bool {
+	if len(pin.Tools) == 0 {
+		return true
+	}
+	need, err := a.hostRequiredTools(h)
+	if err != nil || need[execution.ToolGo] == "" {
+		return true
+	}
+	return execution.CheckTools(pin.Tools, need) == nil
+}
 
 // hostDrainRetry paces the next update of a host that answered busy while
 // the coordinator recorded no execution on it.
@@ -86,7 +98,7 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 			continue
 		}
 		switch {
-		case pin != nil && pin.Held == "" && pin.Version == version:
+		case pin != nil && pin.Held == "" && pin.Version == version && a.hostPinToolsCurrent(*pin, a.cfg.Agents.Hosts[selector]):
 			continue
 		case pin != nil && pin.Held != "" && pin.HeldVersion == version && hostHoldWait(*pin, st.Budget, a.timeNow()):
 			continue

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +117,38 @@ func TestLegacyHostSourcePreparationRejectedBeforeReservation(t *testing.T) {
 	}
 	if len(st.Starts) != 0 || len(st.Agents) != 0 {
 		t.Fatal("incompatible host reserved an execution")
+	}
+}
+
+func TestHostsCheckReportsPinOlderThanCoordinatorRepositoriesNeedBeforeStart(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	withCoordinatorVersion(t, "dev")
+	repoDir := filepath.Join(a.cfg.Projects.Dir, "beekeeper")
+	if err := os.MkdirAll(repoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go1.27.4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := a.cfg.Agents.Hosts[sshTestSelector]
+	caps, err := a.executionProbe(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps.Tools = map[string]string{execution.ToolGitHub: "2.83.0", execution.ToolGo: "1.27.3"}
+	a.executionProbe = func(context.Context, execution.Host) (execution.Capabilities, error) { return caps, nil }
+	out, err := runAgents(a, "hosts", "check", sshTestSelector)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "pinned 1.27.3 is older than 1.27.4") {
+		t.Fatalf("hosts check with stale Go pin: out=%s err=%v", out, err)
+	}
+	if err := a.startSSHExecution(context.Background(), "fixture worker", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}); Code(err) != ExitRefused || !strings.Contains(err.Error(), "pinned 1.27.3 is older than 1.27.4") {
+		t.Fatalf("start with stale Go pin: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Starts) != 0 || len(st.Agents) != 0 {
+		t.Fatal("host with stale Go pin reserved an execution")
 	}
 }
