@@ -202,7 +202,11 @@ func TestPullRevisionUsesConditionalAllStateUpdates(t *testing.T) {
 			if github.Repo(ctx) != repo || !slices.Contains(args, "If-None-Match: inventory-etag-old") || !slices.Contains(args, "repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=1") {
 				t.Fatalf("revision route %v", args)
 			}
-			return []byte(fmt.Sprintf("HTTP/2.0 %d response\r\nETag: next\r\nContent-Length: 2\r\n\r\n{}", status)), nil
+			var runErr error
+			if status != 200 {
+				runErr = fmt.Errorf("exit status 1: gh: HTTP %d", status)
+			}
+			return []byte(fmt.Sprintf("HTTP/2.0 %d response\r\nETag: next\r\nContent-Length: 2\r\n\r\n{}", status)), runErr
 		}
 		etag, unchanged, err := readRepoPullRevisionWithGH(context.Background(), run, repo, "inventory-etag-old")
 		if status == 403 {

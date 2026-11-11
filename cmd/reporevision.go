@@ -21,24 +21,28 @@ func readRepoPullRevisionWithGH(ctx context.Context, run github.GH, repo, etag s
 	if etag != "" {
 		args = append(args, "-H", "If-None-Match: "+etag)
 	}
-	raw, err := run(github.ActingOn(ctx, repo), args...)
-	if err != nil {
-		return "", false, err
-	}
+	raw, runErr := run(github.ActingOn(ctx, repo), args...)
 	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
 	if err != nil {
+		if runErr != nil {
+			return "", false, runErr
+		}
 		return "", false, fmt.Errorf("repository pull revision: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	switch resp.StatusCode {
-	case http.StatusNotModified:
+	// gh exits 1 for 304 as well as failures; the HTTP response decides
+	// whether the conditional read can reuse its cached value.
+	if resp.StatusCode == http.StatusNotModified {
 		if etag == "" {
 			return "", false, fmt.Errorf("repository pull revision: unexpected 304")
 		}
 		return etag, true, nil
-	case http.StatusOK:
-		return resp.Header.Get("ETag"), false, nil
-	default:
+	}
+	if runErr != nil {
+		return "", false, runErr
+	}
+	if resp.StatusCode != http.StatusOK {
 		return "", false, fmt.Errorf("repository pull revision: HTTP %d", resp.StatusCode)
 	}
+	return resp.Header.Get("ETag"), false, nil
 }

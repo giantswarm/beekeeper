@@ -170,3 +170,15 @@ version and observation window, outcome counts, proof that no terminal
 `delivery.step` event lacks an outcome, and the share of started issue
 deliveries ending without a pull request, grouped by their recorded reasons.
 Passing synthetic tests alone does not establish this live acceptance.
+
+## Repository observations during refill
+
+Conditional GitHub reads reuse the cached value on HTTP 304, including when
+`gh` reports exit status 1 for that response. An unchanged pull inventory
+refreshes its observation time without listing all open pulls again; the
+periodic full refresh still applies.
+
+If a repository's pull observation fails, refill defers that board item with
+its normal retry backoff and continues looking for work in other repositories.
+It does not start the affected item using stale data. Global GitHub budget
+holds, cancellation and capacity admission still stop the refill.

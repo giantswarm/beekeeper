@@ -812,7 +812,12 @@ func (l *supervisorLoop) unmergedStart(ctx context.Context, nextRef string) erro
 		if exempt {
 			return nil
 		}
-		return fmt.Errorf("open pull request observation failed: %v: %w", err, errLoopLater)
+		wait := fmt.Errorf("open pull request observation failed: %v: %w", err, errLoopLater)
+		if errors.Is(err, errLoopLater) || ctx.Err() != nil {
+			return wait // Global budget and cancellation still stop the pass.
+		}
+		// An unread repository must not prevent other repositories starting.
+		return &refillStartError{cause: wait, output: "repository observation unavailable"}
 	}
 	l.clearSaid("unmerged read " + strings.ToLower(r.Repo))
 	if err := l.escalateUnmergedBacklog(r.Repo, recent, why); err != nil {

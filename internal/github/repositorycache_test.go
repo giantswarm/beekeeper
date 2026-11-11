@@ -38,7 +38,7 @@ func TestRepositoryReadsWorkingHour(t *testing.T) {
 		}
 		if slices.Contains(args, `If-None-Match: `+cacheTestETag) {
 			conditional++
-			return fileResponse(304, cacheTestETag, ""), nil
+			return fileResponse(304, cacheTestETag, ""), errors.New("gh: HTTP 304")
 		}
 		charged++
 		return fileResponse(200, cacheTestETag, "manifest"), nil
