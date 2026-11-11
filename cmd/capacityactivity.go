@@ -32,10 +32,16 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 	for _, name := range k.ProviderNames() {
 		get(name)
 	}
+	type startedProvider struct {
+		at       time.Time
+		provider string
+	}
+	byName := map[string][]startedProvider{}
 	starts := slices.Concat(st.Starts, st.EndedWorkers)
 	for _, s := range starts {
 		provider, _ := resolveAgentProviderBucket(k, s.Harness, s.Model)
 		provider = cmp.Or(provider, s.Harness, claudeComm)
+		byName[s.Name] = append(byName[s.Name], startedProvider{at: s.At, provider: provider})
 		key := s.Session + "/" + s.HostSession
 		if s.Session == "" && s.HostSession == "" {
 			key = s.Name + "/" + s.Conversation + "/" + s.At.UTC().Format(time.RFC3339Nano)
@@ -57,13 +63,14 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 		}
 		provider := kindUnknown
 		var latest time.Time
-		for _, s := range starts {
-			if !strings.HasPrefix(e.Detail, s.Name+": ") || s.At.After(e.At) || s.At.Before(latest) {
-				continue
+		if name, _, ok := strings.Cut(e.Detail, ": "); ok {
+			for _, s := range byName[name] {
+				if s.at.After(e.At) || s.at.Before(latest) {
+					continue
+				}
+				provider = s.provider
+				latest = s.at
 			}
-			provider, _ = resolveAgentProviderBucket(k, s.Harness, s.Model)
-			provider = cmp.Or(provider, s.Harness, claudeComm)
-			latest = s.At
 		}
 		switch e.Verb {
 		case transcriptResumeEvent:

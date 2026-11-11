@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -2745,13 +2746,16 @@ func unsavedBudget(err error) error {
 }
 
 // onlyLockBusy says every leaf of err, through wrapping and joining, is a
-// LockBusyError.
+// LockBusyError or coordinator lease commit lock contention.
 func onlyLockBusy(err error) bool {
 	switch e := err.(type) {
 	case *state.LockBusyError:
 		return true
 	case interface{ Unwrap() []error }:
 		errs := e.Unwrap()
+		if len(errs) == 2 && errors.Is(errs[0], execution.ErrCoordinatorBusy) && errors.Is(errs[1], context.DeadlineExceeded) {
+			return true
+		}
 		for _, inner := range errs {
 			if !onlyLockBusy(inner) {
 				return false
@@ -2761,7 +2765,7 @@ func onlyLockBusy(err error) bool {
 	case interface{ Unwrap() error }:
 		return onlyLockBusy(e.Unwrap())
 	}
-	return false
+	return errors.Is(err, execution.ErrCoordinatorBusy)
 }
 
 // capRuns counts the machine's devctl merges and promotes, a running

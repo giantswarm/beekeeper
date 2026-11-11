@@ -54,11 +54,16 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 		return false
 	}
 	for _, ag := range st.Agents {
+		if ag.Done || ag.Task == "" {
+			continue
+		}
+		if d.Agent != "" && strings.EqualFold(ag.Name, d.Agent) {
+			return true
+		}
 		serves := loopServes(st, ag)
-		if !ag.Done && ag.Task != "" && (strings.EqualFold(ag.Name, d.Agent) && d.Agent != "" ||
-			strings.EqualFold(serves, d.Ref) ||
-			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) }) ||
-			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) })) {
+		if serves != "" && (strings.EqualFold(serves, d.Ref) ||
+			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) })) ||
+			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) }) {
 			return true
 		}
 	}

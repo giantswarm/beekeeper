@@ -60,6 +60,7 @@ type loopPullWatcher struct {
 	changed  chan struct{}
 	ready    chan struct{}
 	// Configuration is copied by the pass, never read concurrently from app.cfg.
+	configured           bool
 	authors, orgs, never []string
 	floor                int
 }
@@ -107,8 +108,8 @@ func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []s
 			added = true
 		}
 	}
-	configChanged := !slices.Equal(w.authors, authors) || !slices.Equal(w.orgs, orgs) || w.floor != floor || !slices.Equal(w.never, never)
-	w.tracked, w.authors, w.orgs, w.floor, w.never = next, slices.Clone(authors), slices.Clone(orgs), floor, slices.Clone(never)
+	configChanged := w.configured && (!slices.Equal(w.authors, authors) || !slices.Equal(w.orgs, orgs) || w.floor != floor || !slices.Equal(w.never, never))
+	w.configured, w.tracked, w.authors, w.orgs, w.floor, w.never = true, next, slices.Clone(authors), slices.Clone(orgs), floor, slices.Clone(never)
 	if configChanged {
 		w.snapshot.ListedAt = time.Time{}
 	}
@@ -116,6 +117,26 @@ func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []s
 	if added || configChanged {
 		signalPullWatch(w.changed)
 	}
+}
+
+func (w *loopPullWatcher) needsPoll(tracked []string, now time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.snapshot.ListedAt.IsZero() || now.Sub(w.snapshot.ListedAt) >= sweepListEvery || w.snapshot.Incomplete {
+		return true
+	}
+	desk := superloop.Desk{Orgs: w.orgs, Never: w.never}
+	check := func(ref string) bool {
+		if why, _ := desk.Unread(ref); why != "" {
+			return false
+		}
+		p, ok := w.snapshot.Pulls[ref]
+		if !ok || p.Error != "" || p.Pull.State == "" {
+			return true
+		}
+		return p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && (p.At.IsZero() || now.Sub(p.At) > loopPullMaxAge)
+	}
+	return slices.ContainsFunc(tracked, check) || slices.ContainsFunc(w.snapshot.Open, check)
 }
 
 func (w *loopPullWatcher) read(ref string, now time.Time) (watchedLoopPull, error) {

@@ -59,7 +59,7 @@ var canaryChecks = [][]string{
 // runCanaryCheck runs one canary command on the staged binary at path and
 // returns its combined output; the tests replace it.
 var runCanaryCheck = func(ctx context.Context, path string, args ...string) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	out, err := proc.Command(cctx, path, args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err

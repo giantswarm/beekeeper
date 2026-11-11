@@ -27,16 +27,15 @@ func liveSession(sessions []*claude.Session, p state.Party) (*claude.Session, bo
 	return s, true
 }
 
-// agentActivity follows both the roster and the transcript, including between
-// turns when discovery has no running CLI. Unknown timestamps keep the slot.
-func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Time {
+func rosterActivity(st *state.State, ag state.Agent) time.Time {
 	last := ag.Registered
 	for _, at := range []time.Time{ag.AssignedAt, ag.IdleSince, ag.ActivityAt, ag.ResumedWait, ag.DesktopTurn, ag.GHAt} {
 		if at.After(last) {
 			last = at
 		}
 	}
-	for _, r := range st.Records {
+	for i := range st.Records {
+		r := &st.Records[i]
 		if r.Session.Is(ag.Party) && r.At.After(last) {
 			last = r.At
 		}
@@ -47,6 +46,13 @@ func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Tim
 	if ag.Keep != nil && ag.Keep.At.After(last) {
 		last = ag.Keep.At
 	}
+	return last
+}
+
+// agentActivity follows both the roster and the transcript, including between
+// turns when discovery has no running CLI. Unknown timestamps keep the slot.
+func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Time {
+	last := rosterActivity(st, ag)
 	if cfg == nil {
 		return last
 	}
@@ -119,13 +125,19 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 	if _, live := liveSession(sessions, ag.Party); live || mergeInFlight(st, ag.Party, proc.Alive) {
 		return time.Time{}, false
 	}
-	last := agentActivity(cfg, st, ag)
+	last := rosterActivity(st, ag)
 	if s, ok := claude.Live(sessions, ag.Party); ok {
 		for _, at := range []time.Time{s.Started, s.LastActive} {
 			if at.After(last) {
 				last = at
 			}
 		}
+	}
+	if !last.IsZero() && now.Sub(last) < staleAfter {
+		return last, false
+	}
+	if act := agentActivity(cfg, st, ag); act.After(last) {
+		last = act
 	}
 	return last, !last.IsZero() && now.Sub(last) >= staleAfter
 }

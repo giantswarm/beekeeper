@@ -79,6 +79,9 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 		return nil
 	}
 	runners, standalone, childCodex, extraDirs := codexProcesses(t)
+	if len(runners) == 0 && len(standalone) == 0 {
+		return nil
+	}
 	files := sessionFiles(sessionDirs(stateDir, sessionsDir, extraDirs...), time.Time{})
 	byID := make(map[string]file, len(files))
 	for _, f := range files {
