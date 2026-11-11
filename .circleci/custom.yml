@@ -16,6 +16,14 @@
 # chart-test lints helm/beekeeper and runs its helm-unittest suites, in a plain
 # container: the dependencies are helm and its plugin, not Go tooling. The
 # versions are pinned so a plugin release cannot turn an unrelated PR red.
+#
+# test-performance runs the performance budgets (docs/performance.md) on a
+# generated desk, never on a desk's machine: CLI calls, the idle loop and
+# concurrent calls, its report in the job output and artifacts. Its control
+# step proves the loop budgets reject main before the fix of
+# https://github.com/giantswarm/beekeeper/issues/3657. The session footprint
+# needs a systemd user manager and runs nightly in GitHub Actions
+# (.github/workflows/performance.yaml).
 version: 2.1
 
 jobs:
@@ -77,6 +85,30 @@ jobs:
     - store_artifacts:
         path: /tmp/state-performance
         destination: state-performance
+    - architect/go-cache-save
+
+  test-performance:
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.45
+      entrypoint: /bin/bash
+    resource_class: medium
+    environment:
+      BEEKEEPER_PERF_REPORT: /tmp/performance
+    steps:
+    - checkout
+    - architect/tools-info
+    - architect/go-cache-restore
+    - run:
+        name: Budgets for CLI calls, the idle loop and concurrent calls on a generated desk
+        no_output_timeout: 20m
+        command: make test-performance
+    - run:
+        name: Reject the idle loop's re-reads of main before the fix (control)
+        no_output_timeout: 20m
+        command: bash .circleci/performance-control.sh
+    - store_artifacts:
+        path: /tmp/performance
+        destination: performance
     - architect/go-cache-save
 
   test-envtest:
@@ -188,6 +220,10 @@ workflows:
   build:
     jobs:
     - test-large-history:
+        filters:
+          tags:
+            only: /^v.*/
+    - test-performance:
         filters:
           tags:
             only: /^v.*/

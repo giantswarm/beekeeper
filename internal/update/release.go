@@ -58,7 +58,9 @@ func LookupVersion(ctx context.Context, version string) (Release, error) {
 	owner, repo, _ := strings.Cut(Repository, "/")
 	lookup, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
-	deskgithub.ObserveRESTCall("update.LookupVersion")
+	if err := deskgithub.AdmitRESTCall(lookup, "update.LookupVersion"); err != nil {
+		return Release{}, err
+	}
 	rel, response, err := client.Repositories.GetReleaseByTag(lookup, owner, repo, version)
 	switch {
 	case response != nil && response.StatusCode == http.StatusNotFound:

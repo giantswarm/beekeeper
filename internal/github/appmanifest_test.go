@@ -24,11 +24,11 @@ const (
 func declaring(files map[string]string) GH {
 	return func(_ context.Context, args ...string) ([]byte, error) {
 		call := strings.Join(args, " ")
-		if strings.Contains(call, "repos/"+declaringRepo+"/commits/HEAD") {
+		if strings.Contains(call, reposPrefix+declaringRepo+commitsHeadSuffix) {
 			return []byte(declaringCommit + "\n"), nil
 		}
 		for path, body := range files {
-			if strings.Contains(call, "repos/"+declaringRepo+"/contents/"+path+"?ref="+declaringCommit) {
+			if strings.Contains(call, reposPrefix+declaringRepo+"/contents/"+path+"?ref="+declaringCommit) {
 				return []byte(body), nil
 			}
 		}

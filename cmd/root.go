@@ -225,6 +225,7 @@ with central configured), 125 a newer release (self-update --check).`,
 			if err := a.load(); err != nil {
 				return err
 			}
+			cmd.SetContext(a.backgroundRESTContext(cmd.Context()))
 			if err := a.checkExecutionCommand(cmd); err != nil {
 				return err
 			}
@@ -362,6 +363,7 @@ func (a *app) callerSession() (state.Party, error) {
 	if p.Session == "" {
 		return p, &exitError{code: ExitUsage, msg: "not inside a Claude Code session: pass --as <name>"}
 	}
+	a.discardInheritedHost(&p)
 	if p.HostSession != "" {
 		if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok && r.Title != "" {
 			p.Name = r.Title
@@ -379,6 +381,35 @@ func (a *app) callerSession() (state.Party, error) {
 		p.Name = p.Session
 	}
 	return p, nil
+}
+
+// A resumed background CLI may inherit the desktop caller's host id and
+// title. Never use those to rename it or rebind the caller's state to it.
+// A desktop restart still keeps its host when that record names this CLI.
+func (a *app) discardInheritedHost(p *state.Party) {
+	if p.HostSession == "" {
+		return
+	}
+	if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok && r.CLISessionID != "" {
+		if r.CLISessionID != p.Session && !slices.Contains(r.PriorCLISessionIDs, p.Session) {
+			p.HostSession, p.Name = "", ""
+		}
+		return
+	}
+	if a.store == nil {
+		return
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return
+	}
+	// A known CLI's recorded identity is stronger than its inherited shell.
+	for _, s := range st.Starts {
+		if s.Session == p.Session && s.HostSession != p.HostSession {
+			p.HostSession, p.Name = s.HostSession, s.Name
+			return
+		}
+	}
 }
 
 // rebindCallerSession keeps a resumed session's recorded role and start bound

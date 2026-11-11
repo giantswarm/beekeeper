@@ -28,6 +28,7 @@ import (
 // capacityView is what capacity shows: the roster's busy, parked and idle
 // agents against the target, the headroom a new start needs and the verdict.
 type capacityView struct {
+	Hosts              []hostPlacementView          `json:"hosts,omitempty"`
 	Activity           map[string]*providerActivity `json:"activity24h,omitempty"`
 	WorkerCeiling      int                          `json:"workerCeiling"`
 	ReviewHeadroom     int                          `json:"reviewHeadroom"`
@@ -2089,6 +2090,7 @@ nothing; it makes no GitHub call.`,
 				return err
 			}
 			v.Activity = activityCounts(st, events, liveCap, a.now)
+			v.Hosts = a.hostPlacementViews(st)
 			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
@@ -2109,6 +2111,9 @@ nothing; it makes no GitHub call.`,
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
 			if v.Local != nil {
 				p("local: %s", v.Local.line())
+			}
+			for _, host := range v.Hosts {
+				p("%s", host.line())
 			}
 			for _, name := range liveCap.ProviderNames() {
 				if pv := v.Providers[name]; pv != nil {

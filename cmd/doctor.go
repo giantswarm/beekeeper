@@ -908,7 +908,7 @@ line:
   script ran, say), which runs outside the lanes, the holds and the budget
   floor; the watch says UNGATED MERGE while it runs;
 - moves a claude daemon (claude daemon run) found in the cgroup of a
-  beekeeper unit (beekeeper-*), named with the unit's limits, into a
+  service or another session's scope, named with the unit's limits, into a
   transient scope of its own under app.slice
   (claude-daemon-<time>-<pid>.scope), with the processes under it there
   (each read again right before the move): its background sessions then
