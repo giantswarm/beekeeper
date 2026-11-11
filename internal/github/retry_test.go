@@ -82,6 +82,7 @@ func TestRetryingAsksAWriteOrAFinalAnswerOnce(t *testing.T) {
 		"a 404":                     {[]string{ghAPI, "repos/o/r"}, `{"message":"Not Found"}`, errors.New("exit status 1: HTTP 404: Not Found")},
 		"a filtered empty answer":   {[]string{ghAPI, "user", "--jq", ".login"}, "", nil},
 		"a raw file":                {[]string{ghAPI, "-H", acceptRaw, "repos/o/r/contents/f"}, "", nil},
+		"an actions job log":        {[]string{ghAPI, ghFlagAllowEscape, "repos/o/r/actions/jobs/11/logs"}, "2026-11-10T00:00:00Z FAIL\n", nil},
 		"a list's plain output":     {[]string{"pr", "list"}, "", nil},
 	} {
 		a := &answers{outs: []string{c.out}, errs: []error{c.err}}
