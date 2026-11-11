@@ -631,3 +631,84 @@ func TestQueueOperationsPreserveUnreadableQueue(t *testing.T) {
 		})
 	}
 }
+
+func TestRunExitsWhenSessionParkedDoneOrOffRoster(t *testing.T) {
+	origGrace := IdleGrace
+	IdleGrace = 40 * time.Millisecond
+	t.Cleanup(func() { IdleGrace = origGrace })
+
+	for name, stateJSON := range map[string]string{
+		"parked":     `{"agents":[{"session":"agent-exit","hostSession":"codex_agent-exit","name":"worker-1","park":{"on":"giantswarm/beekeeper#3675"}}]}`,
+		"done":       `{"agents":[{"session":"agent-exit","hostSession":"codex_agent-exit","name":"worker-1","done":true}]}`,
+		"off-roster": `{"agents":[{"session":"other","hostSession":"codex_other","name":"other"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			const agentID = "agent-exit"
+			inbox := InboxPath(stateDir, agentID)
+			logPath := LogPath(stateDir, agentID)
+			fakeCodex := filepath.Join(stateDir, "fake-codex.sh")
+			script := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+echo '{"type":"thread.started","thread_id":"thread-exit-1"}'
+echo '{"type":"turn.started"}'
+echo '{"type":"turn.completed"}'
+`
+			if err := os.WriteFile(fakeCodex, []byte(script), 0o700); err != nil { //nolint:gosec // test script
+				t.Fatal(err)
+			}
+			activeJSON := `{"agents":[{"session":"agent-exit","hostSession":"codex_agent-exit","name":"worker-1","task":"work"}]}`
+			if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(activeJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				var stderr bytes.Buffer
+				done <- Run(ctx, inbox, logPath, fakeCodex, testModel, &stderr)
+			}()
+
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				err := Send(inbox, "first turn")
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, ErrNotRunning) || time.Now().After(deadline) {
+					t.Fatalf("Send: %v", err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			for ReadThread(stateDir, inbox) != "thread-exit-1" || ReadState(inbox) != StateIdle {
+				if time.Now().After(deadline) {
+					t.Fatal("timed out waiting for first turn to complete")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			// Transition the session in state.json to parked, done, or off-roster.
+			if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(stateJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Run = %v, want nil", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("Run did not exit after session became %s", name)
+			}
+
+			if err := Send(inbox, "after exit"); !errors.Is(err, ErrNotRunning) {
+				t.Fatalf("Send after runner exit = %v, want ErrNotRunning", err)
+			}
+			if got := ReadThread(stateDir, inbox); got != "thread-exit-1" {
+				t.Fatalf("ReadThread after runner exit = %q, want thread-exit-1 preserved for wake", got)
+			}
+		})
+	}
+}

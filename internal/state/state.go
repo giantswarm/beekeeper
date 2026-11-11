@@ -1189,6 +1189,78 @@ func (st *State) Knows(p Party) bool {
 	return false
 }
 
+// RunnerSessionActive reports whether a harness runner unit in stateDir still
+// belongs to a live, unparked session on the roster (or the active guide).
+// When stateDir is empty or state.json does not exist or cannot be decoded, it
+// returns true so standalone runner invocations and unit tests without a state
+// file keep running.
+func RunnerSessionActive(stateDir, hostSession, sessionID, name string) bool {
+	if strings.TrimSpace(stateDir) == "" {
+		return true
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDir, "state.json")) //nolint:gosec // state.json under the configured state directory
+	if err != nil {
+		return true
+	}
+	var doc struct {
+		Guide *struct {
+			Holder *Party `json:"holder,omitempty"`
+		} `json:"guide,omitempty"`
+		Agents []struct {
+			Party
+			Done bool            `json:"done,omitempty"`
+			Park json.RawMessage `json:"park,omitempty"`
+		} `json:"agents,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return true
+	}
+	id := strings.TrimSpace(hostSession)
+	for _, prefix := range []string{"codex_", "agy_", "omp_"} {
+		if after, ok := strings.CutPrefix(id, prefix); ok {
+			id = after
+			break
+		}
+	}
+	hostSession = strings.TrimSpace(hostSession)
+	sessionID = strings.TrimSpace(sessionID)
+	name = strings.TrimSpace(name)
+	matches := func(p Party) bool {
+		if hostSession != "" && strings.EqualFold(p.HostSession, hostSession) {
+			return true
+		}
+		if id != "" && (strings.EqualFold(p.Session, id) || strings.EqualFold(p.HostSession, id)) {
+			return true
+		}
+		if sessionID != "" && (strings.EqualFold(p.Session, sessionID) || strings.EqualFold(p.HostSession, sessionID)) {
+			return true
+		}
+		if p.Session == "" && p.HostSession == "" {
+			if id != "" && strings.EqualFold(p.Name, id) {
+				return true
+			}
+			if name != "" && p.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, ag := range doc.Agents {
+		if !matches(ag.Party) {
+			continue
+		}
+		trimmedPark := bytes.TrimSpace(ag.Park)
+		parked := len(trimmedPark) > 0 && !bytes.Equal(trimmedPark, []byte("null"))
+		if !ag.Done && !parked {
+			return true
+		}
+	}
+	if doc.Guide != nil && doc.Guide.Holder != nil && matches(*doc.Guide.Holder) {
+		return true
+	}
+	return false
+}
+
 // Emergency is a guide-role grant; By records its issuer, not its owner.
 // Only the authenticated current guide may act; expiry is checked every time.
 type Emergency struct {

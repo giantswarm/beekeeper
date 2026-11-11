@@ -15,7 +15,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+// IdleGrace is how long an idle runner waits after its session parks, finishes
+// or leaves the roster before closing its inbox FIFO and exiting.
+var IdleGrace = 200 * time.Millisecond
+
+func stateDirFromInbox(inbox string) string {
+	dir := filepath.Dir(filepath.Clean(inbox))
+	if filepath.Base(dir) == "agy" {
+		return filepath.Dir(dir)
+	}
+	return ""
+}
 
 // QuotaError records a quota 429 / RESOURCE_EXHAUSTED failure reported by agy
 // on stderr or in its stream-json output.
@@ -476,7 +490,18 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		}
 	}()
 
+	stateDir := stateDirFromInbox(inbox)
+	id := cmp.Or(cleanID(strings.TrimSuffix(filepath.Base(inbox), ".in")), cleanID(os.Getenv(EnvAgent)))
+	var hostSession string
+	if id != "" {
+		hostSession = HostPrefix + id
+	}
+	name := strings.TrimSpace(os.Getenv(EnvName))
+	var convID string
+
 	ready, busy := false, false
+	idleSince := time.Now()
+	var inactiveSince time.Time
 	feedIfIdle := func() {
 		if !ready || busy {
 			return
@@ -493,12 +518,20 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 			return
 		}
 		busy = true
+		inactiveSince = time.Time{}
 	}
 
 	handleEvent := func(ev streamEvent, feed bool) {
+		if ev.ConversationID != "" {
+			if c := cleanID(ev.ConversationID); c != "" {
+				convID = c
+			}
+		}
 		switch ev.Event {
 		case eventInit:
 			ready, busy = true, false
+			idleSince = time.Now()
+			inactiveSince = time.Time{}
 			if feed {
 				feedIfIdle()
 			}
@@ -509,6 +542,8 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		case "result":
 			_ = finishTurn(inbox)
 			busy = false
+			idleSince = time.Now()
+			inactiveSince = time.Time{}
 			if feed {
 				feedIfIdle()
 			}
@@ -545,6 +580,13 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 				return
 			}
 		}
+	}
+
+	var idleTick <-chan time.Time
+	if stateDir != "" {
+		ticker := time.NewTicker(max(IdleGrace/2, 10*time.Millisecond))
+		defer ticker.Stop()
+		idleTick = ticker.C
 	}
 
 	for {
@@ -597,6 +639,51 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 			handleEvent(ev, true)
 		case <-wakeCh:
 			feedIfIdle()
+		case <-idleTick:
+			feedIfIdle()
+			if !ready || busy {
+				inactiveSince = time.Time{}
+				continue
+			}
+			cID := convID
+			if cID == "" && id != "" {
+				cID = ReadConv(stateDir, id)
+			}
+			if state.RunnerSessionActive(stateDir, hostSession, cID, name) {
+				inactiveSince = time.Time{}
+				continue
+			}
+			if inactiveSince.IsZero() {
+				inactiveSince = time.Now()
+			}
+			if time.Since(inactiveSince) < IdleGrace || time.Since(idleSince) < IdleGrace {
+				continue
+			}
+			closed, cerr := closeIfIdle(inbox, fifo)
+			if cerr != nil {
+				return cerr
+			}
+			if !closed {
+				feedIfIdle()
+				continue
+			}
+			_ = stdinPipe.Close()
+			if cmd.Process != nil {
+				select {
+				case <-processExited:
+				case <-time.After(100 * time.Millisecond):
+					_ = cmd.Process.Kill()
+					<-processExited
+				}
+			} else {
+				<-processExited
+			}
+			drain(events, stderrDone)
+			if qerr := getQuotaErr(); qerr != nil {
+				_ = WriteQuotaError(inbox, qerr)
+				return qerr
+			}
+			return nil
 		}
 	}
 }
