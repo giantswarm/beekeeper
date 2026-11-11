@@ -530,7 +530,7 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if b := caps.PolicyBundle; b != nil && b.Problem != "" {
 			return refused("execution host %s cannot run the coordinator policy bundle: %s", h.Identity, b.Problem)
 		}
-		return checkHostRelease(caps.Version)
+		return nil
 	}})
 	var releaseEvidence bool
 	reconcile := &cobra.Command{Use: "reconcile <host> <execution> <generation>", Short: "Reconcile one terminal execution; retain recovery work", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
@@ -694,12 +694,4 @@ func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord
 		}
 	}
 	return nil, -1
-}
-
-func checkHostRelease(version string) error {
-	want := coordinatorVersion()
-	if releaseVersion(want) && version != want {
-		return refused("execution host runs %s, coordinator runs %s; run beekeeper agents hosts update <host>", version, want)
-	}
-	return nil
 }

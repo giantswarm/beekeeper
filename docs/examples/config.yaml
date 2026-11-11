@@ -270,7 +270,7 @@ supervisor:                 # the supervisor loop, which beekeeper install alway
   reserveFor: 1h            # a review-queued or fixing delivery reserves a start slot ahead of new work this long after its step began
   graphQLLimit: 1500        # GraphQL points an hour the board's reads may spend (keep above 800); past it the board waits for the reset, reviews and merges go on
   hosts: []                # execution host selectors (agents.hosts) worker starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); reviewers may run there with github.workerApp configured
-  hostsFirst: false        # prefer the first host with room over the coordinator's own machine, whatever its room is
+  hostsFirst: true         # default: prefer hosts, then fall back within local capacity; false explicitly opts into local-first placement
   # The loop owns a watch beside it, reading alerts every alerts.every;
   # unowned pages become guide.person notes. A worker can wait on a named
   # alert with agents park --on alert:<alertname|installation/alertname>.

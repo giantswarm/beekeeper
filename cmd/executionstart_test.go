@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/update"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -54,9 +55,21 @@ func sshStartTestApp(t *testing.T) (*app, string) {
 // A lost activation reply must leave exactly one registered execution. Its
 // recovery uses the same reference and observes the already-running process.
 func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *testing.T) {
+	withCoordinatorVersion(t, hostNewRelease)
+	previous := coordinatorJournal
+	coordinatorJournal = func() (*update.Journal, error) {
+		return &update.Journal{Probation: coordinatorProbationPending, Candidate: update.Binary{Version: hostNewRelease}}, nil
+	}
+	t.Cleanup(func() { coordinatorJournal = previous })
 	for _, interrupt := range []string{"", execution.Prepared, execution.Activating} {
 		t.Run(interrupt, func(t *testing.T) {
 			a, brief := sshStartTestApp(t)
+			probe := a.executionProbe
+			a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {
+				caps, err := probe(ctx, h)
+				caps.Version = hostOldRelease
+				return caps, err
+			}
 			var handle execution.Handle
 			process, starts, activations, lost := execution.Prepared, 0, 0, false
 			fake := &testExecutionTransport{}
@@ -107,6 +120,9 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 			st, err := a.store.Read()
 			if err != nil || len(st.Starts) != 1 || len(st.Agents) != 1 || activations != 1 || starts > 3 || !st.Starts[0].Execution.Observation.Ready {
 				t.Fatal("recovery duplicated registration/activation or lost acceptance")
+			}
+			if busy := localBusy(st, []string{st.Agents[0].Name}); len(busy) != 0 {
+				t.Fatalf("remote probation start used coordinator capacity: %v", busy)
 			}
 		})
 	}

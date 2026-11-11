@@ -22,13 +22,14 @@ are available through the worker's authenticated SSH callback. Remote wakes and 
 them with `agents messages` and reconcile with `agents hosts sync`. Hosts
 follow the coordinator's release: `agents hosts update` installs it there,
 verified, and pins the prepared policy digest in beekeeper's state, which the
-supervisor loop does after each coordinator update; a host that cannot be
-updated is held. With
-`supervisor.hosts`, `supervisor loop` places its worker starts
-on these hosts when the coordinator is out of room (or always with
-`supervisor.hostsFirst`, for what a host can run: a repository no host maps
-and a choice of a harness no host has an adapter for start locally within
-`capacity.local.ceiling`). Reviewers follow the same host preferences, including
+supervisor loop does after each coordinator update settles probation. Compatible
+older hosts keep taking starts during probation or release lookup failures;
+failed installations or policy checks still hold the host. With
+`supervisor.hosts`, workers prefer the first host with room by default and
+fall back to the coordinator within its ordinary capacity guards.
+Explicit `supervisor.hostsFirst: false` retains local-first placement.
+`capacity` and `supervisor status` show dated per-host placement reasons.
+Reviewers follow the same host preferences, including
 Codex reviewers without a worker GitHub App. On an execution host,
 `beekeeper agents review` reads the assigned PR and its closing issues,
 `--diff` reads the diff, and `--body-file <file>` posts the exact-head comment

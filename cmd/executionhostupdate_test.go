@@ -308,9 +308,9 @@ func TestHostsUpdatePinsTheDigestInStateWithoutAConfiguredOne(t *testing.T) {
 	if err := a.admitExecution(sshTestSelector, got); err != nil {
 		t.Errorf("the pinned host takes no start: %v", err)
 	}
-	// The coordinator moves on: the host takes no start until it follows.
+	// A newer coordinator does not revoke the already pinned host policy.
 	withCoordinatorVersion(t, "v0.7.0")
-	if err := a.admitExecution(sshTestSelector, got); Code(err) != ExitRefused || !strings.Contains(err.Error(), "v0.7.0") {
+	if err := a.admitExecution(sshTestSelector, got); err != nil {
 		t.Errorf("a host behind the coordinator: %v", err)
 	}
 }
@@ -696,7 +696,7 @@ func TestHostSelfUpdateRefusesALookupOfAnotherRelease(t *testing.T) {
 	}
 }
 
-func TestHostsUpdateHoldsAHostWhoseReleaseLookupFails(t *testing.T) {
+func TestHostsUpdateRetainsAHostWhoseReleaseLookupFails(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, hostNewRelease)
 	calls := stubHostUpdates(t, a, nil)
@@ -709,8 +709,15 @@ func TestHostsUpdateHoldsAHostWhoseReleaseLookupFails(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Errorf("the host was asked to update without the coordinator's lookup: %v", *calls)
 	}
-	if st, _ := a.store.Read(); st.HostPin(sshTestSelector) == nil || st.HostPin(sshTestSelector).Held == "" {
-		t.Errorf("a refused lookup left the host unheld")
+	if st, _ := a.store.Read(); st.HostPin(sshTestSelector) == nil || st.HostPin(sshTestSelector).Held != "" || st.HostPin(sshTestSelector).UpdateError == "" {
+		t.Errorf("a refused lookup must defer only the update")
+	}
+	h, err := a.executionHost(sshTestSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.admitExecution(sshTestSelector, h); err != nil {
+		t.Fatalf("lookup failure blocked starts: %v", err)
 	}
 }
 

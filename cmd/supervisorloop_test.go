@@ -2905,9 +2905,7 @@ func hostsFirstRig(t *testing.T, choices []config.Choice, answer func(host bool,
 // no host has an adapter for.
 var mixedChoices = []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: "gpt-fixture"}}
 
-// The mixed queue under hostsFirst: no host has room, so the Claude choice
-// waits for one, but the codex choice no host can run starts locally, the
-// host-run choice excluded from the local start.
+// When no host has room, local fallback retains every eligible choice.
 func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
 		if host {
@@ -2923,20 +2921,15 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	if slices.Contains(start, loopHostFlag) {
 		t.Errorf("a full host took the start: %v", start)
 	}
-	if i := slices.Index(start, "--"+excludeFlag); i < 0 || i+1 >= len(start) || start[i+1] != claudeComm+"/"+bgModel {
-		t.Errorf("the local start does not leave the Claude choice to the hosts: %v", start)
+	if slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("local fallback must preserve capacity choices: %v", start)
 	}
 	if !slices.Contains(start, harnessAuto) {
 		t.Errorf("the local start loses capacity's pick: %v", start)
 	}
 }
 
-// A Claude choice a host runs and a self-hosted omp choice no host runs:
-// with no host room, leaving Claude to the hosts must not make the
-// self-hosted model the local pick while the subscription is eligible
-// (the local verdict picks Claude), so the start waits; only when no
-// subscription is eligible (the local verdict picks the self-hosted choice
-// itself) does the local start take it.
+// Local fallback must not exclude an eligible subscription choice.
 func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 	const selfHosted = "local"
 	choices := []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: config.OmpHarness, Model: "local/qwen-fixture", Provider: selfHosted, Kinds: []string{workerRole}}}
@@ -2960,11 +2953,8 @@ func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
 		r.pass(t)
 		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
-		if eligible {
-			if start != nil {
-				t.Errorf("an eligible subscription: the loop started %v on the self-hosted choice", start)
-			}
-			continue
+		if start != nil && slices.Contains(start, "--"+excludeFlag) {
+			t.Errorf("fallback changed the subscription pick: %v", start)
 		}
 		if start == nil {
 			t.Fatalf("no subscription eligible: the self-hosted start waited: %v\n%s", r.calls, r.out)
@@ -2994,10 +2984,7 @@ func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
 // Claude-only one.
 func TestLoopHostsFirstWaitsWithoutLocalRoomForLocalOnlyKinds(t *testing.T) {
 	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
-		if host || len(exclude) > 0 {
-			return loopNoRoomJSON
-		}
-		return loopRoomJSON
+		return loopNoRoomJSON
 	})
 	r.pass(t)
 	r.pass(t)
@@ -3006,9 +2993,8 @@ func TestLoopHostsFirstWaitsWithoutLocalRoomForLocalOnlyKinds(t *testing.T) {
 	}
 }
 
-// A desk whose every choice a host runs keeps hostsFirst as it was: no
-// host room, the start waits even with local room.
-func TestLoopHostsFirstWaitsForAHostWhenEveryKindRunsThere(t *testing.T) {
+// Full hosts leave the ordinary local capacity available as fallback.
+func TestLoopHostsFirstFallsBackWhenEveryKindRunsThere(t *testing.T) {
 	r := hostsFirstRig(t, []config.Choice{{Harness: claudeComm, Model: bgModel}}, func(host bool, exclude []string) string {
 		if host {
 			return loopNoRoomJSON
@@ -3016,9 +3002,8 @@ func TestLoopHostsFirstWaitsForAHostWhenEveryKindRunsThere(t *testing.T) {
 		return loopRoomJSON
 	})
 	r.pass(t)
-	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c != nil {
-		t.Errorf("hostsFirst started %v locally while a host could run it", c)
+	if c := r.called(agentsName, agentStartName); c == nil || slices.Contains(c, loopHostFlag) {
+		t.Errorf("full hosts did not leave a local fallback: %v", c)
 	}
 }
 
@@ -3056,8 +3041,8 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 	}
 }
 
-// Reviewers of a mixed queue use local choices unsupported by the full host.
-func TestLoopHostsFirstReviewerExcludesHostedChoices(t *testing.T) {
+// Reviewers fall back with unchanged choices and review capacity flags.
+func TestLoopHostsFirstReviewerPreservesChoices(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.HostsFirst = true
 	r.sshLoopHost(t, true)
@@ -3084,8 +3069,8 @@ func TestLoopHostsFirstReviewerExcludesHostedChoices(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, "--"+excludeFlag) {
-		t.Errorf("the reviewer start = %v, want local with host choices excluded", start)
+	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local with unchanged choices", start)
 	}
 }
 
