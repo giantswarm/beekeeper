@@ -106,11 +106,20 @@ func (w *watcher) firstTurn(ctx context.Context, st *state.State, p state.Party)
 	if p.Session == "" {
 		return false
 	}
+	if i := st.StartIndex(p); i >= 0 && st.Starts[i].Background {
+		return false // background starts/resumes have no headless service turn
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if w.stand.turning != nil && w.stand.turning(ctx, p.Session) {
 		return true
 	}
+	if ctx.Err() != nil {
+		return true // an unread unit is not evidence that its turn ended
+	}
 	i := agentOfSession(st, p.Session)
-	return i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.stand.reopening != nil && w.stand.reopening(ctx, p.Session)
+	reopening := i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.stand.reopening != nil && w.stand.reopening(ctx, p.Session)
+	return reopening || ctx.Err() != nil
 }
 
 // unitsReopening reports whether a unit of session id runs its headless
@@ -146,11 +155,16 @@ func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*cl
 		// The guide's own watch, which records its CLI, went with it: the
 		// standby records since when it is gone, or the grace would start
 		// anew on every poll and no successor would ever start.
-		_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		err := w.store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
 			_, evs := guideRole.observeCLI(st, sessions, w.now)
 			r = guideRole.get(st)
 			return evs, nil
 		})
+		if err != nil {
+			w.fail("guide-observe", "cannot record the missing guide CLI: %v", err)
+			return
+		}
+		w.clear("guide-observe")
 	}
 	sv := readHolder(r, sessions, w.now, w.cfg.Guide.RestartGrace.Duration)
 	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, st, r.Holder.Party) {
