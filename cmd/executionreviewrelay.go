@@ -33,12 +33,10 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 	}
 	_, i := executionRecord(st, ref)
 	var round *state.DeskReview
-	roundIndex := -1
 	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
 		candidate := &st.DeskReviews[n]
 		if sameReviewSession(candidate.Reviewer, st.Starts[i].Party) {
 			round = candidate
-			roundIndex = n
 			break
 		}
 	}
@@ -64,17 +62,6 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 		verdict := superloop.Verdict("COMMENTED", request.Body)
 		reviewedHead := superloop.ReviewedHead(request.Body, "")
 		headOK := reviewedHead == round.Head && pull.Head == round.Head
-		if !headOK && verdict == superloop.Approved && reviewedHead != "" && reviewedHead == pull.Head {
-			if descends, descErr := readReviewerFixedHead(ctx, round.Ref, round.Head, reviewedHead); descErr == nil && descends {
-				headOK = true
-				for _, prev := range st.DeskReviews[:roundIndex] {
-					if strings.EqualFold(prev.Ref, round.Ref) && (prev.Head == pull.Head || prev.Result != nil && prev.Result.Head == pull.Head) {
-						headOK = false
-						break
-					}
-				}
-			}
-		}
 		if verdict == "" || !headOK {
 			return "", refused("review must begin with Review: approved or Review: changes requested and name the assigned Head reviewed")
 		}

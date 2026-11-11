@@ -9,11 +9,51 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const IdentityApp = "app"
 const IdentityGH = "gh"
+
+// DevctlSkipVersionCheckEnv is the devctl-owned environment variable that
+// disables devctl's interactive self-update and version gate checks when set
+// to "true".
+const DevctlSkipVersionCheckEnv = "DEVCTL_UNSAFE_SKIP_VERSION_CHECK"
+
+var devctlSkipVersionCheck atomic.Bool
+
+// SetDevctlSkipVersionCheck records whether beekeeper-owned devctl commands
+// should opt out of devctl's interactive self-update and version gate checks
+// (active only while hooks.guards is false).
+func SetDevctlSkipVersionCheck(skip bool) {
+	devctlSkipVersionCheck.Store(skip)
+}
+
+// DevctlSkipVersionCheck reports whether hooks.guards is false for
+// beekeeper-owned devctl child commands.
+func DevctlSkipVersionCheck() bool {
+	return devctlSkipVersionCheck.Load()
+}
+
+// DevctlEnv returns env with DEVCTL_UNSAFE_SKIP_VERSION_CHECK=true when skip
+// is true, and with DEVCTL_UNSAFE_SKIP_VERSION_CHECK removed when skip is
+// false.
+func DevctlEnv(env []string, skip bool) []string {
+	prefix := DevctlSkipVersionCheckEnv + "="
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if skip {
+		out = append(out, DevctlSkipVersionCheckEnv+"=true")
+	}
+	return out
+}
 
 // BudgetAppRepo pins App credential acquisition and its REST probe to the same repository.
 const BudgetAppRepo = "giantswarm/beekeeper"
@@ -38,38 +78,52 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	if err != nil {
 		return []BudgetCredential{{Identity: IdentityGH, Err: err}}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	env := budgetEnv(os.Environ())
-	personal := budgetCredential(ctx, IdentityGH, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
-	result := []BudgetCredential{personal}
-	devctl, err := budgetDevctl()
-	if err != nil {
-		return result
+	devctl, devctlErr := budgetDevctl()
+	var (
+		personal BudgetCredential
+		app      BudgetCredential
+		wg       sync.WaitGroup
+	)
+	wg.Go(func() {
+		personal = budgetCredential(ctx, IdentityGH, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
+	})
+	if devctlErr == nil {
+		wg.Go(func() {
+			status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
+			status.Env = env
+			status.WaitDelay = 100 * time.Millisecond
+			// The overall exit status covers other providers too (for example CircleCI).
+			// Its stdout can still contain usable GitHub metadata.
+			raw, _ := status.Output()
+			var metadata struct {
+				GitHub struct {
+					Present *bool `json:"present"`
+				} `json:"github"`
+			}
+			if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
+				app = BudgetCredential{Identity: IdentityApp, Skip: true,
+					Warning: "devctl App credential metadata unavailable; probing stored gh identity only"}
+				return
+			}
+			if !*metadata.GitHub.Present {
+				app = BudgetCredential{Identity: IdentityApp, Skip: true}
+				return
+			}
+			// devctl applies its owner routing even under auth exec. Pin the App's
+			// owner explicitly so a personal checkout cannot select the gh login.
+			appEnv := ghEnv(env, BudgetAppRepo)
+			app = budgetCredential(ctx, IdentityApp, devctl,
+				[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, appEnv)
+		})
 	}
-	status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
-	status.Env = env
-	status.WaitDelay = 100 * time.Millisecond
-	// The overall exit status covers other providers too (for example CircleCI).
-	// Its stdout can still contain usable GitHub metadata.
-	raw, _ := status.Output()
-	var metadata struct {
-		GitHub struct {
-			Present *bool `json:"present"`
-		} `json:"github"`
+	wg.Wait()
+	if devctlErr != nil {
+		return []BudgetCredential{personal}
 	}
-	if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
-		return append(result, BudgetCredential{Identity: IdentityApp, Skip: true,
-			Warning: "devctl App credential metadata unavailable; probing stored gh identity only"})
-	}
-	if !*metadata.GitHub.Present {
-		return append(result, BudgetCredential{Identity: IdentityApp, Skip: true})
-	}
-	// devctl applies its owner routing even under auth exec. Pin the App's
-	// owner explicitly so a personal checkout cannot select the gh login.
-	appEnv := ghEnv(env, BudgetAppRepo)
-	return append(result, budgetCredential(ctx, IdentityApp, devctl,
-		[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, appEnv))
+	return []BudgetCredential{personal, app}
 }
 
 // The loop service may have a smaller PATH than a worker. The sibling of
@@ -78,7 +132,7 @@ func budgetDevctl() (string, error) {
 	if path, err := exec.LookPath("devctl"); err == nil {
 		return path, nil
 	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
@@ -91,7 +145,7 @@ func budgetDevctl() (string, error) {
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		path := filepath.Join(filepath.Dir(exe), "devctl")
+		path := filepath.Join(filepath.Dir(strings.TrimSuffix(exe, " (deleted)")), "devctl")
 		if found, err := exec.LookPath(path); err == nil {
 			return found, nil
 		}
@@ -119,17 +173,17 @@ func budgetEnv(env []string) []string {
 	for _, v := range env {
 		name, _, _ := strings.Cut(v, "=")
 		switch name {
-		case "GH_TOKEN", "GITHUB_TOKEN", "GH_REPO", "DEVCTL_AUTH_EXEC_CHAIN":
+		case "GH_TOKEN", "GITHUB_TOKEN", ghRepoEnv, "DEVCTL_AUTH_EXEC_CHAIN", DevctlSkipVersionCheckEnv:
 		default:
 			out = append(out, v)
 		}
 	}
-	return out
+	return DevctlEnv(out, DevctlSkipVersionCheck())
 }
 
 // Skip the devctl gh link; the personal route must reach the stored login.
 func budgetGH() (string, error) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}

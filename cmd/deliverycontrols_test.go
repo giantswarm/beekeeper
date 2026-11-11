@@ -131,10 +131,10 @@ func TestDeliveryFullLoopReadsNothingAndReleaseHasNoPause(t *testing.T) {
 	if r.called(loopBoard) != nil || *busy != 0 || !l.fillPause.until.IsZero() {
 		t.Fatalf("full walked or paused: %v %+v", r.calls, l.fillPause)
 	}
-	if _, err := l.startNext(t.Context(), superloop.Action{}); err != errLoopLater {
+	if _, err := l.startNext(t.Context(), superloop.Action{}); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
-	if _, err := l.startItem(t.Context(), superloop.Action{}, loopBoardItem{Ref: epicTen}); err != errLoopLater {
+	if _, err := l.startItem(t.Context(), superloop.Action{}, loopBoardItem{Ref: epicTen}); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(loopBoard) != nil || r.called(agentsName) != nil {
@@ -292,7 +292,7 @@ func TestDeliveryAllStepStallsAndReleaseFailures(t *testing.T) {
 			}
 		})
 	}
-	for _, verdict := range []string{state.DeliveryReleaseFailed, verdictUnconfirmed} {
+	for _, verdict := range []string{state.DeliveryReleaseFailed} {
 		t.Run(verdict, func(t *testing.T) {
 			a, _ := supervisorApp(t)
 			now := a.timeNow()
@@ -433,7 +433,7 @@ func TestDeliveryFullMonitoredQueueCostsNoRead(t *testing.T) {
 		return nil, errors.New("unexpected queue read")
 	}
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
-	if _, err := l.nextItem(t.Context()); err != errLoopLater {
+	if _, err := l.nextItem(t.Context()); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(loopBoard) != nil {
@@ -458,7 +458,7 @@ func TestDeliveryFreshGateAfterPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.startItem(t.Context(), superloop.Action{Key: "fresh gate"}, loopBoardItem{Ref: "o/r#99"}); err != errLoopLater {
+	if _, err := l.startItem(t.Context(), superloop.Action{Key: "fresh gate"}, loopBoardItem{Ref: "o/r#99"}); !errors.Is(err, errLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(agentsName, agentStartName) != nil {
@@ -528,5 +528,43 @@ func TestDeliveryMissingObservationAndZeroOff(t *testing.T) {
 	}
 	if v := readDeliveryWIP(st, 0, time.Second, now); v.Reason != "" {
 		t.Fatal(v)
+	}
+}
+
+func TestUnconfirmedReleaseStallGraceAndRecovery(t *testing.T) {
+	for _, completes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("completes=%t", completes), func(t *testing.T) {
+			a, _ := supervisorApp(t)
+			a.cfg.Delivery.StallAfter.Duration = time.Minute
+			now := a.timeNow()
+			seed(t, a, func(st *state.State) {
+				st.Deliveries = []state.Delivery{{Ref: refOne, Step: state.DeliveryReleasing, Since: now, Verdict: verdictUnconfirmed}}
+			})
+			for _, age := range []time.Duration{4 * time.Second, 30*time.Minute - time.Second} {
+				if line, err := a.checkDeliveries(now.Add(age)); err != nil || line != "" {
+					t.Fatalf("pending release at %s: %s %v", age, line, err)
+				}
+			}
+			if completes {
+				seed(t, a, func(st *state.State) {
+					applyDeliveryVerdict(&st.Deliveries[0], verdictAvailable, "v1.2.3", now.Add(29*time.Minute))
+				})
+			}
+			line, err := a.checkDeliveries(now.Add(30 * time.Minute))
+			if err != nil || (strings.Contains(line, "DELIVERY STALLED") != !completes) {
+				t.Fatalf("threshold: %s %v", line, err)
+			}
+			if line, err := a.checkDeliveries(now.Add(31 * time.Minute)); err != nil || line != "" {
+				t.Fatalf("duplicate: %s %v", line, err)
+			}
+			if !completes {
+				seed(t, a, func(st *state.State) {
+					applyDeliveryVerdict(&st.Deliveries[0], verdictAvailable, "v1.2.3", now.Add(32*time.Minute))
+				})
+				if line, err := a.checkDeliveries(now.Add(32 * time.Minute)); err != nil || !strings.Contains(line, "RECOVERED:") {
+					t.Fatalf("recovery: %s %v", line, err)
+				}
+			}
+		})
 	}
 }

@@ -18,11 +18,13 @@ type lockTiming struct {
 	HoldNS   int64     `json:"hold_ns"`
 }
 
+const lockTraceEnv = "BEEKEEPER_STATE_LOCK_TRACE"
+
 // traceLockHold is opt-in, best-effort diagnostics. All diagnostic I/O happens
 // after unlocking so a slow trace destination cannot lengthen a state hold.
 // Operators bound the capture window and retain the trace as proof evidence.
 func traceLockHold(acquired, released time.Time, shared bool) {
-	path := os.Getenv("BEEKEEPER_STATE_LOCK_TRACE")
+	path := os.Getenv(lockTraceEnv)
 	if !filepath.IsAbs(path) {
 		return
 	}
@@ -33,7 +35,7 @@ func traceLockHold(acquired, released time.Time, shared bool) {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // operator-selected absolute trace path
 	if err != nil {
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -55,6 +56,7 @@ var (
 	releaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 		var out bytes.Buffer
 		c := exec.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
+		c.Env = devctlCommandEnv("")
 		c.Stdout, c.Stderr = &out, os.Stderr
 		_ = c.Run() // its exit code is the document's verdict
 		return out.Bytes()
@@ -90,6 +92,7 @@ var (
 	// stderr: a warm-up whose verdict the merge's own devctl run judges.
 	prWarmWait = func(ctx context.Context, repo string, n int) {
 		c := exec.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
+		c.Env = devctlCommandEnv("")
 		c.Stdout, c.Stderr = io.Discard, os.Stderr
 		_ = c.Run()
 	}
@@ -209,8 +212,13 @@ var mergeExts = []string{".progress.tmp", ".progress", ".json", ".log", ".rc", "
 
 // removeMergeFiles removes a merge's files.
 func removeMergeFiles(base string) {
+	root, err := os.OpenRoot(filepath.Dir(base))
+	if err != nil {
+		return
+	}
+	defer root.Close() //nolint:errcheck // best-effort cleanup
 	for _, ext := range mergeExts {
-		_ = os.Remove(base + ext)
+		_ = root.Remove(filepath.Base(base) + ext)
 	}
 }
 
@@ -639,7 +647,7 @@ func launchChild(spec childSpec, base string) (int, error) {
 		return 0, err
 	}
 	spec.Argv = append([]string{path}, spec.Argv[1:]...)
-	spec.Env, spec.Gate = os.Environ(), os.Getpid()
+	spec.Env, spec.Gate = devctlCommandEnv(spec.Config), os.Getpid()
 	spec.Dir, _ = os.Getwd()
 	raw, _ := json.Marshal(spec)
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
@@ -1017,9 +1025,14 @@ const busySpent = "busy-base budget spent"
 // and gone set.
 func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
 	started := time.Now()
+	skip := slices.Contains(spec.Env, github.DevctlSkipVersionCheckEnv+"=true")
+	if spec.Config != "" || os.Getenv(beekeeperConfigEnv) != "" {
+		skip = !guardsEnabledForConfig(spec.Config)
+	}
+	github.SetDevctlSkipVersionCheck(skip)
 	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
 	progress := newMergeProgress(base, spec.Argv, time.Now().UTC())
-	c.Stdout, c.Stderr, c.Env, c.Dir = out, io.MultiWriter(errs, progress), spec.Env, spec.Dir
+	c.Stdout, c.Stderr, c.Env, c.Dir = out, io.MultiWriter(errs, progress), github.DevctlEnv(spec.Env, skip), spec.Dir
 	if err := c.Start(); err != nil {
 		_, _ = fmt.Fprintln(errs, err)
 		return guard.ExitNotFound

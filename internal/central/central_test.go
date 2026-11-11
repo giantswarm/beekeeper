@@ -45,11 +45,14 @@ func backend(t *testing.T) string {
 	return srv.URL + "/mcp"
 }
 
-// labContext is the muster context the tests call through.
-const labContext = "lab"
+// labContext and beekeeperServer are the muster context and server the tests call through.
+const (
+	labContext      = "lab"
+	beekeeperServer = "beekeeper"
+)
 
 func client(t *testing.T, endpoint string) (*central.Client, string) {
-	return clientOf(t, endpoint, "beekeeper", 10*time.Second)
+	return clientOf(t, endpoint, beekeeperServer, 10*time.Second)
 }
 
 func clientOf(t *testing.T, endpoint, server string, timeout time.Duration) (*central.Client, string) {
@@ -185,7 +188,7 @@ func TestCallAuthTimeout(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	c := central.New(config.Central{Context: labContext, Server: "beekeeper", Timeout: config.Duration{Duration: 200 * time.Millisecond}}, run)
+	c := central.New(config.Central{Context: labContext, Server: beekeeperServer, Timeout: config.Duration{Duration: 200 * time.Millisecond}}, run)
 	var u *central.Unreachable
 	if _, err := c.Call(context.Background(), "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Reason != "auth timed out (deadline 200ms)" {
 		t.Errorf("auth stalled: %v, want Unreachable naming the auth stage and its deadline", err)

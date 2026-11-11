@@ -20,7 +20,7 @@ func (h Hook) checkWorktreeOwner(args []string, dir string, known bool) string {
 		return ""
 	}
 	if !known {
-		return "Refused: the guard cannot determine the worktree owner: run git from an explicit worktree directory."
+		return "Refused: the guard cannot determine the worktree owner: run git -C <worktree> with an explicit worktree directory."
 	}
 	if create {
 		// git worktree add options that consume an argument; the first operand is the path.

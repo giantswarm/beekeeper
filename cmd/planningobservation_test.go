@@ -95,3 +95,53 @@ func TestBacklogPlanningBoundsAdmissionAndRotates(t *testing.T) {
 		t.Fatalf("shutdown issued inventory reads: %v", order)
 	}
 }
+
+func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
+	a, _ := supervisorApp(t)
+	now := a.timeNow()
+	seed(t, a, func(st *state.State) {
+		st.StartDelivery(epicTen, "issue worker", "", now)
+		st.Deliveries = append(st.Deliveries, state.Delivery{Ref: reserveIssue, Pulls: []string{planningPull}, Step: state.DeliveryReleasing, Started: now, Since: now})
+	})
+	oldRefs, oldRelease := refStates, readDeliveryRelease
+	t.Cleanup(func() { refStates, readDeliveryRelease = oldRefs, oldRelease })
+	var issueDeadline time.Time
+	refStates = func(ctx context.Context, _ []github.PR) (map[github.PR]github.RefState, error) {
+		var ok bool
+		issueDeadline, ok = ctx.Deadline()
+		if !ok {
+			t.Fatal("issue observation has no deadline")
+		}
+		return nil, context.DeadlineExceeded
+	}
+	releaseRead := false
+	readDeliveryRelease = func(ctx context.Context, _ superloop.Pull) (string, string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || issueDeadline.IsZero() || deadline.Sub(issueDeadline) < loopPlanningObservationTimeout/3 {
+			t.Fatal("issue reads left no release observation allowance")
+		}
+		releaseRead = true
+		return verdictAvailable, deliveryAvailableTag, nil
+	}
+	l := &supervisorLoop{a: a, said: map[string]bool{}}
+	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}
+	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !releaseRead {
+		t.Fatal("release observation starved behind issue read")
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range st.Deliveries {
+		if d.Ref == epicTen {
+			if d.Step != state.DeliveryImplementing {
+				t.Fatalf("failed issue read changed its delivery: %+v", d)
+			}
+			return
+		}
+	}
+	t.Fatal("failed issue read removed its delivery")
+}

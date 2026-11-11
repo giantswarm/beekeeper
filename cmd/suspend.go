@@ -71,7 +71,7 @@ func (w *watcher) resumed(st *state.State, sessions []*claude.Session, entry, ex
 		w.suspendRecovery = map[string]suspendWake{}
 	}
 	for _, ag := range st.Agents {
-		if ag.Execution != nil || ag.Task == "" || ag.Done || ag.Park != nil {
+		if ag.Execution != nil || ag.Task == "" || ag.Done || ag.Park != nil || pastRun(st, ag.Party, exit) || holdsRole(st, ag.Party) {
 			continue
 		}
 		if _, live := claude.Live(sessions, ag.Party); live {
@@ -89,6 +89,11 @@ func (w *watcher) resumed(st *state.State, sessions []*claude.Session, entry, ex
 	}
 	if w.standby && st.Stop == nil {
 		if holder := guideRole.get(st).Holder; holder != nil {
+			for name, wake := range w.suspendRecovery {
+				if wake.guide {
+					delete(w.suspendRecovery, name)
+				}
+			}
 			w.suspendRecovery[holder.Name] = suspendWake{party: holder.Party, message: guideRole.resumeMessage("the machine resumed from suspend; check the workers and timers that passed during the gap"), guide: true}
 		}
 	}
@@ -110,37 +115,44 @@ func suspendItems(items []string) string {
 }
 
 // Use the standby's serialized delivery slot so recovery does not block polling
-// or race its ordinary role recovery. Failed deliveries remain queued to retry.
+// or race its ordinary role recovery. Consume each wake before delivery: even an
+// error may have started a turn, so retrying could start another copy.
 func (w *watcher) recoverSuspend(ctx context.Context) {
-	if w.suspendResults != nil {
-		select {
-		case failed := <-w.suspendResults:
-			if w.suspendRecovery == nil {
-				w.suspendRecovery = map[string]suspendWake{}
-			}
-			for name, wake := range failed {
-				if _, exists := w.suspendRecovery[name]; !exists {
-					w.suspendRecovery[name] = wake
-				}
-			}
-		default:
-		}
-	}
 	if !w.standby || len(w.suspendRecovery) == 0 || !w.stand.busy.CompareAndSwap(false, true) {
 		return
 	}
-	if w.suspendResults == nil {
-		w.suspendResults = make(chan map[string]suspendWake, 1)
-	}
+	now := w.now
 	pending := w.suspendRecovery
 	w.suspendRecovery = nil
 	w.stand.inflight.Add(1)
 	go func() {
 		defer w.stand.inflight.Done()
 		defer w.stand.busy.Store(false)
-		failed := map[string]suspendWake{}
+		var attempted []state.Party
 		for _, wake := range pending {
-			var err error
+			// Recheck authority immediately before each delivery: a relay may
+			// have completed while the batch waited for the delivery slot.
+			st, err := w.store.Read()
+			if err != nil {
+				w.emitNow("suspend-recovery", "RESUME FAILED: %q: read current state: %v", wake.party.Name, err)
+				continue
+			}
+			if st.Stop != nil {
+				return
+			}
+			if wake.guide {
+				holder := guideRole.get(st).Holder
+				if holder == nil {
+					continue
+				}
+				wake.party = holder.Party
+			} else if pastRun(st, wake.party, now) || holdsRole(st, wake.party) {
+				continue
+			}
+			if slices.ContainsFunc(attempted, func(p state.Party) bool { return p.Is(wake.party) }) {
+				continue
+			}
+			attempted = append(attempted, wake.party)
 			if w.suspendDeliver != nil {
 				err = w.suspendDeliver(ctx, wake)
 			} else if wake.guide && w.stand.revive != nil {
@@ -149,10 +161,8 @@ func (w *watcher) recoverSuspend(ctx context.Context) {
 				err = w.wakeAgent(ctx, watchParty, wake.party.Name, wake.message, "")
 			}
 			if err != nil {
-				failed[wake.party.Name] = wake
 				w.emitNow("suspend-recovery", "RESUME FAILED: %q: %v", wake.party.Name, err)
 			}
 		}
-		w.suspendResults <- failed
 	}()
 }

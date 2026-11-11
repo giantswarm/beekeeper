@@ -374,7 +374,6 @@ type watcher struct {
 	suspendChecked  time.Time
 	suspendThrough  time.Time
 	suspendRecovery map[string]suspendWake
-	suspendResults  chan map[string]suspendWake
 	suspendDeliver  func(context.Context, suspendWake) error
 	// Hung checks get a fresh grace period on startup and after a suspend
 	// (or a long gap in observations). These times stay in memory so their
@@ -406,6 +405,8 @@ type watcher struct {
 	readHeadroom func(context.Context, *swapReading) *headroom
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
+	// guideRecovery owns crash recovery on its own clock in a continuous watch.
+	guideRecovery bool
 	// upgrades are the last upgrade readings of the installations.
 	upgrades        upgrade.Readings
 	upgradeFailures map[string]int
@@ -678,13 +679,21 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	w.ctx = ctx
+	var wg sync.WaitGroup
+	if w.standby {
+		w.guideRecovery = true
+		g := w.newGuideRecovery()
+		wg.Go(func() {
+			defer g.stand.inflight.Wait()
+			g.loop(ctx, min(interval, 30*time.Second), false, g.recoverGuide)
+		})
+	}
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
 	// The first sample comes before the reads start: they begin knowing
 	// whether the machine is strained. The loop's own first sample is one
 	// interval later: two samples in a row span one (CPU PRESSURE).
 	w.sample(ctx)
-	var wg sync.WaitGroup
 	defer wg.Wait()
 	if w.batchEvery > 0 {
 		wg.Go(func() { w.batchLoop(ctx) })
@@ -2077,8 +2086,10 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	if w.standby {
-		w.guideGone(ctx, st, sessions)
-		w.resumeRestarted(ctx, guideRole, st, sessions)
+		if !w.guideRecovery {
+			w.guideGone(ctx, st, sessions)
+			w.resumeRestarted(ctx, guideRole, st, sessions)
+		}
 		for _, rl := range roles {
 			w.relayOverdue(ctx, rl, st, sessions)
 		}
@@ -2184,7 +2195,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
-		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
+		kl, ke := markResumable(st, w.recheckLeaseParks(st, parks), w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
 		tl, te, tf, touched := settleTimersMatching(st, found, w.now, w.cfg.Watch.Interval.Duration, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf

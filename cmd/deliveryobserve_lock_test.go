@@ -41,6 +41,7 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 		})
 	}()
 	<-entered
+	const releaseTag = "v1.0.0"
 	writer := make(chan error, 1)
 	go func() {
 		writer <- a.store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
@@ -50,7 +51,7 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 			st.Timers = append(st.Timers, state.Timer{ID: 1, Due: now})
 			st.Deliveries[0].Step = state.DeliveryDone
 			st.Deliveries[0].Verdict = verdictAvailable
-			st.Deliveries[0].Release = "v1.0.0"
+			st.Deliveries[0].Release = releaseTag
 			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: "o/r#101", Step: state.DeliveryImplementing, Started: now, Since: now})
 			return nil, nil
 		})
@@ -73,8 +74,8 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 	if len(st.Agents) != 21 || len(st.Timers) != 1 || len(st.Deliveries) != 101 {
 		t.Fatalf("concurrent state lost: agents=%d timers=%d deliveries=%d", len(st.Agents), len(st.Timers), len(st.Deliveries))
 	}
-	i := slices.IndexFunc(st.Deliveries, func(d state.Delivery) bool { return d.Ref == "o/r#1" })
-	if i < 0 || st.Deliveries[i].Step != state.DeliveryDone || st.Deliveries[i].Release != "v1.0.0" {
+	i := slices.IndexFunc(st.Deliveries, func(d state.Delivery) bool { return d.Ref == refOne })
+	if i < 0 || st.Deliveries[i].Step != state.DeliveryDone || st.Deliveries[i].Release != releaseTag {
 		t.Fatal("concurrent release verdict lost")
 	}
 	if !st.DeliveriesAt.Equal(now) {

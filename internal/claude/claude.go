@@ -27,6 +27,12 @@ type Session struct {
 	PID    int    `json:"pid"`
 	ID     string `json:"session"`
 	HostID string `json:"hostSession,omitempty"`
+	// ResumedID is the session --resume named when the CLI went on under a
+	// new session id (ID).
+	ResumedID string `json:"resumedSession,omitempty"`
+	// JobID is the claude daemon's short job id when the CLI runs a
+	// background session (jobId in its record).
+	JobID string `json:"jobId,omitempty"`
 	// Parent is the session whose tool command started this one.
 	Parent string `json:"parent,omitempty"`
 	Name   string `json:"name"`
@@ -206,6 +212,16 @@ func (r *Record) Waiting() *Waiting {
 // one's. A CLI that another session's tool command runs belongs to that
 // session unless it was started under an id of its own.
 func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	return discover(cfg, t, now, true)
+}
+
+// DiscoverLiveness reads CLI identities without repository, transcript or
+// process-tree accounting. Role recovery must not wait for those observations.
+func DiscoverLiveness(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	return discover(cfg, t, now, false)
+}
+
+func discover(cfg *config.Config, t *proc.Table, now time.Time, details bool) []*Session {
 	records := map[int]*cliRecord{}
 	for _, p := range t.ByPID {
 		if isCLI(p) || isSpare(p) {
@@ -222,7 +238,7 @@ func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
 	}
 	byKey := map[string]*Session{}
 	for pid := range clis {
-		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now)
+		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now, details)
 		// A restarted CLI can overlap its predecessor for a moment:
 		// the newest process is the session.
 		if prev, ok := byKey[s.Key()]; ok && prev.Started.After(s.Started) {
@@ -361,6 +377,7 @@ type cliRecord struct {
 	PID       int    `json:"pid"`
 	SessionID string `json:"sessionId"`
 	Name      string `json:"name"`
+	JobID     string `json:"jobId"`
 	// ProcStart is the process's start time in clock ticks since boot: a
 	// record a dead process left behind is not taken for another process
 	// under its PID.
@@ -395,16 +412,40 @@ func RecordName(cfg *config.Config, t *proc.Table, id string) string {
 	return ""
 }
 
+// ResumedSession reports the prior session id (--resume) and background job
+// id (jobId) of the running CLI of session id, when a resumed CLI went on
+// under a new session id.
+func ResumedSession(cfg *config.Config, t *proc.Table, id string) (prevID, jobID string) {
+	for _, p := range t.ByPID {
+		if !isCLI(p) && !isSpare(p) {
+			continue
+		}
+		if r, ok := readCLIRecord(cfg, p); ok && r.SessionID == id {
+			prev := ownID(p.Args)
+			if prev == id {
+				prev = ""
+			}
+			return prev, r.JobID
+		}
+	}
+	return "", ""
+}
+
 // newSession builds the session process p runs: its record names it, else
 // its arguments and environment do.
-func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
-	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: ownID(p.Args), Background: underDaemon(t, p)}
+func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time, details bool) *Session {
+	argID := ownID(p.Args)
+	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: argID, Background: underDaemon(t, p)}
 	s.Name = argValue(p.Args, "--name")
 	if s.Name == "" {
 		s.Name = argValue(p.Args, "-n")
 	}
 	if rec != nil {
+		if argID != "" && argID != rec.SessionID {
+			s.ResumedID = argID
+		}
 		s.ID = rec.SessionID
+		s.JobID = rec.JobID
 		if rec.Name != "" {
 			s.Name = rec.Name
 		}
@@ -441,6 +482,9 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 	}
 	if s.Name == "" {
 		s.Name = "pid " + strconv.Itoa(p.PID)
+	}
+	if !details {
+		return s
 	}
 	repo, branch := GitInfo(s.Cwd)
 	s.Repo = repo
@@ -738,11 +782,21 @@ func sleepDuration(args []string) (time.Duration, bool) {
 // Live reports whether party names one of the running sessions, and which.
 func Live(sessions []*Session, p state.Party) (*Session, bool) {
 	for _, s := range sessions {
-		if p.Is(s.Party()) {
+		if p.Is(s.Party()) || s.resumedFrom(p) {
 			return s, true
 		}
 	}
 	return nil, false
+}
+
+func (s *Session) resumedFrom(p state.Party) bool {
+	if p.Session == "" {
+		return false
+	}
+	if s.ResumedID != "" && s.ResumedID == p.Session {
+		return true
+	}
+	return s.JobID != "" && len(p.Session) >= 8 && strings.HasPrefix(p.Session, s.JobID)
 }
 
 // OwnerOf returns the session a process was started by, from the session

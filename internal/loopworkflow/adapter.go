@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -47,6 +49,8 @@ const (
 	ghAPI            = "api"
 	ghGraphQL        = "graphql"
 	ghPR             = "pr"
+	ghInclude        = "--include"
+	acceptRawHeader  = "Accept: application/vnd.github.raw"
 	deliveryScenario = "delivery"
 	dataField        = "data"
 	nodesField       = "nodes"
@@ -55,6 +59,7 @@ const (
 	repositoryField  = "repository"
 	sessionIDField   = "sessionId"
 	fixtureRepo      = "fixture/project"
+	pullRequestQuery = "pullRequest(number:"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -139,13 +144,34 @@ func serveGitHub() int {
 		}
 		return 0
 	}
+	observePull := func() map[string]any {
+		// Model a push between the planner's read and the merge executor's read.
+		if os.Getenv("FIXTURE_CASE") == "moved-head" {
+			countPath := filepath.Join(root, "read-count")
+			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
+			if len(b) > 0 {
+				p["headRefOid"] = strings.Repeat("f", 40)
+				raw, err = json.Marshal(p)
+				if err != nil {
+					panic(err)
+				}
+				if err = os.WriteFile(filepath.Join(root, pullJSONFile), raw, 0600); err != nil { //nolint:gosec // scratch fixture state
+					panic(err)
+				}
+			}
+			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
+				panic(err)
+			}
+		}
+		return p
+	}
 	switch {
 	case starts("auth", "token"):
 		fmt.Println("fixture-token")
 		return 0
 	case starts("search", "prs"):
 		return emit([]any{})
-	case starts(ghAPI, "--include") && len(args) >= 3 && args[2] == "repos/fixture/project/pulls?state=all&sort=updated&direction=desc&per_page=1":
+	case starts(ghAPI, ghInclude) && len(args) >= 3 && args[2] == "repos/fixture/project/pulls?state=all&sort=updated&direction=desc&per_page=1":
 		fmt.Print("HTTP/2.0 200 OK\r\nETag: fixture\r\nContent-Type: application/json\r\n\r\n[]")
 		return 0
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "pullRequests(states:OPEN,") }):
@@ -155,7 +181,7 @@ func serveGitHub() int {
 	// This fixture repository has a readable main branch and no release
 	// workflows. Delivery recovery must observe that explicitly, without
 	// allowing unrelated or unrecognized external requests.
-	case starts(ghAPI, "-H", "Accept: application/vnd.github.raw") && len(args) == 4 && fixtureWorkflowRead(args[3]):
+	case fixtureRawWorkflowCall(args):
 		fmt.Fprintln(os.Stderr, "gh: Not Found (HTTP 404)")
 		return 1
 	case starts(ghAPI, "repos/fixture/project/branches/main", "--jq", ".name") && len(args) == 4:
@@ -199,24 +225,38 @@ func serveGitHub() int {
 	case starts(ghAPI, "-i") && len(args) == 3 && slices.Contains([]string{"repos/fixture/project/issues/1/comments?per_page=100&page=1", "repos/fixture/project/issues/2/comments?per_page=100&page=1"}, args[2]):
 		fmt.Print("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n[]")
 		return 0
+	// Fixture checks are external checks represented by the rollup; there
+	// are no additional Actions workflow runs for this head.
+	case starts(ghAPI, "--paginate") && len(args) == 3 && args[2] == fmt.Sprintf("repos/fixture/project/actions/runs?head_sha=%s&per_page=100", p["headRefOid"]):
+		return emit(map[string]any{"workflow_runs": []any{}})
 	case starts(ghAPI, "--paginate") && len(args) == 3 && slices.Contains([]string{"repos/fixture/project/pulls/1/reviews", "repos/fixture/project/pulls/1/comments", "repos/fixture/project/issues/1/comments"}, args[2]):
 		return emit([]any{})
 	case starts(ghAPI) && len(args) == 4 && strings.HasPrefix(args[1], "repos/fixture/project/commits/") && args[2] == "--jq" && args[3] == ".commit.committer.date":
 		fmt.Println("2026-01-01T00:00:00Z")
 		return 0
 	case starts(ghPR, "view"):
-		// Model a push between the planner's read and the merge executor's read.
-		if os.Getenv("FIXTURE_CASE") == "moved-head" {
-			countPath := filepath.Join(root, "read-count")
-			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
-			if len(b) > 0 {
-				p["headRefOid"] = strings.Repeat("f", 40)
+		return emit(observePull())
+	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, pullRequestQuery) }):
+		query := strings.Join(args, " ")
+		data := map[string]any{"rateLimit": map[string]any{"remaining": 4900}}
+		for i := range 8 {
+			alias := fmt.Sprintf("p%d", i)
+			pos := strings.Index(query, alias+":")
+			if pos < 0 {
+				continue
 			}
-			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
-				panic(err)
+			_, after, ok := strings.Cut(query[pos:], pullRequestQuery)
+			if !ok {
+				continue
 			}
+			num, _, _ := strings.Cut(after, ")")
+			var found any
+			if num == "1" {
+				found = observePull()
+			}
+			data[alias] = map[string]any{"pullRequest": found}
 		}
-		return emit(p)
+		return emit(map[string]any{dataField: data})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "fields(first:50)") }):
 		fmt.Println(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{"id":"S","name":"Status","options":[{"id":"ready","name":"Ready"}]}]}}}}}`)
 		return 0
@@ -332,10 +372,12 @@ func serveClaude() int {
 			name = args[idx+1]
 		}
 		rows := readSessions()
-		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
+		// Retired sessions disappear from rows; their IDs must never be reused.
+		sessionID := uuid.NewString()
+		short := sessionID[:8]
 		rows = append(rows, map[string]any{
 			"id":           short,
-			sessionIDField: short + "-0000-0000-0000-000000000001",
+			sessionIDField: sessionID,
 			nameField:      name,
 			"kind":         "bg",
 			"pid":          1,
@@ -352,11 +394,11 @@ func serveClaude() int {
 			if err != nil {
 				panic(err)
 			}
-			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: short + "-0000-0000-0000-000000000001", "type": "assistant"})
+			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: sessionID, "type": "assistant"})
 			if err != nil {
 				panic(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, short+"-0000-0000-0000-000000000001.jsonl"), append(raw, '\n'), 0600); err != nil { //nolint:gosec // isolated scratch fixture transcript
+			if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), append(raw, '\n'), 0600); err != nil { //nolint:gosec // isolated scratch fixture transcript
 				panic(err)
 			}
 		}
@@ -387,6 +429,29 @@ func serveClaude() int {
 		fmt.Fprintln(os.Stderr, "unknown fixture claude command: "+string(raw))
 		return 1
 	}
+}
+
+// fixtureRawRead parses a raw repository file read with or without the
+// repository cache's header and conditional-request flags.
+func fixtureRawRead(args []string) (endpoint string, include bool, ok bool) {
+	if len(args) < 4 || args[0] != ghAPI || args[1] != "-H" || args[2] != acceptRawHeader {
+		return "", false, false
+	}
+	switch len(args) {
+	case 4:
+		return args[3], false, true
+	case 5:
+		return args[3], true, args[4] == ghInclude
+	case 7:
+		return args[3], true, args[4] == ghInclude && args[5] == "-H" && strings.HasPrefix(args[6], "If-None-Match: ")
+	default:
+		return "", false, false
+	}
+}
+
+func fixtureRawWorkflowCall(args []string) bool {
+	endpoint, _, ok := fixtureRawRead(args)
+	return ok && fixtureWorkflowRead(endpoint)
 }
 
 // fixtureWorkflowRead recognizes raw workflow reads only in the isolated

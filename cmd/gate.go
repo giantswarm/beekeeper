@@ -728,6 +728,9 @@ func (g *gateRun) step() (string, error) {
 			return why, err
 		}
 	}
+	if err := g.fatalPublicationBarrier(); err != nil {
+		return "", g.refuse("%v", err)
+	}
 	var q merge.Lane
 	var hold state.Hold
 	var held bool
@@ -766,6 +769,7 @@ func (g *gateRun) step() (string, error) {
 			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
 			m.Version = project.Version()
+			m.Head = g.mergeTargetHead()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -776,7 +780,7 @@ func (g *gateRun) step() (string, error) {
 			dropped = true
 			return nil, nil
 		} else {
-			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid, Output: g.output,
+			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Head: g.mergeTargetHead(), Lane: g.lane.Name, By: g.me, PID: g.pid, Output: g.output,
 				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC(), Candidate: g.candidate})
 			detail := fmt.Sprintf("%s in lane %s", g.key(), g.lane.Name)
 			if g.pr == 0 {
@@ -925,8 +929,10 @@ func (g *gateRun) reloadQueueConfig() error {
 	}
 	next := *g.cfg
 	next.GitHub.PublicOnlyOwners = c.GitHub.PublicOnlyOwners
+	next.Hooks.Guards = c.Hooks.Guards
 	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
 	g.cfg = &next
+	github.SetDevctlSkipVersionCheck(!g.cfg.Hooks.GuardsEnabled())
 	g.lane = lane
 	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
 	return nil
@@ -985,6 +991,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	defer cancel()
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
+	c.Env = devctlCommandEnv("")
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if candidate, ok := merge.ParsePromoteCandidate(out); ok {
@@ -1549,7 +1556,7 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 		g.drop(st)
 		if code == ExitGateRefused {
 			g.refusePair(st, why)
-			merge.Fail(st, state.Failed{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, At: g.now, Exit: code, Reason: why})
+			merge.Fail(st, state.Failed{Repo: g.repo, PR: g.pr, Head: g.mergeTargetHead(), Lane: g.lane.Name, By: g.me, At: g.now, Exit: code, Reason: why})
 		}
 		return []state.Event{event(g.me, "merge.refused", "%s: %s", g.key(), why)}, nil
 	})
@@ -1862,6 +1869,9 @@ func (g *gateRun) runMerge() error {
 	}
 	if err := g.awaitReleases(); err != nil {
 		return err
+	}
+	if err := g.fatalPublicationBarrier(); err != nil {
+		return g.refuseRunning("%v", err)
 	}
 	base, err := g.mergeFiles()
 	if err != nil {
@@ -2420,7 +2430,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	case out.Merged:
 		merge.Retry(st, repo, pr)
 	case r.unanswered == nil:
-		merge.Fail(st, state.Failed{Repo: repo, PR: pr, Lane: lane.Name, By: m.By, At: now, Exit: rc, Reason: r.reason})
+		merge.Fail(st, state.Failed{Repo: repo, PR: pr, Head: m.Head, Lane: lane.Name, By: m.By, At: now, Exit: rc, Reason: r.reason})
 	}
 	switch {
 	case r.unanswered != nil:
@@ -2846,7 +2856,9 @@ func (a *app) installTool(ctx context.Context, by state.Party, verb, what string
 func toolUpdate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, merge.Tool, "version", "update").CombinedOutput() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, err := c.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, truncate(strings.TrimSpace(string(out)), 200))
 	}
@@ -2857,7 +2869,9 @@ func toolUpdate(ctx context.Context) error {
 func toolVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, merge.Tool, "version").Output() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, err := c.Output()
 	if err != nil {
 		return ""
 	}
@@ -2874,7 +2888,9 @@ func toolVersion(ctx context.Context) string {
 func toolAcceptsRed(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help").Output() //nolint:gosec // the merge tool, a constant
+	c := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
+	c.Env = devctlCommandEnv("")
+	out, _ := c.Output()
 	return strings.Contains(string(out), merge.AcceptRedFlag)
 }
 
@@ -2950,6 +2966,7 @@ func runChild(argv []string, out io.Writer) int {
 		return guard.ExitNotFound
 	}
 	c := exec.Command(path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
+	c.Env = devctlCommandEnv("")
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, out, os.Stderr
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)

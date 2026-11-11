@@ -17,6 +17,8 @@ func TestReviewOnlyBypassRequirements(t *testing.T) {
 		wantError                                                  bool
 	}{
 		{name: "required check passes"},
+		{name: "required reviewers", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"required_reviewers":[{"type":"Team","id":123,"minimum_approvals":1}]`, 1)},
+		{name: "required reviewers cannot waive checks", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"required_reviewers":[{"type":"Team","id":123,"minimum_approvals":1}]`, 1), runs: strings.ReplaceAll(reviewRunsJSON, `"success"`, `"failure"`), wantError: true},
 		{name: "dismissal restriction", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"dismissal_restriction":{"users":[],"teams":[]}`, 1)},
 		{name: "strict current", rules: strings.Replace(reviewRulesJSON, `"required_status_checks":[`, `"strict_required_status_checks_policy":true,"required_status_checks":[`, 1), distance: `{"behind_by":0}`},
 		{name: "strict behind", rules: strings.Replace(reviewRulesJSON, `"required_status_checks":[`, `"strict_required_status_checks_policy":true,"required_status_checks":[`, 1), distance: `{"behind_by":2}`, wantError: true},

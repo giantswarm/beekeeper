@@ -9,24 +9,40 @@ import (
 
 // Delivery steps are observations, never start or capacity admission rules.
 const (
-	DeliveryUnknown       = "unknown"
-	DeliveryImplementing  = "implementing"
-	DeliveryCI            = "ci"
-	DeliveryReviewQueued  = "review-queued"
-	DeliveryReviewing     = "reviewing"
-	DeliveryFixing        = "fixing"
-	DeliveryMerging       = "merging"
-	DeliveryReleasing     = "releasing"
-	DeliveryDone          = "done"
-	DeliveryDropped       = "dropped"
-	DeliveryStepVerb      = "delivery.step"
-	DeliveryNoRelease     = "no_release"
-	DeliveryReleaseFailed = "ci_failed"
+	DeliveryOriginObserved = "observed"
+	DeliveryOriginStarted  = "started"
+	DeliveryUnknown        = "unknown"
+	DeliveryImplementing   = "implementing"
+	DeliveryCI             = "ci"
+	DeliveryReviewQueued   = "review-queued"
+	DeliveryReviewing      = "reviewing"
+	DeliveryFixing         = "fixing"
+	DeliveryMerging        = "merging"
+	DeliveryReleasing      = "releasing"
+	DeliveryDone           = "done"
+	DeliveryDropped        = "dropped"
+	DeliveryBlocked        = "blocked"
+	DeliveryStalled        = "stalled"
+	OutcomeMerged          = "merged"
+	OutcomeNoChange        = "no-change"
+	OutcomeBlocked         = "blocked"
+	OutcomeParked          = "parked"
+	OutcomeStalled         = "stalled"
+	DeliveryStepVerb       = "delivery.step"
+	DeliveryNoRelease      = "no_release"
+	DeliveryReleaseFailed  = "ci_failed"
 )
 
 // Delivery is one issue (or an issue-less desk pull request) from start to release.
 // Ref and Pulls use the same canonical references as serve records.
 type Delivery struct {
+	Abandoned bool      `json:"abandoned,omitempty"`
+	Outcome   string    `json:"outcome,omitempty"`
+	Evidence  string    `json:"evidence,omitempty"`
+	OutcomeAt time.Time `json:"outcomeAt,omitzero"`
+	// Origin distinguishes passive PR observations from work started by the desk
+	// or advanced by a new commit after observation. Empty is legacy/issue work.
+	Origin         string            `json:"origin,omitempty"`
 	OutsideDesk    bool              `json:"outsideDesk,omitempty"`
 	Heads          map[string]string `json:"heads,omitempty"`
 	DroppedHeads   map[string]string `json:"droppedHeads,omitempty"`
@@ -46,7 +62,9 @@ type Delivery struct {
 }
 
 // Active includes unknown observations: an unreadable pull never frees its place.
-func (d Delivery) Active() bool { return d.Step != DeliveryDone && d.Step != DeliveryDropped }
+func (d Delivery) Active() bool {
+	return d.Step != DeliveryDone && d.Step != DeliveryDropped && d.Step != DeliveryBlocked && d.Step != DeliveryStalled
+}
 
 // DeliveryEvents compares against the last committed observation, not a pass's
 // earlier snapshot. Store.Update commits these events with the new reading.
@@ -54,7 +72,7 @@ func DeliveryEvents(prev, next []Delivery, by Party) []Event {
 	var events []Event
 	for _, d := range next {
 		i := slices.IndexFunc(prev, func(p Delivery) bool { return strings.EqualFold(p.Ref, d.Ref) })
-		if i >= 0 && prev[i].Step == d.Step && prev[i].Started.Equal(d.Started) {
+		if i >= 0 && prev[i].Step == d.Step && prev[i].Outcome == d.Outcome && prev[i].Evidence == d.Evidence && prev[i].Started.Equal(d.Started) {
 			continue
 		}
 		raw, _ := json.Marshal(d)
@@ -90,11 +108,18 @@ func (s *State) StartDelivery(ref, agent, waits string, at time.Time) {
 	}
 }
 
+// DeliveryStallReport retains the identity needed to recover one batched alert.
+type DeliveryStallReport struct {
+	Episodes []string `json:"episodes"`
+	Detail   string   `json:"detail"`
+}
+
 // DeliveryHealth is committed with alert events, shared by both watches.
 type DeliveryHealth struct {
-	At            time.Time         `json:"at,omitempty"`
-	Episodes      map[string]string `json:"episodes,omitempty"`
-	FullSignature string            `json:"fullSignature,omitempty"`
-	FullSince     time.Time         `json:"fullSince,omitempty"`
-	FullRaised    bool              `json:"fullRaised,omitempty"`
+	StallReports  map[string]DeliveryStallReport `json:"stallReports,omitempty"`
+	At            time.Time                      `json:"at,omitempty"`
+	Episodes      map[string]string              `json:"episodes,omitempty"`
+	FullSignature string                         `json:"fullSignature,omitempty"`
+	FullSince     time.Time                      `json:"fullSince,omitempty"`
+	FullRaised    bool                           `json:"fullRaised,omitempty"`
 }

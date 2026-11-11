@@ -154,7 +154,8 @@ The coordinator records a pr-checks timer. End the turn; owned green CI goes
 directly to desk review, while red CI goes to a fresh worker with the failures.
 An unverified head remains a plain wait and grants no review authority.
 
-A park from the pull request's own worktree at its published HEAD records
+An explicit "desk review" park on a non-draft pull request from its own
+worktree at its published HEAD records
 a CI and independent review request, retained per pull request. Push and park
 immediately without local tests or lints or waiting for CI; the loop returns
 CI failures to the worker and starts review only on green. Park from each
@@ -251,6 +252,9 @@ agents wake: its task is that message's first line.`,
 			if err != nil {
 				return err
 			}
+			if a.json {
+				return a.printJSON(map[string]string{paramMessage: line})
+			}
 			_, err = fmt.Fprintln(a.out, line)
 			return err
 		},
@@ -291,8 +295,12 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 	if err != nil {
 		return "", err
 	}
-	reviewHead := parkReviewHead(on)
-	var line string
+	var reviewHead, reviewReason string
+	if isDeskReviewWait(waits) {
+		reviewHead, reviewReason = parkReviewHead(on)
+	}
+	reviewPending := isDeskReviewWait(waits) && reviewReason != parkDraftReason
+	var line, repairOwner string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := a.callerAgent(st, me)
 		if i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done) {
@@ -328,6 +336,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 		self := me
 		if i >= 0 {
 			self = st.Agents[i].Party
+			repairOwner = st.Agents[i].Name
 			if on != "" {
 				if rp, ok := st.ReviewParkFor(on); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, st.Agents[i].Name) || rp.Party.Is(self)) {
 					inheritReviewParkOnAgent(st, &st.Agents[i], rp, a.now.UTC())
@@ -367,19 +376,29 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 			if i < 0 && reviewHead != "" {
 				back += "; plain wait off the roster; no supervisor review requested"
 			} else {
-				if reviewHead == "" && i >= 0 && isDeskReviewWait(waits) {
+				if reviewHead == "" && i >= 0 && reviewPending {
 					back += "; review request saved; published HEAD verification pending; the supervisor loop retries automatically (including after GitHub budget recovery)"
 				} else {
 					back += "; " + parkReviewMode(reviewHead)
 				}
 			}
 		}
+		if _, ref := parseRef(on); ref && reviewHead == "" && reviewReason != "" {
+			back += "; verification reason: " + reviewReason
+		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
 		if k := st.StartIndex(self); k >= 0 && st.Starts[k].Background {
 			line += " The watch stops your background session once the turn ends, and the wake resumes it from its transcript."
 		}
-		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
+		var outcomes []state.Event
+		if i >= 0 {
+			outcomes = a.recordTaskOutcome(st, st.Agents[i], state.OutcomeParked, park.On+": "+park.Waits)
+		}
+		return append(outcomes, event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))), nil
 	})
+	if err == nil && reviewHead != "" {
+		err = a.recordFatalRepair(repairOwner, on)
+	}
 	if err == nil && kind == github.RefIssue {
 		if suggestion := a.parkSuggestion(me, on); suggestion != "" {
 			line += " This is an issue wait. For desk review, park on your open pull request: " + suggestion
@@ -452,8 +471,12 @@ func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string,
 	if _, ok := upgrade.Held(st, res, a.now); ok {
 		return "", false
 	}
-	if _, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Now: a.now, TTL: a.cfg.GrantTTL.Duration}); err != nil {
+	idx, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+	if err != nil {
 		return "", false
+	}
+	if idx < 0 {
+		return fmt.Sprintf("%s has no grant of it to you left: `beekeeper lease grant %s %q` queues you again", res, res, ag.Name), true
 	}
 	claim := fmt.Sprintf("beekeeper lease claim %s -p \"<purpose>\"", res)
 	return fmt.Sprintf("%s is free and yours: claim it now with `%s`, within %s", res, claim, dur(a.cfg.GrantTTL.Duration)), true
@@ -576,14 +599,20 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		return refused("no resume: %s (--force resumes anyway)", block)
 	}
 	if gone {
+		msg := resumeMessage
 		if target.Execution != nil {
 			// This is an explicit by-name resume, like agents wake. Keep
 			// automatic wakes from restarting an unparked finished worker.
 			if err := a.continueExecution(ctx, by, *target); err != nil {
 				return err
 			}
+			// The managed worker cannot inspect the coordinator roster to
+			// recover an assignment made after its previous turn completed.
+			if target.Task != "" {
+				msg = "Your current task is:\n" + target.Task + "\n\n" + msg
+			}
 		}
-		if err := wakeOwner(a, ctx, by, target.Name, resumeMessage, ""); err != nil {
+		if err := wakeOwner(a, ctx, by, target.Name, msg, ""); err != nil {
 			return err
 		}
 		return a.store.Record(event(by, resumedEvent, "%s: resumed from gone state", target.Name))
@@ -991,6 +1020,23 @@ func parkedAgents(st *state.State) []state.Agent {
 	return out
 }
 
+// recheckLeaseParks validates lease wakes under the state lock. Other parks
+// may require remote probes; a lease's holder and queue can change during them.
+func (a *app) recheckLeaseParks(st *state.State, parks []settledPark) []settledPark {
+	out := make([]settledPark, 0, len(parks))
+	for _, p := range parks {
+		if res, ok := parkLease(p.on); ok {
+			answer, ready := a.leaseSettled(st, state.Agent{Party: p.party}, res)
+			if !ready {
+				continue
+			}
+			p.answer = answer
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // markResumable marks the parks of st among settled resumable and returns
 // their watch lines and events: one AGENT RESUMABLE line per park, since
 // the mark is in the state. A park ended or moved meanwhile is left alone.
@@ -998,6 +1044,16 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 	var lines []string
 	var evs []state.Event
 	mark := func(name string, p *state.Park, s settledPark, routed bool) {
+		// The wake promises a full claim window, even if the grant was
+		// nearly expired when this poll observed it.
+		if res, ok := parkLease(s.on); ok && strings.Contains(s.answer, "is free and yours:") {
+			for i := range st.Grants {
+				if g := &st.Grants[i]; g.Resource == res && g.To.Is(s.party) {
+					g.Reserved = now.UTC()
+					break
+				}
+			}
+		}
 		p.Resumable, p.Answer = now.UTC(), s.answer
 		next := fmt.Sprintf("beekeeper agents resume %q", name)
 		switch {
@@ -1069,10 +1125,10 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 
 // parkReviewHead fails closed: a repository/branch name or shared GitHub
 // author alone is no evidence that this caller published the pull request.
-var parkReviewHead = func(on string) string {
+var parkReviewHead = func(on string) (string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return publishedParkHead(ctx, on, ".", runGit, github.RunGH)
+	return publishedParkVerification(ctx, on, ".", runGit, github.RunGH)
 }
 
 var parkWorktree = func(dir string) string {
@@ -1086,9 +1142,14 @@ var parkWorktree = func(dir string) string {
 }
 
 func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {
+	head, _ := publishedParkVerification(ctx, on, dir, git, gh)
+	return head
+}
+
+func publishedParkVerification(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) (string, string) {
 	r, ok := parseRef(on)
 	if !ok {
-		return ""
+		return "", "target is not an issue or pull request reference"
 	}
 	read := func(args ...string) string {
 		out, err := git(ctx, dir, args...)
@@ -1101,14 +1162,15 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 	branch := read("symbolic-ref", "--quiet", "--short", "HEAD")
 	head := read("rev-parse", "HEAD")
 	if !strings.EqualFold(repo, r.Repo) || branch == "" || head == "" {
-		return ""
+		return "", "local origin, branch or HEAD does not match the target repository"
 	}
 	out, err := gh(github.ActingOn(ctx, r.Repo), "api", fmt.Sprintf("repos/%s/pulls/%d", r.Repo, r.N))
 	if err != nil {
-		return ""
+		return "", "GitHub pull request lookup failed; retry after connectivity or budget recovery"
 	}
 	var p struct {
-		Head struct {
+		Draft bool
+		Head  struct {
 			SHA  string
 			Repo struct {
 				FullName string `json:"full_name"`
@@ -1118,9 +1180,12 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 	// Repair worktrees can publish to a PR from a differently named branch.
 	// The exact published commit and repository establish the match.
 	if json.Unmarshal(out, &p) != nil || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
-		return ""
+		return "", "published HEAD or head repository does not match the local checkout"
 	}
-	return head
+	if p.Draft {
+		return "", parkDraftReason
+	}
+	return head, ""
 }
 
 // executionWorkspaceHead is the HEAD of the calling execution's workspace
@@ -1144,6 +1209,8 @@ func (a *app) executionWorkspaceHead(ctx context.Context, on string) string {
 	}
 	return head
 }
+
+const parkDraftReason = "draft pull request; mark it ready and park again for desk review"
 
 func parkReviewMode(head string) string {
 	if head != "" {

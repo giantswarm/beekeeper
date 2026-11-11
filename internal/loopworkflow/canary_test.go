@@ -651,6 +651,10 @@ if args[:2] == ["api", "-i"]:
 
 if args[:2] == ["api", "--paginate"]:
     endpoint = args[2]
+    # These fixtures model external checks through the PR rollup.
+    if any(endpoint == "repos/" + repo + "/actions/runs?head_sha=" + p["headRefOid"] + "&per_page=100" for p in prs):
+        print(json.dumps({"workflow_runs": []}))
+        sys.exit(0)
     if "/pulls" in endpoint and "/reviews" not in endpoint and "/comments" not in endpoint:
         open_prs = []
         for p in prs:
@@ -789,6 +793,18 @@ if args[:2] == ["api", "graphql"]:
         sys.exit(0)
     if "issue(number:" in joined_args:
         print(json.dumps({"data": {"repository": {"issue": {"parent": None}}}}))
+        sys.exit(0)
+    if "pullRequest(number:" in joined_args:
+        data = {"rateLimit": {"remaining": 4900, "resetAt": "2026-01-01T01:00:00Z", "cost": 1}}
+        for m in re.finditer(r'(p\d+):\s*repository\([^)]*\)\s*\{\s*pullRequest\(number:(\d+)\)', joined_args):
+            alias, num_s = m.group(1), int(m.group(2))
+            found = None
+            for p in prs:
+                if p["number"] == num_s:
+                    found = p
+                    break
+            data[alias] = {"pullRequest": found}
+        print(json.dumps({"data": data}))
         sys.exit(0)
     print(json.dumps({"data": {}}))
     sys.exit(0)

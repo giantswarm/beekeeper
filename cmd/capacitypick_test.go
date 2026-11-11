@@ -513,11 +513,73 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 			t.Errorf("candidate %d rate = %v, want %v", i, gotR, wantRate[i])
 		}
 	}
+	// With no choice below half pace, distance and remaining rate rank starts.
 	// When two choices tie on distance behind pace (23.1 points), higher
 	// remaining budget per hour breaks the tie (2.1%/h vs 1.2%/h).
+	r.choices = `    - {harness: agy, model: gemini-x}
+    - {harness: codex, model: gpt-x}
+`
+	r.configure("")
 	agy7d, agyReset7d = 68, r.t0.Add(15*time.Hour)
 	codex7d, codexReset7d = 54.9, r.t0.Add(37*time.Hour)
 	r.want(harnessAgy + " " + pickGemini)
 	agy5h = 90
 	r.want(codex.Harness + " " + pickGPT)
+}
+
+func TestCapacityPickPrioritizesBelowHalfPace(t *testing.T) {
+	lowPace, highPace := 32.0, 86.0
+	k := config.Capacity{Providers: map[string]config.Provider{claudeComm: {}, codex.Harness: {}}, Choices: []config.Choice{
+		{Harness: claudeComm, Model: pickOpus},
+		{Harness: codex.Harness, Model: pickGPT},
+	}}
+	providers := map[string]*providerView{
+		claudeComm:    {Room: 1, SevenDay: &usageWindow{UsedPercent: 50, Pace: &highPace}},
+		codex.Harness: {Room: 1, SevenDay: &usageWindow{UsedPercent: 12, Pace: &lowPace}},
+	}
+	got := evaluateChoices(k, providers, nil, "", nil, forWorker, time.Now())
+	if got.Provider != codex.Harness {
+		t.Fatalf("below-half-pace provider lost to greater absolute lag: %+v", got)
+	}
+	providers[codex.Harness].Room = 0
+	got = evaluateChoices(k, providers, nil, "", nil, forWorker, time.Now())
+	if got.Provider != claudeComm {
+		t.Fatalf("underuse bypassed admission: %+v", got)
+	}
+}
+
+func TestAutoStartChoiceEffortDoesNotReachAgy(t *testing.T) {
+	r := newPickRig(t, subscriptionChoices)
+	r.choices = `    - {harness: codex, model: gpt-x, effort: high}
+    - {harness: agy, model: gemini-x}
+`
+	r.providersExtra = "    agy:\n      ceiling: 2\n      command: [read-agy]\n"
+	r.configure("")
+	if _, err := runGit(t.Context(), r.dir, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	brief := filepath.Join(r.dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalogDir := t.TempDir()
+	r.cfg.Codex.ConfigFile = filepath.Join(catalogDir, "config.toml")
+	if err := os.WriteFile(filepath.Join(catalogDir, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-x","supported_reasoning_levels":[{"effort":"high"}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, excluded := range []string{harnessAgy, codex.Harness} {
+		a, out := r.app(false)
+		c := a.agentStartCmd()
+		c.SetArgs([]string{"EffortChoice", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag, "--exclude", excluded})
+		if err := c.Execute(); err != nil {
+			t.Fatalf("excluding %s: %v", excluded, err)
+		}
+		if excluded == harnessAgy {
+			if !strings.Contains(out.String(), `model_reasoning_effort="high"`) {
+				t.Fatalf("Codex effort missing: %s", out)
+			}
+		} else if !strings.Contains(out.String(), "choice: agy /") || strings.Contains(out.String(), "effort high") {
+			t.Fatalf("agy choice inherited effort: %s", out)
+		}
+	}
 }

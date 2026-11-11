@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -232,7 +233,7 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 	for _, k := range slices.Sorted(maps.Keys(routed)) {
 		out = append(out, k+"="+routed[k])
 	}
-	return out, nil
+	return github.DevctlEnv(out, s.GuardsDisabled), nil
 }
 
 // ownedHome moves a worker's HOME into its owned root, so what it writes to a

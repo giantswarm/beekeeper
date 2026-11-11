@@ -76,6 +76,7 @@ type Server struct {
 	coordinatorBundle                                     *CoordinatorBundle
 	Config                                                HostConfig
 	Root, Executable, ConfigPath, Version, SecurityDigest string
+	GuardsDisabled                                        bool
 	Rules                                                 []byte
 	Launcher                                              platform.Launcher
 	Command                                               HostCommand

@@ -178,9 +178,10 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 
 	original := r.answer
 	var dispatched []string
+	admit := false
 	r.answer = func(args []string) (string, int) {
 		switch {
-		case args[0] == fillCapacityCommand && *busy > 0:
+		case args[0] == fillCapacityCommand && (!admit || *busy > 0):
 			return fillNoRoomJSON, 0
 		case slices.Equal(args, []string{loopBoard, loopBoardMove, filedRef, "backlog", "--intake"}):
 			// GitHub adds a new item at the very bottom of the board in Backlog
@@ -248,6 +249,10 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	if r.called("note", loopAdd) != nil {
 		t.Fatalf("person was asked about filed issue: calls %v", r.calls)
 	}
+	// The existing worker occupies capacity during intake. Once a slot frees,
+	// the next pass must choose the newly ranked follow-up.
+	admit = true
+	r.pass(t)
 	if *busy != 1 || len(dispatched) != 1 || !strings.Contains(dispatched[0], filedURL) {
 		t.Fatalf("board next did not offer ranked cross-owner issue %s ahead of bottom backlog: busy %d, briefs %v\n%s", filedURL, *busy, dispatched, r.out)
 	}

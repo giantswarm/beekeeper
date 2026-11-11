@@ -202,7 +202,7 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	// request. A run that ended arms none after the next step, and settle
 	// fails.
 	clk.settle(loopTimers)
-	clk.step(loopTimers)
+	clk.advance(time.Hour) // guide recovery also ticks between the hourly polls
 	clk.settle(loopTimers)
 	if n := w.polls.Load(); n != 2 {
 		t.Fatalf("%d polls after one interval, want 2", n)

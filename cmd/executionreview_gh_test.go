@@ -73,7 +73,7 @@ func TestReadDeskReviewRefusesAnotherPullRequestsReview(t *testing.T) {
 	}
 }
 
-func TestExecutionReviewReportVerifiesFixedHeadDescentBeforeCI(t *testing.T) {
+func TestExecutionReviewReportRejectsFixedHead(t *testing.T) {
 	const (
 		url          = "https://github.com/o/r/pull/14#pullrequestreview-346"
 		assignedHead = "0123456789abcdef0123456789abcdef01234567"
@@ -94,22 +94,6 @@ func TestExecutionReviewReportVerifiesFixedHeadDescentBeforeCI(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	oldPull := readLoopPull
-	oldDesc := readReviewerFixedHead
-	t.Cleanup(func() {
-		readLoopPull = oldPull
-		readReviewerFixedHead = oldDesc
-	})
-
-	pullGreen := false
-	descends := false
-	readLoopPull = func(_ context.Context, _ string) (superloop.Pull, error) {
-		return superloop.Pull{Ref: reviewPRRef, State: superloop.Open, Head: fixedHead, Green: pullGreen}, nil
-	}
-	readReviewerFixedHead = func(_ context.Context, _, base, head string) (bool, error) {
-		return descends && base == assignedHead && head == fixedHead, nil
-	}
-
 	reviewer := state.Party{Name: litReviewer, Session: "reviewer-fixed-head"}
 	newState := func() *state.State {
 		return &state.State{DeskReviews: []state.DeskReview{{
@@ -120,16 +104,11 @@ func TestExecutionReviewReportVerifiesFixedHeadDescentBeforeCI(t *testing.T) {
 		}}}
 	}
 
-	// Descent is required even when CI is pending. The loop owns the CI gate.
-	if err := (&app{}).captureExecutionReviewReport(context.Background(), newState(), reviewer, "Review: approved\n"+url, time.Now(), true); err == nil {
-		t.Fatal("accepted self-fixed review head without descent verified")
-	}
-	descends = true
 	st := newState()
-	if err := (&app{}).captureExecutionReviewReport(context.Background(), st, reviewer, "Review: approved\n"+url, time.Now(), true); err != nil {
-		t.Fatalf("expected pending-CI descendant self-fixed review head to be accepted, got: %v", err)
+	if err := (&app{}).captureExecutionReviewReport(context.Background(), st, reviewer, "Review: approved\n"+url, time.Now(), true); err == nil {
+		t.Fatal("accepted self-fixed review head")
 	}
-	if st.DeskReviews[0].Result == nil || st.DeskReviews[0].Result.Head != fixedHead {
-		t.Fatalf("unexpected review result: %+v", st.DeskReviews[0].Result)
+	if st.DeskReviews[0].Result != nil {
+		t.Fatal("refused verdict was recorded")
 	}
 }

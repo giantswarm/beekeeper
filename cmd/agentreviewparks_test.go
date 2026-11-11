@@ -21,7 +21,7 @@ func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
 	head := loopHead
-	parkReviewHead = func(string) string { return head }
+	parkReviewHead = func(string) (string, string) { return head, parkVerificationUnavailable }
 	me := state.Party{Name: agentOne}
 	for _, ref := range []string{refOne, refTwo, refOne} {
 		if _, err := w.park(me, ref, deskReviewWait); err != nil {
@@ -43,7 +43,7 @@ func TestReviewParksRetainEachPullRequest(t *testing.T) {
 		}
 	}
 	// A plain wait cannot erase either independently proven request.
-	parkReviewHead = func(string) string { return "" }
+	parkReviewHead = func(string) (string, string) { return "", parkVerificationUnavailable }
 	if _, err := w.park(me, "#3", "answer"); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open, refTwo: github.Open})
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
-	parkReviewHead = func(string) string { return loopHead }
+	parkReviewHead = func(string) (string, string) { return loopHead, parkVerificationUnavailable }
 	me := state.Party{Name: agentOne}
 	if _, err := w.park(me, refOne, deskReviewWait, "release first PR"); err != nil {
 		t.Fatal(err)

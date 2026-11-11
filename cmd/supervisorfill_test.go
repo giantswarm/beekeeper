@@ -813,8 +813,8 @@ func TestLoopSettlesDoneEventsWhenNothingIsFree(t *testing.T) {
 	if got := len(r.logged(t, "supervisor.done")); got != n {
 		t.Fatalf("%d of %d done events settled:\n%s", got, n, r.out)
 	}
-	before := *reads
-	r.loopPass(t, l) // each done event's next start asks the board
+	before := 0
+	r.loopPass(t, l) // next bookkeeping shares the refill's earlier empty read
 	if got := *reads - before; got != 1 {
 		t.Fatalf("%d done events read the board %d times in one pass, want 1", n, got)
 	}
@@ -822,7 +822,7 @@ func TestLoopSettlesDoneEventsWhenNothingIsFree(t *testing.T) {
 		t.Fatalf("%d of %d next starts settled:\n%s", got, n, r.out)
 	}
 	for _, e := range r.logged(t, "supervisor.next") {
-		if !strings.Contains(e.Detail, "the board offers nothing") {
+		if !strings.Contains(e.Detail, "superseded by the capacity refill") {
 			t.Errorf("next start settled as %q", e.Detail)
 		}
 	}
@@ -842,7 +842,10 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 	for _, name := range []string{"graphql under floor", "graphql refused", "rest under floor"} {
 		t.Run(name, func(t *testing.T) {
 			r, l, reads := nothingFreeRig(t, 2)
+			// Settle retirement without creating an empty-board backoff.
+			r.a.cfg.Supervisor.WorkerBrief = ""
 			r.loopPass(t, l)
+			nextBrief(t, r)
 			r.a.cfg.GitHub.Floor = 2500
 			setBudget := func(low bool) {
 				t.Helper()

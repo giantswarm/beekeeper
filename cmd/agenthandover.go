@@ -266,14 +266,24 @@ func (a *app) readHandover(q string) (handover, error) {
 }
 
 // lastNote is p's latest hand-over note logged at or after since.
-func (a *app) lastNote(p state.Party, since time.Time) (string, bool, error) {
-	notes, err := a.store.Events(1, func(e state.Event) bool {
-		return e.Verb == verbNote && e.By.Is(p) && !e.At.Before(since)
-	})
-	if err != nil || len(notes) == 0 {
+func (a *app) lastNote(p state.Party, since time.Time, progress ...func()) (string, bool, error) {
+	keep := func(e state.Event) bool {
+		return e.Verb == verbNote
+	}
+	if len(progress) > 0 && progress[0] != nil {
+		keep = eventProgressFilter(keep, progress[0], time.Now)
+	}
+	notes, err := state.FollowSnapshot(a.store, "agent-notes", "v1", keep)
+	if err != nil {
 		return "", false, err
 	}
-	return notes[0].Detail, true, nil
+	for i := len(notes) - 1; i >= 0; i-- {
+		e := notes[i]
+		if e.By.Is(p) && !e.At.Before(since) {
+			return e.Detail, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // briefOf is the brief of a session's first prompt: the brief a hand-over

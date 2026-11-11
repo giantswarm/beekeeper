@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -343,11 +344,6 @@ work, which takes no choice on a self-hosted provider.`,
 					}
 				}
 			}
-			level, err := a.startEffort(name, a.selectionKind, effortLevel)
-			if err != nil {
-				return err
-			}
-			effortLevel = level
 			harness = a.defaultStartHarness(harness, model)
 			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
 				if err := a.requireStartModel(name, ""); err != nil {
@@ -361,7 +357,7 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			kind := startKind(review, ofSelfHosted)
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
 				if harness == harnessAuto {
 					base, ok = claudeHarness{}, true
@@ -509,6 +505,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
+				choiceEffort := ""
 				if harness == harnessAuto {
 					ch, err := pickAutoChoice(v, force)
 					if err != nil {
@@ -527,6 +524,7 @@ work, which takes no choice on a self-hosted provider.`,
 					}
 					harness = ch.Harness
 					model = ch.Model
+					choiceEffort = ch.Effort
 				}
 				if over != "" {
 					if _, err := fmt.Fprintf(a.out, "dry run over %s (--force)\n", over); err != nil {
@@ -540,7 +538,11 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				level, err := a.selectedEffort(name, a.selectionKind, harness, model, effortLevel, choiceEffort)
+				if err != nil {
+					return err
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: level, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -554,6 +556,7 @@ work, which takes no choice on a self-hosted provider.`,
 			var timerLine string
 			for {
 				gateFrom := time.Now()
+				choiceEffort := ""
 				curHarness, curModel := origHarness, origModel
 				over, v, err := a.startGateWithOptions(cmd.Context(), name, curHarness, curModel, builds, force, exclude, kind)
 				gateWait := time.Since(gateFrom)
@@ -580,6 +583,13 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 					if ch.Harness == omp.Harness && a.ompStartBrokered(ch.Model) {
+						level, err := a.selectedEffort(name, a.selectionKind, ch.Harness, ch.Model, effortLevel, ch.Effort)
+						if err != nil {
+							return err
+						}
+						if err := cmd.Flags().Set("effort", level); err != nil {
+							return err
+						}
 						if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
 							return err
 						}
@@ -587,6 +597,7 @@ work, which takes no choice on a self-hosted provider.`,
 					}
 					harness = ch.Harness
 					model = ch.Model
+					choiceEffort = ch.Effort
 					choiceLine = ch.line()
 				} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
 					return err
@@ -620,6 +631,10 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
+				level, err := a.selectedEffort(name, a.selectionKind, harness, model, effortLevel, choiceEffort)
+				if err != nil {
+					return err
+				}
 				h, _ := harnessByName(harness)
 				err = a.withKindAdmission(cmd.Context(), name, func() error {
 					// Admission must precede worktree creation: a refused start
@@ -630,7 +645,7 @@ work, which takes no choice on a self-hosted provider.`,
 							return err
 						}
 					}
-					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
+					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
 					if byTimer {
 						if timerLine == "" {
 							var err error
@@ -806,6 +821,7 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer && !strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
 				return &choiceView{
 					Harness:  cand.Harness,
+					Effort:   cand.Effort,
 					Model:    cand.Model,
 					Provider: cand.Provider,
 					Bucket:   cand.Bucket,
@@ -982,7 +998,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		id = uuid.NewString()
 	}
 	sp.brief = fillScratchpad(sp.brief, dir, id)
-	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Role: startRole(sp.role)}
+	s := state.Start{Kind: sp.kind, Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Role: startRole(sp.role)}
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -1578,10 +1594,6 @@ func (a *app) detachReopen(arg string) error {
 		return err
 	}
 	id := strings.TrimPrefix(arg, "local_")
-	if !a.desktopMode() {
-		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
-		return err
-	}
 	if s := a.readStop(); s != nil {
 		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(s))
 		return err
@@ -1641,6 +1653,10 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 			}
 			return nil
 		}
+	}
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
 	}
 	release, waits, err := a.holdReopen(id)
 	if err != nil {
@@ -2039,7 +2055,7 @@ func handClaims(st *state.State, dir lease.Dir, from, to state.Party) ([]string,
 func (a *app) explicitConfig() string {
 	p := a.cfgPath
 	if p == "" {
-		p = os.Getenv("BEEKEEPER_CONFIG")
+		p = os.Getenv(beekeeperConfigEnv)
 	}
 	if p == "" {
 		return ""
@@ -2420,7 +2436,7 @@ func launch(unit, dir, config string, stopPost, argv []string, env ...string) er
 // $BEEKEEPER_CONFIG, a scratch state it keeps as $BEEKEEPER_STATE_FROM, and
 // env (KEY=value) is added.
 func startUnit(u platform.Unit, config string, env ...string) error {
-	u.Env = append(u.Env, env...)
+	u.Env = github.DevctlEnv(append(u.Env, env...), !guardsEnabledForConfig(config))
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
 	}
@@ -2543,6 +2559,7 @@ func unitEnded(ctx context.Context, unit string) bool {
 }
 
 func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+	s.Kind = cmp.Or(s.Kind, a.selectionKind)
 	reg, err := recordStart(st, s, task, serves, live)
 	if err != nil {
 		return reg, err

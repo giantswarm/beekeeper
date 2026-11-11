@@ -101,15 +101,16 @@ func (g *GraphQL) Blocks(now time.Time) bool {
 }
 
 // RateLimited says err is GitHub refusing a request under a rate limit, in
-// gh's words: the hourly limit spent (REST's "API rate limit exceeded",
-// GraphQL's "API rate limit already exceeded") or a secondary limit.
+// gh's or go-github's words: the hourly limit spent ("API rate limit exceeded",
+// "GitHub rate limit exceeded", GraphQL's "API rate limit already exceeded")
+// or a secondary limit.
 func RateLimited(err error) bool {
 	if err == nil {
 		return false
 	}
 	words := strings.ToLower(err.Error())
-	return strings.Contains(words, "api rate limit") || strings.Contains(words, "secondary rate limit") ||
-		strings.Contains(words, "rate_limited")
+	return strings.Contains(words, "api rate limit") || strings.Contains(words, "github rate limit") ||
+		strings.Contains(words, "secondary rate limit") || strings.Contains(words, "rate_limited")
 }
 
 // SpentUntil is when the limit b reports spent at now resets: the later of
@@ -130,7 +131,7 @@ func (b Budget) SpentUntil(now time.Time) time.Time {
 // Token returns the token of the gh CLI's login.
 func Token(ctx context.Context) (string, error) {
 	c := exec.CommandContext(ctx, "gh", "auth", "token")
-	c.Env = ghEnv(os.Environ(), Repo(ctx))
+	c.Env = DevctlEnv(ghEnv(os.Environ(), Repo(ctx)), DevctlSkipVersionCheck())
 	out, err := c.Output()
 	if err != nil {
 		return "", fmt.Errorf("gh auth token: %w (log in with `gh auth login`)", err)

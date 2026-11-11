@@ -23,9 +23,8 @@ const (
 	// sweepListLimit is the most results GitHub's search returns: a list
 	// that long may stop short of the desk's open pull requests.
 	sweepListLimit = 1000
-	// sweepReadsPerPass bounds the pull requests the sweep reads anew in a
-	// pass, least recently read first: a pile of hundreds would otherwise
-	// keep every pass reading, and no review would start until it ended.
+	// sweepReadsPerPass bounds issue detail reads in delivery discovery.
+	// PR observations are batched by the independent watcher.
 	sweepReadsPerPass = 50
 	// sweepPileStep is how much the pile grows between the lines the loop
 	// says about it.
@@ -127,44 +126,7 @@ var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), 
 // tracked already, outside the desk, or owned by an agent the roster names
 // for them (parked on one, or its worker by name), which need no read.
 func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tracked []string) []string {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	now := l.a.timeNow()
-	if l.openPullsAt.IsZero() || now.Sub(l.openPullsAt) >= sweepListEvery {
-		authors := func() ([]string, error) {
-			if len(in.Desk.Authors) > 0 {
-				return in.Desk.Authors, nil
-			}
-			if l.login == "" {
-				login, err := readDeskLogin(ctx)
-				if err != nil {
-					return nil, err
-				}
-				l.login = login
-			}
-			return []string{l.login}, nil
-		}
-		// Discovery is delivery work: inventory and orphan detail scans
-		// must not spend its allowance and hide approved heads. The
-		// listing interval still bounds searches; shared floors still apply.
-		var open []string
-		err := l.a.loopGitHub(ctx, "pull discovery", func() (err error) {
-			open, err = readOpenPulls(ctx, authors, l.a.cfg.GitHub.AllowedOrgs)
-			return err
-		})
-		l.sweepIncomplete = err != nil || len(open) >= sweepListLimit
-		if err != nil {
-			// The last list stands. Retry next pass so a reset does not
-			// leave discovery waiting another full listing interval.
-			l.sayOnce("sweep list", "SUPERVISOR SWEEP cannot list the desk's open pull requests (%v): the last list stands", err)
-		} else {
-			l.clearSaid("sweep list")
-			l.openPulls = open
-		}
-		if err == nil {
-			l.openPullsAt = now
-		}
-	}
+	readLoopSweep(l, ctx, in)
 	var out []string
 	for _, ref := range l.openPulls {
 		if slices.ContainsFunc(tracked, func(t string) bool { return strings.EqualFold(t, ref) }) {
@@ -184,13 +146,6 @@ func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tra
 	// request gets its turn.
 	slices.SortStableFunc(out, func(a, b string) int { return l.pulls[a].at.Compare(l.pulls[b].at) })
 	return out
-}
-
-// sweepReadDue reports whether reading ref in this pass would ask GitHub:
-// an observation still fresh costs nothing and no place in the bound.
-func (l *supervisorLoop) sweepReadDue(ref string, changed time.Time) bool {
-	seen, ok := l.pulls[ref]
-	return !ok || !seen.changed.Equal(changed) || l.a.timeNow().Sub(seen.at) >= loopPullEvery
 }
 
 // ownerlessSince opens the detail of a loopOwnerlessVerb line that starts

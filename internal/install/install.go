@@ -93,6 +93,11 @@ func Install(ctx context.Context, e Env) error {
 			return err
 		}
 	}
+	if !e.RecoveryOnly && (m.CodexSkillsDir != "" || m.AgySkillsDir != "") {
+		p.add("check", AgySkillsDir(e.StateDir), "complete embedded skills", func() error {
+			return CheckSkillMirror(e.StateDir)
+		})
+	}
 	e.planConfig(p, &m)
 	if e.BeforeServices != nil {
 		p.add("record", e.StateDir, "validated recovery admission", e.BeforeServices)

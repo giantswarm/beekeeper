@@ -156,6 +156,7 @@ func mergeStart(dst, src state.Start) state.Start {
 	if dst.At.IsZero() {
 		dst.At = src.At
 	}
+	dst.Kind = cmp.Or(dst.Kind, src.Kind)
 	dst.Mode = cmp.Or(dst.Mode, src.Mode)
 	dst.Background = dst.Background || src.Background
 	dst.Dir = cmp.Or(dst.Dir, src.Dir)

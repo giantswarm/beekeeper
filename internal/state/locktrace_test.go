@@ -12,7 +12,7 @@ import (
 func TestLockTimingRecordsReleasedHolds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "holds.jsonl")
-	t.Setenv("BEEKEEPER_STATE_LOCK_TRACE", path)
+	t.Setenv(lockTraceEnv, path)
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestLockTimingRecordsReleasedHolds(t *testing.T) {
 		}
 		unlock()
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // trace path under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestLockTimingRecordsReleasedHolds(t *testing.T) {
 func TestLockTimingFailureDoesNotKeepLock(t *testing.T) {
 	dir := t.TempDir()
 	// An absent parent makes the optional trace unwritable.
-	t.Setenv("BEEKEEPER_STATE_LOCK_TRACE", filepath.Join(dir, "missing", "trace"))
+	t.Setenv(lockTraceEnv, filepath.Join(dir, "missing", "trace"))
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)

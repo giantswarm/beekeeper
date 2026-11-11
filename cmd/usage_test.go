@@ -121,9 +121,14 @@ cat "` + outFile + `"
 	t0 := keepNow
 	reset5h := t0.Add(2 * time.Minute).UTC()
 	reset7d := t0.Add(72 * time.Hour).UTC()
+	payloadRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = payloadRoot.Close() })
 	writePayload := func(s string) {
 		t.Helper()
-		if err := os.WriteFile(outFile, []byte(s), 0o600); err != nil {
+		if err := payloadRoot.WriteFile("payload.json", []byte(s), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1727,8 +1732,8 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 // TestCachedProvidersCapacityAndWatcherCurrentUsage verifies that:
 //   - cachedUsageCapacity treats any enabled provider with a missing, stale, or
 //     invalid reading as 0 floor and 0 ceiling (never falling back to raw k);
-//   - watcher.currentUsage propagates provider errors so watcher.capacity
-//     suppresses CAPACITY LOW when provider usage is unreadable;
+//   - watcher.currentUsage retains valid cached limits after a reader failure,
+//     and watchProvidersUsage clears the warning when a fresh reading arrives;
 //   - watchProvidersUsage with !w.chores reuses the resolved reading in memory
 //     even when w.store == nil.
 func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
@@ -1795,17 +1800,24 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		t.Fatalf("stale claude + fresh agy: derived=%d, u=%+v; want 2 and claude stale error", derived1.Ceiling, u1)
 	}
 
-	// 3. Make claude fresh as well, then set w.providerUsageErr["claude"] on watcher:
-	//    w.currentUsage returns error.
+	// 3. Keep a valid claude reading that is due for refresh. A failed refresh
+	//    retains its capacity and reports the last good reading's age.
 	freshClaude := usageReading{
 		At:       t0.Add(-1 * time.Minute),
 		FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
 	}
-	if err := store.WriteFile(usageProviderFile(claudeComm), freshClaude); err != nil {
+	refreshDueClaude := freshClaude
+	refreshDueClaude.At = t0.Add(-6 * time.Minute)
+	if err := store.WriteFile(usageProviderFile(claudeComm), refreshDueClaude); err != nil {
 		t.Fatal(err)
 	}
 	var watchOut bytes.Buffer
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut}
+	var probeCalls int
+	aWatch.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		probeCalls++
+		return usageReading{}, errors.New("endpoint timeout")
+	}
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
@@ -1816,8 +1828,19 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		t.Fatalf("watcher.currentUsage with providerUsageErr: kw=%d, uw=%+v", kw.Ceiling, uw)
 	}
 	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
-	if !strings.Contains(watchOut.String(), "last good read 1m") || !strings.Contains(watchOut.String(), "endpoint timeout") {
+	if !strings.Contains(watchOut.String(), "last good read 6m") || !strings.Contains(watchOut.String(), "endpoint timeout") || probeCalls != 1 {
 		t.Fatalf("watch lost fallback: %s", watchOut.String())
+	}
+
+	// A fresh reading from another caller clears the old warning without
+	// starting another provider probe during the cache lifetime.
+	if err := store.WriteFile(usageProviderFile(claudeComm), freshClaude); err != nil {
+		t.Fatal(err)
+	}
+	watchOut.Reset()
+	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
+	if w.providerUsageErr[claudeComm] != "" || strings.Contains(watchOut.String(), "last good read") || probeCalls != 1 {
+		t.Fatalf("fresh cache did not clear fallback without probing: calls=%d, error=%q, output=%s", probeCalls, w.providerUsageErr[claudeComm], watchOut.String())
 	}
 
 	// 4. Nit check: watchProvidersUsage with !w.chores and w.store == nil reuses the in-memory reading.
