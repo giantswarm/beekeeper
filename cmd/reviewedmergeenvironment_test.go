@@ -18,7 +18,15 @@ import (
 )
 
 func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
-	for _, mode := range []string{"quota then pass", "quota then CI", "quota persists", "code failure", "runner unavailable", "CI already green"} {
+	const (
+		modeQuotaPass        = "quota then pass"
+		modeQuotaCI          = "quota then CI"
+		modeQuotaPersists    = "quota persists"
+		modeCodeFailure      = "code failure"
+		modeRunnerDown       = "runner unavailable"
+		modeCIAlreadyGreen   = "CI already green"
+	)
+	for _, mode := range []string{modeQuotaPass, modeQuotaCI, modeQuotaPersists, modeCodeFailure, modeRunnerDown, modeCIAlreadyGreen} {
 		t.Run(mode, func(t *testing.T) {
 			repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, map[string]string{golangCILintYAML: "version: '2'\n"})
 			base := repo.advanceMain(t, repo.head1)
@@ -47,12 +55,12 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 					t.Fatalf("remote lint config is not worktree-relative: %v", argv)
 				}
 				switch {
-				case mode == "runner unavailable":
+				case mode == modeRunnerDown:
 					return false, 0
-				case mode == "code failure":
+				case mode == modeCodeFailure:
 					_, _ = fmt.Fprintln(runner.Stdout, "--- FAIL: TestCombinedRegression")
 					return true, 1
-				case mode == "quota persists" || len(commands) == 1:
+				case mode == modeQuotaPersists || len(commands) == 1:
 					_, _ = fmt.Fprintln(runner.Stdout, "compile: writing output: disk quota exceeded (typecheck)")
 					return true, 1
 				default:
@@ -63,24 +71,24 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 				if gotRepo != loopMergeRepo || gotBase != mainBranch || gotSHA != base || gotHead != repo.head2 || number != 8 {
 					t.Fatal("CI proof lost exact merge identity")
 				}
-				return mode == "CI already green" || mode == "quota then CI" && len(commands) > 0, nil
+				return mode == modeCIAlreadyGreen || mode == modeQuotaCI && len(commands) > 0, nil
 			}
 			checked, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
 			wantCode, wantDirs := 0, 2
 			switch mode {
-			case "code failure":
+			case modeCodeFailure:
 				wantCode, wantDirs = github.SquashRed, 1
-			case "quota persists", "runner unavailable":
+			case modeQuotaPersists, modeRunnerDown:
 				wantCode = github.SquashTooling
-			case "quota then CI":
+			case modeQuotaCI:
 				wantDirs = 1
-			case "CI already green":
+			case modeCIAlreadyGreen:
 				wantDirs = 0
 			}
 			if !checked || code != wantCode || len(dirs) != wantDirs {
 				t.Fatalf("checked=%v code=%d dirs=%v: %s", checked, code, dirs, reason)
 			}
-			if mode == "quota then pass" && (len(commands) != 3 || commands[2] != "go test -short ./...") {
+			if mode == modeQuotaPass && (len(commands) != 3 || commands[2] != "go test -short ./...") {
 				t.Fatalf("missing full-module check: %v", commands)
 			}
 			for _, dir := range dirs {
@@ -95,7 +103,7 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantFindings := 1
-			if mode == "code failure" || mode == "CI already green" {
+			if mode == modeCodeFailure || mode == modeCIAlreadyGreen {
 				wantFindings = 0
 			}
 			if len(events) != wantFindings {
@@ -113,9 +121,9 @@ func TestMergeCheckOverloadDoesNotRunLocalTools(t *testing.T) {
 	}
 	old := mergeLocalHeadroom
 	t.Cleanup(func() { mergeLocalHeadroom = old })
-	mergeLocalHeadroom = func(string) error { return errors.New("coordinator overloaded") }
+	mergeLocalHeadroom = func(string) error { return errors.New("coordinator host overloaded") }
 	reason, code := r.a.runReviewedMergeChecks(t.Context(), dir, "", mainBranch, loopHead)
-	if code != github.SquashTooling || !strings.Contains(reason, "coordinator overloaded") {
+	if code != github.SquashTooling || !strings.Contains(reason, "coordinator host overloaded") {
 		t.Fatalf("%d: %s", code, reason)
 	}
 }

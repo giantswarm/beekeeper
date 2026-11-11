@@ -45,7 +45,7 @@ func TestMergeCheckUsesExplicitWorktreeAndRemoteLint(t *testing.T) {
 					}
 					pods := corev1.PodList{}
 					if slices.Contains(a, "-l") {
-						pods.Items = []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "builder"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}}
+						pods.Items = []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "merge-builder-pod"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}}
 					}
 					return json.NewEncoder(out).Encode(pods)
 				case "create", "wait", "delete":
@@ -81,7 +81,7 @@ func TestMergeCheckUsesExplicitWorktreeAndRemoteLint(t *testing.T) {
 				t.Fatalf("unexpected call: %v", a)
 				return nil
 			}
-			handled, rc := r.TryMergeCheck(t.Context(), []string{"golangci-lint", "run", "--config", ".golangci.yaml", "./..."})
+			handled, rc := r.TryMergeCheck(t.Context(), []string{"golangci-lint", "run", "--config", ".golangci.yaml", testPackages})
 			if !handled {
 				t.Fatal("merge check allowed local fallback")
 			}
@@ -104,7 +104,7 @@ func TestBuilderReservesConfiguredScratchSpace(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	p := Job(c, "builder", "builder:test").Spec.Template.Spec
+	p := Job(c, "merge-builder", "builder:test").Spec.Template.Spec
 	resources := p.Containers[0].Resources
 	if resources.Requests.StorageEphemeral().String() != c.Storage || resources.Limits.StorageEphemeral().String() != c.Storage || p.Volumes[0].EmptyDir.SizeLimit.String() != c.Storage {
 		t.Fatal("scratch space not reserved and bounded")

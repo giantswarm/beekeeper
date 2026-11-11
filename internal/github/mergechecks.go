@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 )
 
 // MergeResultGreen proves required CI on GitHub's synthetic merge commit for
@@ -12,7 +13,7 @@ import (
 // Missing, stale, empty or unreadable evidence simply cannot avoid validation.
 func MergeResultGreen(ctx context.Context, run GH, repo, base, baseSHA, head string, number int) (bool, error) {
 	ctx = ActingOn(ctx, repo)
-	raw, err := run(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d", repo, number))
+	raw, err := run(ctx, ghAPI, reposPrefix+repo+"/pulls/"+strconv.Itoa(number))
 	if err != nil {
 		return false, err
 	}
@@ -32,7 +33,7 @@ func MergeResultGreen(ctx context.Context, run GH, repo, base, baseSHA, head str
 	if pull.Merge == "" || pull.Head.SHA != head || pull.Base.SHA != baseSHA || pull.Base.Ref != base {
 		return false, nil
 	}
-	raw, err = run(ctx, "api", "repos/"+repo+"/git/commits/"+pull.Merge)
+	raw, err = run(ctx, ghAPI, reposPrefix+repo+"/git/commits/"+pull.Merge)
 	if err != nil {
 		return false, err
 	}
@@ -50,7 +51,7 @@ func MergeResultGreen(ctx context.Context, run GH, repo, base, baseSHA, head str
 	}
 	// Include classic branch protection and effective rulesets. Keep App-bound
 	// contexts bound to their integration, even if a legacy context also exists.
-	raw, err = run(ctx, "api", "repos/"+repo+"/branches/"+url.PathEscape(base))
+	raw, err = run(ctx, ghAPI, reposPrefix+repo+"/branches/"+url.PathEscape(base))
 	if err != nil {
 		return false, err
 	}
@@ -81,7 +82,7 @@ func MergeResultGreen(ctx context.Context, run GH, repo, base, baseSHA, head str
 	for _, check := range branch.Protection.Required.Checks {
 		required = append(required, bypassCheck{Context: check.Context, IntegrationID: check.AppID})
 	}
-	rules, err := bypassPages[bypassRule](ctx, run, "repos/"+repo+"/rules/branches/"+url.PathEscape(base))
+	rules, err := bypassPages[bypassRule](ctx, run, reposPrefix+repo+"/rules/branches/"+url.PathEscape(base))
 	if err != nil {
 		return false, err
 	}
