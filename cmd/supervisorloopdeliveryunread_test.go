@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 func TestDeliveryPullsOutsideDeskAreNotTracked(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Ownership.Never = []string{"o/never"}
+	r.pulls[readableDeliveryPull] = superloop.Pull{Ref: readableDeliveryPull, URL: "https://github.com/o/r/pull/66", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	since := r.a.now.Add(-time.Hour)
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Deliveries = append(st.Deliveries,
