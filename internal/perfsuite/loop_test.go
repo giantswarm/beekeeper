@@ -16,9 +16,9 @@ import (
 )
 
 // loopIssue is the open issue that has the loop over its budgets today: on an
-// event log four times the size, an idle pass reads several times as much and
-// costs more CPU than the budget. Idle passes on the desk of record are within
-// their CPU and process budgets since its review-recovery backoff.
+// event log four times the size, an idle pass reads several times as much.
+// Idle passes are within their CPU and process budgets, including on the
+// grown event log.
 const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 
 // Loop budgets per pass of the supervisor loop on the desk of record. An
@@ -26,7 +26,7 @@ const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 // 30-second production interval its CPU is a few percent of one core.
 var (
 	loopIdleCPU      = limit{Max: 0.5}
-	loopGrownCPU     = limit{Max: loopIdleCPU.Max, Known: loopIssue}
+	loopGrownCPU     = limit{Max: loopIdleCPU.Max}
 	loopIdleRead     = limit{Max: 8}
 	loopIdleChildren = limit{Max: 5}
 	// The event log grows; an idle pass must not: at most this factor of
