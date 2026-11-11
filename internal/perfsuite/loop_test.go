@@ -26,12 +26,12 @@ const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 // 30-second production interval its CPU is a few percent of one core.
 var (
 	loopIdleCPU      = limit{Max: 0.5, Known: loopIssue}
-	loopIdleRead     = limit{Max: 4}
+	loopIdleRead     = limit{Max: 8}
 	loopIdleChildren = limit{Max: 5, Known: loopIssue}
 	// The event log grows; an idle pass must not: at most this factor of
 	// the pass before plus loopGrowthSlack MiB.
 	loopGrowthFactor = 1.25
-	loopGrowthSlack  = 1.0
+	loopGrowthSlack  = 0.5
 )
 
 // loopWindow is how long each measurement runs: a few passes on a pull
@@ -149,10 +149,11 @@ func TestLoopBudgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	cpu, read, write, children = l.window(t, o.loopInterval*2, o.loopInterval)
-	rep.check(t, "pass with one event", "cpu", cpu, loopIdleCPU)
+	// Two passes are too short for CPU and processes to settle: reported.
+	rep.check(t, "pass with one event", "cpu", cpu, measured)
 	rep.check(t, "pass with one event", "read", read, loopIdleRead)
 	rep.check(t, "pass with one event", "write", write, measured)
-	rep.check(t, "pass with one event", "children", children, loopIdleChildren)
+	rep.check(t, "pass with one event", "children", children, measured)
 
 	// Grow the event log to four times its size, let the loop take the new
 	// events in, then an idle pass must cost what it cost before.

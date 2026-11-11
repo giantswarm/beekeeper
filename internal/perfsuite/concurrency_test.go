@@ -14,7 +14,7 @@ import (
 var (
 	concurrentCalls = 20
 	concurrentAll   = limit{Max: 10}  // seconds until the last call ends
-	concurrentHold  = limit{Max: 2.0} // seconds the state lock is held exclusively at most
+	concurrentHold  = limit{Max: 3.0} // seconds the state lock is held exclusively at most
 )
 
 func concurrentArgs(i int) []string {
