@@ -13,8 +13,8 @@ const (
 	watchQueued       = "QUEUED"
 	watchStatusField  = "status"
 	watchNameField    = "name"
+	watchSuiteCursor  = "more"
 	watchMovedHead    = "moved head"
-	watchNextCursor   = "more"
 )
 
 func watchSuite(run, workflow int, status, conclusion string) map[string]any {
@@ -175,7 +175,7 @@ func TestPullWatcherIncompleteWorkflowSuitesStayUnread(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			fakePullGraphQL(t, func(query string, call int) map[string]any {
 				p := pullGraphQLFixture(t, query, checkSuccess, loopHead, watchFixtureUpdated)
-				page := map[string]any{pullHasNext: true, pullEndCursor: watchNextCursor}
+				page := map[string]any{pullHasNext: true, pullEndCursor: watchSuiteCursor}
 				if mode == "missing cursor" {
 					delete(page, pullEndCursor)
 				}
