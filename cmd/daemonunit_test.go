@@ -301,3 +301,41 @@ func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 		})
 	}
 }
+
+func TestDaemonMigrationIncludesForeignServicesAndScopes(t *testing.T) {
+	for _, unit := range []string{"claude-bg-daemon.service", "other-agent.service", "app-desktop.scope", "session-42.scope", "claude-daemon-old.service"} {
+		t.Run(unit, func(t *testing.T) {
+			table, cgroups := daemonTable()
+			foreign := filepath.Join(filepath.Dir(daemonNotifyCgroup), unit)
+			for _, pid := range []int{10, 11, 12} {
+				cgroups[pid] = foreign
+			}
+			cg := func(pid int) string { return cgroups[pid] }
+			found := daemonsInUnits(table, cg, func(string) []string { return []string{"MemoryMax 256M"} })
+			if len(found) != 1 || found[0].unit != unit || !slices.Equal(found[0].pids, []int{10, 11, 12}) {
+				t.Fatalf("foreign daemon not found: %+v", found)
+			}
+			old := plat.Machine
+			t.Cleanup(func() { plat.Machine = old })
+			plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) { return table, nil }}
+			store, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := &scopeLauncher{afterMove: func(pids []int, _ string) {
+				for _, pid := range pids {
+					cgroups[pid] = daemonOwnScope
+				}
+			}}
+			useLauncher(t, l)
+			a := &app{store: store}
+			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			if len(lines) != 1 || !strings.HasPrefix(lines[0], "moved ") || len(l.moved) != 1 {
+				t.Fatalf("migration: %v, moves %v", lines, l.moved)
+			}
+			if cgroups[13] != daemonRunScope || cgroups[20] != daemonNotifyCgroup || cgroups[30] != daemonNotifyCgroup {
+				t.Fatal("moved an unrelated process or an explicitly capped build")
+			}
+		})
+	}
+}

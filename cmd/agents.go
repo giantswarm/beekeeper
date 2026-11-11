@@ -776,8 +776,7 @@ const resumeMessage = "Your CLI stopped (a reboot or a crash). Re-query the live
 const endedResumeMessage = "Someone resumed you by hand. Re-query the live state of your task and continue it."
 
 // resumeHint is how a stopped agent comes back: a desktop session by
-// opening its row, a background one by claude --bg --resume, and another
-// harness through agents wake.
+// opening its row, a background one or another harness through agents wake.
 func resumeHint(ag state.Agent) string {
 	if _, _, ok := harnessForHost(ag.HostSession); ok || ag.Harness != "" && ag.Harness != claudeComm {
 		return fmt.Sprintf("beekeeper agents wake %q %q", ag.Name, resumeMessage)
@@ -785,7 +784,7 @@ func resumeHint(ag state.Agent) string {
 	if ag.HostSession != "" {
 		return "open " + continueURL(ag.HostSession)
 	}
-	return fmt.Sprintf("claude --bg --resume %s %q", ag.Session, resumeMessage)
+	return fmt.Sprintf("beekeeper agents wake %q %q", ag.Name, resumeMessage)
 }
 
 func boolInt(b bool) int {

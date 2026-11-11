@@ -3618,9 +3618,16 @@ which `claude agents`, `claude attach` and Remote Control show:
   in the calling unit (the standby watch's `beekeeper-notify.service` with its `MemoryMax` and
   `CPUQuota`, a wake's unit), whose limits every background session would share and whose stop
   would end them all. `beekeeper doctor`, and so the watch every tick, moves a daemon it finds in a
-  beekeeper unit, with the processes under it there, into a scope of its own
+  service or another app/session scope, with the processes under it there, into a scope of its own
   (`claude-daemon-<time>-<pid>.scope`) and says so in a `DOCTOR` line naming the unit and its
-  limits (`daemon.move` in the log); no session stops.
+  limits (`daemon.move` in the log); no session stops. Dedicated daemon scopes and explicit
+  build caps stay in place. Services are unsafe even with `Restart=on-failure`: an upgrade
+  can exit cleanly and leave the replacement daemon subject to the old service's stop.
+- **Independent guide recovery.** The standby checks CLI identities at least every 30 seconds,
+  outside the main watch's accounting and network work. After `guide.restartGrace` (one minute
+  by default), it resumes the guide or starts its successor, respecting stops and open relays.
+  The stopped-agent remedy is `beekeeper agents wake`, which cleans the environment and scopes
+  background resumes; never start the daemon through a raw resume in another session.
 - **On the roster at once.** The daemon chooses the session id (`--bg` ignores `--session-id`);
   `agents start` reads it from `claude agents --json` and records the start (`background: true`)
   and the roster entry, busy with `--task`, before it returns. No `agents assign` follows. The
