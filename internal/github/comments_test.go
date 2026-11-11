@@ -28,7 +28,7 @@ func TestLatestCommentsReadsTheTail(t *testing.T) {
 	if !slices.Contains(asked, "last=5") || !slices.Contains(asked, "number=7") || !strings.Contains(strings.Join(asked, " "), "comments(last:$last)") {
 		t.Errorf("asked %q", asked)
 	}
-	if len(cs) != 5 || !cs[0].Member || cs[0].Automation || cs[1].Member || cs[1].Automation || cs[1].Association != "NONE" ||
+	if len(cs) != 5 || !cs[0].Member || cs[0].Automation || cs[1].Member || cs[1].Automation || cs[1].Association != associationNone ||
 		!cs[2].Automation || !cs[3].Member || cs[3].Automation || !cs[4].Automation || cs[1].URL != "u2" || cs[0].Body != "waits on o/r#9" {
 		t.Errorf("comments %+v", cs)
 	}

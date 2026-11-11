@@ -130,7 +130,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if f.Repo != ref.Repo || f.PR != ref.N || f.By.Name != loopParty.Name {
 			continue
 		}
-		if f.Head != act.Head || staleMergeResultFailure(f.Reason, act.Head) || ghMergePolicyRefused(f.Reason) {
+		if f.Head != act.Head || staleMergeResultFailure(f.Reason, act.Head) || ghMergePolicyRefused(f.Reason) || github.RateLimited(errors.New(f.Reason)) {
 			// A different (or unknown legacy) head supplies no failure proof
 			// for this approved commit. Let the gate validate it again.
 			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
@@ -257,7 +257,14 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, oneLine(out))
 		return "", errLoopLater
 	}
-	if err == nil && (code == ExitGateUnread || code == ExitGateRefused) || mutationResult && code == github.SquashRefused {
+	// An unavailable read never authorizes a merge and is not a durable
+	// policy refusal. Reconsider it on a budget-admitted pass, so quota
+	// recovery does not wait for the generic exponential failure backoff.
+	if err == nil && (code == ExitGateUnread || code == ExitGateRefused && github.RateLimited(errors.New(out))) {
+		pending = "GitHub read unavailable; retrying when GitHub answers: " + oneLine(out)
+		return "", errLoopLater
+	}
+	if err == nil && code == ExitGateRefused || mutationResult && code == github.SquashRefused {
 		if mutationResult && reply.Reason != "" {
 			out = reply.Reason
 		}

@@ -1353,7 +1353,7 @@ func (g *gateRun) checkReviews(refuse func(code int, format string, args ...any)
 	}
 	why, err := g.reviewHold()
 	switch {
-	case err != nil && merge.Transient(err):
+	case err != nil && (merge.Transient(err) || github.RateLimited(err)):
 		return refuse(ExitGateUnread, "reading the reviews of %s failed in transit (%v), nothing merged: run the same command again once GitHub answers", g.key(), err)
 	case err != nil:
 		return refuse(ExitGateRefused, "the reviews of %s cannot be read (%v), nothing merged: run the same command again", g.key(), err)
