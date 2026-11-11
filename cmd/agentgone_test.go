@@ -366,7 +366,7 @@ func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
 	idleCodex := state.Agent{
 		Party:      state.Party{HostSession: codex.HostPrefix + "rev-codex", Name: "Review beekeeper 3394 x1"},
 		Harness:    codex.Harness,
-		Model:      "gpt-6.1-sol",
+		Model:      testGoneCodexModel,
 		Task:       "Review https://github.com/giantswarm/beekeeper/pull/3394",
 		Registered: now.Add(-10 * time.Minute),
 		ActivityAt: now.Add(-5 * time.Minute),
@@ -381,7 +381,7 @@ func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
 	staleIdleWorker := state.Agent{
 		Party:      state.Party{HostSession: codex.HostPrefix + "worker-codex", Name: "beekeeper 3394"},
 		Harness:    codex.Harness,
-		Model:      "gpt-6.1-sol",
+		Model:      testGoneCodexModel,
 		Task:       "Work https://github.com/giantswarm/beekeeper/issues/3394",
 		Registered: now.Add(-48 * time.Hour),
 		ActivityAt: now.Add(-25 * time.Hour),
@@ -445,13 +445,15 @@ func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
 	}
 }
 
+const testGoneCodexModel = "gpt-6.1-sol"
+
 func TestGoneAgentRecentRosterSkipsEndedTranscripts(t *testing.T) {
 	a, _ := stubApp(t)
 	const id = "codex-recent-roster"
 	ag := state.Agent{
 		Party:      state.Party{HostSession: codex.HostPrefix + id, Name: "beekeeper 3657 c1"},
 		Harness:    codex.Harness,
-		Model:      "gpt-6.1-sol",
+		Model:      testGoneCodexModel,
 		Task:       "Work https://github.com/giantswarm/beekeeper/issues/3657",
 		Registered: a.now.Add(-time.Hour),
 	}
