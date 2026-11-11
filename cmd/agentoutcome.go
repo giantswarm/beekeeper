@@ -145,7 +145,7 @@ func (a *app) recordTaskOutcome(st *state.State, ag state.Agent, outcome, eviden
 	prev := slices.Clone(st.Deliveries)
 	for _, i := range workerDeliveries(st, ag) {
 		d := &st.Deliveries[i]
-		if d.Outcome == state.OutcomeMerged && outcome == state.OutcomeParked {
+		if (d.Outcome == state.OutcomeMerged || !d.Active()) && outcome == state.OutcomeParked {
 			continue
 		}
 		if d.Outcome == outcome && d.Evidence == evidence {

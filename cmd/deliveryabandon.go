@@ -53,6 +53,7 @@ func abandonEndedDeliveries(st *state.State, now time.Time) []state.Event {
 			continue
 		}
 		d.Step, d.Since, d.Abandoned, d.Waits = state.DeliveryDropped, now, true, ""
+		d.Outcome, d.Evidence, d.OutcomeAt = state.DeliveryDropped, "worker ended without completion outcome", now
 		events = append(events, state.DeliveryEvents(nil, []state.Delivery{*d}, loopParty)...)
 	}
 	return events

@@ -62,12 +62,16 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 				t.Fatal(err)
 			}
 			d := st.Deliveries[0]
-			if d.Step != tc.step || d.Verdict != tc.verdict || d.Release != tc.out.Release {
+			if d.Step != tc.step || d.Verdict != tc.verdict || d.Release != tc.out.Release || d.Outcome != state.OutcomeMerged || d.Evidence == "" {
 				t.Fatalf("%+v", d)
 			}
 			events, err := store.Events(0, func(e state.Event) bool { return e.Verb == state.DeliveryStepVerb })
 			if err != nil || len(events) != 1 {
 				t.Fatalf("events: %+v %v", events, err)
+			}
+			var recorded state.Delivery
+			if err := json.Unmarshal([]byte(events[0].Detail), &recorded); err != nil || recorded.Outcome != state.OutcomeMerged || recorded.Evidence == "" {
+				t.Fatalf("event: %+v %v", recorded, err)
 			}
 		})
 	}
@@ -244,6 +248,9 @@ func TestDeliveryStatsWindowAndDuplicates(t *testing.T) {
 	var events []state.Event
 	add := func(ref, step string, at time.Time) {
 		d := state.Delivery{Ref: ref, Step: step, Since: at, Started: since}
+		if step == state.DeliveryDone {
+			d.Outcome = state.OutcomeMerged
+		}
 		raw, _ := json.Marshal(d)
 		events = append(events, state.Event{Verb: state.DeliveryStepVerb, At: at, Detail: string(raw)})
 	}
@@ -509,6 +516,15 @@ func TestDeliveryLoopWritesBeforeActionsAndRestart(t *testing.T) {
 	r.answer = answer
 	r.pass(t)
 	events, _ := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == state.DeliveryStepVerb })
+	for _, e := range events {
+		var d state.Delivery
+		if err := json.Unmarshal([]byte(e.Detail), &d); err != nil {
+			t.Fatal(err)
+		}
+		if !d.Active() && (d.Outcome == "" || d.Evidence == "") {
+			t.Fatalf("terminal event missing outcome or evidence: %+v", d)
+		}
+	}
 	r.pass(t)
 	after, _ := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == state.DeliveryStepVerb })
 	if len(events) != len(after) {
