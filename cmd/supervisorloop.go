@@ -1133,6 +1133,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 	if d <= 0 {
 		return ctx.Err() == nil
 	}
+	changes, closeChanges := state.Changes(ctx, filepath.Join(l.a.store.Dir(), "state.json"), filepath.Join(l.a.store.Dir(), "events.jsonl"))
+	defer closeChanges()
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	const checkEvery = time.Second
@@ -1140,6 +1142,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-changes:
+			return pauseChange(ctx)
 		case <-timer.C:
 			return true
 		}
@@ -1150,6 +1154,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-changes:
+			return pauseChange(ctx)
 		case <-timer.C:
 			return true
 		case <-ticker.C:

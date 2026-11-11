@@ -2029,6 +2029,17 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if host != "" && host != executionLocal {
+				h, err := a.executionHost(host)
+				if err != nil {
+					return err
+				}
+				unlock, err := a.probeLock("capacity-host-" + unsafeKey.ReplaceAllString(string(h.Identity), "_") + ".lock")
+				if err != nil {
+					return refused("capacity: %v", err)
+				}
+				defer unlock()
+			}
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
 			if a.selectionKind == taskKindReview {
 				review = true
@@ -2036,7 +2047,7 @@ nothing; it makes no GitHub call.`,
 			if a.selectionAuthor != "" && !review && !ofSelfHosted {
 				return usageErr(authorNeedsReview)
 			}
-			st, err := a.store.Read()
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
@@ -2046,7 +2057,7 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
 					return err
@@ -2071,7 +2082,7 @@ nothing; it makes no GitHub call.`,
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
-			events, err := a.store.Follow("capacity-activity", func(e state.Event) bool {
+			events, err := state.FollowSnapshot(a.store, "capacity-activity", "v1", func(e state.Event) bool {
 				return e.Verb == agentWakeEvent || e.Verb == resumedEvent || e.Verb == transcriptResumeEvent
 			})
 			if err != nil {
@@ -2493,7 +2504,7 @@ func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude
 }
 
 func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, kind startFor, wantModel string) (*capacityView, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
