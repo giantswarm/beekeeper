@@ -168,6 +168,23 @@ func unansweredReviews(ctx context.Context, gh GH, repo string, n int, head, aut
 // before devctl pr merge runs, whose guard drops a request for changes once
 // a commit or a reply is newer.
 func ReviewGuard(ctx context.Context, gh GH, repo string, n int) (string, []UnansweredReview, error) {
+	ctx = ActingOn(ctx, repo)
+	f, author, caller, graphErr := graphReviewFeedback(ctx, gh, repo, n)
+	if graphErr == nil {
+		open := f.unanswered(author.Login, caller)
+		if len(open) == 0 {
+			return "", open, nil
+		}
+		return reviewRefusal(open, answerers(author.Login, author.automation(), caller)), open, nil
+	}
+	why, open, restErr := reviewGuardREST(ctx, gh, repo, n)
+	if restErr != nil {
+		return "", nil, errors.Join(graphErr, restErr)
+	}
+	return why, open, nil
+}
+
+func reviewGuardREST(ctx context.Context, gh GH, repo string, n int) (string, []UnansweredReview, error) {
 	me, err := gh(ctx, "api", "user", "--jq", ".login")
 	if err != nil {
 		return "", nil, err

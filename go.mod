@@ -14,7 +14,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/giantswarm/go-selfupdate v1.7.7
 	github.com/giantswarm/mcp-toolkit v0.5.3
-	github.com/giantswarm/selfupdate-cosign v0.3.27
+	github.com/giantswarm/selfupdate-cosign v0.3.28
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-logr/logr v1.4.4
 	github.com/godbus/dbus/v5 v5.2.4

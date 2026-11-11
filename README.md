@@ -2023,6 +2023,12 @@ verdict, which newer commits and replies leave standing and only their approval 
 clears, or a `COMMENTED` review or comment newer than the head and unanswered by the author or the
 caller since (devctl's review guard drops a request for changes once a commit or reply is newer);
 the author's and automation's own feedback holds nothing, and a read failing in transit is 74.
+The review guard reads its login and all feedback through GraphQL, with a full
+REST fallback when GraphQL cannot answer. Both paths paginate all feedback and
+apply the same review rules; partial reads never authorize a merge. A rate limit
+is also an unread result (74). The supervisor retries unread merge gates on a
+budget-admitted pass instead of applying its general failure backoff, including
+quota refusals recorded by an older version.
 `beekeeper gate check <owner/repo> <n>` is that read alone, the gate's dry path: 77 naming the
 reviewer, 74 unread, 0 when the reviews let the merge through; nothing queues or is logged.
 `beekeeper gate runs` lists every run the gate runs outside its caller (a running merge or

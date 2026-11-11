@@ -19,6 +19,7 @@ type Config struct {
 	Namespace        string            `yaml:"namespace"`
 	Images           map[string]string `yaml:"images"`
 	CPU              string            `yaml:"cpu"`
+	Storage          string            `yaml:"storage"`
 	Memory           string            `yaml:"memory"`
 	MaxPods          int               `yaml:"maxPods"`
 	PlacementTimeout time.Duration     `yaml:"placementTimeout"`
@@ -33,6 +34,9 @@ func (c Config) Defaults() Config {
 	}
 	if c.Memory == "" {
 		c.Memory = "4Gi"
+	}
+	if c.Storage == "" {
+		c.Storage = "30Gi"
 	}
 	if c.MaxPods == 0 {
 		c.MaxPods = 8
@@ -61,7 +65,7 @@ func (c Config) Validate() error {
 	if c.MaxPods < 1 || c.PlacementTimeout < time.Second || c.IdleTimeout < time.Minute {
 		return errors.New("run.remote requires positive maxPods, placementTimeout >= 1s and idleTimeout >= 1m")
 	}
-	for key, value := range map[string]string{"cpu": c.CPU, "memory": c.Memory} {
+	for key, value := range map[string]string{"cpu": c.CPU, "memory": c.Memory, "storage": c.Storage} {
 		q, err := resource.ParseQuantity(value)
 		if err != nil || q.Sign() <= 0 {
 			return fmt.Errorf("run.remote.%s must be a positive resource quantity", key)

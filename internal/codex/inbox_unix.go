@@ -169,3 +169,30 @@ func Confirm(inbox string) error {
 func openInboxRDWR(inbox string) (*os.File, error) {
 	return os.OpenFile(inbox, os.O_RDWR|syscall.O_CLOEXEC, 0) //nolint:gosec // inbox path under state directory
 }
+
+// closeIfIdle closes fifo while holding inbox's lock when no undelivered or
+// inflight message remains in the persistent queue. Closing fifo under the
+// lock ensures a concurrent Send either queues its message before the runner
+// exits or receives ErrNotRunning so the caller wakes the session anew.
+func closeIfIdle(inbox string, fifo *os.File) (bool, error) {
+	var closed bool
+	err := withLock(inbox, func() error {
+		q, err := readQueue(inbox)
+		if err != nil {
+			return err
+		}
+		if q.Inflight != "" && !isDelivered(&q, q.InflightID) {
+			return nil
+		}
+		for _, m := range q.Messages {
+			if !isDelivered(&q, m.ID) {
+				return nil
+			}
+		}
+		_, _ = fifo.Write([]byte{'\n'})
+		_ = fifo.Close()
+		closed = true
+		return nil
+	})
+	return closed, err
+}

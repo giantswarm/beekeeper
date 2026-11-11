@@ -283,15 +283,7 @@ var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 var readDeskLogin = func(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "api", "user", "--jq", ".login")
-	if err != nil {
-		return "", err
-	}
-	login := strings.TrimSpace(string(out))
-	if login == "" {
-		return "", errors.New("gh api user answers no login")
-	}
-	return login, nil
+	return github.ViewerLogin(ctx, github.RunGH)
 }
 
 // readTeams reads supervisor.ownership.teamFiles: the team that owns each
@@ -960,16 +952,18 @@ func (l *supervisorLoop) liveOpen(ctx context.Context, ref string) bool {
 // owner/repo#n: "" without one, once its session ended or once it waits
 // for "done".
 func loopServes(st *state.State, ag state.Agent) string {
-	i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(ag.Party) })
-	if i < 0 {
+	for i := range st.Records {
+		r := &st.Records[i]
+		if !r.Session.Is(ag.Party) {
+			continue
+		}
+		if !r.Ended.IsZero() || strings.HasPrefix(strings.ToLower(r.Waits), "done") {
+			return ""
+		}
+		if ref, ok := parseRef(r.Issue); ok {
+			return refName(ref)
+		}
 		return ""
-	}
-	r := st.Records[i]
-	if !r.Ended.IsZero() || strings.HasPrefix(strings.ToLower(r.Waits), "done") {
-		return ""
-	}
-	if ref, ok := parseRef(r.Issue); ok {
-		return refName(ref)
 	}
 	return ""
 }
@@ -1145,7 +1139,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 // holder released it.
 func lockBusy(err error) bool {
 	var busy *state.LockBusyError
-	return errors.As(err, &busy)
+	return errors.As(err, &busy) || errors.Is(err, execution.ErrCoordinatorBusy)
 }
 
 // waitNextPass waits for LoopInterval, ctx.Done(), or a replaced binary so
@@ -1641,7 +1635,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	st, err := a.store.Read()
+	readState := a.store.Read
+	if l.dryRun {
+		readState = a.store.Peek
+	}
+	st, err := readState()
 	if err != nil {
 		return err
 	}
@@ -1731,9 +1729,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	l.lifecyclePhase(loopPhaseContinueParks)
-	st, err = a.store.Read()
-	if err != nil {
-		return err
+	if !l.dryRun {
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
 	}
 	if err := l.continueParks(ctx, st); err != nil {
 		return err
@@ -1742,9 +1742,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	l.lifecyclePhase(loopPhaseRecoverParks)
-	st, err = a.store.Read()
-	if err != nil {
-		return err
+	if !l.dryRun {
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
 	}
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
@@ -1753,9 +1755,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	l.lifecyclePhase(loopPhaseRecoverReviews)
-	st, err = a.store.Read()
-	if err != nil {
-		return err
+	if !l.dryRun {
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
 	}
 	if err := l.recoverReviewRequests(ctx, st); err != nil {
 		return err
@@ -1764,16 +1768,20 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	l.lifecyclePhase(loopPhaseEndReviews)
-	st, err = a.store.Read()
-	if err != nil {
-		return err
+	if !l.dryRun {
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
 	}
 	if err := l.endReviewWorkers(ctx, st); err != nil {
 		return err
 	}
-	st, err = a.store.Read()
-	if err != nil {
-		return err
+	if !l.dryRun {
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
 	}
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
@@ -1969,7 +1977,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	})
 	sortTrackedPulls(in, tracked)
 	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
-	if l.once && l.a.loopNow != nil && !l.dryRun {
+	if l.once && l.a.loopNow != nil && !l.dryRun || l.dryRun && l.pullWatcher().needsPoll(tracked, in.Now) {
 		pollOncePullWatcher(ctx, l)
 	}
 	// The sweep reads the desk's open pull requests that nothing tracks:
@@ -2284,7 +2292,10 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 		return nil
 	}
 
-	if l.a.timeNow().Before(failures[act.Key].RetryAt) {
+	// Older versions backed quota-only merge refusals off for up to an
+	// hour. Fresh budget admission and the gate decide when they can retry.
+	quotaRetry := act.Kind == superloop.KindGo && github.RateLimited(errors.New(failures[act.Key].Message))
+	if l.a.timeNow().Before(failures[act.Key].RetryAt) && !quotaRetry {
 		l.mu.Unlock()
 		return nil
 	}

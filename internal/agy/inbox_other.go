@@ -2,7 +2,10 @@
 
 package agy
 
-import "errors"
+import (
+	"errors"
+	"os"
+)
 
 var errNoFIFO = errors.New("agy agents need a FIFO inbox, which this platform lacks")
 
@@ -20,9 +23,10 @@ func drainHook(string, string) ([]string, error) { return nil, errNoFIFO }
 // Confirm refuses: no FIFO here.
 func Confirm(string) error { return errNoFIFO }
 
-func popInflight(string) (string, bool, error) { return "", false, errNoFIFO }
-func finishTurn(string) error                  { return errNoFIFO }
-func restoreInflight(string) error             { return errNoFIFO }
+func popInflight(string) (string, bool, error)   { return "", false, errNoFIFO }
+func finishTurn(string) error                    { return errNoFIFO }
+func restoreInflight(string) error               { return errNoFIFO }
+func closeIfIdle(string, *os.File) (bool, error) { return false, errNoFIFO }
 
 // RemoveInbox has nothing to remove: no FIFO here.
 func RemoveInbox(string) (bool, error) { return false, nil }

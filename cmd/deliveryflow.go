@@ -27,6 +27,9 @@ type deliveryFlow struct {
 var externalDeliveryWait = regexp.MustCompile(`(?i)\b(?:physical visit|technician|site visit|external party|on.?site measurement|physical measurement)\b`)
 
 func deliveryMatches(d state.Delivery, ref string) bool {
+	if ref == "" {
+		return false
+	}
 	if r, ok := parseRef(ref); ok {
 		ref = refName(r)
 	}
