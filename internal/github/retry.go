@@ -189,8 +189,9 @@ func isRead(args []string) bool {
 }
 
 // answersJSON says whether gh args print GitHub's JSON as it is: gh api
-// without a filter, a template, --silent, --include, --paginate or a
-// non-JSON Accept, or a command's --json without a filter.
+// without a filter, a template, --silent, --include, --paginate,
+// --allow-escape-sequences, a /logs endpoint or a non-JSON Accept, or a
+// command's --json without a filter.
 func answersJSON(args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -235,13 +236,14 @@ func parseAPI(args []string) apiCall {
 		if !strings.HasPrefix(x, "-") {
 			if a.endpoint == "" {
 				a.endpoint = x
+				a.shaped = a.shaped || strings.HasSuffix(x, "/logs")
 			}
 			continue
 		}
 		name, value, inline := strings.Cut(x, "=")
 		if !apiValued[name] {
 			switch name {
-			case "--silent", "-i", "--include", "--paginate":
+			case "--silent", "-i", "--include", "--paginate", "--allow-escape-sequences":
 				a.shaped = true
 			}
 			continue
