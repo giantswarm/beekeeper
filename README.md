@@ -33,6 +33,9 @@ Codex reviewers without a worker GitHub App. On an execution host,
 `beekeeper agents review` reads the assigned PR and its closing issues,
 `--diff` reads the diff, and `--body-file <file>` posts the exact-head comment
 review through the coordinator for merge authorization.
+These execution forms take no PR reference: the assigned review supplies the
+target. On the coordinator, `beekeeper agents review <owner/repo>#<n>` starts
+an independent review; its flags cannot be mixed with `--diff` or `--body-file`.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
