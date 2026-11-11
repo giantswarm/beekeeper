@@ -25,6 +25,8 @@ import (
 // branch moves; a seam for tests.
 var reviewedMergeCheck = checkReviewedMerge
 
+var reviewedMergeCI = github.MergeResultGreen
+
 // checkReviewedMergeResult verifies that merging head into p.Base is green
 // when p.Base has moved ahead of head, and re-checks desk stop and hold
 // policy after the check completes. A non-zero code refuses the merge with
@@ -95,9 +97,37 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	if _, err := runGit(ctx, repoDir, "merge-base", "--is-ancestor", baseSHA, head); err == nil {
 		return false, "", 0
 	}
+	// Prefer proof of the exact combination from CI to repeating it on the desk.
+	if green, _ := reviewedMergeCI(ctx, github.RunGH, ref.Repo, p.Base, baseSHA, head, ref.N); green {
+		return true, "", 0
+	}
+	for attempt := 0; ; attempt++ {
+		reason, code := a.checkReviewedMergeAttempt(ctx, repoDir, baseSHA, p, head)
+		if code != github.SquashTooling {
+			return true, reason, code
+		}
+		if attempt == 0 {
+			if err := a.recordMergeEnvironment(p, head, reason); err != nil {
+				return true, mergeValidationUnavailable("recording environment finding: %v", err), github.SquashTooling
+			}
+		}
+		// CI may have completed while this checker failed. It still must name
+		// this base and head; the later merge gate rechecks policy and authority.
+		if green, _ := reviewedMergeCI(ctx, github.RunGH, ref.Repo, p.Base, baseSHA, head, ref.N); green {
+			return true, "", 0
+		}
+		if attempt == 1 || ctx.Err() != nil {
+			return true, reason, code
+		}
+	}
+}
+
+// Each attempt owns a new worktree and remote builder, never a failed cache or
+// temporary directory from the previous attempt.
+func (a *app) checkReviewedMergeAttempt(ctx context.Context, repoDir, baseSHA string, p superloop.Pull, head string) (string, int) {
 	mbOut, err := runGit(ctx, repoDir, "merge-base", baseSHA, head)
 	if err != nil {
-		return true, mergeValidationUnavailable("reading merge base: %v", err), github.SquashTooling
+		return mergeValidationUnavailable("reading merge base: %v", err), github.SquashTooling
 	}
 	mb := strings.TrimSpace(string(mbOut))
 
@@ -107,14 +137,14 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	parentDir, err := filepath.Abs(filepath.Join(cmp.Or(stateDir, os.TempDir()), "merge-check"))
 	if err != nil {
-		return true, "resolving merge-check directory: " + err.Error(), github.SquashTooling
+		return "resolving merge-check directory: " + err.Error(), github.SquashTooling
 	}
 	if err := os.MkdirAll(parentDir, 0o700); err != nil {
-		return true, "creating merge-check directory: " + err.Error(), github.SquashTooling
+		return "creating merge-check directory: " + err.Error(), github.SquashTooling
 	}
 	tmpDir, err := os.MkdirTemp(parentDir, "pr-*")
 	if err != nil {
-		return true, "creating merge-check worktree: " + err.Error(), github.SquashTooling
+		return "creating merge-check worktree: " + err.Error(), github.SquashTooling
 	}
 	defer func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -123,7 +153,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 		_ = os.RemoveAll(tmpDir) //nolint:gosec // owned temporary worktree under state directory
 	}()
 	if _, err := runGit(ctx, repoDir, "worktree", loopAdd, "--force", "--detach", tmpDir, baseSHA); err != nil {
-		return true, "creating merge-check worktree: " + err.Error(), github.SquashTooling
+		return "creating merge-check worktree: " + err.Error(), github.SquashTooling
 	}
 	// The merge commit is thrown away, so the machine's signing setup never applies.
 	if _, err := runGit(ctx, tmpDir, "-c", "user.name=Beekeeper", "-c", "user.email=beekeeper@giantswarm.io", "-c", "commit.gpgsign=false", gitMerge, "--no-ff", "--no-edit", head); err != nil {
@@ -131,12 +161,12 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 		// because the checker cannot write, start a hook or create a commit.
 		unmerged, readErr := runGit(ctx, tmpDir, "diff", "--name-only", "--diff-filter=U")
 		if readErr == nil && strings.TrimSpace(string(unmerged)) != "" {
-			return true, "branch conflicts with its base", github.SquashNotApplicable
+			return "branch conflicts with its base", github.SquashNotApplicable
 		}
-		return true, mergeValidationUnavailable("creating merge result: %v", err), github.SquashTooling
+		return mergeValidationUnavailable("creating merge result: %v", err), github.SquashTooling
 	}
-	reason, code := runReviewedMergeChecks(ctx, tmpDir, mb, p.Base, head)
-	return true, reason, code
+	reason, code := a.runReviewedMergeChecks(ctx, tmpDir, mb, p.Base, head)
+	return reason, code
 }
 
 // findReviewedRepoDir locates a local git checkout or worktree whose origin
@@ -229,13 +259,19 @@ func hasReviewedCommit(ctx context.Context, repoDir, rev string) bool {
 // runReviewedMergeChecks runs repository-configured golangci-lint and go test on the Go
 // module in worktreeDir, including reverse dependents and unchanged tests.
 func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, head string) (string, int) {
+	return runReviewedMergeChecksWith(ctx, worktreeDir, baseBranch, head, runMergeCheckCmd, true)
+}
+
+type mergeCheckCommand func(context.Context, string, string, ...string) (string, error)
+
+func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseBranch, head string, run mergeCheckCommand, local bool) (string, int) {
 	if _, err := os.Stat(filepath.Join(worktreeDir, "go.mod")); err != nil {
 		return "", 0
 	}
 	// Whole-module checks include unchanged tests, reverse dependents and
 	// dependency-only changes. Filename correspondence cannot prove coverage.
 	pkgs := []string{"./..."}
-	if _, err := exec.LookPath("golangci-lint"); err != nil {
+	if _, err := exec.LookPath("golangci-lint"); local && err != nil {
 		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
 	}
 	// Never approximate a repository's linter policy with a separate check or
@@ -247,14 +283,18 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, hea
 	if configName == "" {
 		lintArgs = append(lintArgs, "--no-config")
 	} else {
-		lintArgs = append(lintArgs, "--config", filepath.Join(worktreeDir, configName))
+		configPath := configName
+		if local {
+			configPath = filepath.Join(worktreeDir, configName)
+		}
+		lintArgs = append(lintArgs, "--config", configPath)
 		configLabel = configName
 	}
 	// Independent merge worktrees may lint concurrently with other workers.
 	// Avoid the host-wide runner lock without suppressing lint findings.
 	lintArgs = append(lintArgs, "--allow-parallel-runners")
 	lintArgs = append(lintArgs, pkgs...)
-	if out, err := runMergeCheckCmd(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
+	if out, err := run(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
@@ -262,7 +302,7 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, hea
 	}
 	// Keep heavyweight live canaries in full CI, outside the coordinator merge
 	// path. Short mode still checks every package and its reverse dependents.
-	if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", goTestSubcmd, "-short", "./..."); err != nil {
+	if out, err := run(ctx, worktreeDir, "go", goTestSubcmd, "-short", "./..."); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
@@ -297,13 +337,17 @@ const goTestSubcmd = "test"
 var mergeCheckTimeout = 30 * time.Minute
 
 func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
+	return runMergeCheckCmdEnv(ctx, dir, nil, name, args...)
+}
+
+func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, mergeCheckTimeout)
 	defer cancel()
 	var buf bytes.Buffer
 	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
 	c.Dir = dir
 	// Git diagnostics and tests must not inherit the desk's language.
-	c.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=C")
+	c.Env = append(append(os.Environ(), "LC_ALL=C", "LANGUAGE=C"), env...)
 	c.Stdout, c.Stderr = &buf, &buf
 	mergeCheckGroup(c)
 	c.WaitDelay = 5 * time.Second
@@ -316,7 +360,7 @@ func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (st
 		// Starting a missing/unusable tool, cancellation and a killed process
 		// describe this checker, not a defect in the reviewed branch.
 		if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() < 0 || mergeCheckHostFailure(buf.String()) {
-			err = fmt.Errorf("%w: %w: %s", errMergeCheckEnvironment, err, summarizeMergeCheckOutput(buf.String()))
+			err = fmt.Errorf("%w: %w: %s; %s", errMergeCheckEnvironment, err, mergeCheckHostDiagnostic(buf.String()), summarizeMergeCheckOutput(buf.String()))
 		}
 	}
 	return buf.String(), err
@@ -324,18 +368,21 @@ func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (st
 
 // These toolchain diagnostics identify host resource failures even when the
 // top-level go/lint command exits normally with status 1 or 2.
-func mergeCheckHostFailure(out string) bool {
+func mergeCheckHostFailure(out string) bool { return mergeCheckHostDiagnostic(out) != "" }
+
+func mergeCheckHostDiagnostic(out string) string {
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",
 		"cannot allocate memory", "signal: killed",
 		"resource temporarily unavailable", "too many open files",
 		"runtime: failed to create new OS thread",
+		"isolated workspace clone failed", "command not found",
 	} {
 		if strings.Contains(out, diagnostic) {
-			return true
+			return diagnostic
 		}
 	}
-	return false
+	return ""
 }
 
 var (

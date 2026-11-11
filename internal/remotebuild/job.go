@@ -31,7 +31,7 @@ func Job(c Config, name, image string) *batchv1.Job {
 	labels := map[string]string{"app.kubernetes.io/name": appLabel}
 	return &batchv1.Job{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: c.Namespace, Labels: labels, Annotations: map[string]string{"beekeeper.dev/builder-spec": fmt.Sprintf("%x", sha256.Sum256([]byte(image+"\x00"+c.CPU+"\x00"+c.Memory+"\x00"+c.IdleTimeout.String()+"\x00"+watchdog+cacheSpec)))}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: c.Namespace, Labels: labels, Annotations: map[string]string{"beekeeper.dev/builder-spec": fmt.Sprintf("%x", sha256.Sum256([]byte(image+"\x00"+c.CPU+"\x00"+c.Memory+"\x00"+c.Storage+"\x00"+c.IdleTimeout.String()+"\x00"+watchdog+cacheSpec)))}},
 		Spec: batchv1.JobSpec{BackoffLimit: ptr.To(int32(0)), TTLSecondsAfterFinished: ptr.To(int32(60)), Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: ptr.To(false), TerminationGracePeriodSeconds: ptr.To(int64(10)),
@@ -39,21 +39,22 @@ func Job(c Config, name, image string) *batchv1.Job {
 				SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(1000)), RunAsGroup: ptr.To(int64(1000)), FSGroup: ptr.To(int64(1000)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 				Containers: []corev1.Container{{Name: "builder", Image: image, Command: []string{shellBash, "-c", watchdog}, Env: append([]corev1.EnvVar{
 					{Name: "IDLE", Value: strconv.FormatInt(int64(c.IdleTimeout.Seconds()), 10)},
+					{Name: "TMPDIR", Value: "/work/tmp"}, {Name: "GOTMPDIR", Value: "/work/tmp"},
 					{Name: "GOCACHE", Value: "/work/go-cache"}, {Name: "GOMODCACHE", Value: "/work/go-mod"},
 					{Name: "CARGO_TARGET_DIR", Value: "/work/target"}, {Name: "CARGO_HOME", Value: "/work/cargo"},
 					{Name: "GOMAXPROCS", Value: strconv.FormatInt(max(1, cpu.MilliValue()/1000), 10)},
 					{Name: "CARGO_BUILD_JOBS", Value: strconv.FormatInt(max(1, cpu.MilliValue()/1000), 10)},
-				}, c.Cache.env()...), Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(c.CPU), corev1.ResourceMemory: resource.MustParse(c.Memory)}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(c.CPU), corev1.ResourceMemory: resource.MustParse(c.Memory)}},
+				}, c.Cache.env()...), Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(c.CPU), corev1.ResourceMemory: resource.MustParse(c.Memory), corev1.ResourceEphemeralStorage: resource.MustParse(c.Storage)}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(c.CPU), corev1.ResourceMemory: resource.MustParse(c.Memory), corev1.ResourceEphemeralStorage: resource.MustParse(c.Storage)}},
 					SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 					VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: "/work"}},
-				}}, Volumes: []corev1.Volume{{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resource.MustParse("30Gi"))}}}},
+				}}, Volumes: []corev1.Volume{{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resource.MustParse(c.Storage))}}}},
 			},
 		}},
 	}
 }
 
 const watchdog = `set -eu
-mkdir -p /work/runs /work/src; touch /work/active
+mkdir -p /work/runs /work/src /work/tmp; touch /work/active
 exec 9>/work/control.lock
 while :; do
  flock 9

@@ -42,6 +42,10 @@ type mergeCheckRepo struct {
 
 func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseFiles map[string]string) *mergeCheckRepo {
 	t.Helper()
+	oldCI, oldRoom := reviewedMergeCI, mergeLocalHeadroom
+	t.Cleanup(func() { reviewedMergeCI, mergeLocalHeadroom = oldCI, oldRoom })
+	reviewedMergeCI = func(context.Context, github.GH, string, string, string, string, int) (bool, error) { return false, nil }
+	mergeLocalHeadroom = func(string) error { return nil }
 	// Model the configured lint command independently of the test runner image.
 	lintDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
