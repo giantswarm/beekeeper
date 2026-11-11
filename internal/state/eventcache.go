@@ -18,15 +18,12 @@ type cachedEventFile struct {
 	events []Event
 }
 
-// cachedEvents decodes each appended line once per process, even for callers
-// with different predicates. Rotation preserves the inode and its cursor;
-// replacement, truncation and same-size rewrites invalidate the old projection.
-// An unterminated last line is visible just as in Events, but never advances
-// the cursor until completed. Filters and callers receive independent notes.
-func (s *FileStore) cachedEvents(n int, keep func(Event) bool) ([]Event, error) {
-	return s.cachedEventsContext(context.Background(), n, keep)
-}
-
+// cachedEventsContext decodes each appended line once per process, even for
+// callers with different predicates. Rotation preserves the inode and its
+// cursor; replacement, truncation and same-size rewrites invalidate the old
+// projection. An unterminated last line is visible just as in Events, but never
+// advances the cursor until completed. Filters and callers receive independent
+// notes.
 func (s *FileStore) cachedEventsContext(ctx context.Context, n int, keep func(Event) bool) ([]Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -80,6 +77,13 @@ func (s *FileStore) cachedEventsContext(ctx context.Context, n int, keep func(Ev
 			order[i] = i
 		}
 	}
+	type stagedCacheUpdate struct {
+		at       *cachedEventFile
+		info     os.FileInfo
+		offset   int64
+		appended []Event
+	}
+	var staged []stagedCacheUpdate
 	var out []Event
 	for _, i := range order {
 		if err := ctx.Err(); err != nil {
@@ -88,12 +92,12 @@ func (s *FileStore) cachedEventsContext(ctx context.Context, n int, keep func(Ev
 		f := files[i]
 		info := infos[i]
 		cache := cacheable[i]
-		var baseOffset int64
-		var baseEvents []Event
-		if old := next[i]; old != nil {
-			baseOffset = old.offset
-			baseEvents = old.events
+		at := next[i]
+		if at == nil {
+			at = &cachedEventFile{info: info}
 		}
+		baseOffset := at.offset
+		baseEvents := at.events
 		var hits []Event
 		add := func(e Event) {
 			if e.NoteSnapshot != nil {
@@ -149,11 +153,13 @@ func (s *FileStore) cachedEventsContext(ctx context.Context, n int, keep func(Ev
 			}
 		}
 		if cache {
-			events := baseEvents
-			if len(appended) > 0 {
-				events = append(slices.Clone(baseEvents), appended...)
-			}
-			next[i] = &cachedEventFile{info: info, offset: offset, events: events}
+			next[i] = at
+			staged = append(staged, stagedCacheUpdate{
+				at:       at,
+				info:     info,
+				offset:   offset,
+				appended: appended,
+			})
 		}
 		if n > 0 {
 			out = append(hits, out...)
@@ -167,6 +173,13 @@ func (s *FileStore) cachedEventsContext(ctx context.Context, n int, keep func(Ev
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	for _, u := range staged {
+		u.at.info = u.info
+		u.at.offset = u.offset
+		if len(u.appended) > 0 {
+			u.at.events = append(u.at.events, u.appended...)
+		}
 	}
 	s.events = slices.DeleteFunc(next, func(c *cachedEventFile) bool { return c == nil })
 	return out, nil

@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	loopLifecycleFile = "supervisor-loop-lifecycle.json"
-	loopPhaseStartup  = "startup"
-	loopPhaseBetween  = "between passes"
+	loopLifecycleFile       = "supervisor-loop-lifecycle.json"
+	loopPhaseStartup        = "startup"
+	loopPhaseBetween        = "between passes"
 	loopPhaseObserve        = "observe workers and pull requests"
 	loopPhaseRecover        = "recover quota and parks"
 	loopPhaseContinueParks  = "continue settled parks"

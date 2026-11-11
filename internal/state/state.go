@@ -2363,13 +2363,9 @@ func (s *FileStore) eventReader(name string) *followed {
 	return s.follows[name]
 }
 
-// follow runs with this reader's mutex held. Unrelated readers never queue
-// behind a cold history scan. A cursor names an inode, so sealing the active
-// log into an archive preserves its position and its retained projection.
-func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error) {
-	return s.followContext(context.Background(), at, keep)
-}
-
+// followContext runs with this reader's mutex held. Unrelated readers never
+// queue behind a cold history scan. A cursor names an inode, so sealing the
+// active log into an archive preserves its position and its retained projection.
 func (s *FileStore) followContext(ctx context.Context, at *followed, keep func(Event) bool) ([]Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

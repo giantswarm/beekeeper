@@ -93,12 +93,8 @@ func (s *FileStore) rotateEventsAbove(limit int64) error {
 	return syncDirectory(s.dir)
 }
 
-// eventFiles pins the inodes while holding the layout lock. Decoding happens
-// after releasing it, so slow history readers never block append/rotation.
-func (s *FileStore) eventFiles() ([]*os.File, error) {
-	return s.eventFilesContext(context.Background())
-}
-
+// eventFilesContext pins the inodes while holding the layout lock. Decoding
+// happens after releasing it, so slow history readers never block append/rotation.
 func (s *FileStore) eventFilesContext(ctx context.Context) ([]*os.File, error) {
 	lock := flock.New(s.path("events-layout.lock"))
 	ctx, cancel := context.WithTimeout(ctx, lockWait)
