@@ -1967,6 +1967,11 @@ type FileStore struct {
 	snapshotMu    sync.Mutex
 	snapshotFile  os.FileInfo
 	snapshot      *State
+
+	// outboxFile is the state file whose outbox outboxPendingSeen answers.
+	outboxMu          sync.Mutex
+	outboxFile        os.FileInfo
+	outboxPendingSeen bool
 }
 
 // followed is how far a Follow reader has read the log, and what it kept.
@@ -2550,11 +2555,16 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	return writeRaw(path, append(raw, '\n'))
+}
+
+// writeRaw atomically replaces path with raw.
+func writeRaw(path string, raw []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	if _, err := tmp.Write(append(raw, '\n')); err != nil {
+	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
 		return err

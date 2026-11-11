@@ -819,6 +819,9 @@ type supervisorLoop struct {
 	// pause, up to fillBackoff times.
 	fillEmpty   int
 	fillRetries map[string]fillRetry
+	// reviewRecoveries are the desk-review parks whose published HEAD did
+	// not verify, by park: when recoverReviewRequests looks again.
+	reviewRecoveries map[string]reviewRecovery
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
@@ -1152,6 +1155,10 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 	}
 	changes, closeChanges := state.Changes(ctx, filepath.Join(l.a.store.Dir(), "state.json"), filepath.Join(l.a.store.Dir(), "events.jsonl"))
 	defer closeChanges()
+	ended := time.Now()
+	// A change wakes the next pass early, but not sooner than passChangeGap
+	// after this one ended, nor later than the interval.
+	changed := func() bool { return pauseChangeFor(ctx, min(passChangeGap, d)-time.Since(ended)) }
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	const checkEvery = time.Second
@@ -1162,7 +1169,7 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		case <-l.pullWatcher().ready:
 			return true
 		case <-changes:
-			return pauseChange(ctx)
+			return changed()
 		case <-timer.C:
 			return true
 		}
@@ -1176,7 +1183,7 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		case <-l.pullWatcher().ready:
 			return true
 		case <-changes:
-			return pauseChange(ctx)
+			return changed()
 		case <-timer.C:
 			return true
 		case <-ticker.C:
