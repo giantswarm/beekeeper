@@ -1328,10 +1328,11 @@ type Capacity struct {
 	// pace (with 7-day budget left per hour, lower configured cost, and
 	// order breaking ties) and self-hosted choices as fallbacks. Each
 	// provider must have room, its 5-hour window below its threshold and
-	// its 7-day use within the weekly cap and not ahead of the even pace.
+	// its 7-day use within the weekly cap and, for a worker start, not
+	// ahead of the even pace.
 	Choices []Choice `yaml:"choices"`
-	// ReviewSkipPace is read and ignored: a review is decided exactly like
-	// a worker's start, with no pace exception.
+	// ReviewSkipPace is read and ignored: review starts already skip the
+	// 7-day pace check while worker starts keep it.
 	ReviewSkipPace bool `yaml:"reviewSkipPace"`
 	// Local bounds the busy agents the coordinator's own machine runs,
 	// apart from Ceiling, which bounds the subscriptions across the desk

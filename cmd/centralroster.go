@@ -36,7 +36,7 @@ type publishedAgent struct {
 // ENDED line once it answers again; what was not published is published
 // then.
 func (w *watcher) syncRoster(ctx context.Context) {
-	st, err := w.store.Read()
+	st, err := w.store.Peek()
 	if err != nil {
 		return
 	}

@@ -43,7 +43,7 @@ type leaseView struct {
 func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
 	var st *state.State
 	if a.store != nil {
-		st, _ = a.store.Read()
+		st, _ = a.store.Peek()
 	}
 	return a.leaseViewState(st, sessions, h)
 }

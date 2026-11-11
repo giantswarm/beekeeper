@@ -152,6 +152,9 @@ func TestDeliveryBoundaries(t *testing.T) {
 			if len(got) > 0 && got[0].Step != tc.step {
 				t.Fatalf("got %+v, want %s", got, tc.step)
 			}
+			if len(got) > 0 && !got[0].Active() && (got[0].Outcome == "" || got[0].Evidence == "") {
+				t.Fatalf("terminal delivery missing outcome or evidence: %+v", got[0])
+			}
 		})
 	}
 }
@@ -181,14 +184,14 @@ func TestDeliveryAbsorbAndReopen(t *testing.T) {
 	p.State = Closed
 	in.Pulls[deliveryPR] = p
 	dropped := Deliveries(in, first)
-	if dropped[0].Step != state.DeliveryDropped {
+	if dropped[0].Step != state.DeliveryDropped || dropped[0].Outcome != state.DeliveryDropped || dropped[0].Evidence == "" {
 		t.Fatal(dropped)
 	}
 	in.Now = in.Now.Add(time.Hour)
 	p.State = Open
 	in.Pulls[deliveryPR] = p
 	reopened := Deliveries(in, dropped)
-	if reopened[0].Step != state.DeliveryImplementing || !reopened[0].Started.Equal(in.Now) {
+	if reopened[0].Step != state.DeliveryImplementing || !reopened[0].Started.Equal(in.Now) || reopened[0].Outcome != "" || reopened[0].Evidence != "" {
 		t.Fatal(reopened)
 	}
 	p.State = Closed
@@ -213,7 +216,7 @@ func TestDeliveryResearchAndClosedIssue(t *testing.T) {
 			in.Events = []Event{{Verb: VerbDone, Agent: "researcher", At: in.Now}}
 		}
 		got := Deliveries(in, prev)
-		if got[0].Step != state.DeliveryDropped {
+		if got[0].Step != state.DeliveryDropped || got[0].Outcome != state.DeliveryDropped || got[0].Evidence == "" {
 			t.Fatal(got)
 		}
 	}
@@ -315,9 +318,9 @@ func TestDeliveryDropIgnoresPreDropObservations(t *testing.T) {
 
 func TestDeliveryDroppedPRSeedPreservesTombstoneWhenLinked(t *testing.T) {
 	in := deliveryInput()
-	prev := []Delivery{{Ref: deliveryPR, Pulls: []string{deliveryPR}, Step: state.DeliveryDropped, Since: in.Now, Started: in.Now, DropReason: deliveryDropReason, DroppedHeads: map[string]string{deliveryPR: deliveryFirstHead}}}
+	prev := []Delivery{{Ref: deliveryPR, Pulls: []string{deliveryPR}, Step: state.DeliveryDropped, Since: in.Now, Started: in.Now, DropReason: deliveryDropReason, Outcome: state.DeliveryDropped, Evidence: deliveryDropReason, DroppedHeads: map[string]string{deliveryPR: deliveryFirstHead}}}
 	got := Deliveries(in, prev)
-	if len(got) != 1 || got[0].Ref != deliveryIssue || got[0].Active() {
+	if len(got) != 1 || got[0].Ref != deliveryIssue || got[0].Active() || got[0].Outcome != state.DeliveryDropped || got[0].Evidence != deliveryDropReason {
 		t.Fatalf("link resurrected dropped seed: %+v", got)
 	}
 }

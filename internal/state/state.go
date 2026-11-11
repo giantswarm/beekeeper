@@ -1296,15 +1296,16 @@ type GuideFinding struct {
 
 // State is the whole document.
 type State struct {
-	DeliveryHealth    DeliveryHealth          `json:"deliveryHealth,omitempty"`
-	DeliveryHolds     map[string]ItemHold     `json:"deliveryHolds,omitempty"`
-	Deliveries        []Delivery              `json:"deliveries,omitempty"`
-	DeliveriesAt      time.Time               `json:"deliveriesAt,omitempty"`
-	GuideReportsSince time.Time               `json:"guideReportsSince,omitempty"`
-	GuideFindings     map[string]GuideFinding `json:"guideFindings,omitempty"`
-	GuideReports      []string                `json:"guideReports,omitempty"`
-	GuideWork         []GuideWork             `json:"guideWork,omitempty"`
-	NextGuideWork     int                     `json:"nextGuideWork,omitempty"`
+	ReportReceipts    map[string]ReportReceipt `json:"reportReceipts,omitempty"`
+	DeliveryHealth    DeliveryHealth           `json:"deliveryHealth,omitempty"`
+	DeliveryHolds     map[string]ItemHold      `json:"deliveryHolds,omitempty"`
+	Deliveries        []Delivery               `json:"deliveries,omitempty"`
+	DeliveriesAt      time.Time                `json:"deliveriesAt,omitempty"`
+	GuideReportsSince time.Time                `json:"guideReportsSince,omitempty"`
+	GuideFindings     map[string]GuideFinding  `json:"guideFindings,omitempty"`
+	GuideReports      []string                 `json:"guideReports,omitempty"`
+	GuideWork         []GuideWork              `json:"guideWork,omitempty"`
+	NextGuideWork     int                      `json:"nextGuideWork,omitempty"`
 	// EventOutbox retains the exact log append with the state it commits.
 	EventOutbox *EventOutbox `json:"eventOutbox,omitempty"`
 	// ProductionNotes are consumed authorities, retained across hook processes.
@@ -1489,11 +1490,12 @@ type HostPlacement struct {
 // recorded when it last updated the host, in place of a hand-kept
 // agents.hosts digest, and the hold of a host whose update failed.
 type HostPin struct {
-	Selector     string           `json:"selector"`
-	Identity     execution.HostID `json:"identity"`
-	Version      string           `json:"version,omitempty"`
-	PolicyDigest string           `json:"policyDigest,omitempty"`
-	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
+	Selector     string            `json:"selector"`
+	Identity     execution.HostID  `json:"identity"`
+	Version      string            `json:"version,omitempty"`
+	PolicyDigest string            `json:"policyDigest,omitempty"`
+	Tools        map[string]string `json:"tools,omitempty"`
+	PinnedAt     time.Time         `json:"pinnedAt,omitzero"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
 	// UpdateError is a release lookup failure before contacting the host.
@@ -2396,7 +2398,13 @@ func endLine(f *os.File) error {
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
 func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
-	return s.cachedEvents(n, keep)
+	return s.EventsContext(context.Background(), n, keep)
+}
+
+// EventsContext abandons history replay when its caller stops. Partial history
+// is never returned as a successful read.
+func (s *FileStore) EventsContext(ctx context.Context, n int, keep func(Event) bool) ([]Event, error) {
+	return s.cachedEventsContext(ctx, n, keep)
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under
@@ -2404,10 +2412,17 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 // since: a watch that follows the log every poll parses each line once. A
 // log that was replaced or shrank is read again from its start.
 func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) {
+	return s.FollowContext(context.Background(), name, keep)
+}
+
+func (s *FileStore) FollowContext(ctx context.Context, name string, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	at := s.eventReader(name)
 	at.mu.Lock()
 	defer at.mu.Unlock()
-	return s.follow(at, keep)
+	return s.followContext(ctx, at, keep)
 }
 
 func (s *FileStore) eventReader(name string) *followed {
@@ -2422,15 +2437,22 @@ func (s *FileStore) eventReader(name string) *followed {
 	return s.follows[name]
 }
 
-// follow runs with this reader's mutex held. Unrelated readers never queue
-// behind a cold history scan. A cursor names an inode, so sealing the active
-// log into an archive preserves its position and its retained projection.
-func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error) {
-	files, err := s.eventFiles()
+// followContext runs with this reader's mutex held. Unrelated readers never
+// queue behind a cold history scan. A cursor names an inode, so sealing the
+// active log into an archive preserves its position and its retained projection.
+func (s *FileStore) followContext(ctx context.Context, at *followed, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	files, err := s.eventFilesContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer closeEventFiles(files)
+	savedFile, savedOffset, savedKept := at.file, at.offset, slices.Clone(at.kept)
+	restore := func() {
+		at.file, at.offset, at.kept = savedFile, savedOffset, savedKept
+	}
 	start := 0
 	if at != nil && at.file != nil {
 		start = -1
@@ -2450,6 +2472,10 @@ func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error)
 		start = 0
 	}
 	for _, f := range files[start:] {
+		if err := ctx.Err(); err != nil {
+			restore()
+			return nil, err
+		}
 		fi, err := f.Stat()
 		if err != nil {
 			return nil, err
@@ -2463,20 +2489,40 @@ func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error)
 		}
 		reader := bufio.NewReader(f)
 		for {
+			if err := ctx.Err(); err != nil {
+				restore()
+				return nil, err
+			}
 			line, readErr := reader.ReadBytes('\n')
+			if err := ctx.Err(); err != nil {
+				restore()
+				return nil, err
+			}
 			if errors.Is(readErr, io.EOF) {
 				break
 			}
 			if readErr != nil {
 				return slices.Clone(at.kept), readErr
 			}
-			at.offset += int64(len(line))
 			var e Event
-			line = bytes.TrimLeft(line, "\x00")
-			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
+			lineTrimmed := bytes.TrimLeft(line, "\x00")
+			if json.Unmarshal(lineTrimmed, &e) == nil && (keep == nil || keep(e)) {
+				if err := ctx.Err(); err != nil {
+					restore()
+					return nil, err
+				}
 				at.kept = append(at.kept, e)
 			}
+			if err := ctx.Err(); err != nil {
+				restore()
+				return nil, err
+			}
+			at.offset += int64(len(line))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		restore()
+		return nil, err
 	}
 	return slices.Clone(at.kept), nil
 }

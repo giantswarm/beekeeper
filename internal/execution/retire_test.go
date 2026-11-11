@@ -592,6 +592,9 @@ func TestOwnedEnvironmentRoutesWorkerPaths(t *testing.T) {
 			t.Fatalf("%s = %v, want one path inside %s", key, values, dir)
 		}
 	}
+	if !slices.Contains(env, "GOTOOLCHAIN=auto") {
+		t.Fatalf("ownedEnvironment lacked GOTOOLCHAIN=auto: %v", env)
+	}
 	const optOut = github.DevctlSkipVersionCheckEnv + "=true"
 	if slices.Contains(env, optOut) {
 		t.Fatalf("ownedEnvironment set %s with guards enabled: %v", optOut, env)

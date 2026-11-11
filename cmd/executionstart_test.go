@@ -34,6 +34,7 @@ func sshStartTestApp(t *testing.T) (*app, string) {
 		t.Fatal(err)
 	}
 	a.cfg.StateDir = root
+	a.cfg.Projects.Dir = filepath.Join(root, "projects")
 	plat.Machine = roomyMachine{Machine: plat.Machine}
 	a.cfg.Identity.Host = sshTestCoordinator
 	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{claudeComm: {Ceiling: 1}}, Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}}}

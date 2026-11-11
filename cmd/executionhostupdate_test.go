@@ -938,3 +938,62 @@ func TestCoordinatorHostUpdateWaitsForReadableMatchingVerdict(t *testing.T) {
 		t.Fatal("unreadable probation allowed an update")
 	}
 }
+
+func TestHostsUpdateRaisesGoPinWhenServedRepositoryToolchainAdvances(t *testing.T) {
+	const wantedGoVersion = "1.27.4"
+	a, _ := sshStartTestApp(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	repoDir := filepath.Join(a.cfg.Projects.Dir, "beekeeper")
+	if err := os.MkdirAll(repoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go"+wantedGoVersion+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := execution.Digest([]byte("prepared with go" + wantedGoVersion))
+	lookup := lookupRelease
+	t.Cleanup(func() { lookupRelease = lookup })
+	lookupRelease = func(_ context.Context, version string) (update.Release, error) {
+		return update.Release{Tag: version, Assets: []update.Asset{{ID: 1, Name: "beekeeper-linux-amd64", URL: "https://github.com/" + update.Repository + "/releases/download/" + version + "/beekeeper-linux-amd64"}}}, nil
+	}
+	var gotTools map[string]string
+	a.executionUpdate = func(_ context.Context, h execution.Host, version string, given []byte) (execution.HostUpdate, error) {
+		var rel update.Release
+		if err := execution.Decode(given, &rel); err != nil {
+			t.Fatal(err)
+		}
+		gotTools = rel.Tools
+		return execution.HostUpdate{Protocol: execution.Protocol, Identity: h.Identity, Version: version, PolicyDigest: digest}, nil
+	}
+	probe := a.executionProbe
+	a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {
+		caps, err := probe(ctx, h)
+		caps.Tools = map[string]string{execution.ToolGitHub: "2.83.0", execution.ToolGo: wantedGoVersion}
+		return caps, err
+	}
+	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); err != nil {
+		t.Fatal(err)
+	}
+	if gotTools[execution.ToolGo] != wantedGoVersion {
+		t.Fatalf("host update sent tools %v, want go %s", gotTools, wantedGoVersion)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := st.HostPin(sshTestSelector)
+	if pin == nil || pin.Tools[execution.ToolGo] != wantedGoVersion {
+		t.Fatalf("host pin tools = %+v, want go %s", pin, wantedGoVersion)
+	}
+	// When a served repository advances to 1.27.5 on the same coordinator
+	// release, hostPinToolsCurrent reports the pin stale so updateHosts runs.
+	if !a.hostPinToolsCurrent(*pin, a.cfg.Agents.Hosts[sshTestSelector]) {
+		t.Fatal("pin at 1.27.4 reported stale for 1.27.4")
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go1.27.5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if a.hostPinToolsCurrent(*pin, a.cfg.Agents.Hosts[sshTestSelector]) {
+		t.Fatal("pin at 1.27.4 reported current after repository bumped to 1.27.5")
+	}
+}

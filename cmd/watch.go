@@ -1223,7 +1223,7 @@ func (w *watcher) emitLinesNow(key string, lines []string) {
 // is strained. It keeps its own time: it runs in a loop of its own.
 func (w *watcher) sample(ctx context.Context) {
 	now := time.Now()
-	if st, err := w.store.Peek(); err == nil {
+	if st, err := w.readSnapshot(); err == nil {
 		w.sayAppDrifts(w.appDrifts(ctx, st.Apps))
 	}
 	th := w.cfg.Watch
@@ -1793,7 +1793,7 @@ func (w *watcher) callersText() string {
 // stalls says each stalled lane, one LANE STALLED line per lane and waiting
 // merge when the stall starts and one ENDED line when it ends.
 func (w *watcher) stalls() {
-	st, err := w.store.Read()
+	st, err := w.readSnapshot()
 	if err != nil {
 		return
 	}
@@ -1863,7 +1863,7 @@ func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
 // merge.settleTimeout is one LANE STUCK line with what the lane waits for,
 // and one ENDED line once it settles or the lane is cleared.
 func (w *watcher) settled(ctx context.Context, now time.Time) {
-	st, err := w.store.Read()
+	st, err := w.readSnapshot()
 	if err != nil {
 		return
 	}
@@ -2063,7 +2063,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if ctx.Err() != nil {
 		return
 	}
-	st, err := w.store.Read()
+	st, err := w.readSnapshot()
 	if err != nil {
 		w.fail("state-read", "cannot read the state: %v", err)
 		return

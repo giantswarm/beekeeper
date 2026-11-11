@@ -284,7 +284,7 @@ func (w *watcher) unownedPages(ctx context.Context, sessions []*claude.Session) 
 	pages := slices.DeleteFunc(base.Firing(al.PageSeverity), func(f alerts.Firing) bool { return al.Team != "" && f.Team != al.Team })
 	var due []alerts.Unowned
 	if len(pages) > 0 {
-		st, err := w.store.Read()
+		st, err := w.store.Peek()
 		if err != nil {
 			return
 		}

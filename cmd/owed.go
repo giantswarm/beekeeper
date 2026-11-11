@@ -213,7 +213,7 @@ func (a *app) failedPay(o state.Owed, why string) {
 // owedRetry under the state's lock, so one watch tries it: a caller that
 // heard it drops it, and one owed past owedFor is given up.
 func (w *watcher) owedOutcomes(ctx context.Context) {
-	st, err := w.store.Read()
+	st, err := w.store.Peek()
 	if err != nil || len(st.Owed) == 0 {
 		return
 	}

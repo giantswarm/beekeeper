@@ -335,7 +335,7 @@ func TestDeliveryDropReasonActorHeadAndReplay(t *testing.T) {
 	}
 	st, _ := a.store.Read()
 	d := st.Deliveries[0]
-	if d.Active() || d.DropBy.Name != guideName || d.DropReason != "duplicate delivery" || d.DroppedHeads[blockerRef] != deliveryControlActualHead {
+	if d.Active() || d.DropBy.Name != guideName || d.DropReason != "duplicate delivery" || d.Outcome != state.DeliveryDropped || d.Evidence != "duplicate delivery" || d.DroppedHeads[blockerRef] != deliveryControlActualHead {
 		t.Fatalf("%+v", d)
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "delivery.drop" })

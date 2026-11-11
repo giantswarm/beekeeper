@@ -230,7 +230,7 @@ func (a *app) syncAgyQuotaFromState(st *state.State, now time.Time) {
 		return
 	}
 	if st == nil && a.store != nil {
-		st, _ = a.store.Read()
+		st, _ = a.store.Peek()
 	}
 	if st == nil {
 		return
@@ -802,9 +802,17 @@ func pctPtr(w *usageWindow) *float64 {
 }
 
 func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.Capacity, *usageView) {
+	return deriveUsageViewForStart(r, k, forWorker, now)
+}
+
+func deriveUsageViewForStart(r usageReading, k config.Capacity, kind startFor, now time.Time) (config.Capacity, *usageView) {
 	fh := effectiveWindow(r.FiveHour, now)
 	sd := effectiveSevenDayWindow(r.SevenDay, now)
-	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+	var pace *float64
+	if kind == forWorker {
+		pace = sdPace(sd)
+	}
+	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
 	return derived, &usageView{
 		At:          r.At,
 		Fallback:    r.Fallback,
@@ -1130,6 +1138,10 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 // closed), a recent usage.json written by the host's watch within 2 × every
 // (before resetsAt) is kept when the command cannot run inside the sandbox.
 func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capacity, *usageView) {
+	return a.resolveUsageForStart(ctx, k, forWorker)
+}
+
+func (a *app) resolveUsageForStart(ctx context.Context, k config.Capacity, kind startFor) (config.Capacity, *usageView) {
 	if !k.Usage.Enabled() {
 		return k, nil
 	}
@@ -1137,7 +1149,7 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 	if err != nil {
 		return errorUsageView(k, err)
 	}
-	return deriveUsageView(r, k, a.now)
+	return deriveUsageViewForStart(r, k, kind, a.now)
 }
 
 func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
@@ -1326,7 +1338,7 @@ func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessi
 func (a *app) providersUsageHighBlockForAgent(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session, ag *state.Agent) string {
 	if ag != nil {
 		if st == nil && a.store != nil {
-			st, _ = a.store.Read()
+			st, _ = a.store.Peek()
 		}
 		if st == nil {
 			st = &state.State{}

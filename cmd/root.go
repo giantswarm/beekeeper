@@ -103,6 +103,9 @@ func Main() int {
 }
 
 type app struct {
+	// queueReports routes session CLI reports through the supervisor inbox.
+	// Embedded command adapters retain their synchronous transaction contract.
+	queueReports       bool
 	selectionKind      string
 	selectionAuthor    string
 	executionTransport func(execution.Host) execution.Transport
@@ -312,6 +315,7 @@ func (a *app) load() error {
 		return err
 	}
 	a.now = time.Now()
+	a.queueReports = true
 	a.observeREST()
 	return nil
 }

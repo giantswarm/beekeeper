@@ -22,6 +22,7 @@
       "age": 14400000000000
     },
     {
+      "outcome": "merged",
       "dropBy": {
         "name": ""
       },

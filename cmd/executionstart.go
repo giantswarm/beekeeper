@@ -114,7 +114,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	readings := a.executionReadings(ctx, k)
 	var legacy *usageView
 	if len(k.Providers) == 0 {
-		k, legacy = a.resolveUsage(ctx, k)
+		k, legacy = a.resolveUsageForStart(ctx, k, startKind(o.Review, o.ReviewOfSelfHosted))
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {

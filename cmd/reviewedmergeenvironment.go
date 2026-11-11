@@ -21,13 +21,21 @@ var mergeRemoteCheck = func(ctx context.Context, runner remotebuild.Runner, argv
 	return runner.TryMergeCheck(ctx, argv)
 }
 
+var (
+	mergeReadLoad = machine.ReadLoad
+	mergeNumCPU   = runtime.NumCPU
+	mergeReadDisk = machine.ReadDisk
+)
+
 // An overloaded coordinator never starts a full-module checker. The configured
 // remote runner is selected before this guard and never falls back to local work.
 var mergeLocalHeadroom = func(dir string) error {
-	if load, err := machine.ReadLoad(); err == nil && load[0] >= float64(runtime.NumCPU()) {
-		return fmt.Errorf("coordinator overloaded (load %.1f, CPUs %d); configure run.remote or await merge-result CI", load[0], runtime.NumCPU())
+	if load, err := mergeReadLoad(); err == nil {
+		if cpus := mergeNumCPU(); load[0] >= float64(cpus) {
+			return fmt.Errorf("coordinator overloaded (load %.1f, CPUs %d); configure run.remote or await merge-result CI", load[0], cpus)
+		}
 	}
-	if disk, err := machine.ReadDisk(dir); err == nil && disk.FreeMiB < 8*1024 {
+	if disk, err := mergeReadDisk(dir); err == nil && disk.FreeMiB < 8*1024 {
 		return fmt.Errorf("check filesystem has %d MiB free; at least 8192 MiB required", disk.FreeMiB)
 	}
 	return nil

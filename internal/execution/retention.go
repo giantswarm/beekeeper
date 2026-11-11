@@ -67,7 +67,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 	findings := []ResourceFinding{}
 	owners := map[string]Journal{}
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") || e.Name() == "policy.json" {
+		if !strings.HasSuffix(e.Name(), ".json") || e.Name() == "policy.json" || e.Name() == PinnedToolsFile {
 			continue
 		}
 		// Only execution journal filenames may be decoded. Other JSON files
@@ -207,7 +207,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 		// These are shared policy/runtime roots, never per-execution garbage.
 		if filepath.Dir(path) == s.Root {
 			switch name {
-			case "policy.json", claudeRulesFile, claudeSettingsFile, "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock, bundlesDir, retiredResources, recoveryBundles: //nolint:goconst // Explicit inventory of shared on-disk names.
+			case "policy.json", PinnedToolsFile, claudeRulesFile, claudeSettingsFile, "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock, bundlesDir, retiredResources, recoveryBundles: //nolint:goconst // Explicit inventory of shared on-disk names.
 				if e.Type()&os.ModeSymlink == 0 {
 					row.State = resourceShared
 					row.Reason = "shared policy, toolchain or retained recovery container"

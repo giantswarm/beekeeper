@@ -148,9 +148,14 @@ its release step. A worker finishes with one of these commands:
   existing wake route and delivery lifecycle.
 
 `delivery --stats` and `sim observe` separate merged, no-change, blocked,
-parked, stalled and legacy dropped outcomes. JSON delivery records retain
-`evidence` and `outcomeAt`. An independent reviewer reports its review without
-claiming that the implementation delivery is complete.
+parked, stalled and dropped outcomes. Every terminal `delivery.step` event
+(`done`, `dropped`, `blocked`, `stalled`) records `outcome`, `evidence` and
+`outcomeAt`, including lane release verdicts, absorbed or excluded pull
+request seeds, abandoned ended-worker deliveries, closed issues or pull
+requests, and manual `delivery drop` commands. Unexplained legacy terminal
+events are counted as dropped, never inferred as merged. An independent
+reviewer reports its review without claiming that the implementation delivery
+is complete.
 
 An unfinished headless turn receives its task again, with the valid endings,
 up to three times per assignment. When the third continuation also ends
@@ -159,8 +164,9 @@ record ends, capacity is released through normal retirement, and the next
 worker's brief includes the last report. A park, an outstanding wake, a role
 session or an active turn is not an unfinished-turn recovery candidate.
 
-Release acceptance requires two days of installed observation: retain the
-installed version and observation window, outcome counts, and the share of
-started issue deliveries ending without a pull request, grouped by their
-recorded reasons. Passing synthetic tests alone does not establish this live
-acceptance.
+Release acceptance requires two days of installed observation inspecting both
+`delivery --stats` and the raw `delivery.step` events: retain the installed
+version and observation window, outcome counts, proof that no terminal
+`delivery.step` event lacks an outcome, and the share of started issue
+deliveries ending without a pull request, grouped by their recorded reasons.
+Passing synthetic tests alone does not establish this live acceptance.

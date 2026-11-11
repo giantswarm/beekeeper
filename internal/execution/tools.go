@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,8 +18,10 @@ import (
 // its harness: Go for the repositories whose source checkout has a go.mod,
 // and the GitHub CLI on every host.
 const (
-	ToolGo     = "go"
-	ToolGitHub = "gh"
+	ToolGo             = "go"
+	ToolGitHub         = "gh"
+	PinnedToolsFile    = "tools.json"
+	toolNotProvisioned = "not provisioned under agents.execution.tools"
 )
 
 // ToolConfig pins one operator-installed tool a worker calls by bare name.
@@ -47,18 +50,18 @@ func goSemver(v string) string {
 	return "v" + v
 }
 
-// requiredTools names each tool a worker on this host needs and the lowest
-// version that serves it: gh everywhere, Go at the highest toolchain (or go
-// line) any served repository's go.mod names.
-func (s *Server) requiredTools() (map[string]string, error) {
+// RepositoriesTools names each tool a worker needs for repositories and the
+// lowest version that serves it: gh everywhere, Go at the highest toolchain
+// (or go line) any repository's go.mod names.
+func RepositoriesTools(repositories map[string]string) (map[string]string, error) {
 	need := map[string]string{ToolGitHub: ""}
-	repos := make([]string, 0, len(s.Config.Repositories))
-	for repo := range s.Config.Repositories {
+	repos := make([]string, 0, len(repositories))
+	for repo := range repositories {
 		repos = append(repos, repo)
 	}
 	slices.Sort(repos)
 	for _, repo := range repos {
-		p := filepath.Join(s.Config.Repositories[repo], "go.mod")
+		p := filepath.Join(repositories[repo], "go.mod")
 		b, err := readRegular(p, MaxWire)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -84,21 +87,120 @@ func (s *Server) requiredTools() (map[string]string, error) {
 	return need, nil
 }
 
+// requiredTools names each tool a worker on this host needs and the lowest
+// version that serves it: gh everywhere, Go at the highest toolchain (or go
+// line) any served repository's go.mod names.
+func (s *Server) requiredTools() (map[string]string, error) {
+	return RepositoriesTools(s.Config.Repositories)
+}
+
+// CheckTools verifies that the reported host tools satisfy the minimum
+// versions required by the served repositories.
+func CheckTools(have, need map[string]string) error {
+	missing := map[string]string{}
+	for name, least := range need {
+		v, configured := have[name]
+		switch {
+		case !configured || v == "":
+			missing[name] = toolNotProvisioned
+		case least != "" && semver.Compare(goSemver(v), goSemver(least)) < 0:
+			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", v, least)
+		}
+	}
+	if len(missing) > 0 {
+		return toolsError(missing)
+	}
+	return nil
+}
+
+// RaiseGoTool returns a ToolConfig for version under the same parent tools
+// directory as base, or base unchanged when version is not newer.
+func RaiseGoTool(base ToolConfig, version string) (ToolConfig, error) {
+	if err := base.validate(ToolGo); err != nil {
+		return ToolConfig{}, err
+	}
+	version = strings.TrimPrefix(version, "go")
+	if version == "" || !semver.IsValid(goSemver(version)) {
+		return ToolConfig{}, fmt.Errorf("invalid go version %q", version)
+	}
+	if semver.Compare(goSemver(version), goSemver(base.Version)) <= 0 {
+		return base, nil
+	}
+	if filepath.Base(filepath.Dir(base.Executable)) != toolBinDirectory {
+		return ToolConfig{}, errors.New("go executable must be under a dedicated installation's bin directory")
+	}
+	parent := filepath.Dir(filepath.Dir(filepath.Dir(base.Executable)))
+	next := ToolConfig{
+		Executable: filepath.Join(parent, "go"+version, toolBinDirectory, ToolGo),
+		Version:    version,
+	}
+	if err := next.validate(ToolGo); err != nil {
+		return ToolConfig{}, err
+	}
+	return next, nil
+}
+
+// LoadPinnedTools applies a raised Go pin recorded in the host's managed
+// execution root when it is newer than the static configuration's pin.
+func (s *Server) LoadPinnedTools() error {
+	if s.Root == "" || len(s.Config.Tools) == 0 {
+		return nil
+	}
+	base, ok := s.Config.Tools[ToolGo]
+	if !ok {
+		return nil
+	}
+	raw, err := readRegular(filepath.Join(s.Root, PinnedToolsFile), MaxWire)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var pinned map[string]ToolConfig
+	if err := Decode(raw, &pinned); err != nil {
+		return err
+	}
+	want, ok := pinned[ToolGo]
+	if !ok || semver.Compare(goSemver(want.Version), goSemver(base.Version)) <= 0 {
+		return nil
+	}
+	raised, err := RaiseGoTool(base, want.Version)
+	if err != nil {
+		return err
+	}
+	if want != raised {
+		return errors.New("pinned go tool override does not match configured tools directory")
+	}
+	tools := maps.Clone(s.Config.Tools)
+	tools[ToolGo] = raised
+	s.Config.Tools = tools
+	return nil
+}
+
 // probeTools checks every required tool against its pin: configured, the
 // pinned version on the executable's own version line, and at least the
 // version the served repositories name. It returns the passing versions and
 // one reason per missing tool.
 func (s *Server) probeTools(ctx context.Context) (map[string]string, map[string]string, error) {
+	if err := s.LoadPinnedTools(); err != nil {
+		return nil, nil, err
+	}
 	need, err := s.requiredTools()
 	if err != nil {
 		return nil, nil, err
+	}
+	for name := range s.Config.Tools {
+		if _, ok := need[name]; !ok {
+			need[name] = ""
+		}
 	}
 	ok, missing := map[string]string{}, map[string]string{}
 	for name, least := range need {
 		t, configured := s.Config.Tools[name]
 		switch {
 		case !configured:
-			missing[name] = "not provisioned under agents.execution.tools"
+			missing[name] = toolNotProvisioned
 		case least != "" && semver.Compare(goSemver(t.Version), goSemver(least)) < 0:
 			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", t.Version, least)
 		default:
@@ -191,14 +293,33 @@ func (s *Server) toolPath(env []string) []string {
 }
 
 // checkWorkspaceTools checks the committed source, rather than assuming a
-// preseeded checkout has the same go.mod as the requested ref.
+// preseeded checkout has the same go.mod as the requested ref. A workspace
+// that names a newer Go version than the host's base pin runs with Go's own
+// toolchain download into the execution-owned GOPATH/GOMODCACHE.
 func (s *Server) checkWorkspaceTools(ctx context.Context, workspace string) error {
-	copy := *s
-	copy.Config = s.Config
-	copy.Config.Repositories = map[string]string{"workspace/source": workspace}
-	_, missing, err := copy.probeTools(ctx)
+	if err := s.LoadPinnedTools(); err != nil {
+		return err
+	}
+	need, err := RepositoriesTools(map[string]string{"workspace/source": workspace})
 	if err != nil {
 		return err
+	}
+	if _, ok := need[ToolGo]; ok {
+		need[ToolGo] = ""
+	}
+	missing := map[string]string{}
+	for name, least := range need {
+		t, configured := s.Config.Tools[name]
+		switch {
+		case !configured:
+			missing[name] = toolNotProvisioned
+		case least != "" && semver.Compare(goSemver(t.Version), goSemver(least)) < 0:
+			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", t.Version, least)
+		default:
+			if err := s.probeTool(ctx, name, t); err != nil {
+				missing[name] = err.Error()
+			}
+		}
 	}
 	if len(missing) > 0 {
 		return toolsError(missing)
