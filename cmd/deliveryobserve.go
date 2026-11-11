@@ -249,6 +249,16 @@ func commitDeliveryObservation(ctx context.Context, store state.Store, now time.
 
 func applyDeliveryVerdict(d *state.Delivery, verdict, tag string, now time.Time) {
 	d.Verdict, d.Release = verdict, tag
+	if d.Outcome == "" || d.Outcome == state.OutcomeParked {
+		d.Outcome, d.OutcomeAt = state.OutcomeMerged, now
+	}
+	if d.Evidence == "" {
+		if len(d.Pulls) > 0 {
+			d.Evidence = deliveryURL(d.Pulls[0], true)
+		} else if d.Ref != "" {
+			d.Evidence = deliveryURL(d.Ref, true)
+		}
+	}
 	if verdict == verdictAvailable || verdict == state.DeliveryNoRelease {
 		if d.Step != state.DeliveryDone {
 			d.Since = now
@@ -282,6 +292,9 @@ func recordDeliveryRelease(st *state.State, repo string, pr int, out merge.Outco
 	for i := range st.Deliveries {
 		d := &st.Deliveries[i]
 		if slices.Contains(d.Pulls, ref) || strings.EqualFold(d.Ref, ref) {
+			if d.Evidence == "" || d.Outcome == state.OutcomeParked {
+				d.Evidence = deliveryURL(ref, true)
+			}
 			applyDeliveryVerdict(d, verdict, out.Release, now)
 		}
 	}
@@ -295,6 +308,7 @@ func deliveryObservationEvents(prev, next []state.Delivery, now time.Time) []sta
 	for _, old := range prev {
 		if old.Active() && !slices.ContainsFunc(next, func(d state.Delivery) bool { return strings.EqualFold(d.Ref, old.Ref) }) {
 			old.Step, old.Since, old.Waits = state.DeliveryDropped, now, "observation identity resolved or outside desk ownership"
+			old.Outcome, old.Evidence, old.OutcomeAt = state.DeliveryDropped, old.Waits, now
 			eventNext = append(eventNext, old)
 		}
 	}

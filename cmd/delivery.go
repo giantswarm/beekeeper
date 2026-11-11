@@ -285,6 +285,7 @@ func (a *app) deliveryDropCmd() *cobra.Command {
 				at = logical
 			}
 			d.Step, d.Since, d.DropAt, d.DropBy, d.DropReason = state.DeliveryDropped, at, at, by, reason
+			d.Outcome, d.Evidence, d.OutcomeAt = state.DeliveryDropped, reason, at
 			events := state.DeliveryEvents(prev, st.Deliveries, by)
 			return append(events, about(event(by, "delivery.drop", "%s: %s", deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)), reason), d.Ref)), nil
 		})

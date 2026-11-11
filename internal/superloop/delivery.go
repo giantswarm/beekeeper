@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -105,6 +106,7 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 					out[i].Step, out[i].Since = old.Step, old.Since
 					out[i].DropReason, out[i].DropBy, out[i].DropAt = old.DropReason, old.DropBy, old.DropAt
 					out[i].DroppedHeads = maps.Clone(old.DroppedHeads)
+					out[i].Outcome, out[i].Evidence, out[i].OutcomeAt = old.Outcome, old.Evidence, old.OutcomeAt
 				}
 			}
 			if !slices.Contains(out[i].Pulls, ref) {
@@ -197,6 +199,9 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 				continue
 			}
 			d.DropReason, d.DroppedHeads = "", nil
+			if d.Outcome == state.DeliveryDropped {
+				d.Outcome, d.Evidence, d.OutcomeAt = "", "", time.Time{}
+			}
 		}
 		var worker *Worker
 		for j := range in.Workers {
@@ -217,6 +222,7 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 			}
 			d.Abandoned = false
 			d.Started = in.Now
+			d.Outcome, d.Evidence, d.OutcomeAt = "", "", time.Time{}
 		}
 		// A combining pull carries deliveries of the original, even when GitHub
 		// no longer includes their issue links on the superseded pull.
@@ -241,10 +247,19 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		if len(d.Pulls) == 0 {
 			if in.ClosedIssues[d.Ref] || deliveryWorkerDone(in, *d) {
 				d.Step = state.DeliveryDropped
+				if before != state.DeliveryDropped || d.Outcome == "" || d.Outcome == state.OutcomeParked {
+					d.Outcome, d.OutcomeAt = state.DeliveryDropped, in.Now
+					if in.ClosedIssues[d.Ref] {
+						d.Evidence = "issue closed without a pull request"
+					} else {
+						d.Evidence = "worker finished without a pull request"
+					}
+				}
 			} else if worker != nil && !worker.Saved && !deliveryWorkerDone(in, *d) {
 				if !d.Active() {
 					d.Step = state.DeliveryImplementing
 					d.Started = in.Now
+					d.Outcome, d.Evidence, d.OutcomeAt = "", "", time.Time{}
 				}
 			}
 		} else {
@@ -257,6 +272,7 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 					d.Started = in.Now
 					d.Release = ""
 					d.Verdict = ""
+					d.Outcome, d.Evidence, d.OutcomeAt = "", "", time.Time{}
 				}
 			case missing: // a failed read never proves an end
 			case merged:
@@ -265,7 +281,11 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 					d.OutcomeAt = in.Now
 					for _, p := range observed {
 						if p.State == Merged {
-							d.Evidence = p.URL
+							if p.URL != "" {
+								d.Evidence = p.URL
+							} else {
+								d.Evidence = p.Ref
+							}
 							break
 						}
 					}
@@ -275,6 +295,9 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 				}
 			case len(observed) > 0 && (worker == nil || worker.Saved || worker.Done || deliveryWorkerDone(in, *d)):
 				d.Step = state.DeliveryDropped
+				if before != state.DeliveryDropped || d.Outcome == "" || d.Outcome == state.OutcomeParked {
+					d.Outcome, d.Evidence, d.OutcomeAt = state.DeliveryDropped, "pull request closed without merge", in.Now
+				}
 			case worker != nil:
 				d.Step = state.DeliveryImplementing
 			}

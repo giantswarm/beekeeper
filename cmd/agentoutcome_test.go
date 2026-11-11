@@ -78,6 +78,12 @@ func TestParkRecordsDeliveryOutcome(t *testing.T) {
 	if len(events) != 1 || st.Deliveries[0].Outcome != state.OutcomeParked || !st.Deliveries[0].Active() {
 		t.Fatalf("park: %+v", st.Deliveries)
 	}
+	st.Deliveries[0].Step = state.DeliveryDropped
+	st.Deliveries[0].Outcome = state.DeliveryDropped
+	st.Deliveries[0].Evidence = "issue closed without a pull request"
+	if events := a.recordTaskOutcome(st, ag, state.OutcomeParked, "#7: decision"); len(events) != 0 || st.Deliveries[0].Outcome != state.DeliveryDropped {
+		t.Fatalf("park overwrote terminal delivery outcome: %+v %+v", st.Deliveries, events)
+	}
 }
 
 func TestCompletionRejectsUnmergedAndUnreadPull(t *testing.T) {

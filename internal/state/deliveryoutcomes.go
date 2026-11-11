@@ -25,13 +25,11 @@ func DeliveryOutcomes(events []Event, since, until time.Time) map[string]int {
 		}
 		key := fmt.Sprintf("%s/%s", d.Ref, d.Started.Format(time.RFC3339Nano))
 		outcome := d.Outcome
-		if outcome == "" {
-			switch d.Step {
-			case DeliveryDone:
-				outcome = OutcomeMerged
-			case DeliveryDropped:
-				outcome = DeliveryDropped
-			}
+		if outcome == "" && !d.Active() {
+			outcome = DeliveryDropped
+		}
+		if outcome == OutcomeParked && attempts[key].outcome != "" && attempts[key].outcome != OutcomeParked {
+			continue
 		}
 		if outcome != "" && attempts[key].outcome != outcome {
 			attempts[key] = ending{outcome, e.At}
