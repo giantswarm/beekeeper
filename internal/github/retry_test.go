@@ -81,7 +81,7 @@ func TestRetryingAsksAWriteOrAFinalAnswerOnce(t *testing.T) {
 		"GitHub's errors with data": {graphqlRead, `{"data":{"repositoryOwner":null},"errors":[{"message":"Could not resolve"}]}`, errors.New("exit status 1: GraphQL: Could not resolve")},
 		"a 404":                     {[]string{ghAPI, "repos/o/r"}, `{"message":"Not Found"}`, errors.New("exit status 1: HTTP 404: Not Found")},
 		"a filtered empty answer":   {[]string{ghAPI, "user", "--jq", ".login"}, "", nil},
-		"a raw file":                {[]string{ghAPI, "-H", "Accept: application/vnd.github.raw", "repos/o/r/contents/f"}, "", nil},
+		"a raw file":                {[]string{ghAPI, "-H", acceptRaw, "repos/o/r/contents/f"}, "", nil},
 		"a list's plain output":     {[]string{"pr", "list"}, "", nil},
 	} {
 		a := &answers{outs: []string{c.out}, errs: []error{c.err}}

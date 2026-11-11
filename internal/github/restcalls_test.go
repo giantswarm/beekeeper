@@ -16,7 +16,7 @@ func TestRESTAdmissionStopsBeforeExecution(t *testing.T) {
 	ctx := WithRESTAdmission(t.Context(), func(context.Context, string) error { return refused })
 	// The refusal returns before looking for gh, retrying, or recording an
 	// invocation. An unrelated worker context does not inherit this gate.
-	_, err := Retrying(execGH, 0)(ctx, ghAPI, "repos/example/cache")
+	_, err := Retrying(execGH, 0)(ctx, ghAPI, reposPrefix+cacheTestRepo)
 	if !errors.Is(err, refused) || observed != 0 {
 		t.Fatalf("refused call: %v, observed=%d", err, observed)
 	}

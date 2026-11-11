@@ -12,7 +12,12 @@ import (
 	"time"
 )
 
-const cacheTestRepo = "example/cache"
+const (
+	cacheTestRepo = "example/cache"
+	cacheTestFile = "file"
+	cacheTestETag = `"v1"`
+	cacheTestBody = "body"
+)
 
 func fileResponse(status int, etag, body string) []byte {
 	return []byte(fmt.Sprintf("HTTP/2.0 %d Status\r\nETag: %s\r\n\r\n%s", status, etag, body))
@@ -28,15 +33,15 @@ func TestRepositoryReadsWorkingHour(t *testing.T) {
 			charged++
 			return []byte("commit\n"), nil
 		}
-		if !slices.Contains(args, "--include") {
+		if !slices.Contains(args, ghFlagInclude) {
 			t.Fatal("file read omitted response headers")
 		}
-		if slices.Contains(args, `If-None-Match: "v1"`) {
+		if slices.Contains(args, `If-None-Match: `+cacheTestETag) {
 			conditional++
-			return fileResponse(304, `"v1"`, ""), nil
+			return fileResponse(304, cacheTestETag, ""), nil
 		}
 		charged++
-		return fileResponse(200, `"v1"`, "manifest"), nil
+		return fileResponse(200, cacheTestETag, "manifest"), nil
 	}, func() time.Time { return now })
 	// Ten repositories, two files per repository, one loop pass per ten
 	// seconds. Only the first file reads spend REST points; all refreshes
@@ -74,25 +79,25 @@ func TestRepositoryFileChangesErrorsAndAbsence(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return fileResponse(200, `"first"`, "old"), nil
+			return fileResponse(200, `"first"`, "first-body"), nil
 		case 2:
 			if !slices.Contains(args, `If-None-Match: "first"`) {
 				t.Fatal("changed read omitted old ETag")
 			}
-			return fileResponse(200, `"second"`, "new"), nil
+			return fileResponse(200, `"second"`, "second-body"), nil
 		case 3:
 			if !slices.Contains(args, `If-None-Match: "second"`) {
 				t.Fatal("validator was not replaced")
 			}
 			return nil, errors.New("HTTP 403 forbidden")
 		case 4:
-			return fileResponse(404, "", "missing"), errors.New("HTTP 404 not found")
+			return fileResponse(404, "", "not-found"), errors.New("HTTP 404 not found")
 		default:
 			return fileResponse(200, `"created"`, ""), nil
 		}
 	}, func() time.Time { return now })
-	read := func() ([]byte, error) { return rawFile(t.Context(), cache.call, cacheTestRepo, "file", "main") }
-	for _, want := range []string{"old", "new"} {
+	read := func() ([]byte, error) { return rawFile(t.Context(), cache.call, cacheTestRepo, cacheTestFile, mainBranch) }
+	for _, want := range []string{"first-body", "second-body"} {
 		body, err := read()
 		if err != nil || string(body) != want {
 			t.Fatalf("read = %q, %v; want %q", body, err, want)
@@ -124,13 +129,13 @@ func TestRepositoryCacheCoalescesAndCancels(t *testing.T) {
 			close(entered)
 		}
 		<-release
-		return fileResponse(200, `"v1"`, "body"), nil
+		return fileResponse(200, cacheTestETag, cacheTestBody), nil
 	}, time.Now)
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {
-			body, err := rawFile(t.Context(), cache.call, cacheTestRepo, "file", "main")
-			if err != nil || string(body) != "body" {
+			body, err := rawFile(t.Context(), cache.call, cacheTestRepo, cacheTestFile, mainBranch)
+			if err != nil || string(body) != cacheTestBody {
 				t.Errorf("coalesced read: %q, %v", body, err)
 			}
 		})
@@ -138,7 +143,7 @@ func TestRepositoryCacheCoalescesAndCancels(t *testing.T) {
 	<-entered
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := rawFile(ctx, cache.call, cacheTestRepo, "file", "main"); !errors.Is(err, context.Canceled) {
+	if _, err := rawFile(ctx, cache.call, cacheTestRepo, cacheTestFile, mainBranch); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled waiter: %v", err)
 	}
 	close(release)
@@ -152,14 +157,14 @@ func TestRepositoryCacheKeysAndBounds(t *testing.T) {
 	calls := 0
 	cache := newRepositoryCache(func(_ context.Context, _ ...string) ([]byte, error) {
 		calls++
-		return fileResponse(200, `"v1"`, "body"), nil
+		return fileResponse(200, cacheTestETag, cacheTestBody), nil
 	}, time.Now)
 	for _, tc := range []struct{ repo, path, ref, acting string }{
-		{cacheTestRepo, "file", "main", cacheTestRepo},
-		{"example/other", "file", "main", cacheTestRepo},
-		{cacheTestRepo, "other", "main", cacheTestRepo},
-		{cacheTestRepo, "file", "other", cacheTestRepo},
-		{cacheTestRepo, "file", "main", "example/other"},
+		{cacheTestRepo, cacheTestFile, mainBranch, cacheTestRepo},
+		{"example/second-repo", cacheTestFile, mainBranch, cacheTestRepo},
+		{cacheTestRepo, "second-path", mainBranch, cacheTestRepo},
+		{cacheTestRepo, cacheTestFile, "second-ref", cacheTestRepo},
+		{cacheTestRepo, cacheTestFile, mainBranch, "example/second-acting"},
 	} {
 		for range 2 {
 			if _, err := rawFile(ActingOn(t.Context(), tc.acting), cache.call, tc.repo, tc.path, tc.ref); err != nil {
@@ -171,7 +176,7 @@ func TestRepositoryCacheKeysAndBounds(t *testing.T) {
 		t.Fatalf("repo/path/ref/routing cache keys: %d calls", calls)
 	}
 	for range 2 {
-		if _, err := cache.call(t.Context(), ghAPI, "repos/example/cache", "-X", "PATCH"); err != nil {
+		if _, err := cache.call(t.Context(), ghAPI, reposPrefix+cacheTestRepo, "-X", "PATCH"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -179,7 +184,7 @@ func TestRepositoryCacheKeysAndBounds(t *testing.T) {
 		t.Fatal("unrelated requests were cached")
 	}
 	for i := range repositoryCacheEntries + 1 {
-		if _, err := rawFile(t.Context(), cache.call, cacheTestRepo, fmt.Sprintf("file%d", i), "main"); err != nil {
+		if _, err := rawFile(t.Context(), cache.call, cacheTestRepo, fmt.Sprintf("file%d", i), mainBranch); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -189,7 +194,7 @@ func TestRepositoryCacheKeysAndBounds(t *testing.T) {
 	cache.run = func(_ context.Context, _ ...string) ([]byte, error) {
 		return fileResponse(200, `"large"`, strings.Repeat("x", repositoryCacheBytes+1)), nil
 	}
-	if _, err := rawFile(t.Context(), cache.call, cacheTestRepo, "large", "main"); err != nil || cache.bytes > repositoryCacheBytes {
+	if _, err := rawFile(t.Context(), cache.call, cacheTestRepo, "large", mainBranch); err != nil || cache.bytes > repositoryCacheBytes {
 		t.Fatalf("cache exceeded byte bound: %d, %v", cache.bytes, err)
 	}
 }

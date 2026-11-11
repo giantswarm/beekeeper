@@ -15,8 +15,14 @@ import (
 	"time"
 )
 
-const repositoryCacheBytes = 8 << 20
-const repositoryCacheEntries = 1024
+const (
+	repositoryCacheBytes   = 8 << 20
+	repositoryCacheEntries = 1024
+	reposPrefix            = "repos/"
+	commitsHeadSuffix      = "/commits/HEAD"
+	ghRepoEnv              = "GH_REPO"
+	pathEnv                = "PATH"
+)
 
 type repositoryRead struct {
 	body    []byte
@@ -44,10 +50,10 @@ func newRepositoryCache(run GH, now func() time.Time) *repositoryCache {
 
 func repositoryReadKind(args []string) (endpoint string, head bool) {
 	if len(args) == 4 && args[0] == ghAPI {
-		if args[2] == ghFlagJQ && args[3] == ".sha" && strings.HasPrefix(args[1], "repos/") && strings.HasSuffix(args[1], "/commits/HEAD") {
+		if args[2] == ghFlagJQ && args[3] == ".sha" && strings.HasPrefix(args[1], reposPrefix) && strings.HasSuffix(args[1], commitsHeadSuffix) {
 			return args[1], true
 		}
-		if args[1] == "-H" && args[2] == "Accept: application/vnd.github.raw" && strings.HasPrefix(args[3], "repos/") && strings.Contains(args[3], "/contents/") {
+		if args[1] == "-H" && args[2] == acceptRaw && strings.HasPrefix(args[3], reposPrefix) && strings.Contains(args[3], "/contents/") {
 			return args[3], false
 		}
 	}
@@ -60,7 +66,7 @@ func (c *repositoryCache) call(ctx context.Context, args ...string) ([]byte, err
 		return c.run(ctx, args...)
 	}
 	// Scope by credential routing metadata, never by a credential value.
-	key := strings.Join([]string{os.Getenv("GH_HOST"), os.Getenv("GH_CONFIG_DIR"), os.Getenv("GH_REPO"), os.Getenv("PATH"), Repo(ctx), endpoint}, "\x00")
+	key := strings.Join([]string{os.Getenv("GH_HOST"), os.Getenv("GH_CONFIG_DIR"), os.Getenv(ghRepoEnv), os.Getenv(pathEnv), Repo(ctx), endpoint}, "\x00")
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -147,7 +153,7 @@ func (c *repositoryCache) fetch(ctx context.Context, args []string, head bool, o
 		}
 		return out, "", err
 	}
-	request := append(append([]string(nil), args...), "--include")
+	request := append(append([]string(nil), args...), ghFlagInclude)
 	if old.etag != "" && old.err == nil {
 		request = append(request, "-H", "If-None-Match: "+old.etag)
 	}

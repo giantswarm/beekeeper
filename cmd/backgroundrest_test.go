@@ -9,11 +9,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const backgroundTestCaller = "internal/github.rawFile"
+const (
+	backgroundTestCaller       = "internal/github.rawFile"
+	backgroundTestBranchCaller = "internal/github.defaultBranch"
+)
 
 func TestWorkerRESTContextKeepsWorkerGate(t *testing.T) {
 	a, _ := budgetApp(t)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "worker")
+	t.Setenv(orphanSessionEnv, "background-worker")
 	ctx := a.backgroundRESTContext(t.Context())
 	if err := github.AdmitRESTCall(ctx, backgroundTestCaller); err != nil {
 		t.Fatal(err)
@@ -31,7 +34,7 @@ func TestBackgroundRESTAllowanceProtectsWindow(t *testing.T) {
 	for i := range backgroundRESTLimit {
 		class := backgroundTestCaller
 		if i%2 == 0 {
-			class = "internal/github.defaultBranch"
+			class = backgroundTestBranchCaller
 		}
 		if err := spend.admit(now, b, 1000, class); err != nil {
 			t.Fatal(err)
@@ -104,7 +107,7 @@ func TestBackgroundRESTAllowanceSurvivesProcessRestart(t *testing.T) {
 	if err := a.admitBackgroundREST(t.Context(), backgroundTestCaller); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.admitBackgroundREST(t.Context(), "internal/github.defaultBranch"); err != nil {
+	if err := b.admitBackgroundREST(t.Context(), backgroundTestBranchCaller); err != nil {
 		t.Fatal(err)
 	}
 	var spend backgroundRESTSpend
