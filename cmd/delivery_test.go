@@ -255,7 +255,7 @@ func TestDeliveryStatsWindowAndDuplicates(t *testing.T) {
 	add(idleRef, state.DeliveryDone, since.Add(3*time.Hour))
 	add("o/r#3", state.DeliveryCI, now.Add(time.Hour))
 	got := deliveryStatistics(events, since, now)
-	want := deliveryStats{Since: since, Until: now, Released: 2, ReleasedPerDay: 2, MeanCycleTime: 3 * time.Hour, CycleSamples: 2, Steps: []deliveryStepStats{{Step: state.DeliveryCI, Median: 2 * time.Hour, Worst: 2 * time.Hour, Samples: 1}, {Step: state.DeliveryImplementing, Median: 2 * time.Hour, Worst: 3 * time.Hour, Samples: 2}}}
+	want := deliveryStats{Outcomes: map[string]int{state.OutcomeMerged: 2}, Since: since, Until: now, Released: 2, ReleasedPerDay: 2, MeanCycleTime: 3 * time.Hour, CycleSamples: 2, Steps: []deliveryStepStats{{Step: state.DeliveryCI, Median: 2 * time.Hour, Worst: 2 * time.Hour, Samples: 1}, {Step: state.DeliveryImplementing, Median: 2 * time.Hour, Worst: 3 * time.Hour, Samples: 2}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v != %+v", got, want)
 	}

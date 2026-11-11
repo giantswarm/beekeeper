@@ -79,3 +79,13 @@ test: test-loop-workflow
 .PHONY: browse-upload-live
 browse-upload-live: ## Check browse --file against the installed Claude CLI and connected Chrome.
 	go test -tags browselive -run '^TestBrowseUploadLive$$' -count=1 -timeout=10m ./cmd
+
+PERF_TEST := go test -tags perf ./internal/perfsuite -count=1 -timeout=40m -v
+
+.PHONY: test-performance
+test-performance: ## Run the performance budgets (docs/performance.md). CI runs it; outside CI it refuses to run without a cgroup limit.
+	BEEKEEPER_PERF=1 $(PERF_TEST)
+
+.PHONY: test-performance-local
+test-performance-local: ## Opt-in local run of the performance budgets, inside a cgroup limited to one core and 1 GiB. Never on a desk's coordinator.
+	systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=1G -- env BEEKEEPER_PERF=1 $(PERF_TEST)

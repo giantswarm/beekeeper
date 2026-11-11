@@ -314,11 +314,11 @@ func TestServesIgnoresPullRequestInTask(t *testing.T) {
 	}
 }
 
-// A pass cut short by the allowance hold says nothing of the pull requests it
-// did not read: an ownerless stretch must not end on that.
-func TestHeldPassKeepsOwnerlessStretchOfUnreadPull(t *testing.T) {
+// Unavailable watcher observations say nothing about ownership. Keep each
+// ownerless stretch while continuing to plan from the other fresh observations.
+func TestUnavailableObservationsKeepOwnerlessStretch(t *testing.T) {
+	observe, sweep := readObservedLoopPull, readLoopSweep
 	r := newLoopRig(t)
-	// The first orphan's read meets the hold, the second is not read at all.
 	orphans := []string{sweepRef(31), sweepRef(32)}
 	for _, orphan := range orphans {
 		r.pulls[orphan] = superloop.Pull{Ref: orphan, URL: "https://github.com/" + strings.Replace(orphan, "#", "/pull/", 1), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
@@ -330,51 +330,90 @@ func TestHeldPassKeepsOwnerlessStretchOfUnreadPull(t *testing.T) {
 	if evs := r.logged(t, loopOwnerlessVerb); len(evs) != len(orphans) {
 		t.Fatalf("stretches did not start: %+v", evs)
 	}
-	r.park(t, loopPR, time.Now())
-	prev := readLoopPull
-	held := 0
-	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
-		if ref == loopPR {
-			// The active pull request is read; the hold starts right after.
-			return prev(ctx, ref)
-		}
-		held++
+	r.park(t, loopPR, r.a.now)
+	readObservedLoopPull, readLoopSweep = observe, sweep
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		t.Error("pass read a pull request from GitHub")
 		return superloop.Pull{}, errLoopLater
 	}
-	r.pass(t)
-	if evs := r.logged(t, loopOwnerlessVerb); len(evs) != len(orphans) {
-		t.Fatalf("a held pass ended the stretch of a pull request it did not read: %+v", evs)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if held != 1 {
-		t.Fatalf("the pass read on after the hold: %d reads met it", held)
+	l.once = true
+	l.pullWatcher().snapshot = loopPullSnapshot{
+		Pulls: map[string]watchedLoopPull{
+			loopPR:     {Pull: r.pull, At: r.a.now},
+			orphans[0]: {Pull: r.pulls[orphans[0]], At: r.a.now, Error: "GitHub allowance held"},
+			orphans[1]: {Pull: r.pulls[orphans[1]], At: r.a.now.Add(-loopPullMaxAge - time.Second)},
+		},
+		Open: orphans, ListedAt: r.a.now,
+	}
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopOwnerlessVerb); len(evs) != len(orphans) {
+		t.Fatalf("an unavailable observation ended an ownerless stretch: %+v", evs)
+	}
+	for _, orphan := range orphans {
+		if !strings.Contains(r.out.String(), "cannot read "+orphan) {
+			t.Errorf("pass did not report the unavailable observation for %s: %s", orphan, r.out)
+		}
+	}
+	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 1)) == nil {
+		t.Fatalf("unavailable observations blocked review of a fresh green pull request: %v\n%s", r.calls, r.out)
 	}
 }
 
-// With no pull request read, the hold ends the pass before it plans anything.
-func TestHeldPassWithNothingReadPlansNothing(t *testing.T) {
+// Missing watcher observations block actions on those pull requests, but local
+// cleanup still proceeds. A later observation lets their review start.
+func TestUnavailableObservationsAllowLocalCleanup(t *testing.T) {
+	observe, sweep := readObservedLoopPull, readLoopSweep
 	r := newLoopRig(t)
+	readObservedLoopPull, readLoopSweep = observe, sweep
 	const finished = "finished worker"
 	party := state.Party{Name: finished}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: party, Task: "done work", Done: true}}
-		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: time.Now(), ReviewHead: loopHead, Agent: "other owner", Party: state.Party{Name: "other owner"}}}
+		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: r.a.now, ReviewHead: loopHead, Agent: "other owner", Party: state.Party{Name: "other owner"}}}
 		return []state.Event{event(party, superloop.VerbDone, "%s done: done work", finished)}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	prev := readLoopPull
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, errLoopLater }
-	r.pass(t)
-	if c := r.called(agentsName, loopRemove, finished); c != nil {
-		t.Fatalf("a pass that read nothing took an action: %v", c)
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		t.Error("pass read a pull request from GitHub")
+		return superloop.Pull{}, errLoopLater
 	}
-	// The same pass plans it once the hold is gone: the check above saw a pass
-	// that stopped, not one with nothing to do.
-	readLoopPull = prev
-	r.pulls[multiParkSecondPR] = superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Open, Head: loopHead, Author: loopDesk}
-	r.pass(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if r.called(agentsName, loopRemove, finished) == nil {
-		t.Fatalf("no action once the hold ended: %v\n%s", r.calls, r.out)
+		t.Fatalf("missing observation blocked local cleanup: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("missing observation started an agent: %v", c)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.ReviewParkFor(multiParkSecondPR); !ok {
+		t.Fatal("missing observation discarded the review request")
+	}
+	l.pullWatcher().snapshot.Pulls[multiParkSecondPR] = watchedLoopPull{
+		Pull: superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk},
+		At:   r.a.now,
+	}
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r.called(agentsName, agentStartName, superloop.ReviewerName(multiParkSecondPR, 1)) == nil {
+		t.Fatalf("no review once the observation arrived: %v\n%s", r.calls, r.out)
 	}
 }
 

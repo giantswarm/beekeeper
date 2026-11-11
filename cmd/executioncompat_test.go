@@ -12,10 +12,14 @@ import (
 )
 
 func TestExecutionHostReleaseCompatibility(t *testing.T) {
+	withCoordinatorVersion(t, hostNewRelease)
 	for _, version := range []string{"v0.171.0-rc.60", "v0.171.0-rc.61", "v0.172.0"} {
 		t.Run(version, func(t *testing.T) {
 			a, _ := sshStartTestApp(t)
 			h := a.cfg.Agents.Hosts[sshTestSelector]
+			if err := a.admitExecution(sshTestSelector, h); err != nil {
+				t.Fatalf("release mismatch blocked compatible probe: %v", err)
+			}
 			caps, err := a.executionProbe(context.Background(), h)
 			if err != nil {
 				t.Fatal(err)
@@ -47,16 +51,6 @@ func TestExecutionHostReleaseCompatibility(t *testing.T) {
 				})
 			}
 		})
-	}
-}
-
-func TestHostsCheckFlagsCoordinatorReleaseMismatch(t *testing.T) {
-	withCoordinatorVersion(t, hostNewRelease)
-	if err := checkHostRelease(hostOldRelease); err == nil {
-		t.Fatal("stale host release accepted")
-	}
-	if err := checkHostRelease(hostNewRelease); err != nil {
-		t.Fatal(err)
 	}
 }
 

@@ -64,13 +64,16 @@ func TestMCPLeaseClaimOutcome(t *testing.T) {
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
 	var pauses []time.Duration
-	claimPause = func(_ context.Context, d time.Duration) error { pauses = append(pauses, d); return nil }
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) {
+		pauses = append(pauses, d)
+		return d, nil
+	}
 	req.Params.Arguments.(map[string]any)["wait"] = "25s"
 	if out, err := invoke("agent-two"); Code(err) != ExitRefused || !strings.HasSuffix(out, "(waited "+dur(25*time.Second)+")") || len(pauses) != 3 {
 		t.Fatalf("wait: %q, %v, %v", out, err, pauses)
 	}
-	claimPause = func(_ context.Context, d time.Duration) error {
-		return store.Release("installation", state.Party{Name: litAgentOne, Person: "agent-one"}, now)
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) {
+		return d, store.Release("installation", state.Party{Name: litAgentOne, Person: "agent-one"}, now)
 	}
 	if out, err := invoke("agent-two"); err != nil || !strings.HasPrefix(out, "held by you since") {
 		t.Fatalf("wait until held: %q, %v", out, err)

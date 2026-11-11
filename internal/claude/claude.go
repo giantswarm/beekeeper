@@ -212,6 +212,16 @@ func (r *Record) Waiting() *Waiting {
 // one's. A CLI that another session's tool command runs belongs to that
 // session unless it was started under an id of its own.
 func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	return discover(cfg, t, now, true)
+}
+
+// DiscoverLiveness reads CLI identities without repository, transcript or
+// process-tree accounting. Role recovery must not wait for those observations.
+func DiscoverLiveness(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	return discover(cfg, t, now, false)
+}
+
+func discover(cfg *config.Config, t *proc.Table, now time.Time, details bool) []*Session {
 	records := map[int]*cliRecord{}
 	for _, p := range t.ByPID {
 		if isCLI(p) || isSpare(p) {
@@ -230,7 +240,7 @@ func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
 	slices.SortFunc(pids, func(a, b int) int { return compareProcessesDesc(t.ByPID[a], t.ByPID[b]) })
 	var out []*Session
 	for _, pid := range pids {
-		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now)
+		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now, details)
 		// A restarted or resumed CLI can overlap its predecessor for a
 		// moment: the newest process is the session.
 		if slices.ContainsFunc(out, func(newer *Session) bool { return newer.supersedes(s) }) {
@@ -375,26 +385,27 @@ func underDaemon(t *proc.Table, p *proc.Process) bool {
 	})
 }
 
+const (
+	sessionIDFlag = "--session-id"
+	resumeFlag    = "--resume"
+)
+
 // ownID is the session id a CLI was started under: --session-id, or the
 // session --resume continues, which the daemon names by its transcript
 // when it wakes a background session (<projects>/<dir>/<id>.jsonl).
 func ownID(args []string) string {
-	for _, flag := range []string{"--session-id", "--resume", "-r"} {
-		if v := argValue(args, flag); v != "" && !strings.HasPrefix(v, "-") {
-			if id, ok := strings.CutSuffix(filepath.Base(v), ".jsonl"); ok {
-				return id
-			}
-			return v
-		}
-	}
-	return ""
+	return flagSessionID(args, sessionIDFlag, resumeFlag, "-r")
 }
 
 // resumeID is the session id --resume or -r names on args, "" for none.
 func resumeID(args []string) string {
-	for _, flag := range []string{"--resume", "-r"} {
+	return flagSessionID(args, resumeFlag, "-r")
+}
+
+func flagSessionID(args []string, flags ...string) string {
+	for _, flag := range flags {
 		if v := argValue(args, flag); v != "" && !strings.HasPrefix(v, "-") {
-			if id, ok := strings.CutSuffix(filepath.Base(v), ".jsonl"); ok {
+			if id, ok := strings.CutSuffix(filepath.Base(v), transcriptExt); ok {
 				return id
 			}
 			return v
@@ -513,7 +524,7 @@ func ResumedSession(cfg *config.Config, t *proc.Table, id string) (prevID, jobID
 
 // newSession builds the session process p runs: its record names it, else
 // its arguments and environment do.
-func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
+func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time, details bool) *Session {
 	argID := ownID(p.Args)
 	resID := resumeID(p.Args)
 	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: argID, Background: underDaemon(t, p)}
@@ -572,6 +583,9 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 	}
 	if s.Name == "" {
 		s.Name = "pid " + strconv.Itoa(p.PID)
+	}
+	if !details {
+		return s
 	}
 	repo, branch := GitInfo(s.Cwd)
 	s.Repo = repo

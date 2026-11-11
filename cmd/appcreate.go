@@ -1007,7 +1007,9 @@ func githubSend(ctx context.Context, method, target, accept, auth string, form u
 		req.Header.Set("Authorization", auth)
 	}
 	if strings.HasPrefix(target, githubAPI+"/") {
-		github.ObserveRESTCall("cmd.githubSend")
+		if err := github.AdmitRESTCall(ctx, "cmd.githubSend"); err != nil {
+			return nil, err
+		}
 	}
 	return githubClient.Do(req)
 }

@@ -303,7 +303,7 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 			Machine: plat.Machine,
 			table: &proc.Table{
 				ByPID: map[int]*proc.Process{
-					4102140: {PID: 4102140, Comm: claudeComm, StartTicks: 100, Args: []string{claudeComm, "--session-id", origID, "-n", guideName56}},
+					4102140: {PID: 4102140, Comm: claudeComm, StartTicks: 100, Args: []string{claudeComm, sessionIDFlag, origID, "-n", guideName56}},
 					4242:    {PID: 4242, Comm: claudeComm, StartTicks: 200, Args: []string{"claude bg-spare", "--bg-spare"}},
 				},
 			},
@@ -361,8 +361,8 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 			Machine: plat.Machine,
 			table: &proc.Table{
 				ByPID: map[int]*proc.Process{
-					4102140: {PID: 4102140, Comm: claudeComm, StartTicks: 100, Args: []string{claudeComm, "--session-id", origID, "-n", guideName51}},
-					603457:  {PID: 603457, Comm: claudeComm, StartTicks: 200, Args: []string{claudeComm, "--resume", origID}},
+					4102140: {PID: 4102140, Comm: claudeComm, StartTicks: 100, Args: []string{claudeComm, sessionIDFlag, origID, "-n", guideName51}},
+					603457:  {PID: 603457, Comm: claudeComm, StartTicks: 200, Args: []string{claudeComm, resumeFlag, origID}},
 				},
 			},
 		}
