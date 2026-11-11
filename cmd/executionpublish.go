@@ -137,7 +137,7 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	// A fetch that runs out of time says how much it received: a slow link and
 	// a transfer too large for the deadline look the same otherwise.
 	received := int64(-1)
-	if len(args) > 0 && args[0] == "fetch" {
+	if len(args) > 0 && args[0] == gitFetch {
 		received = publicationObjectBytes(dir)
 	}
 	out, err := c.Output()
@@ -155,10 +155,11 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 
 // publicationGitStages are the Git subcommands publication runs; any other
 // argument is never echoed back as a stage.
-var publicationGitStages = []string{"init", "fetch", "push", gitBundle, "cat-file", "rev-parse", gitRevList, "merge-base", "log", gitMerge, "diff", "update-ref"}
+var publicationGitStages = []string{"init", gitFetch, "push", gitBundle, "cat-file", "rev-parse", gitRevList, "merge-base", "log", gitMerge, "diff", "update-ref"}
 
 const (
 	gitBundle  = "bundle"
+	gitFetch   = "fetch"
 	gitRevList = "rev-list"
 	gitMerge   = "merge"
 	gitVerify  = "verify"
