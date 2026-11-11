@@ -994,15 +994,16 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		t.Fatalf("step 4 = room %d, choice %+v; want room 0, no choice, gemini ahead of pace", v3.Room, v3.Choice)
 	}
 
-	// 5. A review is decided like a worker's start: with capacity.reviewSkipPace
-	//    configured, the same windows give it no choice either.
+	// 5. A review is not refused by the 7-day pace check while within the
+	//    weekly cap: with all choices ahead of pace, it still gets room and
+	//    picks the choice least ahead of pace (agy/claude-opus-4-6-thinking).
 	a4Rev, _ := newApp(t0, false)
 	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, nil, forReview)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vReview.Room != 0 || vReview.Choice == nil || vReview.Choice.Harness != "" || !vReview.Choice.Review {
-		t.Fatalf("review ahead of pace = room %d, choice %+v; want room 0 and no choice", vReview.Room, vReview.Choice)
+	if vReview.Room != 5 || vReview.Choice == nil || vReview.Choice.Harness != harnessAgy || vReview.Choice.Model != testModelOpus46 || !vReview.Choice.Review {
+		t.Fatalf("review ahead of pace = room %d, choice %+v; want room 5 and agy/claude-opus-4-6-thinking", vReview.Room, vReview.Choice)
 	}
 
 	// 6. Busy agents count against their provider/bucket, and machine guards cap the total across providers.
