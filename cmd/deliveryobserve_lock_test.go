@@ -52,7 +52,7 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 			st.Deliveries[0].Step = state.DeliveryDone
 			st.Deliveries[0].Verdict = verdictAvailable
 			st.Deliveries[0].Release = releaseTag
-			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: "o/r#101", Step: state.DeliveryImplementing, Started: now, Since: now})
+			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: "o/r#201", Step: state.DeliveryImplementing, Started: now, Since: now})
 			return nil, nil
 		})
 	}()
