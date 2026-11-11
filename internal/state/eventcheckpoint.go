@@ -99,7 +99,7 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 	dir := s.path("event-checkpoints")
 	path := filepath.Join(dir, name+".json")
 	previousFile, previousOffset := at.file, at.offset
-	savedKept, savedAnchor := slices.Clone(at.kept), at.anchor
+	savedKept, savedAnchor := at.kept, at.anchor
 	var saved eventCheckpoint
 	if at.file == nil {
 		if raw, err := os.ReadFile(path); err == nil { //nolint:gosec // validated reader basename under the store checkpoint directory
@@ -166,8 +166,13 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 			_ = os.Remove(anchor)
 			return events, nil
 		}
-		next := eventCheckpoint{Revision: revision, Source: source, Offset: at.offset, Kept: slices.Clone(at.kept)}
-		if err := writeJSON(path, next); err != nil {
+		// Encoded under the reader's mutex, so kept needs no copy; compact,
+		// as only a reader decodes it.
+		raw, err := json.Marshal(eventCheckpoint{Revision: revision, Source: source, Offset: at.offset, Kept: at.kept})
+		if err == nil {
+			err = writeRaw(path, append(raw, '\n'))
+		}
+		if err != nil {
 			_ = os.Remove(anchor)
 			return events, nil
 		}

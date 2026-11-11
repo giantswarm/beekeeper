@@ -2460,7 +2460,10 @@ func (s *FileStore) followContext(ctx context.Context, at *followed, keep func(E
 		return nil, err
 	}
 	defer closeEventFiles(files)
-	savedFile, savedOffset, savedKept := at.file, at.offset, slices.Clone(at.kept)
+	// kept only grows by append and every caller gets a copy, so the slice
+	// header restores it: a grown log's projection is not copied for a
+	// cancellation that rarely comes.
+	savedFile, savedOffset, savedKept := at.file, at.offset, at.kept
 	restore := func() {
 		at.file, at.offset, at.kept = savedFile, savedOffset, savedKept
 	}
