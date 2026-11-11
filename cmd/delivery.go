@@ -38,9 +38,10 @@ func readDelivery(st *state.State, limit int, now time.Time, policies ...deliver
 	}
 	v := deliveryView{Deliveries: []deliveryRow{}, Limit: limit, CompleteAt: st.DeliveriesAt}
 	for _, d := range st.Deliveries {
-		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, Flow: classifyDelivery(st, d, now, p), StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
+		flow := classifyDelivery(st, d, now, p)
+		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, Flow: flow, StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
 		if deliveryOwned(st, d, now, p) {
-			switch classifyDelivery(st, d, now, p).Class {
+			switch flow.Class {
 			case deliveryPerson:
 				v.WaitingOnPerson++
 			case deliveryBlocked:
@@ -77,6 +78,11 @@ func (a *app) deliveryCmd() *cobra.Command {
 			v := deliveryStatistics(events, a.timeNow().Add(-since), a.timeNow())
 			if a.json {
 				return a.printJSON(v)
+			}
+			for _, outcome := range slices.Sorted(maps.Keys(v.Outcomes)) {
+				if _, err := fmt.Fprintf(a.out, "outcome %s: %d\n", outcome, v.Outcomes[outcome]); err != nil {
+					return err
+				}
 			}
 			for _, s := range v.Steps {
 				if _, err := fmt.Fprintf(a.out, "%s: median %s, worst %s (%d observations)\n", s.Step, s.Median, s.Worst, s.Samples); err != nil {
@@ -136,6 +142,7 @@ type deliveryStepStats struct {
 	Samples int           `json:"samples"`
 }
 type deliveryStats struct {
+	Outcomes       map[string]int      `json:"outcomes"`
 	Since          time.Time           `json:"since"`
 	Until          time.Time           `json:"until"`
 	Steps          []deliveryStepStats `json:"steps"`
@@ -148,7 +155,7 @@ type deliveryStats struct {
 // Intervals crossing the window boundary are clipped. End states have no
 // residence duration; duplicate events and events in the future add nothing.
 func deliveryStatistics(events []state.Event, since, until time.Time) deliveryStats {
-	v := deliveryStats{Since: since, Until: until, Steps: []deliveryStepStats{}}
+	v := deliveryStats{Since: since, Until: until, Steps: []deliveryStepStats{}, Outcomes: state.DeliveryOutcomes(events, since, until)}
 	last := map[string]state.Delivery{}
 	durations := map[string][]time.Duration{}
 	slices.SortStableFunc(events, func(a, b state.Event) int { return a.At.Compare(b.At) })
@@ -173,7 +180,7 @@ func deliveryStatistics(events []state.Event, since, until time.Time) deliverySt
 				durations[old.Step] = append(durations[old.Step], e.At.Sub(start))
 			}
 		}
-		if d.Step == state.DeliveryDone && !e.At.Before(since) {
+		if d.Step == state.DeliveryDone && d.Outcome != state.OutcomeNoChange && !e.At.Before(since) {
 			v.Released++
 			// Completed cycles keep their full age, even if their start precedes
 			// the statistics window. Unknown start times cannot size a limit.

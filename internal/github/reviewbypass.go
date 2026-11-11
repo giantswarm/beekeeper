@@ -12,6 +12,7 @@ import (
 const (
 	reviewRequiredChecks = "required_status_checks"
 	reviewCheckSuccess   = "success"
+	jsonNull             = "null"
 )
 
 // ReviewOnlyBypass proves the requirements an admin merge would otherwise
@@ -44,7 +45,7 @@ func ReviewOnlyBypass(ctx context.Context, run GH, repo, base, head string) erro
 	if len(protection.Errors) != 0 || protection.Data.Repository == nil || protection.Data.Repository.Ref == nil || len(protection.Data.Repository.Ref.Rule) == 0 {
 		return fmt.Errorf("classic protection is unreadable")
 	}
-	if string(protection.Data.Repository.Ref.Rule) != "null" {
+	if string(protection.Data.Repository.Ref.Rule) != jsonNull {
 		return fmt.Errorf("classic protection cannot be safely waived by the review-only exception")
 	}
 	rules, err := bypassPages[bypassRule](ctx, run, "repos/"+repo+"/rules/branches/"+url.PathEscape(base))
@@ -87,7 +88,7 @@ func ReviewOnlyBypass(ctx context.Context, run GH, repo, base, head string) erro
 			// on a behind head do not prove its merge result is green.
 			var strict bool
 			if value, ok := rule.Parameters["strict_required_status_checks_policy"]; ok {
-				if err := json.Unmarshal(value, &strict); err != nil || string(value) == "null" {
+				if err := json.Unmarshal(value, &strict); err != nil || string(value) == jsonNull {
 					return fmt.Errorf("up-to-date requirement is unreadable")
 				}
 			}

@@ -574,6 +574,20 @@ func (a *app) reviveBackground(ctx context.Context, holder state.Party, msg stri
 	if err != nil {
 		return err
 	}
+	// Independent crash recovery and suspend recovery can arrive together.
+	// Serialize with ordinary wakes, then recheck the current role and daemon.
+	unlock, err := a.lockForWake(ctx, st, holder)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "reviving "+holder.Name); err != nil {
+		return err
+	}
 	for _, q := range []string{holder.Session, holder.Name} {
 		if _, err := guideMessageTarget(st, q); err != nil {
 			return err
@@ -735,6 +749,30 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 		}
 		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
 		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
+	}
+	for _, ag := range st.Agents {
+		if ag.Park == nil || !ag.Park.Resumable.IsZero() && len(ag.Park.Continuation) == 0 || ag.Execution != nil || keepsRole(st, ag.Party) {
+			continue
+		}
+		h, id, ok := harnessOf(ag.Party)
+		if !ok {
+			continue
+		}
+		if _, busy := turnRunning(sessions, t, ag.Party, w.now); busy {
+			continue
+		}
+		unit := h.Unit(id)
+		if plat.Launcher.State(ctx, unit) != holdActive {
+			continue
+		}
+		key := "park-stop-" + unit
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			w.fail(key, "PARKED SESSION STAYS %q: its %s unit %s keeps its memory: %v", ag.Name, h.Name(), unit, err)
+			continue
+		}
+		w.clear(key)
+		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its %s unit %s while it is parked; its wake resumes it", ag.Name, h.Name(), unit))
+		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: %s unit %s frees its memory while parked; its wake resumes it", ag.Name, h.Name(), unit)
 	}
 }
 

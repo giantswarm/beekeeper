@@ -41,9 +41,10 @@ type ObservedStage struct {
 
 // Observed is the real flow read from the event log.
 type Observed struct {
-	Since time.Time `json:"since"`
-	Until time.Time `json:"until"`
-	Days  float64   `json:"days"`
+	Outcomes map[string]int `json:"outcomes"`
+	Since    time.Time      `json:"since"`
+	Until    time.Time      `json:"until"`
+	Days     float64        `json:"days"`
 	// Stages are the delivery steps' residence times (delivery.step).
 	Stages []ObservedStage `json:"stages"`
 	// Deliveries counts the issues observed, Started those whose worker
@@ -184,6 +185,7 @@ func Observe(events []state.Event, since, until time.Time) Observed {
 // observeSteps reads the delivery steps: the residence in each step, the
 // deliveries started, released and dropped in the window.
 func (o *Observed) observeSteps(steps []state.Event) {
+	o.Outcomes = state.DeliveryOutcomes(steps, o.Since, o.Until)
 	last := map[string]state.Delivery{}
 	first := map[string]time.Time{}
 	released := map[string]bool{}
@@ -211,7 +213,7 @@ func (o *Observed) observeSteps(steps []state.Event) {
 			}
 		}
 		if !e.At.Before(o.Since) {
-			if d.Step == state.DeliveryDone {
+			if d.Step == state.DeliveryDone && d.Outcome != state.OutcomeNoChange {
 				released[d.Ref] = true
 			}
 			if d.Step == state.DeliveryDropped {

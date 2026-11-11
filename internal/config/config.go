@@ -2494,19 +2494,15 @@ type Supervisor struct {
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
 	// Hosts are execution host selectors (agents.hosts) the loop's worker
-	// starts may be placed on, in order of preference: when
-	// the local machine leaves no room for the start, or always with
-	// HostsFirst. A host must map the item's repository and pass its own
+	// starts may be placed on, in order of preference. HostsFirst defaults
+	// to true. A host must map the item's repository and pass its own
 	// check (capacity --host); the start is pinned to the repository's
-	// default branch. Reviewers, releases and the loop stay on the coordinator.
+	// default branch. Reviewers follow the same preferences unless a local
+	// review directory is required; releases and the loop stay local.
 	Hosts []string `yaml:"hosts"`
-	// HostsFirst places a start on the first host of Hosts with room,
-	// whatever the local machine's room is, for what a host can run: a
-	// start a mapped host could run waits without room on any host, as it
-	// does on a full machine; a repository no host maps, or a choice of a
-	// harness no host has an adapter for (every harness but Claude Code),
-	// starts locally within the local room (capacity.local.ceiling among
-	// its guards).
+	// HostsFirst prefers execution hosts and falls back to the coordinator
+	// within its ordinary capacity guards. Defaults to true; explicit false
+	// retains local-first placement.
 	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
@@ -3576,7 +3572,7 @@ func Load(path string) (*Config, error) {
 // parse is the configuration raw holds, read from path, with the defaults
 // applied and validated.
 func parse(path string, raw []byte) (*Config, error) {
-	c := &Config{}
+	c := &Config{Supervisor: Supervisor{HostsFirst: true}}
 	if err := yaml.Unmarshal(raw, c); err != nil {
 		var doc yaml.Node
 		if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) > 0 {

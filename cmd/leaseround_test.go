@@ -17,7 +17,7 @@ func TestLeaseClaimWaitNamesTheOverrun(t *testing.T) {
 	}
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
-	claimPause = func(context.Context, time.Duration) error { return nil }
+	claimPause = func(_ context.Context, d time.Duration, _ <-chan struct{}) (time.Duration, error) { return d, nil }
 	out, err := runLease(a, "claim", graveler, "-p", "next proof", "--wait", "1m")
 	for _, want := range []string{"queued: number 1 behind", claimOther.Name, "since", "overrun 19m past its 1h00m round", "waited 1m"} {
 		if !strings.Contains(out, want) {

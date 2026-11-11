@@ -16,6 +16,7 @@ run:
       cargo: registry.example/build-rust:stable
     cpu: "2"
     memory: 4Gi
+    storage: 30Gi
     maxPods: 8
     placementTimeout: 1m
     idleTimeout: 1h
@@ -29,6 +30,18 @@ and exec into pods. The namespace must enforce a pod ResourceQuota at or below
 When several namespaces share a build budget, provision aggregate admission or
 partition their quotas so their sum stays within that budget. Warm idle pods
 count toward the quota; a full namespace falls back locally.
+
+`storage` defaults to 30 GiB and sets the ephemeral-storage request, limit and
+workspace volume bound. The scheduler reserves this capacity; Go scratch files
+use the workspace volume rather than the container's default `/tmp`.
+
+Supervisor merge validation also uses this runner when enabled, including
+`golangci-lint run` in the Go image. That image must supply the repository's lint
+toolchain as well as Go. Unlike ordinary worker commands, merge validation never
+falls back locally: an unavailable builder is a checker environment finding.
+Each validation attempt owns an isolated worktree and retires its builder when
+finished. One environment failure triggers one clean retry; actual code failures
+do not retry. Existing builders need retirement after changing resource settings.
 
 Each host/worktree pair gets one Job with a name derived from a hash; names
 contain no host or path text. Its pod keeps Go build/module caches and Cargo
@@ -93,7 +106,7 @@ options), `nohup`, and util-linux `setsid`, along with the selected toolchain.
 No privileged mode, host mount, service-account token or cluster client is
 available in the pod. CPU and memory requests equal their limits. Build
 parallelism follows the whole cores in the CPU limit, at least one. The
-workspace is limited to 30 GiB.
+workspace is limited by `storage` (30 GiB by default).
 
 Lifecycle cleanup on worktree/PR removal is a separate slice. Remote builds
 require a live proof against the configured cluster before rollout. Shared

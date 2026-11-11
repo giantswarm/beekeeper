@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1150,5 +1151,58 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 				t.Fatal("merge outcome bypassed coordinator by waking worker")
 			}
 		})
+	}
+}
+
+// Quota-only refusals wait on fresh GitHub reads, not exponential backoff.
+// The same exact-head review is used once quota recovers.
+func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
+	for _, code := range []int{ExitGateUnread, ExitGateRefused} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			attempts := 0
+			r.answer = func(args []string) (string, int) {
+				if len(args) > 0 && args[0] == gateCmdName {
+					attempts++
+					if attempts <= 3 {
+						return "the reviews cannot be read: API rate limit exceeded", code
+					}
+					r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
+				}
+				return "", 0
+			}
+			for range 4 {
+				r.pass(t)
+			}
+			if attempts != 4 || len(r.logged(t, "merge.pending")) != 3 || len(r.logged(t, "merge.finished")) != 1 {
+				t.Fatalf("quota recovery did not retry: attempts=%d output=%s", attempts, r.out)
+			}
+			if len(r.logged(t, loopFailureVerb)) != 0 || r.called(agentsName, agentWakeName, loopWorker) != nil {
+				t.Fatalf("quota read created backoff or worker bypass: %s", r.out)
+			}
+		})
+	}
+}
+
+func TestLoopRetriesLegacyQuotaBackoff(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	key := superloop.KindGo + " " + loopPR + "@" + loopHead
+	failure := loopFailure{Message: "merge gate refused: API rate limit exceeded", Count: 8, Kind: superloop.KindGo, Ref: loopPR, At: r.a.timeNow(), Since: r.a.timeNow(), RetryAt: r.a.timeNow().Add(time.Hour)}
+	raw, err := json.Marshal(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Record(about(event(loopParty, loopFailureVerb, "[%s] %s", key, raw), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if r.called(gateCmdName) == nil {
+		t.Fatalf("legacy quota backoff still holds the gate: %s", r.out)
 	}
 }

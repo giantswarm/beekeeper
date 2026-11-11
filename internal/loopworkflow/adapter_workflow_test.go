@@ -23,14 +23,21 @@ func TestFixtureRawWorkflowReads(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, pullJSONFile), []byte(`{}`), 0600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.CommandContext(t.Context(), gh, "api", "-H", "Accept: application/vnd.github.raw", "repos/fixture/project/contents/.github/workflows/"+name+"?ref=main") //nolint:gosec // isolated fixture executable
-			cmd.Env = append(os.Environ(), "FIXTURE_DIR="+dir)
-			out, err := cmd.CombinedOutput()
-			if err == nil || !strings.Contains(string(out), "HTTP 404") {
-				t.Fatalf("missing workflow must answer GitHub 404: %s, %v", out, err)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "unknown-call")); !os.IsNotExist(err) {
-				t.Fatalf("workflow read recorded an unknown call: %v", err)
+			for _, extra := range [][]string{
+				nil,
+				{ghInclude},
+				{ghInclude, "-H", `If-None-Match: "fixture"`},
+			} {
+				args := append([]string{ghAPI, "-H", acceptRawHeader, "repos/fixture/project/contents/.github/workflows/" + name + "?ref=main"}, extra...)
+				cmd := exec.CommandContext(t.Context(), gh, args...) //nolint:gosec // isolated fixture executable
+				cmd.Env = append(os.Environ(), "FIXTURE_DIR="+dir)
+				out, err := cmd.CombinedOutput()
+				if err == nil || !strings.Contains(string(out), "HTTP 404") {
+					t.Fatalf("missing workflow must answer GitHub 404: %s, %v", out, err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "unknown-call")); !os.IsNotExist(err) {
+					t.Fatalf("workflow read recorded an unknown call: %v", err)
+				}
 			}
 		})
 	}

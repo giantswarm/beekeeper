@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -27,16 +28,15 @@ func liveSession(sessions []*claude.Session, p state.Party) (*claude.Session, bo
 	return s, true
 }
 
-// agentActivity follows both the roster and the transcript, including between
-// turns when discovery has no running CLI. Unknown timestamps keep the slot.
-func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Time {
+func agentRosterActivity(st *state.State, ag state.Agent) time.Time {
 	last := ag.Registered
 	for _, at := range []time.Time{ag.AssignedAt, ag.IdleSince, ag.ActivityAt, ag.ResumedWait, ag.DesktopTurn, ag.GHAt} {
 		if at.After(last) {
 			last = at
 		}
 	}
-	for _, r := range st.Records {
+	for i := range st.Records {
+		r := &st.Records[i]
 		if r.Session.Is(ag.Party) && r.At.After(last) {
 			last = r.At
 		}
@@ -47,13 +47,24 @@ func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Tim
 	if ag.Keep != nil && ag.Keep.At.After(last) {
 		last = ag.Keep.At
 	}
+	return last
+}
+
+func agentTranscriptActivity(cfg *config.Config, ag state.Agent, last time.Time) time.Time {
 	if cfg == nil {
 		return last
 	}
 	if h, id, ok := harnessForHost(ag.HostSession); ok {
-		if h.Name() == agy.Harness && cfg.StateDir != "" {
-			if fi, err := os.Stat(agy.StreamPath(cfg.StateDir, id)); err == nil && fi.ModTime().After(last) {
-				last = fi.ModTime()
+		if cfg.StateDir != "" {
+			switch h.Name() {
+			case agy.Harness:
+				if fi, err := os.Stat(agy.StreamPath(cfg.StateDir, id)); err == nil && fi.ModTime().After(last) {
+					last = fi.ModTime()
+				}
+			case codex.Harness:
+				if fi, err := os.Stat(codex.LogPath(cfg.StateDir, id)); err == nil && fi.ModTime().After(last) {
+					last = fi.ModTime()
+				}
 			}
 		}
 		for _, s := range h.Ended(cfg, nil, last) {
@@ -73,6 +84,12 @@ func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Tim
 		}
 	}
 	return last
+}
+
+// agentActivity follows both the roster and the transcript, including between
+// turns when discovery has no running CLI. Unknown timestamps keep the slot.
+func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Time {
+	return agentTranscriptActivity(cfg, ag, agentRosterActivity(st, ag))
 }
 
 func agyAgentStartID(ag state.Agent) string {
@@ -110,6 +127,11 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 	if qerr := agyQuotaError(cfg, ag); qerr != nil {
 		return cmp.Or(qerr.At, agentActivity(cfg, st, ag), now), true
 	}
+	if !ag.ContinuationExhausted.IsZero() && !ag.ContinuationExhausted.Before(ag.AssignedAt) {
+		if _, live := liveSession(sessions, ag.Party); !live && !mergeInFlight(st, ag.Party, proc.Alive) {
+			return ag.ContinuationExhausted, true
+		}
+	}
 	if staleAfter <= 0 {
 		return time.Time{}, false
 	}
@@ -119,7 +141,7 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 	if _, live := liveSession(sessions, ag.Party); live || mergeInFlight(st, ag.Party, proc.Alive) {
 		return time.Time{}, false
 	}
-	last := agentActivity(cfg, st, ag)
+	last := agentRosterActivity(st, ag)
 	if s, ok := claude.Live(sessions, ag.Party); ok {
 		for _, at := range []time.Time{s.Started, s.LastActive} {
 			if at.After(last) {
@@ -127,6 +149,10 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 			}
 		}
 	}
+	if last.IsZero() || now.Sub(last) < staleAfter {
+		return last, false
+	}
+	last = agentTranscriptActivity(cfg, ag, last)
 	return last, !last.IsZero() && now.Sub(last) >= staleAfter
 }
 

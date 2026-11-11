@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	loopComparisonTimeout      = 90 * time.Second
+	loopComparisonTimeout      = 2 * time.Minute
 	loopContinuationTransition = "continuation"
 )
 
@@ -27,39 +27,29 @@ func compareLoopPasses(ctx context.Context, current, candidate, config string) e
 	if config != "" {
 		args = append([]string{workerGitHubConfigOption, config}, args...)
 	}
-	type result struct {
-		counts map[string]int
-		err    error
+	run := func(binary string) (map[string]int, error) {
+		bounded, cancel := context.WithTimeout(ctx, loopComparisonTimeout)
+		defer cancel()
+		out, err := runLoopComparison(bounded, binary, args...)
+		if err == nil {
+			err = bounded.Err()
+		}
+		if err != nil {
+			return nil, err
+		}
+		return loopTransitionCounts(out)
 	}
-	run := func(binary string) <-chan result {
-		ch := make(chan result, 1)
-		go func() {
-			bounded, cancel := context.WithTimeout(ctx, loopComparisonTimeout)
-			defer cancel()
-			out, err := runLoopComparison(bounded, binary, args...)
-			if err == nil {
-				err = bounded.Err()
-			}
-			if err != nil {
-				ch <- result{err: err}
-				return
-			}
-			counts, err := loopTransitionCounts(out)
-			ch <- result{counts: counts, err: err}
-		}()
-		return ch
+	oldCounts, err := run(current)
+	if err != nil {
+		return fmt.Errorf("running release dry-run unavailable (retryable): %w", err)
 	}
-	baseline, proposed := run(current), run(candidate)
-	old, next := <-baseline, <-proposed
-	if old.err != nil {
-		return fmt.Errorf("running release dry-run unavailable (retryable): %w", old.err)
-	}
-	if next.err != nil {
-		return fmt.Errorf("candidate dry-run unavailable (retryable): %w", next.err)
+	nextCounts, err := run(candidate)
+	if err != nil {
+		return fmt.Errorf("candidate dry-run unavailable (retryable): %w", err)
 	}
 	for _, kind := range []string{labStart, loopContinuationTransition, taskKindReview, gitMerge} {
-		if old.counts[kind] > 0 && next.counts[kind] == 0 {
-			return fmt.Errorf("candidate dry-run lost %s transitions (running release: %d); retry or use --allow-loop-regression for an intentional change", kind, old.counts[kind])
+		if oldCounts[kind] > 0 && nextCounts[kind] == 0 {
+			return fmt.Errorf("candidate dry-run lost %s transitions (running release: %d); retry or use --allow-loop-regression for an intentional change", kind, oldCounts[kind])
 		}
 	}
 	return nil

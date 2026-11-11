@@ -44,9 +44,15 @@ type overtake struct {
 // parseRef reads an issue or pull request as owner/repo#n or its full URL.
 func parseRef(s string) (github.PR, bool) {
 	s = strings.TrimSpace(s)
-	if m := refURL.FindStringSubmatch(s); m != nil && m[0] == s {
-		n, _ := strconv.Atoi(m[2])
-		return github.PR{Repo: m[1], N: n}, true
+	if s == "" {
+		return github.PR{}, false
+	}
+	if strings.Contains(s, "://") {
+		if m := refURL.FindStringSubmatch(s); m != nil && m[0] == s {
+			n, _ := strconv.Atoi(m[2])
+			return github.PR{Repo: m[1], N: n}, true
+		}
+		return github.PR{}, false
 	}
 	if m := ghRef.FindStringSubmatch(s); m != nil {
 		n, _ := strconv.Atoi(m[2])

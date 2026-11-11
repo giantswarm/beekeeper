@@ -167,16 +167,72 @@ func TestDiscoverFindsAWorkerInAClaimedSpare(t *testing.T) {
 	}
 }
 
+const wokenFixture = "woken"
+
 func TestDiscoverFindsAWokenWorkerUnderItsID(t *testing.T) {
-	root := filepath.Join("testdata", "proc", "woken")
+	root := filepath.Join("testdata", "proc", wokenFixture)
 	// Its record names it, and so does its transcript's path before the
 	// CLI has written the record.
-	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", "woken"), "arguments": ""} {
+	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", wokenFixture), "arguments": ""} {
 		got := discoverAt(t, root, records)
 		w := got[wokenPID]
-		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA || !w.Background {
+		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA || w.JobID != "dddddddd" || !w.Background {
 			t.Errorf("from its %s: sessions = %v, worker = %+v", from, got, w)
 		}
+	}
+}
+
+func TestDiscoverDropsStalePredecessorAfterResume(t *testing.T) {
+	const (
+		origID        = "7437da00-35de-44ef-b0fd-ac788ab594b7"
+		origShortID   = "7437da00"
+		resumedID     = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
+		guideName51   = "Guide run 51"
+		resumedName51 = "beekeeper guide run 51"
+		stalePID      = 4102140
+		resumedPID    = 603457
+	)
+	for _, tc := range []struct {
+		name      string
+		resumedID string
+	}{
+		{name: "same session id", resumedID: origID},
+		{name: "rebound session id", resumedID: resumedID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Claude.ProjectsDir = t.TempDir()
+			cfg.Claude.SessionsDir = t.TempDir()
+			cfg.Claude.DesktopDir = t.TempDir()
+			for _, rec := range []struct {
+				pid       int
+				sessionID string
+				name      string
+				ticks     int64
+			}{
+				{pid: stalePID, sessionID: origID, name: guideName51, ticks: 100},
+				{pid: resumedPID, sessionID: tc.resumedID, name: resumedName51, ticks: 200},
+			} {
+				raw := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"name":%q,"jobId":%q,"procStart":"%d"}`,
+					rec.pid, rec.sessionID, rec.name, origShortID, rec.ticks)
+				if err := os.WriteFile(filepath.Join(cfg.Claude.SessionsDir, strconv.Itoa(rec.pid)+".json"), []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tab := &proc.Table{
+				ByPID: map[int]*proc.Process{
+					stalePID:   {PID: stalePID, Comm: cliComm, StartTicks: 100, Args: []string{cliComm, sessionIDFlag, origID, "-n", guideName51}},
+					resumedPID: {PID: resumedPID, Comm: cliComm, StartTicks: 200, Args: []string{cliComm, resumeFlag, origID}},
+				},
+			}
+			got := Discover(cfg, tab, time.Now())
+			if len(got) != 1 || got[0].PID != resumedPID || got[0].ID != tc.resumedID || got[0].Name != resumedName51 {
+				t.Fatalf("Discover = %+v, want only resumed PID %d", got, resumedPID)
+			}
+			if name := RecordName(cfg, tab, tc.resumedID); name != resumedName51 {
+				t.Fatalf("RecordName(%s) = %q, want %q", tc.resumedID, name, resumedName51)
+			}
+		})
 	}
 }
 
@@ -307,5 +363,38 @@ func TestAsideMarksArchivedAndTestSessions(t *testing.T) {
 		if got := c.s.Aside(); got != c.want {
 			t.Errorf("%q archived=%v: aside %q, want %q", c.s.Name, c.s.Archived, got, c.want)
 		}
+	}
+}
+
+func TestLivenessDiscoveryKeepsCLIIdentitiesWithoutAccounting(t *testing.T) {
+	for _, fixture := range []string{"children", "background", "spare", wokenFixture} {
+		t.Run(fixture, func(t *testing.T) {
+			table, err := proc.ReadAt(filepath.Join("testdata", "proc", fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{}
+			cfg.Claude.SessionsDir = filepath.Join("testdata", "sessions")
+			cfg.Claude.DesktopDir = filepath.Join("testdata", "desktop")
+			cfg.Claude.ProjectsDir = t.TempDir()
+			full := Discover(cfg, table, time.Now())
+			live := DiscoverLiveness(cfg, table, time.Now())
+			if len(full) != len(live) {
+				t.Fatalf("full %d, liveness %d", len(full), len(live))
+			}
+			for _, want := range full {
+				i := slices.IndexFunc(live, func(s *Session) bool { return s.PID == want.PID })
+				if i < 0 {
+					t.Fatalf("missing CLI %d", want.PID)
+				}
+				got := live[i]
+				if got.Party() != want.Party() || got.ResumedID != want.ResumedID || got.JobID != want.JobID {
+					t.Fatalf("identity mismatch: %+v / %+v", got, want)
+				}
+				if got.Transcript != "" || got.Repo != "" || got.MemMiB != 0 || len(got.Commands) != 0 {
+					t.Fatalf("liveness performed accounting: %+v", got)
+				}
+			}
+		})
 	}
 }

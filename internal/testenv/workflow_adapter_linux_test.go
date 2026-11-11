@@ -313,6 +313,40 @@ func adapter(args []string) error {
 				return data(map[string]any{"r0": map[string]any{"issueOrPullRequest": map[string]any{"__typename": "PullRequest", "state": state}}})
 			case strings.Contains(q, "mergeQueue(branch:"):
 				return data(map[string]any{"repository": map[string]any{"mergeQueue": nil}})
+			case strings.Contains(q, "viewer { login }"):
+				date := "2026-01-01T00:00:00Z"
+				if a.Head != "" {
+					if out, e := git("show", "-s", "--format=%cI", a.Head); e == nil {
+						date = out
+					}
+				}
+				return data(map[string]any{
+					"viewer": map[string]any{"login": "desk"},
+					"repository": map[string]any{"pullRequest": map[string]any{
+						"id":         "PR_7",
+						"headRefOid": a.Head,
+						"author":     map[string]any{"login": "desk", "type": "User", "id": 1},
+						"commits":    map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"oid": a.Head, "committedDate": date}}}},
+					}},
+				})
+			case strings.Contains(q, `node(id:"PR_7")`):
+				nodes := []any{}
+				if strings.Contains(q, "items:reviews") {
+					for _, r := range a.Reviews {
+						nodes = append(nodes, map[string]any{
+							"id":                 r["node_id"],
+							"user":               r["user"],
+							"state":              r["state"],
+							"body":               r["body"],
+							"submitted_at":       r["submitted_at"],
+							"commit":             map[string]any{"oid": r["commit_id"]},
+							"html_url":           r["html_url"],
+							"author_association": r["author_association"],
+							"comments":           map[string]any{"totalCount": 0},
+						})
+					}
+				}
+				return data(map[string]any{"node": map[string]any{"items": map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": false}}}})
 			}
 		}
 		a.Unknown = joined

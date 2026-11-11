@@ -295,13 +295,16 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(a.cfg.Claude.SessionsDir, "4102140.json"),
+			`{"pid":4102140,"sessionId":"`+origID+`","name":"`+guideName56+`","jobId":"`+origShortID+`","procStart":"100"}`)
 		writeFile(t, filepath.Join(a.cfg.Claude.SessionsDir, "4242.json"),
-			`{"pid":4242,"sessionId":"`+resumedID+`","name":"`+resumedName+`","jobId":"`+origShortID+`","procStart":"100"}`)
+			`{"pid":4242,"sessionId":"`+resumedID+`","name":"`+resumedName+`","jobId":"`+origShortID+`","procStart":"200"}`)
 		plat.Machine = staticProcMachine{
 			Machine: plat.Machine,
 			table: &proc.Table{
 				ByPID: map[int]*proc.Process{
-					4242: {PID: 4242, Comm: claudeComm, StartTicks: 100, Args: []string{"claude bg-spare", "--bg-spare"}},
+					4102140: {PID: 4102140, Comm: claudeComm, StartTicks: 100, Args: []string{claudeComm, sessionIDFlag, origID, "-n", guideName56}},
+					4242:    {PID: 4242, Comm: claudeComm, StartTicks: 200, Args: []string{"claude bg-spare", "--bg-spare"}},
 				},
 			},
 		}
@@ -320,11 +323,75 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		if err := a.runStart(t.Context(), guideRole, false); err != nil {
 			t.Fatalf("guide start: %v", err)
 		}
+		if err := a.runStart(t.Context(), guideRole, true); err != nil {
+			t.Fatalf("guide start --take-over: %v", err)
+		}
 		st, err := a.store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if st.Guide == nil || st.Guide.Holder == nil || st.Guide.Holder.Session != resumedID || st.Guide.Holder.Name != guideName56 || st.Guide.Run != 56 {
+			t.Fatalf("guide state after resume: %+v", st.Guide)
+		}
+	})
+
+	t.Run("guide resumed with same session id and new process 'beekeeper guide run N' beside stale predecessor", func(t *testing.T) {
+		const (
+			guideName51 = "Guide run 51"
+			resumed51   = "beekeeper guide run 51"
+		)
+		a, _ := stubApp(t)
+		a.as = ""
+		dir := t.TempDir()
+		guide := state.Party{Name: guideName51, Session: origID}
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 51}
+			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: guide}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(a.cfg.Claude.SessionsDir, "4102140.json"),
+			`{"pid":4102140,"sessionId":"`+origID+`","name":"`+guideName51+`","jobId":"`+origShortID+`","procStart":"100"}`)
+		writeFile(t, filepath.Join(a.cfg.Claude.SessionsDir, "603457.json"),
+			`{"pid":603457,"sessionId":"`+origID+`","name":"`+resumed51+`","jobId":"`+origShortID+`","procStart":"200"}`)
+		plat.Machine = staticProcMachine{
+			Machine: plat.Machine,
+			table: &proc.Table{
+				ByPID: map[int]*proc.Process{
+					4102140: {PID: 4102140, Comm: claudeComm, StartTicks: 100, Args: []string{claudeComm, sessionIDFlag, origID, "-n", guideName51}},
+					603457:  {PID: 603457, Comm: claudeComm, StartTicks: 200, Args: []string{claudeComm, resumeFlag, origID}},
+				},
+			},
+		}
+		t.Setenv("CLAUDE_CODE_SESSION_ID", origID)
+		t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+		t.Setenv("CLAUDE_CODE_SESSION_NAME", resumed51)
+
+		if err := a.roleStatus(guideRole); err != nil {
+			t.Fatalf("guide status: %v", err)
+		}
+		workCmd := a.guideWorkCmd()
+		workCmd.SetArgs([]string{paramDone, "1", flagNoteReason, resumedDoneReason})
+		if err := workCmd.Execute(); err != nil {
+			t.Fatalf("guide work done: %v", err)
+		}
+		if err := a.recordAnswerWithOptions(t.Context(), "", 1152, 0, viaCLI, resumedAnswerText, false, answerNoteOpts{}); err != nil {
+			t.Fatalf("answer: %v", err)
+		}
+		if err := a.runStart(t.Context(), guideRole, false); err != nil {
+			t.Fatalf("guide start: %v", err)
+		}
+		if err := a.runStart(t.Context(), guideRole, true); err != nil {
+			t.Fatalf("guide start --take-over: %v", err)
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Guide == nil || st.Guide.Holder == nil || st.Guide.Holder.Session != origID || st.Guide.Holder.Name != guideName51 || st.Guide.Run != 51 {
 			t.Fatalf("guide state after resume: %+v", st.Guide)
 		}
 	})

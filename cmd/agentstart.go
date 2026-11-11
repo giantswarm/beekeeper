@@ -357,7 +357,7 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			kind := startKind(review, ofSelfHosted)
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
 				if harness == harnessAuto {
 					base, ok = claudeHarness{}, true
@@ -1594,10 +1594,6 @@ func (a *app) detachReopen(arg string) error {
 		return err
 	}
 	id := strings.TrimPrefix(arg, "local_")
-	if !a.desktopMode() {
-		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
-		return err
-	}
 	if s := a.readStop(); s != nil {
 		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(s))
 		return err
@@ -1657,6 +1653,10 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 			}
 			return nil
 		}
+	}
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
 	}
 	release, waits, err := a.holdReopen(id)
 	if err != nil {

@@ -31,7 +31,7 @@ const modelFlag = "--model"
 const inboxWait = 30 * time.Second
 
 // ompUnit is the transient user unit an omp agent runs in.
-func ompUnit(id string) string { return "beekeeper-omp-" + id[:8] }
+func ompUnit(id string) string { return "beekeeper-omp-" + id[:min(8, len(id))] }
 
 // startOmpAgent reads the agent's provider key, records and registers the
 // agent, starts it in a transient user unit with its stdin on its inbox,

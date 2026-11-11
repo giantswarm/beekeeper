@@ -174,7 +174,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			url := issueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
-				pull, err := readLoopPull(ctx, ref)
+				pull, err := readLoopContextPull(ctx, ref)
 				if err != nil {
 					continue
 				}
@@ -225,7 +225,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 			if err != nil {
 				return err
 			}
-			if err := l.incidentStart(ref); err != nil {
+			if err := l.repositoryStart(ref); err != nil {
 				continue
 			}
 			args := []string{agentsName, agentStartName, name, brief}
@@ -377,6 +377,9 @@ func (l *supervisorLoop) finishContinuation(old state.Agent, name string) error 
 		return []state.Event{e}, nil
 	})
 	if err == nil && finished {
+		if h, id, ok := harnessOf(old.Party); ok {
+			_ = plat.Launcher.Stop(context.Background(), h.Unit(id))
+		}
 		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
 	}
 	return err

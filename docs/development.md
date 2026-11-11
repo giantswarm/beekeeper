@@ -13,8 +13,21 @@ Before a reviewed supervisor merge, the lane builds the pull request merged into
 freshly fetched base in a temporary worktree of the repository's local checkout (found
 in `disk.checkouts`, `agents.dir` or `agents.roots`, `~/` expanded, as `<root>`,
 `<root>/<name>` or `<root>/<owner>/<name>`) whenever the base has moved past the head.
-For Go modules it runs configured lint and `go test ./...`, including unchanged tests and
-reverse dependents even for dependency-only changes; `golangci-lint` must be on PATH.
+Before running tools, it checks whether GitHub already has passing required CI
+on the synthetic merge commit with exactly the fetched base and reviewed head as
+its parents. Missing, stale, source-mismatched or incomplete evidence cannot
+substitute for validation; green PR-head checks alone are insufficient.
+
+For Go modules it runs configured lint and `go test -short ./...`, including
+unchanged tests and reverse dependents even for dependency-only changes.
+With `run.remote.enabled`, both commands use the configured Go builder image
+(which must contain `golangci-lint`), never a local fallback. Otherwise local
+checks require load below the CPU count and at least 8 GiB free on the check
+filesystem. Their scratch files and caches are isolated under the state directory.
+An environment failure (quota, clone, missing tools, transport or timeout) records
+its own supervisor finding and retries once with a fresh worktree and builder.
+CI completing on the exact merge result can satisfy the check after that failure.
+Without successful validation the merge remains refused; no gate is bypassed.
 Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or
 `.golangci.json` explicitly (in that order), without additional linters or a separate
 goconst pre-check. Without a repository config it uses `--no-config` and the tool's

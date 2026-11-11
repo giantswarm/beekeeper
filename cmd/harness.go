@@ -23,6 +23,10 @@ type Harness interface {
 	Name() string
 	// HostPrefix prefixes a started session's HostSession ("local_", "omp_", "agy_", "codex_").
 	HostPrefix() string
+	// Host returns the HostSession for start id ("local_<id>", "omp_<id>", "agy_<id>", "codex_<id>").
+	Host(id string) string
+	// Unit returns the transient user unit name for start id, or "" for Claude Code.
+	Unit(id string) string
 	// EnvAgent is the environment variable a started session's shell carries, "" for Claude Code.
 	EnvAgent() string
 	// Start starts sp on this harness.
@@ -85,10 +89,7 @@ func harnessForSession(s *claude.Session) Harness {
 // harnessForHost returns the non-Claude harness and start id for a HostSession
 // ("omp_<id>", "agy_<id>").
 func harnessForHost(hostSession string) (Harness, string, bool) {
-	for _, h := range harnesses {
-		if h.Name() == "" {
-			continue
-		}
+	for _, h := range []Harness{ompHarness{}, agyHarness{}, codexHarness{}} {
 		if id, ok := strings.CutPrefix(hostSession, h.HostPrefix()); ok {
 			return h, id, true
 		}
@@ -96,11 +97,75 @@ func harnessForHost(hostSession string) (Harness, string, bool) {
 	return nil, "", false
 }
 
+// harnessOf returns the non-Claude harness and start id for p from its
+// HostSession or Session.
+func harnessOf(p state.Party) (Harness, string, bool) {
+	if h, id, ok := harnessForHost(strings.TrimSpace(p.HostSession)); ok && id != "" {
+		return h, id, true
+	}
+	if h, id, ok := harnessForHost(strings.TrimSpace(p.Session)); ok && id != "" {
+		return h, id, true
+	}
+	return nil, "", false
+}
+
+// harnessTurnPatterns match the transient user units of non-Claude harness
+// runners (codex, agy, omp).
+func harnessTurnPatterns() []string {
+	return []string{"beekeeper-agy-*", "beekeeper-codex-*", "beekeeper-omp-*"}
+}
+
+// harnessUnitID returns the harness and unit id prefix for a transient runner
+// unit ("beekeeper-codex-<id>[.service]", "beekeeper-agy-<id>[.service]",
+// "beekeeper-omp-<id>[.service]").
+func harnessUnitID(unit string) (Harness, string, bool) {
+	u := strings.TrimSuffix(strings.TrimSpace(unit), ".service")
+	for _, entry := range []struct {
+		prefix string
+		h      Harness
+	}{
+		{"beekeeper-omp-", ompHarness{}},
+		{"beekeeper-agy-", agyHarness{}},
+		{"beekeeper-codex-", codexHarness{}},
+	} {
+		if id, ok := strings.CutPrefix(u, entry.prefix); ok && id != "" {
+			return entry.h, id, true
+		}
+	}
+	return nil, "", false
+}
+
+// harnessUnitMatchesParty reports whether unit is the runner unit of p.
+func harnessUnitMatchesParty(unit string, p state.Party) bool {
+	uh, uid, ok := harnessUnitID(unit)
+	if !ok {
+		return false
+	}
+	u := uh.Unit(uid)
+	if h, hid, ok := harnessOf(p); ok && hid != "" {
+		return h.Name() == uh.Name() && h.Unit(hid) == u
+	}
+	if s := strings.TrimSpace(p.Session); s != "" && p.HostSession == "" {
+		return strings.EqualFold(s, uid) || (strings.HasPrefix(strings.ToLower(s), strings.ToLower(uid)) && uh.Unit(s) == u)
+	}
+	return false
+}
+
+// sameHarnessUnit reports whether a and b belong to the same non-Claude
+// harness runner unit.
+func sameHarnessUnit(a, b state.Party) bool {
+	ha, ida, oka := harnessOf(a)
+	hb, idb, okb := harnessOf(b)
+	return oka && okb && ha.Name() == hb.Name() && ha.Unit(ida) == hb.Unit(idb)
+}
+
 type claudeHarness struct{}
 
-func (claudeHarness) Name() string       { return "" }
-func (claudeHarness) HostPrefix() string { return "local_" }
-func (claudeHarness) EnvAgent() string   { return "" }
+func (claudeHarness) Name() string          { return "" }
+func (claudeHarness) HostPrefix() string    { return "local_" }
+func (claudeHarness) Host(id string) string { return "local_" + id }
+func (claudeHarness) Unit(string) string    { return "" }
+func (claudeHarness) EnvAgent() string      { return "" }
 
 func (claudeHarness) Start(ctx context.Context, a *app, sp agentStart) error {
 	if sp.effort != "" {
@@ -179,9 +244,11 @@ func (claudeHarness) SpendTranscripts(cfg *config.Config, from, to time.Time) ([
 
 type ompHarness struct{}
 
-func (ompHarness) Name() string       { return omp.Harness }
-func (ompHarness) HostPrefix() string { return omp.HostPrefix }
-func (ompHarness) EnvAgent() string   { return omp.EnvAgent }
+func (ompHarness) Name() string          { return omp.Harness }
+func (ompHarness) HostPrefix() string    { return omp.HostPrefix }
+func (ompHarness) Host(id string) string { return omp.HostPrefix + id }
+func (ompHarness) Unit(id string) string { return ompUnit(id) }
+func (ompHarness) EnvAgent() string      { return omp.EnvAgent }
 
 func (ompHarness) Start(ctx context.Context, a *app, sp agentStart) error {
 	if sp.effort != "" {
@@ -233,9 +300,11 @@ func (ompHarness) SpendTranscripts(cfg *config.Config, from, to time.Time) ([]cl
 
 type agyHarness struct{}
 
-func (agyHarness) Name() string       { return agy.Harness }
-func (agyHarness) HostPrefix() string { return agy.HostPrefix }
-func (agyHarness) EnvAgent() string   { return agy.EnvAgent }
+func (agyHarness) Name() string          { return agy.Harness }
+func (agyHarness) HostPrefix() string    { return agy.HostPrefix }
+func (agyHarness) Host(id string) string { return agy.HostPrefix + id }
+func (agyHarness) Unit(id string) string { return agyUnit(id) }
+func (agyHarness) EnvAgent() string      { return agy.EnvAgent }
 
 func (agyHarness) Start(ctx context.Context, a *app, sp agentStart) error {
 	if err := refuseAgyEffort(sp.effort); err != nil {
@@ -291,9 +360,11 @@ func (agyHarness) SpendTranscripts(cfg *config.Config, from, to time.Time) ([]cl
 
 type codexHarness struct{}
 
-func (codexHarness) Name() string       { return codex.Harness }
-func (codexHarness) HostPrefix() string { return codex.HostPrefix }
-func (codexHarness) EnvAgent() string   { return codex.EnvAgent }
+func (codexHarness) Name() string          { return codex.Harness }
+func (codexHarness) HostPrefix() string    { return codex.HostPrefix }
+func (codexHarness) Host(id string) string { return codex.HostPrefix + id }
+func (codexHarness) Unit(id string) string { return codexUnit(id) }
+func (codexHarness) EnvAgent() string      { return codex.EnvAgent }
 
 func (codexHarness) Start(ctx context.Context, a *app, sp agentStart) error {
 	if sp.effort != "" {

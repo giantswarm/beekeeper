@@ -49,11 +49,11 @@ func deliveryGitHub(args []string) (int, bool) {
 			}
 			nodes = append(nodes, map[string]any{"id": fmt.Sprintf("I%d", n), statusField: map[string]any{"name": "Ready"}, "content": map[string]any{
 				numberField: n, "url": fmt.Sprintf("https://github.com/fixture/project/issues/%d", n), "title": fmt.Sprintf("fixture task %d", n), "state": "OPEN",
-				"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", repositoryField: map[string]any{"nameWithOwner": fixtureRepo},
+				"createdAt": fixtureTimestamp, "updatedAt": fixtureTimestamp, repositoryField: map[string]any{"nameWithOwner": fixtureRepo},
 				"blockedBy": map[string]any{"totalCount": 0, nodesField: []any{}}, "subIssuesSummary": map[string]any{"total": 0, "completed": 0},
 			}})
 		}
-		return emit(map[string]any{dataField: map[string]any{"repositoryOwner": map[string]any{"projectV2": map[string]any{"items": map[string]any{"pageInfo": map[string]any{"hasNextPage": false}, nodesField: nodes}}}}})
+		return emit(map[string]any{dataField: map[string]any{"repositoryOwner": map[string]any{"projectV2": map[string]any{"items": map[string]any{pageInfoField: map[string]any{hasNextPageField: false}, nodesField: nodes}}}}})
 	case slices.Contains(args, ghGraphQL) && strings.Contains(query, "issueOrPullRequest(number:"):
 		// Ref state batches use r0, r1, ... aliases. The only PR is 1;
 		// issue 2 closes when the merge closes its linked issue.
@@ -86,8 +86,7 @@ func deliveryGitHub(args []string) (int, bool) {
 			data[alias] = map[string]any{"issueOrPullRequest": map[string]any{"__typename": kind, "state": status}}
 		}
 		return emit(map[string]any{dataField: data})
-	case len(args) == 4 && args[0] == ghAPI && args[1] == "-H" && strings.Contains(args[3], "/contents/.github/workflows/zz_generated.auto_release.yaml?"):
-		fmt.Print("on:\n  push:\n    branches: [main]\n")
+	case fixtureDeliveryWorkflowRead(args):
 		return 0, true
 	case len(args) > 1 && args[0] == ghAPI && strings.Contains(args[1], "/tags?per_page=1"):
 		if _, err := os.Stat(filepath.Join(os.Getenv("FIXTURE_DIR"), "released")); err == nil { //nolint:gosec // isolated scratch fixture release marker
@@ -100,4 +99,16 @@ func deliveryGitHub(args []string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func fixtureDeliveryWorkflowRead(args []string) bool {
+	endpoint, include, ok := fixtureRawRead(args)
+	if !ok || !strings.Contains(endpoint, "/contents/.github/workflows/zz_generated.auto_release.yaml?") {
+		return false
+	}
+	if include {
+		fmt.Print("HTTP/2.0 200 OK\r\nETag: \"fixture\"\r\n\r\n")
+	}
+	fmt.Print("on:\n  push:\n    branches: [main]\n")
+	return true
 }
