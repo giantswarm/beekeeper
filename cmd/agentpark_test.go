@@ -215,7 +215,7 @@ func TestAsNamesTheRegisteredAgent(t *testing.T) {
 	c := w.agentsCmd()
 	c.SetOut(w.out)
 	c.SetErr(w.out)
-	c.SetArgs([]string{stateIdle, "--done", "--report", "https://github.com/giantswarm/beekeeper/issues/86 done", "--problem", noProblems})
+	c.SetArgs([]string{stateIdle, flagDone, flagReport, "https://github.com/giantswarm/beekeeper/issues/86 done", flagProblem, noProblems})
 	if err := c.Execute(); err != nil {
 		t.Fatalf("idle --done --as %s: %v", agentOne, err)
 	}

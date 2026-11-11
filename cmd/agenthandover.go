@@ -267,13 +267,23 @@ func (a *app) readHandover(q string) (handover, error) {
 
 // lastNote is p's latest hand-over note logged at or after since.
 func (a *app) lastNote(p state.Party, since time.Time, progress ...func()) (string, bool, error) {
+	return a.lastNoteContext(context.Background(), p, since, progress...)
+}
+
+func (a *app) lastNoteContext(ctx context.Context, p state.Party, since time.Time, progress ...func()) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
 	keep := func(e state.Event) bool {
 		return e.Verb == verbNote
 	}
 	if len(progress) > 0 && progress[0] != nil {
 		keep = eventProgressFilter(keep, progress[0], time.Now)
 	}
-	notes, err := state.FollowSnapshot(a.store, "agent-notes", "v1", keep)
+	notes, err := state.FollowSnapshotContext(ctx, a.store, "agent-notes", "v1", keep)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		return "", false, err
 	}

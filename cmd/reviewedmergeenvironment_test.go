@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -119,12 +120,24 @@ func TestMergeCheckOverloadDoesNotRunLocalTools(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := mergeLocalHeadroom
-	t.Cleanup(func() { mergeLocalHeadroom = old })
-	mergeLocalHeadroom = func(string) error { return errors.New("coordinator host overloaded") }
+	oldLoad, oldCPU, oldDisk := mergeReadLoad, mergeNumCPU, mergeReadDisk
+	t.Cleanup(func() {
+		mergeReadLoad, mergeNumCPU, mergeReadDisk = oldLoad, oldCPU, oldDisk
+	})
+	mergeReadLoad = func() ([3]float64, error) { return [3]float64{47.5, 40.0, 30.0}, nil }
+	mergeNumCPU = func() int { return 36 }
+	mergeReadDisk = func(string) (machine.Disk, error) { return machine.Disk{FreeMiB: 32 * 1024}, nil }
 	reason, code := r.a.runReviewedMergeChecks(t.Context(), dir, "", mainBranch, loopHead)
-	if code != github.SquashTooling || !strings.Contains(reason, "coordinator host overloaded") {
+	if code != github.SquashTooling || !strings.Contains(reason, "coordinator overloaded (load 47.5, CPUs 36)") {
 		t.Fatalf("%d: %s", code, reason)
+	}
+	mergeReadLoad = func() ([3]float64, error) { return [3]float64{1.0, 1.0, 1.0}, nil }
+	if err := mergeLocalHeadroom(dir); err != nil {
+		t.Fatalf("mergeLocalHeadroom under healthy load: %v", err)
+	}
+	mergeReadDisk = func(string) (machine.Disk, error) { return machine.Disk{FreeMiB: 4096}, nil }
+	if err := mergeLocalHeadroom(dir); err == nil || !strings.Contains(err.Error(), "check filesystem has 4096 MiB free") {
+		t.Fatalf("mergeLocalHeadroom under low disk: %v", err)
 	}
 }
 

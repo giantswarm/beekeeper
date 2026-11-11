@@ -52,14 +52,14 @@ func TestDeliveryOutputGoldens(t *testing.T) {
 					if !empty {
 						a.cfg.Delivery.WIPLimit = 4
 						active := state.Delivery{Ref: deliveryTestIssue, Pulls: []string{"example/project#11"}, Step: state.DeliveryCI, Since: start.Add(22 * time.Hour), Started: start.Add(20 * time.Hour), Agent: workerRole, Waits: deliveryGoldenWait}
-						done := state.Delivery{Ref: deliveryTestPull, Pulls: []string{"example/project#12"}, Step: state.DeliveryDone, Since: start.Add(3 * time.Hour), Started: start, Verdict: state.DeliveryNoRelease}
+						done := state.Delivery{Ref: deliveryTestPull, Pulls: []string{"example/project#12"}, Step: state.DeliveryDone, Since: start.Add(3 * time.Hour), Started: start, Verdict: state.DeliveryNoRelease, Outcome: state.OutcomeMerged}
 						seed(t, a, func(st *state.State) {
 							// Deliberately reversed: output must sort by reference.
 							st.Deliveries = []state.Delivery{done, active}
 							st.DeliveriesAt = now
 						})
 						implementing := func(d state.Delivery) state.Delivery {
-							d.Step, d.Since = state.DeliveryImplementing, d.Started
+							d.Step, d.Since, d.Outcome = state.DeliveryImplementing, d.Started, ""
 							return d
 						}
 						for _, d := range []state.Delivery{implementing(done), done, implementing(active), active} {

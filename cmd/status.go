@@ -92,7 +92,7 @@ type statusView struct {
 }
 
 func (a *app) status() (*statusView, error) {
-	st, err := a.store.Read()
+	st, err := a.readSnapshot()
 	if err != nil {
 		return nil, err
 	}

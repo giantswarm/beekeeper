@@ -74,6 +74,9 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 				t.Fatalf("delivery: %+v", st.Deliveries[0])
 			}
 			if want {
+				if st.Deliveries[0].Outcome != state.DeliveryDropped || st.Deliveries[0].Evidence == "" {
+					t.Fatalf("abandoned without outcome: %+v", st.Deliveries[0])
+				}
 				if strings.Contains(line, "DELIVERY STALLED") {
 					t.Fatal(line)
 				}
@@ -82,7 +85,7 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 					t.Fatalf("reopened: %+v", next)
 				}
 				st.StartDelivery(refOne, abandonReplacement, "", now.Add(time.Hour))
-				if !st.Deliveries[0].Active() || st.Deliveries[0].Abandoned {
+				if !st.Deliveries[0].Active() || st.Deliveries[0].Abandoned || st.Deliveries[0].Outcome != "" {
 					t.Fatal(st.Deliveries)
 				}
 			}

@@ -13,12 +13,16 @@ import (
 )
 
 const (
-	loopLifecycleFile = "supervisor-loop-lifecycle.json"
-	loopPhaseStartup  = "startup"
-	loopPhaseBetween  = "between passes"
-	loopPhaseObserve  = "observe workers and pull requests"
-	loopPhaseRecover  = "recover quota and parks"
-	loopPhaseTidy     = "tidy and sync claims"
+	loopLifecycleFile       = "supervisor-loop-lifecycle.json"
+	loopPhaseStartup        = "startup"
+	loopPhaseBetween        = "between passes"
+	loopPhaseObserve        = "observe workers and pull requests"
+	loopPhaseRecover        = "recover quota and parks"
+	loopPhaseContinueParks  = "continue settled parks"
+	loopPhaseRecoverParks   = "recover ended parks"
+	loopPhaseRecoverReviews = "recover review requests"
+	loopPhaseEndReviews     = "end review workers"
+	loopPhaseTidy           = "tidy and sync claims"
 )
 
 const loopPhaseStartupHistory = "read loop startup history"

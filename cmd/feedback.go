@@ -73,7 +73,7 @@ func (w *watcher) tendFeedback(ctx context.Context) {
 // a, the watch's app as of its start with its output discarded.
 func (w *watcher) readFeedback(ctx context.Context, a *app) {
 	fc := a.cfg.Feedback
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return
 	}
@@ -119,7 +119,7 @@ func (w *watcher) readFeedback(ctx context.Context, a *app) {
 
 // deliverFeedback delivers reply r on thread th and reports whether it was.
 func (w *watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client, th state.ReportThread, r feedback.Message) bool {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return false
 	}

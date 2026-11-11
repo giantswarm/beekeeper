@@ -746,7 +746,7 @@ func (a *app) printLanes(views []laneView) {
 // returns GitHub's error for a place settled with lanes settle, which heads
 // its lane; other places are asked again at the next check.
 func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, lane, repo string, pr int, every time.Duration) error {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil
 	}
@@ -814,7 +814,7 @@ func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []st
 // recordGateExits also settles unreadable exits immediately when a worker
 // has just been stopped. Ordinary watch recovery retains its lost-run event.
 func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded, cut []string, lost []state.Merge) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, nil, nil
 	}
@@ -1017,7 +1017,7 @@ type hungRun struct {
 // stays running until its gate, or recordGone once the gate is gone,
 // records how devctl ended.
 func (a *app) endHung(ctx context.Context, by state.Party, now time.Time, after time.Duration, pick func(state.Merge) bool) []hungRun {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil
 	}
