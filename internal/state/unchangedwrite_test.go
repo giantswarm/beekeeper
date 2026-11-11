@@ -29,7 +29,7 @@ func TestUpdateWithoutChangeKeepsStateFile(t *testing.T) {
 	if !sameSnapshot(before, after) {
 		t.Fatal("an update without a change replaced state.json")
 	}
-	if err := s.Update(func(st *State) ([]Event, error) { st.Notes[0].Text = "changed"; return nil, nil }); err != nil {
+	if err := s.Update(func(st *State) ([]Event, error) { st.Notes[0].Text = "updated"; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := os.Stat(s.path("state.json"))
@@ -43,7 +43,7 @@ func TestUpdateWithoutChangeKeepsStateFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Notes) != 1 || st.Notes[0].Text != "changed" {
+	if len(st.Notes) != 1 || st.Notes[0].Text != "updated" {
 		t.Fatalf("notes = %+v", st.Notes)
 	}
 }

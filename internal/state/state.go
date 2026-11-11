@@ -1967,6 +1967,7 @@ type FileStore struct {
 	snapshotMu    sync.Mutex
 	snapshotFile  os.FileInfo
 	snapshot      *State
+	snapshotSum   [32]byte
 
 	// outboxFile is the state file whose outbox outboxPendingSeen answers.
 	outboxMu          sync.Mutex
@@ -1981,6 +1982,11 @@ type followed struct {
 	offset int64
 	kept   []Event
 	anchor string
+	// published* are the checkpoint FollowSnapshot last wrote: when, and
+	// up to where in which file.
+	publishedAt     time.Time
+	publishedFile   os.FileInfo
+	publishedOffset int64
 }
 
 var _ Store = (*FileStore)(nil)

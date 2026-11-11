@@ -109,7 +109,7 @@ func (s *FileStore) recoverPendingEvents() error {
 func (s *FileStore) outboxPending() (bool, error) {
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	f, err := os.Open(s.path("state.json"))
+	f, err := os.Open(s.path("state.json")) //nolint:gosec // the store's own state file
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -181,18 +181,19 @@ func (s *FileStore) flushEvents(st *State, f outboxFile) error {
 // writeState replaces state.json unless the document would stay byte for byte
 // the same. A save that changes nothing must not change the file's identity:
 // every process's snapshot cache keys on it, and the loop, the guide and lease
-// waits wake on its replacement. The caller holds the commit lock.
+// waits wake on its replacement. The transaction loaded the current document
+// through the snapshot cache, which keeps its digest. The caller holds the
+// commit lock.
 func (s *FileStore) writeState(st *State) error {
-	path := s.path("state.json")
 	raw, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
 	raw = append(raw, '\n')
-	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, raw) {
+	if s.unchangedSnapshot(raw) {
 		return nil
 	}
-	return writeRaw(path, raw)
+	return writeRaw(s.path("state.json"), raw)
 }
 
 // Windows does not expose a portable directory fsync; file data is still

@@ -28,7 +28,9 @@ var readLoopAlerts = func(_ context.Context, a *app) ([]alerts.Firing, error) {
 	} else if !at.IsZero() {
 		return current, nil
 	}
-	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "watch.alert-state" })
+	// Followed, not searched: without a watch the event may never have been
+	// logged, and every pass would read the whole history again.
+	evs, err := state.FollowLast(a.store, "watch-alert-state", 1, func(e state.Event) bool { return e.Verb == "watch.alert-state" })
 	if err != nil || len(evs) == 0 {
 		return nil, err
 	}
