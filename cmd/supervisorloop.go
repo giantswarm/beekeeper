@@ -1155,6 +1155,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 	if d <= 0 {
 		return ctx.Err() == nil
 	}
+	changes, closeChanges := state.Changes(ctx, filepath.Join(l.a.store.Dir(), "state.json"), filepath.Join(l.a.store.Dir(), "events.jsonl"))
+	defer closeChanges()
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	const checkEvery = time.Second
@@ -1164,6 +1166,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 			return false
 		case <-l.pullWatcher().ready:
 			return true
+		case <-changes:
+			return pauseChange(ctx)
 		case <-timer.C:
 			return true
 		}
@@ -1176,6 +1180,8 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 			return false
 		case <-l.pullWatcher().ready:
 			return true
+		case <-changes:
+			return pauseChange(ctx)
 		case <-timer.C:
 			return true
 		case <-ticker.C:
@@ -1791,6 +1797,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 				w.Issues = append(w.Issues, record.Issue)
 			}
 		}
+		if len(w.Issues) == 0 && ag.Done {
+			if served := loopTaskServes(ag, w.ParkedOn); served != "" {
+				w.Issues = append(w.Issues, served)
+			}
+		}
 		if !ag.Done {
 			w.Mentions = namedRefs(ag.Task, a.cfg.Board.Owner)
 		}
@@ -2152,6 +2163,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		}
 	}
 	l.lifecyclePhase("plan and record heartbeat")
+	in.ClosedIssues = l.closedIssues(in.Now)
 	if l.dryRun {
 		l.recording = &loopRecording{Agents: st.Agents, Deliveries: st.Deliveries}
 		in = l.recording.capture(in)
@@ -2346,7 +2358,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		otherActs  []superloop.Action
 	)
 	for _, act := range actions {
-		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
+		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone || act.Kind == superloop.KindProgress {
 			planned[act.Agent] = true
 		}
 		switch act.Kind {
@@ -3252,6 +3264,8 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.install(ctx, act)
 	case superloop.KindClassify:
 		return l.classify(ctx, st, act)
+	case superloop.KindProgress:
+		return "delivery progress: " + act.Message, nil
 	case superloop.KindFile:
 		return l.toFile(ctx, st, act)
 	case superloop.KindIntake:

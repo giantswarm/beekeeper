@@ -21,6 +21,10 @@
 # Stop/holds/capacity still govern repairs; three attempts,
 # ten minutes apart, with only one repair owner at a time. Only a passing
 # probe clears an outage; unreadable is unknown. Inspect: beekeeper fatal status.
+# A red repository default branch holds only merges into that branch (except
+# the reserved repair PR) and releases from that repository. Workers in every
+# repository keep starting. Infrastructure outages retain the global start
+# barrier. Status and refusals name the scope; repair PR identity survives review.
 # fatal:
 #   repositories: [giantswarm/beekeeper] # [] disables default-branch CI probes
 #   checkouts: {giantswarm/beekeeper: ~/projects/beekeeper} # default projects.dir/<repo>
