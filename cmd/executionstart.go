@@ -94,14 +94,6 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		return err
 	}
 	caps, err := a.probeExecution(ctx, host)
-	if err != nil && !o.DryRun && execution.IsToolsError(err) && releaseVersion(coordinatorVersion()) {
-		if _, uerr := a.updateExecutionHost(ctx, o.Host); uerr == nil {
-			if updated, herr := a.executionHost(o.Host); herr == nil {
-				host = updated
-				caps, err = a.probeExecution(ctx, host)
-			}
-		}
-	}
 	if err != nil {
 		return err
 	}

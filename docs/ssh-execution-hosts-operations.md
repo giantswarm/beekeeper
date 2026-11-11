@@ -69,7 +69,7 @@ named `go` or `gh` and the version it reports (`go version` with
 `GOTOOLCHAIN=local`, `gh --version`). `agents hosts check`, and every start,
 refuses a host whose required tool is unpinned, reports another version than its
 pin, or is older than a served `go.mod` asks for, naming each one; a passing
-check lists the pinned versions under `tools`. the runner puts each tool's directory on the worker's PATH right after the
+check lists the pinned versions under `tools`. The runner puts each tool's directory on the worker's PATH right after the
 component's, so a worker runs `go` and `gh` by bare name. The tools are part of
 the pinned policy: when a served repository's `go.mod` moves to a newer Go
 release, `agents hosts update` (or `agents hosts provision-tools` followed by

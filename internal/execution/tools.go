@@ -18,9 +18,10 @@ import (
 // its harness: Go for the repositories whose source checkout has a go.mod,
 // and the GitHub CLI on every host.
 const (
-	ToolGo          = "go"
-	ToolGitHub      = "gh"
-	PinnedToolsFile = "tools.json"
+	ToolGo             = "go"
+	ToolGitHub         = "gh"
+	PinnedToolsFile    = "tools.json"
+	toolNotProvisioned = "not provisioned under agents.execution.tools"
 )
 
 // ToolConfig pins one operator-installed tool a worker calls by bare name.
@@ -101,7 +102,7 @@ func CheckTools(have, need map[string]string) error {
 		v, configured := have[name]
 		switch {
 		case !configured || v == "":
-			missing[name] = "not provisioned under agents.execution.tools"
+			missing[name] = toolNotProvisioned
 		case least != "" && semver.Compare(goSemver(v), goSemver(least)) < 0:
 			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", v, least)
 		}
@@ -110,11 +111,6 @@ func CheckTools(have, need map[string]string) error {
 		return toolsError(missing)
 	}
 	return nil
-}
-
-// IsToolsError reports whether err is a worker toolchain readiness refusal.
-func IsToolsError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "execution host lacks the worker toolchain (")
 }
 
 // RaiseGoTool returns a ToolConfig for version under the same parent tools
@@ -204,7 +200,7 @@ func (s *Server) probeTools(ctx context.Context) (map[string]string, map[string]
 		t, configured := s.Config.Tools[name]
 		switch {
 		case !configured:
-			missing[name] = "not provisioned under agents.execution.tools"
+			missing[name] = toolNotProvisioned
 		case least != "" && semver.Compare(goSemver(t.Version), goSemver(least)) < 0:
 			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", t.Version, least)
 		default:
@@ -316,7 +312,7 @@ func (s *Server) checkWorkspaceTools(ctx context.Context, workspace string) erro
 		t, configured := s.Config.Tools[name]
 		switch {
 		case !configured:
-			missing[name] = "not provisioned under agents.execution.tools"
+			missing[name] = toolNotProvisioned
 		case least != "" && semver.Compare(goSemver(t.Version), goSemver(least)) < 0:
 			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", t.Version, least)
 		default:

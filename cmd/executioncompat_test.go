@@ -122,7 +122,6 @@ func TestLegacyHostSourcePreparationRejectedBeforeReservation(t *testing.T) {
 
 func TestHostsCheckReportsPinOlderThanCoordinatorRepositoriesNeedBeforeStart(t *testing.T) {
 	a, brief := sshStartTestApp(t)
-	withCoordinatorVersion(t, "dev")
 	repoDir := filepath.Join(a.cfg.Projects.Dir, "beekeeper")
 	if err := os.MkdirAll(repoDir, 0o700); err != nil {
 		t.Fatal(err)

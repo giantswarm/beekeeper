@@ -940,16 +940,17 @@ func TestCoordinatorHostUpdateWaitsForReadableMatchingVerdict(t *testing.T) {
 }
 
 func TestHostsUpdateRaisesGoPinWhenServedRepositoryToolchainAdvances(t *testing.T) {
+	const wantedGoVersion = "1.27.4"
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, hostNewRelease)
 	repoDir := filepath.Join(a.cfg.Projects.Dir, "beekeeper")
 	if err := os.MkdirAll(repoDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go1.27.4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go"+wantedGoVersion+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digest := execution.Digest([]byte("prepared with go1.27.4"))
+	digest := execution.Digest([]byte("prepared with go" + wantedGoVersion))
 	lookup := lookupRelease
 	t.Cleanup(func() { lookupRelease = lookup })
 	lookupRelease = func(_ context.Context, version string) (update.Release, error) {
@@ -967,22 +968,22 @@ func TestHostsUpdateRaisesGoPinWhenServedRepositoryToolchainAdvances(t *testing.
 	probe := a.executionProbe
 	a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {
 		caps, err := probe(ctx, h)
-		caps.Tools = map[string]string{execution.ToolGitHub: "2.83.0", execution.ToolGo: "1.27.4"}
+		caps.Tools = map[string]string{execution.ToolGitHub: "2.83.0", execution.ToolGo: wantedGoVersion}
 		return caps, err
 	}
 	if _, err := runAgents(a, hostFixtureCommand, hostUpdateCmdName, sshTestSelector); err != nil {
 		t.Fatal(err)
 	}
-	if gotTools[execution.ToolGo] != "1.27.4" {
-		t.Fatalf("host update sent tools %v, want go 1.27.4", gotTools)
+	if gotTools[execution.ToolGo] != wantedGoVersion {
+		t.Fatalf("host update sent tools %v, want go %s", gotTools, wantedGoVersion)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	pin := st.HostPin(sshTestSelector)
-	if pin == nil || pin.Tools[execution.ToolGo] != "1.27.4" {
-		t.Fatalf("host pin tools = %+v, want go 1.27.4", pin)
+	if pin == nil || pin.Tools[execution.ToolGo] != wantedGoVersion {
+		t.Fatalf("host pin tools = %+v, want go %s", pin, wantedGoVersion)
 	}
 	// When a served repository advances to 1.27.5 on the same coordinator
 	// release, hostPinToolsCurrent reports the pin stale so updateHosts runs.

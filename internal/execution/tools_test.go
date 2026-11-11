@@ -200,12 +200,13 @@ func TestWorkspaceChecksActualGoRequirement(t *testing.T) {
 }
 
 func TestRaiseGoToolAndLoadPinnedTools(t *testing.T) {
+	const raisedGoVersion = "1.27.4"
 	base := ToolConfig{Executable: "/srv/tools/go1.27.3/bin/go", Version: "1.27.3"}
-	raised, err := RaiseGoTool(base, "1.27.4")
+	raised, err := RaiseGoTool(base, raisedGoVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ToolConfig{Executable: "/srv/tools/go1.27.4/bin/go", Version: "1.27.4"}
+	want := ToolConfig{Executable: "/srv/tools/go" + raisedGoVersion + "/bin/go", Version: raisedGoVersion}
 	if raised != want {
 		t.Fatalf("RaiseGoTool = %+v, want %+v", raised, want)
 	}
