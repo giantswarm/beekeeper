@@ -45,7 +45,7 @@ func (w *watcher) unbrokered() {
 	if len(path) == 0 {
 		return
 	}
-	st, err := w.store.Read()
+	st, err := w.store.Peek()
 	if err != nil {
 		return
 	}

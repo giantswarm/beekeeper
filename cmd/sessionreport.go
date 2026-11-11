@@ -62,6 +62,8 @@ type sessionReport struct {
 	Registered     bool
 	Clear          bool
 	NoteID         int
+	preview        bool
+	pullStates     map[github.PR]github.RefState
 }
 
 func (a *app) submitReport(p sessionReport) error {
@@ -84,6 +86,7 @@ func (a *app) submitReport(p sessionReport) error {
 		}
 	}
 	preview := p
+	preview.preview = true
 	if strings.HasPrefix(preview.On, reportReferencePrefix) {
 		preview.On = ""
 	}
@@ -160,6 +163,9 @@ func (a *app) consumeReports(ctx context.Context) error {
 			reviewBefore = slices.Clone(st.DeskReviews)
 			prepareErr = copyApp.captureExecutionReviewReport(ctx, st, p.By, p.Text, p.At, true)
 			reviewAfter = st.DeskReviews
+			if prepareErr == nil && strings.TrimSpace(p.NoChange) == "" {
+				p.pullStates, prepareErr = copyApp.idleDeliveryPullStates(ctx, st, p.By)
+			}
 		}
 		if prepareErr == nil && p.Kind == reportKindPark && !strings.HasPrefix(p.On, reportReferencePrefix) {
 			p.RefKind, prepareErr = resolveParkRef(ctx, p.On)
@@ -271,12 +277,43 @@ func reportWakeTarget(by state.Party) string {
 	return by.Name
 }
 
+func (a *app) idleDeliveryPullStates(ctx context.Context, st *state.State, by state.Party) (map[github.PR]github.RefState, error) {
+	i := a.callerAgent(st, by)
+	if i < 0 {
+		return nil, nil
+	}
+	ag := st.Agents[i]
+	if slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool { return sameReviewSession(r.Reviewer, ag.Party) }) {
+		return nil, nil
+	}
+	var refs []github.PR
+	for _, idx := range workerDeliveries(st, ag) {
+		d := st.Deliveries[idx]
+		if d.Outcome == state.OutcomeMerged {
+			continue
+		}
+		for _, ref := range d.Pulls {
+			if r, ok := parseRef(ref); ok && !slices.Contains(refs, r) {
+				refs = append(refs, r)
+			}
+		}
+	}
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	return refStates(ctx, refs)
+}
+
 func (a *app) prepareNoteReport(ctx context.Context, p *sessionReport) error {
 	if p.Note.Kind == noteDecision {
 		if err := a.refuseMergeAsk(a.out, p.By, p.Draft, p.Note.Refs); err != nil {
 			return err
 		}
-		if p.Registered {
+		worker, err := a.isWorker(p.By)
+		if err != nil {
+			return err
+		}
+		if worker {
 			if err := a.routeWorkerNote(ctx, a.out, p.By, p.Draft, p.Note.Refs); err != nil {
 				return err
 			}

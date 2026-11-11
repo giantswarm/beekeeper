@@ -245,7 +245,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 				me, _ = a.caller()
 			}
 			if exemptOnly {
-				st, err := a.store.Read()
+				st, err := a.store.Peek()
 				if err != nil {
 					return err
 				}
@@ -259,7 +259,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 				return err
 			}
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			epicState, err := a.store.Read()
+			epicState, err := a.store.Peek()
 			if err != nil {
 				return err
 			}
@@ -287,7 +287,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 			skipHeldLeases(cands, holders, me)
 			skipUnread(cands, a.cfg.Supervisor.Ownership.Never)
 			skipAsked(cands, skip)
-			st, err := a.store.Read()
+			st, err := a.store.Peek()
 			if err != nil {
 				return err
 			}

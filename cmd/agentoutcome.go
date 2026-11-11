@@ -29,6 +29,10 @@ func workerDeliveries(st *state.State, ag state.Agent) []int {
 }
 
 func (a *app) completionOutcome(ctx context.Context, st *state.State, ag state.Agent, done bool, noChange string, blocked bool, by string) ([]state.Event, error) {
+	return a.completionOutcomeWith(ctx, st, ag, done, noChange, blocked, by, refStates)
+}
+
+func (a *app) completionOutcomeWith(ctx context.Context, st *state.State, ag state.Agent, done bool, noChange string, blocked bool, by string, lookup func(context.Context, []github.PR) (map[github.PR]github.RefState, error)) ([]state.Event, error) {
 	noChange, by = strings.TrimSpace(noChange), strings.TrimSpace(by)
 	if blocked && done || noChange != "" && !done || by != "" && !blocked || blocked && by == "" {
 		return nil, refused("choose one outcome: %s", taskEndings)
@@ -77,7 +81,7 @@ func (a *app) completionOutcome(ctx context.Context, st *state.State, ag state.A
 				if !ok {
 					continue
 				}
-				reads, err := refStates(ctx, []github.PR{r})
+				reads, err := lookup(ctx, []github.PR{r})
 				if err != nil {
 					return nil, fmt.Errorf("verify completion of %s: %w", d.Ref, err)
 				}

@@ -224,7 +224,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 					return refused("--holds with --fold-into: the open note's hold stands; file the hold on a note of its own")
 				}
 			}
-			if a.queueReports && !into.Central && !a.centralNote(&n, holds, foldInto) {
+			if a.queueReports && a.managedExecutionID() == "" && !into.Central && !a.centralNote(&n, holds, foldInto) {
 				checked := guides(person, &n)
 				if checked {
 					if missing := draft.missing(); len(missing) > 0 {

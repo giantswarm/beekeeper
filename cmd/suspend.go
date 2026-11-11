@@ -49,7 +49,7 @@ func (w *watcher) suspends(ctx context.Context, since time.Time, sessions []*cla
 		if w.suspendEntry.IsZero() || record.At.Before(w.suspendEntry) {
 			continue
 		}
-		st, err := w.store.Read()
+		st, err := w.store.Peek()
 		if err != nil {
 			return
 		} // retry the pair on the next poll

@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -110,12 +112,19 @@ func (a *app) applyIdleReport(st *state.State, p *sessionReport) ([]state.Event,
 	if slices.ContainsFunc(st.DeskReviews, func(round state.DeskReview) bool { return sameReviewSession(round.Reviewer, ag.Party) }) && !sameReviewSession(me, ag.Party) {
 		return nil, refused("independent review completion requires its assigned session, not --as")
 	}
-	var outcomes []state.Event
-	if strings.TrimSpace(p.NoChange) != "" {
-		var err error
-		if outcomes, err = a.completionOutcome(a.context(), st, *ag, finished, p.NoChange, false, ""); err != nil {
-			return nil, err
+	lookup := func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		if p.preview {
+			reads := make(map[github.PR]github.RefState, len(refs))
+			for _, r := range refs {
+				reads[r] = github.RefState{Kind: github.RefPullRequest, State: github.Merged}
+			}
+			return reads, nil
 		}
+		return p.pullStates, nil
+	}
+	outcomes, err := a.completionOutcomeWith(a.context(), st, *ag, finished, p.NoChange, false, "", lookup)
+	if err != nil {
+		return nil, err
 	}
 	found = freshWorkerProblems(ag, found)
 	reportIdle(ag, a.now)

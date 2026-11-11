@@ -13,6 +13,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -178,5 +179,42 @@ func TestDelayedReportCannotCompleteAnotherAssignment(t *testing.T) {
 		if !strings.Contains(r.Error, "replaced assignment") {
 			t.Fatalf("receipt: %+v", r)
 		}
+	}
+}
+
+func TestSessionReportDeliveryOutcomes(t *testing.T) {
+	a := sessionReportFixture(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Task = heldRef
+		st.StartDelivery(heldRef, agentOne, "", a.now)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := a.agentsCmd()
+	c.SetArgs([]string{stateIdle, "--done", "--report", "Completed https://github.com/giantswarm/beekeeper/issues/7", "--problem", ghNone})
+	c.SetOut(a.out)
+	c.SetErr(a.out)
+	if err := c.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), taskEndings) {
+		t.Fatalf("accepted completion without merged pull request: %v", err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Deliveries[0].Pulls = []string{alsoHeldRef}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := refStates
+	t.Cleanup(func() { refStates = prev })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		return map[github.PR]github.RefState{refs[0]: {Kind: github.RefPullRequest, State: github.Merged}}, nil
+	}
+	reportCommand(t, a, a.agentsCmd(), stateIdle, "--done", "--report", "Merged https://github.com/giantswarm/beekeeper/pull/8", "--problem", ghNone)
+	if err := a.consumeReports(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Peek()
+	if err != nil || !st.Agents[0].Done || st.Deliveries[0].Outcome != state.OutcomeMerged {
+		t.Fatalf("delivery outcome not recorded: %+v, %v", st, err)
 	}
 }

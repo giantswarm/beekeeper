@@ -310,7 +310,7 @@ func (w *watcher) kindSpending(now time.Time) {
 		zone = time.Local
 	}
 	from, _ := kindDayWindow(now, zone)
-	st, err := w.store.Read()
+	st, err := w.store.Peek()
 	if err != nil {
 		return
 	}
