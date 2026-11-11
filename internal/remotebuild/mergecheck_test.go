@@ -128,7 +128,11 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 	}
 	tools := t.TempDir()
 	shim := strings.ReplaceAll(lintShim, "/work/tools", tools)
-	installed := filepath.Join(tools, "v2.14.0", "golangci-lint")
+	_, version, ok := strings.Cut(GolangCILintModule, "@")
+	if !ok || version == "" {
+		t.Fatal("golangci-lint module must pin a version")
+	}
+	installed := filepath.Join(tools, version, "golangci-lint")
 	lint := "#!/bin/sh\necho \"linted by $0 $* cache=$GOLANGCI_LINT_CACHE\"\n"
 	// The install must not touch the image's GOPATH, which the builder's
 	// non-root user cannot write.

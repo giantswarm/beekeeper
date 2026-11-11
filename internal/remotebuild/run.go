@@ -99,7 +99,7 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 
 // GolangCILintModule is the golangci-lint a Go image without one gets for
 // merge validation: the version the repository's CI pins.
-const GolangCILintModule = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0"
+const GolangCILintModule = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0"
 
 // lintShim runs the image's golangci-lint, or installs GolangCILintModule into
 // the pod's workspace first. A failed install exits 125, a checker environment
