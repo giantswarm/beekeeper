@@ -53,7 +53,7 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 		return r, nil, err
 	}
 	prerequisites := sourcePrerequisites(ctx, repo, head, basis)
-	if _, err = publishGit(ctx, repo, append([]string{"bundle", "create", stagedBundle, "refs/heads/execution-source"}, prerequisites...)...); err != nil {
+	if _, err = publishGit(ctx, repo, append([]string{gitBundle, workerGitHubCreate, stagedBundle, "refs/heads/execution-source"}, prerequisites...)...); err != nil {
 		return r, nil, err
 	}
 	data, err := readPublicationBundle(stagedBundle)
@@ -100,7 +100,7 @@ func sourcePrerequisites(ctx context.Context, repo, head string, basis []string)
 	if len(basis) == 0 {
 		return nil
 	}
-	args := append([]string{"rev-list", "--no-walk=unsorted", "--ignore-missing"}, basis...)
+	args := append([]string{gitRevList, "--no-walk=unsorted", "--ignore-missing"}, basis...)
 	present, err := publishGit(ctx, repo, args...)
 	if err != nil {
 		return nil
@@ -116,7 +116,7 @@ func sourcePrerequisites(ctx context.Context, repo, head string, basis []string)
 	for c := range strings.SplitSeq(present, "\n") {
 		c = strings.TrimSpace(c)
 		if c == head {
-			parents, err := publishGit(ctx, repo, "rev-list", "--no-walk", "--parents", head)
+			parents, err := publishGit(ctx, repo, gitRevList, "--no-walk", "--parents", head)
 			if err != nil {
 				continue
 			}

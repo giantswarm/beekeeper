@@ -270,7 +270,9 @@ func (t *basisTransport) UploadSource(ctx context.Context, ref execution.Ref, da
 func TestHostsCheckReportsHostSourceBehind(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	h := a.cfg.Agents.Hosts[sshTestSelector]
-	h.Repositories = map[string]string{sshTestRepository: "/srv/source"}
+	if _, ok := h.Repositories[sshTestRepository]; !ok || len(h.Repositories) != 1 {
+		t.Fatalf("fixture host maps %v", h.Repositories)
+	}
 	tip := strings.Repeat("cd", 20)
 	transport := &basisTransport{testExecutionTransport: &testExecutionTransport{}, basis: []string{tip}}
 	a.executionTransport = func(execution.Host) execution.Transport { return transport }
