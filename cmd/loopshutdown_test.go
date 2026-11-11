@@ -36,7 +36,7 @@ func TestLoopShutdownAbandonsAStuckPass(t *testing.T) {
 	exited := fakeLoopShutdown(t, 100*time.Millisecond)
 	store := shutdownStore(t)
 	started := time.Now().UTC()
-	if err := store.WriteFile(loopLifecycleFile, loopLifecycle{Version: "1.2.3", Started: started, At: started, Phase: loopPhaseRecover}); err != nil {
+	if err := store.WriteFile(loopLifecycleFile, loopLifecycle{Version: "0.9.1", Started: started, At: started, Phase: loopPhaseRecover}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteFile(loopPIDFile, 4242); err != nil {
@@ -81,7 +81,7 @@ func TestLoopShutdownAbandonsAStuckPass(t *testing.T) {
 	if found, err := store.ReadFile(loopLifecycleFile, &life); err != nil || !found {
 		t.Fatalf("lifecycle: found %v, err %v", found, err)
 	}
-	if !life.Exited || life.Failure != loopFailureAbandoned || life.Phase != loopPhaseRecover || life.Version != "1.2.3" {
+	if !life.Exited || life.Failure != loopFailureAbandoned || life.Phase != loopPhaseRecover || life.Version != "0.9.1" {
 		t.Fatalf("lifecycle %+v, want exited with %q in %q", life, loopFailureAbandoned, loopPhaseRecover)
 	}
 	var pid int
