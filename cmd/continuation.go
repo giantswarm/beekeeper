@@ -135,6 +135,9 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		return nil
 	}
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !freshPark(st, ag) || len(ag.Park.Continuation) == 0 {
 			continue
 		}
@@ -155,7 +158,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase(loopPhaseRecover)
+		l.lifecyclePhase(loopPhaseContinueParks)
 		if l.dryRun {
 			l.sayOnce("continue "+ag.Name, "SUPERVISOR WOULD CONTINUE %s with a fresh worker for %s", ag.Name, ref)
 			continue
@@ -205,11 +208,11 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 					}
 				}
 			}
-			note, _, err := l.a.lastNote(ag.Party, ag.AssignedAt, func() { l.lifecyclePhase(loopPhaseRecover) })
+			note, _, err := l.a.lastNoteContext(ctx, ag.Party, ag.AssignedAt, func() { l.lifecyclePhase(loopPhaseContinueParks) })
 			if err != nil {
 				return err
 			}
-			l.lifecyclePhase(loopPhaseRecover)
+			l.lifecyclePhase(loopPhaseContinueParks)
 			if note != "" {
 				context += "\nLatest handover note (full record in beekeeper log --verb agents.note):\n" + truncate(note, 8192)
 			}
@@ -264,7 +267,7 @@ func (l *supervisorLoop) continueParks(ctx context.Context, st *state.State) err
 				l.sayOnce("continue start "+ag.Name, "SUPERVISOR CONTINUATION WAITS %s: %v", ag.Name, err)
 				continue
 			}
-			l.lifecyclePhase(loopPhaseRecover)
+			l.lifecyclePhase(loopPhaseContinueParks)
 		}
 		if i >= 0 && current.Agents[i].Execution != nil {
 			if rec, _ := executionRecord(current, *current.Agents[i].Execution); rec != nil && unactivated(rec) {

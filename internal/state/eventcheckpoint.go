@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,10 +15,29 @@ import (
 // the ordinary Follow contract. Checkpoints are disposable; audit segments are
 // the source of truth and remain available to Events/log --since.
 func FollowSnapshot(s Store, name, revision string, keep func(Event) bool) ([]Event, error) {
+	return FollowSnapshotContext(context.Background(), s, name, revision, keep)
+}
+
+// FollowSnapshotContext is FollowSnapshot with caller cancellation during cold
+// or incremental history scans.
+func FollowSnapshotContext(ctx context.Context, s Store, name, revision string, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if indexed, ok := s.(interface {
+		FollowSnapshotContext(context.Context, string, string, func(Event) bool) ([]Event, error)
+	}); ok {
+		return indexed.FollowSnapshotContext(ctx, name, revision, keep)
+	}
 	if indexed, ok := s.(interface {
 		FollowSnapshot(string, string, func(Event) bool) ([]Event, error)
 	}); ok {
 		return indexed.FollowSnapshot(name, revision, keep)
+	}
+	if cancellable, ok := s.(interface {
+		EventsContext(context.Context, int, func(Event) bool) ([]Event, error)
+	}); ok {
+		return cancellable.EventsContext(ctx, 0, keep)
 	}
 	return s.Follow(name, keep)
 }
@@ -33,8 +53,15 @@ type eventCheckpoint struct {
 // It prevents a replaced/truncated log from being mistaken for the old cursor.
 // No checkpoint can authorize a state write or alter recovery's writer fence.
 func (s *FileStore) FollowSnapshot(name, revision string, keep func(Event) bool) ([]Event, error) {
+	return s.FollowSnapshotContext(context.Background(), name, revision, keep)
+}
+
+func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision string, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if filepath.Base(name) != name || name == "." || strings.ContainsAny(name, `/\`) {
-		return s.Follow(name, keep)
+		return s.FollowContext(ctx, name, keep)
 	}
 	key := name + ":" + revision
 	at := s.eventReader(key)
@@ -43,6 +70,7 @@ func (s *FileStore) FollowSnapshot(name, revision string, keep func(Event) bool)
 	dir := s.path("event-checkpoints")
 	path := filepath.Join(dir, name+".json")
 	previousFile, previousOffset := at.file, at.offset
+	savedKept, savedAnchor := slices.Clone(at.kept), at.anchor
 	var saved eventCheckpoint
 	if at.file == nil {
 		if raw, err := os.ReadFile(path); err == nil { //nolint:gosec // validated reader basename under the store checkpoint directory
@@ -56,8 +84,11 @@ func (s *FileStore) FollowSnapshot(name, revision string, keep func(Event) bool)
 			at.file, at.offset, at.kept, at.anchor = fi, saved.Offset, saved.Kept, saved.Source
 		}
 	}
-	events, err := s.follow(at, keep)
+	events, err := s.followContext(ctx, at, keep)
 	if err != nil {
+		if ctx.Err() != nil {
+			at.file, at.offset, at.kept, at.anchor = previousFile, previousOffset, savedKept, savedAnchor
+		}
 		return events, err
 	}
 	if at.file == nil {
@@ -76,7 +107,7 @@ func (s *FileStore) FollowSnapshot(name, revision string, keep func(Event) bool)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return events, nil
 	}
-	files, err := s.eventFiles()
+	files, err := s.eventFilesContext(ctx)
 	if err != nil {
 		return events, nil
 	}
