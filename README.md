@@ -174,9 +174,13 @@ and approval or loop go for that head.
 Direct merge commands and other guide work remain guarded.
 
 A green bot pull request the desk did not open is left alone until its login
-is in `supervisor.ownership.bots`; a worker's park on it then requests the
-loop's review and go, and the gated merge follows as for the desk's own. The
-sweep never lists one.
+is in `supervisor.ownership.bots`. The sweep then lists the bot's open pull
+requests in the repositories the desk owns (no `team`, the team's own by its
+team files, or `supervisor.ownership.review`; never `never`): one without a
+live owner for 15 minutes gets the loop's review, on approval its go, and the
+gated merge follows as for the desk's own. A head the bot moves (a rebase after
+another merge) gets a new review. A worker's park on one requests the same
+review at once.
 
 Independently, `beekeeper emergency auto-install pause --reason "<their words>"`
 pauses the loop's release installation without stopping reviews, merges or
