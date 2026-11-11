@@ -23,8 +23,8 @@ func TestHostCapacityReasons(t *testing.T) {
 		{loopRoomJSON, 0, nil, ""},
 		{`{"room":0,"blocks":["host maxBusy reached"]}`, 0, nil, "host maxBusy reached"},
 		{`{"room":0,"verdict":"no start: provider quota"}`, 0, nil, "provider quota"},
-		{"not JSON", 0, nil, "unreadable"},
-		{"{}", 0, nil, "unreadable"},
+		{"malformed capacity output", 0, nil, "answer is unreadable"},
+		{"{}", 0, nil, "capacity answer is"},
 		{"policy mismatch", 3, nil, "policy mismatch"},
 		{"", 0, errors.New("host unreachable"), "host unreachable"},
 	} {

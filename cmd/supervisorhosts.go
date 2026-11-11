@@ -22,8 +22,10 @@ const hostDrainRetry = 10 * time.Minute
 // Legacy lookup and probation holds never changed the installed host. Actual
 // installation, preparation and policy failures remain start-blocking.
 func hostHoldBlocks(pin state.HostPin) bool {
-	return pin.Held != "" && !strings.Contains(pin.Held, update.ErrProbationWatched.Error()) &&
-		!(strings.HasPrefix(pin.Held, "looking up release ") && github.RateLimited(errors.New(pin.Held)))
+	if pin.Held == "" || strings.Contains(pin.Held, update.ErrProbationWatched.Error()) {
+		return false
+	}
+	return !strings.HasPrefix(pin.Held, "looking up release ") || !github.RateLimited(errors.New(pin.Held))
 }
 
 func hostHoldWait(pin state.HostPin, b *state.Budget, now time.Time) bool {

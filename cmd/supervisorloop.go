@@ -4162,7 +4162,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 	if (err != nil || code != 0) && !k.HostsFirst {
 		return startHost{}, errLoopLater
 	}
-	localReady := hostCapacityReason(out, code, err) == ""
+	localReady := err == nil && code == 0 && roomOpen(out)
 	if localReady && !k.HostsFirst {
 		for _, selector := range k.Hosts {
 			l.recordHostPlacement(selector, repo, "not tried: explicit local-first preference and coordinator has room")
