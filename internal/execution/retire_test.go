@@ -621,3 +621,92 @@ func TestHostRetentionValidates(t *testing.T) {
 		}
 	}
 }
+
+// legacyStandaloneClone turns the fixture's workspace into what executions
+// started before workspaces became worktrees left: a standalone clone with its
+// own .git directory and no shared repository.git.
+func legacyStandaloneClone(t *testing.T, f fixture, h Handle) {
+	t.Helper()
+	ctx := context.Background()
+	dir := filepath.Dir(h.Workspace)
+	for _, path := range []string{h.Workspace, filepath.Join(dir, "repository.git")} {
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.s.git(ctx, "", "clone", "--quiet", "--no-local", "--config", "maintenance.auto=false", "--", f.source, h.Workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.git(ctx, h.Workspace, "checkout", "--quiet", "-B", workerBranch+string(f.r.Ref.Execution), h.Commit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A legacy standalone clone retires like a worktree: its work is bundled from
+// the clone's own repository and the execution root moves aside, instead of
+// the retirement stopping on a repository it misreports as a symlink.
+func TestRetireLegacyStandaloneClone(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	h := launched(t, f)
+	legacyStandaloneClone(t, f, h)
+	head := leaveWork(t, f, h)
+	f.launcher.states[h.Unit] = unitInactive
+	x, err := f.s.Retire(ctx, f.r.Ref, retireRequest(RetireTriggerStop))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.Stage != RetireRetired || x.Recovery == nil || x.Recovery.Head != head || !x.Recovery.Dirty {
+		t.Fatalf("retirement = %+v", x)
+	}
+	if want := filepath.Join(retiredRoot(f), "workspace", ".git"); x.Recovery.Repository != want {
+		t.Fatalf("recovery repository = %q, want %q", x.Recovery.Repository, want)
+	}
+	if info, err := os.Stat(x.Recovery.Repository); err != nil || !info.IsDir() {
+		t.Fatalf("moved-aside repository: %v", err)
+	}
+	if got := recoveredFile(t, f, x, retireFixtureTracked); got != retireFixtureEdit {
+		t.Fatalf("recovered edit = %q", got)
+	}
+	if _, err := os.Lstat(filepath.Dir(h.Workspace)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("execution root stayed: %v", err)
+	}
+}
+
+// A clean legacy clone needs no recovery and is proved disposable.
+func TestRetireCleanLegacyStandaloneClone(t *testing.T) {
+	f := testFixture(t)
+	h := launched(t, f)
+	legacyStandaloneClone(t, f, h)
+	f.launcher.states[h.Unit] = unitInactive
+	x, err := f.s.Retire(context.Background(), f.r.Ref, retireRequest(RetireTriggerReport))
+	if err != nil || x.Stage != RetireRetired || x.Recovery != nil {
+		t.Fatalf("retirement = %+v, %v", x, err)
+	}
+	j, err := f.s.Read(f.r.Ref)
+	if err != nil || !j.Disposable {
+		t.Fatalf("clean legacy clone not disposable: %+v, %v", j, err)
+	}
+}
+
+// A workspace with neither repository.git nor its own .git directory stops
+// the retirement with the repository named missing, not a symlink.
+func TestRetireMissingRepositoryIsNotASymlink(t *testing.T) {
+	f := testFixture(t)
+	h := launched(t, f)
+	leaveWork(t, f, h)
+	if err := os.RemoveAll(filepath.Join(filepath.Dir(h.Workspace), "repository.git")); err != nil {
+		t.Fatal(err)
+	}
+	f.launcher.states[h.Unit] = unitInactive
+	x, err := f.s.Retire(context.Background(), f.r.Ref, retireRequest(RetireTriggerCrash))
+	if err == nil || x.Stage != RetireRequested {
+		t.Fatalf("retirement = %+v, %v", x, err)
+	}
+	if strings.Contains(err.Error(), "symlink") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.Workspace, "untracked.txt")); err != nil {
+		t.Fatalf("work moved: %v", err)
+	}
+}

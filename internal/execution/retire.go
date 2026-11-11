@@ -399,9 +399,9 @@ func (s *Server) preserveWork(ctx context.Context, j Journal) (*Recovery, error)
 	if resolved, err := filepath.EvalSymlinks(workspace); err != nil || resolved != workspace {
 		return nil, errors.New("workspace resolves through a symlink; it is preserved in place")
 	}
-	repository := filepath.Join(dir, "repository.git")
-	if resolved, err := filepath.EvalSymlinks(repository); err != nil || resolved != repository {
-		return nil, errors.New("execution repository resolves through a symlink; it is preserved in place")
+	repository, err := executionRepository(dir, workspace)
+	if err != nil {
+		return nil, err
 	}
 	inert, err := s.inertGit(ctx, repository)
 	if err != nil {
@@ -487,8 +487,39 @@ func (s *Server) preserveWork(ctx context.Context, j Journal) (*Recovery, error)
 	if err != nil {
 		return nil, err
 	}
-	aside := filepath.Join(s.Config.WorkspaceRoot, retiredWorkspaces, retiredLabel(j.Handle.Ref), "repository.git")
+	rel, err := filepath.Rel(dir, repository)
+	if err != nil {
+		return nil, err
+	}
+	aside := filepath.Join(s.Config.WorkspaceRoot, retiredWorkspaces, retiredLabel(j.Handle.Ref), rel)
 	return &Recovery{Ref: ref, Commit: commit, Base: j.Handle.Commit, Head: head, Branch: branch, Dirty: status != "", Bundle: bundle, BundleDigest: digest, Repository: aside}, nil
+}
+
+// executionRepository names the repository an execution's workspace uses: its
+// shared repository.git, or, for an execution started before workspaces became
+// worktrees, the standalone clone's own .git directory. Either must be a real
+// directory at its own path; a missing one is reported as missing, not as a
+// symlink, and anything else is preserved in place.
+func executionRepository(dir, workspace string) (string, error) {
+	repository := filepath.Join(dir, "repository.git")
+	if _, err := os.Lstat(repository); errors.Is(err, os.ErrNotExist) {
+		legacy := filepath.Join(workspace, ".git")
+		info, err := os.Lstat(legacy)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", errors.New("execution repository is missing; the work is preserved in place")
+		}
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() {
+			return "", errors.New("execution repository is missing and the workspace is no standalone clone; it is preserved in place")
+		}
+		repository = legacy
+	}
+	if resolved, err := filepath.EvalSymlinks(repository); err != nil || resolved != repository {
+		return "", errors.New("execution repository resolves through a symlink; it is preserved in place")
+	}
+	return repository, nil
 }
 
 // provedDisposable says a retirement keeps nothing a person could want: no
@@ -506,7 +537,11 @@ func (s *Server) provedDisposable(ctx context.Context, j Journal, recovery *Reco
 	if _, err := os.Lstat(workspace); workspace == "" || err != nil {
 		return false
 	}
-	inert, err := s.inertGit(ctx, filepath.Join(s.executionDir(j.Handle.Ref), "repository.git"))
+	repository, err := executionRepository(s.executionDir(j.Handle.Ref), workspace)
+	if err != nil {
+		return false
+	}
+	inert, err := s.inertGit(ctx, repository)
 	if err != nil {
 		return false
 	}
