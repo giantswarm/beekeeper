@@ -31,6 +31,7 @@ const (
 	fatalDisabledState     = "disabled"
 	fatalEnabledState      = "enabled"
 	fatalNameOption        = "--name"
+	fatalStateDirOption    = "--state-dir"
 	fatalDirOption         = "--dir"
 	fatalBranchOption      = "--branch"
 	fatalHarnessOption     = "--harness"

@@ -116,11 +116,12 @@ func TestFatalFlappingProbeKeepsItsRepairOwner(t *testing.T) {
 }
 
 func TestMainScopeSurvivesLegacyJournalAndUnknownProbe(t *testing.T) {
-	q := Queue{Incidents: []Incident{{ID: "main:example/repo", Owner: "repair", Attempts: 3}}}
+	const mainID = "main:example/repo"
+	q := Queue{Incidents: []Incident{{ID: mainID, Owner: "repair", Attempts: 3}}}
 	if err := q.Barrier("ordinary"); err != nil {
 		t.Fatal(err)
 	}
-	q.Observe(Observation{ID: "main:example/repo", Unknown: true}, time.Now())
+	q.Observe(Observation{ID: mainID, Unknown: true}, time.Now())
 	if _, held := q.MainOutage("EXAMPLE/REPO"); !held {
 		t.Fatal("unknown cleared publication barrier")
 	}
@@ -135,7 +136,7 @@ func TestMainScopeSurvivesLegacyJournalAndUnknownProbe(t *testing.T) {
 	if err := q.Barrier("repair"); err == nil || !strings.Contains(err.Error(), "all ordinary worker starts") {
 		t.Fatalf("main repair bypassed infrastructure outage: %v", err)
 	}
-	q.Observe(Observation{ID: "main:example/repo"}, time.Now())
+	q.Observe(Observation{ID: mainID}, time.Now())
 	if _, held := q.MainOutage("example/repo"); held {
 		t.Fatal("healthy probe did not clear repository barrier")
 	}

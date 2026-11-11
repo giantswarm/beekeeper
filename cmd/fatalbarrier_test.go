@@ -70,9 +70,9 @@ func TestFatalPublicationScopeAndRepair(t *testing.T) {
 		{name: "ordinary merge", repo: fatalScopeRepo, base: fatalScopeBase, pr: 7, blocked: true},
 		{name: "repair merge", repo: fatalScopeRepo, base: fatalScopeBase, pr: 7, repair: true},
 		{name: "other pull", repo: fatalScopeRepo, base: fatalScopeBase, pr: 8, repair: true, blocked: true},
-		{name: "other branch", repo: fatalScopeRepo, base: "maintenance", pr: 7},
+		{name: "other branch", repo: fatalScopeRepo, base: "release/1.x", pr: 7},
 		{name: "other repo", repo: fatalOtherRepo, pr: 7},
-		{name: "promotion", repo: fatalScopeRepo, blocked: true},
+		{name: "blocked repository promotion", repo: fatalScopeRepo, blocked: true},
 		{name: "repair cannot promote", repo: fatalScopeRepo, repair: true, blocked: true},
 		{name: "other promotion", repo: fatalOtherRepo},
 		{name: "unreadable base", repo: fatalScopeRepo, pr: 7, readErr: errors.New("unavailable"), blocked: true},
@@ -115,7 +115,7 @@ func TestFatalRepairParkPersistsAndStatusShowsScope(t *testing.T) {
 	var out bytes.Buffer
 	c := w.fatalCmd()
 	c.SetOut(&out)
-	c.SetArgs([]string{"--state-dir", w.store.Dir(), executionStatus})
+	c.SetArgs([]string{fatalStateDirOption, w.store.Dir(), executionStatus})
 	if err := c.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}

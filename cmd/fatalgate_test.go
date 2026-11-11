@@ -37,6 +37,7 @@ func TestFatalMainRepairStillPassesNormalGateAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := placedGate(a, 7, os.Getpid())
+	g.placed, g.queued = false, false
 	why, err := g.step()
 	if err != nil || !strings.Contains(why, "merges and promotes run machine-wide") {
 		t.Fatalf("repair bypassed cap or did not reach normal admission: %s %v", why, err)

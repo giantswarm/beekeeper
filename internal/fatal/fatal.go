@@ -157,7 +157,7 @@ func (x Incident) MarshalJSON() ([]byte, error) {
 }
 
 func (x Incident) Refusal() error {
-	return fmt.Errorf("fatal outage %s; scope: %s (repair owner %q, pull request %q): beekeeper fatal status", x.ID, x.Scope(), x.Owner, x.Repair)
+	return fmt.Errorf("fatal outage %s takes priority; scope: %s (repair owner %q, pull request %q): beekeeper fatal status", x.ID, x.Scope(), x.Owner, x.Repair)
 }
 
 // Barrier leaves existing work running. Repository CI outages never prevent

@@ -23,9 +23,9 @@ func (a *app) fatalStateDir() string {
 }
 
 var fatalDefaultBranch = func(ctx context.Context, repo string) (string, error) {
-	out, err := github.RunGH(ctx, "api", "repos/"+repo, "--jq", ".default_branch")
+	out, err := github.RunGH(ctx, "api", "repos/"+repo, "--jq", ".default_branch // empty")
 	branch := strings.TrimSpace(string(out))
-	if err != nil || branch == "" || branch == "null" {
+	if err != nil || branch == "" {
 		return "", fmt.Errorf("default branch of %s unreadable: %v", repo, err)
 	}
 	return branch, nil
@@ -48,7 +48,16 @@ func (a *app) fatalPublicationBarrier(ctx context.Context, st *state.State, repo
 		return x.Refusal()
 	}
 	ref := fmt.Sprintf("%s#%d", repo, pr)
-	if strings.EqualFold(x.Repair, ref) || fatalRepairPark(st, x.Owner, ref) {
+	if strings.EqualFold(x.Repair, ref) {
+		return nil
+	}
+	if st == nil && x.Owner != "" {
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
+	}
+	if fatalRepairPark(st, x.Owner, ref) {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
@@ -124,9 +133,5 @@ func (a *app) recordFatalRepair(owner, ref string) error {
 }
 
 func (g *gateRun) fatalPublicationBarrier() error {
-	st, err := g.store.Read()
-	if err != nil {
-		return err
-	}
-	return g.app.fatalPublicationBarrier(g.ctx, st, g.repo, g.pr)
+	return g.app.fatalPublicationBarrier(g.ctx, nil, g.repo, g.pr)
 }
