@@ -30,7 +30,7 @@ const cliRuns = 3
 // both still pay the reads and decisions the budget is about.
 var cliBudgets = map[string]cliBudget{
 	"agents":                 {args: []string{"--as", "perf guide", "agents", "--full"}, exits: []int{0}},
-	"agents start --dry-run": {args: []string{"--as", "perf guide", "agents", "start", "perf dry run", "BRIEF", "--dry-run", "--harness", "codex", "--model", "fixture-model", "--dir", "CHECKOUT"}, exits: []int{0, 1, 3}},
+	"agents start --dry-run": {args: []string{"--as", "perf guide", "agents", "start", "perf dry run", "BRIEF", "--dry-run", "--harness", "codex", "--model", "fixture-model", "--dir", "CHECKOUT", "--branch", "perf-dry-run"}, exits: []int{0, 1, 3}},
 	"agents wake":            {args: []string{"--as", "perf guide", "agents", "wake", "perf worker 1", "fixture wake"}, exits: []int{0, 1, 3}},
 	"capacity":               {args: []string{"capacity", "--json"}, exits: []int{0, 3}},
 	"supervisor status":      {args: []string{"supervisor", "status"}, exits: []int{0}},

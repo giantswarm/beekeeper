@@ -15,8 +15,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// loopIssue is the open issue that has the loop over its budgets today: it
-// re-reads and re-polls on every pass.
+// loopIssue is the open issue that has the loop over its budgets today: its
+// passes cost more CPU and processes than the budget, and its reads grow
+// with the event log (an idle pass on a log four times the size read five
+// times as much when the suite was written).
 const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 
 // Loop budgets per pass of the supervisor loop on the desk of record. An
@@ -24,7 +26,7 @@ const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 // 30-second production interval its CPU is a few percent of one core.
 var (
 	loopIdleCPU      = limit{Max: 0.5, Known: loopIssue}
-	loopIdleRead     = limit{Max: 4, Known: loopIssue}
+	loopIdleRead     = limit{Max: 4}
 	loopIdleChildren = limit{Max: 5, Known: loopIssue}
 	// The event log grows; an idle pass must not: at most this factor of
 	// the pass before plus loopGrowthSlack MiB.
