@@ -25,14 +25,40 @@ const (
 )
 
 func (a *app) agentReviewCmd() *cobra.Command {
+	host := a.executionReviewCmd()
 	var model, nitsOf string
 	var lightLines int
 	var verdicts bool
 	c := &cobra.Command{
-		Use:   "review <owner/repo>#<n>",
-		Short: "Start one independent review of a green pull request head",
-		Args:  cobra.ExactArgs(1),
+		Use:   "review [<owner/repo>#<n>]",
+		Short: "Start an independent review or relay the assigned execution review",
+		Long: `With a pull request reference, start one independent review of its green
+head on the coordinator. Without a reference, read the calling SSH execution's
+assigned review through the coordinator; --diff reads its diff and --body-file
+posts its review. Coordinator flags require a reference and cannot be combined
+with execution review flags.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.MaximumNArgs(1)(cmd, args); err != nil {
+				return err
+			}
+			flags := strings.Fields("model nits-of light-lines verdict")
+			if len(args) == 1 {
+				flags = strings.Fields("diff body-file")
+			}
+			for _, flag := range flags {
+				if cmd.Flags().Changed(flag) {
+					return usageErr("--%s is not valid for this review form; see agents review --help", flag)
+				}
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return host.RunE(cmd, args)
+			}
+			if a.managedExecutionID() != "" {
+				return refused("managed SSH reviewers must use agents review without a pull request reference; the coordinator supplies the assigned target")
+			}
 			r, ok := parseRef(args[0])
 			if !ok {
 				return usageErr("expected owner/repo#n")
@@ -131,6 +157,7 @@ func (a *app) agentReviewCmd() *cobra.Command {
 	c.Flags().StringVar(&nitsOf, "nits-of", "", "supervisor attestation: this head only fixes the approval nits at this full SHA; no new reviewer")
 	c.Flags().StringVar(&model, "model", "", "review model (default: supervisor.reviewModel, then opus)")
 	c.Flags().IntVar(&lightLines, "light-lines", 0, "diff-only review below this changed-line count (default: supervisor.reviewLightLines, then 150; -1 disables size shortcut)")
+	c.Flags().AddFlagSet(host.Flags())
 	return c
 }
 

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -424,10 +425,13 @@ type Agent struct {
 	// while it waits; nil: none waits.
 	Import *ImportWait `json:"import,omitempty"`
 	// ResumedWait is when the reopen after a headless turn that ended on a
-	// background wait, its task open, resumed the agent headless (once per
-	// task), and ResumedOn the wait it named; zero: never.
-	ResumedWait time.Time `json:"resumedWait,omitzero"`
-	ResumedOn   string    `json:"resumedOn,omitempty"`
+	// unfinished task resumed the agent headless, and ResumedOn the wait
+	// it named; zero: never. Continuations are bounded per assignment.
+	ContinuationCount     int       `json:"continuationCount,omitempty"`
+	ContinuationTask      time.Time `json:"continuationTask,omitzero"`
+	ContinuationExhausted time.Time `json:"continuationExhausted,omitzero"`
+	ResumedWait           time.Time `json:"resumedWait,omitzero"`
+	ResumedOn             string    `json:"resumedOn,omitempty"`
 	// Undelivered is why agents start delivered no turn of the agent's
 	// task, which waits until agents wake delivers one; empty: delivered.
 	Undelivered string `json:"undelivered,omitempty"`
@@ -1350,6 +1354,11 @@ type State struct {
 	// update): the release each runs and the policy digest its starts are
 	// pinned to, or why it is held.
 	HostPins []HostPin `json:"hostPins,omitempty"`
+	// HostPlacements retain the last placement verdict, not an admission grant.
+	HostPlacements      map[string]HostPlacement `json:"hostPlacements,omitempty"`
+	HostIdleSince       time.Time                `json:"hostIdleSince,omitzero"`
+	HostLastRemoteStart time.Time                `json:"hostLastRemoteStart,omitzero"`
+	HostIdleReported    bool                     `json:"hostIdleReported,omitempty"`
 	// TranscriptGrants are the guide's expiring grants of wider transcript
 	// access to workers.
 	TranscriptGrants []TranscriptGrant `json:"transcriptGrants,omitempty"`
@@ -1396,6 +1405,14 @@ type TranscriptRequest struct {
 	rest rest
 }
 
+// HostPlacement is the last dated placement decision for a configured host.
+type HostPlacement struct {
+	At         time.Time `json:"at"`
+	Repository string    `json:"repository"`
+	Reason     string    `json:"reason"`
+	rest       rest
+}
+
 // HostPin is an execution host's release and the policy digest beekeeper
 // recorded when it last updated the host, in place of a hand-kept
 // agents.hosts digest, and the hold of a host whose update failed.
@@ -1407,6 +1424,10 @@ type HostPin struct {
 	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
+	// UpdateError is a release lookup failure before contacting the host.
+	// It delays update retries but does not block starts on a compatible host.
+	UpdateError   string `json:"updateError,omitempty"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
 	// Held is why the host takes no start: its update to HeldVersion
 	// failed, since HeldAt. The next successful update lifts it.
 	Held        string    `json:"held,omitempty"`
@@ -1867,6 +1888,11 @@ type FileStore struct {
 	stopMu        sync.Mutex
 	stopFile      os.FileInfo
 	stopRequested bool
+	eventsMu      sync.Mutex
+	events        []*cachedEventFile
+	snapshotMu    sync.Mutex
+	snapshotFile  os.FileInfo
+	snapshot      *State
 }
 
 // followed is how far a Follow reader has read the log, and what it kept.
@@ -1898,8 +1924,8 @@ func (s *FileStore) Dir() string { return s.dir }
 
 func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name) }
 
-// Read copies the current state under a shared lock, then decodes the snapshot
-// after releasing it. Large read-only views must not hold up writers while
+// Read opens the current state under a shared lock, then decodes or clones
+// the cached snapshot after releasing it. Large read-only views must not hold up writers while
 // allocating and decoding the retained history. Pending outbox recovery still
 // re-reads the latest state under the exclusive lock before changing anything.
 func (s *FileStore) Read() (*State, error) {
@@ -1907,7 +1933,7 @@ func (s *FileStore) Read() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(s.path("state.json"))
+	f, err := os.Open(s.path("state.json"))
 	unlock()
 	if errors.Is(err, os.ErrNotExist) {
 		return &State{}, nil
@@ -1915,7 +1941,8 @@ func (s *FileStore) Read() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.decode(raw)
+	defer func() { _ = f.Close() }()
+	st, err := s.readSnapshot(f)
 	if err != nil || st.EventOutbox == nil {
 		return st, err
 	}
@@ -2126,7 +2153,10 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	// Releases before the refusal recorded their stale saves here instead.
-	delete(st.rest, "staleWriters")
+	if _, has := st.rest["staleWriters"]; has {
+		st.rest = maps.Clone(st.rest)
+		delete(st.rest, "staleWriters")
+	}
 	return nil
 }
 
@@ -2192,14 +2222,15 @@ func command(args []string) string {
 }
 
 func (s *FileStore) load() (*State, error) {
-	raw, err := os.ReadFile(s.path("state.json"))
+	f, err := os.Open(s.path("state.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return &State{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return s.decode(raw)
+	defer func() { _ = f.Close() }()
+	return s.readSnapshot(f)
 }
 
 func (s *FileStore) decode(raw []byte) (*State, error) {
@@ -2293,33 +2324,7 @@ func endLine(f *os.File) error {
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
 func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
-	files, err := s.eventFiles()
-	if err != nil {
-		return nil, err
-	}
-	defer closeEventFiles(files)
-	var out []Event
-	for _, f := range files {
-		reader := bufio.NewReader(f)
-		for {
-			line, readErr := reader.ReadBytes('\n')
-			var e Event
-			line = bytes.TrimLeft(line, "\x00")
-			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
-				out = append(out, e)
-				if n > 0 && len(out) > n {
-					out = out[len(out)-n:]
-				}
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			if readErr != nil {
-				return out, readErr
-			}
-		}
-	}
-	return out, nil
+	return s.cachedEvents(n, keep)
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

@@ -21,6 +21,13 @@ const (
 	DeliveryReleasing      = "releasing"
 	DeliveryDone           = "done"
 	DeliveryDropped        = "dropped"
+	DeliveryBlocked        = "blocked"
+	DeliveryStalled        = "stalled"
+	OutcomeMerged          = "merged"
+	OutcomeNoChange        = "no-change"
+	OutcomeBlocked         = "blocked"
+	OutcomeParked          = "parked"
+	OutcomeStalled         = "stalled"
 	DeliveryStepVerb       = "delivery.step"
 	DeliveryNoRelease      = "no_release"
 	DeliveryReleaseFailed  = "ci_failed"
@@ -29,7 +36,10 @@ const (
 // Delivery is one issue (or an issue-less desk pull request) from start to release.
 // Ref and Pulls use the same canonical references as serve records.
 type Delivery struct {
-	Abandoned bool `json:"abandoned,omitempty"`
+	Abandoned bool      `json:"abandoned,omitempty"`
+	Outcome   string    `json:"outcome,omitempty"`
+	Evidence  string    `json:"evidence,omitempty"`
+	OutcomeAt time.Time `json:"outcomeAt,omitzero"`
 	// Origin distinguishes passive PR observations from work started by the desk
 	// or advanced by a new commit after observation. Empty is legacy/issue work.
 	Origin         string            `json:"origin,omitempty"`
@@ -52,7 +62,9 @@ type Delivery struct {
 }
 
 // Active includes unknown observations: an unreadable pull never frees its place.
-func (d Delivery) Active() bool { return d.Step != DeliveryDone && d.Step != DeliveryDropped }
+func (d Delivery) Active() bool {
+	return d.Step != DeliveryDone && d.Step != DeliveryDropped && d.Step != DeliveryBlocked && d.Step != DeliveryStalled
+}
 
 // DeliveryEvents compares against the last committed observation, not a pass's
 // earlier snapshot. Store.Update commits these events with the new reading.
@@ -60,7 +72,7 @@ func DeliveryEvents(prev, next []Delivery, by Party) []Event {
 	var events []Event
 	for _, d := range next {
 		i := slices.IndexFunc(prev, func(p Delivery) bool { return strings.EqualFold(p.Ref, d.Ref) })
-		if i >= 0 && prev[i].Step == d.Step && prev[i].Started.Equal(d.Started) {
+		if i >= 0 && prev[i].Step == d.Step && prev[i].Outcome == d.Outcome && prev[i].Evidence == d.Evidence && prev[i].Started.Equal(d.Started) {
 			continue
 		}
 		raw, _ := json.Marshal(d)

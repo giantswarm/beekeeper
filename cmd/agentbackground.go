@@ -574,6 +574,20 @@ func (a *app) reviveBackground(ctx context.Context, holder state.Party, msg stri
 	if err != nil {
 		return err
 	}
+	// Independent crash recovery and suspend recovery can arrive together.
+	// Serialize with ordinary wakes, then recheck the current role and daemon.
+	unlock, err := a.lockForWake(ctx, st, holder)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "reviving "+holder.Name); err != nil {
+		return err
+	}
 	for _, q := range []string{holder.Session, holder.Name} {
 		if _, err := guideMessageTarget(st, q); err != nil {
 			return err

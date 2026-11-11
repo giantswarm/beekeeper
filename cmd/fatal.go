@@ -31,6 +31,7 @@ const (
 	fatalDisabledState     = "disabled"
 	fatalEnabledState      = "enabled"
 	fatalNameOption        = "--name"
+	fatalStateDirOption    = "--state-dir"
 	fatalDirOption         = "--dir"
 	fatalBranchOption      = "--branch"
 	fatalHarnessOption     = "--harness"
@@ -86,7 +87,7 @@ func (a *app) fatalCmd() *cobra.Command {
 			}
 			return nil
 		}})
-	c.AddCommand(&cobra.Command{Use: executionStatus, Short: "Show outages, repair owners, attempts and verified outcomes", Args: cobra.NoArgs,
+	c.AddCommand(&cobra.Command{Use: executionStatus, Short: "Show outage scopes, repair owners, attempts and verified outcomes", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := resolve(); err != nil {
 				return err
@@ -347,6 +348,13 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	}
 	var deadOwners []state.Agent
 	x := q.Reserve(now, func(name string) bool {
+		for _, incident := range q.Incidents {
+			if incident.Owner == name && incident.Repair != "" {
+				if _, ok := st.ReviewParkFor(incident.Repair); ok {
+					return true
+				}
+			}
+		}
 		for _, ag := range st.Agents {
 			if ag.Name != name || ag.Done || ag.Task == "" {
 				continue

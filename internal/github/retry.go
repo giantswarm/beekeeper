@@ -36,10 +36,13 @@ const (
 // filter or a template.
 // The gh api flags more than one reader names.
 const (
-	ghFlagJQ       = "--jq"
-	ghFlagField    = "--field"
-	ghFlagRawField = "--raw-field"
-	ghFlagTemplate = "--template"
+	ghFlagJQ          = "--jq"
+	ghFlagField       = "--field"
+	ghFlagRawField    = "--raw-field"
+	ghFlagTemplate    = "--template"
+	ghFlagInclude     = "--include"
+	ghFlagAllowEscape = "--allow-escape-sequences"
+	acceptRaw         = "Accept: application/vnd.github.raw"
 )
 
 var shapers = map[string]bool{"-q": true, ghFlagJQ: true, "-t": true, ghFlagTemplate: true}
@@ -243,7 +246,7 @@ func parseAPI(args []string) apiCall {
 		name, value, inline := strings.Cut(x, "=")
 		if !apiValued[name] {
 			switch name {
-			case "--silent", "-i", "--include", "--paginate", "--allow-escape-sequences":
+			case "--silent", "-i", ghFlagInclude, "--paginate", ghFlagAllowEscape:
 				a.shaped = true
 			}
 			continue

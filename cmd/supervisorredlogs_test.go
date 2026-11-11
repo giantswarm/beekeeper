@@ -24,7 +24,7 @@ func TestRedHandoffIncludesBoundedFailureOutput(t *testing.T) {
 	calls := 0
 	github.RunGH = github.Retrying(func(ctx context.Context, args ...string) ([]byte, error) {
 		calls++
-		want := []string{"api", "--allow-escape-sequences", "repos/red/logs/actions/jobs/11/logs"}
+		want := []string{workerGitHubAPIGroup, "--allow-escape-sequences", "repos/red/logs/actions/jobs/11/logs"}
 		if github.Repo(ctx) != redLogRepo || !slices.Equal(args, want) {
 			t.Fatalf("unexpected gh call repo=%q args=%v", github.Repo(ctx), args)
 		}
