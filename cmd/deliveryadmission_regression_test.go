@@ -14,6 +14,7 @@ import (
 const deliveryTestIssue = "example/project#1"
 const deliveryTestPull = "example/project#2"
 const deliveryTestTask = "delivery"
+const deliveryTestOtherPull = "other/project#3"
 
 func TestDeliveryWIPInFlightBounds(t *testing.T) {
 	now := time.Now().UTC()
@@ -181,15 +182,15 @@ func TestDeliveryStallsAreBatchedWithWaitReasons(t *testing.T) {
 // observed by the watcher. Tracking it anyway kept every pass's delivery
 // observation incomplete, so admission said "wip stale" forever.
 func TestDeliveryTrackedPullsSkipsUnreadRepositories(t *testing.T) {
-	desk := superloop.Desk{Orgs: []string{"example", "other"}, Never: []string{"example/skipped"}}
+	desk := superloop.Desk{Orgs: []string{"example", removeOther}, Never: []string{"example/skipped"}}
 	deliveries := []state.Delivery{
 		{Ref: "example/skipped#1", Step: state.DeliveryReleasing, OutsideDesk: true, Pulls: []string{"example/skipped#2"}},
 		{Ref: "elsewhere/project#1", Step: state.DeliveryReviewQueued, OutsideDesk: true, Pulls: []string{"elsewhere/project#2"}},
-		{Ref: deliveryTestIssue, Step: state.DeliveryReviewQueued, Pulls: []string{deliveryTestPull, "other/project#3"}},
+		{Ref: deliveryTestIssue, Step: state.DeliveryReviewQueued, Pulls: []string{deliveryTestPull, deliveryTestOtherPull}},
 		{Ref: "example/project#4", Step: state.DeliveryDone, Pulls: []string{"example/project#5"}},
 	}
-	got := deliveryTrackedPulls([]string{"other/project#3"}, deliveries, desk)
-	want := []string{"other/project#3", deliveryTestPull}
+	got := deliveryTrackedPulls([]string{deliveryTestOtherPull}, deliveries, desk)
+	want := []string{deliveryTestOtherPull, deliveryTestPull}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tracked = %v, want %v", got, want)
 	}
