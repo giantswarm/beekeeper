@@ -251,3 +251,17 @@ Shared S3 objects survive it. Configure the store's native size quota or object
 age/lifecycle policy independently for the configured Go and Rust prefixes;
 workers do not receive bucket-administration permissions or enumerate/delete
 shared objects during worktree cleanup.
+
+### Go memory and lost journals
+
+Builders set `GOMEMLIMIT` to half of their configured memory limit. This is a
+per-process soft Go runtime target, leaving headroom for concurrent compiler
+processes, native allocations and the journal wrapper; it is not an aggregate
+hard cap. Kubernetes still enforces the container limit. If a workload's live
+memory exceeds that limit, the container can still be killed.
+
+When journal recovery fails, the runner reads the builder's termination status.
+An `OOMKilled` container is reported as a memory-limit failure with exit 125,
+not as lint findings. The command is never retried locally. Existing warm
+builders have a different specification and must retire before using the new
+memory budget.

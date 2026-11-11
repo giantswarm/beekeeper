@@ -178,3 +178,26 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 		})
 	}
 }
+
+func TestBuilderGoMemoryBudget(t *testing.T) {
+	for _, test := range []struct{ memory, limit string }{
+		{"4Gi", "2147483648B"},
+		{"1Gi", "536870912B"},
+		{"6000M", "3000000000B"},
+	} {
+		t.Run(test.memory, func(t *testing.T) {
+			c := validConfig()
+			c.Memory = test.memory
+			job := Job(c, "memory-builder", "builder:test")
+			for _, env := range job.Spec.Template.Spec.Containers[0].Env {
+				if env.Name == "GOMEMLIMIT" {
+					if env.Value != test.limit {
+						t.Fatalf("Go memory limit = %s, want %s", env.Value, test.limit)
+					}
+					return
+				}
+			}
+			t.Fatal("builder has no Go memory budget")
+		})
+	}
+}
