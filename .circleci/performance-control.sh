@@ -14,7 +14,7 @@ src=$(mktemp -d)
 git worktree add --quiet --detach "$src" "$before"
 trap 'git worktree remove --force "$src"' EXIT
 (cd "${src:?}" && go build -o /tmp/perf-control/beekeeper .)
-if BEEKEEPER_PERF=1 BEEKEEPER_PERF_BINARY=/tmp/perf-control/beekeeper BEEKEEPER_PERF_REPORT="$artifacts" \
+if BEEKEEPER_PERF=1 BEEKEEPER_PERF_STRICT=1 BEEKEEPER_PERF_BINARY=/tmp/perf-control/beekeeper BEEKEEPER_PERF_REPORT="$artifacts" \
   go test -tags perf ./internal/perfsuite -run '^TestLoopBudgets$' -count=1 -timeout=20m -v > "$artifacts/output.txt" 2>&1; then
   cat "$artifacts/output.txt"
   echo "control: the loop budgets accepted the loop before the fix of https://github.com/giantswarm/beekeeper/issues/3657"

@@ -13,13 +13,12 @@ import (
 // cliBudget is what one call of a command may cost on the desk of record:
 // the median of its runs for time, the most of them for the rest.
 type cliBudget struct {
-	wall, cpu  time.Duration
-	readMiB    float64
-	rssMiB     float64
-	children   int
-	exits      []int // exit codes a call on this desk may end with
-	args       []string
-	needsBrief bool
+	wall, cpu time.Duration
+	readMiB   float64
+	rssMiB    float64
+	children  int
+	exits     []int // exit codes a call on this desk may end with
+	args      []string
 }
 
 // cliRuns is the number of calls per command: the first one cold, after a
@@ -31,7 +30,7 @@ const cliRuns = 3
 // both still pay the reads and decisions the budget is about.
 var cliBudgets = map[string]cliBudget{
 	"agents":                 {args: []string{"--as", "perf guide", "agents", "--full"}, exits: []int{0}},
-	"agents start --dry-run": {args: []string{"--as", "perf guide", "agents", "start", "perf dry run", "BRIEF", "--dry-run", "--harness", "codex", "--model", "fixture-model"}, needsBrief: true, exits: []int{0, 1, 3}},
+	"agents start --dry-run": {args: []string{"--as", "perf guide", "agents", "start", "perf dry run", "BRIEF", "--dry-run", "--harness", "codex", "--model", "fixture-model", "--dir", "CHECKOUT"}, exits: []int{0, 1, 3}},
 	"agents wake":            {args: []string{"--as", "perf guide", "agents", "wake", "perf worker 1", "fixture wake"}, exits: []int{0, 1, 3}},
 	"capacity":               {args: []string{"capacity", "--json"}, exits: []int{0, 3}},
 	"supervisor status":      {args: []string{"supervisor", "status"}, exits: []int{0}},
@@ -41,10 +40,14 @@ var cliBudgets = map[string]cliBudget{
 	"budget":                 {args: []string{"budget", "--json"}, exits: []int{0}},
 }
 
+// Every command's budget, measured on a two-core CI machine when the suite
+// was written with headroom for the machine's noise: a call reads the state
+// and the event log once at most (6 + 12 MiB), takes less than a second
+// of CPU and starts at most a few processes.
 func init() {
 	for name, b := range cliBudgets {
-		b.wall, b.cpu = 5*time.Second, 5*time.Second
-		b.readMiB, b.rssMiB, b.children = 256, 512, 40
+		b.wall, b.cpu = 2*time.Second, 1500*time.Millisecond
+		b.readMiB, b.rssMiB, b.children = 32, 256, 8
 		cliBudgets[name] = b
 	}
 }
@@ -66,8 +69,11 @@ func TestCLIBudgets(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			args := slices.Clone(b.args)
 			for i, a := range args {
-				if a == "BRIEF" {
+				switch a {
+				case "BRIEF":
 					args[i] = brief
+				case "CHECKOUT":
+					args[i] = d.checkout
 				}
 			}
 			var runs []sample

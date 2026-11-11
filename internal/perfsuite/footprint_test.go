@@ -27,8 +27,8 @@ const runnerUnitsIssue = "https://github.com/giantswarm/beekeeper/issues/3675"
 
 // footprint budgets per session: processes and MiB of its runner unit.
 var footprintBudgets = map[string]struct{ procs, mem limit }{
-	"working":    {procs: limit{Max: 3}, mem: limit{Max: 96}},
-	"idle":       {procs: limit{Max: 1}, mem: limit{Max: 32}},
+	"working":    {procs: limit{Max: 3}, mem: limit{Max: 48}},
+	"idle":       {procs: limit{Max: 1}, mem: limit{Max: 24}},
 	"parked":     {procs: limit{Max: 0, Known: runnerUnitsIssue}, mem: limit{Max: 0, Known: runnerUnitsIssue}},
 	"off roster": {procs: limit{Max: 0, Known: runnerUnitsIssue}, mem: limit{Max: 0, Known: runnerUnitsIssue}},
 }

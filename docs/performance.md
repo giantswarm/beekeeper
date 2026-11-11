@@ -22,16 +22,29 @@ network, a real desk or an account.
 | `TestConcurrentCalls` | 20 calls at once (readers and event writers): time until the last ends, and the longest exclusive hold of the state lock |
 | `TestSessionFootprint` | session: processes and memory of its runner unit, working, idle, parked and off the roster (the last two: none) |
 
-How it measures: CPU and peak memory from the process's rusage, which
-includes its waited-for descendants; bytes read and written from
-`/proc/<pid>/io` (`rchar`, `wchar`, cached reads included), read while the
-exited process is still a zombie; processes from the fakes' trace and a
-sample of `/proc` for beekeeper re-executing itself; the lock hold by
-taking a shared lock every 2ms, which only an exclusive holder refuses.
+How it measures: a call runs under the test binary as its measuring
+parent, which reaps it and reads its own `/proc/self/io` (`rchar`, `wchar`,
+cached reads included), where the kernel adds a reaped child's and its
+descendants' reads and writes; CPU and peak memory come from the call's
+rusage, which includes its waited-for descendants. A running loop is read
+from its `/proc/<pid>/stat` and `/proc/<pid>/io` before and after a window.
+Processes are counted from the fakes' trace and a 20ms sample of `/proc`
+for beekeeper re-executing itself. The lock hold is measured by taking a
+shared lock every 2ms, which only an exclusive holder refuses.
 
-A budget an open issue has over today carries that issue (`limit.Known`):
-the report shows it, and the test fails once the value is within budget, so
-the marker goes and the budget holds from then on.
+A budget that an open issue already exceeds today carries that issue
+(`limit.Known`). The report shows it without failing. The test fails once
+the value is within budget, so the marker is removed and the budget holds
+from then on. Today's known ones:
+
+- the idle loop's CPU, reads and processes per pass, and its reads growing
+  with the event log:
+  [the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657);
+- the runner units of parked and off-roster sessions:
+  [runner units outliving their sessions](https://github.com/giantswarm/beekeeper/issues/3675).
+
+`BEEKEEPER_PERF_STRICT=1` holds every budget, known or not; the control
+step uses it.
 
 ## Where it runs
 
@@ -41,7 +54,8 @@ Never on a desk's coordinator.
   `TestCLIBudgets`, `TestLoopBudgets` (30-second windows) and
   `TestConcurrentCalls`. Its control step builds main before the fix of
   [the loop's re-reads](https://github.com/giantswarm/beekeeper/issues/3657)
-  and requires the loop budgets to reject it (`.circleci/performance-control.sh`).
+  and requires the strict loop budgets to reject its idle reads
+  (`.circleci/performance-control.sh`).
 - **GitHub Actions, nightly** (`.github/workflows/performance.yaml`, also by
   hand and on pull requests that change the suite): everything with
   two-minute loop windows (`BEEKEEPER_PERF_LONG=1`), and the footprint test

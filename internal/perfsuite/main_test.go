@@ -17,6 +17,9 @@ func TestMain(m *testing.M) {
 	if code, served := serveFake(); served {
 		os.Exit(code)
 	}
+	if code, served := serveMeasure(); served {
+		os.Exit(code)
+	}
 	code := m.Run()
 	if err := rep.write(); err != nil {
 		fmt.Fprintln(os.Stderr, "performance report:", err)

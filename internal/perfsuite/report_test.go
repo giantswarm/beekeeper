@@ -59,6 +59,10 @@ const mib = 1 << 20
 func (r *report) check(t *testing.T, kase, metric string, value float64, l limit) {
 	t.Helper()
 	status := "ok"
+	// A control run (BEEKEEPER_PERF_STRICT=1) holds every budget, known or not.
+	if os.Getenv("BEEKEEPER_PERF_STRICT") == "1" {
+		l.Known = ""
+	}
 	switch {
 	case l.Max < 0:
 		status = "measured"

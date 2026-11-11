@@ -48,6 +48,8 @@ func serveFake() (int, bool) {
 		return 255, true
 	case "codex":
 		return fakeCodex(args), true
+	case "journalctl":
+		return 0, true
 	}
 	unknown(dir, name, args)
 	fmt.Fprintf(os.Stderr, "%s: not available in the performance fixture\n", name)
@@ -201,7 +203,16 @@ func fakeGitHub(dir string, args []string) int {
 	case starts("search", "prs"), starts("pr", "list"):
 		return emit(fakePulls())
 	case starts("pr", "view"):
-		return emit(fakePull(0))
+		n := 1000
+		if len(args) > 2 {
+			ref := args[2][strings.LastIndexByte(args[2], '/')+1:]
+			if v, err := strconv.Atoi(ref); err == nil {
+				n = v
+			}
+		}
+		return emit(fakePull(n - 1000))
+	case starts("api", "--paginate") && len(args) > 2 && strings.Contains(args[2], "/actions/runs"):
+		return emit(map[string]any{"total_count": 0, "workflow_runs": []any{}})
 	case starts("api", "rate_limit"):
 		return emit(map[string]any{"resources": map[string]any{
 			"core":        map[string]any{"limit": 5000, "remaining": 4900, "reset": time.Now().Add(time.Hour).Unix()},

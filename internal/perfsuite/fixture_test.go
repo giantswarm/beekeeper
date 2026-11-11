@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,7 +98,10 @@ type desk struct {
 	env      []string
 	store    *state.FileStore
 	httpMiss atomic.Int64
+	missMu   sync.Mutex
+	misses   map[string]bool
 	agents   []state.Agent
+	checkout string
 }
 
 type deskOptions struct {
@@ -114,7 +118,7 @@ func defaultDesk() deskOptions {
 
 func newDesk(t *testing.T, o deskOptions) *desk {
 	t.Helper()
-	d := &desk{t: t, dir: t.TempDir(), bin: beekeeperBinary(t)}
+	d := &desk{t: t, dir: t.TempDir(), bin: beekeeperBinary(t), misses: map[string]bool{}}
 	d.stateDir = filepath.Join(d.dir, "state")
 	must := func(err error) {
 		t.Helper()
@@ -143,7 +147,16 @@ func newDesk(t *testing.T, o deskOptions) *desk {
 		case "/rate_limit":
 			_, _ = fmt.Fprint(w, `{"resources":{"core":{"limit":5000,"remaining":4900},"graphql":{"limit":5000,"remaining":4900},"search":{"limit":30,"remaining":30},"code_search":{"limit":10,"remaining":10}}}`)
 		default:
+			if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); len(parts) == 3 && parts[0] == "repos" {
+				_, _ = fmt.Fprintf(w, `{"full_name":%q,"default_branch":"main","private":false}`, parts[1]+"/"+parts[2])
+				return
+			}
 			d.httpMiss.Add(1)
+			d.missMu.Lock()
+			if len(d.misses) < 20 {
+				d.misses[r.Method+" "+r.URL.Path] = true
+			}
+			d.missMu.Unlock()
 			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 		}
 	}))
@@ -166,12 +179,23 @@ func newDesk(t *testing.T, o deskOptions) *desk {
 			}
 		}
 	}
-	must(os.WriteFile(filepath.Join(d.dir, "config.yaml"), []byte(deskConfig(d.stateDir, o.loopInterval)), 0o600))
+	// One checkout of the fixture repository, as agents start --dir needs.
+	d.checkout = filepath.Join(d.dir, "checkout")
+	if realGit != "" {
+		for _, args := range [][]string{{"init", "-q", "-b", "main", d.checkout}, {"-C", d.checkout, "remote", "add", "origin", "https://github.com/" + fixtureRepo + ".git"}} {
+			c := exec.CommandContext(t.Context(), realGit, args...) //nolint:gosec // fixture git
+			c.Env = d.env
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("fixture checkout: %v: %s", err, out)
+			}
+		}
+	}
+	must(os.WriteFile(filepath.Join(d.dir, "config.yaml"), []byte(deskConfig(d.stateDir, d.checkout, o.loopInterval)), 0o600))
 	must(os.MkdirAll(filepath.Join(d.dir, "work"), 0o700))
 
 	d.store, err = state.Open(d.stateDir)
 	must(err)
-	d.agents = fixtureAgents(now, o.sessions, filepath.Join(d.dir, "work"))
+	d.agents = fixtureAgents(now, o.sessions)
 	must(d.store.Update(func(st *state.State) ([]state.Event, error) {
 		fillState(st, now, d.agents, o.stateBytes)
 		return nil, nil
@@ -186,7 +210,7 @@ func newDesk(t *testing.T, o deskOptions) *desk {
 	return d
 }
 
-func deskConfig(stateDir string, loopInterval time.Duration) string {
+func deskConfig(stateDir, checkout string, loopInterval time.Duration) string {
 	var hosts strings.Builder
 	for i := range deskHosts {
 		name := fmt.Sprintf("host-%c", 'a'+i)
@@ -204,6 +228,8 @@ capacity:
 identity:
   host: fixture
 stateDir: %s
+disk:
+  checkouts: [%q]
 github:
   floor: -1
   allowedOrgs: [fixture]
@@ -213,12 +239,12 @@ supervisor:
     authors: [fixture-bot]
 agents:
   hosts:
-%s`, stateDir, loopInterval, hosts.String())
+%s`, stateDir, checkout, loopInterval, hosts.String())
 }
 
 // fixtureAgents is the roster: a third each working, idle and parked on a
 // pull request's desk review.
-func fixtureAgents(now time.Time, n int, work string) []state.Agent {
+func fixtureAgents(now time.Time, n int) []state.Agent {
 	out := make([]state.Agent, 0, n)
 	for i := range n {
 		p := state.Party{Session: fmt.Sprintf("0000%04x-0000-4000-8000-%012x", i, i), Name: fmt.Sprintf("perf worker %d", i), Person: fixturePerson, Host: "fixture"}
@@ -231,7 +257,7 @@ func fixtureAgents(now time.Time, n int, work string) []state.Agent {
 			ag.IdleSince, ag.LastTask = now.Add(-2*time.Hour), task
 		case 2:
 			ag.Task = task
-			ag.Park = &state.Park{By: p, At: now.Add(-30 * time.Minute), On: fmt.Sprintf("%s#%d", fixtureRepo, 1000+i), Waits: "desk review", Worktree: filepath.Join(work, fmt.Sprintf("w%d", i))}
+			ag.Park = &state.Park{By: p, At: now.Add(-30 * time.Minute), On: fmt.Sprintf("%s#%d", fixtureRepo, 1000+i), Waits: "desk review"}
 		}
 		out = append(out, ag)
 	}
@@ -259,7 +285,7 @@ func fillState(st *state.State, now time.Time, agents []state.Agent, size int) {
 	st.NextNote = 301
 	workerReport := func(i int) state.WorkerReport {
 		ag := agents[i%len(agents)]
-		return state.WorkerReport{Finished: true, By: ag.Party, At: now.Add(-time.Duration(i) * time.Minute), Task: ag.Task, Text: fmt.Sprintf("https://github.com/%s/pull/%d merged; %s", fixtureRepo, 1000+i, strings.Repeat("proof ", 140)), Problems: []string{"none"}}
+		return state.WorkerReport{Finished: true, By: ag.Party, At: now.Add(-time.Duration(i) * time.Minute), Task: ag.Task, Text: fmt.Sprintf("https://github.com/%s/pull/%d merged; %s", fixtureRepo, 1000+i, strings.Repeat("proof ", 140))}
 	}
 	raw, _ := json.Marshal(st)
 	one, _ := json.Marshal(workerReport(0))
@@ -338,6 +364,13 @@ func (d *desk) keepArtifacts() {
 		_ = os.WriteFile(filepath.Join(dest, name), []byte(strings.ReplaceAll(string(raw), d.dir, "<fixture>")), 0o600)
 	}
 	if n := d.httpMiss.Load(); n > 0 {
-		rep.note("%s: %d GitHub API requests no fake answers", d.t.Name(), n)
+		d.missMu.Lock()
+		paths := make([]string, 0, len(d.misses))
+		for p := range d.misses {
+			paths = append(paths, p)
+		}
+		d.missMu.Unlock()
+		slices.Sort(paths)
+		rep.note("%s: %d GitHub API requests no fake answers: %s", d.t.Name(), n, strings.Join(paths, ", "))
 	}
 }

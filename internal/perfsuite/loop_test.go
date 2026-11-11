@@ -15,15 +15,21 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// Loop budgets per pass of the supervisor loop on the desk of record.
+// loopIssue is the open issue that has the loop over its budgets today: it
+// re-reads and re-polls on every pass.
+const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
+
+// Loop budgets per pass of the supervisor loop on the desk of record. An
+// idle pass reads what changed, not the state and the event log again; at the
+// 30-second production interval its CPU is a few percent of one core.
 var (
-	loopIdleCPU      = limit{Max: 1.0}
-	loopIdleRead     = limit{Max: 32}
-	loopIdleChildren = limit{Max: 10}
+	loopIdleCPU      = limit{Max: 0.5, Known: loopIssue}
+	loopIdleRead     = limit{Max: 4, Known: loopIssue}
+	loopIdleChildren = limit{Max: 5, Known: loopIssue}
 	// The event log grows; an idle pass must not: at most this factor of
 	// the pass before plus loopGrowthSlack MiB.
-	loopGrowthFactor = 1.5
-	loopGrowthSlack  = 2.0
+	loopGrowthFactor = 1.25
+	loopGrowthSlack  = 1.0
 )
 
 // loopWindow is how long each measurement runs: a few passes on a pull
@@ -60,7 +66,7 @@ func (d *desk) startLoop(t *testing.T) *runningLoop {
 		t.Fatal(err)
 	}
 	_ = logFile.Close()
-	l := &runningLoop{d: d, cmd: c, w: watchDescendants(c.Process.Pid, filepath.Base(d.bin))}
+	l := &runningLoop{d: d, cmd: c, w: watchDescendants(c.Process.Pid, filepath.Base(d.bin), true)}
 	t.Cleanup(l.stop)
 	return l
 }
@@ -162,7 +168,7 @@ func TestLoopBudgets(t *testing.T) {
 	rep.note("%s: event log grown by %d events", t.Name(), len(grow))
 	time.Sleep(3*o.loopInterval + 10*time.Second)
 	cpu, read, write, children = l.window(t, win, o.loopInterval)
-	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack}
+	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack, Known: loopIssue}
 	rep.check(t, "idle pass, 4x event log", "read", read, grown)
 	rep.check(t, "idle pass, 4x event log", "cpu", cpu, loopIdleCPU)
 	rep.check(t, "idle pass, 4x event log", "write", write, measured)

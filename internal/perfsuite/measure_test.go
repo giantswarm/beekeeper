@@ -5,10 +5,11 @@ package perfsuite
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,7 +17,6 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"golang.org/x/sys/unix"
 )
 
 // sample is what one process cost: its own and its waited-for descendants'.
@@ -34,44 +34,84 @@ type sample struct {
 // clockTicks is USER_HZ, the unit of /proc/<pid>/stat times on Linux.
 const clockTicks = 100
 
-// run runs the binary under test with args on the desk and measures it. The
-// exited process is held as a zombie until its /proc/<pid>/io, which then
-// includes its reaped descendants, is read.
+// measureOutEnv makes this test binary the measuring parent of the command
+// in its arguments: it runs it, reaps it, and writes what it cost to the
+// file it names. Its own /proc/self/io then holds the command's reads and
+// writes, with its reaped descendants', which the kernel adds to the parent
+// at reaping.
+const measureOutEnv = "PERF_MEASURE_OUT"
+
+type measurement struct {
+	Wall, CPU   time.Duration
+	RSS         int64
+	Read, Write int64
+	Exit        int
+}
+
+func serveMeasure() (int, bool) {
+	out := os.Getenv(measureOutEnv)
+	if out == "" || len(os.Args) < 2 {
+		return 0, false
+	}
+	_ = os.Unsetenv(measureOutEnv)
+	read0, write0 := readIO(os.Getpid())
+	c := exec.Command(os.Args[1], os.Args[2:]...) //nolint:gosec,noctx // the command under measurement
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	started := time.Now()
+	m := measurement{Exit: -1}
+	if err := c.Start(); err == nil {
+		_ = c.Wait()
+		m.Wall = time.Since(started)
+		if ru, ok := c.ProcessState.SysUsage().(*syscall.Rusage); ok {
+			m.CPU = time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+			m.RSS = ru.Maxrss * 1024
+		}
+		m.Exit = c.ProcessState.ExitCode()
+	}
+	read1, write1 := readIO(os.Getpid())
+	m.Read, m.Write = read1-read0, write1-write0
+	raw, err := json.Marshal(m)
+	if err != nil || os.WriteFile(out, raw, 0o600) != nil {
+		return 125, true
+	}
+	return max(m.Exit, 0), true
+}
+
+// run runs the binary under test with args on the desk, under this test
+// binary as its measuring parent.
 func (d *desk) run(ctx context.Context, args ...string) sample {
-	c := exec.CommandContext(ctx, d.bin, args...) //nolint:gosec // binary under test
-	c.Env = d.env
+	self, err := os.Executable()
+	if err != nil {
+		return sample{Exit: -1, Output: err.Error()}
+	}
+	result, err := os.CreateTemp(d.dir, "measure-*.json")
+	if err != nil {
+		return sample{Exit: -1, Output: err.Error()}
+	}
+	_ = result.Close()
+	defer func() { _ = os.Remove(result.Name()) }()
+	c := exec.CommandContext(ctx, self, append([]string{d.bin}, args...)...) //nolint:gosec // the test binary measuring the binary under test
+	c.Env = append(slices.Clone(d.env), measureOutEnv+"="+result.Name())
 	c.Dir = d.dir
 	c.WaitDelay = 5 * time.Second
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
 	before := d.traceCount()
-	started := time.Now()
 	if err := c.Start(); err != nil {
 		return sample{Exit: -1, Output: err.Error()}
 	}
-	pid := c.Process.Pid
-	w := watchDescendants(pid, filepath.Base(d.bin))
-	var info unix.Siginfo
-	for {
-		if err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil); !errors.Is(err, unix.EINTR) {
-			break
-		}
-	}
-	s := sample{Wall: time.Since(started)}
-	s.Read, s.Write = readIO(pid)
+	w := watchDescendants(c.Process.Pid, filepath.Base(d.bin))
+	_ = c.Wait()
 	selfRuns := w.stop()
-	err := c.Wait()
-	if c.ProcessState != nil {
-		if ru, ok := c.ProcessState.SysUsage().(*syscall.Rusage); ok {
-			s.CPU = time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
-			s.RSS = ru.Maxrss * 1024
-		}
-		s.Exit = c.ProcessState.ExitCode()
-	} else if err != nil {
-		s.Exit = -1
+	s := sample{Exit: -1, Output: tailString(out.String(), 2000)}
+	raw, err := os.ReadFile(result.Name())
+	var m measurement
+	if err != nil || json.Unmarshal(raw, &m) != nil {
+		s.Output += "\n(no measurement)"
+		return s
 	}
+	s.Wall, s.CPU, s.RSS, s.Read, s.Write, s.Exit = m.Wall, m.CPU, m.RSS, m.Read, m.Write, m.Exit
 	s.Children = d.traceCount() - before + selfRuns
-	s.Output = tailString(out.String(), 2000)
 	return s
 }
 
@@ -144,14 +184,17 @@ func readStat(pid int) (procStat, bool) {
 // descendants samples /proc every 20ms for the processes below root named
 // name (beekeeper re-executing itself); fakes count themselves in the trace.
 type descendants struct {
-	mu    sync.Mutex
-	seen  map[[2]uint64]bool
-	done  chan struct{}
-	ended chan struct{}
+	// direct counts root's own children too; a measuring parent's child
+	// is the command itself.
+	direct bool
+	mu     sync.Mutex
+	seen   map[[2]uint64]bool
+	done   chan struct{}
+	ended  chan struct{}
 }
 
-func watchDescendants(root int, name string) *descendants {
-	w := &descendants{seen: map[[2]uint64]bool{}, done: make(chan struct{}), ended: make(chan struct{})}
+func watchDescendants(root int, name string, direct ...bool) *descendants {
+	w := &descendants{direct: len(direct) > 0 && direct[0], seen: map[[2]uint64]bool{}, done: make(chan struct{}), ended: make(chan struct{})}
 	if len(name) > 15 {
 		name = name[:15]
 	}
@@ -189,7 +232,7 @@ func (w *descendants) scan(root int, name string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for pid, ps := range stats {
-		if pid == root || ps.comm != name {
+		if pid == root || ps.comm != name || ps.ppid == root && !w.direct {
 			continue
 		}
 		for p, hops := ps.ppid, 0; p > 1 && hops < 64; hops++ {

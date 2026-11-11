@@ -13,7 +13,7 @@ import (
 // roster, status and notes, and writers of the event log.
 var (
 	concurrentCalls = 20
-	concurrentAll   = limit{Max: 30}  // seconds until the last call ends
+	concurrentAll   = limit{Max: 10}  // seconds until the last call ends
 	concurrentHold  = limit{Max: 2.0} // seconds the state lock is held exclusively at most
 )
 
