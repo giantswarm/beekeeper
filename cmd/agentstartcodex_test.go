@@ -339,7 +339,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		append(strings.Fields("--"+configFlag+"="+cfgPath+" log add"), "progress on https://github.com/giantswarm/beekeeper/issues/1708"),
 		append(strings.Fields("--"+configFlag+"="+cfgPath+" "+agentsName+" park --on "+testIssueRef), "desk review of https://github.com/giantswarm/beekeeper/issues/1708"),
 		append(strings.Fields("--"+configFlag+"="+cfgPath+" note add --for "+supervisorName+" --ref "+testIssueRef+" --due 18:00 --default continue --status-quo running --why verify"), "Should we proceed with https://github.com/giantswarm/beekeeper/issues/1708?"),
-		append(strings.Fields("--"+configFlag+"="+cfgPath+" "+agentsName+" "+stateIdle+" --done --problem "+ghNone+" --report"), "Completed https://github.com/giantswarm/beekeeper/issues/1708"),
+		append(strings.Fields("--"+configFlag+"="+cfgPath+" "+agentsName+" "+stateIdle+" --done --problem "+ghNone+" --report"), "Completed https://github.com/giantswarm/beekeeper/issues/1708", "--no-change", "Verified Codex worker identity through log, park and note commands; no repository change needed"),
 	} {
 		cmd := New()
 		var cmdOut bytes.Buffer

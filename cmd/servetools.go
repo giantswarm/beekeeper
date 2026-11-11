@@ -284,7 +284,7 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 			return nil, refused("%s", r.line())
 		}
 		step := min(claimPoll, wait-waited)
-		if err := claimPause(c.ctx, step); err != nil {
+		if _, err := claimPause(c.ctx, step, nil); err != nil {
 			return nil, err
 		}
 		waited += step

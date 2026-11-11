@@ -101,7 +101,7 @@ func TestStoppedAgentsAreListedOnce(t *testing.T) {
 	w.stoppedAgents(st, nil)
 	w.stoppedAgents(st, nil)
 	l := out.String()
-	if strings.Count(l, "AGENTS STOPPED") != 1 || !strings.Contains(l, `"worker one" (claude --bg --resume bg-1 "`) ||
+	if strings.Count(l, "AGENTS STOPPED") != 1 || !strings.Contains(l, `"worker one" (beekeeper agents wake "worker one" "`) ||
 		!strings.Contains(l, `"Agent four" (open claude://code/continue?session=local_4)`) || strings.Contains(l, "idle one") {
 		t.Fatalf("stopped agents:\n%s", l)
 	}
@@ -117,7 +117,7 @@ func TestStoppedAgentsAreListedOnce(t *testing.T) {
 	a := &app{out: &prompt, now: relayNow}
 	a.promptAgents(func(f string, args ...any) { prompt.WriteString(strings.TrimSpace(fmt.Sprintf(f, args...)) + "\n") }, agents, nil)
 	if p := prompt.String(); !strings.Contains(p, `"worker one" on fix beekeeper#1 since`) ||
-		!strings.Contains(p, "its CLI is not running (stopped by a reboot or a crash): resume it with `claude --bg --resume bg-1") ||
+		!strings.Contains(p, "its CLI is not running (stopped by a reboot or a crash): resume it with `beekeeper agents wake \"worker one\"") ||
 		!strings.Contains(p, `"idle one" idle since`) {
 		t.Errorf("handover prompt:\n%s", p)
 	}

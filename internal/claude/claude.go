@@ -212,6 +212,16 @@ func (r *Record) Waiting() *Waiting {
 // one's. A CLI that another session's tool command runs belongs to that
 // session unless it was started under an id of its own.
 func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	return discover(cfg, t, now, true)
+}
+
+// DiscoverLiveness reads CLI identities without repository, transcript or
+// process-tree accounting. Role recovery must not wait for those observations.
+func DiscoverLiveness(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	return discover(cfg, t, now, false)
+}
+
+func discover(cfg *config.Config, t *proc.Table, now time.Time, details bool) []*Session {
 	records := map[int]*cliRecord{}
 	for _, p := range t.ByPID {
 		if isCLI(p) || isSpare(p) {
@@ -228,7 +238,7 @@ func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
 	}
 	byKey := map[string]*Session{}
 	for pid := range clis {
-		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now)
+		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now, details)
 		// A restarted CLI can overlap its predecessor for a moment:
 		// the newest process is the session.
 		if prev, ok := byKey[s.Key()]; ok && prev.Started.After(s.Started) {
@@ -423,7 +433,7 @@ func ResumedSession(cfg *config.Config, t *proc.Table, id string) (prevID, jobID
 
 // newSession builds the session process p runs: its record names it, else
 // its arguments and environment do.
-func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
+func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time, details bool) *Session {
 	argID := ownID(p.Args)
 	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: argID, Background: underDaemon(t, p)}
 	s.Name = argValue(p.Args, "--name")
@@ -472,6 +482,9 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 	}
 	if s.Name == "" {
 		s.Name = "pid " + strconv.Itoa(p.PID)
+	}
+	if !details {
+		return s
 	}
 	repo, branch := GitInfo(s.Cwd)
 	s.Repo = repo
