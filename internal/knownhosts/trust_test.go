@@ -91,9 +91,8 @@ func checkFilteredTrust(t *testing.T, first, second []string, decisions []trustD
 			t.Fatal(err)
 		}
 	}
-	if _, err := knownhosts.New(sources...); err == nil {
-		t.Fatal("unsupported entry must force filtering")
-	}
+	requireRejectedLine(t, unknownLine("unsupported.invalid"))
+	t.Run("with unsupported entry", func(t *testing.T) { check(t, sources...) })
 	dropped, err := Parseable(dst, sources...)
 	if err != nil {
 		t.Fatal(err)

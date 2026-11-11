@@ -1,9 +1,9 @@
 // Package knownhosts gives a run's commands a known_hosts file Go's SSH
-// clients can read. golang.org/x/crypto/ssh/knownhosts, which go-git's SSH
-// transport uses, refuses a whole file for one line whose key type it does
-// not know (a post-quantum host key OpenSSH accepts, for one), so every
-// go-git SSH test of a machine whose known_hosts holds such a line fails.
-// Parseable writes the machine's known_hosts without those lines to a file
+// clients can read. Parseable checks each line with golang.org/x/crypto's
+// knownhosts parser, which go-git's SSH transport uses. Since x/crypto v0.59.0,
+// that parser skips malformed entries in files with valid entries, but still
+// rejects files containing only malformed entries or oversized lines.
+// Parseable writes the machine's known_hosts without rejected lines to a file
 // of its own, for the command's SSH_KNOWN_HOSTS; the machine's files stay
 // untouched.
 package knownhosts

@@ -44,6 +44,17 @@ func write(t *testing.T, path string, lines ...string) {
 	}
 }
 
+// requireRejectedLine checks a fixture in isolation, as Parseable does. Since
+// x/crypto v0.59.0, a valid entry in the same file masks other parse errors.
+func requireRejectedLine(t *testing.T, line string) {
+	t.Helper()
+	src := filepath.Join(t.TempDir(), "invalid")
+	write(t, src, line)
+	if _, err := knownhosts.New(src); err == nil {
+		t.Fatal("consumer accepted the invalid line in isolation")
+	}
+}
+
 func TestParseableDropsUnknownKeyTypes(t *testing.T) {
 	dir := t.TempDir()
 	home, etc, dst := filepath.Join(dir, "known_hosts"), filepath.Join(dir, "ssh_known_hosts"), filepath.Join(dir, "out", "known_hosts")
@@ -52,9 +63,7 @@ func TestParseableDropsUnknownKeyTypes(t *testing.T) {
 	write(t, etc, other)
 	before, _ := os.ReadFile(home) //nolint:gosec // the test's own temp file
 
-	if _, err := knownhosts.New(home); err == nil {
-		t.Fatal("the source must fail Go's knownhosts, or this test proves nothing")
-	}
+	requireRejectedLine(t, unknownLine("pq.example"))
 	dropped, err := Parseable(dst, home, etc, filepath.Join(dir, "missing"))
 	if err != nil {
 		t.Fatal(err)
@@ -135,8 +144,9 @@ func TestParseableDropsInvalidHostEntries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := knownhosts.New(src); err == nil {
-					t.Fatal("consumer accepted the invalid source")
+				requireRejectedLine(t, invalid)
+				if extra {
+					requireRejectedLine(t, unknownLine("192.0.2.2"))
 				}
 				dropped, err := Parseable(dst, src)
 				if err != nil || dropped != wantDropped {
