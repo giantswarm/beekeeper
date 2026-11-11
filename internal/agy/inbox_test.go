@@ -737,3 +737,82 @@ func testRunQuota429(t *testing.T, mode string) {
 		t.Fatalf("ReadQuotaError after RemoveInbox = %+v, want nil", got)
 	}
 }
+
+func TestRunExitsWhenSessionParkedDoneOrOffRoster(t *testing.T) {
+	origGrace := IdleGrace
+	IdleGrace = 40 * time.Millisecond
+	t.Cleanup(func() { IdleGrace = origGrace })
+
+	for name, stateJSON := range map[string]string{
+		"parked":     `{"agents":[{"hostSession":"agy_1234abcd-0000-4000-8000-000000000009","name":"worker-1","park":{"on":"giantswarm/beekeeper#3675"}}]}`,
+		"done":       `{"agents":[{"hostSession":"agy_1234abcd-0000-4000-8000-000000000009","name":"worker-1","done":true}]}`,
+		"off-roster": `{"agents":[{"hostSession":"agy_other","name":"other"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			const (
+				startID = "1234abcd-0000-4000-8000-000000000009"
+				convID  = "conv-uuid-0009"
+			)
+			inbox := InboxPath(stateDir, startID)
+			logPath := StreamPath(stateDir, startID)
+			transcriptPath := filepath.Join(stateDir, "transcript.jsonl")
+
+			activeJSON := `{"agents":[{"hostSession":"agy_1234abcd-0000-4000-8000-000000000009","name":"worker-1","task":"work"}]}`
+			if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(activeJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := MakeInbox(inbox); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GO_WANT_HELPER_MOCK_AGY", "1")
+			t.Setenv("MOCK_AGY_STATE_DIR", stateDir)
+			t.Setenv("MOCK_AGY_TRANSCRIPT", transcriptPath)
+			t.Setenv("MOCK_AGY_CONV_ID", convID)
+			t.Setenv("MOCK_AGY_MODE", "stay-idle")
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			errCh := make(chan error, 1)
+			go func() {
+				argv := []string{os.Args[0], "-test.run=^TestHelperMockAgy$"}
+				errCh <- Run(ctx, inbox, logPath, argv, io.Discard)
+			}()
+
+			for range 200 {
+				if Send(inbox, "first turn") == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for ReadConv(stateDir, startID) != convID || streamState(logPath) != StateIdle {
+				if time.Now().After(deadline) {
+					t.Fatal("timed out waiting for first turn to complete and become idle")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			// Transition the session in state.json to parked, done, or off-roster.
+			if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(stateJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			select {
+			case err := <-errCh:
+				if err != nil {
+					t.Fatalf("Run = %v, want nil", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("Run did not exit after session became %s", name)
+			}
+
+			if err := Send(inbox, "after exit"); !errors.Is(err, ErrNotRunning) {
+				t.Fatalf("Send after runner exit = %v, want ErrNotRunning", err)
+			}
+			if got := ReadConv(stateDir, startID); got != convID {
+				t.Fatalf("ReadConv after runner exit = %q, want %q preserved for wake", got, convID)
+			}
+		})
+	}
+}
