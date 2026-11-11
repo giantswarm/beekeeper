@@ -60,6 +60,11 @@ const (
 	sessionIDField   = "sessionId"
 	fixtureRepo      = "fixture/project"
 	pullRequestQuery = "pullRequest(number:"
+	headRefOIDField  = "headRefOid"
+	pageInfoField    = "pageInfo"
+	hasNextPageField = "hasNextPage"
+	pullRequestField = "pullRequest"
+	fixtureTimestamp = "2026-01-01T00:00:00Z"
 )
 
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
@@ -175,7 +180,7 @@ func serveGitHub() int {
 		fmt.Print("HTTP/2.0 200 OK\r\nETag: fixture\r\nContent-Type: application/json\r\n\r\n[]")
 		return 0
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "pullRequests(states:OPEN,") }):
-		return emit(map[string]any{dataField: map[string]any{repositoryField: map[string]any{"pullRequests": map[string]any{nodesField: []any{}, "pageInfo": map[string]any{"hasNextPage": false}}}}})
+		return emit(map[string]any{dataField: map[string]any{repositoryField: map[string]any{"pullRequests": map[string]any{nodesField: []any{}, pageInfoField: map[string]any{hasNextPageField: false}}}}})
 	case starts(ghPR, "list"):
 		return emit([]any{})
 	// This fixture repository has a readable main branch and no release
@@ -232,10 +237,24 @@ func serveGitHub() int {
 	case starts(ghAPI, "--paginate") && len(args) == 3 && slices.Contains([]string{"repos/fixture/project/pulls/1/reviews", "repos/fixture/project/pulls/1/comments", "repos/fixture/project/issues/1/comments"}, args[2]):
 		return emit([]any{})
 	case starts(ghAPI) && len(args) == 4 && strings.HasPrefix(args[1], "repos/fixture/project/commits/") && args[2] == "--jq" && args[3] == ".commit.committer.date":
-		fmt.Println("2026-01-01T00:00:00Z")
+		fmt.Println(fixtureTimestamp)
 		return 0
 	case starts(ghPR, "view"):
 		return emit(observePull())
+	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "viewer { login }") }):
+		return emit(map[string]any{dataField: map[string]any{
+			"viewer": map[string]any{loginField: fixtureBot},
+			repositoryField: map[string]any{pullRequestField: map[string]any{
+				"id":            "PR_1",
+				headRefOIDField: p[headRefOIDField],
+				authorField:     map[string]any{loginField: fixtureBot, "type": "User", "id": 1},
+				"commits": map[string]any{nodesField: []any{map[string]any{
+					gitCommit: map[string]any{oidField: p[headRefOIDField], "committedDate": fixtureTimestamp},
+				}}},
+			}},
+		}})
+	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, `node(id:"PR_1")`) }):
+		return emit(map[string]any{dataField: map[string]any{"node": map[string]any{"items": map[string]any{nodesField: []any{}, pageInfoField: map[string]any{hasNextPageField: false}}}}})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, pullRequestQuery) }):
 		query := strings.Join(args, " ")
 		data := map[string]any{"rateLimit": map[string]any{"remaining": 4900}}
@@ -254,7 +273,7 @@ func serveGitHub() int {
 			if num == "1" {
 				found = observePull()
 			}
-			data[alias] = map[string]any{"pullRequest": found}
+			data[alias] = map[string]any{pullRequestField: found}
 		}
 		return emit(map[string]any{dataField: data})
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "fields(first:50)") }):

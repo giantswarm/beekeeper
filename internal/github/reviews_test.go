@@ -107,8 +107,8 @@ func TestChangesRequestedHoldsUntilApprovedOrDismissed(t *testing.T) {
 // surrounding space and a trailing "." or "!" aside.
 func TestDeskVerdict(t *testing.T) {
 	for body, want := range map[string]string{
-		"Review: approved\n\nFine.":        "APPROVED",
-		"\n  Review: Approved.  \n":        "APPROVED",
+		"Review: approved\n\nFine.":        stateApproved,
+		"\n  Review: Approved.  \n":        stateApproved,
 		"Review: changes requested!\nFix.": changesRequested,
 		"Looks approved to me":             "",
 		"":                                 "",
@@ -123,7 +123,7 @@ func TestDeskVerdict(t *testing.T) {
 // clears the request, apart from the unanswered feedback.
 func TestReviewRefusalNamesTheReviewer(t *testing.T) {
 	open := []UnansweredReview{
-		{Kind: FeedbackReview, Login: "marians", State: "CHANGES_REQUESTED", URL: "u1"},
+		{Kind: FeedbackReview, Login: "marians", State: changesRequested, URL: "u1"},
 		{Kind: FeedbackComment, Login: "kim", URL: "u2"},
 	}
 	got := reviewRefusal(open, "fixture-person")

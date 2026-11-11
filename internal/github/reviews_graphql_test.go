@@ -9,7 +9,11 @@ import (
 	"testing"
 )
 
-const graphReviewHead = `{"data":{"viewer":{"login":"fixture-person"},"repository":{"pullRequest":{"id":"P7","headRefOid":"h","author":{"login":"fixture-person","type":"User"},"commits":{"nodes":[{"commit":{"oid":"h","committedDate":"2026-10-21T08:00:00Z"}}]}}}}`
+const (
+	graphReviewHead      = `{"data":{"viewer":{"login":"fixture-person"},"repository":{"pullRequest":{"id":"P7","headRefOid":"h","author":{"login":"fixture-person","type":"User"},"commits":{"nodes":[{"commit":{"oid":"h","committedDate":"2026-10-21T08:00:00Z"}}]}}}}`
+	associationNone      = "NONE"
+	deskChangesRequested = "Review: changes requested"
+)
 
 func reviewPage(nodes, cursor string) []byte {
 	return []byte(fmt.Sprintf(`{"data":{"node":{"items":{"nodes":%s,"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}`, nodes, cursor != "", cursor))
@@ -18,14 +22,14 @@ func reviewPage(nodes, cursor string) []byte {
 // GraphQL supplies every page while REST has no quota. The conversion keeps
 // the same persistent changes-requested and unanswered-comment semantics.
 func TestReviewGuardWithoutRESTQuota(t *testing.T) {
-	for _, verdict := range []string{"CHANGES_REQUESTED", "APPROVED"} {
+	for _, verdict := range []string{changesRequested, stateApproved} {
 		t.Run(verdict, func(t *testing.T) {
 			calls := map[string]int{}
 			gh := func(ctx context.Context, args ...string) ([]byte, error) {
 				if Repo(ctx) != "o/r" {
 					t.Fatalf("repository context lost: %q", Repo(ctx))
 				}
-				if len(args) < 4 || args[1] != "graphql" {
+				if len(args) < 4 || args[1] != graphqlEndpoint {
 					t.Fatal("REST called despite healthy GraphQL")
 				}
 				q := args[len(args)-1]
@@ -83,7 +87,7 @@ func TestReviewGuardGraphQLFailsClosed(t *testing.T) {
 				if calls > 6 {
 					t.Fatal("unbounded pagination")
 				}
-				if args[1] != "graphql" {
+				if args[1] != graphqlEndpoint {
 					return nil, errors.New("API rate limit exceeded")
 				}
 				if strings.Contains(args[len(args)-1], "viewer") {
@@ -103,7 +107,7 @@ func TestViewerLoginUsesAvailableAPIAndRunner(t *testing.T) {
 	for _, graph := range []bool{true, false} {
 		for _, login := range []string{"first-account", "second-account"} {
 			gh := func(_ context.Context, args ...string) ([]byte, error) {
-				if args[1] == "graphql" {
+				if args[1] == graphqlEndpoint {
 					if !graph {
 						return nil, errors.New("API rate limit already exceeded")
 					}
@@ -127,14 +131,14 @@ func TestGraphQLDeskReviewVerdicts(t *testing.T) {
 		login, association, body string
 		want                     int
 	}{
-		{"fixture-person", "NONE", "Review: changes requested", 1},
-		{"fixture-person", "NONE", "Review: approved", 0},
-		{"member", "MEMBER", "Review: changes requested", 1},
-		{"outsider", "NONE", "Review: changes requested", 0},
+		{"fixture-person", associationNone, deskChangesRequested, 1},
+		{"fixture-person", associationNone, "Review: approved", 0},
+		{"member", "MEMBER", deskChangesRequested, 1},
+		{"outsider", associationNone, deskChangesRequested, 0},
 	} {
 		t.Run(tc.login+tc.body, func(t *testing.T) {
 			gh := func(_ context.Context, args ...string) ([]byte, error) {
-				if args[1] != "graphql" {
+				if args[1] != graphqlEndpoint {
 					t.Fatal("REST called")
 				}
 				q := args[len(args)-1]

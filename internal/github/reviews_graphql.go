@@ -25,7 +25,7 @@ func ViewerLogin(ctx context.Context, gh GH) (string, error) {
 	if err == nil {
 		err = errors.New("GraphQL viewer has no login")
 	}
-	raw, restErr := gh(ctx, "api", "user", "--jq", ".login")
+	raw, restErr := gh(ctx, ghAPI, "user", ghFlagJQ, ".login")
 	login := strings.TrimSpace(string(raw))
 	if restErr == nil && login != "" {
 		return login, nil
@@ -39,7 +39,7 @@ func ViewerLogin(ctx context.Context, gh GH) (string, error) {
 // reviewQuery rejects partial GraphQL results: missing feedback cannot grant
 // permission to merge. All calls retain the same repository and GH identity.
 func reviewQuery(ctx context.Context, gh GH, query string, dst any) error {
-	raw, err := gh(ctx, "api", "graphql", "-f", "query="+query)
+	raw, err := gh(ctx, ghAPI, graphqlEndpoint, "-f", "query="+query)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func reviewQuery(ctx context.Context, gh GH, query string, dst any) error {
 	if len(doc.Errors) > 0 {
 		return fmt.Errorf("GraphQL review read: %s", doc.Errors[0].Message)
 	}
-	if len(doc.Data) == 0 || string(doc.Data) == "null" {
+	if len(doc.Data) == 0 || string(doc.Data) == jsonNull {
 		return errors.New("GraphQL review read has no data")
 	}
 	return json.Unmarshal(doc.Data, dst)

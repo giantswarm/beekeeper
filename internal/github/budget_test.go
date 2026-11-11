@@ -35,7 +35,7 @@ func TestProbeGraphQL(t *testing.T) {
 	now := time.Date(2026, 10, 6, 3, 50, 0, 0, time.UTC)
 	reset := time.Date(2026, 10, 6, 3, 55, 12, 0, time.UTC)
 	limits := map[string]string{"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "4960", "X-RateLimit-Used": "40",
-		"X-RateLimit-Reset": "1791258912", "X-RateLimit-Resource": "graphql"}
+		"X-RateLimit-Reset": "1791258912", "X-RateLimit-Resource": graphqlEndpoint}
 	for name, tc := range map[string]struct {
 		status    int
 		headers   map[string]string

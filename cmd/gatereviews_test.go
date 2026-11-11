@@ -19,7 +19,10 @@ import (
 
 // changesRequested is the reason github.ReviewGuard gives for a standing
 // request for changes.
-const changesRequested = "changes requested: review CHANGES_REQUESTED by marians https://github.com/o/r/pull/7#r; a new commit or a reply leaves it standing, only the reviewer's approval or the review's dismissal clears it"
+const (
+	changesRequested       = "changes requested: review CHANGES_REQUESTED by marians https://github.com/o/r/pull/7#r; a new commit or a reply leaves it standing, only the reviewer's approval or the review's dismissal clears it"
+	reviewsFailedInTransit = "reading the reviews of o/r#7 failed in transit"
+)
 
 // stubReviews answers reviewGuard with why and err and counts the reads.
 func stubReviews(t *testing.T, why string, err error) *int {
@@ -45,8 +48,8 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 		says string
 	}{
 		"changes requested": {why: changesRequested, code: ExitGateRefused, says: "o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
-		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: "reading the reviews of o/r#7 failed in transit"},
-		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: "reading the reviews of o/r#7 failed in transit"},
+		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: reviewsFailedInTransit},
+		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: reviewsFailedInTransit},
 		"unreadable":        {err: errFake("HTTP 404"), code: ExitGateRefused, says: "the reviews of o/r#7 cannot be read"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -125,7 +128,7 @@ func TestGateCheckIsTheDryPath(t *testing.T) {
 		says string
 	}{
 		"changes requested": {why: changesRequested, code: ExitGateRefused, says: "refused, o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
-		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: "reading the reviews of o/r#7 failed in transit"},
+		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: reviewsFailedInTransit},
 		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: "unread, reading the reviews of o/r#7 failed in transit"},
 		"nothing holds":     {says: "dry path: o/r#7 would merge as far as its reviews go"},
 	} {
