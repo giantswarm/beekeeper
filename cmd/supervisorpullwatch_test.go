@@ -470,6 +470,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		botName  = "renovate[bot]"
 		botTool  = "o/tool"
 		botOther = "o/other"
+		botPull  = "o/x-configs#4"
 	)
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -489,7 +490,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		}
 		searched = append(searched, logins...)
 		if slices.Equal(logins, []string{"app/renovate"}) {
-			return []string{idleRef, "o/other#3", "o/x-configs#4", "o/tool#6"}, nil
+			return []string{idleRef, "o/other#3", botPull, "o/tool#6"}, nil
 		}
 		return []string{reserveIssue}, nil
 	}
@@ -506,7 +507,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	if !slices.Equal(searched, []string{"me", "app/renovate"}) {
 		t.Errorf("searched %v", searched)
 	}
-	if got, want := w.view().Open, []string{reserveIssue, "o/x-configs#4"}; !slices.Equal(got, want) {
+	if got, want := w.view().Open, []string{reserveIssue, botPull}; !slices.Equal(got, want) {
 		t.Errorf("teams unread: open = %v, want %v", got, want)
 	}
 	// Once read, the team files admit the team's own repositories: the
@@ -518,7 +519,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	if _, err := w.poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := w.view().Open, []string{reserveIssue, idleRef, "o/x-configs#4"}; !slices.Equal(got, want) {
+	if got, want := w.view().Open, []string{reserveIssue, idleRef, botPull}; !slices.Equal(got, want) {
 		t.Errorf("teams read: open = %v, want %v", got, want)
 	}
 	if w.view().Incomplete {

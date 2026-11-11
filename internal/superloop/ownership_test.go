@@ -145,7 +145,7 @@ func TestAParkFromBeforeTheLoopsFirstStartIsLeftAlone(t *testing.T) {
 // it is then a review request, under any spelling of the login. Never still
 // outranks it.
 func TestABotPullRequestIsReviewedOnRequest(t *testing.T) {
-	for _, author := range []string{"app/renovate", "renovate[bot]", "renovate"} {
+	for _, author := range []string{"app/renovate", botLogin, "renovate"} {
 		pulls := owned(ourTeam)
 		q := pulls[pr]
 		q.Author = author
@@ -153,7 +153,7 @@ func TestABotPullRequestIsReviewedOnRequest(t *testing.T) {
 		left(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: desk(), Now: t0}), leftAuthor)
 
 		d := desk()
-		d.Bots = []string{"renovate[bot]"}
+		d.Bots = []string{botLogin}
 		only(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), KindReview)
 
 		d.Never = []string{repoOf(pr)}
@@ -382,13 +382,14 @@ func TestNeverRepositoryPatternsOutrankOverrides(t *testing.T) {
 // desk's own: after the wait it gets a review, on approval the go, and a
 // head the bot moves (a rebase) after the go gets a review of its own.
 const (
-	botApp  = "app/renovate"
-	botRepo = "o/r"
+	botApp   = "app/renovate"
+	botRepo  = "o/r"
+	botLogin = "renovate[bot]"
 )
 
 func TestTheSweepReviewsAnOwnerlessBotPullRequest(t *testing.T) {
 	d := desk()
-	d.Bots = []string{"renovate[bot]"}
+	d.Bots = []string{botLogin}
 	pulls := owned(ourTeam)
 	q := pulls[pr]
 	q.Author = botApp
@@ -450,7 +451,7 @@ func TestABotRepositoryIsTheDesksOwn(t *testing.T) {
 			t.Errorf("%s: BotRepo(%s) = %v, want %v", name, tc.repo, got, tc.want)
 		}
 	}
-	if got := BotLogin("renovate[bot]"); got != botApp {
+	if got := BotLogin(botLogin); got != botApp {
 		t.Errorf("BotLogin = %q", got)
 	}
 }
