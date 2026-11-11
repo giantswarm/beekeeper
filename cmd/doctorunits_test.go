@@ -88,6 +88,9 @@ func TestDoctorStopsRunnerUnitsWithoutLiveSession(t *testing.T) {
 			{Party: state.Party{Session: parkedID, HostSession: codex.HostPrefix + parkedID, Name: "parked-codex"}, Task: "work", Park: &state.Park{On: "giantswarm/beekeeper#3675"}},
 			{Party: state.Party{HostSession: agy.HostPrefix + doneID, Name: "done-agy"}, Done: true},
 		},
+		Starts: []state.Start{
+			{Party: state.Party{Session: busyOffID, HostSession: codex.HostPrefix + busyOffID}, Harness: codex.Harness},
+		},
 	}
 	running := []string{
 		codexUnit(workingID),

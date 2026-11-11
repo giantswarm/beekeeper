@@ -378,7 +378,7 @@ func (l *supervisorLoop) finishContinuation(old state.Agent, name string) error 
 	})
 	if err == nil && finished {
 		if h, id, ok := harnessOf(old.Party); ok {
-			_ = plat.Launcher.Stop(ctx, h.Unit(id))
+			_ = plat.Launcher.Stop(context.Background(), h.Unit(id))
 		}
 		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
 	}

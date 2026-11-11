@@ -937,7 +937,7 @@ func (a *app) runningTurn(p state.Party) (*claude.Session, bool) {
 // turnRunning is runningTurn on the sessions and process table read.
 func turnRunning(sessions []*claude.Session, t *proc.Table, p state.Party, now time.Time) (*claude.Session, bool) {
 	for _, s := range sessions {
-		if !p.Is(s.Party()) {
+		if !p.Is(s.Party()) && !sameHarnessUnit(p, s.Party()) {
 			continue
 		}
 		if s.State == omp.StateIdle && len(s.Commands) == 0 {

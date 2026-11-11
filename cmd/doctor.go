@@ -463,6 +463,20 @@ func runnerUnitHasLiveSession(cfg *config.Config, st *state.State, unit string, 
 	if !ok {
 		return true
 	}
+	for _, ag := range st.Agents {
+		if harnessUnitMatchesParty(unit, ag.Party) {
+			if _, hid, ok := harnessOf(ag.Party); ok && len(hid) > len(id) {
+				id = hid
+			}
+		}
+	}
+	for _, s := range st.Starts {
+		if harnessUnitMatchesParty(unit, s.Party) {
+			if _, hid, ok := harnessOf(s.Party); ok && len(hid) > len(id) {
+				id = hid
+			}
+		}
+	}
 	party := state.Party{Session: id, HostSession: h.Host(id)}
 	var convID string
 	if i := st.StartIndex(party); i >= 0 {
