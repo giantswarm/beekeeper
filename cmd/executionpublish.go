@@ -134,9 +134,21 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	c.Env = append(c.Env, "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
+	// A fetch that runs out of time says how much it received: a slow link and
+	// a transfer too large for the deadline look the same otherwise.
+	received := int64(-1)
+	if len(args) > 0 && args[0] == "fetch" {
+		received = publicationObjectBytes(dir)
+	}
 	out, err := c.Output()
 	if err != nil {
-		return nil, publicationGitFailure(ctx, args, stderr.String())
+		failure := publicationGitFailure(ctx, args, stderr.String())
+		if received >= 0 && ctx.Err() != nil {
+			if after := publicationObjectBytes(dir); after >= 0 {
+				return nil, fmt.Errorf("%w after receiving %d bytes", failure, max(after-received, 0))
+			}
+		}
+		return nil, failure
 	}
 	return out, nil
 }
@@ -448,6 +460,8 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if _, err = publishGit(ctx, dir, "init", "--bare", repo); err != nil {
 		return result, err
 	}
+	cache := a.publicationCache(ctx, r.Request.Repository)
+	borrowPublicationCache(repo, cache)
 	sourceBundle := filepath.Join(a.cfg.StateDir, "execution-sources", string(ref.Execution), "source.bundle")
 	if data, readErr := readPublicationBundle(sourceBundle); readErr == nil && (r.Request.SourceDigest == "" || execution.Digest(data) == r.Request.SourceDigest) {
 		_, _ = publishGit(ctx, repo, "fetch", "--no-tags", "--", sourceBundle, "refs/heads/execution-source:refs/heads/source")
@@ -470,6 +484,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if _, err = publishGit(ctx, repo, "fetch", "--no-tags", remote, "refs/heads/"+base+":refs/heads/base"); err != nil {
 		return result, err
 	}
+	keepInPublicationCache(ctx, cache, repo, "refs/heads/base", "refs/heads/"+base)
 	bundlePath := filepath.Join(dir, "commits.bundle")
 	result.Branch = executionOwnedBranch(r)
 	ensureCommit := func(commit string) {
