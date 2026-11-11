@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -457,5 +458,73 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 	var disk loopPullSnapshot
 	if ok, err := r.a.store.ReadFile(loopPullWatchFile, &disk); !ok || err != nil || len(disk.Pulls) != 0 {
 		t.Fatalf("dryRun mutated saved snapshot on disk: ok=%v err=%v pulls=%d", ok, err, len(disk.Pulls))
+	}
+}
+
+// The listing finds the bots' pull requests beside the desk's own, as
+// GitHub's search names an app, and keeps only those in repositories the
+// desk owns: until the team files are read, only the review list's.
+func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, batch := readOpenPulls, readLoopPullBatch
+	t.Cleanup(func() { readOpenPulls, readLoopPullBatch = listed, batch })
+	var searched []string
+	readOpenPulls = func(_ context.Context, authors func() ([]string, error), orgs []string) ([]string, error) {
+		logins, err := authors()
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Equal(orgs, []string{"o"}) {
+			t.Errorf("orgs = %v", orgs)
+		}
+		searched = append(searched, logins...)
+		if slices.Equal(logins, []string{"app/renovate"}) {
+			return []string{"o/r#2", "o/other#3", "o/x-configs#4", "o/tool#6"}, nil
+		}
+		return []string{"o/r#1"}, nil
+	}
+	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
+		return map[string]watchedLoopPull{}, nil
+	}
+	w := l.pullWatcher()
+	w.set(nil, []string{"me"}, []string{"o"}, 0, []string{"o/tool"})
+	desk := superloop.Desk{Orgs: []string{"o"}, Team: "team-a", Review: []string{"o/*-configs"}, Never: []string{"o/tool"}}
+	w.setBots([]string{"renovate[bot]"}, desk, nil, false)
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(searched, []string{"me", "app/renovate"}) {
+		t.Errorf("searched %v", searched)
+	}
+	if got, want := w.view().Open, []string{"o/r#1", "o/x-configs#4"}; !slices.Equal(got, want) {
+		t.Errorf("teams unread: open = %v, want %v", got, want)
+	}
+	// Once read, the team files admit the team's own repositories: the
+	// listing runs again at once.
+	w.setBots([]string{"renovate[bot]"}, desk, map[string]string{"o/r": "team-a", "o/other": "team-b", "o/tool": "team-a"}, true)
+	if !w.view().ListedAt.IsZero() {
+		t.Fatal("team files read without a new listing")
+	}
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := w.view().Open, []string{"o/r#1", "o/r#2", "o/x-configs#4"}; !slices.Equal(got, want) {
+		t.Errorf("teams read: open = %v, want %v", got, want)
+	}
+	if w.view().Incomplete {
+		t.Error("a short bot listing marked the desk's incomplete")
+	}
+	// No bots: one search, the desk's.
+	searched = nil
+	w.setBots(nil, desk, nil, true)
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(searched, []string{"me"}) || !slices.Equal(w.view().Open, []string{"o/r#1"}) {
+		t.Errorf("without bots: searched %v, open %v", searched, w.view().Open)
 	}
 }

@@ -64,6 +64,13 @@ type loopPullWatcher struct {
 	configured           bool
 	authors, orgs, never []string
 	floor                int
+	// bots, listed beside authors, keep only the pull requests in
+	// repositories botDesk.BotRepo admits by teams, the team files' owner
+	// of each lowercased owner/name (teamsKnown once they were read).
+	bots       []string
+	botDesk    superloop.Desk
+	teams      map[string]string
+	teamsKnown bool
 }
 
 func newPullWatcher() *loopPullWatcher {
@@ -118,6 +125,49 @@ func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []s
 	if added || configChanged {
 		signalPullWatch(w.changed)
 	}
+}
+
+// setBots has the listing find the pull requests bots opened in the
+// repositories desk owns, teams being the team files' owners as last read
+// (known false until they are): without it the sweep never sees one, and
+// a green bot pull request without a worker waits for nobody.
+func (w *loopPullWatcher) setBots(bots []string, desk superloop.Desk, teams map[string]string, known bool) {
+	w.mu.Lock()
+	changed := !slices.Equal(w.bots, bots) || len(bots) > 0 && known && !w.teamsKnown
+	w.bots, w.botDesk, w.teams, w.teamsKnown = slices.Clone(bots), desk, maps.Clone(teams), known
+	if changed {
+		w.snapshot.ListedAt = time.Time{}
+	}
+	w.mu.Unlock()
+	if changed {
+		signalPullWatch(w.changed)
+	}
+}
+
+// readBotPulls lists the open pull requests of the watcher's bots in orgs
+// that are in a repository of the desk's, and whether GitHub's search
+// stopped short of all of them.
+func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out []string, short bool, err error) {
+	w.mu.Lock()
+	bots, desk, teams, known := slices.Clone(w.bots), w.botDesk, maps.Clone(w.teams), w.teamsKnown
+	w.mu.Unlock()
+	if len(bots) == 0 {
+		return nil, false, nil
+	}
+	logins := make([]string, 0, len(bots))
+	for _, b := range bots {
+		logins = append(logins, superloop.BotLogin(b))
+	}
+	listed, err := readOpenPulls(ctx, func() ([]string, error) { return logins, nil }, orgs)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, ref := range listed {
+		if r, ok := parseRef(ref); ok && desk.BotRepo(r.Repo, teams[strings.ToLower(r.Repo)], known) {
+			out = append(out, ref)
+		}
+	}
+	return out, len(listed) >= sweepListLimit, nil
 }
 
 func (w *loopPullWatcher) needsPoll(tracked []string, now time.Time) bool {
@@ -189,6 +239,8 @@ var startLoopPullWatcher = func(ctx context.Context, l *supervisorLoop) func() {
 	ctx, cancel := context.WithCancel(ctx)
 	w := l.pullWatcher()
 	w.set(nil, l.a.cfg.Supervisor.Ownership.Authors, l.a.cfg.GitHub.AllowedOrgs, l.a.cfg.GitHub.Floor, l.a.cfg.Supervisor.Ownership.Never)
+	own := l.a.cfg.Supervisor.Ownership
+	w.setBots(own.Bots, superloop.Desk{Orgs: l.a.cfg.GitHub.AllowedOrgs, Team: own.Team, Review: own.Review, Never: own.Never}, nil, false)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -282,10 +334,24 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 			login, err := readDeskLogin(ctx)
 			return []string{login}, err
 		}, orgs)
+		incomplete := len(open) >= sweepListLimit
+		if err == nil {
+			// A bot's pull requests beyond the search's limit leave the
+			// desk's own listing whole: the sweep takes the rest as their
+			// pull requests merge.
+			var bots []string
+			var short bool
+			if bots, short, err = w.readBotPulls(ctx, orgs); short {
+				l.sayOnce("sweep bot limit", "SUPERVISOR SWEEP bot pull requests in %s reach GitHub's search limit of %d: the sweep sees only the most recent", strings.Join(orgs, ", "), sweepListLimit)
+			}
+			open = append(open, bots...)
+			slices.Sort(open)
+			open = slices.Compact(open)
+		}
 		discoveryErr = err
 		if err == nil {
 			before.Open, before.ListedAt = open, time.Now()
-			before.Incomplete = len(open) >= sweepListLimit
+			before.Incomplete = incomplete
 		} else {
 			before.Incomplete = true
 		}

@@ -1974,6 +1974,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	})
 	sortTrackedPulls(in, tracked)
 	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
+	l.pullWatcher().setBots(in.Desk.Bots, in.Desk, l.teams, l.teams != nil)
 	if l.once && l.a.loopNow != nil && !l.dryRun || l.dryRun && l.pullWatcher().needsPoll(tracked, in.Now) {
 		pollOncePullWatcher(ctx, l)
 	}

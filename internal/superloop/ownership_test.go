@@ -377,3 +377,75 @@ func TestNeverRepositoryPatternsOutrankOverrides(t *testing.T) {
 		}
 	}
 }
+
+// A bot's green pull request without any worker is the sweep's like the
+// desk's own: after the wait it gets a review, on approval the go, and a
+// head the bot moves (a rebase) after the go gets a review of its own.
+func TestTheSweepReviewsAnOwnerlessBotPullRequest(t *testing.T) {
+	d := desk()
+	d.Bots = []string{"renovate[bot]"}
+	pulls := owned(ourTeam)
+	q := pulls[pr]
+	q.Author = "app/renovate"
+	pulls[pr] = q
+	in := Input{Pulls: pulls, Rounds: 1, Desk: d, Now: orphanSince.Add(OrphanWait), Ownerless: map[string]time.Time{pr: orphanSince}}
+	if got := Ownerless(in); len(got) != 1 || got[0] != pr {
+		t.Fatalf("ownerless = %v, want %s", got, pr)
+	}
+	a := only(t, Plan(in), KindReview)
+	if a.Key != reviewKey(pr, head1) || a.Agent != PullWorkerName(pr) {
+		t.Errorf("review = %+v", a)
+	}
+	in.Taken = taken(t, in.Now, a)
+	in.Ownerless = nil
+	q.Reviews = []Review{{ID: "R1", Author: me, Head: head1, Verdict: Approved, At: in.Now.Add(time.Minute)}}
+	pulls[pr] = q
+	g := only(t, Plan(in), KindGo)
+	if g.Head != head1 {
+		t.Errorf("go = %+v", g)
+	}
+	// Renovate rebased it onto a base that moved after another merge.
+	in.Taken = append(in.Taken, taken(t, in.Now.Add(2*time.Minute), g)...)
+	q.Head, q.Updated = head2, in.Now.Add(3*time.Minute)
+	pulls[pr] = q
+	in.Now = q.Updated.Add(OrphanWait)
+	in.Ownerless = map[string]time.Time{pr: q.Updated}
+	in.BaseMerged = func(Pull, string) bool { return false }
+	if r := only(t, Plan(in), KindReview); r.Head != head2 || KeyHead(r.Key) != head2 {
+		t.Errorf("review of the moved head = %+v", r)
+	}
+
+	// Without the bot named, nobody's.
+	in.Desk.Bots = nil
+	if got := Ownerless(in); len(got) != 0 {
+		t.Errorf("an unnamed bot's pull request is ownerless: %v", got)
+	}
+}
+
+// The sweep lists a bot's pull requests only where the desk may own them.
+func TestABotRepositoryIsTheDesksOwn(t *testing.T) {
+	d := desk()
+	for name, tc := range map[string]struct {
+		d           Desk
+		repo, team  string
+		known, want bool
+	}{
+		"our team":              {d: d, repo: "o/r", team: ourTeam, known: true, want: true},
+		"our team, any case":    {d: d, repo: "o/r", team: "Team-A", known: true, want: true},
+		"another team":          {d: d, repo: "o/r", team: teamB, known: true},
+		"no team file":          {d: d, repo: "o/r", known: true},
+		"teams unread":          {d: d, repo: "o/r", team: ourTeam},
+		"review list":           {d: d, repo: "o/x-configs", team: teamB, known: true, want: true},
+		"review list, unread":   {d: d, repo: "o/x-configs", want: true},
+		"never":                 {d: d, repo: tool, team: ourTeam, known: true},
+		"outside the orgs":      {d: d, repo: "elsewhere/r", team: ourTeam, known: true},
+		"no team, all the orgs": {d: Desk{Orgs: []string{"o"}}, repo: "o/r", want: true},
+	} {
+		if got := tc.d.BotRepo(tc.repo, tc.team, tc.known); got != tc.want {
+			t.Errorf("%s: BotRepo(%s) = %v, want %v", name, tc.repo, got, tc.want)
+		}
+	}
+	if got := BotLogin("renovate[bot]"); got != "app/renovate" {
+		t.Errorf("BotLogin = %q", got)
+	}
+}
