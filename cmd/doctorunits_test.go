@@ -83,9 +83,9 @@ func TestDoctorStopsRunnerUnitsWithoutLiveSession(t *testing.T) {
 	)
 	st := &state.State{
 		Agents: []state.Agent{
-			{Party: state.Party{Session: workingID, HostSession: codex.HostPrefix + workingID, Name: "working-codex"}, Task: "work"},
+			{Party: state.Party{Session: workingID, HostSession: codex.HostPrefix + workingID, Name: "working-codex"}, Task: task},
 			{Party: state.Party{HostSession: agy.HostPrefix + idleID, Name: "idle-agy"}},
-			{Party: state.Party{Session: parkedID, HostSession: codex.HostPrefix + parkedID, Name: "parked-codex"}, Task: "work", Park: &state.Park{On: "giantswarm/beekeeper#3675"}},
+			{Party: state.Party{Session: parkedID, HostSession: codex.HostPrefix + parkedID, Name: "parked-codex"}, Task: task, Park: &state.Park{On: "giantswarm/beekeeper#3675"}},
 			{Party: state.Party{HostSession: agy.HostPrefix + doneID, Name: "done-agy"}, Done: true},
 		},
 		Starts: []state.Start{

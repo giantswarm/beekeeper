@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+const testHelperMockAgyArg = "-test.run=^TestHelperMockAgy$"
+
 func TestSendRefusesStoppedInboxAndDrainsInOrder(t *testing.T) {
 	stateDir := t.TempDir()
 	inbox := InboxPath(stateDir, "1234abcd-0000-4000-8000-000000000001")
@@ -426,7 +428,7 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 		t.Setenv("MOCK_AGY_MODE", mode)
 		t.Setenv("MOCK_AGY_SIGNAL_FILE", signalFile)
 		t.Setenv("MOCK_AGY_RESUME_SIGNAL", resumeSignal)
-		argv := []string{os.Args[0], "-test.run=^TestHelperMockAgy$"}
+		argv := []string{os.Args[0], testHelperMockAgyArg}
 		return Run(ctx, inbox, logPath, argv, io.Discard)
 	}
 
@@ -578,7 +580,7 @@ func TestMidTurnFaultsDeliverExactlyOnce(t *testing.T) {
 			t.Setenv("MOCK_AGY_MODE", mode)
 			t.Setenv("MOCK_AGY_SIGNAL_FILE", signalFile)
 			t.Setenv("MOCK_AGY_RESUME_SIGNAL", resumeSignal)
-			argv := []string{os.Args[0], "-test.run=^TestHelperMockAgy$"}
+			argv := []string{os.Args[0], testHelperMockAgyArg}
 			return Run(ctx, inbox, logPath, argv, io.Discard)
 		}
 
@@ -775,7 +777,7 @@ func TestRunExitsWhenSessionParkedDoneOrOffRoster(t *testing.T) {
 			defer cancel()
 			errCh := make(chan error, 1)
 			go func() {
-				argv := []string{os.Args[0], "-test.run=^TestHelperMockAgy$"}
+				argv := []string{os.Args[0], testHelperMockAgyArg}
 				errCh <- Run(ctx, inbox, logPath, argv, io.Discard)
 			}()
 
