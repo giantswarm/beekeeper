@@ -381,12 +381,17 @@ func TestNeverRepositoryPatternsOutrankOverrides(t *testing.T) {
 // A bot's green pull request without any worker is the sweep's like the
 // desk's own: after the wait it gets a review, on approval the go, and a
 // head the bot moves (a rebase) after the go gets a review of its own.
+const (
+	botApp  = "app/renovate"
+	botRepo = "o/r"
+)
+
 func TestTheSweepReviewsAnOwnerlessBotPullRequest(t *testing.T) {
 	d := desk()
 	d.Bots = []string{"renovate[bot]"}
 	pulls := owned(ourTeam)
 	q := pulls[pr]
-	q.Author = "app/renovate"
+	q.Author = botApp
 	pulls[pr] = q
 	in := Input{Pulls: pulls, Rounds: 1, Desk: d, Now: orphanSince.Add(OrphanWait), Ownerless: map[string]time.Time{pr: orphanSince}}
 	if got := Ownerless(in); len(got) != 1 || got[0] != pr {
@@ -430,22 +435,22 @@ func TestABotRepositoryIsTheDesksOwn(t *testing.T) {
 		repo, team  string
 		known, want bool
 	}{
-		"our team":              {d: d, repo: "o/r", team: ourTeam, known: true, want: true},
-		"our team, any case":    {d: d, repo: "o/r", team: "Team-A", known: true, want: true},
-		"another team":          {d: d, repo: "o/r", team: teamB, known: true},
-		"no team file":          {d: d, repo: "o/r", known: true},
-		"teams unread":          {d: d, repo: "o/r", team: ourTeam},
+		"our team":              {d: d, repo: botRepo, team: ourTeam, known: true, want: true},
+		"our team, any case":    {d: d, repo: botRepo, team: "Team-A", known: true, want: true},
+		"another team":          {d: d, repo: botRepo, team: teamB, known: true},
+		"no team file":          {d: d, repo: botRepo, known: true},
+		"teams unread":          {d: d, repo: botRepo, team: ourTeam},
 		"review list":           {d: d, repo: "o/x-configs", team: teamB, known: true, want: true},
 		"review list, unread":   {d: d, repo: "o/x-configs", want: true},
 		"never":                 {d: d, repo: tool, team: ourTeam, known: true},
 		"outside the orgs":      {d: d, repo: "elsewhere/r", team: ourTeam, known: true},
-		"no team, all the orgs": {d: Desk{Orgs: []string{"o"}}, repo: "o/r", want: true},
+		"no team, all the orgs": {d: Desk{Orgs: []string{"o"}}, repo: botRepo, want: true},
 	} {
 		if got := tc.d.BotRepo(tc.repo, tc.team, tc.known); got != tc.want {
 			t.Errorf("%s: BotRepo(%s) = %v, want %v", name, tc.repo, got, tc.want)
 		}
 	}
-	if got := BotLogin("renovate[bot]"); got != "app/renovate" {
+	if got := BotLogin("renovate[bot]"); got != botApp {
 		t.Errorf("BotLogin = %q", got)
 	}
 }
