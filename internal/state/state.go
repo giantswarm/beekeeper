@@ -2397,7 +2397,13 @@ func endLine(f *os.File) error {
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
 func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
-	return s.cachedEvents(n, keep)
+	return s.EventsContext(context.Background(), n, keep)
+}
+
+// EventsContext abandons history replay when its caller stops. Partial history
+// is never returned as a successful read.
+func (s *FileStore) EventsContext(ctx context.Context, n int, keep func(Event) bool) ([]Event, error) {
+	return s.cachedEventsContext(ctx, n, keep)
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under
@@ -2405,10 +2411,17 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 // since: a watch that follows the log every poll parses each line once. A
 // log that was replaced or shrank is read again from its start.
 func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) {
+	return s.FollowContext(context.Background(), name, keep)
+}
+
+func (s *FileStore) FollowContext(ctx context.Context, name string, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	at := s.eventReader(name)
 	at.mu.Lock()
 	defer at.mu.Unlock()
-	return s.follow(at, keep)
+	return s.followContext(ctx, at, keep)
 }
 
 func (s *FileStore) eventReader(name string) *followed {
@@ -2423,15 +2436,22 @@ func (s *FileStore) eventReader(name string) *followed {
 	return s.follows[name]
 }
 
-// follow runs with this reader's mutex held. Unrelated readers never queue
-// behind a cold history scan. A cursor names an inode, so sealing the active
-// log into an archive preserves its position and its retained projection.
-func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error) {
-	files, err := s.eventFiles()
+// followContext runs with this reader's mutex held. Unrelated readers never
+// queue behind a cold history scan. A cursor names an inode, so sealing the
+// active log into an archive preserves its position and its retained projection.
+func (s *FileStore) followContext(ctx context.Context, at *followed, keep func(Event) bool) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	files, err := s.eventFilesContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer closeEventFiles(files)
+	savedFile, savedOffset, savedKept := at.file, at.offset, slices.Clone(at.kept)
+	restore := func() {
+		at.file, at.offset, at.kept = savedFile, savedOffset, savedKept
+	}
 	start := 0
 	if at != nil && at.file != nil {
 		start = -1
@@ -2451,6 +2471,10 @@ func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error)
 		start = 0
 	}
 	for _, f := range files[start:] {
+		if err := ctx.Err(); err != nil {
+			restore()
+			return nil, err
+		}
 		fi, err := f.Stat()
 		if err != nil {
 			return nil, err
@@ -2464,20 +2488,40 @@ func (s *FileStore) follow(at *followed, keep func(Event) bool) ([]Event, error)
 		}
 		reader := bufio.NewReader(f)
 		for {
+			if err := ctx.Err(); err != nil {
+				restore()
+				return nil, err
+			}
 			line, readErr := reader.ReadBytes('\n')
+			if err := ctx.Err(); err != nil {
+				restore()
+				return nil, err
+			}
 			if errors.Is(readErr, io.EOF) {
 				break
 			}
 			if readErr != nil {
 				return slices.Clone(at.kept), readErr
 			}
-			at.offset += int64(len(line))
 			var e Event
-			line = bytes.TrimLeft(line, "\x00")
-			if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
+			lineTrimmed := bytes.TrimLeft(line, "\x00")
+			if json.Unmarshal(lineTrimmed, &e) == nil && (keep == nil || keep(e)) {
+				if err := ctx.Err(); err != nil {
+					restore()
+					return nil, err
+				}
 				at.kept = append(at.kept, e)
 			}
+			if err := ctx.Err(); err != nil {
+				restore()
+				return nil, err
+			}
+			at.offset += int64(len(line))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		restore()
+		return nil, err
 	}
 	return slices.Clone(at.kept), nil
 }

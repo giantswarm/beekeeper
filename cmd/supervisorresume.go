@@ -32,6 +32,9 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 		return nil
 	}
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if ag.Done || ag.Task == "" || ag.Execution != nil || roleRun(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
 			continue
 		}
@@ -76,7 +79,7 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			l.sayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
 			continue
 		}
-		note, _, _ := l.a.lastNote(ag.Party, time.Time{}, func() { l.lifecyclePhase(loopPhaseRecover) })
+		note, _, _ := l.a.lastNoteContext(ctx, ag.Party, time.Time{}, func() { l.lifecyclePhase(loopPhaseRecover) })
 		l.lifecyclePhase(loopPhaseRecover)
 		err = l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			// The replacement took the name, and with it the task; it
@@ -264,6 +267,9 @@ func appendBrief(path, text string) error {
 // Discovery failure is not evidence that a worker ended. Managed executions
 // have their own lifecycle and must never be replaced by a local start.
 func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if st.Stop != nil || !slices.ContainsFunc(st.Agents, endedParkCandidate) {
 		return nil
 	}
@@ -272,6 +278,9 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		return err
 	}
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !endedParkCandidate(ag) {
 			continue
 		}
@@ -296,7 +305,7 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase(loopPhaseRecover)
+		l.lifecyclePhase(loopPhaseRecoverParks)
 		if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 			continue
 		}

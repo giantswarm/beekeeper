@@ -70,6 +70,9 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		return nil
 	}
 	for _, ag := range st.Agents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		p := ag.Park
 		if ag.Done || ag.Execution != nil || p == nil || p.External || p.Checks || p.ReviewHead != "" || !isDeskReviewWait(p.Waits) {
 			continue
@@ -89,7 +92,7 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase(loopPhaseRecover)
+		l.lifecyclePhase(loopPhaseRecoverReviews)
 		verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		head := recoverParkReviewHead(verifyCtx, p.On, dir)
 		cancel()
