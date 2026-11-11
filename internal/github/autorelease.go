@@ -210,7 +210,7 @@ func releasesByPR(ctx context.Context, run GH, repo, base, ref string) (bool, er
 // rawFile is the file at path on ref, raw; one the repository lacks there
 // is GitHub's 404 (notFound).
 func rawFile(ctx context.Context, run GH, repo, path, ref string) ([]byte, error) {
-	return run(ctx, "api", "-H", "Accept: application/vnd.github.raw",
+	return run(ctx, "api", "-H", acceptRaw,
 		fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, path, url.QueryEscape(ref)))
 }
 

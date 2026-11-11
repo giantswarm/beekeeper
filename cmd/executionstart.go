@@ -318,7 +318,6 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 // adapter for. hostUnsupportedHarnesses is empty now that every harness has
 // a remote adapter; the loop's verdict weighs the harnesses its catalogue
 // entry lists (executionCapacity) and its check offers (hostUnoffered).
-// hostRunsHarness is the other side, a harness some host runs ("" is Claude Code).
 var hostUnsupportedHarnesses = []string{}
 
 // hostUnoffered are the remote harnesses a host's check did not offer: a
@@ -331,21 +330,6 @@ func hostUnoffered(caps execution.Capabilities) []string {
 		}
 	}
 	return out
-}
-
-// hostRunsHarness says whether one of hosts can run harness: Claude Code on
-// any host, as before, and Codex, Agy or omp on a host whose entry lists it.
-func hostRunsHarness(harness string, hosts []execution.Host) bool {
-	h := strings.TrimSpace(harness)
-	if h == "" || h == claudeComm {
-		return true
-	}
-	for _, host := range hosts {
-		if execution.SupportedHarness(h) && host.Supports(h) {
-			return true
-		}
-	}
-	return false
 }
 
 func executionReserved(st *state.State, ag state.Agent) bool {

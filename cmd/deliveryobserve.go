@@ -65,6 +65,18 @@ type deliveryReleaseResult struct {
 	at           time.Time
 }
 
+func (l *supervisorLoop) closedIssues(now time.Time) map[string]bool {
+	closed := map[string]bool{}
+	l.mu.Lock()
+	for ref, o := range l.opens {
+		if !o.open && now.Sub(o.at) < loopOpenEvery {
+			closed[ref] = true
+		}
+	}
+	l.mu.Unlock()
+	return closed
+}
+
 func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Input, unread map[string]bool) error {
 	ctx, cancel := context.WithTimeout(ctx, loopPlanningObservationTimeout)
 	defer cancel()
@@ -75,16 +87,9 @@ func (l *supervisorLoop) observeDeliveries(ctx context.Context, in superloop.Inp
 	if err != nil {
 		return err
 	}
-	in.ClosedIssues = map[string]bool{}
 	// Reuse successful issue observations and the existing fail-open issue reader.
 	// An unreadable issue is never evidence that its delivery ended.
-	l.mu.Lock()
-	for ref, o := range l.opens {
-		if !o.open && in.Now.Sub(o.at) < loopOpenEvery {
-			in.ClosedIssues[ref] = true
-		}
-	}
-	l.mu.Unlock()
+	in.ClosedIssues = l.closedIssues(in.Now)
 	// Leave half the planning allowance for release probes. Otherwise slow
 	// issue reads can consume the whole context before any release gets a
 	// turn, retaining completed deliveries in WIP indefinitely.

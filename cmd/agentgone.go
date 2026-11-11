@@ -126,6 +126,11 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 	if qerr := agyQuotaError(cfg, ag); qerr != nil {
 		return cmp.Or(qerr.At, agentActivity(cfg, st, ag), now), true
 	}
+	if !ag.ContinuationExhausted.IsZero() && !ag.ContinuationExhausted.Before(ag.AssignedAt) {
+		if _, live := liveSession(sessions, ag.Party); !live && !mergeInFlight(st, ag.Party, proc.Alive) {
+			return ag.ContinuationExhausted, true
+		}
+	}
 	if staleAfter <= 0 {
 		return time.Time{}, false
 	}

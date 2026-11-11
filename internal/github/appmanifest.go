@@ -225,7 +225,7 @@ func (e *absentError) Error() string { return e.repo + " declares no App at " + 
 
 // defaultBranch is the commit the default branch of repo is at.
 func defaultBranch(ctx context.Context, run GH, repo string) (string, error) {
-	out, err := run(ctx, "api", "repos/"+repo+"/commits/HEAD", "--jq", ".sha")
+	out, err := run(ctx, "api", reposPrefix+repo+commitsHeadSuffix, "--jq", ".sha")
 	if err != nil {
 		return "", err
 	}

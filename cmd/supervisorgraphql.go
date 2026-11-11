@@ -332,37 +332,20 @@ func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed ti
 	return l.observePullStep(ctx, ref, changed, loopPullStep)
 }
 
-// Orphan detail reads share scan admission; tracked pulls keep their own path.
+// Observation lookup performs no IO against GitHub. Keep the original read
+// time when copying a watcher's observation into this pass's action cache.
 func (l *supervisorLoop) observePullStep(ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
-	// Bound the entire observation, including shared admission-lock waits
-	// and budget probes, rather than only the eventual gh pr view.
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
+	seen, err := readObservedLoopPull(l, ctx, ref, changed, step)
+	if err != nil {
 		return superloop.Pull{}, err
 	}
-	if seen, ok := l.pulls[ref]; ok && seen.changed.Equal(changed) && l.a.timeNow().Sub(seen.at) < loopPullEvery {
-		return seen.pull, nil
-	}
-	var p superloop.Pull
-	err := l.a.loopGitHub(ctx, step, func() (err error) {
-		p, err = readLoopPull(ctx, ref)
-		return err
-	})
-	if err != nil {
-		return p, err
-	}
+	l.mu.Lock()
 	if l.pulls == nil {
 		l.pulls = map[string]loopPullObservation{}
 	}
-	at := l.a.timeNow()
-	// A running loop's clock stays at the start of its pass: this read may be
-	// minutes later, and the next pass must not take it for an old one.
-	if l.a.loopNow != nil {
-		at = time.Now()
-	}
-	l.pulls[ref] = loopPullObservation{pull: p, at: at, changed: changed}
-	return p, nil
+	l.pulls[ref] = seen
+	l.mu.Unlock()
+	return seen.pull, nil
 }
 
 // A reset is not evidence of recovery: wait for the watch to publish a

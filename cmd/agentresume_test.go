@@ -80,8 +80,7 @@ func reopen(t *testing.T, a *app) {
 }
 
 // A headless turn that ended on a background wait with its task open is
-// resumed headless once, with the wait named, and logged; the next end of
-// the same task's turn is not resumed again.
+// resumed with the wait named and logged, including its next unfinished turn.
 func TestReopenResumesATurnThatEndedOnAWait(t *testing.T) {
 	a, resumes := waitApp(t, backgroundTurn("until gh run view 1 --exit-status; do :; done"), "CI of PR 340")
 	reopen(t, a)
@@ -101,8 +100,8 @@ func TestReopenResumesATurnThatEndedOnAWait(t *testing.T) {
 		t.Errorf("%s events = %+v, %v", resumedWaitEvent, evs, err)
 	}
 	reopen(t, a)
-	if len(*resumes) != 1 {
-		t.Errorf("resumed again for the same task: %q", *resumes)
+	if len(*resumes) != 2 {
+		t.Errorf("second continuation missing: %q", *resumes)
 	}
 }
 
@@ -127,12 +126,9 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 		transcript, waits string
 		done              bool
 	}{
-		"parked on the person":   {backgroundTurn("sleep 600"), "Alex's answer on the rollout", false},
-		"parked on a note":       {backgroundTurn("sleep 600"), "note #12", false},
-		"finished":               {backgroundTurn("sleep 600"), "", true},
-		"no wait":                {"{}\n", "CI", false},
-		"a gated devctl wait":    {backgroundTurn("devctl pr wait giantswarm/beekeeper 340"), "CI", false},
-		"a completed background": {backgroundTurn("make test") + `{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}}` + "\n", "", false},
+		"parked on the person": {backgroundTurn("sleep 600"), "Alex's answer on the rollout", false},
+		"parked on a note":     {backgroundTurn("sleep 600"), "note #12", false},
+		"finished":             {backgroundTurn("sleep 600"), "", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, resumes := waitApp(t, c.transcript, c.waits)
@@ -217,5 +213,58 @@ func TestReopenArgs(t *testing.T) {
 		if got := reopenArgs(strings.Fields(cmd)); got != want {
 			t.Errorf("reopenArgs(%q) = %v, want %v", cmd, got, want)
 		}
+	}
+}
+
+// The harness stub ends every turn without a report or background wait.
+// Three continuations are allowed; the following end frees the slot and item
+// immediately, independently of the stale timeout.
+func TestUnfinishedTurnExhaustsThreeContinuations(t *testing.T) {
+	a, resumes := waitApp(t, "{}\n", "")
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		ag := st.Agents[0]
+		st.StartDelivery(ag.Task, ag.Name, "", a.now)
+		st.Records = append(st.Records, state.Record{Session: ag.Party, Issue: ag.Task, At: a.now})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		reopen(t, a)
+	}
+	if len(*resumes) != 3 {
+		t.Fatalf("resumes = %d", len(*resumes))
+	}
+	for _, msg := range *resumes {
+		if !strings.Contains(msg, "giantswarm/beekeeper#299") || !strings.Contains(msg, taskEndings) {
+			t.Fatalf("missing task or endings: %s", msg)
+		}
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Deliveries[0].Step != state.DeliveryStalled || st.Records[0].Ended.IsZero() {
+		t.Fatalf("delivery or record still held: %+v", st.Deliveries)
+	}
+	if _, gone := goneAgent(nil, st, nil, st.Agents[0], 0, a.now); !gone {
+		t.Fatal("exhausted worker still occupies a slot")
+	}
+	if c := countAgents(st, nil, a.now, nil); len(c.Gone) != 1 {
+		t.Fatalf("capacity: %+v", c)
+	}
+}
+
+func TestExplicitParkDoesNotContinue(t *testing.T) {
+	a, resumes := waitApp(t, "{}\n", "")
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{On: "o/r#1", Waits: "CI"}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopen(t, a)
+	if len(*resumes) != 0 {
+		t.Fatal("parked worker resumed")
 	}
 }
