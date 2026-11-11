@@ -239,8 +239,14 @@ func observedGraphQL(previous state.Budget, current *state.GraphQL, now time.Tim
 		key := g.Login + "@" + g.Reset.UTC().Format(time.RFC3339Nano)
 		observed := *g
 		observed.BlockedBy = nil
+		// The lower count stands, but a reading of the same window is fresh
+		// evidence of it: keeping the old time held the loop on a stale
+		// reading until the window reset (#3724).
 		if old, ok := windows[key]; ok && old.Remaining < g.Remaining {
-			observed.Remaining, observed.At = old.Remaining, old.At
+			observed.Remaining = old.Remaining
+			if old.At.After(observed.At) {
+				observed.At = old.At
+			}
 		}
 		windows[key] = observed
 	}

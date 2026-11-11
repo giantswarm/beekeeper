@@ -589,6 +589,51 @@ func TestPublicationGitFailureNamesOnlyKnownStages(t *testing.T) {
 	}
 }
 
+// A fetch out of time names what it received; other stages say nothing more.
+func TestPublicationGitFetchOutOfTimeNamesReceivedBytes(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repository.git")
+	if _, err := runPublicationGit(t.Context(), filepath.Dir(repo), nil, "init", "--bare", "--quiet", repo); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := runPublicationGit(ctx, repo, nil, "fetch", "--no-tags", "--", t.TempDir(), "refs/heads/main")
+	if err == nil || err.Error() != "publication Git fetch failed: the publication attempt ran out of time after receiving 0 bytes" {
+		t.Fatal(err)
+	}
+	_, err = runPublicationGit(ctx, repo, nil, "rev-parse", "HEAD")
+	if err == nil || err.Error() != "publication Git rev-parse failed: the publication attempt ran out of time" {
+		t.Fatal(err)
+	}
+}
+
+// The default branch a publication fetched stays in the repository's cache,
+// and the next transfer borrows its objects instead of fetching them again.
+func TestExecutionPublicationKeepsTheBaseInTheRepositoryCache(t *testing.T) {
+	rig := newPublicationRig(t)
+	p := rig.publication(t, rig.commit(t, "change.txt", "one\n"))
+	var result executionPublicationResult
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	owner, name, _ := strings.Cut(rig.request.Repository, "/")
+	cache := filepath.Join(rig.a.cfg.StateDir, "execution-publications", "cache", owner, name+".git")
+	if got, err := publishGit(t.Context(), cache, "rev-parse", "refs/heads/main"); err != nil || got != rig.base {
+		t.Fatalf("cached default branch = %q, %v, want %s", got, err, rig.base)
+	}
+	repo := filepath.Join(t.TempDir(), "repository.git")
+	if _, err := publishGit(t.Context(), filepath.Dir(repo), "init", "--bare", "--quiet", repo); err != nil {
+		t.Fatal(err)
+	}
+	borrowPublicationCache(repo, rig.a.publicationCache(t.Context(), rig.request.Repository))
+	if _, err := publishGit(t.Context(), repo, "cat-file", "-e", rig.base+"^{commit}"); err != nil {
+		t.Fatal("a transfer does not borrow the cached history:", err)
+	}
+	if rig.a.publicationCache(t.Context(), "../escape") != "" || rig.a.publicationCache(t.Context(), "owner/../escape") != "" {
+		t.Fatal("a repository name outside owner/name got a cache")
+	}
+}
+
 // syncBase runs the --sync-base round trip: it downloads the bundle of the
 // default branch through the coordinator and merges it into the workspace.
 func (rig *publicationRig) syncBase(t *testing.T) string {

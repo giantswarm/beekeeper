@@ -416,7 +416,7 @@ func TestParkReferenceRESTFallback(t *testing.T) {
 			w := parkingWatch(t, nil)
 			readParkRefREST = originalREST
 			github.RunGH = func(ctx context.Context, args ...string) ([]byte, error) {
-				if github.Repo(ctx) != "o/r" || strings.Join(args, " ") != "api repos/o/r/issues/1" {
+				if github.Repo(ctx) != repo || strings.Join(args, " ") != "api repos/o/r/issues/1" {
 					t.Fatalf("identity %q args %v", github.Repo(ctx), args)
 				}
 				return []byte(`{"state":"open","pull_request":{"merged_at":null}}`), nil

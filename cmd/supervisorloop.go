@@ -1021,6 +1021,10 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			panic(crash)
 		}
 	}()
+	// The stop signal bounds the exit, however the pass is stuck.
+	shutdownDone := make(chan struct{})
+	defer close(shutdownDone)
+	go boundLoopShutdown(ctx, shutdownDone, a.store, a.out)
 	// Observers read a PID marker instead of briefly contending for this lock.
 	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		return err
@@ -1666,6 +1670,16 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
+	// An unknown or stale reading is resolved by a reading of the loop's
+	// own: the watch may sample too rarely or not at all, and a hold that
+	// waits on a pass it ends early never recovers (#3724).
+	if !l.dryRun && a.cfg.GitHub.Floor > 0 && loopReadingStale(st.Budget, a.timeNow()) {
+		if err := refreshLoopBudget(a, ctx); err == nil {
+			if fresh, err := readState(); err == nil {
+				st = fresh
+			}
+		}
+	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
@@ -1974,6 +1988,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	})
 	sortTrackedPulls(in, tracked)
 	l.pullWatcher().set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
+	l.pullWatcher().setBots(in.Desk.Bots, in.Desk, l.teams, l.teams != nil)
 	if l.once && l.a.loopNow != nil && !l.dryRun || l.dryRun && l.pullWatcher().needsPoll(tracked, in.Now) {
 		pollOncePullWatcher(ctx, l)
 	}
