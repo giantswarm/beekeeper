@@ -36,8 +36,12 @@ workspace volume bound. The scheduler reserves this capacity; Go scratch files
 use the workspace volume rather than the container's default `/tmp`.
 
 Supervisor merge validation also uses this runner when enabled, including
-`golangci-lint run` in the Go image. That image must supply the repository's lint
-toolchain as well as Go. Unlike ordinary worker commands, merge validation never
+`golangci-lint run` in the Go image. An image's own `golangci-lint` runs as is;
+an image without one gets the version CI pins (`GolangCILintModule` in
+`internal/remotebuild`) installed with `go install` into `/work/tools` of the
+builder, so the image needs Go and network access to the module proxy. A failed
+install exits 125, a checker environment finding rather than lint findings.
+Unlike ordinary worker commands, merge validation never
 falls back locally: an unavailable builder is a checker environment finding.
 Each validation attempt owns an isolated worktree and retires its builder when
 finished. One environment failure triggers one clean retry; actual code failures

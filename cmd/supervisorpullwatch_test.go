@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -457,5 +458,109 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 	var disk loopPullSnapshot
 	if ok, err := r.a.store.ReadFile(loopPullWatchFile, &disk); !ok || err != nil || len(disk.Pulls) != 0 {
 		t.Fatalf("dryRun mutated saved snapshot on disk: ok=%v err=%v pulls=%d", ok, err, len(disk.Pulls))
+	}
+}
+
+// The listing finds the bots' pull requests beside the desk's own, as
+// GitHub's search names an app, and keeps only those in repositories the
+// desk owns: until the team files are read, only the review list's.
+func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
+	const (
+		botTeam  = "team-a"
+		botName  = "renovate[bot]"
+		botTool  = "o/tool"
+		botOther = "o/other"
+		botPull  = "o/x-configs#4"
+		botLogin = "app/renovate"
+		badLogin = "app/renovat"
+	)
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, batch := readOpenPulls, readLoopPullBatch
+	t.Cleanup(func() { readOpenPulls, readLoopPullBatch = listed, batch })
+	var searched []string
+	var botFails bool
+	readOpenPulls = func(_ context.Context, authors func() ([]string, error), orgs []string) ([]string, error) {
+		logins, err := authors()
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Equal(orgs, []string{"o"}) {
+			t.Errorf("orgs = %v", orgs)
+		}
+		searched = append(searched, logins...)
+		if botFails && slices.Equal(logins, []string{badLogin}) {
+			return nil, errors.New("the listed users cannot be searched")
+		}
+		if slices.Equal(logins, []string{botLogin}) {
+			return []string{idleRef, "o/other#3", botPull, "o/tool#6"}, nil
+		}
+		return []string{reserveIssue}, nil
+	}
+	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
+		return map[string]watchedLoopPull{}, nil
+	}
+	w := l.pullWatcher()
+	w.set(nil, []string{"me"}, []string{"o"}, 0, []string{botTool})
+	desk := superloop.Desk{Orgs: []string{"o"}, Team: botTeam, Review: []string{"o/*-configs"}, Never: []string{botTool}}
+	w.setBots([]string{botName}, desk, nil, false)
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(searched, []string{"me", botLogin}) {
+		t.Errorf("searched %v", searched)
+	}
+	if got, want := w.view().Open, []string{reserveIssue, botPull}; !slices.Equal(got, want) {
+		t.Errorf("teams unread: open = %v, want %v", got, want)
+	}
+	// Once read, the team files admit the team's own repositories: the
+	// listing runs again at once.
+	w.setBots([]string{botName}, desk, map[string]string{repo: botTeam, botOther: "team-b", botTool: botTeam}, true)
+	if !w.view().ListedAt.IsZero() {
+		t.Fatal("team files read without a new listing")
+	}
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := w.view().Open, []string{reserveIssue, idleRef, botPull}; !slices.Equal(got, want) {
+		t.Errorf("teams read: open = %v, want %v", got, want)
+	}
+	if w.view().Incomplete {
+		t.Error("a short bot listing marked the desk's incomplete")
+	}
+	// One bot's failed search (a login GitHub's search refuses) leaves the
+	// desk's own listing and the other bots' whole, and is said once.
+	botFails = true
+	searched = nil
+	w.setBots([]string{"renovat", botName}, desk, map[string]string{repo: botTeam}, true)
+	for range 2 {
+		if _, err := w.poll(t.Context(), l); err != nil {
+			t.Fatal(err)
+		}
+		if v := w.view(); v.ListedAt.IsZero() || v.Incomplete || !slices.Equal(v.Open, []string{reserveIssue, idleRef, botPull}) {
+			t.Errorf("a bot's search failed: listed %v, incomplete %v, open %v", v.ListedAt, v.Incomplete, v.Open)
+		}
+		w.mu.Lock()
+		w.snapshot.ListedAt = time.Time{}
+		w.mu.Unlock()
+	}
+	if !slices.Equal(searched, []string{"me", badLogin, botLogin, "me", badLogin, botLogin}) {
+		t.Errorf("a bot's search failed: searched %v", searched)
+	}
+	if n := strings.Count(r.out.String(), "cannot list the pull requests of app/renovat "); n != 1 {
+		t.Errorf("a bot's failed search said %d times, want once:\n%s", n, r.out.String())
+	}
+	botFails = false
+	// No bots: one search, the desk's.
+	searched = nil
+	w.setBots(nil, desk, nil, true)
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(searched, []string{"me"}) || !slices.Equal(w.view().Open, []string{reserveIssue}) {
+		t.Errorf("without bots: searched %v, open %v", searched, w.view().Open)
 	}
 }

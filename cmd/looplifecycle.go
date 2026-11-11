@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -26,6 +27,61 @@ const (
 )
 
 const loopPhaseStartupHistory = "read loop startup history"
+
+// loopFailureAbandoned is the lifecycle failure of a loop that exited at its
+// shutdown deadline with a pass still running.
+const loopFailureAbandoned = "pass abandoned at shutdown deadline"
+
+// A SIGTERM cancels the pass, but work that does not watch its context (a
+// state lock wait of minutes, a slow read) would hold the exit past the
+// service manager's stop timeout and end in SIGKILL. After loopShutdownGrace
+// the loop abandons that work: it quiesces its state writes, waiting at most
+// loopShutdownLockWait for the state lock and a few seconds for a commit, and
+// exits. Grace plus waits stay well under systemd's default 90 s.
+var (
+	loopShutdownGrace    = 10 * time.Second
+	loopShutdownLockWait = 2 * time.Second
+	loopShutdownExit     = os.Exit
+)
+
+// boundLoopShutdown exits the process loopShutdownGrace after ctx ends unless
+// done closes first, the loop having returned. It writes the lifecycle,
+// PID and version records the loop's own deferred cleanup would have written,
+// reading the lifecycle from its file, never from the running loop's memory.
+// A store that cannot quiesce its writes is exited without: an unfinished
+// write is recovered by the next reader, as after a SIGKILL, only sooner.
+func boundLoopShutdown(ctx context.Context, done <-chan struct{}, store state.Store, out io.Writer) {
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	t := time.NewTimer(loopShutdownGrace)
+	defer t.Stop()
+	select {
+	case <-done:
+		return
+	case <-t.C:
+	}
+	if q, ok := store.(interface {
+		Quiesce(time.Duration) (func(), error)
+	}); ok {
+		// Not released before the exit: no write of the abandoned pass may
+		// start in between. A replaced exit (tests) releases it on return.
+		if release, err := q.Quiesce(loopShutdownLockWait); err == nil {
+			defer release()
+		}
+	}
+	var life loopLifecycle
+	if found, err := store.ReadFile(loopLifecycleFile, &life); err == nil && found {
+		life.At, life.Exited, life.Code, life.Failure = time.Now().UTC(), true, 0, loopFailureAbandoned
+		_ = store.WriteFile(loopLifecycleFile, life)
+	}
+	_ = store.WriteFile(loopPIDFile, 0)
+	_ = store.WriteFile(loopVersionFile, loopVersionRecord{})
+	_, _ = fmt.Fprintf(out, "SUPERVISOR LOOP stopped: its pass still ran %s after the stop signal; abandoned it\n", loopShutdownGrace)
+	loopShutdownExit(0)
+}
 
 // Phase transitions are bounded progress evidence. Only the loop holding
 // the exclusive loop lock writes it; failed contenders cannot overwrite it.

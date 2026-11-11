@@ -1,0 +1,39 @@
+# Batch CI opt-in for `devctl gen workflows|precommit|circleci`, kept by align-files.
+# See https://github.com/giantswarm/devctl/blob/main/docs/ci-batch.md and
+# https://github.com/giantswarm/beekeeper/issues/3300.
+#
+# Stage: prepare. Full PR CI and the ruleset's individual required checks stay;
+# expensive workflows also run on merge_group and `batch-ci` waits for every
+# result below on the exact queue SHA. Switch to `mode: batch` only after real
+# queue-SHA proof and an enforced merge queue requiring the app-bound `batch-ci`.
+#
+# results: every required check of the main ruleset except the PR title check,
+# with its observed producer (Actions app 15368; CircleCI status creator 127350680).
+mode: prepare
+baseBranch: main
+gateAppID: 15368
+results:
+  - name: pre-commit
+    appID: 15368
+    workflow: .github/workflows/zz_generated.pre-commit.yaml
+  - name: check-values-schema / validate
+    appID: 15368
+    workflow: .github/workflows/zz_generated.check_values_schema.yaml
+  - name: "ci/circleci: pin-version"
+    creatorID: 127350680
+  - name: "ci/circleci: go-build"
+    creatorID: 127350680
+  - name: "ci/circleci: test-envtest"
+    creatorID: 127350680
+  - name: "ci/circleci: test-stable-version"
+    creatorID: 127350680
+  - name: "ci/circleci: test-loop-workflow"
+    creatorID: 127350680
+  - name: "ci/circleci: test-large-history"
+    creatorID: 127350680
+  - name: "ci/circleci: build-chart"
+    creatorID: 127350680
+  - name: "ci/circleci: build-image"
+    creatorID: 127350680
+  - name: "ci/circleci: chart-test"
+    creatorID: 127350680
