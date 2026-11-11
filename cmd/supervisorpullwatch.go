@@ -27,6 +27,7 @@ const (
 const (
 	pullWatchKey     = "pull watcher"
 	pullContexts     = "contexts"
+	pullSuites       = "checkSuites"
 	pullNodes        = "nodes"
 	pullPageInfo     = "pageInfo"
 	pullHasNext      = "hasNextPage"
@@ -344,7 +345,9 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 
 // Light fields change independently of updatedAt (notably CI and mergeability).
 const loopPullLightFields = `state url headRefOid baseRefName headRefName updatedAt isDraft mergeable mergeStateStatus reviewDecision mergeCommit { oid }
- commits(last:1) { nodes { commit { statusCheckRollup { state contexts(first:100) { pageInfo { hasNextPage endCursor } nodes {
+ commits(last:1) { nodes { commit {
+ checkSuites(first:100) { pageInfo { hasNextPage endCursor } nodes { status conclusion workflowRun { databaseId runAttempt url workflow { databaseId name } } } }
+ statusCheckRollup { state contexts(first:100) { pageInfo { hasNextPage endCursor } nodes {
  __typename ... on CheckRun { name status conclusion detailsUrl startedAt checkSuite { workflowRun { workflow { name } } } }
  ... on StatusContext { context state targetUrl }
  } } } } } }`
@@ -478,12 +481,14 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 		fields[name] = connection.Nodes
 	}
 	var checks []loopCheck
+	var suites *loopWatchedSuites
 	pending := true
 	switch {
 	case len(fields["commits"]) > 0 && fields["commits"][0] == '{':
 		var commits struct {
 			Nodes []struct {
 				Commit struct {
+					Suites *loopWatchedSuites `json:"checkSuites"`
 					Rollup *struct {
 						State    string
 						Contexts struct {
@@ -502,6 +507,10 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 		if err := json.Unmarshal(fields["commits"], &commits); err != nil {
 			return superloop.Pull{}, false, err
 		}
+		if len(commits.Nodes) != 1 || commits.Nodes[0].Commit.Suites == nil {
+			return superloop.Pull{}, false, errors.New("workflow suites missing; observation unknown")
+		}
+		suites = commits.Nodes[0].Commit.Suites
 		if len(commits.Nodes) > 0 && commits.Nodes[0].Commit.Rollup != nil {
 			rollup := commits.Nodes[0].Commit.Rollup
 			if rollup.Contexts.PageInfo.HasNextPage {
@@ -529,7 +538,52 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 		return superloop.Pull{}, false, err
 	}
 	p, err := parseLoopPull(ref, normalized)
+	if err == nil && p.State == superloop.Open && suites != nil {
+		err = suites.apply(&p, checks)
+		pending = pending || !p.Green && len(p.Red) == 0
+	}
 	return p, pending, err
+}
+
+// Check suites expose workflows which never created a job. Read them in the
+// same batch as the rollup, on every poll (CI does not change PR updatedAt).
+type loopWatchedSuites struct {
+	PageInfo struct{ HasNextPage bool }
+	Nodes    []struct {
+		Status, Conclusion string
+		WorkflowRun        *struct {
+			DatabaseID uint64
+			RunAttempt int
+			URL        string
+			Workflow   struct {
+				DatabaseID uint64
+				Name       string
+			}
+		}
+	}
+}
+
+func (s *loopWatchedSuites) apply(p *superloop.Pull, checks []loopCheck) error {
+	if s.PageInfo.HasNextPage || s.Nodes == nil {
+		return errors.New("workflow suites incomplete; observation unknown")
+	}
+	runs := make([]loopWorkflowRun, 0, len(s.Nodes))
+	for _, suite := range s.Nodes {
+		run := suite.WorkflowRun
+		if run == nil {
+			continue // External checks are already represented by the rollup.
+		}
+		runs = append(runs, loopWorkflowRun{
+			ID: run.DatabaseID, WorkflowID: run.Workflow.DatabaseID,
+			Attempt: run.RunAttempt, Head: p.Head, Name: run.Workflow.Name,
+			URL: run.URL, Status: suite.Status, Conclusion: suite.Conclusion,
+		})
+	}
+	raw, err := json.Marshal(map[string]any{"workflow_runs": runs})
+	if err != nil {
+		return err
+	}
+	return applyLoopWorkflowRuns(p, raw, checks)
 }
 
 // Discovery shares the watcher's timer; a slow listing cannot stall a pass.
@@ -609,7 +663,7 @@ func expandLoopPullConnections(ctx context.Context, ref string, raw []byte, deta
 	if err := json.Unmarshal(raw, &full); err != nil {
 		return nil, err
 	}
-	names := []string{pullContexts}
+	names := []string{pullContexts, pullSuites}
 	if details {
 		names = append(names, "files", "reviews", "closingIssuesReferences")
 	}
@@ -669,7 +723,7 @@ func expandLoopPullConnections(ctx context.Context, ref string, raw []byte, deta
 }
 
 func pullConnection(p map[string]any, name string) map[string]any {
-	if name != pullContexts {
+	if name != pullContexts && name != pullSuites {
 		c, _ := p[name].(map[string]any)
 		return c
 	}
@@ -680,6 +734,10 @@ func pullConnection(p map[string]any, name string) map[string]any {
 	}
 	node, _ := nodes[0].(map[string]any)
 	commit, _ := node["commit"].(map[string]any)
+	if name == pullSuites {
+		suites, _ := commit[pullSuites].(map[string]any)
+		return suites
+	}
 	rollup, _ := commit["statusCheckRollup"].(map[string]any)
 	contexts, _ := rollup[pullContexts].(map[string]any)
 	return contexts

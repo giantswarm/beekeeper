@@ -59,7 +59,7 @@ func pullGraphQLFixture(t *testing.T, query, status, head, updated string) map[s
  "author":{"login":"desk"},"title":"fix: observed","body":"kept detail","changedFiles":1,
  "files":{"nodes":[{"path":"main.go"}]},"closingIssuesReferences":{"nodes":[]},
  "reviews":{"nodes":[{"id":"R1","author":{"login":"desk"},"state":"APPROVED","commit":{"oid":"%s"}}]},
- "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"%s","contexts":{"nodes":[
+ "commits":{"nodes":[{"commit":{"checkSuites":{"nodes":[]},"statusCheckRollup":{"state":"%s","contexts":{"nodes":[
  {"__typename":"StatusContext","context":"CI","state":"%s","targetUrl":"https://example.test/ci"}
  ]}}}}]}}`, loopURL, head, updated, head, status, status)
 	var p map[string]any
