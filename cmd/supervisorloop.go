@@ -1666,6 +1666,16 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
+	// An unknown or stale reading is resolved by a reading of the loop's
+	// own: the watch may sample too rarely or not at all, and a hold that
+	// waits on a pass it ends early never recovers (#3724).
+	if !l.dryRun && a.cfg.GitHub.Floor > 0 && loopReadingStale(st.Budget, a.timeNow()) {
+		if err := refreshLoopBudget(a, ctx); err == nil {
+			if fresh, err := readState(); err == nil {
+				st = fresh
+			}
+		}
+	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {

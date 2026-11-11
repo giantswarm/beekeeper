@@ -165,7 +165,17 @@ func TestLoopRESTAllowancePersistsAndLeavesFloor(t *testing.T) {
 	if _, err := r.a.store.ReadFile(loopRESTFile, &spend); err != nil || spend.Spent != 0 {
 		t.Fatalf("conditional response not refunded: %+v %v", spend, err)
 	}
+	// Above loopRESTLimit while the window has room: with 4000 remaining
+	// over the floor 2500, the loop holds once its spend passes 1400, half of
+	// the window above the floor besides the others' spend.
 	spend.Spent = loopRESTLimit
+	if err := r.a.store.WriteFile(loopRESTFile, spend); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.a.reserveLoopREST(b, "sweep"); err != nil || got.Spent != loopRESTLimit+loopRESTReserve {
+		t.Fatalf("allowance capped while the window has room: %+v %v", got, err)
+	}
+	spend.Spent = 1450
 	if err := r.a.store.WriteFile(loopRESTFile, spend); err != nil {
 		t.Fatal(err)
 	}
@@ -254,15 +264,25 @@ func TestLoopScanAllowanceSurvivesDisabledFloor(t *testing.T) {
 				return github.Budget{Remaining: remaining, Reset: reset}, nil
 			}
 			runs := 0
-			for range loopRESTLimit / loopRESTReserve {
-				if err := r.a.loopGitHub(context.Background(), "inventory", func() error {
+			for runs <= remaining/loopRESTReserve {
+				err := r.a.loopGitHub(context.Background(), "inventory", func() error {
 					runs++
 					remaining -= loopRESTReserve
 					return nil
-				}); err != nil {
+				})
+				if errors.Is(err, errLoopLater) {
+					break
+				}
+				if err != nil {
 					t.Fatal(err)
 				}
 			}
+			// The loop's share is half the window, above loopRESTLimit while
+			// nothing else spends (#3724), and no more (#3465).
+			if spent := runs * loopRESTReserve; spent != 2450 {
+				t.Fatalf("loop scans spent %d of the window's 4900, want 2450", spent)
+			}
+			scans := runs
 			// A restarted caller and a different scan type share the ledger.
 			restarted := *r.a
 			if err := restarted.loopGitHub(context.Background(), loopSweepStep, func() error {
@@ -274,7 +294,7 @@ func TestLoopScanAllowanceSurvivesDisabledFloor(t *testing.T) {
 			if err := restarted.loopGitHub(context.Background(), loopPullStep, func() error {
 				runs++
 				return nil
-			}); err != nil || runs != loopRESTLimit/loopRESTReserve+1 {
+			}); err != nil || runs != scans+1 {
 				t.Fatalf("emergency tracked read blocked: runs=%d err=%v", runs, err)
 			}
 		})
@@ -312,13 +332,13 @@ func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *t
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = -1
 	reset := r.a.timeNow().Add(time.Hour)
-	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: reset, Spent: loopRESTLimit, Remaining: 3800}); err != nil {
+	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: reset, Spent: 2500, Remaining: 2300}); err != nil {
 		t.Fatal(err)
 	}
 	probes := 0
 	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
 		probes++
-		return github.Budget{Remaining: 3800, Reset: reset}, nil
+		return github.Budget{Remaining: 2300, Reset: reset}, nil
 	}
 	if err := r.a.loopScanREST(context.Background(), "inventory", func() error {
 		t.Fatal("exhausted loopScanREST ran")
@@ -365,5 +385,22 @@ func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *t
 	restarted.loadCache()
 	if restarted.login != cacheLogin || restarted.teams[cacheTeam] != cacheLogin || restarted.defaultBranches[repo] != mainBranch || restarted.unmerged[repo].etag != cacheETag || restarted.unmergedCursor != repo {
 		t.Fatalf("restarted loop lost persisted cache: login=%q teams=%v branches=%v unmerged=%+v", restarted.login, restarted.teams, restarted.defaultBranches, restarted.unmerged)
+	}
+}
+
+// The loop's own allowance holds no scan while the window has room: 991
+// spent with 4523 remaining under a disabled floor (#3724).
+func TestLoopRESTAllowanceFollowsWhatRemains(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = -1
+	reset := r.a.timeNow().Add(30 * time.Minute)
+	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: reset, Spent: 991, Remaining: 4523}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.loopRESTHeld(r.a.timeNow()); err != nil {
+		t.Fatalf("held with room in the window: %v", err)
+	}
+	if _, err := r.a.reserveLoopREST(github.Budget{Remaining: 4523, Reset: reset}, "inventory"); err != nil {
+		t.Fatalf("reservation refused with room in the window: %v", err)
 	}
 }

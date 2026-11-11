@@ -14,6 +14,9 @@ import (
 // Background observations have their own allowance. Merges, starts and
 // workers retain the shared floor and the rest of the hourly core budget.
 const loopRESTFile = "loop-rest.json"
+
+// loopRESTLimit is the least allowance of a window; allowance raises it
+// with what the window leaves.
 const loopRESTLimit = 1000
 const loopRESTReserve = 50
 
@@ -60,18 +63,32 @@ type loopRESTSpend struct {
 	Steps     map[string]int `json:"steps,omitempty"`
 }
 
+// allowance is the loop's share of the window: half of what the window
+// holds above the floor besides the others' spend, never under
+// loopRESTLimit. It follows what remains, so the loop's own cap never holds
+// starts while the budget has room (#3724), and the other half stays for
+// starts, merges and workers (#3465).
+func (s loopRESTSpend) allowance(floor int) int {
+	return max(loopRESTLimit, (s.Remaining+s.Spent-max(0, floor))/2)
+}
+
+// held: the next reservation would pass the allowance.
+func (s loopRESTSpend) held(floor int) bool {
+	return s.Spent+loopRESTReserve > s.allowance(floor)
+}
+
 func (a *app) loopRESTHeld(now time.Time) error {
 	var spend loopRESTSpend
 	if _, err := a.store.ReadFile(loopRESTFile, &spend); err != nil {
 		return err
 	}
-	if spend.Reset.IsZero() || !now.Before(spend.Reset) || spend.Spent+loopRESTReserve <= loopRESTLimit {
+	if spend.Reset.IsZero() || !now.Before(spend.Reset) || !spend.held(a.cfg.GitHub.Floor) {
 		return nil
 	}
 	if st, err := a.store.Read(); err == nil && st.Budget != nil && !st.Budget.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, st.Budget.Reset) {
 		return nil
 	}
-	return fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, loopRESTLimit, spend.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
+	return fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, spend.allowance(a.cfg.GitHub.Floor), spend.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
 }
 
 // Called under loop-graphql.lock, so parallel loop actions share one ledger.
@@ -91,8 +108,8 @@ func (a *app) reserveLoopREST(b github.Budget, step string) (loopRESTSpend, erro
 		spend.Steps = map[string]int{}
 	}
 	spend.Remaining = b.Remaining
-	if spend.Spent+loopRESTReserve > loopRESTLimit || b.Remaining < max(0, a.cfg.GitHub.Floor)+loopRESTReserve {
-		return spend, fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, loopRESTLimit, b.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
+	if spend.held(a.cfg.GitHub.Floor) || b.Remaining < max(0, a.cfg.GitHub.Floor)+loopRESTReserve {
+		return spend, fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, spend.allowance(a.cfg.GitHub.Floor), b.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
 	}
 	spend.Spent += loopRESTReserve
 	spend.Steps[step] += loopRESTReserve
