@@ -673,25 +673,8 @@ func (a *app) findStrandedPublication(ctx context.Context, r *state.ExecutionRec
 	if r.Published == nil {
 		return executionPublication{}, false
 	}
-	transferDir := filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(r.Handle.Ref.Execution), fmt.Sprint(r.Handle.Ref.Generation))
-	entries, err := os.ReadDir(transferDir)
-	if err != nil {
-		return executionPublication{}, false
-	}
-	var newestName string
-	var newestTime time.Time
-	for _, entry := range entries {
-		if entry.IsDir() || len(entry.Name()) != 64 {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		if newestName == "" || info.ModTime().After(newestTime) {
-			newestName, newestTime = entry.Name(), info.ModTime()
-		}
-	}
+	transferDir := a.publicationTransferDir(r.Handle.Ref)
+	newestName := newestPublicationTransfer(transferDir)
 	if newestName == "" {
 		return executionPublication{}, false
 	}
@@ -720,17 +703,39 @@ func (a *app) hasUnrecoveredPublication(r *state.ExecutionRecord) bool {
 	if r.Published == nil {
 		return false
 	}
-	transferDir := filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(r.Handle.Ref.Execution), fmt.Sprint(r.Handle.Ref.Generation))
-	entries, err := os.ReadDir(transferDir)
+	// Each publication leaves its transfer; a later one supersedes the
+	// earlier, so only the newest can still hold a stranded publication.
+	newest := newestPublicationTransfer(a.publicationTransferDir(r.Handle.Ref))
+	return newest != "" && "sha256:"+newest != r.RecoveredTransfer
+}
+
+func (a *app) publicationTransferDir(ref execution.Ref) string {
+	return filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(ref.Execution), fmt.Sprint(ref.Generation))
+}
+
+// newestPublicationTransfer names the most recently written publication
+// bundle in dir, "" when it holds none. Stranded-publication recovery,
+// its recovered mark and the retirement gate all judge this one transfer.
+func newestPublicationTransfer(dir string) string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return ""
 	}
+	var newestName string
+	var newestTime time.Time
 	for _, entry := range entries {
-		if !entry.IsDir() && len(entry.Name()) == 64 && "sha256:"+entry.Name() != r.RecoveredTransfer {
-			return true
+		if entry.IsDir() || len(entry.Name()) != 64 {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if newestName == "" || info.ModTime().After(newestTime) {
+			newestName, newestTime = entry.Name(), info.ModTime()
 		}
 	}
-	return false
+	return newestName
 }
 
 func (a *app) recoverExecutionPublication(ctx context.Context, ref execution.Ref, auto bool) (executionPublicationResult, bool, error) {
@@ -748,13 +753,8 @@ func (a *app) recoverExecutionPublication(ctx context.Context, ref execution.Ref
 				r.PendingPublication = nil
 			}
 			if r.Published != nil {
-				transferDir := filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(ref.Execution), fmt.Sprint(ref.Generation))
-				if entries, readErr := os.ReadDir(transferDir); readErr == nil {
-					for _, e := range entries {
-						if !e.IsDir() && len(e.Name()) == 64 {
-							r.RecoveredTransfer = "sha256:" + e.Name()
-						}
-					}
+				if newest := newestPublicationTransfer(a.publicationTransferDir(ref)); newest != "" {
+					r.RecoveredTransfer = "sha256:" + newest
 				}
 			}
 			return nil, nil
