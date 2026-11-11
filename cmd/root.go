@@ -226,6 +226,7 @@ with central configured), 125 a newer release (self-update --check).`,
 			if err := a.load(); err != nil {
 				return err
 			}
+			cmd.SetContext(a.backgroundRESTContext(cmd.Context()))
 			if err := a.checkExecutionCommand(cmd); err != nil {
 				return err
 			}
