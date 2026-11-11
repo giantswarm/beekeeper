@@ -62,7 +62,12 @@ func (a *app) preparePendingExecution(ctx context.Context, client execution.Tran
 		if !existing {
 			var data []byte
 			var err error
-			r, data, err = a.prepareExecutionSource(ctx, r)
+			var basis execution.SourceBasis
+			if reader, ok := client.(execution.SourceBasisReader); ok && r.SourceDigest == "" {
+				// An older host answers no basis: it receives the whole history.
+				basis, _ = reader.SourceBasis(ctx, ref, r.Repository)
+			}
+			r, data, err = a.prepareExecutionSource(ctx, r, basis.Commits)
 			if err != nil {
 				return r, sentAt, err
 			}

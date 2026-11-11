@@ -351,7 +351,10 @@ type Capabilities struct {
 	// PolicyBundle compares the coordinator's current bundle with what the host
 	// holds. hosts check fills it; the host's own check leaves it empty.
 	PolicyBundle *BundleReport `json:"policyBundle,omitempty"`
-	CIWait       bool          `json:"ciWait"`
+	// Sources compares each mapped host source with its default branch.
+	// hosts check fills it; the host's own check leaves it empty.
+	Sources []SourceReport `json:"sources,omitempty"`
+	CIWait  bool           `json:"ciWait"`
 	// SourcePreparation promises source-chunk upload and typed not-found
 	// responses when inspecting an execution whose journal does not exist.
 	SourcePreparation bool `json:"sourcePreparation"`

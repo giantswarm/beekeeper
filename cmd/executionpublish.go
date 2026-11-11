@@ -143,12 +143,13 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 
 // publicationGitStages are the Git subcommands publication runs; any other
 // argument is never echoed back as a stage.
-var publicationGitStages = []string{"init", "fetch", "push", gitBundle, "cat-file", "rev-parse", "rev-list", "merge-base", "log", gitMerge, "diff", "update-ref"}
+var publicationGitStages = []string{"init", "fetch", "push", gitBundle, "cat-file", "rev-parse", gitRevList, "merge-base", "log", gitMerge, "diff", "update-ref"}
 
 const (
-	gitBundle = "bundle"
-	gitMerge  = "merge"
-	gitVerify = "verify"
+	gitBundle  = "bundle"
+	gitRevList = "rev-list"
+	gitMerge   = "merge"
+	gitVerify  = "verify"
 )
 
 // publicationGitReasons map a known Git or GitHub rejection to a fixed
@@ -779,13 +780,16 @@ func (a *app) recoverExecutionPublication(ctx context.Context, ref execution.Ref
 	return result, found, publishErr
 }
 
+// errSourceBundleLimit is a refusal: a bundle over the transfer limit.
+var errSourceBundleLimit = refused("commit bundle exceeds the publication transfer limit (64 MiB)")
+
 func readPublicationBundle(path string) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if info.Size() > publishBundleLimit {
-		return nil, refused("commit bundle exceeds the publication transfer limit (64 MiB)")
+		return nil, errSourceBundleLimit
 	}
 	return os.ReadFile(filepath.Clean(path))
 }
@@ -809,7 +813,7 @@ func tryUnshallowWorkspace(ctx context.Context, workspace string, revs ...string
 	if err := os.Remove(shallowPath); err != nil {
 		return
 	}
-	args := append([]string{"rev-list", "--objects"}, revs...)
+	args := append([]string{gitRevList, "--objects"}, revs...)
 	if _, err := publishGit(ctx, workspace, args...); err != nil {
 		_ = os.WriteFile(shallowPath, raw, 0o600) //nolint:gosec // shallow file inside the validated execution workspace git common dir
 	}
