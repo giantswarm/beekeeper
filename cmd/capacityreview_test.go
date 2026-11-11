@@ -127,7 +127,8 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Provider windows and pace remain binding, including explicit starts.
+	// Provider window stops remain binding for reviews, including explicit starts,
+	// while the 7-day pace check and paceCaps hold workers only.
 	r.claude[0], r.codex[0] = 91, 91
 	a, _ = r.app(false)
 	a.cfgPath = ""
@@ -139,12 +140,29 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 		t.Fatal("explicit start bypassed window stop")
 	}
 	r.claude[0], r.codex[0] = 10, 10
-	r.claude[1], r.codex[1] = 51, 51
+	r.claude[1], r.codex[1] = 95, 95
 	a, _ = r.app(false)
 	a.cfgPath = ""
 	v, err = a.startCapacityWithOptions(context.Background(), false, nil, forReview)
 	if err != nil || v.Room != 0 {
-		t.Fatalf("pace admission: %+v, %v", v, err)
+		t.Fatalf("7d window stop admission: %+v, %v", v, err)
+	}
+	r.reset7d = r.t0.Add(167 * time.Hour)
+	r.claude[1], r.codex[1] = 1, 1
+	claudeProv := r.cfg.Capacity.Providers[claudeComm]
+	claudeProv.PaceCaps = []config.UsageBand{{UpTo: 0, Ceiling: 0}}
+	r.cfg.Capacity.Providers[claudeComm] = claudeProv
+	codexProv := r.cfg.Capacity.Providers["codex"]
+	codexProv.PaceCaps = []config.UsageBand{{UpTo: 0, Ceiling: 0}}
+	r.cfg.Capacity.Providers["codex"] = codexProv
+	a, _ = r.app(false)
+	a.cfgPath = ""
+	v, err = a.startCapacityWithOptions(context.Background(), false, nil, forReview)
+	if err != nil || v.Room != 2 || v.Choice == nil || v.Choice.Harness == "" {
+		t.Fatalf("review ahead of post-reset pace: %+v, %v", v, err)
+	}
+	if v = v.forTarget(r.cfg.Capacity, claudeComm, pickOpus); v.Room != 2 {
+		t.Fatalf("explicit review ahead of pace: %s", v.verdict())
 	}
 }
 

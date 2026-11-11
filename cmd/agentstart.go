@@ -296,13 +296,14 @@ resume. An idle worker starts that next turn immediately.
 
 --harness auto picks the first non-excluded (harness, model) pair in
 capacity.choices whose provider has room (5-hour and 7-day windows below
-their stops, weekly use within the choice's sevenDayMax worker cap and not
-ahead of the even pace), the pick beekeeper capacity pick prints. Without
+their stops, weekly use within the choice's sevenDayMax worker cap and, for
+a worker start, not ahead of the even pace), the pick beekeeper capacity pick prints. Without
 --harness a desk with capacity.choices starts on that pick too (unless
 --model names a model none of them has: claude then), one without them on
 claude. --exclude skips matching choices (by model, harness/model, provider,
 or harness; repeatable). --review marks a review start, which may use
-capacity.reviewHeadroom extra subscription sessions above the worker ceiling;
+capacity.reviewHeadroom extra subscription sessions above the worker ceiling
+and is not refused by the 7-day pace check;
 --review-of-self-hosted marks the review of a self-hosted model's
 work, which takes no choice on a self-hosted provider.`,
 		Args: cobra.RangeArgs(1, 2),
