@@ -73,6 +73,9 @@ cgroup that limits both CPU and memory:
 make test-performance-local   # systemd-run --user --scope -p CPUQuota=100% -p MemoryMax=1G
 ```
 
+Checkpoint publication encodes the retained projection directly under its reader
+lock as compact JSON, avoiding a full slice copy and indentation overhead.
+
 ## The report
 
 Each run prints a table of every value against its budget, with the commit,
