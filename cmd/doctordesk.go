@@ -30,7 +30,7 @@ func checkDeskWorkflow(desk string, briefs []string) []string {
 			return
 		}
 		seen[name] = true
-		info, err := os.Lstat(name)
+		info, err := os.Lstat(name) // #nosec G703 -- trusted configured brief path or file walked under the configured desk
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
 			return // Installed skill symlinks are references, not desk copies.
 		}
@@ -40,7 +40,7 @@ func checkDeskWorkflow(desk string, briefs []string) []string {
 		}
 		var raw []byte
 		if err == nil {
-			raw, err = os.ReadFile(name)
+			raw, err = os.ReadFile(name) // #nosec G703 -- trusted configured brief path or file walked under the configured desk
 		}
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("desk workflow: cannot read %s: %v", name, err))

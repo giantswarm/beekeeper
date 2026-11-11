@@ -300,7 +300,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 		reviewHead, reviewReason = parkReviewHead(on)
 	}
 	reviewPending := isDeskReviewWait(waits) && reviewReason != parkDraftReason
-	var line string
+	var line, repairOwner string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := a.callerAgent(st, me)
 		if i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done) {
@@ -336,6 +336,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 		self := me
 		if i >= 0 {
 			self = st.Agents[i].Party
+			repairOwner = st.Agents[i].Name
 			if on != "" {
 				if rp, ok := st.ReviewParkFor(on); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, st.Agents[i].Name) || rp.Party.Is(self)) {
 					inheritReviewParkOnAgent(st, &st.Agents[i], rp, a.now.UTC())
@@ -391,6 +392,9 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 		}
 		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
 	})
+	if err == nil && reviewHead != "" {
+		err = a.recordFatalRepair(repairOwner, on)
+	}
 	if err == nil && kind == github.RefIssue {
 		if suggestion := a.parkSuggestion(me, on); suggestion != "" {
 			line += " This is an issue wait. For desk review, park on your open pull request: " + suggestion
