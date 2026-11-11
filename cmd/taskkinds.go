@@ -112,7 +112,7 @@ const kindLockWait = 15 * time.Minute
 // pass a cap.
 const kindLockFile = "kinds.lock"
 
-// fatalAdmission stops new ordinary work while an outage needs repair.
+// fatalAdmission stops ordinary work only for execution infrastructure outages.
 func (a *app) fatalAdmission(name string, review bool) error {
 	q, err := fatal.Read(cmp.Or(a.store.Dir(), a.cfg.StateDir))
 	if err != nil {
@@ -120,19 +120,7 @@ func (a *app) fatalAdmission(name string, review bool) error {
 	}
 	// Reviews finish already admitted work, including the outage's own fix.
 	if err := q.Barrier(name); err != nil && !review {
-		if !a.emergencyStart {
-			return refused("%v", err)
-		}
-		// Keep every other outage barrier intact, including main incidents
-		// which still have automatic repair attempts available.
-		for _, incident := range q.Incidents {
-			if incident.Resolved.IsZero() && (!strings.HasPrefix(incident.ID, "main:") || incident.Attempts < 3) {
-				return refused("%v", err)
-			}
-		}
-		if _, err := a.emergencyAction("override exhausted main outage for start " + name); err != nil {
-			return err
-		}
+		return refused("%v", err)
 	}
 	return nil
 }

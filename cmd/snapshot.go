@@ -381,7 +381,7 @@ func (r *runIndex) start(scope string) (state.Event, bool) {
 	}
 	if r.starts == nil {
 		r.starts = map[string]state.Event{}
-		evs, _ := r.store.Events(0, func(e state.Event) bool { return e.Verb == guard.VerbStart })
+		evs, _ := state.FollowSnapshot(r.store, "snapshot-starts", "v1", func(e state.Event) bool { return e.Verb == guard.VerbStart })
 		for _, e := range evs {
 			r.starts[guard.RunScope(e.Detail)] = e
 		}

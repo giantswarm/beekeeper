@@ -129,3 +129,38 @@ across the full interval, accounting for exempt starts. Capture alerts via
 Keep public evidence generic: no local configuration, machine identifiers,
 private references or credentials. The epic stays open until this live
 acceptance evidence is complete.
+
+### Worker task outcomes
+
+A delivery records the worker's outcome and its evidence independently of
+its release step. A worker finishes with one of these commands:
+
+- `agents idle --done --report "..." --problem none`: each owned delivery
+  must have a linked pull request that GitHub confirms is merged.
+- `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
+  explicitly explain an already fixed issue, an operation with its proof, or
+  an answer recorded on the issue. This counts as no change, not a release.
+- `agents idle --blocked --by <issue URL|#note>`: the blocker must be open.
+  An issue dependency moves the item to Blocked / Waiting; a note holds its
+  board status until the note is answered. This ends the worker assignment,
+  not the blocked issue.
+- `agents park --on <ref> "<wait>"`: records a parked outcome and retains the
+  existing wake route and delivery lifecycle.
+
+`delivery --stats` and `sim observe` separate merged, no-change, blocked,
+parked, stalled and legacy dropped outcomes. JSON delivery records retain
+`evidence` and `outcomeAt`. An independent reviewer reports its review without
+claiming that the implementation delivery is complete.
+
+An unfinished headless turn receives its task again, with the valid endings,
+up to three times per assignment. When the third continuation also ends
+without an outcome, the delivery becomes stalled immediately. Its serving
+record ends, capacity is released through normal retirement, and the next
+worker's brief includes the last report. A park, an outstanding wake, a role
+session or an active turn is not an unfinished-turn recovery candidate.
+
+Release acceptance requires two days of installed observation: retain the
+installed version and observation window, outcome counts, and the share of
+started issue deliveries ending without a pull request, grouped by their
+recorded reasons. Passing synthetic tests alone does not establish this live
+acceptance.
