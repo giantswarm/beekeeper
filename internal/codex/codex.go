@@ -82,7 +82,54 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 	if len(runners) == 0 && len(standalone) == 0 {
 		return nil
 	}
-	files := sessionFiles(sessionDirs(stateDir, sessionsDir, extraDirs...), time.Time{})
+	wantIDs := map[string]bool{}
+	var since time.Time
+	hasZeroStart := false
+	noteStart := func(start time.Time) {
+		if start.IsZero() {
+			hasZeroStart = true
+			return
+		}
+		if s := start.Add(-startSlack); since.IsZero() || s.Before(since) {
+			since = s
+		}
+	}
+	runnerThread := make(map[int]string, len(runners))
+	for _, r := range runners {
+		noteStart(r.Start)
+		env, _ := proc.Environ(r.PID)
+		inbox := runnerInbox(r.Args, stateDir, strings.TrimSpace(env[EnvAgent]))
+		threadID := ReadThread(stateDir, inbox)
+		if threadID == "" {
+			if c := childCodex[r.PID]; c != nil {
+				threadID = resumeThreadArg(c.Args)
+			}
+		}
+		if threadID != "" {
+			runnerThread[r.PID] = threadID
+			wantIDs[threadID] = true
+		}
+	}
+	standaloneThread := make(map[int]string, len(standalone))
+	standaloneInboxThread := make(map[int]string, len(standalone))
+	for _, p := range standalone {
+		noteStart(p.Start)
+		if id := resumeThreadArg(p.Args); id != "" {
+			standaloneThread[p.PID] = id
+			wantIDs[id] = true
+		}
+		env, _ := proc.Environ(p.PID)
+		if agentID := strings.TrimSpace(env[EnvAgent]); agentID != "" {
+			if id := ReadThread(stateDir, InboxPath(stateDir, agentID)); id != "" {
+				standaloneInboxThread[p.PID] = id
+				wantIDs[id] = true
+			}
+		}
+	}
+	if hasZeroStart {
+		since = time.Time{}
+	}
+	files := discoverSessionFiles(sessionDirs(stateDir, sessionsDir, extraDirs...), since, wantIDs)
 	byID := make(map[string]file, len(files))
 	for _, f := range files {
 		if f.id != "" {
@@ -99,23 +146,12 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 		}
 	}
 	for _, r := range runners {
-		env, _ := proc.Environ(r.PID)
-		inbox := runnerInbox(r.Args, stateDir, strings.TrimSpace(env[EnvAgent]))
-		threadID := ReadThread(stateDir, inbox)
-		if threadID == "" {
-			if c := childCodex[r.PID]; c != nil {
-				threadID = resumeThreadArg(c.Args)
-			}
-		}
-		reserve(r.PID, threadID)
+		reserve(r.PID, runnerThread[r.PID])
 	}
 	for _, p := range standalone {
-		reserve(p.PID, resumeThreadArg(p.Args))
+		reserve(p.PID, standaloneThread[p.PID])
 		if _, ok := explicit[p.PID]; !ok {
-			env, _ := proc.Environ(p.PID)
-			if agentID := strings.TrimSpace(env[EnvAgent]); agentID != "" {
-				reserve(p.PID, ReadThread(stateDir, InboxPath(stateDir, agentID)))
-			}
+			reserve(p.PID, standaloneInboxThread[p.PID])
 		}
 	}
 	var out []*claude.Session
@@ -138,12 +174,7 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 			s.HostID = HostPrefix + agentID
 		}
 		inbox := runnerInbox(r.Args, stateDir, agentID)
-		threadID := ReadThread(stateDir, inbox)
-		if threadID == "" {
-			if c := childCodex[r.PID]; c != nil {
-				threadID = resumeThreadArg(c.Args)
-			}
-		}
+		threadID := runnerThread[r.PID]
 		matched, hasFile := explicit[r.PID]
 		if !hasFile {
 			for _, f := range files {
@@ -267,8 +298,20 @@ func Ended(stateDir, sessionsDir string, running []*claude.Session, since time.T
 		}) {
 			continue
 		}
-		s := &claude.Session{Cwd: f.cwd, Harness: Harness}
-		fillFromFile(s, f.path, false)
+		s := &claude.Session{
+			ID:         f.id,
+			Cwd:        f.cwd,
+			Branch:     f.branch,
+			Model:      f.model,
+			Name:       f.title,
+			Transcript: f.path,
+			LastActive: f.mod,
+			Harness:    Harness,
+			State:      StateEnded,
+		}
+		if s.Model == "" || s.Name == "" {
+			fillFromFile(s, f.path, false)
+		}
 		if stateDir != "" && s.ID != "" {
 			if b, err := os.ReadFile(ThreadLinkPath(stateDir, s.ID)); err == nil {
 				inbox := strings.TrimSpace(string(b))
@@ -419,8 +462,103 @@ func resumeThreadArg(args []string) string {
 }
 
 type file struct {
-	path, id, cwd string
-	created, mod  time.Time
+	path, id, cwd        string
+	branch, model, title string
+	created, mod         time.Time
+}
+
+func readSessionFile(path string, mod time.Time) (file, bool) {
+	h, err := readHead(path)
+	if err != nil || h.id == "" {
+		return file{}, false
+	}
+	created := h.created
+	if created.IsZero() {
+		created = mod
+	}
+	return file{
+		path:    path,
+		id:      h.id,
+		cwd:     h.cwd,
+		branch:  h.branch,
+		model:   h.model,
+		title:   h.title,
+		created: created,
+		mod:     mod,
+	}, true
+}
+
+func discoverSessionFiles(dirs []string, since time.Time, wantIDs map[string]bool) []file {
+	if since.IsZero() {
+		return sessionFiles(dirs, time.Time{})
+	}
+	type skippedPath struct {
+		path string
+		mod  time.Time
+	}
+	seen := map[string]bool{}
+	foundIDs := map[string]bool{}
+	var out []file
+	var skipped []skippedPath
+	for _, dir := range dirs {
+		var paths []string
+		for _, pat := range []string{
+			filepath.Join(dir, "*", "*", "*", "rollout-*.jsonl"),
+			filepath.Join(dir, "*", "rollout-*.jsonl"),
+			filepath.Join(dir, "rollout-*.jsonl"),
+			filepath.Join(dir, "*.jsonl"),
+		} {
+			matches, _ := filepath.Glob(pat)
+			paths = append(paths, matches...)
+		}
+		for _, p := range paths {
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			fi, err := os.Stat(p)
+			if err != nil {
+				continue
+			}
+			if fi.ModTime().Before(since) && !matchesThreadPath(p, wantIDs) {
+				skipped = append(skipped, skippedPath{path: p, mod: fi.ModTime()})
+				continue
+			}
+			if f, ok := readSessionFile(p, fi.ModTime()); ok {
+				out = append(out, f)
+				if wantIDs[f.id] {
+					foundIDs[f.id] = true
+				}
+			}
+		}
+	}
+	if len(foundIDs) < len(wantIDs) && len(skipped) > 0 {
+		slices.SortFunc(skipped, func(a, b skippedPath) int { return b.mod.Compare(a.mod) })
+		for _, sp := range skipped {
+			if f, ok := readSessionFile(sp.path, sp.mod); ok && wantIDs[f.id] {
+				out = append(out, f)
+				foundIDs[f.id] = true
+				if len(foundIDs) == len(wantIDs) {
+					break
+				}
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b file) int { return b.mod.Compare(a.mod) })
+	return out
+}
+
+func matchesThreadPath(path string, wantIDs map[string]bool) bool {
+	if len(wantIDs) == 0 {
+		return false
+	}
+	base := filepath.Base(path)
+	for id := range wantIDs {
+		if id != "" && strings.Contains(base, id) {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionFiles(dirs []string, since time.Time) []file {
@@ -446,21 +584,9 @@ func sessionFiles(dirs []string, since time.Time) []file {
 			if err != nil || (!since.IsZero() && fi.ModTime().Before(since)) {
 				continue
 			}
-			h, err := readHead(p)
-			if err != nil || h.id == "" {
-				continue
+			if f, ok := readSessionFile(p, fi.ModTime()); ok {
+				out = append(out, f)
 			}
-			created := h.created
-			if created.IsZero() {
-				created = fi.ModTime()
-			}
-			out = append(out, file{
-				path:    p,
-				id:      h.id,
-				cwd:     h.cwd,
-				created: created,
-				mod:     fi.ModTime(),
-			})
 		}
 	}
 	slices.SortFunc(out, func(a, b file) int { return b.mod.Compare(a.mod) })
@@ -502,8 +628,8 @@ func assign(files []file, procs []*proc.Process, cwd func(pid int) string) map[i
 }
 
 type head struct {
-	id, cwd, model string
-	created        time.Time
+	id, cwd, branch, model, title string
+	created                       time.Time
 }
 
 type rolloutLine struct {
@@ -574,6 +700,16 @@ type streamItem struct {
 	ExitCode         *int   `json:"exit_code"`
 }
 
+func isHeadLine(raw []byte, needTitle bool) bool {
+	if bytes.Contains(raw, []byte(evSessionMeta)) ||
+		bytes.Contains(raw, []byte(evTurnContext)) ||
+		bytes.Contains(raw, []byte(evThreadStarted)) {
+		return true
+	}
+	return needTitle && bytes.Contains(raw, []byte(evResponseItem)) &&
+		(bytes.Contains(raw, []byte(`"role":"user"`)) || bytes.Contains(raw, []byte(`"role": "user"`)))
+}
+
 func readHead(path string) (head, error) {
 	f, err := os.Open(path) //nolint:gosec // rollout file under configured sessions directory
 	if err != nil {
@@ -582,9 +718,13 @@ func readHead(path string) (head, error) {
 	defer func() { _ = f.Close() }()
 	sc := newScanner(f)
 	var h head
-	for i := 0; i < 16 && sc.Scan(); i++ {
+	for i := 0; i < 32 && sc.Scan(); i++ {
+		raw := sc.Bytes()
+		if !isHeadLine(raw, h.title == "") {
+			continue
+		}
 		var l rolloutLine
-		if json.Unmarshal(sc.Bytes(), &l) != nil {
+		if json.Unmarshal(raw, &l) != nil {
 			continue
 		}
 		switch l.Type {
@@ -593,6 +733,9 @@ func readHead(path string) (head, error) {
 			if json.Unmarshal(l.Payload, &m) == nil {
 				h.id = cmp.Or(h.id, m.ID)
 				h.cwd = cmp.Or(h.cwd, m.Cwd)
+				if m.Git != nil && h.branch == "" {
+					h.branch = m.Git.Branch
+				}
 				if !m.Timestamp.IsZero() {
 					h.created = m.Timestamp
 				} else if !l.Timestamp.IsZero() {
@@ -605,10 +748,20 @@ func readHead(path string) (head, error) {
 				h.cwd = cmp.Or(h.cwd, tc.Cwd)
 				h.model = cmp.Or(h.model, tc.Model)
 			}
+		case evResponseItem:
+			if h.title != "" {
+				continue
+			}
+			var item responseItemPayload
+			if json.Unmarshal(l.Payload, &item) == nil && item.Type == itemMessage && item.Role == roleUser {
+				if txt := messageText(item.Content); isUserPrompt(txt) {
+					h.title = promptTitle(extractTitlePrompt(txt))
+				}
+			}
 		case evThreadStarted:
 			h.id = cmp.Or(h.id, l.ThreadID)
 		}
-		if h.id != "" && h.cwd != "" && h.model != "" {
+		if h.id != "" && h.cwd != "" && h.model != "" && h.title != "" {
 			return h, nil
 		}
 	}
@@ -620,16 +773,33 @@ func fillFromFile(s *claude.Session, path string, running bool) {
 	if fi, err := os.Stat(path); err == nil {
 		s.LastActive = fi.ModTime()
 	}
-	f, err := os.Open(path) //nolint:gosec // rollout file under configured sessions directory
-	if err != nil {
+	if h, err := readHead(path); err == nil {
+		s.ID = cmp.Or(s.ID, h.id)
+		s.Cwd = cmp.Or(s.Cwd, h.cwd)
+		s.Branch = cmp.Or(s.Branch, h.branch)
+		s.Model = cmp.Or(s.Model, h.model)
+		if s.Name == "" && h.title != "" {
+			s.Name = h.title
+		}
+	}
+	if !running && s.ID != "" && s.Cwd != "" && s.Model != "" && s.Name != "" {
+		s.State = StateEnded
 		return
 	}
-	defer func() { _ = f.Close() }()
+	buf, _ := claude.ReadWindow(path)
+	if len(buf) == 0 {
+		if !running {
+			s.State = StateEnded
+		} else if s.State == "" {
+			s.State = StateIdle
+		}
+		return
+	}
 
 	var busy bool
 	var pendingTools int
 	var firstUserPrompt string
-	sc := newScanner(f)
+	sc := newScanner(bytes.NewReader(buf))
 	for sc.Scan() {
 		var l rolloutLine
 		if json.Unmarshal(sc.Bytes(), &l) != nil {

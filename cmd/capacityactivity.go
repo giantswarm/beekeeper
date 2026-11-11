@@ -63,7 +63,12 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 		}
 		provider := kindUnknown
 		var latest time.Time
-		if name, _, ok := strings.Cut(e.Detail, ": "); ok {
+		for off := 0; ; {
+			idx := strings.Index(e.Detail[off:], ": ")
+			if idx < 0 {
+				break
+			}
+			name := e.Detail[:off+idx]
 			for _, s := range byName[name] {
 				if s.at.After(e.At) || s.at.Before(latest) {
 					continue
@@ -71,6 +76,7 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 				provider = s.provider
 				latest = s.at
 			}
+			off += idx + 2
 		}
 		switch e.Verb {
 		case transcriptResumeEvent:

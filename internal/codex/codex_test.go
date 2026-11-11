@@ -464,3 +464,58 @@ func TestCodexReadTranscriptPricesRequests(t *testing.T) {
 		t.Fatalf("priced stream Total = (CostUSD=%v, CostUnknown=%v), want >0 and no unknown", actStream.Total.CostUSD, actStream.Total.CostUnknown)
 	}
 }
+
+func TestDiscoverSkipsHistoricalRolloutsAndEndedUsesHead(t *testing.T) {
+	stateDir := t.TempDir()
+	sessionsDir := t.TempDir()
+	now := time.Now().UTC()
+
+	// Historical rollout older than any running process.
+	oldPath := filepath.Join(sessionsDir, "rollout-old-thread.jsonl")
+	oldData := `{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"old-thread","timestamp":"2026-01-01T00:00:00Z","cwd":""}}` + "\n"
+	if err := os.WriteFile(oldPath, []byte(oldData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldMod := now.Add(-24 * time.Hour)
+	if err := os.Chtimes(oldPath, oldMod, oldMod); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty process table returns nil without scanning rollout files.
+	if got := Discover(stateDir, sessionsDir, proc.NewTable(), now); len(got) != 0 {
+		t.Fatalf("Discover with no codex processes = %+v, want empty", got)
+	}
+
+	// Recent process does not match historical rollout older than its start.
+	freshProc := &proc.Process{
+		PID:   -300,
+		PPID:  1,
+		Comm:  Comm,
+		Args:  []string{Comm, execArg, "-"},
+		Start: now.Add(-time.Minute),
+	}
+	got := Discover(stateDir, sessionsDir, proc.NewTable(freshProc), now)
+	if len(got) != 1 || got[0].ID != "" || got[0].Transcript != "" {
+		t.Fatalf("Discover matched historical rollout: %+v", got)
+	}
+
+	// Ended populates session metadata from readHead without full-file scan.
+	endedPath := filepath.Join(sessionsDir, "rollout-ended-head.jsonl")
+	if err := os.WriteFile(endedPath, []byte(sampleRollout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(endedPath, now, now); err != nil {
+		t.Fatal(err)
+	}
+	ended := Ended(stateDir, sessionsDir, nil, now.Add(-time.Hour))
+	if len(ended) != 1 {
+		t.Fatalf("Ended len = %d, want 1: %+v", len(ended), ended)
+	}
+	if ended[0].ID != "019a296d-aa93-71d2-842b-dc8079ce03a4" ||
+		ended[0].Model != testModel ||
+		ended[0].Branch != "feat/codex" ||
+		ended[0].State != StateEnded ||
+		!strings.HasPrefix(ended[0].Name, "Implement the codex harness") {
+		t.Fatalf("unexpected Ended session: %+v", ended[0])
+	}
+}

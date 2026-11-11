@@ -98,6 +98,6 @@ func PullCheck(ctx context.Context, run GH, repo string, n int, name string) (Ch
 // JobLog is the log of repo's GitHub Actions job, as GitHub keeps it
 // (terminal escape sequences included).
 func JobLog(ctx context.Context, run GH, repo string, job int64) (string, error) {
-	out, err := run(ActingOn(ctx, repo), "api", "--allow-escape-sequences", fmt.Sprintf("repos/%s/actions/jobs/%d/logs", repo, job))
+	out, err := run(ActingOn(ctx, repo), ghAPI, ghFlagAllowEscape, fmt.Sprintf("repos/%s/actions/jobs/%d/logs", repo, job))
 	return string(out), err
 }

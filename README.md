@@ -2370,7 +2370,11 @@ The held limit sets no refill pause, so a completed release frees the next pass.
 It checks again immediately before dispatch. With a worker brief configured,
 every pass that starts no board worker logs `SUPERVISOR REFILL started 0:` with its reason, including full or
 stale delivery admission (count, limit and last complete observation), capacity,
-GitHub budget, incident holds, board backoff or an earlier refill still running.
+GitHub budget, repository holds, board backoff or an earlier refill still running.
+A repository hold skips its board items and blocks new supervisor workers,
+reviewers and fixers until it expires or is lifted. The loop logs each skipped
+item with its hold reason once; an explicit repository or issue exception may
+still start. Lane and global merge holds continue to govern merges only.
 Passes that fail before dispatch report that failure too. Release observations
 probe the oldest attempted releases first, with never-probed releases ahead of
 retries, so a slow pass or a few failing releases cannot starve the rest of the
