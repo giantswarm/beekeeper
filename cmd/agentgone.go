@@ -35,7 +35,8 @@ func agentRosterActivity(st *state.State, ag state.Agent) time.Time {
 			last = at
 		}
 	}
-	for _, r := range st.Records {
+	for i := range st.Records {
+		r := &st.Records[i]
 		if r.Session.Is(ag.Party) && r.At.After(last) {
 			last = r.At
 		}

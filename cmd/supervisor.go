@@ -155,7 +155,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		ver = a.loopVersion(c, pid)
 	}
 	held, pulls := a.loopWaitLines()
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return err
 	}
