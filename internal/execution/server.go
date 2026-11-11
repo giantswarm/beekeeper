@@ -781,6 +781,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				value, err = s.Missing(ctx, req.Ref)
 			case checkOperation:
 				value, err = s.Check(ctx)
+			case SourceBasisOperation:
+				var repository string
+				err = Decode(req.Payload, &repository)
+				if err == nil {
+					value, err = s.SourceBasis(ctx, repository)
+				}
 			case "source-chunk":
 				var chunk SourceChunk
 				err = Decode(req.Payload, &chunk)

@@ -779,13 +779,16 @@ func (a *app) recoverExecutionPublication(ctx context.Context, ref execution.Ref
 	return result, found, publishErr
 }
 
+// errSourceBundleLimit is a refusal: a bundle over the transfer limit.
+var errSourceBundleLimit = refused("commit bundle exceeds the publication transfer limit (64 MiB)")
+
 func readPublicationBundle(path string) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if info.Size() > publishBundleLimit {
-		return nil, refused("commit bundle exceeds the publication transfer limit (64 MiB)")
+		return nil, errSourceBundleLimit
 	}
 	return os.ReadFile(filepath.Clean(path))
 }

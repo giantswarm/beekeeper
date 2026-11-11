@@ -523,6 +523,7 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		}
 		caps.ResourceAudit = audit
 		caps.PolicyBundle = a.hostBundleReport(cmd.Context(), h)
+		caps.Sources = a.hostSourceReports(cmd.Context(), h)
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
 		}

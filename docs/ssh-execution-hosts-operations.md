@@ -930,6 +930,21 @@ aside once the execution is retired. Failed staging directories remain for
 inspection under the coordinator's `execution-publications/transfer-*` state
 directories; successful staging directories are removed.
 
+A start's source travels the same way, under the same 64 MiB bound, but only
+the history the host lacks: before it pins the source, the coordinator asks the
+host for its source basis (the tips of the mapped checkout's branches, the
+checked-out branch first) and bundles the pinned commit without them. The
+workspace clone of the mapped checkout supplies the bundle's prerequisites, so
+a repository whose whole history exceeds the bound starts on a host whose source
+holds most of it. An unmapped repository, or a host without the basis call,
+receives the whole history. A start whose bundle exceeds the bound even against
+the host's source is refused and names the repository: bring that source up to
+date on the host. `agents hosts check` lists every mapped source under
+`sources` with its checked-out commit and how many commits of the repository's
+default branch it lacks (`missingCommits`, compared on GitHub), and names a
+source lacking more than 1000 as a `problem`; such a source does not fail the
+check.
+
 A republication with `--title` or `--body-file` updates the existing pull
 request's title or body and lists the fields in `updated`; a flag left out keeps
 the field, and a failed update is an error that an identical retry repeats.
