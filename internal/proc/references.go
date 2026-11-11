@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // References reads a process's files, mappings and temporary/build directory
@@ -245,6 +246,9 @@ func processReferences(root string, pid, uid int, files referenceIO) ([]string, 
 	if errors.Is(err, os.ErrPermission) && foreignNamespace(root, pid, raw, files) {
 		return nil, comm, false, fmt.Errorf("%w: %w", errForeign, err)
 	}
+	if err != nil && exitConfirmed(err, filepath.Join(dir, "status"), false, files) {
+		return nil, "", false, nil
+	}
 	if err != nil {
 		return nil, comm, false, err
 	}
@@ -311,6 +315,9 @@ func zombieThreadReferences(dir string, pid int, protected bool, files reference
 			continue
 		}
 		got, err := referencesWith(tasks, tid, protected, files)
+		if err != nil && exitConfirmed(err, filepath.Join(tasks, e.Name(), "status"), true, files) {
+			continue
+		}
 		if err != nil {
 			return nil, false, err
 		}
@@ -318,6 +325,27 @@ func zombieThreadReferences(dir string, pid int, protected bool, files reference
 		live = true
 	}
 	return paths, live, nil
+}
+
+// exitConfirmed reports that a read failed with ESRCH because the process
+// or thread exited meanwhile: its status, read again, is gone or a zombie
+// (a leader only with no live thread left). The kernel answers ESRCH for the
+// environ and maps of a task whose memory is already released, so an exit
+// racing the scan must not make every reference unknown. A task still live
+// on the second read keeps the error and fails closed.
+func exitConfirmed(err error, status string, thread bool, files referenceIO) bool {
+	if !errors.Is(err, syscall.ESRCH) {
+		return false
+	}
+	raw, err := files.readFile(status)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	zombie, threads := referenceState(raw)
+	return zombie && (thread || threads >= 0 && threads <= 1)
 }
 
 // referenceState reads whether a process is a zombie and its thread count,
