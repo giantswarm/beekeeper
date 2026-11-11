@@ -21,16 +21,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// runnerUnitsIssue is the open issue that has parked and off-roster sessions
-// keep their runner units.
-const runnerUnitsIssue = "https://github.com/giantswarm/beekeeper/issues/3675"
-
 // footprint budgets per session: processes and MiB of its runner unit.
 var footprintBudgets = map[string]struct{ procs, mem limit }{
 	"working":    {procs: limit{Max: 3}, mem: limit{Max: 48}},
 	"idle":       {procs: limit{Max: 1}, mem: limit{Max: 24}},
-	"parked":     {procs: limit{Max: 0, Known: runnerUnitsIssue}, mem: limit{Max: 0, Known: runnerUnitsIssue}},
-	"off roster": {procs: limit{Max: 0, Known: runnerUnitsIssue}, mem: limit{Max: 0, Known: runnerUnitsIssue}},
+	"parked":     {procs: limit{Max: 0}, mem: limit{Max: 0}},
+	"off roster": {procs: limit{Max: 0}, mem: limit{Max: 0}},
 }
 
 // TestSessionFootprint needs a systemd user manager (the nightly job); with

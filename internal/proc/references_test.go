@@ -546,3 +546,65 @@ func TestUserScanSkipsForeignNamespacesOnPermissionDenied(t *testing.T) {
 		})
 	}
 }
+
+// A thread of a zombie leader that exits between its status read and its
+// environ read answers ESRCH; a second status read confirming the exit skips
+// it instead of making the scan's references unknown. A thread still live on
+// the second read fails closed.
+func TestUserReferencesSkipsThreadExitingMidScan(t *testing.T) {
+	for _, tc := range []struct {
+		name, after string
+		gone        bool
+	}{
+		{"exited to zombie", "State: Z (zombie)\n", true},
+		{"status vanished", "", true},
+		{"still live", fixtureLiveStatus, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "42")
+			thread := filepath.Join(dir, "task", "43")
+			uid := os.Getuid()
+			ids := fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid)
+			for _, d := range []string{dir, filepath.Join(dir, "task", "42"), thread} {
+				if err := os.MkdirAll(filepath.Join(d, "fd"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				data := ids + "State: Z (zombie)\nThreads: 2\n"
+				if d == thread {
+					data = fixtureLiveStatus
+				}
+				for name, content := range map[string]string{fixtureStatus: data, fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: fixtureName} {
+					if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			threadStatus := filepath.Join(thread, fixtureStatus)
+			threadEnviron := filepath.Join(thread, fixtureEnvironment)
+			reads := 0
+			files := referenceFiles()
+			files.readFile = func(path string) ([]byte, error) {
+				switch filepath.Clean(path) {
+				case threadEnviron:
+					return nil, &os.PathError{Op: readOp, Path: path, Err: syscall.ESRCH}
+				case threadStatus:
+					if reads++; reads > 1 {
+						if tc.after == "" {
+							return nil, &os.PathError{Op: readOp, Path: path, Err: os.ErrNotExist}
+						}
+						return []byte(tc.after), nil
+					}
+				}
+				return os.ReadFile(filepath.Clean(path))
+			}
+			_, _, err := userReferencesAt(root, uid, files)
+			if tc.gone && err != nil {
+				t.Fatalf("thread exiting mid-scan made references unknown: %v", err)
+			}
+			if !tc.gone && !errors.Is(err, syscall.ESRCH) {
+				t.Fatalf("live thread's ESRCH did not fail closed: %v", err)
+			}
+		})
+	}
+}

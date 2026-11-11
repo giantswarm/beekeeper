@@ -326,11 +326,22 @@ func deliveryTrackedPulls(tracked []string, deliveries []state.Delivery, desk su
 			continue
 		}
 		for _, ref := range d.Pulls {
-			if reason, _ := desk.Unread(ref); reason != "" || slices.Contains(tracked, ref) {
+			if deliveryPullUnread(desk, ref) || slices.Contains(tracked, ref) {
 				continue
 			}
 			tracked = append(tracked, ref)
 		}
 	}
 	return tracked
+}
+
+// deliveryPullUnread reports whether desk leaves the pull request ref unread,
+// judged on its normalized repository name as supervisorLoop.unreadRepo does.
+func deliveryPullUnread(desk superloop.Desk, ref string) bool {
+	r, ok := parseRef(ref)
+	if !ok {
+		return false
+	}
+	reason, _ := desk.Unread(refName(r))
+	return reason != ""
 }

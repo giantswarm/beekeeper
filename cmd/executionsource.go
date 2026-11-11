@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -12,7 +13,10 @@ import (
 
 // prepareExecutionSource resolves the requested ref through the coordinator's
 // GitHub transport. Persist before SSH so every recovery uses the same commit.
-func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartRequest) (execution.StartRequest, []byte, error) {
+// basis names commits the host's workspace clone already holds: the bundle
+// carries only the history beyond them, so a large repository's start ships
+// what the host lacks, not its whole history.
+func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartRequest, basis []string) (execution.StartRequest, []byte, error) {
 	root := filepath.Join(a.cfg.StateDir, "execution-sources", string(r.Ref.Execution))
 	bundle := filepath.Join(root, "source.bundle")
 	if r.SourceDigest != "" {
@@ -48,11 +52,15 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	if _, err = publishGit(ctx, repo, "update-ref", "refs/heads/execution-source", head); err != nil {
 		return r, nil, err
 	}
-	if _, err = publishGit(ctx, repo, "bundle", "create", stagedBundle, "refs/heads/execution-source"); err != nil {
+	prerequisites := sourcePrerequisites(ctx, repo, head, basis)
+	if _, err = publishGit(ctx, repo, append([]string{gitBundle, workerGitHubCreate, stagedBundle, "refs/heads/execution-source"}, prerequisites...)...); err != nil {
 		return r, nil, err
 	}
 	data, err := readPublicationBundle(stagedBundle)
 	if err != nil {
+		if len(prerequisites) > 0 && errors.Is(err, errSourceBundleLimit) {
+			return r, nil, refused("commit bundle exceeds the publication transfer limit (64 MiB) even against the host's source of %s; bring that source up to date on the host (agents hosts check reports how far behind it is)", r.Repository)
+		}
 		return r, nil, err
 	}
 	originalRef := r.GitRef
@@ -81,4 +89,45 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	// temporary fetch, as publication does after a completed transfer.
 	_ = os.RemoveAll(dir)
 	return r, data, nil
+}
+
+// sourcePrerequisites turns a host's basis into bundle exclusions: each basis
+// commit the fetched history contains is history the host need not receive.
+// Commits outside that history (other branches, unknown objects) are dropped.
+// The pinned head itself cannot be excluded, or the bundle would be empty: the
+// host holding it receives the head alone, against its parents.
+func sourcePrerequisites(ctx context.Context, repo, head string, basis []string) []string {
+	if len(basis) == 0 {
+		return nil
+	}
+	args := append([]string{gitRevList, "--no-walk=unsorted", "--ignore-missing"}, basis...)
+	present, err := publishGit(ctx, repo, args...)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	exclude := func(c string) {
+		if c != "" && c != head && !seen[c] {
+			seen[c] = true
+			out = append(out, "^"+c)
+		}
+	}
+	for c := range strings.SplitSeq(present, "\n") {
+		c = strings.TrimSpace(c)
+		if c == head {
+			parents, err := publishGit(ctx, repo, gitRevList, "--no-walk", "--parents", head)
+			if err != nil {
+				continue
+			}
+			for _, p := range strings.Fields(parents)[1:] {
+				exclude(p)
+			}
+			continue
+		}
+		if _, err := publishGit(ctx, repo, "merge-base", "--is-ancestor", c, head); err == nil {
+			exclude(c)
+		}
+	}
+	return out
 }

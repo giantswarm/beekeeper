@@ -35,13 +35,13 @@ shared lock every 2ms, which only an exclusive holder refuses.
 A budget that an open issue already exceeds today carries that issue
 (`limit.Known`). The report shows it without failing. The test fails once
 the value is within budget, so the marker is removed and the budget holds
-from then on. Today's known ones:
-
-- the idle loop's CPU and processes per pass, and its reads growing with
-  the event log (five times the reads on a log four times the size):
-  [the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657);
-- the runner units of parked and off-roster sessions:
-  [runner units outliving their sessions](https://github.com/giantswarm/beekeeper/issues/3675).
+from then on. Today's known one: the idle loop's CPU and processes per
+pass, and its reads growing with the event log (five times the reads on a
+log four times the size):
+[the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657).
+The runner units of parked and off-roster sessions were known until
+[runner units outliving their sessions](https://github.com/giantswarm/beekeeper/issues/3675)
+was fixed; their budget of zero now holds.
 
 `BEEKEEPER_PERF_STRICT=1` holds every budget, known or not; the control
 step uses it.
