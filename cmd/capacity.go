@@ -354,9 +354,10 @@ const (
 )
 
 // startFor is the start a decision is for: a worker's, a review's, or the
-// review of a pull request a self-hosted model's worker wrote. Every kind is
-// decided by the same gates; the last alone takes no choice on a self-hosted
-// provider.
+// review of a pull request a self-hosted model's worker wrote. Worker starts
+// keep the strict pace check; review starts inside the reserved review
+// headroom are not refused by pace, and the last takes no choice on a
+// self-hosted provider.
 type startFor int
 
 const (
@@ -973,10 +974,10 @@ func windowUnderused(sd *usageWindow, u config.Usage, now time.Time) bool {
 }
 
 func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
-	return buildProviderForStart(name, pCfg, pa, res, now, 0)
+	return buildProviderForStart(name, pCfg, pa, res, now, 0, forWorker)
 }
 
-func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time, extra int) *providerView {
+func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time, extra int, kind startFor) *providerView {
 	if pCfg.SelfHosted() {
 		return buildSelfHostedProviderView(name, pCfg, pa, res, now)
 	}
@@ -1026,7 +1027,11 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 			b := r.Buckets[bName]
 			fh := effectiveWindow(b.FiveHour, now)
 			sd := effectiveSevenDayWindow(b.SevenDay, now)
-			dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+			var pace *float64
+			if kind == forWorker {
+				pace = sdPace(sd)
+			}
+			dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
 			dp.Ceiling = reviewCeiling(dp.Ceiling, extra)
 			if high && firstHighFH == nil {
 				firstHighFH = fh
@@ -1111,7 +1116,11 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 	pv.SevenDay = effectiveSevenDayWindow(r.SevenDay, now)
 	pv.Pace = sdPace(pv.SevenDay)
 	pv.Underused = windowUnderused(pv.SevenDay, pCfg.Usage, now)
-	dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pv.Pace)
+	var pace *float64
+	if kind == forWorker {
+		pace = pv.Pace
+	}
+	dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pace)
 	pv.Ceiling, pv.High = reviewCeiling(dp.Ceiling, extra), high
 	switch {
 	case pv.High:
@@ -1226,7 +1235,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	anySelfHosted := false
 	for _, name := range k.ProviderNames() {
 		pCfg := k.Providers[name]
-		pv := buildProviderForStart(name, pCfg, pa[name], readings[name], now, extra)
+		pv := buildProviderForStart(name, pCfg, pa[name], readings[name], now, extra, kind)
 		providers[name] = pv
 		sumCeiling += pv.Ceiling
 		// capacity.ceiling caps the subscription providers, not a self-hosted
@@ -1535,8 +1544,9 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 // evaluateChoices prioritizes eligible subscriptions below half their 7-day
 // pace, then ranks by distance behind pace and budget left per hour until reset
 // (remaining percent / hours to reset) and lower configured cost. Configured
-// order breaks ties; self-hosted choices are fallbacks. The same gates apply
-// to every kind of start.
+// order breaks ties; self-hosted choices are fallbacks. Worker starts keep the
+// strict 7-day pace check; review starts inside the reserved review headroom
+// are not refused by pace.
 func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, kind startFor, now time.Time) *choiceView {
 	normEx := normalizeExcludes(exclude)
 	cv := &choiceView{
@@ -1726,9 +1736,11 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 			return fmt.Sprintf("7d %s at or past worker cap %s", pct(sd.UsedPercent), pct(max7d))
 		}
 	}
-	// No start runs ahead of the even pace: a margin, the choice's or its
-	// provider's, may only tighten it, and skipPace no longer waives it.
-	if sd != nil && sd.Pace != nil {
+	// No worker start runs ahead of the even pace: a margin, the choice's or
+	// its provider's, may only tighten it, and skipPace no longer waives it.
+	// Desk reviews inside the reserved review headroom are not refused by the
+	// pace check, only by a provider at its hard limit.
+	if kind == forWorker && sd != nil && sd.Pace != nil {
 		margin := min(ch.EffectivePaceMargin(pCfg), pCfg.PaceMargin, 0)
 		over := math.Round((sd.UsedPercent-*sd.Pace)*10) / 10
 		if over > margin+1e-9 {
@@ -1944,14 +1956,17 @@ behind pace (with remaining
 7-day budget per hour, lower configured cost, and capacity.choices order
 breaking ties), with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
-within the weekly cap and at or under the even pace of its 7-day window.
+within the weekly cap and, for a worker start, at or under the even pace of its
+7-day window.
 If built-in Codex usage is unreadable, its last good windows still bound starts;
 without valid saved windows, its configured ceiling applies. The watch reports
 the failure to the guide. Explicit account, spend and rate-limit stops remain
 blocking until a successful reading clears them.
-Every start is decided alike: --review marks a review start, which skips no
-gate (capacity.reviewSkipPace, a choice's skipPace and a positive paceMargin
-no longer let a start run ahead of the pace), and --review-of-self-hosted
+--review marks a review start, which may use capacity.reviewHeadroom extra
+subscription sessions above the worker ceiling and is not refused by the 7-day
+pace check (machine guards and provider window stops still apply;
+capacity.reviewSkipPace, a choice's skipPace and a positive paceMargin are
+ignored), and --review-of-self-hosted
 marks the review of a self-hosted model's work, which takes no choice on a
 self-hosted provider. capacity pick prints that choice alone. A provider of
 kind self-hosted (a model served on the desk's own machines, such as an omp
@@ -2073,14 +2088,14 @@ nothing; it makes no GitHub call.`,
 				k := liveCap
 				var legacy *usageView
 				if len(k.Providers) == 0 {
-					k, legacy = a.resolveUsage(cmd.Context(), k)
+					k, legacy = a.resolveUsageForStart(cmd.Context(), k, startKind(review, ofSelfHosted))
 				}
 				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st)
 			} else {
 				c := countAgents(st, sessions, a.now, a.cfg)
-				k, u := a.resolveUsage(cmd.Context(), liveCap)
+				k, u := a.resolveUsageForStart(cmd.Context(), liveCap, startKind(review, ofSelfHosted))
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
 			events, err := state.FollowSnapshot(a.store, "capacity-activity", "v1", func(e state.Event) bool {
@@ -2221,11 +2236,12 @@ reset, lower configured cost, and configured order breaking ties), with
 self-hosted choices used when no subscription is eligible; a self-hosted choice
 takes the worker kind (code changes) only when its kinds list it. Each eligible choice
 has a configured provider and a free slot under its running-session ceiling,
-5-hour and 7-day windows under their stop percent, and 7-day use not ahead of
+5-hour and 7-day windows under their stop percent, and for a worker start 7-day
+use not ahead of
 the even pace of its window, with the
 machine's headroom as a hard gate and capacity.ceiling bounding the
 subscription providers together. A review may use capacity.reviewHeadroom extra subscription sessions above
-the worker ceiling; machine guards and provider window stops still apply. --review-of-self-hosted decides the reviewer of a pull request a
+the worker ceiling and is not refused by the 7-day pace check; machine guards and provider window stops still apply. --review-of-self-hosted decides the reviewer of a pull request a
 self-hosted model's worker wrote: no choice on a self-hosted provider. --json
 prints the pick with every choice's reason and eligible subscription's remaining
 budget per hour (rate) and distance behind pace, each provider's windows and
@@ -2522,7 +2538,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st), nil
 	}
 	c := countAgents(st, sessions, a.now, a.cfg)
-	k, u := a.resolveUsage(ctx, liveCap)
+	k, u := a.resolveUsageForStart(ctx, liveCap, kind)
 	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st), nil
 }
 

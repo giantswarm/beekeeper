@@ -213,8 +213,9 @@ func TestCapacityPickHoldsEveryStartOnTheMachinesHeadroom(t *testing.T) {
 	r.want(noPick)
 }
 
-// A review is decided exactly like a worker's start, even where the desk
-// still configures capacity.reviewSkipPace.
+// A review ranks choices behind pace first like a worker's start, and still
+// starts when every provider is ahead of its 7-day pace (such as right after
+// a weekly reset) while under its window stops.
 func TestCapacityReviewIsDecidedLikeAWorkersStart(t *testing.T) {
 	r := newPickRig(t, subscriptionChoices)
 	r.configure("  reviewSkipPace: true\n")
@@ -232,6 +233,9 @@ func TestCapacityReviewIsDecidedLikeAWorkersStart(t *testing.T) {
 	if v.Choice == nil || v.Choice.Harness != codex.Harness {
 		t.Errorf("capacity --review choice = %+v, want codex", v.Choice)
 	}
+	r.codex[1] = 50.5
+	r.want(noPick)
+	r.want(codex.Harness+" "+pickGPT, "--"+reviewFlag)
 }
 
 // The one restriction: the review of a self-hosted model's work takes a
@@ -243,9 +247,8 @@ func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.
 	r.want("claude " + pickOpus)
 	r.claude[1], r.codex[1] = 60, 60
 	r.want("omp " + pickQwen)
-	r.claude[1], r.codex[1] = 40, 40
 	r.want("claude "+pickOpus, ofSelfHostedArg)
-	r.claude[1], r.codex[1] = 60, 60
+	r.claude[1], r.codex[1] = 95, 95
 	r.want(noPick, ofSelfHostedArg)
 	var p struct{ Reason string }
 	if err := json.Unmarshal([]byte(r.pick(true, ofSelfHostedArg)), &p); err != nil {
@@ -291,7 +294,7 @@ func TestCapacityPickKeepsWorkersOffASelfHostedChoiceWithoutKinds(t *testing.T) 
 func TestForcedReviewOfSelfHostedWorkNeverLandsOnASelfHostedProvider(t *testing.T) {
 	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
 `+subscriptionChoices)
-	r.claude[1], r.codex[1] = 60, 60
+	r.claude[1], r.codex[1] = 95, 95
 	if _, err := runGit(context.Background(), r.dir, "init", "-b", "main"); err != nil {
 		t.Fatal(err)
 	}
