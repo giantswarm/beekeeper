@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"os"
 	"strings"
 	"time"
 
@@ -63,12 +64,17 @@ func reviewPostMerge(st *state.State, on string, current *state.Park, declared *
 
 // recoverReviewRequests upgrades explicit review waits only after re-proving
 // their published worktree. Older parks omitted Worktree; their recorded start
-// directory supplies it. An API failure leaves the request pending for a pass
-// after budget recovery, never granting authority from the wait text alone.
+// directory supplies it. An API failure leaves the request pending for a later
+// pass after budget recovery, never granting authority from the wait text alone.
 func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.State) error {
 	if l.dryRun || st.Stop != nil {
 		return nil
 	}
+	now := l.a.timeNow()
+	if l.reviewRecoveries == nil {
+		l.reviewRecoveries = map[string]reviewRecovery{}
+	}
+	seen := map[string]bool{}
 	for _, ag := range st.Agents {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -89,6 +95,14 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		if dir == "" {
 			continue
 		}
+		// A request that did not verify is looked at again after a backoff,
+		// not every pass: each look starts git in its worktree and reads the
+		// pull request from GitHub.
+		key := reviewRecoveryKey(ag, dir)
+		seen[key] = true
+		if r, ok := l.reviewRecoveries[key]; ok && now.Before(r.next) {
+			continue
+		}
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
@@ -97,8 +111,14 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		head := recoverParkReviewHead(verifyCtx, p.On, dir)
 		cancel()
 		if head == "" {
+			wait := reviewRecoveryFirst
+			if r, ok := l.reviewRecoveries[key]; ok {
+				wait = min(2*r.wait, reviewRecoveryMax)
+			}
+			l.reviewRecoveries[key] = reviewRecovery{next: now.Add(wait), wait: wait}
 			continue
 		}
+		delete(l.reviewRecoveries, key)
 		verified := false
 		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			for i := range current.Agents {
@@ -121,9 +141,41 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 			}
 		}
 	}
+	for key := range l.reviewRecoveries {
+		if !seen[key] {
+			delete(l.reviewRecoveries, key)
+		}
+	}
 	return nil
 }
 
+// reviewRecovery is when a review request that did not verify is looked at
+// again, and the wait that set it.
+type reviewRecovery struct {
+	next time.Time
+	wait time.Duration
+}
+
+// The first retry of a review request that did not verify comes after
+// reviewRecoveryFirst; each further one waits twice as long, up to
+// reviewRecoveryMax.
+const (
+	reviewRecoveryFirst = time.Minute
+	reviewRecoveryMax   = 10 * time.Minute
+)
+
+// reviewRecoveryKey names one park of one session in one worktree: a new
+// park, or the same one in another worktree, is looked at at once.
+func reviewRecoveryKey(ag state.Agent, dir string) string {
+	p := ag.Park
+	return strings.Join([]string{ag.Name, ag.Session, p.On, p.At.UTC().Format(time.RFC3339Nano), p.Waits, dir}, "\x00")
+}
+
+// recoverParkReviewHead starts no git in a worktree that is gone: it cannot
+// verify there.
 var recoverParkReviewHead = func(ctx context.Context, on, dir string) string {
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
 	return publishedParkHead(ctx, on, dir, runGit, github.RunGH)
 }

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"crypto/sha256"
 	"io"
 	"os"
 	"reflect"
@@ -27,9 +28,22 @@ func (s *FileStore) readSnapshot(f *os.File) (*State, error) {
 		if err != nil {
 			return nil, err
 		}
-		s.snapshotFile, s.snapshot = info, st
+		s.snapshotFile, s.snapshot, s.snapshotSum = info, st, sha256.Sum256(raw)
 	}
 	return cloneSnapshot(reflect.ValueOf(s.snapshot)).Interface().(*State), nil
+}
+
+// unchangedSnapshot says raw is what state.json holds now, judged by the
+// snapshot this store last decoded: a save that changes nothing need not read
+// the document back to know it.
+func (s *FileStore) unchangedSnapshot(raw []byte) bool {
+	info, err := os.Stat(s.path("state.json"))
+	if err != nil {
+		return false
+	}
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+	return sameSnapshot(s.snapshotFile, info) && s.snapshotSum == sha256.Sum256(raw)
 }
 
 func sameSnapshot(a, b os.FileInfo) bool {

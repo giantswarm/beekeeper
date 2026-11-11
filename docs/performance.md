@@ -35,10 +35,14 @@ shared lock every 2ms, which only an exclusive holder refuses.
 A budget that an open issue already exceeds today carries that issue
 (`limit.Known`). The report shows it without failing. The test fails once
 the value is within budget, so the marker is removed and the budget holds
-from then on. Today's known one: the idle loop's CPU and processes per
-pass, and its reads growing with the event log (five times the reads on a
-log four times the size):
+from then on. Today's known one: an idle loop pass on an event log four
+times the size and its reads:
 [the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657).
+Its CPU budget holds over both window lengths since the loop folds only the
+history appended after its last pass.
+The idle pass's CPU and processes were known under the same issue until the
+loop stopped re-verifying unverified review requests every pass; their
+budgets now hold.
 The runner units of parked and off-roster sessions were known until
 [runner units outliving their sessions](https://github.com/giantswarm/beekeeper/issues/3675)
 was fixed; their budget of zero now holds.
@@ -68,6 +72,9 @@ cgroup that limits both CPU and memory:
 ```sh
 make test-performance-local   # systemd-run --user --scope -p CPUQuota=100% -p MemoryMax=1G
 ```
+
+Checkpoint publication encodes the retained projection directly under its reader
+lock as compact JSON, avoiding a full slice copy and indentation overhead.
 
 ## The report
 

@@ -15,19 +15,21 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// loopIssue is the open issue that has the loop over its budgets today: its
-// passes cost more CPU and processes than the budget, and its reads grow
-// with the event log (an idle pass on a log four times the size read five
-// times as much when the suite was written).
+// loopIssue is the open issue that has the loop over its budgets today: on an
+// event log four times the size, an idle pass reads several times as much.
+// Idle passes on the desk of record are within their CPU and process budgets
+// since its review-recovery backoff, and on the grown log since the loop
+// folds only the history appended after its last pass.
 const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
 
 // Loop budgets per pass of the supervisor loop on the desk of record. An
 // idle pass reads what changed, not the state and the event log again; at the
 // 30-second production interval its CPU is a few percent of one core.
 var (
-	loopIdleCPU      = limit{Max: 0.5, Known: loopIssue}
+	loopIdleCPU      = limit{Max: 0.5}
+	loopGrownCPU     = limit{Max: loopIdleCPU.Max}
 	loopIdleRead     = limit{Max: 8}
-	loopIdleChildren = limit{Max: 5, Known: loopIssue}
+	loopIdleChildren = limit{Max: 5}
 	// The event log grows; an idle pass must not: at most this factor of
 	// the pass before plus loopGrowthSlack MiB.
 	loopGrowthFactor = 1.25
@@ -173,7 +175,7 @@ func TestLoopBudgets(t *testing.T) {
 	cpu, read, write, children = l.window(t, win, o.loopInterval)
 	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack, Known: loopIssue}
 	rep.check(t, "idle pass, 4x event log", "read", read, grown)
-	rep.check(t, "idle pass, 4x event log", "cpu", cpu, loopIdleCPU)
+	rep.check(t, "idle pass, 4x event log", "cpu", cpu, loopGrownCPU)
 	rep.check(t, "idle pass, 4x event log", "write", write, measured)
 	rep.check(t, "idle pass, 4x event log", "children", children, loopIdleChildren)
 	if idleRead > 0 {
