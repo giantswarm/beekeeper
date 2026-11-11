@@ -11,25 +11,29 @@ const (
 	watchWorkflowRun  = "workflowRun"
 	watchRunAttempt   = "runAttempt"
 	watchQueued       = "QUEUED"
+	watchStatusField  = "status"
+	watchNameField    = "name"
+	watchSuiteCursor  = "more"
+	watchMovedHead    = "moved head"
 )
 
 func watchSuite(run, workflow int, status, conclusion string) map[string]any {
 	return map[string]any{
-		"status": status, "conclusion": conclusion,
+		watchStatusField: status, "conclusion": conclusion,
 		watchWorkflowRun: map[string]any{
 			"databaseId": run, watchRunAttempt: 1,
 			"url":      fmt.Sprintf("https://github.com/o/r/actions/runs/%d", run),
-			"workflow": map[string]any{"databaseId": workflow, "name": watchWorkflowName},
+			"workflow": map[string]any{"databaseId": workflow, watchNameField: watchWorkflowName},
 		},
 	}
 }
 
 func watchJob(run int, conclusion string) map[string]any {
 	return map[string]any{
-		"__typename": "CheckRun", "name": "ci-ok", "status": checkCompleted,
+		"__typename": "CheckRun", watchNameField: "ci-ok", watchStatusField: checkCompleted,
 		"conclusion": conclusion,
 		"detailsUrl": fmt.Sprintf("https://github.com/o/r/actions/runs/%d/job/%d", run, run),
-		"checkSuite": map[string]any{watchWorkflowRun: map[string]any{"workflow": map[string]any{"name": watchWorkflowName}}},
+		"checkSuite": map[string]any{watchWorkflowRun: map[string]any{"workflow": map[string]any{watchNameField: watchWorkflowName}}},
 	}
 }
 
@@ -70,7 +74,7 @@ func TestPullWatcherNewestWorkflowGatesGreen(t *testing.T) {
 		},
 		{
 			name:   "external suite has no workflow",
-			suites: []any{map[string]any{"status": watchQueued, watchWorkflowRun: nil}},
+			suites: []any{map[string]any{watchStatusField: watchQueued, watchWorkflowRun: nil}},
 			jobs:   []any{watchJob(20, checkSuccess)}, green: true,
 		},
 		{
@@ -167,15 +171,15 @@ func TestPullWatcherWorkflowRerunAttempt(t *testing.T) {
 }
 
 func TestPullWatcherIncompleteWorkflowSuitesStayUnread(t *testing.T) {
-	for _, mode := range []string{"missing cursor", "repeated cursor", "moved head"} {
+	for _, mode := range []string{"missing cursor", "repeated cursor", watchMovedHead} {
 		t.Run(mode, func(t *testing.T) {
 			fakePullGraphQL(t, func(query string, call int) map[string]any {
 				p := pullGraphQLFixture(t, query, checkSuccess, loopHead, watchFixtureUpdated)
-				page := map[string]any{pullHasNext: true, pullEndCursor: "more"}
+				page := map[string]any{pullHasNext: true, pullEndCursor: watchSuiteCursor}
 				if mode == "missing cursor" {
 					delete(page, pullEndCursor)
 				}
-				if mode == "moved head" && call == 2 {
+				if mode == watchMovedHead && call == 2 {
 					p[pullHeadField] = loopFixed
 				}
 				pullConnection(p, pullSuites)[pullPageInfo] = page
