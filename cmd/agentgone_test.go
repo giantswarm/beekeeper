@@ -366,7 +366,7 @@ func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
 	idleCodex := state.Agent{
 		Party:      state.Party{HostSession: codex.HostPrefix + "rev-codex", Name: "Review beekeeper 3394 x1"},
 		Harness:    codex.Harness,
-		Model:      "gpt-6.1-sol",
+		Model:      testGoneCodexModel,
 		Task:       "Review https://github.com/giantswarm/beekeeper/pull/3394",
 		Registered: now.Add(-10 * time.Minute),
 		ActivityAt: now.Add(-5 * time.Minute),
@@ -381,7 +381,7 @@ func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
 	staleIdleWorker := state.Agent{
 		Party:      state.Party{HostSession: codex.HostPrefix + "worker-codex", Name: "beekeeper 3394"},
 		Harness:    codex.Harness,
-		Model:      "gpt-6.1-sol",
+		Model:      testGoneCodexModel,
 		Task:       "Work https://github.com/giantswarm/beekeeper/issues/3394",
 		Registered: now.Add(-48 * time.Hour),
 		ActivityAt: now.Add(-25 * time.Hour),
@@ -442,5 +442,47 @@ func TestStoppedAndIdleReviewersFreeCapacityAndRetire(t *testing.T) {
 	wantRemoved := []string{stoppedAgy.Name, idleCodex.Name, staleIdleWorker.Name}
 	if !slices.Equal(removed, wantRemoved) {
 		t.Fatalf("planChores removed = %v, want %v", removed, wantRemoved)
+	}
+}
+
+const testGoneCodexModel = "gpt-6.1-sol"
+
+func TestGoneAgentRecentRosterSkipsEndedTranscripts(t *testing.T) {
+	a, _ := stubApp(t)
+	const id = "codex-recent-roster"
+	ag := state.Agent{
+		Party:      state.Party{HostSession: codex.HostPrefix + id, Name: "beekeeper 3657 c1"},
+		Harness:    codex.Harness,
+		Model:      testGoneCodexModel,
+		Task:       "Work https://github.com/giantswarm/beekeeper/issues/3657",
+		Registered: a.now.Add(-time.Hour),
+	}
+	st := &state.State{Agents: []state.Agent{ag}}
+
+	// Put a newer stream log on disk; while roster activity is within staleAfter,
+	// goneAgent returns the roster timestamp without consulting disk transcripts.
+	logPath := codex.LogPath(a.cfg.StateDir, id)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fresh := a.now.Add(-5 * time.Minute)
+	if err := os.Chtimes(logPath, fresh, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	last, gone := goneAgent(a.cfg, st, nil, ag, 24*time.Hour, a.now)
+	if gone || !last.Equal(ag.Registered) {
+		t.Fatalf("recent roster goneAgent = (%v, %v), want (%v, false)", last, gone, ag.Registered)
+	}
+
+	// Once roster activity exceeds staleAfter, goneAgent checks the transcript on disk.
+	ag.Registered = a.now.Add(-48 * time.Hour)
+	st.Agents[0] = ag
+	last, gone = goneAgent(a.cfg, st, nil, ag, 24*time.Hour, a.now)
+	if gone || !last.Equal(fresh) {
+		t.Fatalf("stale roster with fresh log goneAgent = (%v, %v), want (%v, false)", last, gone, fresh)
 	}
 }

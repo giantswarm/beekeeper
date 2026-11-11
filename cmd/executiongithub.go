@@ -169,6 +169,9 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 			return err
 		}
 	}
+	if _, index := executionRecord(st, ref); (request.ResolvePush || request.PushBranch != "") && index >= 0 && reviewerSession(st, st.Starts[index].Party) {
+		return refused("%s", reviewWriteRefusal)
+	}
 	if request.PushBranch != "" {
 		branch := executionOwnedBranch(r)
 		if round := assignedExecutionReviewRound(st, ref); round != nil {

@@ -630,10 +630,6 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 			var target workerGitHubPushTarget
 			err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &target, false)
 			switch scenario {
-			case review3325Authorized:
-				if err != nil || target.Branch != branch || target.ReviewID == "" {
-					t.Fatalf("assigned branch refused: %+v %v", target, err)
-				}
 			case review3325SourceOnly, review3325DefaultTrunk, review3325WrongSession:
 				if err == nil && target.Branch != execution.GitHubBranch(r.Ref) {
 					t.Fatalf("source or name granted foreign write: %+v", target)
@@ -646,8 +642,8 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 			// Revalidation on credential use must reject a branch other than the
 			// resolved target, before any credential mint or network write.
 			if scenario == review3325Authorized {
-				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: target.ReviewID}); err != nil {
-					t.Fatalf("current round push refused: %v", err)
+				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: target.ReviewID}); err == nil {
+					t.Fatal("reviewer received a push credential")
 				}
 				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: "different-round"}); err == nil {
 					t.Fatal("another round borrowed the branch grant")

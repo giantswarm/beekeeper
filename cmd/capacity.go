@@ -28,6 +28,7 @@ import (
 // capacityView is what capacity shows: the roster's busy, parked and idle
 // agents against the target, the headroom a new start needs and the verdict.
 type capacityView struct {
+	Hosts              []hostPlacementView          `json:"hosts,omitempty"`
 	Activity           map[string]*providerActivity `json:"activity24h,omitempty"`
 	WorkerCeiling      int                          `json:"workerCeiling"`
 	ReviewHeadroom     int                          `json:"reviewHeadroom"`
@@ -2029,6 +2030,17 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if host != "" && host != executionLocal {
+				h, err := a.executionHost(host)
+				if err != nil {
+					return err
+				}
+				unlock, err := a.probeLock("capacity-host-" + unsafeKey.ReplaceAllString(string(h.Identity), "_") + ".lock")
+				if err != nil {
+					return refused("capacity: %v", err)
+				}
+				defer unlock()
+			}
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
 			if a.selectionKind == taskKindReview {
 				review = true
@@ -2046,7 +2058,7 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
 					return err
@@ -2071,13 +2083,14 @@ nothing; it makes no GitHub call.`,
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
-			events, err := a.store.Follow("capacity-activity", func(e state.Event) bool {
+			events, err := state.FollowSnapshot(a.store, "capacity-activity", "v1", func(e state.Event) bool {
 				return e.Verb == agentWakeEvent || e.Verb == resumedEvent || e.Verb == transcriptResumeEvent
 			})
 			if err != nil {
 				return err
 			}
 			v.Activity = activityCounts(st, events, liveCap, a.now)
+			v.Hosts = a.hostPlacementViews(st)
 			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
@@ -2098,6 +2111,9 @@ nothing; it makes no GitHub call.`,
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
 			if v.Local != nil {
 				p("local: %s", v.Local.line())
+			}
+			for _, host := range v.Hosts {
+				p("%s", host.line())
 			}
 			for _, name := range liveCap.ProviderNames() {
 				if pv := v.Providers[name]; pv != nil {

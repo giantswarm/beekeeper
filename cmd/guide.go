@@ -978,6 +978,8 @@ lines that save would have recorded, again only when those lines change.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			changes, closeChanges := state.Changes(ctx, filepath.Join(a.store.Dir(), "state.json"), filepath.Join(a.store.Dir(), "events.jsonl"))
+			defer closeChanges()
 			tick := time.NewTicker(a.cfg.Watch.Interval.Duration)
 			defer tick.Stop()
 			if a.cfg.Guide.Person == "" {
@@ -1004,6 +1006,11 @@ lines that save would have recorded, again only when those lines change.`,
 				case <-ctx.Done():
 					return nil
 				case <-tick.C:
+				case <-changes:
+					// Coalesce a transaction's outbox writes before rereading.
+					if !pauseChange(ctx) {
+						return nil
+					}
 				}
 			}
 		},
@@ -1192,7 +1199,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	if len(gone) == 0 {
 		return out, nil
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.store, "guide-closed-notes", "v1", func(e state.Event) bool {
 		return e.Verb == answerRecorded || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken
 	})
 	if err != nil {

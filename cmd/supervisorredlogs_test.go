@@ -3,9 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -16,20 +19,21 @@ const (
 )
 
 func TestRedHandoffIncludesBoundedFailureOutput(t *testing.T) {
-	old := readRedJobLog
-	t.Cleanup(func() { readRedJobLog = old })
+	oldGH := github.RunGH
+	t.Cleanup(func() { github.RunGH = oldGH })
 	calls := 0
-	readRedJobLog = func(_ context.Context, repo string, job int64) (string, error) {
+	github.RunGH = github.Retrying(func(ctx context.Context, args ...string) ([]byte, error) {
 		calls++
-		if repo != redLogRepo || job != 11 {
-			t.Fatalf("unexpected log request %s %d", repo, job)
+		want := []string{workerGitHubAPIGroup, "--allow-escape-sequences", "repos/red/logs/actions/jobs/11/logs"}
+		if github.Repo(ctx) != redLogRepo || !slices.Equal(args, want) {
+			t.Fatalf("unexpected gh call repo=%q args=%v", github.Repo(ctx), args)
 		}
-		return strings.Repeat("x", 13000) + "FAIL: useful tail", nil
-	}
+		return []byte(strings.Repeat("x", 13000) + "FAIL: useful tail"), nil
+	}, time.Millisecond)
 	url := redLogURL
 	act := attachRedLogs(context.Background(), superloop.Action{Ref: redLogRef, Message: url + " " + url})
-	if calls != 1 || !strings.Contains(act.Message, "earlier output truncated") || !strings.HasSuffix(act.Message, "FAIL: useful tail") || len(act.Message) > 12500 {
-		t.Fatalf("calls=%d, output length=%d", calls, len(act.Message))
+	if calls != 1 || !strings.Contains(act.Message, "CI failure output from "+url+":") || !strings.Contains(act.Message, "earlier output truncated") || !strings.HasSuffix(act.Message, "FAIL: useful tail") || len(act.Message) > 12500 {
+		t.Fatalf("calls=%d, output length=%d, msg=%q", calls, len(act.Message), act.Message)
 	}
 }
 

@@ -79,7 +79,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	sp.brief = "Working directory: " + dir + "\n\n" + projectPrompt(dir, sp.brief)
 	inbox := agy.InboxPath(a.cfg.StateDir, id)
 	stream := agy.StreamPath(a.cfg.StateDir, id)
-	s := state.Start{Party: state.Party{HostSession: agy.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: agy.Harness, Model: model}
+	s := state.Start{Kind: sp.kind, Party: state.Party{HostSession: agy.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: agy.Harness, Model: model}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)

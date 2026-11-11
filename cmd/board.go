@@ -784,7 +784,7 @@ func nextFreePreview(st *state.State, cands []board.Candidate, sc pickScope) nex
 		if asked {
 			c.Skip = ""
 		}
-		c.Skip = cmp.Or(incidentStartReason(st, sc.listed, c.Ref), heldByDecision(st.Notes, c.Item), c.Skip)
+		c.Skip = cmp.Or(repositoryStartReason(st, sc.listed, c.Ref), heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
 			c.Skip = cmp.Or(owned(c.Ref), sc.prReferences[strings.ToLower(c.Ref)])
 		}

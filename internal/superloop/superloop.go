@@ -46,6 +46,8 @@ const (
 	// KindFile hands the problems a done report found and filed nowhere
 	// to the guide's feed, to file in their owning repository.
 	KindFile = "file"
+	// KindProgress retains an owned delivery report without guide work.
+	KindProgress = "progress"
 	// KindEnd ends the tracking of a pull request that merged or closed.
 	KindEnd = "end"
 	// KindLeave says once why the loop leaves a parked pull request alone:
@@ -84,7 +86,7 @@ const OverlapWait = 30 * time.Minute
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
-	return []string{KindReview, KindGo, KindForward, KindRework, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
+	return []string{KindReview, KindGo, KindForward, KindRework, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindProgress, KindEnd,
 		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindOwner, KindMerge}
 }
 
@@ -220,7 +222,7 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 type Worker struct {
 	// Done affects observation only; Plan continues to use its existing events.
 	Done bool
-	// Issues are all active serve records, for observation only.
+	// Issues are all active serve records.
 	Issues []string
 	// ReviewRequested distinguishes a proven published branch from a plain wait.
 	ReviewRequested bool
@@ -1120,6 +1122,18 @@ func Plan(in Input) []Action {
 		}
 		return ""
 	}
+	progress := func(e Event) bool {
+		key := progressKey(e)
+		if l.has(key) || l.has(eventKey(KindProgress, e)) {
+			return true
+		}
+		if !ownDeliveryProblem(in, l, e) {
+			return false
+		}
+		ev := e
+		add(Action{Key: key, Kind: KindProgress, Agent: e.Agent, Event: &ev, Message: problemText(e)})
+		return true
+	}
 	for _, e := range in.Events {
 		switch e.Verb {
 		case VerbDone:
@@ -1131,7 +1145,7 @@ func Plan(in Input) []Action {
 				// agent leaves the roster.
 				var filed, unfiled []string
 				for _, p := range eventsByAgent[e.Agent] {
-					if p.Verb != VerbProblem || !near(p, e) || forwarded(p) {
+					if p.Verb != VerbProblem || !near(p, e) || forwarded(p) || progress(p) {
 						continue
 					}
 					if Filed(p.Detail) {
@@ -1161,7 +1175,7 @@ func Plan(in Input) []Action {
 				continue
 			}
 			for _, p := range eventsByAgent[e.Agent] {
-				if p.Verb == VerbProblem && near(p, e) && !forwarded(p) && Filed(p.Detail) {
+				if p.Verb == VerbProblem && near(p, e) && !forwarded(p) && !progress(p) && Filed(p.Detail) {
 					for _, u := range issueURL.FindAllString(p.Detail, -1) {
 						intake(issueRefFromURL(u), u, p.Agent, originOf(p, u))
 					}
@@ -1184,7 +1198,7 @@ func Plan(in Input) []Action {
 			// finding, never a decision: one naming its issue is filed,
 			// one naming none goes to the guide's feed to file in its
 			// owning repository, and the agent keeps its task.
-			if !paired(e) && !forwarded(e) {
+			if !paired(e) && !forwarded(e) && !progress(e) {
 				if Filed(e.Detail) {
 					for _, u := range issueURL.FindAllString(e.Detail, -1) {
 						intake(issueRefFromURL(u), u, e.Agent, originOf(e, u))
@@ -1264,6 +1278,15 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	rs := l.rounds[ref]
+	// A verdict may not approve commits introduced after its assigned head.
+	// Sessions share a GitHub login, so author-login comparisons cannot prove
+	// independence. Fail closed on a moved approval, including legacy results.
+	for _, rd := range rs {
+		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && !sameHead(v.Head, rd.head) {
+			leave(ref, p.URL, agent, "review-moved@"+short(p.Head), "review approved a different head from its assignment; no merge go: post findings and forward them to the implementing worker")
+			return
+		}
+	}
 	// Approved heads use the merge executor's durable repair handoff, which
 	// retains the approval and retries a capacity-limited fixer only once.
 	approved := false
@@ -1283,17 +1306,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		}
 		return
 	}
-	// A reviewer publishes fixes and reports approval before CI completes.
-	// The author's saved park still names the original head. Route failures
-	// of the authenticated round verdict's current head back to that worker,
-	// using the verdict time as a stable, deduplicated CI handoff boundary.
-	ciWorker := w
-	if isParked && !sameHead(w.ParkedHead, p.Head) && len(rs) > 0 {
-		if v := p.verdict(rs[len(rs)-1], l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) {
-			ciWorker.ParkedHead, ciWorker.ParkedAt = p.Head, v.At
-		}
-	}
-	planRed(l, p, ciWorker, isParked, add)
+	planRed(l, p, w, isParked, add)
 	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && !slices.ContainsFunc(p.Reviews, func(r Review) bool {
 		return r.Verdict == ChangesRequested && (sameHead(r.Head, p.Head) || !r.At.Before(l.keys[goKey(ref, head)].At))
 	}) && in.baseMerged(p, head) {

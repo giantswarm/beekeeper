@@ -103,39 +103,9 @@ func assignedExecutionReviewRound(st *state.State, ref execution.Ref) *state.Des
 	return nil
 }
 
-// executionReviewWriteBranch derives the write grant from the latest durable
-// review assignment and its concrete execution session. Source selection alone
-// never grants write access. Callers also require a live execution lease.
-func executionReviewWriteBranch(ctx context.Context, st *state.State, ref execution.Ref) (string, error) {
-	r, i := executionRecord(st, ref)
-	round := assignedExecutionReviewRound(st, ref)
-	if r == nil || r.Completed || r.Terminal() || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || i < 0 || round == nil || round.ID == "" || round.Round <= 0 || round.Result != nil || round.Head != r.Handle.Commit {
-		return "", refused("no active review branch assignment")
-	}
-	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
-		candidate := &st.DeskReviews[n]
-		if strings.EqualFold(candidate.Ref, round.Ref) {
-			if candidate.ID != round.ID {
-				return "", refused("review branch assignment was superseded")
-			}
-			break
-		}
-	}
-	pr, ok := parseRef(round.Ref)
-	if !ok || !strings.EqualFold(pr.Repo, r.Request.Repository) || !sameReviewSession(round.Reviewer, st.Starts[i].Party) {
-		return "", refused("review branch assignment identity mismatch")
-	}
-	pull, err := readLoopPull(ctx, round.Ref)
-	if err != nil {
-		return "", err
-	}
-	if !r.Lease.ExpiresAt.After(time.Now()) {
-		return "", refused("review branch assignment expired during revalidation")
-	}
-	if pull.State != superloop.Open || !strings.EqualFold(pull.Ref, round.Ref) || pull.Branch == "" || pull.Branch != r.Request.GitRef {
-		return "", refused("review branch assignment no longer matches the open pull request")
-	}
-	return pull.Branch, nil
+// Reviewers have no branch write grant, even when their assignment is live.
+func executionReviewWriteBranch(_ context.Context, _ *state.State, _ execution.Ref) (string, error) {
+	return "", refused("%s", reviewWriteRefusal)
 }
 
 func publicationCommit(s string) bool {
@@ -443,8 +413,8 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		return result, refused("base synchronization cannot publish a PR")
 	}
 	reviewRound := assignedExecutionReviewRound(st, ref)
-	if reviewRound != nil && (strings.TrimSpace(p.Title) != "" || strings.TrimSpace(p.Body) != "") {
-		return result, refused("reviewers may push self-fix commits to the assigned pull request branch, not create or edit pull request metadata")
+	if _, i := executionRecord(st, ref); reviewRound != nil || i >= 0 && reviewerSession(st, st.Starts[i].Party) {
+		return result, refused("%s", reviewWriteRefusal)
 	}
 	write := func() (context.Context, context.CancelFunc, error) {
 		if _, err := checkAuthority(st, ref); err != nil {
@@ -611,25 +581,11 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if reason := outboundGuard(a.cfg.Outbound).PublicationRefusal(p.Title+"\n"+p.Body, messages+"\n"+added.String()); reason != "" {
 			return result, refused("%s", reason)
 		}
-		if reviewRound != nil {
-			result.Branch, err = executionReviewWriteBranch(ctx, st, ref)
-			if err != nil {
-				return result, err
-			}
-		}
 		// Reconcile a lost create response by the exact owned branch. An existing
 		// PR takes only the title and body this publication names.
 		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
 		if listErr != nil {
 			return result, listErr
-		}
-		if reviewRound != nil {
-			if len(pulls) != 1 || pulls[0].State != github.Open {
-				return result, refused("reviewer publication requires the assigned open pull request")
-			}
-			if prRef, ok := parseRef(pulls[0].URL); !ok || !strings.EqualFold(refName(prRef), reviewRound.Ref) {
-				return result, refused("reviewer publication must target the assigned pull request")
-			}
 		}
 		if len(pulls) == 1 && pulls[0].State != github.Open {
 			return result, refused("owned pull request is already closed; a new execution is required")
@@ -664,12 +620,6 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		}
 		if _, liveErr := checkAuthority(st, ref); liveErr != nil {
 			return result, liveErr
-		}
-		if reviewRound != nil {
-			branch, authErr := executionReviewWriteBranch(ctx, st, ref)
-			if authErr != nil || branch != result.Branch {
-				return result, refused("review branch authorization changed")
-			}
 		}
 		if _, err = publishGit(ctx, repo, "push", remote, p.Head+":refs/heads/"+result.Branch); err != nil {
 			return result, err

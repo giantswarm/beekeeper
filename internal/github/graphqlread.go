@@ -45,7 +45,7 @@ func GraphQLRead(args []string) bool {
 			if i == len(args) || args[i] == "" {
 				return false
 			}
-		case a == "--paginate" || a == "--slurp" || a == "--silent" || a == "--include" || a == "-i" || a == "--verbose":
+		case a == "--paginate" || a == "--slurp" || a == "--silent" || a == ghFlagInclude || a == "-i" || a == "--verbose":
 		case strings.HasPrefix(a, "--jq=") || strings.HasPrefix(a, "--template=") || strings.HasPrefix(a, "--cache="):
 		case strings.HasPrefix(a, "-") || endpoint != "":
 			return false

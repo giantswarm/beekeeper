@@ -113,6 +113,8 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// ReviewWrite refuses commit and push from an independently assigned reviewer.
+	ReviewWrite func(session string) string
 	// ExecutionMCP admits only the authenticated coordinator proxy namespace.
 	ExecutionMCP bool
 	// Panic records the failing check and stack without exposing them to the tool.

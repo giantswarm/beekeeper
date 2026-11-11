@@ -219,6 +219,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		endpoint := host.Endpoint
 		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
+		s.Kind = a.selectionKind
+		if o.Review {
+			s.Kind = taskKindReview
+		}
 		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
 		}
@@ -314,7 +318,6 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 // adapter for. hostUnsupportedHarnesses is empty now that every harness has
 // a remote adapter; the loop's verdict weighs the harnesses its catalogue
 // entry lists (executionCapacity) and its check offers (hostUnoffered).
-// hostRunsHarness is the other side, a harness some host runs ("" is Claude Code).
 var hostUnsupportedHarnesses = []string{}
 
 // hostUnoffered are the remote harnesses a host's check did not offer: a
@@ -327,21 +330,6 @@ func hostUnoffered(caps execution.Capabilities) []string {
 		}
 	}
 	return out
-}
-
-// hostRunsHarness says whether one of hosts can run harness: Claude Code on
-// any host, as before, and Codex, Agy or omp on a host whose entry lists it.
-func hostRunsHarness(harness string, hosts []execution.Host) bool {
-	h := strings.TrimSpace(harness)
-	if h == "" || h == claudeComm {
-		return true
-	}
-	for _, host := range hosts {
-		if execution.SupportedHarness(h) && host.Supports(h) {
-			return true
-		}
-	}
-	return false
 }
 
 func executionReserved(st *state.State, ag state.Agent) bool {

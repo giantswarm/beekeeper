@@ -7,7 +7,7 @@
 //
 // The model is deliberately small. An issue is started by a worker when a
 // slot is free; the worker pushes a pull request; CI runs; a reviewer is
-// started once CI is green; the reviewer fixes its own findings or asks
+// started once CI is green; the reviewer posts findings and asks
 // for changes; the merge lane merges one pull request at a time; the
 // release rolls out. The loop drives every transition but the worker's
 // and the reviewer's own turns, so while the loop is down nothing starts,

@@ -62,12 +62,14 @@ type GH func(ctx context.Context, args ...string) ([]byte, error)
 // RunGH is GH through the gh binary, acting on the repository ctx names
 // (ActingOn) through GH_REPO; a read GitHub answers with a 5xx, an empty or
 // a cut-off body is asked again (Retrying).
-var RunGH = Retrying(execGH, ReadBackoff)
+var RunGH = newRepositoryCache(Retrying(execGH, ReadBackoff), time.Now).call
 
 // execGH is one run of the gh binary.
 func execGH(ctx context.Context, args ...string) ([]byte, error) {
 	if len(args) > 1 && (args[0] == "api" && !slices.Contains(args, "graphql") || args[0] == "run" || args[0] == "workflow" || args[0] == "search" || args[0] == "release" && args[1] != "list" || args[0] == "issue" && args[1] == "close" || args[0] == "pr" && slices.Contains([]string{"diff", "create", "edit", "merge", "review", "close"}, args[1])) {
-		observeREST()
+		if err := AdmitRESTCall(ctx, restCaller()); err != nil {
+			return nil, err
+		}
 	}
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number

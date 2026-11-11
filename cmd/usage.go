@@ -1141,6 +1141,13 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 }
 
 func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+	return a.resolveReadingAt(ctx, file, u, nil)
+}
+
+func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage, completed func() time.Time) (usageReading, error) {
+	if err := ctx.Err(); err != nil {
+		return usageReading{}, err
+	}
 	started := time.Now()
 	now := a.now
 	if now.IsZero() {
@@ -1157,8 +1164,33 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 			haveCached = true
 		}
 	}
+	unlock, err := a.usageRefreshLock(file)
+	if err != nil {
+		now := a.timeNow()
+		if now.IsZero() {
+			now = time.Now()
+		}
+		return a.cachedUsageReading(file, u, now, err)
+	}
+	defer unlock()
+	// Recheck under the provider lock: another process may have published
+	// the reading between our caller deciding to refresh and admission.
+	if a.store != nil {
+		cached = usageReading{}
+		haveCached = false
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
+			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
+				applyQuotaForUsageFile(a.store, file, &cached, now)
+				return cached, nil
+			}
+			haveCached = true
+		}
+	}
 	r, err := a.execUsage(ctx, u)
 	now = now.Add(max(0, time.Since(started)))
+	if completed != nil {
+		now = completed()
+	}
 	if !a.now.IsZero() {
 		a.now = now
 	}
@@ -1552,12 +1584,15 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 	var cached usageReading
 	if found, err := w.store.ReadFile(usageFile, &cached); err == nil && found &&
 		usageFresh(cached, k.Usage, now) && validateReadingAt(cached, k.Usage, now) == nil {
+		w.mu.Lock()
+		w.usageErr = ""
+		w.mu.Unlock()
 		return false
 	}
 	w.mu.Lock()
 	last := w.lastUsage
 	w.mu.Unlock()
-	retry := min(k.Usage.EffectiveEvery(), max(w.cfg.Watch.Interval.Duration, time.Second))
+	retry := min(k.Usage.EffectiveEvery(), w.usageRetryFloor())
 	return last.IsZero() || now.Sub(last) >= retry
 }
 
@@ -1566,13 +1601,23 @@ func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now tim
 	if found, err := w.store.ReadFile(usageProviderFile(name), &cached); err == nil && found &&
 		!w.useCodexRolloutUsage(u, cached) &&
 		usageFresh(cached, u, now) && validateReadingAt(cached, u, now) == nil {
+		w.mu.Lock()
+		delete(w.providerUsageErr, name)
+		w.mu.Unlock()
 		return false
 	}
 	w.mu.Lock()
 	last := w.providerLastUsage[name]
 	w.mu.Unlock()
-	retry := min(u.EffectiveEvery(), max(w.cfg.Watch.Interval.Duration, time.Second))
+	retry := min(u.EffectiveEvery(), w.usageRetryFloor())
 	return last.IsZero() || now.Sub(last) >= retry
+}
+
+func (w *watcher) usageRetryFloor() time.Duration {
+	if w.cfg != nil {
+		return max(w.cfg.Watch.Interval.Duration, time.Second)
+	}
+	return time.Second
 }
 
 // Providers are read sequentially; allow each its configured command deadline.
@@ -1596,21 +1641,17 @@ func (w *watcher) usageNow() time.Time {
 // execUsageNow gives each provider its own observation time, then validates at
 // completion. A refresh can spend minutes on earlier providers; its scheduling
 // time must not make a newly written Codex event appear to be in the future.
-func (w *watcher) execUsageNow(ctx context.Context, u config.Usage) (usageReading, error) {
+func (w *watcher) execUsageNow(ctx context.Context, file string, u config.Usage) (usageReading, error) {
 	started := w.clk().Now()
 	obs := w.usageNow()
 	reader := w.snapshotAtNow()
 	reader.now = obs
-	r, err := reader.execUsage(ctx, u)
-	if err != nil {
-		return usageReading{}, err
-	}
-	now := obs.Add(max(0, w.clk().Now().Sub(started)))
-	if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
-		now = w.clk().Now()
-	}
-	r.At = now.UTC()
-	return r, validateReadingAt(r, u, now)
+	return reader.resolveReadingAt(ctx, file, u, func() time.Time {
+		if w.clock != nil || w.polls.Load() > 0 || w.now.IsZero() {
+			return w.clk().Now()
+		}
+		return obs.Add(max(0, w.clk().Now().Sub(started)))
+	})
 }
 
 // refreshUsage stamps every provider read with its own observation time: a
@@ -1623,14 +1664,15 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
 			}
+			r, err := w.execUsageNow(ctx, usageProviderFile(name), p.Usage)
+			if err != nil && isProbeInProgress(err.Error()) || isProbeInProgress(r.Fallback) {
+				continue
+			}
 			w.mu.Lock()
 			if w.providerLastUsage == nil {
 				w.providerLastUsage = map[string]time.Time{}
 			}
 			w.providerLastUsage[name] = now
-			w.mu.Unlock()
-			r, err := w.execUsageNow(ctx, p.Usage)
-			w.mu.Lock()
 			if w.providerUsageErr == nil {
 				w.providerUsageErr = map[string]string{}
 			}
@@ -1640,27 +1682,25 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 				w.retainUsageStop(usageProviderFile(name), err)
 				continue
 			}
-			w.providerUsageErr[name] = ""
+			w.providerUsageErr[name] = r.Fallback
 			w.mu.Unlock()
-			_ = w.store.WriteFile(usageProviderFile(name), r)
 		}
 		return
 	}
 	now := w.usageNow()
+	r, err := w.execUsageNow(ctx, usageFile, k.Usage)
+	if err != nil && isProbeInProgress(err.Error()) || isProbeInProgress(r.Fallback) {
+		return
+	}
 	w.mu.Lock()
 	w.lastUsage = now
-	w.mu.Unlock()
-	r, err := w.execUsageNow(ctx, k.Usage)
 	if err != nil {
-		w.mu.Lock()
 		w.usageErr = err.Error()
 		w.mu.Unlock()
 		w.retainUsageStop(usageFile, err)
 		return
 	}
-	_ = w.store.WriteFile(usageFile, r)
-	w.mu.Lock()
-	w.usageErr = ""
+	w.usageErr = r.Fallback
 	w.mu.Unlock()
 }
 
@@ -1694,7 +1734,7 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 // reportUsageFallback keeps unreadability visible even when starts can continue.
 // The keyed report feeds the guide's existing durable problem queue.
 func (w *watcher) reportUsageFallback(key, provider, failure string) {
-	if failure == "" {
+	if failure == "" || isProbeInProgress(failure) {
 		w.clear(key)
 		return
 	}

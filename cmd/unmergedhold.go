@@ -351,7 +351,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 	}
 
 	if a.store != nil {
-		if evs, err := a.store.Events(0, func(e state.Event) bool {
+		if evs, err := state.FollowSnapshot(a.store, "start-gate-loop-claims", "v1", func(e state.Event) bool {
 			return e.By.Name == loopParty.Name && (e.Verb == loopClaimVerb || e.Verb == loopClaimEndVerb)
 		}); err == nil {
 			settled := map[string]bool{}

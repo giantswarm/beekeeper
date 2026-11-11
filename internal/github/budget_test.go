@@ -174,6 +174,7 @@ func TestRateLimited(t *testing.T) {
 	for msg, want := range map[string]bool{
 		"GraphQL: API rate limit already exceeded for user ID 1.":         true,
 		"gh api repos/o/r/pulls/7: HTTP 403: API rate limit exceeded for": true,
+		"looking up release v0.6.0: GitHub rate limit exceeded":           true,
 		"HTTP 403: You have exceeded a secondary rate limit.":             true,
 		"connection reset by peer":                                        false,
 		"HTTP 404: Not Found":                                             false,

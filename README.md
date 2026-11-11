@@ -25,17 +25,21 @@ are available through the worker's authenticated SSH callback. Remote wakes and 
 them with `agents messages` and reconcile with `agents hosts sync`. Hosts
 follow the coordinator's release: `agents hosts update` installs it there,
 verified, and pins the prepared policy digest in beekeeper's state, which the
-supervisor loop does after each coordinator update; a host that cannot be
-updated is held. With
-`supervisor.hosts`, `supervisor loop` places its worker starts
-on these hosts when the coordinator is out of room (or always with
-`supervisor.hostsFirst`, for what a host can run: a repository no host maps
-and a choice of a harness no host has an adapter for start locally within
-`capacity.local.ceiling`). Reviewers follow the same host preferences, including
+supervisor loop does after each coordinator update settles probation. Compatible
+older hosts keep taking starts during probation or release lookup failures;
+failed installations or policy checks still hold the host. With
+`supervisor.hosts`, workers prefer the first host with room by default and
+fall back to the coordinator within its ordinary capacity guards.
+Explicit `supervisor.hostsFirst: false` retains local-first placement.
+`capacity` and `supervisor status` show dated per-host placement reasons.
+Reviewers follow the same host preferences, including
 Codex reviewers without a worker GitHub App. On an execution host,
 `beekeeper agents review` reads the assigned PR and its closing issues,
 `--diff` reads the diff, and `--body-file <file>` posts the exact-head comment
 review through the coordinator for merge authorization.
+These execution forms take no PR reference: the assigned review supplies the
+target. On the coordinator, `beekeeper agents review <owner/repo>#<n>` starts
+an independent review; its flags cannot be mixed with `--diff` or `--body-file`.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
@@ -109,8 +113,16 @@ or missing previously configured identity holds the gate. Refusals on a
 higher-balance identity also hold it without hiding the lowest counter.
 Loop spend tracks each identity's counter separately; selecting another
 minimum or a GitHub window resetting never replenishes its own hourly allowance.
-Unchanged PR observations last five minutes; a new park, a report from that
-PR's reviewer or an answer on its thread invalidates them immediately.
+One independent watcher reads the pull requests of active deliveries, parks and
+sweep discoveries in GraphQL batches of up to 60. It polls every 30 seconds while
+checks or mergeability are pending and every two minutes when settled. Files,
+body and reviews refresh only when the head or `updatedAt` changes. Errors and
+rate limits are logged once per episode and back off exponentially to ten minutes,
+respecting `github.floor`. The pass never waits on these reads: it consumes dated
+observations, treating nonterminal ones older than five minutes as unknown.
+`beekeeper supervisor status` shows observation age; `--once` and `--dry-run`
+consume the watcher's saved observations. Terminal pull requests leave the poll
+set after their final read.
 Repository backlog inventories use paged GraphQL connections instead of REST
 search. The loop reuses each inventory for five minutes, then checks the latest
 updated pull in all states with an ETag: an unchanged response costs no REST
@@ -129,6 +141,15 @@ merges retain their own admission. Supervisor status names the scan hold.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+`beekeeper fatal status` reports each outage's scope. A red repository default
+branch holds merges into that branch, except the reserved repair PR, and release
+promotions from that repository. Workers in that repository and other repositories
+keep starting; other repositories' merges and releases continue. The repair PR
+keeps its exception through review and worker handoffs, but still requires green
+CI and merge-result validation, independent review, and the normal stop and hold
+checks. Infrastructure outages retain the global ordinary-start barrier. A
+successful probe clears only its own outage; an unreadable probe clears none.
+
 On the person's explicit emergency authorization, the current guide can run
 `beekeeper emergency on --reason "<their verbatim words>" --until 30m`, then
 `beekeeper emergency merge owner/repo 123`. The merge requires GitHub approval
@@ -144,8 +165,7 @@ context on that head, including any required App identity. It refuses unreadable
 requirements, classic protection, and non-review rules it cannot verify. Ruleset
 `required_reviewers` is a review requirement covered by this exception.
 `emergency hold set/lift`, `emergency
-start` (forced capacity admission; an active authenticated grant also overrides
-exhausted main-outage repair barriers, with a durable audit record), and `emergency capacity capacity.ceiling 4`
+start` (forced capacity admission, retaining infrastructure outage barriers), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.
 Under an active grant, admin merge attempts and results also name the full PR URL and exact head,
 including refused or failed attempts; a moved head requires a new invocation
@@ -488,7 +508,7 @@ whose shared rules sit above the repositories puts them in `~/.codex/AGENTS.md` 
 | `beekeeper agents park [--on <#note\|<context>#note\|owner/repo#n>] "<what>"`, `agents resume [<agent>]` | `park` parks the calling agent, its task kept, on what settles its wait: counted parked, not busy, in `agents` and `capacity`, it ends its turn. On a machine with a central instance, `--on <context>#<n>` parks on its open note `n` (a bare number the machine has no open note of is the central instance's, one open on both is refused); the watch reads the central instance's open notes (`note_list`) each poll while such a park stands and, once its note closed, its answer from the central feed (`read_feed`). Once the note is closed, the issue or pull request merged or closed, or the pull request given a review or comment by anyone but its author since the park (one posted under the author's own login, as a desk whose sessions share one login posts its own review, settles nothing), the watch says `AGENT RESUMABLE` once; a park on a person (a note, or a wait naming `guide.person`, an answer, a review or a decision) the supervisor's watch says once as `PARKED ON A PERSON`, for the guide to tell the person, and a park on a lease (`lease claim --park`, or a wait naming only the supervisor or guide, including a gate, an install chain, a timer or a probe) never: one on a lease it says once as `PARKED ON A LEASE` with the agent's place in the lease's queue, for the supervisor's grant; with `agents.autoResume` it resumes the agent with what settled it, a person's answer word for word. `resume` does it by hand. Run by the parked agent itself with no agent named (or naming itself), `resume` ends its own park, wakes nobody and prints what settled the wait. An agent of a harness beekeeper has no message route to (a session of another harness that registered itself with `agents register --harness`, not one `agents start` started on that harness) is never woken headless, which would start a second, unrelated Claude Code session: `resume` ends its park and says so, its park line and `AGENT RESUMABLE` name its own `resume` instead of the watch, and `agents.autoResume` leaves its park resumable for its own `resume`. A managed SSH worker's `resume` ends its own park on the coordinator, and only its own. A session off the roster (any session that never registered) parks too: its park is kept apart from the roster (`parks` in the state), settles the same way and resumes it by its session id, as `agents wake <session id>` does; one whose session is gone by then gets no wake and one line, and the issues it served go back to the board; joining the roster (`agents register`) ends it. A roster agent without a task is refused. See [Agents started without a click](#agents-started-without-a-click). |
 | `beekeeper agents archivable <local_id>...` | Confirms, per desktop session, that it is a finished worker beekeeper started (one of its starts, off the roster, no role a relay did not relieve, unarchived, its CLI in no turn but the caller's own) and exits 3 for any other, a session the person started included. A steward asked to archive runs it first and archives only what it confirms (see [Agents started without a click](#agents-started-without-a-click)). |
 | `beekeeper agents broadcast <message>` | Sends one message by name to every registered agent whose CLI runs, one after the other, the supervisor and the caller left out; a stopped agent is not resumed for it. One `agents.broadcast` event logs whom it reached. |
-| `beekeeper agents problem <finding>` | Records a mid-task finding immediately as `agents.problem` and delivers it to the supervisor’s watch, preserving the worker’s task and park. Include evidence and the owning repository, with full issue and PR URLs. Repeating a finding, including at `idle --problem`, logs and delivers it once per worker assignment. |
+| `beekeeper agents problem <finding>` | Records a mid-task finding immediately as `agents.problem` and delivers it to the supervisor’s watch, preserving the worker’s task and park. Include evidence and the owning repository, with full issue and PR URLs. Repeating a finding, including at `idle --problem`, logs and delivers it once per worker assignment. Reports explicitly naming only the worker’s claimed issues or owned open PRs stay in the delivery timeline as `supervisor.progress`, including after the worker leaves; they create no guide filing task. Unknown ownership and reports naming another repository remain findings. Repeated fingerprints already mapped to filed issues increment their observation tally without creating new guide work. |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. It waits 3 s at most for the state lock: a lock held longer fails the note unsaved, naming the lock's holder and, when one is pending, the desktop import of the caller's session, to be noted again. |
 | `beekeeper note add\|answer\|done` | Questions for a person, of two kinds (`--kind`): a decision (the default) or a sign-in (`login`); every note names its person (`--for`). A decision waits on a person with its deadline and what happens if nobody answers (`note add --for Ada --ref owner/repo#n --due 22:55 --status-quo "<what is true now>" --why "<why it needs Ada>" --default "the alert stays as is" <text>`); the guide puts them to its person (`guide queue`, `guide watch`). A session's state is its hand-over, rendered from live state; deferred work is a board item, a priority a rank (`board rank`) and a hold a blocked-by (`board block`); a hold on a person is the decision itself, `note add --holds`: every `--ref` is set `Blocked / Waiting` on the board, which no step of `board next` offers (`board next` skips it as `held: decision #<n> for <person> until it closes`; one refused leaves none held), and each set back to the Status it had once the decision closes, answered, by its default, as overtaken or by hand (`board.released`, `BOARD RELEASED`; its filer told), unless its Status was changed while held (`HOLD LEFT`, left as it is, the filer told why) or another open decision still holds it (`HOLD KEPT`); `--holds` without `--ref`, or on an issue not on the board, is refused with exit 3. `note list --for <person>` lists one person's notes; `note list --full` prints each note's whole text, every line, with its default and the issues and pull requests it names from its text and `--ref` links, and `--json --full` adds them as each note's `names`. A decision names the issue or PR it concerns (`--ref`, the first one the thread its answer is about), and is refused with exit 2 without them, `--due` and a `--default` that is an action. A decision for `guide.person` (any `--for` with it unset) is refused, naming what it lacks, without `--status-quo`, `--why`, a `--default` that is an action (not `wait` or `none`), every `--option` as `<choice>: <consequence>`, the full URL of every `#N` or `owner/repo#N`, and `--checked "<source>"` for a claim that something is merged, green, released, rolled or closed, and while a pull request it links in a plans repository (`plans.repositories`) is closed, or open with its stage check (`plans.check`, `plan-stages`) pending, missing or red for anything but missing stage outputs, naming the stage and what would admit it (a check red only for `<plan>: <stage> missing` findings is the grill stage, whose output is questions for the person: admitted, the stage named on stderr); one folds into the open note for the same person (`note.folded`) only when it asks the same question (case, spacing and closing punctuation aside) on the same issue or PR, its `--ref` or else the first URL of its `--status-quo` (URLs cited as context and a shared first word never fold); the same question with a different `--default` or recommended option is refused, naming the open note, and `--fold-into <n>` folds into open note `n` for the same person explicitly, whose default and recommendation stand. `--kind login --until "<probe>"`: the watch runs the probe each tick and closes the note once it exits 0; a login is refused without its probe. A note for a person on a thread they answered on within 72 hours (`answer.recorded`) is filed with a warning that quotes the answer. `watch` reports a note once when it is due; a decision due unanswered closes with its default (`NOTE DEFAULTED #<id>: <default>`, `note.defaulted`), and the session that filed it is told; an answer within the day after replaces the default. A decision renders as one Slack message (`beekeeper serve --help`): it is refused with exit 2 without `--status-quo`, with a question over one line or 150 characters, a status quo over 3000, more than 10 `--option` or a label over 75 characters, or a `--recommend <n>` (1-based) that names none of them; `--for team:<name>` puts it to a team. On a machine with a central instance (`central.context`) a decision is filed there once its checks pass (`note_add`, through muster as the person): the central instance puts it in Slack, its number is the central note's (`note #<n> (central <context>: …)`), and its answer or default reaches the filing session through the person's mailbox (a role's run relayed since: the role's holder now, or its next start); a sign-in, `--holds` and `--fold-into` a machine's note stay on the machine; `--fold-into <context>#<n>` (or a bare `<n>` only the central instance has open) folds a decision into the central note `n` (`note_add`'s `fold_into`), whose filer is told its answer. With the central instance unreachable before the call went out, the decision is filed on the machine, as stderr says; a call sent and left unanswered files it nowhere else and exits 69. `--ref owner/repo#n` (repeatable) links a note to the issues or PRs it asks about: once every one is closed or merged, `watch` closes it as overtaken (`NOTE OVERTAKEN`, `note.overtaken` with the reason; `watch --once` names it and writes nothing), when its worker closed them at the end of its task: an issue a pull request's closing keyword closed at its merge (`<ref> closed by <owner/repo#pr>'s closing keyword`), or any close while the worker that filed the note still runs its task, keeps the note open, said once per reason as `NOTE KEPT: #<id>, <reason>: <text>` (`note.kept`); the worker's `agents idle` ends its task, and from then on its settled issues overtake its notes, a keyword close included; a note without `--ref` is never closed by the watch: once the session that filed it is archived (a stopped session is not), `guide watch` names it to the guide as orphaned, to ask or close by hand (a role's run, current or relieved, never orphans its notes). Login notes, and the note the guide asks now, are never overtaken. `note show <id>` prints one note's full text, audience, status and retained answer (`--json` returns one object); answered file-backed notes require their audit event, and the central store retains closed notes for its history period. `note done <id> --overtaken "<why>"` closes one so by hand. `note answer <id> [--choice <n>] [<answer>]` is `beekeeper answer <its first --ref> --note <id>` (below); a note without a `--ref` is refused, naming that form. On a machine with a central instance, `note list`, `note answer` and `note done` also act on its notes, named `<context>#<n>` ([The central instance](#the-central-instance)). A decision that asks whether to merge a pull request (to approve, confirm or authorise its merge) is refused from anyone and logged as `note.redirected`: the supervisor loop merges a pull request after its desk review and the fixes of its findings, once its checks are green, and asks nobody. The full hand-over carries `standing.md` in the state directory verbatim; the guide successor prompt references the file once, which the person edits (an instruction ends when its block is deleted). |
 | `beekeeper answer <owner/repo#n> [--note <id>] [--choice <n>] [--via cli\|slack] [--post] [<words>]` | Records the person's words verbatim about the issue or pull request they concern, however they came: `answer.recorded` in `beekeeper log` with the thread and the words; `--note` closes that note (`--choice <n>` one of its options, 1-based, the words optional then) and tells the session that filed it (`NOTE ANSWERED #<id> by <person>: <answer> (on <thread>)`, which `watch` prints too; a note a role's run filed goes to the role's holder now, or waits for the guide's next `guide start` while none can be told); without a note the sessions serving the thread (`sessions serve`) are told (`ANSWER on <thread> by <person>: <words>`). A decision its default closed within the last day is answered all the same: the answer replaces the default, its filer told so (`… (replaces the default applied: <default>)`); a day later it is refused. Nothing is posted to GitHub: what shows there is the work's own result. `--post` also records the decision as a comment in plain words (who decided, the words, the issue or pull request by its URL when the comment is elsewhere; no note, session or channel): a thread in a private repository gets it itself; a public one gets nothing, the comment goes to the first private plan pull request (`plans.repositories`) whose Epic line names the thread or an epic above it, else to the nearest epic above it in a private repository; with neither the answer is refused (exit 3), naming what to add, nothing posted. The hand-over's answers section (those since the predecessor's start) and `note add`'s re-ask warning read `answer.recorded`. The event records `--via cli` or `--via slack` as how the words came. |
@@ -2353,7 +2373,11 @@ The held limit sets no refill pause, so a completed release frees the next pass.
 It checks again immediately before dispatch. With a worker brief configured,
 every pass that starts no board worker logs `SUPERVISOR REFILL started 0:` with its reason, including full or
 stale delivery admission (count, limit and last complete observation), capacity,
-GitHub budget, incident holds, board backoff or an earlier refill still running.
+GitHub budget, repository holds, board backoff or an earlier refill still running.
+A repository hold skips its board items and blocks new supervisor workers,
+reviewers and fixers until it expires or is lifted. The loop logs each skipped
+item with its hold reason once; an explicit repository or issue exception may
+still start. Lane and global merge holds continue to govern merges only.
 Passes that fail before dispatch report that failure too. Release observations
 probe the oldest attempted releases first, with never-probed releases ahead of
 retries, so a slow pass or a few failing releases cannot starve the rest of the
@@ -2405,7 +2429,7 @@ proof remain separate work.
 `beekeeper sim` holds the model of how an issue is meant to flow and compares it with the
 event log. The model: a worker starts when a busy slot is free (`capacity.ceiling`, reviewers
 up to `capacity.reviewHeadroom` more) and pushes a pull request; CI runs; once it is green the
-loop starts a reviewer, which fixes its own findings on the branch or asks for changes; the
+loop starts a reviewer, which posts findings for the implementing worker; the
 repository's lane merges one pull request at a time (`devctl pr merge` with the merge-result
 check); the release rolls out. The loop drives every step but the worker's and the reviewer's
 turns, so while it is down nothing starts, is reviewed or merges. Each stage has a median
@@ -3621,9 +3645,16 @@ which `claude agents`, `claude attach` and Remote Control show:
   in the calling unit (the standby watch's `beekeeper-notify.service` with its `MemoryMax` and
   `CPUQuota`, a wake's unit), whose limits every background session would share and whose stop
   would end them all. `beekeeper doctor`, and so the watch every tick, moves a daemon it finds in a
-  beekeeper unit, with the processes under it there, into a scope of its own
+  service or another app/session scope, with the processes under it there, into a scope of its own
   (`claude-daemon-<time>-<pid>.scope`) and says so in a `DOCTOR` line naming the unit and its
-  limits (`daemon.move` in the log); no session stops.
+  limits (`daemon.move` in the log); no session stops. Dedicated daemon scopes and explicit
+  build caps stay in place. Services are unsafe even with `Restart=on-failure`: an upgrade
+  can exit cleanly and leave the replacement daemon subject to the old service's stop.
+- **Independent guide recovery.** The standby checks CLI identities at least every 30 seconds,
+  outside the main watch's accounting and network work. After `guide.restartGrace` (one minute
+  by default), it resumes the guide or starts its successor, respecting stops and open relays.
+  The stopped-agent remedy is `beekeeper agents wake`, which cleans the environment and scopes
+  background resumes; never start the daemon through a raw resume in another session.
 - **On the roster at once.** The daemon chooses the session id (`--bg` ignores `--session-id`);
   `agents start` reads it from `claude agents --json` and records the start (`background: true`)
   and the roster entry, busy with `--task`, before it returns. No `agents assign` follows. The

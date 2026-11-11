@@ -142,6 +142,19 @@ func fillCapacityKey(cap *capacityView) string {
 	return strconv.Itoa(cap.Ceiling)
 }
 
+// fillRepositoryHoldsKey invalidates an empty-board pause as soon as a
+// repository hold is lifted, expires or changes its exception.
+func fillRepositoryHoldsKey(st *state.State, now time.Time) string {
+	var holds []string
+	for _, h := range st.Holds {
+		if _, ok := parseRef(h.Target + "#1"); ok && h.Active(now) {
+			holds = append(holds, fmt.Sprintf("%q:%q", strings.ToLower(h.Target), strings.ToLower(h.Except)))
+		}
+	}
+	slices.Sort(holds)
+	return strings.Join(holds, ",")
+}
+
 // fillRoom is how many worker slots this pass can fill toward capacity.ceiling.
 // Local room bounds the pass only when no start can be placed on an execution
 // host; with supervisor.hosts, a hold across all providers (no choice picked
@@ -372,7 +385,14 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 	if l.fillPreview != nil {
 		st = l.fillPreview
 	}
-	room := l.deliveryFillRoom(l.fillRoom(l.fillCapacity(ctx)), st)
+	capacity, err := l.readFillCapacity(ctx)
+	if err != nil {
+		return err
+	}
+	if l.recording != nil {
+		l.recording.Room = l.fillRoom(capacity)
+	}
+	room := l.deliveryFillRoom(l.fillRoom(capacity), st)
 	if room <= 0 {
 		return nil
 	}
@@ -490,7 +510,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return nil
 		}
 		ordinary := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy()).Reason == ""
-		capacity, alive := fillCapacityKey(cap), fillLive(live)
+		capacity, alive := fillCapacityKey(cap)+"/"+fillRepositoryHoldsKey(live, l.a.timeNow()), fillLive(live)
 		l.mu.Lock()
 		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
 			if !l.fillPause.until.IsZero() && l.fillPause.changed(capacity, alive) {

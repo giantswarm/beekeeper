@@ -951,7 +951,7 @@ func cutOwed(m state.Merge, now time.Time) state.Owed {
 // exited says whether the devctl of the merge whose files are at base wrote
 // its exit code.
 func exited(base string) bool {
-	_, err := os.Stat(base + ".rc")
+	_, err := os.Stat(base + ".rc") // #nosec G703 -- gate run path under the state directory
 	return err == nil
 }
 

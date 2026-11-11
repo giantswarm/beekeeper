@@ -357,7 +357,7 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			kind := startKind(review, ofSelfHosted)
-			if host != "" && host != "local" {
+			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
 				if harness == harnessAuto {
 					base, ok = claudeHarness{}, true
@@ -998,7 +998,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		id = uuid.NewString()
 	}
 	sp.brief = fillScratchpad(sp.brief, dir, id)
-	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Role: startRole(sp.role)}
+	s := state.Start{Kind: sp.kind, Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Role: startRole(sp.role)}
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -1594,10 +1594,6 @@ func (a *app) detachReopen(arg string) error {
 		return err
 	}
 	id := strings.TrimPrefix(arg, "local_")
-	if !a.desktopMode() {
-		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
-		return err
-	}
 	if s := a.readStop(); s != nil {
 		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(s))
 		return err
@@ -1657,6 +1653,10 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 			}
 			return nil
 		}
+	}
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
 	}
 	release, waits, err := a.holdReopen(id)
 	if err != nil {
@@ -2559,6 +2559,7 @@ func unitEnded(ctx context.Context, unit string) bool {
 }
 
 func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+	s.Kind = cmp.Or(s.Kind, a.selectionKind)
 	reg, err := recordStart(st, s, task, serves, live)
 	if err != nil {
 		return reg, err

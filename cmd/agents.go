@@ -276,7 +276,8 @@ leaves its own park with agents resume, no agent named.`,
 	}
 	var finished bool
 	var problems []string
-	var report string
+	var report, noChange, blockedBy string
+	var blocked bool
 	idle := &cobra.Command{
 		Use:   "idle",
 		Short: "Report the calling agent's task done: idle again",
@@ -319,7 +320,7 @@ completion is refused under --as.`,
 			}
 			report = strings.TrimSpace(report)
 			if a.managedExecutionID() != "" {
-				return a.remoteControl(cmd.Context(), "report", executionReport{Finished: finished, Text: report, Problems: problems})
+				return a.remoteControl(cmd.Context(), "report", executionReport{Finished: finished, Text: report, Problems: problems, NoChange: noChange, Blocked: blocked, By: blockedBy})
 			}
 			if finished && report == "" {
 				return refused("the final report is missing: --report \"<PR links, releases, the live proof, what is still open>\" (or --report - from stdin); beekeeper delivers it to the supervisor")
@@ -328,8 +329,8 @@ completion is refused under --as.`,
 			if err != nil {
 				return err
 			}
-			if a.queueReports {
-				return a.submitReport(sessionReport{Kind: reportKindIdle, By: me, Text: report, Problems: found, Finished: finished})
+			if a.queueReports && !blocked {
+				return a.submitReport(sessionReport{Kind: reportKindIdle, By: me, Text: report, Problems: found, Finished: finished, NoChange: noChange})
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i := a.callerAgent(st, me)
@@ -346,16 +347,20 @@ completion is refused under --as.`,
 				if err := a.captureExecutionReviewReport(cmd.Context(), st, me, report, a.now, finished); err != nil {
 					return nil, err
 				}
+				outcomes, err := a.completionOutcome(cmd.Context(), st, *ag, finished, noChange, blocked, blockedBy)
+				if err != nil {
+					return nil, err
+				}
 				found = freshWorkerProblems(ag, found)
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
-				ag.Done = finished
+				ag.Done = finished || blocked
 				verb := litAgentsIdle
-				if finished {
+				if finished || blocked {
 					verb = executionDone
 				}
-				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
-				if finished {
+				evs := append(outcomes, event(me, verb, "%s done: %s", ag.Name, ag.LastTask))
+				if finished || blocked {
 					for _, r := range clearRecords(st, ag.Party) {
 						evs = append(evs, event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r)))
 					}
@@ -380,7 +385,7 @@ completion is refused under --as.`,
 					return err
 				}
 			}
-			if finished {
+			if finished || blocked {
 				if err := a.stopOwnBackground(); err != nil {
 					return err
 				}
@@ -391,6 +396,9 @@ completion is refused under --as.`,
 			return err
 		},
 	}
+	idle.Flags().StringVar(&noChange, "no-change", "", "why no pull request was needed, with proof (with --done)")
+	idle.Flags().BoolVar(&blocked, "blocked", false, "end this worker task blocked on a named open issue or note")
+	idle.Flags().StringVar(&blockedBy, "by", "", "open issue URL or #note blocking the delivery")
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
 	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
 	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository, and its issue's URL once filed; "none" when there was none (required with --done)`)
@@ -779,8 +787,7 @@ const resumeMessage = "Your CLI stopped (a reboot or a crash). Re-query the live
 const endedResumeMessage = "Someone resumed you by hand. Re-query the live state of your task and continue it."
 
 // resumeHint is how a stopped agent comes back: a desktop session by
-// opening its row, a background one by claude --bg --resume, and another
-// harness through agents wake.
+// opening its row, a background one or another harness through agents wake.
 func resumeHint(ag state.Agent) string {
 	if _, _, ok := harnessForHost(ag.HostSession); ok || ag.Harness != "" && ag.Harness != claudeComm {
 		return fmt.Sprintf("beekeeper agents wake %q %q", ag.Name, resumeMessage)
@@ -788,7 +795,7 @@ func resumeHint(ag state.Agent) string {
 	if ag.HostSession != "" {
 		return "open " + continueURL(ag.HostSession)
 	}
-	return fmt.Sprintf("claude --bg --resume %s %q", ag.Session, resumeMessage)
+	return fmt.Sprintf("beekeeper agents wake %q %q", ag.Name, resumeMessage)
 }
 
 func boolInt(b bool) int {

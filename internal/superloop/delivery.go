@@ -120,6 +120,9 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 		d := &out[i]
 		d.Pulls = slices.Clone(d.Pulls)
 		before := d.Step
+		if d.Outcome == state.OutcomeNoChange || d.Outcome == state.OutcomeBlocked || d.Outcome == state.OutcomeStalled {
+			continue
+		}
 		// Preserve unknown ownership on partial reads; positive exclusion applies
 		// to linked issue deliveries as well as temporary PR seeds.
 		if reason, _ := in.Desk.unread(d.Ref); reason != "" {
@@ -257,6 +260,16 @@ func Deliveries(in Input, prev []Delivery) []Delivery {
 				}
 			case missing: // a failed read never proves an end
 			case merged:
+				d.Outcome = state.OutcomeMerged
+				if d.Evidence == "" || before != state.DeliveryReleasing && before != state.DeliveryDone {
+					d.OutcomeAt = in.Now
+					for _, p := range observed {
+						if p.State == Merged {
+							d.Evidence = p.URL
+							break
+						}
+					}
+				}
 				if d.Step != state.DeliveryDone {
 					d.Step = state.DeliveryReleasing
 				}
@@ -301,6 +314,9 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 	rs := l.rounds[p.Ref]
 	if len(rs) > 0 {
 		rd := rs[len(rs)-1]
+		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && !sameHead(v.Head, rd.head) {
+			return state.DeliveryFixing
+		}
 		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested && (sameHead(v.Head, p.Head) || !requested) {
 			return state.DeliveryFixing
 		}

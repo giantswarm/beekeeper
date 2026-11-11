@@ -1306,11 +1306,7 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p)
-			if scenario == review3325Authorized {
-				if err != nil || result.Branch != authorBranch || result.URL != publicationFixturePRURL {
-					t.Fatalf("authorized publication failed: %+v %v", result, err)
-				}
-			} else if scenario == review3325Unassigned || scenario == review3325WrongSession {
+			if scenario == review3325Unassigned || scenario == review3325WrongSession {
 				if err == nil && result.Branch == authorBranch {
 					t.Fatal("unassigned execution wrote author branch")
 				}
@@ -1322,9 +1318,6 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				t.Fatal(readErr)
 			}
 			want := rig.base
-			if scenario == review3325Authorized {
-				want = head
-			}
 			if !strings.HasPrefix(got, want+"\t") {
 				t.Fatalf("author branch changed without authorization: %q", got)
 			}
@@ -1335,25 +1328,19 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 	}
 }
 
-func TestReview3325GrantExpiresDuringBranchRead(t *testing.T) {
+func TestReviewerWriteGrantRefusedBeforeAnyBranchRead(t *testing.T) {
 	rig := newPublicationRig(t)
 	st, err := rig.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := &st.Starts[0]
-	record := start.Execution
-	const branch = "fixture/lease-bound-review"
-	const ref = "giantswarm/beekeeper#42"
-	record.Request.GitRef = branch
-	st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: "lease-bound-round", Ref: ref, Head: rig.base, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()})
 	originalRead := readLoopPull
 	t.Cleanup(func() { readLoopPull = originalRead })
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		record.Lease.ExpiresAt = time.Now().Add(-time.Second)
-		return superloop.Pull{Ref: ref, State: superloop.Open, Branch: branch}, nil
+		t.Fatal("review branch lookup must not grant writes")
+		return superloop.Pull{}, nil
 	}
-	if _, err := executionReviewWriteBranch(context.Background(), st, rig.request.Ref); err == nil {
-		t.Fatal("branch read outlived the lease but still returned a write grant")
+	if _, err := executionReviewWriteBranch(context.Background(), st, rig.request.Ref); err == nil || !strings.Contains(err.Error(), "implementing worker") {
+		t.Fatalf("missing finding-forwarding refusal: %v", err)
 	}
 }

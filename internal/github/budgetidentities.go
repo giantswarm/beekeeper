@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -77,38 +78,52 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	if err != nil {
 		return []BudgetCredential{{Identity: IdentityGH, Err: err}}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	env := budgetEnv(os.Environ())
-	personal := budgetCredential(ctx, IdentityGH, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
-	result := []BudgetCredential{personal}
-	devctl, err := budgetDevctl()
-	if err != nil {
-		return result
+	devctl, devctlErr := budgetDevctl()
+	var (
+		personal BudgetCredential
+		app      BudgetCredential
+		wg       sync.WaitGroup
+	)
+	wg.Go(func() {
+		personal = budgetCredential(ctx, IdentityGH, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
+	})
+	if devctlErr == nil {
+		wg.Go(func() {
+			status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
+			status.Env = env
+			status.WaitDelay = 100 * time.Millisecond
+			// The overall exit status covers other providers too (for example CircleCI).
+			// Its stdout can still contain usable GitHub metadata.
+			raw, _ := status.Output()
+			var metadata struct {
+				GitHub struct {
+					Present *bool `json:"present"`
+				} `json:"github"`
+			}
+			if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
+				app = BudgetCredential{Identity: IdentityApp, Skip: true,
+					Warning: "devctl App credential metadata unavailable; probing stored gh identity only"}
+				return
+			}
+			if !*metadata.GitHub.Present {
+				app = BudgetCredential{Identity: IdentityApp, Skip: true}
+				return
+			}
+			// devctl applies its owner routing even under auth exec. Pin the App's
+			// owner explicitly so a personal checkout cannot select the gh login.
+			appEnv := ghEnv(env, BudgetAppRepo)
+			app = budgetCredential(ctx, IdentityApp, devctl,
+				[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, appEnv)
+		})
 	}
-	status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
-	status.Env = env
-	status.WaitDelay = 100 * time.Millisecond
-	// The overall exit status covers other providers too (for example CircleCI).
-	// Its stdout can still contain usable GitHub metadata.
-	raw, _ := status.Output()
-	var metadata struct {
-		GitHub struct {
-			Present *bool `json:"present"`
-		} `json:"github"`
+	wg.Wait()
+	if devctlErr != nil {
+		return []BudgetCredential{personal}
 	}
-	if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
-		return append(result, BudgetCredential{Identity: IdentityApp, Skip: true,
-			Warning: "devctl App credential metadata unavailable; probing stored gh identity only"})
-	}
-	if !*metadata.GitHub.Present {
-		return append(result, BudgetCredential{Identity: IdentityApp, Skip: true})
-	}
-	// devctl applies its owner routing even under auth exec. Pin the App's
-	// owner explicitly so a personal checkout cannot select the gh login.
-	appEnv := ghEnv(env, BudgetAppRepo)
-	return append(result, budgetCredential(ctx, IdentityApp, devctl,
-		[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, appEnv))
+	return []BudgetCredential{personal, app}
 }
 
 // The loop service may have a smaller PATH than a worker. The sibling of
@@ -117,7 +132,7 @@ func budgetDevctl() (string, error) {
 	if path, err := exec.LookPath("devctl"); err == nil {
 		return path, nil
 	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
@@ -130,7 +145,7 @@ func budgetDevctl() (string, error) {
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		path := filepath.Join(filepath.Dir(exe), "devctl")
+		path := filepath.Join(filepath.Dir(strings.TrimSuffix(exe, " (deleted)")), "devctl")
 		if found, err := exec.LookPath(path); err == nil {
 			return found, nil
 		}
@@ -158,7 +173,7 @@ func budgetEnv(env []string) []string {
 	for _, v := range env {
 		name, _, _ := strings.Cut(v, "=")
 		switch name {
-		case "GH_TOKEN", "GITHUB_TOKEN", "GH_REPO", "DEVCTL_AUTH_EXEC_CHAIN", DevctlSkipVersionCheckEnv:
+		case "GH_TOKEN", "GITHUB_TOKEN", ghRepoEnv, "DEVCTL_AUTH_EXEC_CHAIN", DevctlSkipVersionCheckEnv:
 		default:
 			out = append(out, v)
 		}
@@ -168,7 +183,7 @@ func budgetEnv(env []string) []string {
 
 // Skip the devctl gh link; the personal route must reach the stored login.
 func budgetGH() (string, error) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}

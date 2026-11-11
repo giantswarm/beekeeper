@@ -444,6 +444,46 @@ if [[ -n $d && $d == */* ]] || [ "$d" = */* ] || test "$d" = */*; then :; fi
 	}
 }
 
+// Exercise the actual carried-ledger script, including its awk expressions and
+// computed repository paths. A missing script would skip the recursive scan.
+func TestTranscriptCarriedCheck(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := filepath.Join(home, "worktrees", "kagent-upstream", "task")
+	script := filepath.Join(cwd, "scripts", "fork", "carried.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	code, err := os.ReadFile("testdata/carried.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, code, 0o700); err != nil { //nolint:gosec // an executable fixture
+		t.Fatal(err)
+	}
+	h := transcriptHook()
+	commands := []string{
+		"beekeeper run -- scripts/fork/carried.sh --check",
+		"scripts/fork/carried.sh --check",
+		"bash scripts/fork/carried.sh --check",
+	}
+	for _, command := range commands {
+		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("carried check refused: %s: %+v", command, d)
+		}
+	}
+	// The same invocation must scan script contents, not whitelist its name.
+	code = append(code, []byte("\ncat ~/.claude/projects/**/*.jsonl\n")...)
+	if err := os.WriteFile(script, code, 0o700); err != nil { //nolint:gosec // an executable fixture
+		t.Fatal(err)
+	}
+	for _, command := range append(commands, "cat ~/.claude/projects/**/*.jsonl") {
+		if d := decide(t, h, cwd, command, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, transcriptReasonName) {
+			t.Errorf("transcript read passed: %s: %+v", command, d)
+		}
+	}
+}
+
 // What the repository commands above may pass must not open a real read:
 // embedded globs that reach a store, and every whole-word glob as before.
 func TestTranscriptGlobsStayClosed(t *testing.T) {

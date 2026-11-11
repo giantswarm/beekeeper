@@ -21,7 +21,7 @@ const (
 	reportKindIdle    = "idle"
 	reportKindProblem = "problem"
 	reportKindServe   = "serve"
-	gitRemoteCommand = "remote"
+	gitRemoteCommand  = "remote"
 	gitRemoteGetURL   = "get-url"
 )
 
@@ -37,6 +37,7 @@ type sessionReport struct {
 	Text           string
 	Problems       []string
 	Finished       bool
+	NoChange       string
 	On             string
 	Waits          string
 	External       bool
@@ -171,6 +172,7 @@ func (a *app) consumeReports(ctx context.Context) error {
 		if prepareErr == nil && p.Kind == paramNote && p.Draft.Kind != "" {
 			prepareErr = copyApp.prepareNoteReport(ctx, &p)
 		}
+		var applied bool
 		err = a.store.Update(func(current *state.State) ([]state.Event, error) {
 			if _, done := current.ReportReceipts[m.ID]; done {
 				return nil, nil
@@ -203,6 +205,7 @@ func (a *app) consumeReports(ctx context.Context) error {
 				receipt.Error = applyErr.Error()
 				events = []state.Event{event(p.By, "session.report-rejected", "%s: %s", m.ID, applyErr)}
 			} else {
+				applied = true
 				receipt.Note = p.NoteID
 				for i, before := range reviewBefore {
 					for j := range current.DeskReviews {
@@ -220,6 +223,11 @@ func (a *app) consumeReports(ctx context.Context) error {
 		})
 		if err != nil {
 			return err
+		}
+		if applied && p.Kind == reportKindPark && p.Registered && p.ReviewHead != "" {
+			if err := copyApp.recordFatalRepair(p.Assignee.Name, p.On); err != nil {
+				return err
+			}
 		}
 		if err := state.RemoveReport(a.store, m); err != nil {
 			return err

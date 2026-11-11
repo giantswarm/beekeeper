@@ -85,7 +85,7 @@ func TestDoctorDeskWorkflowReferences(t *testing.T) {
 	if err := os.Symlink(skill, filepath.Join(dir, "SKILL.md")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if got := checkDeskWorkflow(desk, []string{filepath.Join(dir, "SKILL.md")}); len(got) != 0 {
+	if got := checkDeskWorkflow(desk, nil); len(got) != 0 {
 		t.Fatalf("installed reference flagged as a copy: %v", got)
 	}
 }

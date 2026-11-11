@@ -89,7 +89,11 @@ func (a *app) applyParkReport(st *state.State, p *sessionReport) ([]state.Event,
 			st.Records[j].Waits = waits
 		}
 	}
-	return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
+	var outcomes []state.Event
+	if i >= 0 {
+		outcomes = a.recordTaskOutcome(st, st.Agents[i], state.OutcomeParked, park.On+": "+park.Waits)
+	}
+	return append(outcomes, event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))), nil
 }
 
 func (a *app) applyIdleReport(st *state.State, p *sessionReport) ([]state.Event, error) {
@@ -106,6 +110,13 @@ func (a *app) applyIdleReport(st *state.State, p *sessionReport) ([]state.Event,
 	if slices.ContainsFunc(st.DeskReviews, func(round state.DeskReview) bool { return sameReviewSession(round.Reviewer, ag.Party) }) && !sameReviewSession(me, ag.Party) {
 		return nil, refused("independent review completion requires its assigned session, not --as")
 	}
+	var outcomes []state.Event
+	if strings.TrimSpace(p.NoChange) != "" {
+		var err error
+		if outcomes, err = a.completionOutcome(a.context(), st, *ag, finished, p.NoChange, false, ""); err != nil {
+			return nil, err
+		}
+	}
 	found = freshWorkerProblems(ag, found)
 	reportIdle(ag, a.now)
 	endNotes(st, ag.Party, a.now)
@@ -114,7 +125,7 @@ func (a *app) applyIdleReport(st *state.State, p *sessionReport) ([]state.Event,
 	if finished {
 		verb = executionDone
 	}
-	evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
+	evs := append(outcomes, event(me, verb, "%s done: %s", ag.Name, ag.LastTask))
 	if finished {
 		for _, r := range clearRecords(st, ag.Party) {
 			evs = append(evs, event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r)))

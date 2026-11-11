@@ -164,9 +164,7 @@ func TestExecutionGuardDecisionMatchesHookFormatToHarness(t *testing.T) {
 	}
 }
 
-// A host's verdict offers codex only where its entry lists codex, and the
-// loop's hostsFirst leaves a codex choice to the hosts only when one of them
-// lists it.
+// A host's verdict offers codex only where its entry lists codex.
 func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
@@ -184,14 +182,6 @@ func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 		t.Fatalf("unoffered harnesses: %v", got)
 	}
 
-	both := config.Capacity{Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: codexTestModel}}}
-	claudeOnly := a.cfg.Agents.Hosts[sshTestSelector]
-	if hosted, mixed := hostChoices(both, []execution.Host{claudeOnly}); len(hosted) != 1 || !mixed {
-		t.Fatalf("claude-only hosts: hosted %v, mixed %v", hosted, mixed)
-	}
-	if hosted, mixed := hostChoices(both, []execution.Host{claudeOnly, host}); len(hosted) != 2 || mixed {
-		t.Fatalf("a codex host: hosted %v, mixed %v", hosted, mixed)
-	}
 }
 
 func TestExecutionCodexReviewerUsesCoordinatorRelayWithoutWorkerApp(t *testing.T) {
