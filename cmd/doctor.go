@@ -13,7 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/install"
@@ -390,6 +392,9 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		for _, p := range a.backgroundStartsToStop(ctx, st, sessions, busy) {
 			rep.chores = append(rep.chores, fmt.Sprintf("would stop the background session %s of %q", p.Session[:min(8, len(p.Session))], p.Name))
 		}
+		if line := a.doctorRunnerUnits(ctx, st, busy, r.by, true); line != "" {
+			rep.chores = append(rep.chores, line)
+		}
 		rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
 		if line := resetOwnUnits(ctx, true); line != "" {
 			rep.chores = append(rep.chores, line)
@@ -440,11 +445,128 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return []state.Event{event(r.by, "agents.retitle", "%s: %s", c.agent.Name, line)}, nil
 		})
 	}
+	if line := a.doctorRunnerUnits(ctx, st, busy, r.by, false); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
 	if line := resetOwnUnits(ctx, r.dryRun); line != "" {
 		rep.chores = append(rep.chores, line)
 	}
 	return rep, nil
+}
+
+// runnerUnitHasLiveSession reports whether the running harness runner unit
+// belongs to a live, unparked session on the roster, a role holder or an active
+// turn/merge.
+func runnerUnitHasLiveSession(cfg *config.Config, st *state.State, unit string, busy func(state.Party) bool, now time.Time) bool {
+	h, id, ok := harnessUnitID(unit)
+	if !ok {
+		return true
+	}
+	for _, ag := range st.Agents {
+		if harnessUnitMatchesParty(unit, ag.Party) {
+			if _, hid, ok := harnessOf(ag.Party); ok && len(hid) > len(id) {
+				id = hid
+			}
+		}
+	}
+	for _, s := range st.Starts {
+		if harnessUnitMatchesParty(unit, s.Party) {
+			if _, hid, ok := harnessOf(s.Party); ok && len(hid) > len(id) {
+				id = hid
+			}
+		}
+	}
+	party := state.Party{Session: id, HostSession: h.Host(id)}
+	var convID string
+	if i := st.StartIndex(party); i >= 0 {
+		convID = strings.TrimSpace(st.Starts[i].Conversation)
+	}
+	if convID == "" && cfg != nil && cfg.StateDir != "" {
+		switch h.Name() {
+		case codex.Harness:
+			convID = strings.TrimSpace(codex.ReadThread(cfg.StateDir, codex.InboxPath(cfg.StateDir, id)))
+		case agy.Harness:
+			convID = strings.TrimSpace(agy.ReadConv(cfg.StateDir, id))
+		}
+	}
+	matches := func(p state.Party) bool {
+		return harnessUnitMatchesParty(unit, p) ||
+			(convID != "" && (strings.EqualFold(p.Session, convID) || strings.EqualFold(p.HostSession, convID)))
+	}
+	if busy != nil && busy(party) {
+		return true
+	}
+	if keepsRole(st, party) || openRelayTo(st, party, now) {
+		return true
+	}
+	if holder := st.GuideRole().Holder; holder != nil && matches(holder.Party) {
+		return true
+	}
+	for _, ag := range st.Agents {
+		if !matches(ag.Party) {
+			continue
+		}
+		if busy != nil && busy(ag.Party) {
+			return true
+		}
+		if !ag.Done && ag.Park == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// doctorRunnerUnits finds and stops harness runner units (beekeeper-codex-*,
+// beekeeper-agy-*, beekeeper-omp-*) that have no live session (their session
+// parked, reported done or left the roster, and runs no turn); with dryRun it
+// only reports them.
+func (a *app) doctorRunnerUnits(ctx context.Context, st *state.State, busy func(state.Party) bool, by state.Party, dryRun bool) string {
+	var cfg *config.Config
+	var now time.Time
+	if a != nil {
+		cfg = a.cfg
+		now = a.now
+	}
+	var units []string
+	for _, u := range plat.Launcher.Running(ctx, false, harnessTurnPatterns()...) {
+		if !runnerUnitHasLiveSession(cfg, st, u, busy, now) {
+			units = append(units, u)
+		}
+	}
+	slices.Sort(units)
+	if len(units) == 0 {
+		return ""
+	}
+	if dryRun {
+		return "would stop the runner units without a live session " + strings.Join(units, ", ")
+	}
+	var stopped, failed []string
+	var firstErr error
+	for _, u := range units {
+		if err := plat.Launcher.Stop(ctx, u); err != nil {
+			failed = append(failed, u)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		stopped = append(stopped, u)
+	}
+	if len(stopped) > 0 && a != nil && a.store != nil {
+		line := "stopped the runner units without a live session " + strings.Join(stopped, ", ")
+		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+			return []state.Event{event(by, "agents.stop", "%s", line)}, nil
+		})
+	}
+	switch {
+	case len(failed) > 0 && len(stopped) > 0:
+		return fmt.Sprintf("stopped the runner units without a live session %s; %s stay running: %v", strings.Join(stopped, ", "), strings.Join(failed, ", "), firstErr)
+	case len(failed) > 0:
+		return fmt.Sprintf("the runner units without a live session %s stay running: %v", strings.Join(failed, ", "), firstErr)
+	default:
+		return "stopped the runner units without a live session " + strings.Join(stopped, ", ")
+	}
 }
 
 // ownUnits matches every unit beekeeper starts or installs.
@@ -731,6 +853,9 @@ line:
   such worker meanwhile;
 - stops attached stdio MCP containers whose Docker client ended, naming
   each container; detached services and containers with a live client stay;
+- stops harness runner units (beekeeper-codex-*, beekeeper-agy-*,
+  beekeeper-omp-*) without a live session (their session parked, reported
+  done or left the roster, and runs no turn);
 - releases leases whose local session ended, logging each release once;
 - stops configured kind labs after 15 minutes without a lease, preserving
   their containers and data; the next successful claim starts them again;

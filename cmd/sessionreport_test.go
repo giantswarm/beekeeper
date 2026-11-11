@@ -66,7 +66,7 @@ func TestSessionReportsAndSnapshotsWithTwoMinuteWriter(t *testing.T) {
 		t.Fatalf("messages: %v, %v", messages, err)
 	}
 	reportCommand(t, a, a.agentsCmd(), "park", "the fixture decision", "--on", reportReferencePrefix+messages[2].ID)
-	reportCommand(t, a, a.agentsCmd(), "idle", "--done", "--report", "fixture completed", "--problem", "none")
+	reportCommand(t, a, a.agentsCmd(), verbIdle, flagDone, flagReport, "fixture completed", flagProblem, noProblems)
 	reportCommand(t, a, a.statusCmd())
 	reportCommand(t, a, a.capacityCmd())
 	reportCommand(t, a, a.deliveryCmd())
@@ -158,7 +158,7 @@ func TestSessionReportReceiptSurvivesUnremovedMessage(t *testing.T) {
 
 func TestDelayedReportCannotCompleteAnotherAssignment(t *testing.T) {
 	a := sessionReportFixture(t)
-	reportCommand(t, a, a.agentsCmd(), "idle", "--done", "--report", "fixture done", "--problem", "none")
+	reportCommand(t, a, a.agentsCmd(), verbIdle, flagDone, flagReport, "fixture done", flagProblem, noProblems)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Task = "replacement task"
 		st.Agents[0].AssignedAt = a.now.Add(time.Minute)
@@ -192,7 +192,7 @@ func TestSessionReportDeliveryOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := a.agentsCmd()
-	c.SetArgs([]string{stateIdle, "--done", "--report", "Completed https://github.com/giantswarm/beekeeper/issues/7", "--problem", ghNone})
+	c.SetArgs([]string{stateIdle, flagDone, flagReport, "Completed https://github.com/giantswarm/beekeeper/issues/7", flagProblem, ghNone})
 	c.SetOut(a.out)
 	c.SetErr(a.out)
 	if err := c.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), taskEndings) {
@@ -209,7 +209,7 @@ func TestSessionReportDeliveryOutcomes(t *testing.T) {
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 		return map[github.PR]github.RefState{refs[0]: {Kind: github.RefPullRequest, State: github.Merged}}, nil
 	}
-	reportCommand(t, a, a.agentsCmd(), stateIdle, "--done", "--report", "Merged https://github.com/giantswarm/beekeeper/pull/8", "--problem", ghNone)
+	reportCommand(t, a, a.agentsCmd(), stateIdle, flagDone, flagReport, "Merged https://github.com/giantswarm/beekeeper/pull/8", flagProblem, ghNone)
 	if err := a.consumeReports(t.Context()); err != nil {
 		t.Fatal(err)
 	}

@@ -464,6 +464,8 @@ func (a *app) rebindCallerSession(t *proc.Table, p *state.Party) {
 	for _, rl := range roles {
 		if h := rl.get(st).Holder; h != nil && h.Is(*p) && rl.runOf(h.Name) > 0 && rl.runOf(p.Name) == 0 {
 			p.Name = h.Name
+		} else if s, ok := st.BypassStartOf(*p); ok && s.Role == rl.name && rl.runOf(s.Name) > 0 && rl.runOf(p.Name) == 0 {
+			p.Name = s.Name
 		}
 	}
 }

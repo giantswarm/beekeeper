@@ -227,7 +227,7 @@ func fakeGitHub(dir string, args []string) int {
 		return emit(map[string]any{"data": map[string]any{"repositoryOwner": map[string]any{"projectV2": map[string]any{"items": map[string]any{"pageInfo": map[string]any{"hasNextPage": false}, "nodes": fakeBoardItems()}}}}})
 	case starts("api", "graphql") && has("pullRequests("):
 		return emit(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequests": map[string]any{"nodes": fakePulls(), "pageInfo": map[string]any{"hasNextPage": false}}}}})
-	case starts("api", "graphql") && has("rateLimit"):
+	case starts("api", "graphql") && (has("rateLimit") || has("viewer")):
 		return emit(map[string]any{"data": map[string]any{"viewer": map[string]any{"login": "fixture-bot"}, "rateLimit": map[string]any{"limit": 5000, "remaining": 4900, "used": 100, "resetAt": time.Now().Add(time.Hour).Format(time.RFC3339)}}})
 	}
 	unknown(dir, "gh", args)

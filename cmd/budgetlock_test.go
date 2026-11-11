@@ -11,6 +11,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -109,15 +110,20 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 
 func TestOnlyLockBusy(t *testing.T) {
 	busy := &state.LockBusyError{Waited: 100 * time.Millisecond}
+	commitBusy := errors.Join(execution.ErrCoordinatorBusy, context.DeadlineExceeded)
 	other := errors.New("GitHub identity gh: 401 Bad credentials")
 	for _, c := range []struct {
 		err  error
 		want bool
 	}{
 		{busy, true},
+		{execution.ErrCoordinatorBusy, true},
+		{commitBusy, true},
 		{fmt.Errorf("saving the budget: %w", busy), true},
-		{errors.Join(busy, busy), true},
+		{fmt.Errorf("saving the budget: %w", commitBusy), true},
+		{errors.Join(busy, commitBusy), true},
 		{errors.Join(other, busy), false},
+		{errors.Join(other, commitBusy), false},
 		{other, false},
 		{errors.Join(), false},
 		{context.DeadlineExceeded, false},
@@ -126,7 +132,7 @@ func TestOnlyLockBusy(t *testing.T) {
 			t.Errorf("onlyLockBusy(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
-	if unsavedBudget(nil) != nil || unsavedBudget(busy) != nil || !errors.Is(unsavedBudget(errors.Join(other, busy)), other) {
+	if unsavedBudget(nil) != nil || unsavedBudget(busy) != nil || unsavedBudget(commitBusy) != nil || !errors.Is(unsavedBudget(errors.Join(other, busy)), other) {
 		t.Error("unsavedBudget kept a lone busy lock or dropped another failure")
 	}
 }

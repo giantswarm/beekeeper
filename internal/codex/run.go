@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+// IdleGrace is how long an idle runner waits after its session parks, finishes
+// or leaves the roster before closing its inbox FIFO and exiting.
+var IdleGrace = 200 * time.Millisecond
 
 // ExecArgv is the command line for a codex session's first turn, reading the
 // prompt from stdin.
@@ -91,6 +98,12 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 	}
 	stateDir := stateDirFromInbox(inbox)
 	threadID := ReadThread(stateDir, inbox)
+	id := cmp.Or(strings.TrimSuffix(filepath.Base(inbox), ".in"), strings.TrimSpace(os.Getenv(EnvAgent)))
+	var hostSession string
+	if id != "" {
+		hostSession = HostPrefix + id
+	}
+	name := strings.TrimSpace(os.Getenv(EnvName))
 	WriteState(inbox, StateIdle)
 
 	readerDone := make(chan struct{})
@@ -124,6 +137,8 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 		<-readerDone
 	}()
 
+	idleSince := time.Now()
+	var inactiveSince time.Time
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -134,10 +149,35 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 		}
 		if len(msgs) == 0 {
 			WriteState(inbox, StateIdle)
+			var poll <-chan time.Time
+			if stateDir != "" {
+				currentThread := cmp.Or(threadID, ReadThread(stateDir, inbox))
+				if state.RunnerSessionActive(stateDir, hostSession, currentThread, name) {
+					inactiveSince = time.Time{}
+					poll = time.After(max(IdleGrace, 100*time.Millisecond))
+				} else {
+					if inactiveSince.IsZero() {
+						inactiveSince = time.Now()
+					}
+					if time.Since(inactiveSince) >= IdleGrace && time.Since(idleSince) >= IdleGrace {
+						closed, err := closeIfIdle(inbox, fifo)
+						if err != nil {
+							return err
+						}
+						if closed {
+							return nil
+						}
+						continue
+					}
+					poll = time.After(max(IdleGrace/2, 10*time.Millisecond))
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-wake:
+				continue
+			case <-poll:
 				continue
 			}
 		}
@@ -153,6 +193,8 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 			case <-time.After(200 * time.Millisecond):
 			}
 		}
+		idleSince = time.Now()
+		inactiveSince = time.Time{}
 	}
 }
 

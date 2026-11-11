@@ -838,11 +838,10 @@ func (a *app) declaredPersonal(ctx context.Context, rec *state.App, manifest str
 	if err != nil {
 		return err
 	}
-	login, err := appsGH(ctx, "api", "user", "--jq", ".login")
+	person, err := github.ViewerLogin(ctx, appsGH)
 	if err != nil {
-		return fmt.Errorf("the person's GitHub account (gh api user): %w", err)
+		return fmt.Errorf("the person's GitHub account: %w", err)
 	}
-	person := strings.TrimSpace(string(login))
 	switch {
 	case self.Owner.Type != "User" || person == "" || !strings.EqualFold(self.Owner.Login, person):
 		return refused("App %s (id %d) belongs to the %s %s, not to the person's own account %s: an App on another account is recorded from apps.repo's declaration",

@@ -401,3 +401,61 @@ func TestPullWatcherHasOneFetchAndCancelsOnStop(t *testing.T) {
 		t.Fatalf("once pass poll: polled=%v err=%v", polledOnce, err)
 	}
 }
+
+func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T) {
+	observe, sweep := readObservedLoopPull, readLoopSweep
+	r := newLoopRig(t)
+	readObservedLoopPull, readLoopSweep = observe, sweep
+	r.a.cfg.Supervisor.Ownership.Authors = []string{loopDesk}
+	r.a.cfg.GitHub.AllowedOrgs = []string{"o"}
+	r.a.cfg.GitHub.Floor = 2500
+	healthyLoopBudget(t, r)
+	r.park(t, loopPR, r.a.now)
+
+	listed := r.a.now.Add(-time.Minute)
+	saved := loopPullSnapshot{
+		Pulls:    map[string]watchedLoopPull{loopPR: {Pull: r.pull, At: r.a.now}},
+		ListedAt: listed,
+	}
+	if err := r.a.store.WriteFile(loopPullWatchFile, saved); err != nil {
+		t.Fatal(err)
+	}
+	polled := 0
+	pollOncePullWatcher = func(context.Context, *supervisorLoop) { polled++ }
+	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
+		t.Fatalf("dryRun with fresh saved snapshot: %v", err)
+	}
+	if polled != 0 {
+		t.Fatalf("dryRun polled %d times despite fresh saved snapshot", polled)
+	}
+
+	// When the saved snapshot is missing a tracked PR (or absent during upgrade),
+	// dry-run polls once in memory without overwriting the saved file.
+	if err := r.a.store.WriteFile(loopPullWatchFile, loopPullSnapshot{Pulls: map[string]watchedLoopPull{}}); err != nil {
+		t.Fatal(err)
+	}
+	oldBatch, oldOpen := readLoopPullBatch, readOpenPulls
+	t.Cleanup(func() { readLoopPullBatch, readOpenPulls = oldBatch, oldOpen })
+	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+		return []string{loopPR}, nil
+	}
+	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
+		return map[string]watchedLoopPull{loopPR: {Pull: r.pull, At: time.Now()}}, nil
+	}
+	pollOncePullWatcher = func(ctx context.Context, l *supervisorLoop) {
+		if _, err := l.pullWatcher().poll(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+		polled++
+	}
+	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
+		t.Fatalf("dryRun with missing snapshot: %v", err)
+	}
+	if polled != 1 {
+		t.Fatalf("dryRun polled %d times, want 1", polled)
+	}
+	var disk loopPullSnapshot
+	if ok, err := r.a.store.ReadFile(loopPullWatchFile, &disk); !ok || err != nil || len(disk.Pulls) != 0 {
+		t.Fatalf("dryRun mutated saved snapshot on disk: ok=%v err=%v pulls=%d", ok, err, len(disk.Pulls))
+	}
+}

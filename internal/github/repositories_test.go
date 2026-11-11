@@ -18,7 +18,7 @@ func TestRepositoriesPerOwner(t *testing.T) {
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
 		repo := Repo(ctx)
 		acting = append(acting, repo)
-		if len(args) != 4 || args[0] != ghAPI || args[1] != "graphql" || args[2] != "-f" || !strings.HasPrefix(args[3], "query=query{") || strings.Contains(args[3], "mutation") {
+		if len(args) != 4 || args[0] != ghAPI || args[1] != graphqlEndpoint || args[2] != "-f" || !strings.HasPrefix(args[3], "query=query{") || strings.Contains(args[3], "mutation") {
 			t.Fatalf("unexpected read: %v", args)
 		}
 		if repo == probeToolsRepo {

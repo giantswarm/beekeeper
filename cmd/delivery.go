@@ -38,9 +38,10 @@ func readDelivery(st *state.State, limit int, now time.Time, policies ...deliver
 	}
 	v := deliveryView{Deliveries: []deliveryRow{}, Limit: limit, CompleteAt: st.DeliveriesAt}
 	for _, d := range st.Deliveries {
-		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, Flow: classifyDelivery(st, d, now, p), StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
+		flow := classifyDelivery(st, d, now, p)
+		v.Deliveries = append(v.Deliveries, deliveryRow{Delivery: d, Flow: flow, StepAge: max(0, now.Sub(d.Since)), Age: max(0, now.Sub(d.Started))})
 		if deliveryOwned(st, d, now, p) {
-			switch classifyDelivery(st, d, now, p).Class {
+			switch flow.Class {
 			case deliveryPerson:
 				v.WaitingOnPerson++
 			case deliveryBlocked:

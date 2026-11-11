@@ -289,3 +289,27 @@ func RemoveInbox(path string) (removed bool, err error) {
 	}
 	return removed, err
 }
+
+// closeIfIdle closes fifo while holding path's lock when no undelivered,
+// injected or inflight message remains in the persistent queue. Closing fifo
+// under the lock ensures a concurrent Send either queues its message before
+// the runner exits or receives ErrNotRunning so the caller wakes the session
+// anew.
+func closeIfIdle(path string, fifo *os.File) (bool, error) {
+	var closed bool
+	err := withLock(path, func() error {
+		q, err := readQueue(path)
+		if err != nil {
+			return err
+		}
+		q.reconcile("")
+		if q.Inflight != nil || len(q.Injected) > 0 || len(dedupMessages(q.Delivered, q.Messages)) > 0 {
+			return nil
+		}
+		_, _ = fifo.Write([]byte{'\n'})
+		_ = fifo.Close()
+		closed = true
+		return nil
+	})
+	return closed, err
+}
