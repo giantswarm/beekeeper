@@ -471,6 +471,8 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		botTool  = "o/tool"
 		botOther = "o/other"
 		botPull  = "o/x-configs#4"
+		botLogin = "app/renovate"
+		badLogin = "app/renovat"
 	)
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -490,10 +492,10 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 			t.Errorf("orgs = %v", orgs)
 		}
 		searched = append(searched, logins...)
-		if botFails && slices.Equal(logins, []string{"app/renovat"}) {
+		if botFails && slices.Equal(logins, []string{badLogin}) {
 			return nil, errors.New("the listed users cannot be searched")
 		}
-		if slices.Equal(logins, []string{"app/renovate"}) {
+		if slices.Equal(logins, []string{botLogin}) {
 			return []string{idleRef, "o/other#3", botPull, "o/tool#6"}, nil
 		}
 		return []string{reserveIssue}, nil
@@ -508,7 +510,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	if _, err := w.poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(searched, []string{"me", "app/renovate"}) {
+	if !slices.Equal(searched, []string{"me", botLogin}) {
 		t.Errorf("searched %v", searched)
 	}
 	if got, want := w.view().Open, []string{reserveIssue, botPull}; !slices.Equal(got, want) {
@@ -516,7 +518,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	}
 	// Once read, the team files admit the team's own repositories: the
 	// listing runs again at once.
-	w.setBots([]string{botName}, desk, map[string]string{"o/r": botTeam, botOther: "team-b", botTool: botTeam}, true)
+	w.setBots([]string{botName}, desk, map[string]string{repo: botTeam, botOther: "team-b", botTool: botTeam}, true)
 	if !w.view().ListedAt.IsZero() {
 		t.Fatal("team files read without a new listing")
 	}
@@ -533,7 +535,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	// desk's own listing and the other bots' whole, and is said once.
 	botFails = true
 	searched = nil
-	w.setBots([]string{"renovat", botName}, desk, map[string]string{"o/r": botTeam}, true)
+	w.setBots([]string{"renovat", botName}, desk, map[string]string{repo: botTeam}, true)
 	for range 2 {
 		if _, err := w.poll(t.Context(), l); err != nil {
 			t.Fatal(err)
@@ -545,7 +547,7 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		w.snapshot.ListedAt = time.Time{}
 		w.mu.Unlock()
 	}
-	if !slices.Equal(searched, []string{"me", "app/renovat", "app/renovate", "me", "app/renovat", "app/renovate"}) {
+	if !slices.Equal(searched, []string{"me", badLogin, botLogin, "me", badLogin, botLogin}) {
 		t.Errorf("a bot's search failed: searched %v", searched)
 	}
 	if n := strings.Count(r.out.String(), "cannot list the pull requests of app/renovat "); n != 1 {
