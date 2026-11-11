@@ -819,6 +819,8 @@ type supervisorLoop struct {
 	// pause, up to fillBackoff times.
 	fillEmpty   int
 	fillRetries map[string]fillRetry
+	// takenFold is the loop's own history folded so far (looptakenfold.go).
+	takenFold takenFold
 	// reviewRecoveries are the desk-review parks whose published HEAD did
 	// not verify, by park: when recoverReviewRequests looks again.
 	reviewRecoveries map[string]reviewRecovery
@@ -1875,56 +1877,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
-	ownerless := map[string]time.Time{}
-	failures := map[string]loopFailure{}
-	stuckFiled := map[string]time.Time{}
-	for _, e := range taken {
-		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
-			in.Taken = append(in.Taken, t)
-			// A step taken is no longer failing.
-			delete(failures, t.Key)
-			if t.Kind == superloop.KindFile && strings.HasPrefix(t.Key, loopStuckKey) {
-				// The episode's start ends the key; filed is by step and error.
-				i := strings.LastIndexByte(t.Key, ' ')
-				stuckFiled[t.Key[:max(i, 0)]] = e.At
-			}
-			continue
-		}
-		key, rest, ok := keyed(e.Detail)
-		switch {
-		case !ok:
-		case e.Verb == loopOwnerlessVerb:
-			if since, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(rest, ownerlessSince)); err == nil {
-				ownerless[key] = since
-			} else {
-				delete(ownerless, key)
-			}
-		case e.Verb == loopClaimVerb:
-			claims[key] = loopClaim{at: e.At, target: rest}
-		case e.Verb == loopClaimEndVerb:
-			delete(claims, key)
-			delete(failures, key)
-			in.Taken = slices.DeleteFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == key })
-		case e.Verb == loopStageVerb:
-			stages[key] = true
-			stageDetail[key] = rest
-		case e.Verb == loopUnstageVerb:
-			delete(stages, key)
-			delete(stageDetail, key)
-		case e.Verb == loopFailureVerb:
-			var f loopFailure
-			if json.Unmarshal([]byte(rest), &f) == nil {
-				// Failures an older loop logged carry neither time.
-				f.At = cmp.Or(f.At, e.At)
-				f.Since = cmp.Or(f.Since, e.At)
-				kind, _, _ := strings.Cut(key, " ")
-				f.Kind = cmp.Or(f.Kind, kind)
-				f.Ref = cmp.Or(f.Ref, e.Subject)
-				failures[key] = f
-			}
-		}
-	}
+	folded := l.takenFold.fold(taken)
+	in.Taken = folded.taken
+	claims, stages, stageDetail := folded.claims, folded.stages, folded.stageDetail
+	ownerless, failures, stuckFiled := folded.ownerless, folded.failures, folded.stuckFiled
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}

@@ -2486,7 +2486,10 @@ func (s *FileStore) followContext(ctx context.Context, at *followed, keep func(E
 		return nil, err
 	}
 	defer closeEventFiles(files)
-	savedFile, savedOffset, savedKept := at.file, at.offset, slices.Clone(at.kept)
+	// kept only grows by append or is replaced, so its elements up to the
+	// saved length stay as they are: a cancelled read restores the slice
+	// without copying everything kept on every call.
+	savedFile, savedOffset, savedKept := at.file, at.offset, at.kept
 	restore := func() {
 		at.file, at.offset, at.kept = savedFile, savedOffset, savedKept
 	}
