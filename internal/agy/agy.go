@@ -113,6 +113,12 @@ func convArg(args []string) string {
 	return ""
 }
 
+// ReadConv returns the conversationId for an agent start id from its .conv link
+// file or from the init event in its stream log.
+func ReadConv(stateDir, id string) string {
+	return resolveAgentConv(stateDir, id)
+}
+
 // resolveAgentConv returns the conversationId for an agent start id from its
 // .conv link file or from the init event in its stream log.
 func resolveAgentConv(stateDir, id string) string {

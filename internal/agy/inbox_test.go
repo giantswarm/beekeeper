@@ -786,7 +786,12 @@ func TestRunExitsWhenSessionParkedDoneOrOffRoster(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 			deadline := time.Now().Add(3 * time.Second)
-			for ReadConv(stateDir, startID) != convID || streamState(logPath) != StateIdle {
+			for {
+				raw, _ := os.ReadFile(transcriptPath) //nolint:gosec // test file
+				st, ok := streamState(logPath)
+				if ReadConv(stateDir, startID) == convID && ok && st == StateIdle && strings.Contains(string(raw), "turn complete: first turn") {
+					break
+				}
 				if time.Now().After(deadline) {
 					t.Fatal("timed out waiting for first turn to complete and become idle")
 				}
