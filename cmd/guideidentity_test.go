@@ -37,7 +37,8 @@ func TestGuideCallerRejectsInheritedDesktopIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			st, err := a.store.Read()
-			if err != nil || st.Starts[0].Party != parent || st.Guide.Holder.Party != guide {
+			if err != nil || st.Starts[0].Party != parent || st.Starts[1].Party != guide ||
+				st.Guide == nil || st.Guide.Holder == nil || st.Guide.Holder.Session != guide.Session || st.Guide.Holder.HostSession != "" || st.Guide.Holder.Name != guide.Name {
 				t.Fatalf("caller identity contaminated state: %+v, %v", st, err)
 			}
 		})

@@ -81,6 +81,7 @@ const (
 	daemonNotifyCgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/beekeeper-notify.service"
 	daemonOwnScope     = "/user.slice/user-1000.slice/user@1000.service/app.slice/claude-daemon-1.scope"
 	daemonRunScope     = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-1.scope"
+	daemonMemLimit     = "MemoryMax 256M"
 	// daemonArg and daemonRunArg are the claude daemon's subcommand and verb.
 	daemonArg    = "daemon"
 	daemonRunArg = "run"
@@ -111,7 +112,7 @@ func TestDaemonsInUnits(t *testing.T) {
 	table, cgroups := daemonTable()
 	limits := func(cg string) []string {
 		if cg == daemonNotifyCgroup {
-			return []string{"MemoryMax 256M", "CPUQuota 50%"}
+			return []string{daemonMemLimit, "CPUQuota 50%"}
 		}
 		return nil
 	}
@@ -151,7 +152,7 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app{cfg: cfg, store: store, out: io.Discard, now: relayNow}
-	found := []daemonUnit{{pid: 10, cgroup: daemonNotifyCgroup, unit: "beekeeper-notify.service", limits: []string{"MemoryMax 256M"}, pids: []int{10, 11, 12}}}
+	found := []daemonUnit{{pid: 10, cgroup: daemonNotifyCgroup, unit: "beekeeper-notify.service", limits: []string{daemonMemLimit}, pids: []int{10, 11, 12}}}
 	cgroups := map[int]string{10: daemonNotifyCgroup, 11: daemonNotifyCgroup, 12: daemonNotifyCgroup}
 	cgroupOf := func(pid int) string { return cgroups[pid] }
 
@@ -311,7 +312,7 @@ func TestDaemonMigrationIncludesForeignServicesAndScopes(t *testing.T) {
 				cgroups[pid] = foreign
 			}
 			cg := func(pid int) string { return cgroups[pid] }
-			found := daemonsInUnits(table, cg, func(string) []string { return []string{"MemoryMax 256M"} })
+			found := daemonsInUnits(table, cg, func(string) []string { return []string{daemonMemLimit} })
 			if len(found) != 1 || found[0].unit != unit || !slices.Equal(found[0].pids, []int{10, 11, 12}) {
 				t.Fatalf("foreign daemon not found: %+v", found)
 			}

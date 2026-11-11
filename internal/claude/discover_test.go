@@ -167,11 +167,13 @@ func TestDiscoverFindsAWorkerInAClaimedSpare(t *testing.T) {
 	}
 }
 
+const wokenFixture = "woken"
+
 func TestDiscoverFindsAWokenWorkerUnderItsID(t *testing.T) {
-	root := filepath.Join("testdata", "proc", "woken")
+	root := filepath.Join("testdata", "proc", wokenFixture)
 	// Its record names it, and so does its transcript's path before the
 	// CLI has written the record.
-	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", "woken"), "arguments": ""} {
+	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", wokenFixture), "arguments": ""} {
 		got := discoverAt(t, root, records)
 		w := got[wokenPID]
 		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA || !w.Background {
@@ -311,7 +313,7 @@ func TestAsideMarksArchivedAndTestSessions(t *testing.T) {
 }
 
 func TestLivenessDiscoveryKeepsCLIIdentitiesWithoutAccounting(t *testing.T) {
-	for _, fixture := range []string{"children", "background", "spare", "woken"} {
+	for _, fixture := range []string{"children", "background", "spare", wokenFixture} {
 		t.Run(fixture, func(t *testing.T) {
 			table, err := proc.ReadAt(filepath.Join("testdata", "proc", fixture))
 			if err != nil {

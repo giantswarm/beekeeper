@@ -36,8 +36,11 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 	w.now = clk.Now()
 	guide := state.Party{Session: bgID, Name: guideSeven}
 	seed(t, w.app, func(st *state.State) {
-		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: w.now.Add(-time.Hour)}, Run: 7,
-			CLI: &state.CLI{Supervisor: guide, Since: w.now.Add(-time.Hour), PID: 77}}
+		st.Guide = &state.Role{
+			Holder: &state.Supervisor{Party: guide, Since: w.now.Add(-time.Hour)},
+			CLI:    &state.CLI{Supervisor: guide, Since: w.now.Add(-time.Hour), PID: 77},
+			Run:    7,
+		}
 		st.Starts = []state.Start{{Party: guide, Role: guideName, Dir: t.TempDir(), Background: true}}
 	})
 	t.Setenv("CLAUDE_CODE_SESSION_ID", bgID)
@@ -74,7 +77,7 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 		t.Fatalf("did not resume the same background run: %+v", *calls)
 	}
 	for _, kv := range (*calls)[0].env {
-		if strings.HasPrefix(kv, "CLAUDE") || strings.HasPrefix(kv, "CCD") {
+		if isHarnessEnv(kv) {
 			t.Fatal("resume inherited the caller's identity")
 		}
 	}

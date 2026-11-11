@@ -25,6 +25,8 @@ func (w *watcher) newGuideRecovery() *watcher {
 	return g
 }
 
+const guideRecoveryKey = "guide-recovery"
+
 // recoverGuide is independent of the main watch's network reads, event replay,
 // accounting and maintenance. It needs only process identities and role state.
 // Unknown process/state observations never mean that the guide is dead.
@@ -35,16 +37,16 @@ func (w *watcher) recoverGuide(ctx context.Context) {
 	w.now = w.clk().Now()
 	t, err := plat.Machine.Processes()
 	if err != nil {
-		w.fail("guide-recovery", "cannot read guide processes: %v", err)
+		w.fail(guideRecoveryKey, "cannot read guide processes: %v", err)
 		return
 	}
 	w.table = t
 	st, err := w.store.Peek()
 	if err != nil {
-		w.fail("guide-recovery", "cannot read guide state: %v", err)
+		w.fail(guideRecoveryKey, "cannot read guide state: %v", err)
 		return
 	}
-	w.clear("guide-recovery")
+	w.clear(guideRecoveryKey)
 	if st.Stop != nil {
 		return
 	}
