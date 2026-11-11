@@ -1657,6 +1657,9 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+		if err := l.checkHostUtilization(st); err != nil {
+			l.sayOnce("host utilization", "SUPERVISOR HOST utilization unread: %v", err)
+		}
 		l.settleOverrides(ctx, st)
 		l.reloadConfig()
 		a = l.a.snapshotAtNow()
@@ -1717,6 +1720,13 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
+	}
+	l.lifecyclePhase(loopPhaseRecover)
+	if err := l.recoverUnfinishedTurns(ctx, st); err != nil {
+		return err
+	}
+	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		return err
 	}
 	l.lifecyclePhase(loopPhaseRecover)
 	if err := l.recoverQuota(ctx, st); err != nil {
@@ -3886,6 +3896,15 @@ func (l *supervisorLoop) brief(file, def, key string, d briefData) (string, erro
 	if err := t.Execute(&b, d); err != nil {
 		return "", err
 	}
+	if st, err := l.a.store.Read(); err != nil {
+		return "", err
+	} else {
+		for _, delivery := range st.Deliveries {
+			if delivery.Outcome == state.OutcomeStalled && (deliveryURL(delivery.Ref, false) == d.URL || delivery.Ref == key) {
+				fmt.Fprintf(&b, "\nPrevious worker exhausted its continuations. Last evidence: %s\n", delivery.Evidence)
+			}
+		}
+	}
 	dir := filepath.Join(l.a.store.Dir(), "supervisor-loop")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
@@ -4123,24 +4142,6 @@ func (h startHost) excludeFlags() []string {
 	return args
 }
 
-// hostChoices are the choices of k one of hosts can run, each as
-// harness/model, the form --exclude matches exactly; mixed says whether
-// k also has a choice no host can run, which only the local machine
-// starts.
-func hostChoices(k config.Capacity, hosts []execution.Host) (choices []string, mixed bool) {
-	for _, ch := range k.Choices {
-		if !hostRunsHarness(ch.Harness, hosts) {
-			mixed = true
-			continue
-		}
-		c := cmp.Or(strings.TrimSpace(ch.Harness), claudeComm) + "/" + strings.TrimSpace(ch.Model)
-		if !slices.Contains(choices, c) {
-			choices = append(choices, c)
-		}
-	}
-	return choices, mixed
-}
-
 // remote reports whether the start runs on an execution host.
 func (h startHost) remote() bool { return h.Selector != "" }
 
@@ -4186,25 +4187,9 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement applies host preferences to workers and coordinator-relayed
-// reviewers, retaining their review capacity flags.
-// Without supervisor.hosts, or for a desk with no capacity.choices
-// (a remote start needs a model name from the pick), it stays local (the
-// zero value). Otherwise the local verdict (capacity --json, with the
-// start kind's flags) decides first: room keeps the start local unless
-// supervisor.hostsFirst; a capacity read that did not run waits, as it
-// did before hosts existed. Then the first host whose own check (capacity
-// --host, which probes the host first) has room and that maps the
-// repository takes it, pinned to the repository's default branch; a host
-// that cannot be read, maps no repository or has no room is said once (or
-// passed quietly) and skipped; a host's check weighs only the choices it
-// can run. With supervisor.hostsFirst and no host with room
-// a start a host could run waits, as it does on a full machine; a start no
-// host can run starts locally within the local room (capacity.local.
-// ceiling among its guards): one whose repository no host maps, or the
-// choices no host has an adapter for, the host-run choices excluded (see
-// hostsFirstLocal). Without the preference the local machine attempts it,
-// whose own start gate makes it wait when it has none either.
+// startPlacement prefers configured execution hosts by default. If none can
+// take the repository and selected task kind, ordinary local capacity is the
+// fallback. Explicit hostsFirst: false retains local-first placement.
 func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
 	kind := workerRole
 	if review {
@@ -4235,96 +4220,50 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		return startHost{}, nil
 	}
 	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
-	if err != nil || code != 0 {
+	if (err != nil || code != 0) && !k.HostsFirst {
 		return startHost{}, errLoopLater
 	}
-	if roomOpen(out) && !k.HostsFirst {
+	localReady := err == nil && code == 0 && roomOpen(out)
+	if localReady && !k.HostsFirst {
+		for _, selector := range k.Hosts {
+			l.recordHostPlacement(selector, repo, "not tried: explicit local-first preference and coordinator has room")
+		}
 		return startHost{}, nil
 	}
-	mapped := false
-	for _, selector := range k.Hosts {
+	for i, selector := range k.Hosts {
 		h, err := l.a.executionHost(selector)
 		if err != nil {
+			l.recordHostPlacement(selector, repo, err.Error())
 			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
 			continue
 		}
 		if !h.AdmitsRepository(repo) {
+			l.recordHostPlacement(selector, repo, "repository is not mapped")
 			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
 			continue
 		}
-		mapped = true
-		if !l.capacityRoom(ctx, append([]string{"--host", selector}, flags...)...) {
+		hostOut, hostCode, hostErr := beekeeperRun(ctx, l.as(append([]string{loopCapacity, "--host", selector}, flags...)...)...)
+		if reason := hostCapacityReason(hostOut, hostCode, hostErr); reason != "" {
+			l.recordHostPlacement(selector, repo, reason)
+			l.sayOnce("host capacity "+selector+" "+reason, "SUPERVISOR HOST WAITS %s: %s", selector, reason)
 			continue
 		}
 		ref, err := l.defaultBranch(ctx, repo)
 		if err != nil || ref == "" {
+			l.recordHostPlacement(selector, repo, fmt.Sprintf("default branch unavailable: %v", err))
 			l.sayOnce("branch "+repo, "SUPERVISOR HOST WAITS: %s: no default branch of %s to pin a remote start (%v)", selector, repo, err)
 			continue
 		}
+		l.recordHostPlacement(selector, repo, "selected for start")
+		for _, later := range k.Hosts[i+1:] {
+			l.recordHostPlacement(later, repo, "not tried: an earlier host was selected")
+		}
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
-	if k.HostsFirst {
-		return l.hostsFirstLocal(ctx, flags, model, out, mapped)
-	}
-	if model != "" && !roomOpen(out) {
+	if !localReady {
 		return startHost{}, errLoopLater
 	}
 	return startHost{}, nil
-}
-
-// hostsFirstLocal is supervisor.hostsFirst's answer when no host took a
-// start: hosts are preferred only for what a host can run. A repository
-// no host maps, or a desk whose choices no host can run, starts locally
-// while the local verdict (localRoom) has room. With a mapped repository
-// the choices a host can run wait for one; the others start locally, the
-// host-run choices excluded from the start, while the local verdict
-// without them has room and picks no self-hosted choice the local verdict
-// (local, with every choice) does not pick itself: excluding the
-// subscriptions a host runs never makes a self-hosted model the pick while
-// a subscription is eligible. Everything else waits.
-func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model, local string, mapped bool) (startHost, error) {
-	localRoom := roomOpen(local)
-	var hosts []execution.Host
-	for _, selector := range l.a.cfg.Supervisor.Hosts {
-		if h, err := l.a.executionHost(selector); err == nil {
-			hosts = append(hosts, h)
-		}
-	}
-	hosted, mixed := hostChoices(filterChoiceModel(l.a.cfg.Capacity, model), hosts)
-	if !mapped || len(hosted) == 0 {
-		if !localRoom {
-			return startHost{}, errLoopLater
-		}
-		return startHost{}, nil
-	}
-	if !mixed {
-		return startHost{}, errLoopLater
-	}
-	place := startHost{Exclude: hosted}
-	out, code, err := beekeeperRun(ctx, l.as(append(append([]string{loopCapacity}, flags...), place.excludeFlags()...)...)...)
-	if err != nil || code != 0 || !roomOpen(out) {
-		return startHost{}, errLoopLater
-	}
-	providers := l.a.cfg.Capacity.Providers
-	if pick := verdictProvider(out); providers[pick].SelfHosted() && !providers[verdictProvider(local)].SelfHosted() {
-		l.sayOnce("self-hosted "+pick, "SUPERVISOR HOST WAITS: no host has room, and without the choices a host runs the local pick is self-hosted %s while a subscription is eligible", pick)
-		return startHost{}, errLoopLater
-	}
-	return place, nil
-}
-
-// verdictProvider is the provider of a `capacity --json` answer's pick:
-// empty when it picks none or cannot be read.
-func verdictProvider(out string) string {
-	var v struct {
-		Choice *struct {
-			Provider string `json:"provider"`
-		} `json:"choice"`
-	}
-	if json.Unmarshal([]byte(out), &v) != nil || v.Choice == nil {
-		return ""
-	}
-	return v.Choice.Provider
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:

@@ -69,6 +69,9 @@ type executionPark struct {
 	Waits      string `json:"waits"`
 }
 type executionReport struct {
+	NoChange string   `json:"noChange,omitempty"`
+	Blocked  bool     `json:"blocked,omitempty"`
+	By       string   `json:"by,omitempty"`
 	Finished bool     `json:"finished"`
 	Text     string   `json:"text"`
 	Problems []string `json:"problems"`
@@ -485,7 +488,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			st.NextTimer++
 			t := state.Timer{ID: st.NextTimer, By: me, At: a.now.UTC(), Due: a.now.UTC(), When: "pr-checks " + on, Every: timerEvery, Until: until, Wake: ag.Name, WakeParkAt: ag.Park.At, What: "CI settled for " + on + ": read the result, fix failures or park for desk review"}
 			st.Timers = append(st.Timers, t)
-			return "CI park and wake timer recorded on coordinator; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now)), event(me, "timer.add", "#%d %s", t.ID, t.When)}, nil
+			return "CI park and wake timer recorded on coordinator; end your turn now", append(a.recordTaskOutcome(st, *ag, state.OutcomeParked, ag.Park.On+": "+ag.Park.Waits), event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now)), event(me, "timer.add", "#%d %s", t.ID, t.When)), nil
 		}
 		if id, ok := parkNote(v.On); ok {
 			if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
@@ -534,7 +537,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				st.Records[i].Waits = oneLine(v.Waits)
 			}
 		}
-		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", append(a.recordTaskOutcome(st, *ag, state.OutcomeParked, ag.Park.On+": "+ag.Park.Waits), event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))), nil
 	case execution.ControlResume:
 		// The worker leaves its own park once its wait settled: nobody is
 		// woken, the line carries what settled it.
@@ -571,21 +574,25 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
 			return "", nil, err
 		}
+		outcomes, err := a.completionOutcome(ctx, st, *ag, v.Finished, v.NoChange, v.Blocked, v.By)
+		if err != nil {
+			return "", nil, err
+		}
 		problems = freshWorkerProblems(ag, problems)
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
-		ag.Done = v.Finished
-		if ag.Execution != nil && v.Finished {
+		ag.Done = v.Finished || v.Blocked
+		if ag.Execution != nil && (v.Finished || v.Blocked) {
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
 				r.Completed = true
 			}
 		}
 		verb := litAgentsIdle
-		if v.Finished {
+		if v.Finished || v.Blocked {
 			verb = executionDone
 			clearRecords(st, me)
 		}
-		events := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
+		events := append(outcomes, event(me, verb, "%s done: %s", ag.Name, ag.LastTask))
 		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems, TellTo: reviewStarter(st, *ag, v.Text)})
 		if v.Text != "" {
 			events = append(events, event(me, "agents.report", "%s: %s", ag.Name, v.Text))

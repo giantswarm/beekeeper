@@ -743,6 +743,9 @@ func (a *app) printRun(r sim.Result) error {
 
 func (a *app) printObserved(o sim.Observed) error {
 	w := a.table()
+	for _, outcome := range slices.Sorted(maps.Keys(o.Outcomes)) {
+		_, _ = fmt.Fprintf(w, "outcome %s: %d\n", outcome, o.Outcomes[outcome])
+	}
 	_, _ = fmt.Fprintf(w, "%s to %s (%.1f days): %d deliveries seen, %d started, %d released, %d dropped: %.1f started and %.1f released a day\n", clock(a.now, o.Since), clock(a.now, o.Until), o.Days, o.Deliveries, o.Started, o.Released, o.Dropped, o.StartedPerDay, o.ReleasedPerDay)
 	_, _ = fmt.Fprintf(w, "loop up %.0f%%, down %s", 100*o.LoopUptime, dur(o.LoopDown))
 	for i, g := range o.Outages {

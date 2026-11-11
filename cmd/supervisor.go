@@ -125,11 +125,12 @@ const loopLaunchdLabel = "com.giantswarm.beekeeper.supervisor-loop"
 
 // supervisorView is the supervisor's status for --json.
 type supervisorView struct {
-	Epics    string        `json:"epics"`
-	Delivery *deliveryView `json:"delivery,omitempty"`
-	Loop     bool          `json:"loop"`
-	PID      int           `json:"pid,omitempty"`
-	Version  string        `json:"version,omitempty"`
+	Hosts    []hostPlacementView `json:"hosts,omitempty"`
+	Epics    string              `json:"epics"`
+	Delivery *deliveryView       `json:"delivery,omitempty"`
+	Loop     bool                `json:"loop"`
+	PID      int                 `json:"pid,omitempty"`
+	Version  string              `json:"version,omitempty"`
 	// Held says what the loop holds of its GitHub reads, Pulls the open
 	// pull requests nobody owns: both for whoever waits on the loop.
 	Held  string `json:"held,omitempty"`
@@ -164,7 +165,12 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		return err
 	}
 	if a.json {
-		return a.printJSON(supervisorView{Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
+		return a.printJSON(supervisorView{Hosts: a.hostPlacementViews(st), Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
+	}
+	for _, host := range a.hostPlacementViews(st) {
+		if _, err := fmt.Fprintln(a.out, host.line()); err != nil {
+			return err
+		}
 	}
 	if pid == 0 {
 		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n%s\n%s\n", loopServiceHint(), delivery.line(), epics)
