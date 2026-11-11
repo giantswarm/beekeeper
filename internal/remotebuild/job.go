@@ -14,6 +14,7 @@ import (
 )
 
 const appLabel = "beekeeper-builder"
+const builderContainer = "builder"
 
 // Job gives each worktree/toolchain a warm workspace without cluster credentials.
 // Exiting the watchdog lets the TTL controller delete both Job and pod.
@@ -42,7 +43,7 @@ func Job(c Config, name, image string) *batchv1.Job {
 			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: ptr.To(false), TerminationGracePeriodSeconds: ptr.To(int64(10)),
 				NodeSelector:    map[string]string{"kubernetes.io/arch": "amd64"},
 				SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(1000)), RunAsGroup: ptr.To(int64(1000)), FSGroup: ptr.To(int64(1000)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
-				Containers: []corev1.Container{{Name: "builder", Image: image, Command: []string{shellBash, "-c", watchdog}, Env: append([]corev1.EnvVar{
+				Containers: []corev1.Container{{Name: builderContainer, Image: image, Command: []string{shellBash, "-c", watchdog}, Env: append([]corev1.EnvVar{
 					{Name: "IDLE", Value: strconv.FormatInt(int64(c.IdleTimeout.Seconds()), 10)},
 					{Name: "TMPDIR", Value: "/work/tmp"}, {Name: "GOTMPDIR", Value: "/work/tmp"},
 					{Name: "GOCACHE", Value: "/work/go-cache"}, {Name: "GOMODCACHE", Value: "/work/go-mod"},

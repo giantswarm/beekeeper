@@ -318,7 +318,7 @@ func (r Runner) builderOOMKilled(ctx context.Context, pod string) bool {
 		return false
 	}
 	for _, container := range status.Status.ContainerStatuses {
-		if container.Name == "builder" && container.State.Terminated != nil && container.State.Terminated.Reason == "OOMKilled" {
+		if container.Name == builderContainer && container.State.Terminated != nil && container.State.Terminated.Reason == "OOMKilled" {
 			return true
 		}
 	}
@@ -326,7 +326,7 @@ func (r Runner) builderOOMKilled(ctx context.Context, pod string) bool {
 }
 
 func (r Runner) exec(ctx context.Context, pod string, in io.Reader, out io.Writer, args ...string) error {
-	flags := []string{"exec", pod, "-c", "builder"}
+	flags := []string{"exec", pod, "-c", builderContainer}
 	if in != nil {
 		flags = append(flags, "-i")
 	}
