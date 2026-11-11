@@ -109,14 +109,22 @@ func parseMem(r io.Reader) (Mem, error) {
 	}, sc.Err()
 }
 
+// EnvLoadavg overrides /proc/loadavg when set in a test environment so a shared
+// CI runner's physical host load cannot fail isolated workflow tests.
+const EnvLoadavg = "BEEKEEPER_LOADAVG"
+
 // ReadLoad returns the 1, 5 and 15 minute load averages.
 func ReadLoad() ([3]float64, error) {
 	var l [3]float64
-	raw, err := os.ReadFile(filepath.Clean("/proc/loadavg"))
-	if err != nil {
-		return l, err
+	raw := os.Getenv(EnvLoadavg)
+	if raw == "" {
+		b, err := os.ReadFile(filepath.Clean("/proc/loadavg"))
+		if err != nil {
+			return l, err
+		}
+		raw = string(b)
 	}
-	f := strings.Fields(string(raw))
+	f := strings.Fields(raw)
 	for i := 0; i < 3 && i < len(f); i++ {
 		l[i], _ = strconv.ParseFloat(f[i], 64)
 	}

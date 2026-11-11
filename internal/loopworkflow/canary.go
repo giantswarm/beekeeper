@@ -224,6 +224,7 @@ func newIsolatedCanaryEnv(scratch string, extra ...string) (string, []string, er
 		"PATH=/usr/local/bin:/usr/bin:/bin",
 		envLang,
 		envTZ,
+		envLoadavg,
 		envGitGlobal,
 		envGitSystem,
 		envGitPrompt,
@@ -376,7 +377,7 @@ func (p *probe) prepareCanary(server, scenario string) (err error) {
 	}
 	home := p.path("home")
 	p.env = []string{
-		"HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_STATE_HOME=" + home, "PATH=" + p.path("bin"), envLang, envTZ,
+		"HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_STATE_HOME=" + home, "PATH=" + p.path("bin"), envLang, envTZ, envLoadavg,
 		"BEEKEEPER_CONFIG=" + p.path("config.yaml"), "FIXTURE_DIR=" + p.dir, "FIXTURE_GIT=" + p.git, "FIXTURE_CASE=" + scenario,
 		envGitGlobal, envGitSystem, "GIT_ALLOW_PROTOCOL=file", envGitPrompt,
 		"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid",

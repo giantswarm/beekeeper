@@ -99,6 +99,14 @@ func TestParseWrittenBack(t *testing.T) {
 	}
 }
 
+func TestReadLoad(t *testing.T) {
+	t.Setenv(EnvLoadavg, "47.50 12.25 4.00 3/500 12345")
+	got, err := ReadLoad()
+	if err != nil || got != [3]float64{47.5, 12.25, 4} {
+		t.Fatalf("ReadLoad() = %v, %v", got, err)
+	}
+}
+
 func TestParseOOMAtASlotSlice(t *testing.T) {
 	const slice = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-slot2.slice"
 	journal := `2026-10-04T16:00:00+0300 host-desk kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=` + slice + `,task_memcg=` + slice + `/memcap-42-000001.scope,task=node,pid=43,uid=1000`

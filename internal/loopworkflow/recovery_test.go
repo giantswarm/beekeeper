@@ -163,7 +163,7 @@ func newDesk(t *testing.T, good, candidate []byte) *desk {
 		t.Fatal(err)
 	}
 	// No service manager, bus or real configuration: only git is on the PATH.
-	d.env = []string{"HOME=" + filepath.Join(dir, "home"), "XDG_STATE_HOME=" + filepath.Join(dir, "home"), "PATH=" + filepath.Join(dir, "path"), "LANG=C.UTF-8", "TZ=UTC"}
+	d.env = []string{"HOME=" + filepath.Join(dir, "home"), "XDG_STATE_HOME=" + filepath.Join(dir, "home"), "PATH=" + filepath.Join(dir, "path"), "LANG=C.UTF-8", "TZ=UTC", envLoadavg}
 	return d
 }
 
