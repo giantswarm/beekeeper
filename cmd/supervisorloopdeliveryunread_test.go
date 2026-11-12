@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -37,8 +38,8 @@ func TestDeliveryPullsOutsideDeskAreNotTracked(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var observed []string
-	fixture := readObservedLoopPull
-	readObservedLoopPull = func(l *supervisorLoop, ctx context.Context, ref string, changed time.Time, step string) (loopPullObservation, error) {
+	fixture := loop.ReadObservedLoopPull
+	loop.ReadObservedLoopPull = func(l *loop.Loop, ctx context.Context, ref string, changed time.Time, step string) (loop.LoopPullObservation, error) {
 		mu.Lock()
 		observed = append(observed, ref)
 		mu.Unlock()

@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -71,7 +72,7 @@ func TestLoopCachesLegacyIssueParksAcrossRestarts(t *testing.T) {
 		reads++
 		return map[github.PR]github.RefState{refs[0]: {Kind: github.RefIssue, State: github.Open}}, nil
 	}
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { panic("issue read as PR") }
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { panic("issue read as PR") }
 	for range 3 {
 		r.pass(t)
 	}
@@ -108,7 +109,7 @@ func TestLoopDoesNotReadAnUnresolvedParkAsPull(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, r.a.now)
 	refStates = func(context.Context, []github.PR) (map[github.PR]github.RefState, error) { return nil, nil }
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Fatal("unknown ref read as PR")
 		return superloop.Pull{}, nil
 	}
@@ -257,7 +258,7 @@ func TestLoopBacksOffUnansweredLegacyParksAcrossRestarts(t *testing.T) {
 				reads++
 				return nil, readErr
 			}
-			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				t.Fatal("unresolved ref read as PR")
 				return superloop.Pull{}, nil
 			}

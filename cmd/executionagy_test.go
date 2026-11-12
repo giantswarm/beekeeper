@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -118,7 +119,7 @@ func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
 // An effort agy would ignore must never reach a request, a start record or an
 // event, however it was selected and whichever way agy was chosen.
 func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
-	remote := []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch}
+	remote := []string{loop.LoopHostFlag, sshTestSelector, loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch}
 	explicit := []string{testHarnessFlag, harnessAgy, modelFlag, agyTestModel}
 	auto := []string{testHarnessFlag, harnessAuto}
 	flag := []string{effortFlag, testEffortHigh}

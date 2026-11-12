@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -36,7 +37,7 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 		var start *state.Start
 		for i := range st.Starts {
 			candidate := &st.Starts[i]
-			if candidate.Name == name && candidate.By.Is(loopParty) && (start == nil || candidate.At.After(start.At)) {
+			if candidate.Name == name && candidate.By.Is(loop.LoopParty) && (start == nil || candidate.At.After(start.At)) {
 				start = candidate
 			}
 		}
@@ -65,7 +66,7 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 				}
 			}
 		}
-		return []state.Event{event(loopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
+		return []state.Event{event(loop.LoopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
 	})
 }
 
@@ -128,7 +129,7 @@ var readDeskReview = func(ctx context.Context, repository string, pr int, id str
 // survives report delivery/pruning and is rechecked immediately before use.
 // The review authenticates the head its round reviewed; a merge head past it
 // is admitted only when it merely merges the base into that head
-// (readBaseMerge), as the reviewed merge's own branch update does.
+// (loop.ReadBaseMerge), as the reviewed merge's own branch update does.
 func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, use execution.MergeUse, pull superloop.Pull) error {
 	return a.authenticateReviewResult(ctx, st, use, pull, false)
 }
@@ -151,7 +152,7 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 		reviewed = roundHead
 	}
 	if !fixes && round != nil && roundHead != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
-		covered, err := readBaseMerge(ctx, pull, roundHead)
+		covered, err := loop.ReadBaseMerge(ctx, pull, roundHead)
 		if err != nil {
 			return err
 		}

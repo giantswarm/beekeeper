@@ -33,13 +33,24 @@ failure. Logs are retained under the job's `loop-workflow/standstills` artifacts
 Add a corresponding negative control for each new standstill before closing it.
 
 Self-update compares the running and staged binaries' read-only live passes
-before replacement. Each pass has a 90-second deadline. Unlike the recurring
-loop, a one-shot pass reads beyond the normal sweep batch limit; its deadline
-and GitHub admission gates still apply. A failure, incomplete
-observation, or loss of all starts, continuations, reviews or merges present in
-the running release refuses installation. Comparison refusals do not enter the
-skipped-release or quarantine files and can be retried after an outage.
+before replacement, one after the other, each with a 2-minute deadline. Unlike
+the recurring loop, a one-shot pass reads beyond the normal sweep batch limit;
+its deadline and GitHub admission gates still apply. The candidate is refused
+when its pass fails, when it cannot observe the desk (it runs out of time, its
+GitHub reads are held or its observations are incomplete) while the running
+release's pass completed, or when it loses all starts, continuations, reviews
+or merges present in the running release. A refusal of a pass that fails or
+cannot observe names that pass's own last line; a lost kind names the kind and
+the running release's count. The running release's pass is only the baseline:
+when it cannot complete, for whatever reason, nothing is compared and only a
+failing candidate pass refuses, so a release whose dry-run breaks, or a desk
+whose GitHub reads keep failing, never holds back a candidate (and with it the
+fix).
+Self-update then says, and logs as `self-update.comparison`, that the
+candidate went uncompared and why; signature verification, the other canary
+checks and probation still apply. Comparison refusals do not enter the skipped-release or
+quarantine files and can be retried after an outage.
 `self-update --allow-loop-regression` explicitly skips this comparison for an
 intentional planner change; signature verification and the other canary checks
-still apply. The two passes observe live state concurrently, so legitimate state
-movement can cause a conservative refusal; retry before overriding it.
+still apply. The two passes observe live state minutes apart, so legitimate
+state movement can cause a conservative refusal; retry before overriding it.

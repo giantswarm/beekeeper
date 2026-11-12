@@ -1,4 +1,4 @@
-package cmd
+package loop
 
 import (
 	"context"
@@ -11,14 +11,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-var readRedJobLog = func(ctx context.Context, repo string, job int64) (string, error) {
+var ReadRedJobLog = func(ctx context.Context, repo string, job int64) (string, error) {
 	return github.JobLog(ctx, github.RunGH, repo, job)
 }
 
 // Attach bounded failure output at the handoff, once per planned red wake.
 // Non-Actions checks and unavailable logs retain their original check links.
-func attachRedLogs(ctx context.Context, act superloop.Action) superloop.Action {
-	ref, ok := parseRef(act.Ref)
+func AttachRedLogs(ctx context.Context, act superloop.Action) superloop.Action {
+	ref, ok := Cmd.ParseRef(act.Ref)
 	if !ok {
 		return act
 	}
@@ -35,7 +35,7 @@ func attachRedLogs(ctx context.Context, act superloop.Action) superloop.Action {
 			break
 		}
 		seen[job] = true
-		log, err := readRedJobLog(ctx, ref.Repo, job)
+		log, err := ReadRedJobLog(ctx, ref.Repo, job)
 		if err != nil {
 			act.Message += "\nCI failure output unavailable; read " + match[0]
 			continue

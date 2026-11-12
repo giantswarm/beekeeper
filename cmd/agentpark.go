@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
@@ -204,11 +205,11 @@ agents wake: its task is that message's first line.`,
 					return usageErr("--on %s names no hold: hold:<target>, as beekeeper hold lists it", on)
 				}
 				on = holdParkOn(target)
-			} else if name, isAlert := strings.CutPrefix(on, alertParkPrefix); isAlert {
+			} else if name, isAlert := strings.CutPrefix(on, loop.AlertParkPrefix); isAlert {
 				if strings.TrimSpace(name) == "" {
 					return usageErr("--on alert:<name> needs an alert name")
 				}
-				on = alertParkPrefix + strings.TrimSpace(name)
+				on = loop.AlertParkPrefix + strings.TrimSpace(name)
 			} else if _, _, release := parseReleaseTarget(on); release {
 				// The repository and exact version are retained in On.
 			} else if strings.HasPrefix(on, reportReferencePrefix) {
@@ -376,7 +377,7 @@ func (a *app) parkWithWait(me state.Party, on, waits string, external bool, post
 		}
 		back := resume + " brings it back"
 		switch {
-		case strings.HasPrefix(on, alertParkPrefix):
+		case strings.HasPrefix(on, loop.AlertParkPrefix):
 			back = "the supervisor loop wakes it when the alert fires"
 		case on != "" && i >= 0 && !wakeRoute(st.Agents[i]):
 			back = "the watch says AGENT RESUMABLE once " + on + " settles; " + unroutedResume
@@ -430,7 +431,7 @@ func inheritReviewParkOnAgent(st *state.State, ag *state.Agent, rp state.ReviewP
 	if st == nil || ag == nil || rp.Serves == "" {
 		return
 	}
-	if loopServes(st, *ag) == "" {
+	if loop.LoopServes(st, *ag) == "" {
 		st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(ag.Party) })
 		st.Records = append(st.Records, state.Record{Session: ag.Party, Issue: rp.Serves, By: ag.Party, At: now})
 	}
@@ -875,7 +876,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		return out
 	}
 	var states map[github.PR]github.RefState
-	if len(refs) > 0 && !boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	if len(refs) > 0 && !loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
 		var s map[github.PR]github.RefState
@@ -903,7 +904,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			err = read()
 		}
 		if err != nil {
-			if !errors.Is(err, errLoopLater) {
+			if !errors.Is(err, loop.ErrLoopLater) {
 				w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
 			}
 		} else {
@@ -1158,11 +1159,6 @@ var parkWorktree = func(dir string) string {
 		return ""
 	}
 	return filepath.Clean(strings.TrimSpace(string(out)))
-}
-
-func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {
-	head, _ := publishedParkVerification(ctx, on, dir, git, gh)
-	return head
 }
 
 func publishedParkVerification(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) (string, string) {

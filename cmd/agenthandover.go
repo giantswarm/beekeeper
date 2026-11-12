@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -278,7 +279,7 @@ func (a *app) lastNoteContext(ctx context.Context, p state.Party, since time.Tim
 		return e.Verb == verbNote
 	}
 	if len(progress) > 0 && progress[0] != nil {
-		keep = eventProgressFilter(keep, progress[0], time.Now)
+		keep = loop.EventProgressFilter(keep, progress[0], time.Now)
 	}
 	notes, err := state.FollowSnapshotContext(ctx, a.store, "agent-notes", "v1", keep)
 	if err == nil {

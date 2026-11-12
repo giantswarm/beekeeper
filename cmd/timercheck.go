@@ -17,6 +17,7 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -180,20 +181,20 @@ func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 // checks still running with none red, does not hold.
 func prChecksSettled(ref string) judge {
 	return func(out []byte) (bool, string, error) {
-		p, err := parseLoopPull(ref, out)
+		p, err := loop.ParseLoopPull(ref, out)
 		if err != nil {
 			return false, "", err
 		}
 		if p.Head == "" || p.State == "" {
 			return false, "", errors.New("no pull request in the answer")
 		}
-		var j loopPullJSON
+		var j loop.LoopPullJSON
 		if err := json.Unmarshal(out, &j); err != nil {
 			return false, "", err
 		}
 		running := 0
 		for _, c := range j.Rollup {
-			if !c.concluded() {
+			if !c.Concluded() {
 				running++
 			}
 		}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -22,10 +23,12 @@ func shutdownStore(t *testing.T) *state.FileStore {
 func fakeLoopShutdown(t *testing.T, grace time.Duration) chan int {
 	t.Helper()
 	exited := make(chan int, 1)
-	oldGrace, oldWait, oldExit := loopShutdownGrace, loopShutdownLockWait, loopShutdownExit
-	loopShutdownGrace, loopShutdownLockWait = grace, 50*time.Millisecond
-	loopShutdownExit = func(code int) { exited <- code }
-	t.Cleanup(func() { loopShutdownGrace, loopShutdownLockWait, loopShutdownExit = oldGrace, oldWait, oldExit })
+	oldGrace, oldWait, oldExit := loop.LoopShutdownGrace, loop.LoopShutdownLockWait, loop.LoopShutdownExit
+	loop.LoopShutdownGrace, loop.LoopShutdownLockWait = grace, 50*time.Millisecond
+	loop.LoopShutdownExit = func(code int) { exited <- code }
+	t.Cleanup(func() {
+		loop.LoopShutdownGrace, loop.LoopShutdownLockWait, loop.LoopShutdownExit = oldGrace, oldWait, oldExit
+	})
 	return exited
 }
 
@@ -36,10 +39,10 @@ func TestLoopShutdownAbandonsAStuckPass(t *testing.T) {
 	exited := fakeLoopShutdown(t, 100*time.Millisecond)
 	store := shutdownStore(t)
 	started := time.Now().UTC()
-	if err := store.WriteFile(loopLifecycleFile, loopLifecycle{Version: "0.9.1", Started: started, At: started, Phase: loopPhaseRecover}); err != nil {
+	if err := store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: "0.9.1", Started: started, At: started, Phase: loop.LoopPhaseRecover}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile(loopPIDFile, 4242); err != nil {
+	if err := store.WriteFile(loop.LoopPIDFile, 4242); err != nil {
 		t.Fatal(err)
 	}
 	held, stuck, updated := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -61,7 +64,7 @@ func TestLoopShutdownAbandonsAStuckPass(t *testing.T) {
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		boundLoopShutdown(ctx, make(chan struct{}), store, &out)
+		loop.BoundLoopShutdown(ctx, make(chan struct{}), store, &out)
 	}()
 	signaled := time.Now()
 	cancel()
@@ -77,15 +80,15 @@ func TestLoopShutdownAbandonsAStuckPass(t *testing.T) {
 		t.Fatalf("exit %s after the stop signal, want within grace and lock wait", took)
 	}
 	<-returned
-	var life loopLifecycle
-	if found, err := store.ReadFile(loopLifecycleFile, &life); err != nil || !found {
+	var life loop.LoopLifecycle
+	if found, err := store.ReadFile(loop.LoopLifecycleFile, &life); err != nil || !found {
 		t.Fatalf("lifecycle: found %v, err %v", found, err)
 	}
-	if !life.Exited || life.Failure != loopFailureAbandoned || life.Phase != loopPhaseRecover || life.Version != "0.9.1" {
-		t.Fatalf("lifecycle %+v, want exited with %q in %q", life, loopFailureAbandoned, loopPhaseRecover)
+	if !life.Exited || life.Failure != loop.LoopFailureAbandoned || life.Phase != loop.LoopPhaseRecover || life.Version != "0.9.1" {
+		t.Fatalf("lifecycle %+v, want exited with %q in %q", life, loop.LoopFailureAbandoned, loop.LoopPhaseRecover)
 	}
 	var pid int
-	if _, err := store.ReadFile(loopPIDFile, &pid); err != nil || pid != 0 {
+	if _, err := store.ReadFile(loop.LoopPIDFile, &pid); err != nil || pid != 0 {
 		t.Fatalf("PID marker %d (err %v), want 0", pid, err)
 	}
 	if !strings.Contains(out.String(), "abandoned") {
@@ -102,7 +105,7 @@ func TestLoopShutdownLeavesAReturningLoop(t *testing.T) {
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		boundLoopShutdown(ctx, done, store, &bytes.Buffer{})
+		loop.BoundLoopShutdown(ctx, done, store, &bytes.Buffer{})
 	}()
 	cancel()
 	close(done)
@@ -112,7 +115,7 @@ func TestLoopShutdownLeavesAReturningLoop(t *testing.T) {
 		t.Fatalf("forced exit %d of a loop that returned", code)
 	case <-time.After(400 * time.Millisecond):
 	}
-	if found, err := store.ReadFile(loopLifecycleFile, &loopLifecycle{}); err != nil || found {
+	if found, err := store.ReadFile(loop.LoopLifecycleFile, &loop.LoopLifecycle{}); err != nil || found {
 		t.Fatalf("lifecycle written for a returning loop (found %v, err %v)", found, err)
 	}
 }
@@ -124,7 +127,7 @@ func TestLoopShutdownWaitsForTheSignal(t *testing.T) {
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		boundLoopShutdown(t.Context(), done, shutdownStore(t), &bytes.Buffer{})
+		loop.BoundLoopShutdown(t.Context(), done, shutdownStore(t), &bytes.Buffer{})
 	}()
 	select {
 	case code := <-exited:
