@@ -197,8 +197,10 @@ The world's time starts at `given.clock.start`, or at the system's time. It
 runs as the system's does, so a pass that waits a second waits a second.
 `advance` moves it forward. The step returns once every process has fired
 the timers, tickers and sleeps that are then due and acknowledged the new
-time. A process started later reads the advanced time. A ticker that missed
-several periods ticks once, as Go's does.
+time. A process that ends before it acknowledges is not waited for; one
+that does not acknowledge within 10 seconds fails the step, named by its
+PID and command line. A process started later reads the advanced time. A
+ticker that missed several periods ticks once, as Go's does.
 
 ```yaml
 - advance: 30m                       # at once
