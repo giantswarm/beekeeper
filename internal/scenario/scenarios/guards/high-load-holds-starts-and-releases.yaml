@@ -1,0 +1,107 @@
+name: high-load-holds-starts-and-releases
+description: >
+  The 1-minute load is over the watch's guard (watch.loadMax). While it is,
+  the supervisor loop starts nobody: its watch says HIGH LOAD, capacity
+  names the load as what blocks a start, a start by hand is refused, and
+  ten minutes of refill ticks leave the Ready item without a worker. Once
+  the load is back under the guard, nothing has to lift the hold: the next
+  reading releases it and the loop starts the item's worker. The load is
+  the loop's own reading (BEEKEEPER_LOADAVG), so the scenario changes it by
+  running the loop again under the new load.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: guards
+tags: [guards, load, loop, capacity]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s, loadMax: 8}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: A ready item, board: Ready}
+  harness:
+    workers:
+      - name: app 1
+        turns:
+          - outcome: hang
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: busy
+    background:
+      args: [supervisor, loop]
+      env: {BEEKEEPER_LOADAVG: "50.00 40.00 30.00"}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: busy, contains: ["HIGH LOAD: 1m 50 over 8"]}
+        - events: {contains: [watch.budget-state]}
+  - name: capacity-busy
+    run:
+      args: [capacity, --json]
+      env: {BEEKEEPER_LOADAVG: "50.00 40.00 30.00"}
+    expect:
+      - json_path: {path: headroom.load1, equals: 50}
+      - json_path: {path: headroom.loadMax, equals: 8}
+      - json_path: {path: room, equals: 0}
+      - output: {contains: ["1m load 50 over 8"]}
+  - name: start-refused
+    run:
+      args: [--as, supervisor loop, agents, start, by-hand, /work/worker.txt, --harness, claude, --model, sonnet]
+      env: {BEEKEEPER_LOADAVG: "50.00 40.00 30.00"}
+    expect:
+      - exit: 3
+      - stderr: {contains: ["1m load 50 over 8"]}
+  # Ten minutes of refill ticks under the load.
+  - name: held
+    advance:
+      by: 10m
+      step: 1m
+      quiet: 200ms
+    expect:
+      - events: {not_contains: [agents.start]}
+      - worker: {name: app 1, turns: 0}
+      - log: {name: busy, contains: ["SUPERVISOR REFILL started 0"]}
+      - process: {name: busy, running: true}
+  - stop: busy
+  # The load is back under the guard: the scenario's own 0.10.
+  - name: calm
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: calm, not_contains: ["HIGH LOAD"], contains: ["watching the machine numbers only"]}
+  - name: released
+    advance:
+      by: 3m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [agents.start]}
+        - worker: {name: app 1, turns: 1}
+  - name: capacity-calm
+    run: {args: [capacity, --json]}
+    expect:
+      - json_path: {path: headroom.load1, equals: 0.1}
+      - json_path: {path: busy, equals: [app 1]}
+  - stop: calm
+
+then:
+  - worker: {name: app 1, harness: claude, turns: 1, running: true}
+  - worker: {name: by-hand, turns: 0}
+  - log: {name: calm, not_contains: ["HIGH LOAD"]}

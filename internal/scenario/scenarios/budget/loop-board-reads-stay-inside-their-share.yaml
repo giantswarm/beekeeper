@@ -1,0 +1,107 @@
+name: loop-board-reads-stay-inside-their-share
+description: >
+  The supervisor loop draws its board reads from a share of the GraphQL
+  window, supervisor.graphQLLimit, so that its own reads never take the
+  budget every session shares under the floor. Here a board walk is costly
+  (300 points) and the share is 1000 points. The first refill walks the
+  board and starts a worker; that walk has used up the room the share
+  leaves, so the loop reads the board no further in this window and says
+  so, while the shared budget stays far above the floor and the gate stays
+  open for everyone else. The second Ready item waits for the next window:
+  once it has begun, the loop walks the board again and starts its worker.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: budget
+tags: [budget, github, loop, allowance]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {floor: 500, probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h, graphQLLimit: 1000}
+      watch: {interval: 30s}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+          - {number: 2, title: Second item, board: Ready}
+    # The board's two reads cost 150 points each.
+    costs:
+      - {operation: repositoryOwner, cost: 150}
+  harness:
+    workers:
+      - name: 'app \d'
+        turns:
+          - outcome: hang
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # The watch's first reading admits starts.
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  # The next refill walks the board once and starts the first worker.
+  - name: first
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app \d', turns: 1}
+  # Ten more minutes of refill ticks with a free slot and a Ready item.
+  - name: within
+    advance:
+      by: 10m
+      step: 1m
+      quiet: 200ms
+  - name: status
+    run: {args: [supervisor, status, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: loop, equals: true}
+      - output: {contains: ["board reads wait until", "supervisor.graphQLLimit"]}
+  - name: budget
+    run: {args: [budget, --gate, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: loop.spent, exists: true}
+  - name: one-worker
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: ., len: 1}
+      # The loop's share bounds what it spent, and the budget everyone
+      # shares is nowhere near the floor.
+      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 1000}}}
+      - github: {budget: {bucket: graphql, remaining: {min: 3500}}}
+  # The next window: the share is new, the board is read again.
+  - name: next-window
+    advance:
+      by: 55m
+      step: 5m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app \d', turns: 2}
+  - name: roster
+    run: {args: [agents, --json]}
+  - stop: loop
+
+then:
+  - {step: roster, json_path: {path: ., len: 2}}
+  - events: {contains: [agents.start, supervisor.next]}
+  - worker: {name: 'app \d', harness: claude, turns: 2, running: true}

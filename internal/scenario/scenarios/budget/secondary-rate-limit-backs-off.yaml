@@ -1,0 +1,92 @@
+name: secondary-rate-limit-backs-off
+description: >
+  GitHub answers GraphQL with a secondary rate limit: 403 and Retry-After
+  ten minutes. The loop takes the refusal as it takes a spent budget. Its
+  watch says GitHub refuses GraphQL calls, starts are held, the gate
+  refuses with exit 3 and names when the refusal ends, and until then the
+  loop does not ask GraphQL again: a handful of refused calls in ten
+  minutes of passes, where every pass would otherwise have read the board.
+  When Retry-After has passed GitHub answers again, the loop reads the
+  board and starts the worker of the Ready item.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: budget
+tags: [budget, github, loop, fault]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {floor: 500, probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: A ready item, board: Ready}
+    faults:
+      - name: secondary
+        match: {path: graphql}
+        respond: {secondary_rate_limit: true, retry_after: 10m}
+        for: 10m
+  harness:
+    workers:
+      - name: app 1
+        turns:
+          - outcome: hang
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["SUPERVISOR GITHUB HELD"]}
+        - github: {calls: {path: graphql, fault: secondary, status: 403, min: 1}}
+  - name: gate-refused
+    run: {args: [budget, --gate, --json]}
+    expect:
+      - exit: 3
+      - json_path: {path: graphql.secondary, equals: true}
+      - stderr: {contains: ["GitHub refuses GraphQL calls"]}
+  # Nine minutes of passes inside Retry-After.
+  - name: backing-off
+    advance:
+      by: 9m
+      step: 1m
+      quiet: 200ms
+    expect:
+      - events: {not_contains: [agents.start]}
+      - worker: {name: app 1, turns: 0}
+      # The loop does not hammer a GitHub that asked it to wait.
+      - github: {calls: {path: graphql, caller: loop, fault: secondary, max: 3}}
+      - github: {budget: {bucket: graphql, spent: 0}}
+  # Retry-After has passed.
+  - name: after
+    advance:
+      by: 6m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [agents.start]}
+        - worker: {name: app 1, turns: 1}
+  - name: gate-open
+    run: {args: [budget, --gate, --json]}
+    expect:
+      - exit: 0
+  - stop: loop
+
+then:
+  - github: {calls: {path: graphql, operation: repositoryOwner, caller: loop, status: 200, min: 1}}
+  - worker: {name: app 1, harness: claude, turns: 1, running: true}

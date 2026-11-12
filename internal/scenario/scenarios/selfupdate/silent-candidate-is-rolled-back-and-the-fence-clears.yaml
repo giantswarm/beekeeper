@@ -1,0 +1,156 @@
+name: silent-candidate-is-rolled-back-and-the-fence-clears
+description: >
+  The desk runs release candidate 2, its last known good, with a loop that
+  ran lately. Candidate 3 is installed and its loop never starts. The
+  recovery controller of candidate 2 waits the heartbeat's grace of ten
+  minutes, then restores candidate 2 and quarantines candidate 3, naming
+  the reason in one line for the person: no health heartbeat from the
+  candidate's loop. The rollback fences the state: a process still running
+  candidate 3 is refused every save, while the restored release works on.
+  Candidate 4, a later compatible release, is not fenced: it installs,
+  serves its probation with a loop that sends its heartbeat, and is
+  promoted. With that the fence is lifted for every process.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: selfupdate
+tags: [selfupdate, release, probation, rollback, fence]
+timeout: 300s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s}
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.2, v1.0.0-rc.3, v1.0.0-rc.4]
+  github:
+    repositories:
+      - name: example/app
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  # Candidate 2 becomes the last known good.
+  - name: first
+    run: {args: [self-update, --version, v1.0.0-rc.2]}
+    expect:
+      - exit: 0
+  - name: promote-first
+    run: {args: [self-update, --complete-probation]}
+    expect:
+      - exit: 0
+  # Its loop runs for a while: this machine runs a loop, so a candidate
+  # owes a heartbeat.
+  - name: good-loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: good-passes
+    advance:
+      by: 3m
+      step: 1m
+      quiet: 200ms
+  - stop: good-loop
+  # Candidate 3 is installed; nothing starts its loop.
+  - name: second
+    run: {args: [self-update, --version, v1.0.0-rc.3]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.2 to v1.0.0-rc.3."]}
+  - name: candidate
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.3\b'}
+  # The heartbeat's grace passes in silence.
+  - name: silence
+    advance:
+      by: 20m
+      step: 1m
+      quiet: 1s
+  - wait_for:
+      timeout: 60s
+      expect:
+        - events: {contains: [supervisor.file]}
+  - name: restored
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.2\b'}
+  - name: reason
+    run: {args: [log, --verb, supervisor.file]}
+    expect:
+      - output: {contains: ["RELEASE ROLLED BACK: v1.0.0-rc.3 failed (no health heartbeat from the candidate's loop", "restored v1.0.0-rc.2"]}
+  # The fence: the failed candidate's processes save nothing, the restored
+  # release does.
+  - name: fenced
+    run:
+      release: v1.0.0-rc.3
+      args: [--as, scenario, timer, add, 1h, a save by the failed candidate]
+    expect:
+      - exit: 1
+      - stderr: {contains: ["state writes fenced after binary recovery"]}
+  - name: restored-saves
+    run: {args: [--as, scenario, timer, add, 1h, a save by the restored release]}
+    expect:
+      - exit: 0
+  # A later release is out, and it is compatible with the state: its
+  # processes are not fenced, or it could never pass its probation.
+  - name: later
+    run: {args: [self-update, --check]}
+    expect:
+      - exit: 125
+      - output: {contains: ["beekeeper v1.0.0-rc.4 is out", "this is v1.0.0-rc.2"]}
+  - name: third
+    run: {args: [self-update]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper to v1.0.0-rc.4."]}
+  # Its loop runs and sends its heartbeat through its probation.
+  - name: later-loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: still-fenced
+    run:
+      release: v1.0.0-rc.3
+      args: [--as, scenario, timer, add, 1h, a second save by the failed candidate]
+    expect:
+      - exit: 1
+      - stderr: {contains: ["state writes fenced after binary recovery"]}
+  - name: probation
+    advance:
+      by: 45m
+      step: 1m
+      quiet: 1s
+  - wait_for:
+      timeout: 60s
+      expect:
+        - events: {contains: [self-update.recovery]}
+  # The compatible release passed: the fence is gone for every process.
+  - name: unfenced
+    run:
+      release: v1.0.0-rc.3
+      args: [--as, scenario, timer, add, 1h, a save once the fence is lifted]
+    expect:
+      - exit: 0
+  - name: installed
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.4\b'}
+  - stop: later-loop
+
+then:
+  - events: {contains: [self-update.canary, supervisor.file, self-update.recovery, timer.add]}
+  - {step: restored, exit: 0}
+  - log: {name: later-loop, not_contains: ["RELEASE ROLLED BACK", "RELEASE RECOVERY FAILED"]}

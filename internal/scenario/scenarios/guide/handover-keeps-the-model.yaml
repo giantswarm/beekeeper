@@ -1,0 +1,81 @@
+name: handover-keeps-the-model
+description: >
+  A worker near its context limit is handed over to a fresh session. It
+  was started on opus, while the desk's first choice for a new start is
+  sonnet. The hand-over asks the old session for its note, ends its CLI and
+  starts the follow-up under the same name, with the same task and in the
+  same folder, on the model the old session was started on: a hand-over
+  keeps the model, it is no new pick. The roster shows one worker under the
+  name, busy with the task, and the old session has no CLI left.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: guide
+tags: [guide, handover, relay, model]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      agents: {noteWait: 5s}
+      capacity:
+        choices:
+          - {harness: claude, model: sonnet}
+          - {harness: claude, model: opus}
+  harness:
+    workers:
+      - name: long-runner
+        harness: claude
+        turns:
+          # Its folder's settings carry the hook a follow-up needs to run
+          # without a click.
+          - steps:
+              - write:
+                  path: .claude/settings.json
+                  content: |
+                    {"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":"beekeeper hook permissionrequest"}]}]}}
+          # Asked for its hand-over note, it records what is in flight.
+          - steps:
+              - beekeeper: [agents, note, "In flight: the cache change is half written; next: finish and push it."]
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stderr: "no oauth token found for github.com\n", exit: 1}
+
+when:
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, long-runner, /work/worker.txt, --harness, claude, --model, opus, --task, Finish the cache change]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: long-runner, turns: 1, outcome: finish}
+  - name: before
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: ., len: 1}
+      - json_path: {path: '[0].name', equals: long-runner}
+  - name: prompt
+    run: {args: [--as, supervisor loop, agents, handover, long-runner, --prompt]}
+    expect:
+      - exit: 0
+      - output: {contains: ['You are "long-runner", taking over from its previous session', "Task: Finish the cache change"]}
+  - name: handover
+    run: {args: [--as, supervisor loop, agents, handover, long-runner]}
+    expect:
+      - exit: 0
+      - output: {contains: ['started "long-runner"', 'handed over "long-runner"']}
+      - events: {contains: [agents.handover]}
+  - name: after
+    run: {args: [agents, --json]}
+
+then:
+  - {step: after, exit: 0}
+  - {step: after, json_path: {path: ., len: 1}}
+  - {step: after, json_path: {path: '[0].name', equals: long-runner}}
+  # Both sessions ran on opus; the desk's first choice was never taken.
+  - calls: {program: claude, args: [--bg, --model, opus], min: 2, max: 2}
+  - calls: {program: claude, args: [--bg, --model, sonnet], max: 0}
+  # The old session was ended before its follow-up started.
+  - calls: {program: claude, args: [stop], min: 1}
+  - events: {contains: [agents.start, agents.handover]}

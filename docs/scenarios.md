@@ -114,7 +114,7 @@ then:
 
 | Step | Does |
 | --- | --- |
-| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit |
+| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit; `release` runs that release's build |
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
@@ -141,11 +141,14 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
+| `log` | what the background step `name` wrote so far: `contains`, `not_contains`, `matches` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
 sessions; `name` and an `origin`'s `branch` are regular expressions that
-match the whole name.
+match the whole name. A `log` reads a background step's standard output and
+error as one text: the lines a running loop and its watch say
+(`SUPERVISOR STARTS HELD`, `HIGH LOAD`), which no event records.
 
 ### The clock
 
@@ -193,6 +196,49 @@ gate, self-update and probation, and the state) and fails when one of their
 files calls the `time` package's clock again. To migrate a flow, replace
 those calls with `internal/clock`'s (imported as `clk` in `cmd`, whose
 `clock` function formats times) and add its files to that list.
+
+### Releases and self-update
+
+`given.releases` gives a scenario beekeeper's own releases, so that
+`self-update` runs for real: the lookup, the download, the verification,
+the canary, the replacement, probation and the recovery controller.
+
+```yaml
+given:
+  releases:
+    installed: v1.0.0-rc.1            # the desk runs this release's build
+    published: [v1.0.0-rc.2, v1.0.0-rc.3]   # on the scenario's GitHub
+when:
+  - run: {args: [self-update, --version, v1.0.0-rc.2]}
+  - run: {release: v1.0.0-rc.1, args: [version]}   # a process still on a release
+```
+
+- **A release is a build.** The suite builds the candidate once more for
+  each version, stamped as the release pipeline stamps it
+  (`-ldflags -X …/pkg/project.version=<version>`), once per run. The builds
+  are in the sandbox under `/work/releases/<version>/`; `installed` is
+  `/work/bin/beekeeper`. Without `installed` the desk runs the candidate,
+  whose version is the checkout's.
+- **Published releases** are releases of `giantswarm/beekeeper` on the
+  scenario's GitHub (`given.github` is created for them when the scenario
+  has none): this platform's binary and its bundle as assets, the tag on
+  the repository's `main`, a pre-release where the version has a
+  pre-release part.
+- **A scenario build asks the scenario's GitHub** for releases
+  (`BEEKEEPER_GITHUB_API`) and verifies a download against a scenario
+  bundle, the binary's SHA-256, where a release build verifies the cosign
+  bundle of a CircleCI build. A release build has neither seam
+  (`internal/update/source_release.go`).
+- **The recovery controller** of a watched candidate is a unit of the fake
+  service manager (`beekeeper-recovery.service`). It evaluates once a
+  minute on the world's clock, so an `advance` in steps of `1m` is its
+  probation; its isolated workflow probe runs as on a desk. Give each step
+  a `quiet` long enough for one evaluation: a tick that arrives during an
+  evaluation is dropped, as a ticker's is.
+- **Use release candidates** for a rollback. A full release that saved the
+  state stamps it as its writer, and a rollback to an older release is then
+  refused; a pre-release neither stamps the state nor is judged by the
+  stamp.
 
 ### Pending scenarios
 

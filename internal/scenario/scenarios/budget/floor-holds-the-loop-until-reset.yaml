@@ -1,0 +1,99 @@
+name: floor-holds-the-loop-until-reset
+description: >
+  The GraphQL bucket is under github.floor: 100 points left of a floor of
+  500, its window resetting in 30 minutes. The supervisor loop holds its
+  GitHub work for that long. Its watch says the budget is low, its passes
+  read no board, ownership or pull request, the Ready item gets no worker,
+  and budget --gate refuses every other caller with exit 3. Ten minutes of
+  passes later nothing has changed and the loop has spent nothing but its
+  rate-limit readings. Once the window has reset, a fresh reading lifts the
+  hold on its own: the gate opens, the loop reads the board and starts the
+  worker of the Ready item.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: budget
+tags: [budget, github, loop, floor]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {floor: 500, probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: A ready item, board: Ready}
+    budgets:
+      graphql: {remaining: 100, reset_in: 30m}
+  harness:
+    workers:
+      # The worker stays on its task.
+      - name: app 1
+        turns:
+          - outcome: hang
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The watch's machine reads: empty journals.
+    - program: journalctl
+      respond: {stdout: ""}
+    # The pull watcher's listing: the desk has no open pull request.
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # The watch's first reading and the first pass both find the bucket low.
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["GITHUB GRAPHQL BUDGET", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor"]}
+  - name: gate-held
+    run: {args: [budget, --gate, --json]}
+    expect:
+      - exit: 3
+      - stderr: {contains: ["under the floor 500"]}
+      - json_path: {path: floor, equals: 500}
+  # Ten minutes of passes and refill ticks under the floor.
+  - name: held
+    advance:
+      by: 10m
+      step: 1m
+      quiet: 200ms
+    expect:
+      - events: {not_contains: [agents.start]}
+      - worker: {name: app 1, turns: 0}
+      - process: {name: loop, running: true}
+      # No board walk, no ownership and no pull request read: the loop's
+      # GraphQL calls are its rate-limit readings alone.
+      - github: {calls: {path: graphql, operation: repositoryOwner, caller: loop, max: 0}}
+      - github: {calls: {path: graphql, operation: repository, caller: loop, max: 0}}
+  # Past the reset: the window is new, and a fresh reading lifts the hold.
+  - name: reset
+    advance:
+      by: 25m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [agents.start]}
+        - worker: {name: app 1, turns: 1}
+        - log: {name: loop, contains: ["ENDED GITHUB GRAPHQL BUDGET"]}
+  - name: gate-open
+    run: {args: [budget, --gate, --json]}
+    expect:
+      - exit: 0
+  - stop: loop
+
+then:
+  - github: {calls: {path: graphql, operation: repositoryOwner, caller: loop, min: 1}}
+  - github: {budget: {bucket: graphql, remaining: {min: 500}}}
+  - worker: {name: app 1, harness: claude, turns: 1, running: true}
+  - {step: held, duration: {max: 30s}}
