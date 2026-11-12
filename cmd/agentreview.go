@@ -98,7 +98,7 @@ with execution review flags.`,
 			if err != nil {
 				return err
 			}
-			round, previous, err := reviewRound(st, p)
+			round, err := reviewRound(st, p)
 			if err != nil {
 				return err
 			}
@@ -115,7 +115,7 @@ with execution review flags.`,
 			if cmd.Flags().Changed("light-lines") {
 				threshold = lightLines
 			}
-			context, err := reviewContext(cmd.Context(), p, previous, threshold)
+			context, err := reviewContext(cmd.Context(), p, threshold)
 			if err != nil {
 				return err
 			}
@@ -163,27 +163,33 @@ with execution review flags.`,
 	return c
 }
 
-// A completed review or an already assigned/requested round forbids a second
-// session on that head, including after restart and before its comment lands.
-func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
-	round := 1
-	previous := ""
-	for _, r := range p.Reviews {
-		if r.Verdict == "" {
-			continue
-		}
-		if loop.SameCommit(r.Head, p.Head) {
-			return 0, "", refused("%s already has a review of head %s", p.Ref, p.Head)
-		}
-		round++
-		previous = r.Body
+// reviewRound is the round of a review of p's head. A pull request gets one
+// desk review (https://github.com/giantswarm/beekeeper/issues/3861): once a
+// trusted verdict is on it, or an assigned round reported one, no review
+// starts again, whatever its head; the loop merges after the fixes. A round
+// released without a result (its reviewer gone) leaves the one review to
+// come and keeps its number. An assigned or requested round forbids a second
+// session on its head, including after restart and before its comment
+// lands.
+func reviewRound(st *state.State, p superloop.Pull) (int, error) {
+	once := func(verdict, head string) error {
+		return refused("%s had its one desk review, %s at head %s: no second review starts; the loop merges after the fixes", p.Ref, verdict, shortSHA(head))
 	}
+	for _, r := range p.Reviews {
+		if r.Verdict != "" {
+			return 0, once(r.Verdict, cmp.Or(r.Head, r.Commit))
+		}
+	}
+	round := 1
 	for _, r := range st.DeskReviews {
 		if !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
+		if r.Result != nil && r.Result.Verdict != "" {
+			return 0, once(r.Result.Verdict, cmp.Or(r.Result.Head, r.Head))
+		}
 		if loop.SameCommit(r.Head, p.Head) && r.Released.IsZero() {
-			return 0, "", refused("%s already has a reviewer for head %s", p.Ref, p.Head)
+			return 0, refused("%s already has a reviewer for head %s", p.Ref, p.Head)
 		}
 		round = max(round, r.Round+1)
 	}
@@ -192,11 +198,11 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 			continue
 		}
 		if loop.SameCommit(r.Head, p.Head) {
-			return 0, "", refused("%s already requested review of head %s", p.Ref, p.Head)
+			return 0, refused("%s already requested review of head %s", p.Ref, p.Head)
 		}
 		round = max(round, r.Round+1)
 	}
-	return round, previous, nil
+	return round, nil
 }
 
 func lightReview(p superloop.Pull, threshold int) bool {
@@ -284,7 +290,7 @@ func (a *app) checkReviewNits(ctx context.Context, p superloop.Pull, approved st
 	return err
 }
 
-func reviewContext(ctx context.Context, p superloop.Pull, previous string, threshold int) (string, error) {
+func reviewContext(ctx context.Context, p superloop.Pull, threshold int) (string, error) {
 	parents, err := reviewParents(ctx, p.Closes)
 	if err != nil {
 		return "", err
@@ -296,7 +302,7 @@ func reviewContext(ctx context.Context, p superloop.Pull, previous string, thres
 	if lightReview(p, threshold) {
 		mode = "Light review: inspect the diff, issue and CI; no checkout and no build."
 	}
-	return fmt.Sprintf("CI green at %s\n%s\nIssues: %s\nParent epic(s): %s\nLast round's findings:\n%s", p.Head, mode, cmp.Or(strings.Join(p.Closes, ", "), "none linked; check the PR's stated scope"), cmp.Or(strings.Join(parents, ", "), "none"), cmp.Or(previous, "none (first round)")), nil
+	return fmt.Sprintf("CI green at %s\n%s\nIssues: %s\nParent epic(s): %s", p.Head, mode, cmp.Or(strings.Join(p.Closes, ", "), "none linked; check the PR's stated scope"), cmp.Or(strings.Join(parents, ", "), "none")), nil
 }
 
 // All entry points reserve atomically before starting a process, including the

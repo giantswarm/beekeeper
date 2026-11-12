@@ -193,13 +193,16 @@ session that started a review gets its verdict: the watch wakes it with the revi
 final report.
 
 `beekeeper agents review <owner/repo>#<n>` starts a fresh independent reviewer
-in a checkout of that repository. It requires green CI at the pinned head and
-refuses a second review of a head already reviewed or requested, including after
-a restart. An assigned reviewer that is gone without a result (done or off the
+in a checkout of that repository. It requires green CI at the pinned head. A
+pull request gets one desk review
+([#3861](https://github.com/giantswarm/beekeeper/issues/3861)): the command refuses
+(exit 3) once the pull request has a desk verdict on any head, or an assigned round
+reported one, and refuses a second session on a head already requested, including
+after a restart. An assigned reviewer that is gone without a result (done or off the
 roster, no live process, no running remote execution) no longer holds its head: the loop's
 next start of that review releases the assignment, logs `review.released` and starts
-the next round's reviewer. The brief includes closing issues, their parent epic, the round and
-previous findings. The shipped [review skill](../plugin/skills/review/SKILL.md)
+the next round's reviewer, since the one review has still to come. The brief includes
+closing issues, their parent epic and the round. The shipped [review skill](../plugin/skills/review/SKILL.md)
 checks acceptance criteria and behavioural coverage as well as correctness.
 `--model` overrides `supervisor.reviewModel` (default `opus`).
 `--light-lines` overrides `supervisor.reviewLightLines` (default 150): smaller
@@ -209,12 +212,19 @@ head; only the reviewer's own probes need local builds.
 
 The comment's first line is always `Desk review (opus): approved` or
 `Desk review (opus): changes requested`, regardless of model. The next line pins
-`Head reviewed:` to the SHA. Workers fix findings, push and park again; the
-supervisor gives the merge go after approval. For a push fixing only approval
-nits, the supervisor checks its delta against the approved head, then attests
-with `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`.
-That attestation covers just the new head, and the loop can merge it without a
-second independent review. Workers cannot attest their own fixes.
+`Head reviewed:` to the SHA. The reviewer fixes its own findings on the branch,
+pushes one commit and approves the head it pushed, naming that SHA, without waiting
+for its CI; the loop gives that head the merge go once it is green. Findings the
+reviewer cannot fix (a product or design decision, or a push refused to a reviewer
+on an SSH execution host, https://github.com/giantswarm/beekeeper/issues/3849) go
+back to the worker, who fixes them, pushes and parks again; its green fix gets the
+merge go without a second review. Nobody merges the base into an approved branch or
+rebases it to bring it up to date: the loop merges the approved head as it is, and
+the merge-result check against the current base is the gate. Only a real conflict
+or a red merge result goes back to the worker for repair, and the repaired head
+merges on the same approval. The supervisor may still attest a nit-only push with
+`beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`,
+for a head no park asks the go for. Workers cannot attest their own fixes.
 `merge.requireReview: true` requires the fixed approval comment covering the
 head (including a supervisor-attested nit delta); a merge go alone is insufficient.
 Review-raised issues use the `follow-up` label, stay unranked in backlog and are

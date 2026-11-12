@@ -93,10 +93,19 @@ scenario's board and holds exactly the fields and options it declares.
 file in the sandbox, read at each download: a binary. [`given.releases`](scenarios.md#releases-and-self-update)
 publishes beekeeper's own releases this way.
 
-**Mergeability.** `mergeStateStatus` and `reviewDecision` follow from the reviews, the checks on
-the head and the base's `protection`, as on GitHub: BLOCKED without the required approval or check,
-UNSTABLE with a pending or red check, else CLEAN. `mergeable`, `merge_state` and `review_decision`
-on a pull request declare them instead.
+**Mergeability.** `mergeable` follows from the origin: CONFLICTING when the head does not merge
+into its base without conflicts (`git merge-tree`), else MERGEABLE, so a push to the base that
+conflicts with a pull request makes it conflicting, and a merge refuses it. `mergeStateStatus`
+and `reviewDecision` follow from that, the reviews, the checks on the head and the base's
+`protection`, as on GitHub: DIRTY when conflicting, BLOCKED without the required approval or
+check, UNSTABLE with a pending or red check, else CLEAN. `mergeable`, `merge_state` and
+`review_decision` on a pull request declare them instead.
+
+**Comparisons.** `compare/<base>...<head>` lists each file as GitHub does: its status (added,
+removed, modified, renamed, copied, changed), a rename's `previous_filename`, its blob `sha` and
+its `patch`, the hunks of `git diff` against the merge base. The desk's approval coverage
+(`github.ApprovalCovers`) reads them, so a scenario's merge of the base, conflict resolution or
+rebase after an approval is judged as on GitHub.
 
 ## Callers and budgets
 

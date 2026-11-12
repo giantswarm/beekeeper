@@ -430,7 +430,7 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 		l.StageDetail[repairStage] = reason
 		l.Mu.Unlock()
 	}
-	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
+	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI: the pull request had its one desk review, and the supervisor merges the repaired head once CI is green without a new review.", act.URL, act.Head, reason)
 	if err := l.WakeOrStartFixer(ctx, st, act); err != nil {
 		// The merge is over; the decision stays pending until a worker has
 		// the repair. Say both, or the wait reads as a merge that never ran.

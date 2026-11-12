@@ -764,7 +764,6 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Labs = a.heldLabs
 				h.LiveDirs = a.hookLiveDirs
 				h.WorktreeOwner = a.hookWorktreeOwner
-				h.ReviewWrite = a.hookReviewWrite
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}

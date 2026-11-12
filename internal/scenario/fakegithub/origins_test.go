@@ -150,3 +150,55 @@ repositories:
 		t.Fatalf("unsupported: %+v", un)
 	}
 }
+
+// Compare lists each file as GitHub does, with its status, blob and patch,
+// which the desk's approval coverage reads (github.ApprovalCovers), and a
+// pull request whose head does not merge into its base without conflicts
+// in the origin is CONFLICTING and DIRTY, and does not merge.
+func TestCompareListsPatchesAndAConflictIsReal(t *testing.T) {
+	o := origins(t, "example/app")
+	c := &clock{t: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	s, err := New(parseGiven(t, `
+repositories:
+  - name: example/app
+    pulls:
+      - {number: 2, title: Add b, head: feature}
+`), Options{Clock: c.Now, Origins: o})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Run(&Step{Push: &PushStep{Repo: "example/app", Branch: "feature", File: "b.txt", Content: "b\n", Message: "Add b"}}); err != nil {
+		t.Fatal(err)
+	}
+	compare := decode(t, []byte(mustGH(t, s, "api", "repos/example/app/compare/main...feature")))
+	if sha, _ := at(t, compare, "files", 1, "sha").(string); at(t, compare, "files", 1, "filename") != "b.txt" || at(t, compare, "files", 1, "status") != "added" ||
+		at(t, compare, "files", 1, "patch") != "@@ -0,0 +1 @@\n+b" || len(sha) != 40 {
+		t.Fatalf("compare's files: %v", compare["files"])
+	}
+	mergeable := func() string {
+		t.Helper()
+		return strings.TrimSpace(mustGH(t, s, "pr", "view", "2", "--repo", "example/app", "--json", "mergeable", "--jq", ".mergeable"))
+	}
+	if got := mergeable(); got != "MERGEABLE" {
+		t.Fatalf("a head without conflicts: %q", got)
+	}
+	// Main adds the same file with other content: a real conflict.
+	if err := s.Run(&Step{Push: &PushStep{Repo: "example/app", Branch: "main", File: "b.txt", Content: "c\n"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := mergeable(); got != "CONFLICTING" {
+		t.Fatalf("a conflicting head: %q", got)
+	}
+	if out := mustGH(t, s, "pr", "view", "2", "--repo", "example/app", "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"); strings.TrimSpace(out) != "DIRTY" {
+		t.Fatalf("a conflicting head's merge state: %q", out)
+	}
+	if out := mustGH(t, s, "api", "repos/example/app/pulls/2", "--jq", ".mergeable"); strings.TrimSpace(out) != "false" {
+		t.Fatalf("a conflicting head over REST: %q", out)
+	}
+	if res := gh(s, "test", "pr", "merge", "2", "--repo", "example/app", "--squash"); res.Exit == 0 {
+		t.Fatalf("a conflicting head merged: %+v", res)
+	}
+	if un := s.Unsupported(); len(un) != 0 {
+		t.Fatalf("unsupported: %+v", un)
+	}
+}
