@@ -133,7 +133,9 @@ func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []s
 // a green bot pull request without a worker waits for nobody.
 func (w *loopPullWatcher) setBots(bots []string, desk superloop.Desk, teams map[string]string, known bool) {
 	w.mu.Lock()
-	changed := !slices.Equal(w.bots, bots) || len(bots) > 0 && known && !w.teamsKnown
+	oldScopes, oldOK := w.botDesk.BotScopes(w.teams, w.teamsKnown)
+	newScopes, newOK := desk.BotScopes(teams, known)
+	changed := !slices.Equal(w.bots, bots) || len(bots) > 0 && (known != w.teamsKnown || oldOK != newOK || !slices.Equal(oldScopes, newScopes))
 	w.bots, w.botDesk, w.teams, w.teamsKnown = slices.Clone(bots), desk, maps.Clone(teams), known
 	if changed {
 		w.snapshot.ListedAt = time.Time{}
@@ -153,9 +155,16 @@ func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out,
 	w.mu.Lock()
 	bots, desk, teams, known := slices.Clone(w.bots), w.botDesk, maps.Clone(w.teams), w.teamsKnown
 	w.mu.Unlock()
+	if len(desk.Orgs) == 0 {
+		desk.Orgs = orgs
+	}
+	scopes, ok := desk.BotScopes(teams, known)
+	if !ok {
+		return nil, nil, nil, nil
+	}
 	for _, b := range bots {
 		login := superloop.BotLogin(b)
-		listed, err := readOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, orgs)
+		listed, err := readOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, scopes)
 		if err != nil {
 			if failed == nil {
 				failed = map[string]error{}
