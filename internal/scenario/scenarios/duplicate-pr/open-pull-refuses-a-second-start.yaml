@@ -85,6 +85,8 @@ when:
     expect:
       - exit: 0
       - events: {contains: [agents.park], not_contains: [session.report-rejected]}
+      # The refill tried the item, and its start was refused.
+      - output: {contains: ["SUPERVISOR NEXT FAILED https://github.com/example/app/issues/1", "example/app#1 already has an open pull request https://github.com/example/app/pull/2"]}
   - name: roster
     run: {args: [agents, --json]}
     expect:
@@ -97,10 +99,12 @@ when:
       - exit: 3
       - stderr: {contains: ["example/app#1 already has an open pull request https://github.com/example/app/pull/2", "instead of starting a second worker"]}
   - advance: 2s
+  # However often the refill looks, the open pull request refuses the start.
   - name: again
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
+      - output: {contains: ["example/app#1 already has an open pull request https://github.com/example/app/pull/2"]}
 
 then:
   - worker: {name: app 1, turns: 1}
