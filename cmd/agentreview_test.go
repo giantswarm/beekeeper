@@ -9,7 +9,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -326,6 +329,110 @@ func TestReviewReservationKeepsRegisteredReviewer(t *testing.T) {
 	r.a.finishReviewRequest(act, false)
 	if err := r.a.reserveReview(act); Code(err) != ExitRefused {
 		t.Fatalf("registered reviewer duplicated: %v", err)
+	}
+}
+
+// An assignment whose reviewer is gone (off the roster, no live process, no
+// running execution) and left no result is released by the next start of
+// the review at its head, instead of refusing every retry of the sweep
+// with "already assigned review of this head". Anything that still shows
+// the reviewer, or its reported result, keeps the head assigned.
+func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
+	reviewer := state.Party{Session: "gone-reviewer", Name: superloop.ReviewerName(loopPR, 1)}
+	running := &state.ExecutionRecord{Phase: execution.Running, Observation: execution.Observation{ProcessState: execution.Running}}
+	exited := &state.ExecutionRecord{Phase: execution.Running, Observation: execution.Observation{ProcessState: execution.Exited}}
+	for _, tt := range []struct {
+		name     string
+		held     func(*loopRig, *state.State)
+		released bool
+	}{
+		{name: "gone", released: true},
+		{name: "done on the roster", held: func(_ *loopRig, st *state.State) {
+			st.Agents = append(st.Agents, state.Agent{Party: reviewer, Done: true})
+		}, released: true},
+		{name: "remote execution ended", held: func(_ *loopRig, st *state.State) {
+			st.Starts = append(st.Starts, state.Start{Party: reviewer, Execution: exited})
+		}, released: true},
+		{name: "on the roster", held: func(_ *loopRig, st *state.State) {
+			st.Agents = append(st.Agents, state.Agent{Party: reviewer})
+		}},
+		{name: "on the roster under its name only", held: func(_ *loopRig, st *state.State) {
+			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Session: "successor", Name: reviewer.Name}})
+		}},
+		{name: "live process", held: func(r *loopRig, _ *state.State) {
+			r.sessions = []*claude.Session{{ID: reviewer.Session}}
+		}},
+		{name: "remote execution running", held: func(_ *loopRig, st *state.State) {
+			st.Starts = append(st.Starts, state.Start{Party: reviewer, Execution: running})
+		}},
+		{name: "reported result", held: func(_ *loopRig, st *state.State) {
+			st.DeskReviews[0].Result = &state.DeskReviewResult{ID: "r1", Verdict: superloop.ChangesRequested, Head: loopHead, By: reviewer}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.DeskReviews = []state.DeskReview{{ID: "round-1", Ref: loopPR, Head: loopHead, Round: 1, Worker: state.Party{Session: "worker", Name: loopWorker}, Reviewer: reviewer, AssignedAt: r.a.timeNow().Add(-time.Hour)}}
+				// The finished start of the gone reviewer left its request.
+				st.ReviewRequests = []state.ReviewRequest{{Ref: loopPR, Head: loopHead, Round: 1}}
+				if tt.held != nil {
+					tt.held(r, st)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			retry := superloop.Action{Ref: loopPR, Head: loopHead, Round: 2}
+			err := r.a.reserveReview(retry)
+			st, rerr := r.a.store.Read()
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			if !tt.released {
+				if Code(err) != ExitRefused {
+					t.Fatalf("held assignment not refused: %v", err)
+				}
+				if !st.DeskReviews[0].Released.IsZero() {
+					t.Fatalf("held assignment released: %+v", st.DeskReviews[0])
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("gone reviewer still blocks its head: %v", err)
+			}
+			if st.DeskReviews[0].Released.IsZero() {
+				t.Fatalf("gone assignment not released: %+v", st.DeskReviews[0])
+			}
+			if !slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 2 && q.Head == loopHead }) || slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 1 }) {
+				t.Fatalf("restart not reserved in place of the gone one: %+v", st.ReviewRequests)
+			}
+			events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == reviewReleasedVerb })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 1 || !strings.Contains(events[0].Detail, reviewer.Name) {
+				t.Fatalf("release not logged: %+v", events)
+			}
+			// The released round no longer holds the request or the
+			// delivery's review, and the same retry is refused once.
+			if !reviewRequestActive(st, state.ReviewRequest{Ref: loopPR, Head: loopHead, Round: 2, PID: os.Getpid()}) {
+				t.Fatal("restart's own reservation inactive")
+			}
+			if reviewRequestOwned(st, state.ReviewRequest{Ref: loopPR, Head: loopHead, Round: 1}) {
+				t.Fatal("released round still owns its request")
+			}
+			if err := r.a.reserveReview(retry); Code(err) != ExitRefused {
+				t.Fatalf("duplicate restart not refused: %v", err)
+			}
+		})
+	}
+}
+
+// A released round keeps its number: the head's next reviewer gets the next.
+func TestReleasedReviewKeepsItsRoundButNotItsHead(t *testing.T) {
+	st := &state.State{DeskReviews: []state.DeskReview{{Ref: loopPR, Head: loopHead, Round: 1, Released: time.Unix(1, 0)}}}
+	if round, _, err := reviewRound(st, superloop.Pull{Ref: loopPR, Head: loopHead}); err != nil || round != 2 {
+		t.Fatalf("released round: round %d, %v", round, err)
 	}
 }
 

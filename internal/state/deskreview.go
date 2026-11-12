@@ -18,6 +18,11 @@ type DeskReview struct {
 	Reviewer   Party             `json:"reviewer"`
 	AssignedAt time.Time         `json:"assignedAt"`
 	Result     *DeskReviewResult `json:"result,omitempty"`
+	// Released is when the round gave up its head because its reviewer was
+	// gone without a result (off the roster, no live process, no running
+	// execution); zero: it holds the head. A released round stays for its
+	// history and its round number but never refuses a new reviewer.
+	Released time.Time `json:"released,omitzero"`
 }
 
 // DeskReviewResult authenticates a specific public review through the assigned
