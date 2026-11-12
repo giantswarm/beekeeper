@@ -68,6 +68,9 @@ func TestStateValidate(t *testing.T) {
 	if err := (*State)(nil).validate(nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := (&State{}).validate(repos); err == nil || !strings.Contains(err.Error(), "state without generate") {
+		t.Fatalf("a state block that seeds nothing: %v", err)
+	}
 	for _, tc := range []struct {
 		name  string
 		gen   Generate

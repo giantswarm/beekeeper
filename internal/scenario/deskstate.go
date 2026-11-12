@@ -45,8 +45,12 @@ const (
 )
 
 func (s *State) validate(repositories []string) error {
-	if s == nil || s.Generate == nil {
+	if s == nil {
 		return nil
+	}
+	if s.Generate == nil {
+		// A state block that seeds nothing would pass for a large desk.
+		return errors.New("state without generate: nothing seeds the desk")
 	}
 	g := s.Generate
 	var errs []error

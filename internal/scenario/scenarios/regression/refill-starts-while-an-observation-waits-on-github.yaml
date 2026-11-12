@@ -108,6 +108,9 @@ when:
     expect:
       - exit: 0
       - duration: {max: 3s}
+      # A call enters GitHub's log once it is answered: none of the slow
+      # ones is, so the write ran while the pass waited.
+      - github: {calls: {path: repos/example/slow/pulls, fault: slow, max: 0}}
   - name: answered
     wait_for:
       timeout: 30s

@@ -9,7 +9,9 @@ description: >
   supervisor status took more than six seconds of CPU on such a state (it
   searched every serve record for every worker of every delivery) and
   waited on the state lock besides; the canary killed it, and every
-  release candidate was refused or rolled back.
+  release candidate was refused or rolled back. The same state made every
+  command and poll of the desk's own processes costly:
+  https://github.com/giantswarm/beekeeper/issues/3657.
 issue: https://github.com/giantswarm/beekeeper/issues/3345
 flow: regression
 tags: [regression, selfupdate, canary, performance]

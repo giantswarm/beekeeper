@@ -138,12 +138,14 @@ when:
       expect:
         - worker: {name: 'app 1.*', host: builder, turns: 2, outcome: finish}
   # The continuation's commit is on the branch of the task's one pull
-  # request, beside the first execution's; CI passes on its head.
+  # request, beside the first execution's; CI passes on its head. The pull
+  # request's own head is counted: a branch of the continuation's own, two
+  # commits ahead as well, is not that pull request.
   - name: green
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
     expect:
       - github: {issue: {repo: example/app, number: 1, open_pulls: 1}}
-      - origin: {repository: example/app, branch: 'beekeeper-execution/[0-9a-f-]+/1', ahead: 2}
+      - github: {pull: {repo: example/app, number: 2, state: open, ahead: 2}}
   - name: review
     advance: {by: 6m, step: 1m, quiet: 1s}
   - name: reviewed

@@ -124,6 +124,8 @@ func TestValidation(t *testing.T) {
 		"an unknown bucket":     {Budget: &BudgetExpect{Bucket: "gql", Spent: &Range{}}},
 		"a budget of nothing":   {Budget: &BudgetExpect{Bucket: bucketCore}},
 		"a pull of nothing":     {Pull: &PullExpect{Repo: "o/r", Number: 1}},
+		"ahead of a merged one": {Pull: &PullExpect{Repo: "o/r", Number: 1, State: "merged", Ahead: ptr(1)}},
+		"ahead by less than 0":  {Pull: &PullExpect{Repo: "o/r", Number: 1, Ahead: ptr(-1)}},
 		"an unknown state":      {Issue: &IssueExpect{Repo: "o/r", Number: 1, State: "merged"}},
 	} {
 		if err := e.Validate(); err == nil {
