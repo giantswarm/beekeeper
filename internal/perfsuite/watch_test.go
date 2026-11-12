@@ -18,8 +18,8 @@ import (
 // at most this share of one core, and reads at most watchIdleRead MiB a
 // second: it waits for a change, not re-reads on a timer.
 var (
-	watchIdleCPU  = limit{Max: 0.05, Known: loopIssue}
-	watchIdleRead = limit{Max: 1, Known: loopIssue}
+	watchIdleCPU  = limit{Max: 0.05}
+	watchIdleRead = limit{Max: 1}
 )
 
 var watchFeeds = []struct {

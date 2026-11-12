@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -67,7 +68,9 @@ func (d *desk) startLoop(t *testing.T) *runningLoop {
 		t.Fatal(err)
 	}
 	c := exec.Command(d.bin, "supervisor", "loop") //nolint:gosec // binary under test, stopped by stop
-	c.Env, c.Dir, c.Stdout, c.Stderr = d.env, d.dir, logFile, logFile
+	// Its CPU profile names the code behind a pass's CPU and reads; the
+	// artifacts keep it for go tool pprof.
+	c.Env, c.Dir, c.Stdout, c.Stderr = append(slices.Clone(d.env), "BEEKEEPER_CPUPROFILE="+filepath.Join(d.dir, "loop.pprof")), d.dir, logFile, logFile
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}

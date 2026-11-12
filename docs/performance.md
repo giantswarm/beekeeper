@@ -53,8 +53,7 @@ from then on. Today's known one: an idle loop pass on an event log four
 times the size and its reads:
 [the loop's re-reads and re-polls](https://github.com/giantswarm/beekeeper/issues/3657).
 Its CPU budget holds over both window lengths since the loop folds only the
-history appended after its last pass. The idle feeds' budgets were added
-known under the same issue.
+history appended after its last pass.
 The idle pass's CPU and processes were known under the same issue until the
 loop stopped re-verifying unverified review requests every pass; their
 budgets now hold.
@@ -96,8 +95,9 @@ lock as compact JSON, avoiding a full slice copy and indentation overhead.
 Each run prints a table of every value against its budget, with the commit,
 the ref (a release tag on tag builds) and the binary's version, and keeps it
 as `report.md` and `report.json` with the fakes' call traces in the job's
-`performance` artifacts. A regression shows as `OVER` on the commit that
-caused it.
+`performance` artifacts, beside the running loop's CPU profile (`loop.pprof`,
+from `BEEKEEPER_CPUPROFILE`) for `go tool pprof`. A regression shows as `OVER`
+on the commit that caused it.
 
 ## Changing a budget
 
