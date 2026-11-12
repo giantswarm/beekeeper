@@ -14,6 +14,8 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: recovery
 tags: [recovery, self-update, probation, mutation]
+control:
+  none: moves a recovery test of internal/loopworkflow's retired integration suite; states behavior main already has
 timeout: 240s
 
 given:

@@ -182,18 +182,6 @@ func (d *driver) run() {
 		err = d.startClock()
 	}
 	if err == nil {
-		d.fakes, err = harness.NewWorld(harness.Options{
-			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
-			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
-				r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
-				return r.Stdout, r.Stderr, r.Exit, r.Given
-			},
-		})
-	}
-	if err == nil {
-		err = d.fakes.Serve(harness.DefaultSocket)
-	}
-	if err == nil {
 		err = d.setup(ctx)
 	}
 	if err == nil {
@@ -315,7 +303,47 @@ func (d *driver) setup(ctx context.Context) error {
 		d.boardNumber, _ = board["project"].(int)
 	}
 	d.cfg, d.orgs = cfg, orgs
-	return nil
+	return codexCatalog(cfg, d.s.Given.Harness.Models[harness.Codex])
+}
+
+// codexCatalog writes the model catalog the codex CLI keeps beside its
+// configuration. Beekeeper validates the effort of a codex start against
+// it, and the loop's starts carry supervisor.effort. It lists the models of
+// the desk's codex choices and of given.harness.models, each with every
+// effort.
+func codexCatalog(cfg map[string]any, models []string) error {
+	slugs := slices.Clone(models)
+	if capacity, ok := cfg["capacity"].(map[string]any); ok {
+		choices, _ := capacity["choices"].([]any)
+		for _, c := range choices {
+			choice, _ := c.(map[string]any)
+			if model, _ := choice["model"].(string); choice["harness"] == harness.Codex && model != "" && !slices.Contains(slugs, model) {
+				slugs = append(slugs, model)
+			}
+		}
+	}
+	type level struct {
+		Effort string `json:"effort"`
+	}
+	type model struct {
+		Slug   string  `json:"slug"`
+		Levels []level `json:"supported_reasoning_levels"`
+	}
+	catalog := struct {
+		Models []model `json:"models"`
+	}{Models: []model{}}
+	for _, slug := range slugs {
+		catalog.Models = append(catalog.Models, model{Slug: slug, Levels: []level{{"low"}, {"medium"}, {"high"}, {"xhigh"}, {"max"}}})
+	}
+	raw, err := json.Marshal(catalog)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(homeDir, ".codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "models_cache.json"), raw, 0o600)
 }
 
 // startFakes starts the world of the fake harnesses, units and hosts. Its

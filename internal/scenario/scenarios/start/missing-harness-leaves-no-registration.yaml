@@ -8,6 +8,8 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: start
 tags: [start, codex, capacity]
+control:
+  none: moves internal/loopworkflow TestWorkflow's failed-start case; states behavior main already has
 timeout: 60s
 
 given:

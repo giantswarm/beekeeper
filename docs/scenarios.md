@@ -279,6 +279,31 @@ when:
   refused; a pre-release neither stamps the state nor is judged by the
   stamp.
 
+### Driving the supervisor loop
+
+A scenario drives the loop pass by pass: `run: {args: [supervisor, loop,
+--once]}` is one pass, a step with its own exit code and output (the
+`SUPERVISOR …` lines). Three things hold for such a scenario:
+
+- A pass starts no worker and no reviewer before the watch has read the
+  GitHub budget and the machine (`SUPERVISOR STARTS HELD`). Poll the watch
+  once first, with `run: {args: [watch, --once]}`. Its budget probe reads
+  the repository `github.probeRepo` names, so name one of the scenario's;
+  its `devctl auth status` and its journal reads (`journalctl -k`,
+  `journalctl -u systemd-oomd`) are answered in `given.calls`. The reading is
+  good for five minutes of the world's clock, so keep the advances between
+  the passes short.
+- What a pass started runs after the pass returned. Wait for a worker's turn
+  with a `wait_for` on its `worker` expectation before the next pass reads
+  what it did.
+- The refill names a worker after its item, `<repository> <number>`
+  (`app 1`), and the loop names a reviewer `Review <repository> <pull> r<round>`:
+  worker scripts match those names. A worker that needs a second turn runs on
+  a headless harness (`codex`), where the loop's continuation is a fresh
+  session's next turn. The desk's codex has a model catalog
+  (`~/.codex/models_cache.json`) with the models of its codex choices, which
+  the loop's `supervisor.effort` is validated against.
+
 ### Pending scenarios
 
 `pending: <issue URL>` marks the scenario of an open bug. The run expects

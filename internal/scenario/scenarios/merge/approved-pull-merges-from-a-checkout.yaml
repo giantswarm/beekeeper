@@ -11,6 +11,8 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: merge
 tags: [merge, review, loop, github, claude]
+control:
+  none: moves a test of internal/loopworkflow's retired integration suite; states behavior main already has
 timeout: 90s
 
 given:

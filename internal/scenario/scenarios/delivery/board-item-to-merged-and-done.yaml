@@ -11,14 +11,24 @@ issue: https://github.com/giantswarm/beekeeper/issues/3793
 flow: delivery
 tags: [delivery, loop, review, merge]
 timeout: 150s
+control:
+  none: states the delivery behavior main already has; this change only adds the scenario
 
 given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
   github:
     repositories:
       - name: example/app
         issues:
           - {number: 1, title: First item, board: Ready}
   harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
     workers:
       - name: app 1
         turns:
@@ -45,8 +55,25 @@ given:
                 save: head
               - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
               - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
 
 when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   # The refill starts a worker on the Ready item.
   - name: start
     run: {args: [supervisor, loop, --once]}
@@ -54,11 +81,11 @@ when:
       - exit: 0
       - events: {contains: [agents.start, supervisor.next]}
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - worker: {name: app 1, outcome: finish}
         - github: {pull: {repo: example/app, number: 2, state: open}}
-  - advance: 1m
+  - advance: 2s
   # The pass takes the park as the request for the desk review; nothing ran
   # on the head yet, so CI is pending and no reviewer starts.
   - name: parked
@@ -70,7 +97,7 @@ when:
     github: {check: {repo: example/app, pull: 2, name: build, state: pending}}
     expect:
       - github: {pull: {repo: example/app, number: 2, state: open, checks: pending}}
-  - advance: 1m
+  - advance: 2s
   - name: pending
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -81,7 +108,7 @@ when:
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
     expect:
       - github: {pull: {repo: example/app, number: 2, state: open, checks: green}}
-  - advance: 1m
+  - advance: 2s
   # Green: the loop starts the reviewer of that head.
   - name: review
     run: {args: [supervisor, loop, --once]}
@@ -89,20 +116,20 @@ when:
       - exit: 0
       - events: {contains: [supervisor.review]}
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - worker: {name: 'Review app 2 r1', outcome: finish}
-  - advance: 1m
+  - advance: 2s
   # The approval of the head gets the go and the merge of that head.
   - name: go
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
-  - advance: 1m
+  - advance: 2s
   # The merged pull request ends its task.
   - name: end
     run: {args: [supervisor, loop, --once]}
@@ -120,4 +147,7 @@ then:
   - worker: {name: app 1, turns: 1, outcome: finish}
   - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
   - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
+  # The task is closed: its worker is done.
   - {step: roster, exit: 0}
+  - {step: roster, json_path: {path: '[0].name', equals: app 1}}
+  - {step: roster, json_path: {path: '[0].done', equals: true}}

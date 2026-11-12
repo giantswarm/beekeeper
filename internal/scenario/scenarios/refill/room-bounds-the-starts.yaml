@@ -9,10 +9,14 @@ issue: https://github.com/giantswarm/beekeeper/issues/3793
 flow: refill
 tags: [refill, loop, capacity]
 timeout: 90s
+control:
+  none: states the refill behavior main already has; this change only adds the scenario
 
 given:
   desk:
     config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
       capacity:
         ceiling: 3
         local: {ceiling: 1}
@@ -25,12 +29,33 @@ given:
           - {number: 2, title: Second item, board: Ready}
           - {number: 3, title: Third item, board: Ready}
   harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
     workers:
       - name: 'app \d'
         turns:
           - outcome: hang
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
 
 when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   - name: before
     run: {args: [capacity, --json]}
     expect:
@@ -43,7 +68,7 @@ when:
       - exit: 0
       - events: {contains: [agents.start]}
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - worker: {name: 'app \d', turns: 1}
   - name: after
