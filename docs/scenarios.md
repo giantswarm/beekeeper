@@ -27,6 +27,43 @@ suite's wall time), `junit/scenarios.xml` (one case per step) and each
 scenario's own artifacts under `<flow>/<name>/`: the world's call log
 (`calls.jsonl`), every step's output, background logs and the driver's log.
 
+## The control: fails without the change
+
+A pull request that fixes or changes behavior of beekeeper's core adds or extends a scenario that
+fails without the change (the rule in [AGENTS.md](../AGENTS.md)). The `scenario-control` step of
+the `test-scenarios` job (`.circleci/scenario-control.sh`) checks the "fails without": it builds
+the candidate from the pull request's merge base with `main` and runs against it, with the pull
+request's harness, only the scenarios the pull request adds or changes. Each must fail there on
+an assertion: an expectation, an unanswered call or its timeout. The step fails for a scenario
+that passes on the base, since it shows nothing the change does, for one whose run on the base
+fails in the harness (the sandbox, the world, the desk's setup), which is no evidence, and when
+the merge base does not build.
+
+- **Added** is a scenario whose name and file the base does not have. **Changed** is one whose
+  `given`, `when`, `then` or `timeout` differ from the base's, found by name or else by file.
+- A change of only `name`, `description`, `issue`, `flow`, `tags`, `pending`, `control`, comments
+  or layout is **metadata only** and does not run. Removing `pending` with a fix is one: the
+  base's own suite showed the scenario failing. A new `pending` scenario fails on the base as on
+  the branch, so it passes.
+- A scenario that cannot fail on the base, such as one that states behavior main already has,
+  opts out with the reason, which the review checks:
+
+  ```yaml
+  control:
+    none: states the refill behavior main already has; this change only adds the scenario
+  ```
+
+  The opt-out holds for the change that writes it. When a later pull request changes the
+  scenario's `given`, `when`, `then` or `timeout` and leaves `control` as it is, the scenario runs
+  against that pull request's base again; a reason written for one change does not cover the
+  next.
+
+The step passes at once, without a build, on a branch that adds or changes no scenario, on `main`
+and on tags. The job's artifacts hold its log (`control.log`), its report (`control/report.txt`
+and `control/report.json`: every scenario with its change, verdict, first failures on the base
+and opt-out reason) and each run's artifacts under `control/<flow>/<name>/`. To run it on a
+branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
+
 ## How a scenario runs
 
 1. The suite builds the candidate once with `-tags scenario`.
@@ -115,7 +152,7 @@ then:
 
 | Step | Does |
 | --- | --- |
-| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit |
+| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit; `release` runs that release's build |
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
@@ -142,12 +179,15 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
+| `log` | what the background step `name` wrote so far: `contains`, `not_contains`, `matches` | every step |
 | `install` | [the installation](#installations-and-mutated-builds): the build `installed`, `probation`, `quarantined`, `probe_failures`, `notified`, `judge_recovered` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
 sessions; `name` and an `origin`'s `branch` are regular expressions that
-match the whole name.
+match the whole name. A `log` reads a background step's standard output and
+error as one text: the lines a running loop and its watch say
+(`SUPERVISOR STARTS HELD`, `HIGH LOAD`), which no event records.
 
 ### The clock
 
@@ -195,6 +235,49 @@ gate, self-update and probation, and the state) and fails when one of their
 files calls the `time` package's clock again. To migrate a flow, replace
 those calls with `internal/clock`'s (imported as `clk` in `cmd`, whose
 `clock` function formats times) and add its files to that list.
+
+### Releases and self-update
+
+`given.releases` gives a scenario beekeeper's own releases, so that
+`self-update` runs for real: the lookup, the download, the verification,
+the canary, the replacement, probation and the recovery controller.
+
+```yaml
+given:
+  releases:
+    installed: v1.0.0-rc.1            # the desk runs this release's build
+    published: [v1.0.0-rc.2, v1.0.0-rc.3]   # on the scenario's GitHub
+when:
+  - run: {args: [self-update, --version, v1.0.0-rc.2]}
+  - run: {release: v1.0.0-rc.1, args: [version]}   # a process still on a release
+```
+
+- **A release is a build.** The suite builds the candidate once more for
+  each version, stamped as the release pipeline stamps it
+  (`-ldflags -X …/pkg/project.version=<version>`), once per run. The builds
+  are in the sandbox under `/work/releases/<version>/`; `installed` is
+  `/work/bin/beekeeper`. Without `installed` the desk runs the candidate,
+  whose version is the checkout's.
+- **Published releases** are releases of `giantswarm/beekeeper` on the
+  scenario's GitHub (`given.github` is created for them when the scenario
+  has none): this platform's binary and its bundle as assets, the tag on
+  the repository's `main`, a pre-release where the version has a
+  pre-release part.
+- **A scenario build asks the scenario's GitHub** for releases
+  (`BEEKEEPER_GITHUB_API`) and verifies a download against a scenario
+  bundle, the binary's SHA-256, where a release build verifies the cosign
+  bundle of a CircleCI build. A release build has neither seam
+  (`internal/update/source_release.go`).
+- **The recovery controller** of a watched candidate is a unit of the fake
+  service manager (`beekeeper-recovery.service`). It evaluates once a
+  minute on the world's clock, so an `advance` in steps of `1m` is its
+  probation; its isolated workflow probe runs as on a desk. Give each step
+  a `quiet` long enough for one evaluation: a tick that arrives during an
+  evaluation is dropped, as a ticker's is.
+- **Use release candidates** for a rollback. A full release that saved the
+  state stamps it as its writer, and a rollback to an older release is then
+  refused; a pre-release neither stamps the state nor is judged by the
+  stamp.
 
 ### Pending scenarios
 
@@ -273,6 +356,14 @@ over a model, so a scenario can override any call.
   `/work/origins/<owner>/<name>.git`. Beekeeper names a repository by that
   URL wherever it fetches or pushes itself, so every transport of a scenario
   ends in the same origins.
+
+The fakes pass [the world's clock](#the-clock) on. An execution's runner
+starts its harness with a cleaned environment, without
+`BEEKEEPER_SCENARIO_CLOCK`; the fake names the clock again, so the
+`beekeeper` a worker script calls reads the world's time on every machine.
+What the fakes write themselves carries the system's time: a session's
+record and transcript, and the reset times a usage probe reports.
+`given.clock.start` and `advance` do not move those yet.
 
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
 live background session), the desktop app, and `gh`, which the fake GitHub

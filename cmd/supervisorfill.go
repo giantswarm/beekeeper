@@ -371,8 +371,10 @@ func (l *supervisorLoop) readFillCapacity(ctx context.Context) (*capacityView, e
 	if err != nil || code != 0 {
 		return nil, fmt.Errorf("capacity --json: exit %d: %v: %s", code, err, oneLine(out))
 	}
+	// The output is stdout and then stderr: the document is its first value.
+	// A diagnostic after it (a stale state snapshot's) is no failed read.
 	var cap capacityView
-	if err := json.Unmarshal([]byte(out), &cap); err != nil {
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&cap); err != nil {
 		return nil, fmt.Errorf("capacity --json: %w", err)
 	}
 	return &cap, nil

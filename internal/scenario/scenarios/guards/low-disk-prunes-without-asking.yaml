@@ -1,0 +1,91 @@
+name: low-disk-prunes-without-asking
+description: >
+  Free space on / is under the watch's floor (watch.diskMinMiB, set here
+  above any disk). Disk is never a question for the person: the loop holds
+  every start, claims the disk step and runs beekeeper disk prune --apply
+  itself, once for the episode, and records what the step did. The Ready
+  item gets no worker while the disk stays low, and nobody is asked: no
+  note is filed and no session is started to decide. What the prune could
+  not reclaim becomes a finding the loop files, not a decision.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: guards
+tags: [guards, disk, loop]
+timeout: 120s
+control:
+  none: >-
+    states the disk guard main already has; on main it differs only in the
+    clock the watch's second reading comes on, which is no behavior of the guard
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      # More than any disk holds: / is always under the floor.
+      watch: {interval: 30s, diskMinMiB: 2000000000}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: A ready item, board: Ready}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["LOW DISK: /"]}
+        - events: {contains: [watch.disk-state]}
+  # The next ticks see the reading: the loop prunes on its own.
+  - name: prune
+    advance:
+      by: 3m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [supervisor.claim, disk.prune, supervisor.disk]}
+        - log: {name: loop, contains: ["SUPERVISOR DISK", "pruned"]}
+  # The disk stays low: starts stay held, and a later reading files the
+  # finding.
+  - name: still-low
+    advance:
+      by: 10m
+      step: 1m
+      quiet: 200ms
+    expect:
+      - events: {not_contains: [agents.start, note.add]}
+      - worker: {name: app 1, turns: 0}
+      - process: {name: loop, running: true}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [supervisor.file]}
+        - log: {name: loop, contains: ["Disk remains low after pruning; every worker start is held"]}
+  - name: notes
+    run: {args: [note]}
+    expect:
+      - exit: 0
+  - name: capacity
+    run: {args: [capacity, --json]}
+    expect:
+      - output: {contains: ["disk pressure"]}
+      - json_path: {path: room, equals: 0}
+  - stop: loop
+
+then:
+  - events: {contains: [watch.disk-state, supervisor.claim, disk.prune, supervisor.disk, supervisor.file], not_contains: [agents.start, note.add]}
+  # One prune for the episode, not one per pass.
+  - log: {name: loop, not_contains: ["SUPERVISOR DISK prune failed"]}
+  - calls: {program: claude, args: [--bg], max: 0}

@@ -59,7 +59,7 @@ tools-doc: ## Regenerate docs/tools.md, every tool's description and input schem
 	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/
 
 .PHONY: test-scenarios
-test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox, the scenario clock's and the sandbox's tests. Set BEEKEEPER_SCENARIO_FLOW, _TAG or _REPORT.
+test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox, the tests of the scenario clock, of the fake harnesses and of the sandbox. Set BEEKEEPER_SCENARIO_FLOW, _TAG or _REPORT.
 	go test -tags scenario ./internal/clock ./internal/scenario/... ./internal/testenv -count=1 -timeout=15m -v
 
 .PHONY: test-gh-contract

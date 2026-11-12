@@ -1,0 +1,133 @@
+name: answer-wakes-the-waiting-worker
+description: >
+  A worker needs a decision only its person can take: it files a note for
+  them with what they need to answer, parks on the note and ends its turn.
+  The loop applies both, the note shows in the person's queue, and the
+  worker's slot is free meanwhile. The person answers in their own words:
+  the answer is recorded on the issue it concerns, the note closes, and the
+  wait is settled. The parked session is not resumed; the loop starts a
+  fresh worker for the task, briefed with the wait and the answer.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: guide
+tags: [guide, notes, answer, park, loop]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Speed up the builds, board: Ready}
+  harness:
+    workers:
+      - name: app 1
+        harness: claude
+        turns:
+          - steps:
+              # The note is queued for the loop; its reference is what the
+              # park waits on.
+              - run:
+                  - sh
+                  - -c
+                  - |
+                    out=$(beekeeper note add --for scenario --ref example/app#1 \
+                      --status-quo "The builds use the free cache, which is full every day by noon." \
+                      --why "The larger cache costs money every month, and what the desk spends is yours to decide." \
+                      --option "Buy it: the cache holds a week of builds for 20 EUR per month" \
+                      --option "Stay free: nothing is spent and the afternoon builds stay slow" \
+                      --recommend 1 --default "keep the free cache" --due 3h \
+                      "May the desk buy the larger build cache for 20 EUR per month?") || exit 1
+                    # "note queued: report:<id>; the supervisor applies it …"
+                    set -- $out
+                    IFS=';'
+                    set -- $3
+                    echo "$1"
+                save: note
+              - beekeeper: [agents, park, --on, '${note}', the person's answer on the build cache]
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  # The refill starts the item's worker, which files its note and parks.
+  - name: start
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+  # The next passes apply the worker's reports: the note and the park.
+  - name: apply
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [note.add, agents.park]}
+  - name: queue
+    run: {args: [note]}
+    expect:
+      - exit: 0
+      - output: {contains: ["May the desk buy the larger build cache for 20 EUR per month?"]}
+  - name: parked
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: '[0].name', equals: app 1}
+      - json_path: {path: '[0].park.on', equals: '#1'}
+  # The person answers, in their words.
+  - name: answer
+    run: {args: [--as, scenario, answer, 'example/app#1', --note, '1', "Yes, buy it, but only for three months."]}
+    expect:
+      - exit: 0
+      - output: {contains: ["answer recorded for example/app#1", "note #1 answered and closed"]}
+      - events: {contains: [answer.recorded, agents.continuation-queued]}
+  - name: closed
+    run: {args: [note]}
+    expect:
+      - output: {not_contains: ["May the desk buy the larger build cache"]}
+  # The next pass starts the fresh worker with the answer.
+  - name: continue
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app 1 next-[0-9a-f]+', turns: 1}
+  - name: history
+    run: {args: [answer, history]}
+    expect:
+      - output: {contains: ["Yes, buy it, but only for three months."]}
+  - stop: loop
+
+then:
+  - events: {contains: [agents.start, note.add, agents.park, answer.recorded, agents.continuation-queued]}
+  # The first session ran its one turn and was not resumed.
+  - worker: {name: app 1, turns: 1, outcome: finish}
+  - worker: {name: 'app 1 next-[0-9a-f]+', harness: claude, turns: 1}
+  # The fresh worker's brief carries the answer.
+  - calls: {program: claude, args: [--bg, '.*Yes, buy it, but only for three months\..*'], min: 1, max: 1}
+  - calls: {program: claude, args: [--resume], max: 0}
