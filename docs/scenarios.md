@@ -112,7 +112,7 @@ then:
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
-| `host` | changes an execution host's faults: `{name: builder, fault: unreachable}`, `{name: builder, slow: 2s}` or `{name: builder, clear: true}` |
+| `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
 
 ### Expectations
 
@@ -129,10 +129,13 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `events` | the desk's event log `contains` / `not_contains` verbs | every step |
 | `calls` | the world's calls of `program` matching `args` number at least `min`, at most `max` | every step |
 | `process` | a background step is `running`, or exited with `exit` | every step |
-| `worker` | what the scripted sessions named `name` (and of `harness`, on `host`) did: `turns` they began, the `outcome` of the last one, whether a CLI of theirs is `running` | every step |
-| `origin` | a branch of `repository`'s bare origin (`branch` is a regular expression matching the whole name): `exists` (true), and how many commits it is `ahead` of `main` | every step |
+| `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
+| `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
+A `worker` expectation may also name the `harness` and the `host` of the
+sessions; `name` and an `origin`'s `branch` are regular expressions that
+match the whole name.
 
 ### Pending scenarios
 
@@ -149,15 +152,41 @@ with. A fake is a real process named as the real CLI is, because beekeeper
 finds its sessions in the process table. A `given.calls` entry still wins
 over a model, so a scenario can override any call.
 
-| Fake | What it models |
-| --- | --- |
-| `claude` | `--bg … -- <brief>` starts a background session: a `claude daemon` runs the session's CLI under a `bg-pty-host`, with the CLI's record and transcript under `~/.claude`. `--bg --resume <id> <message>` continues a stopped one, `agents --json [--all]` lists them, `stop <id>` ends one. `-p … <prompt>` is a headless turn. `--print --input-format stream-json` is an execution host's managed session. `-p /usage`, `plugin list`, `auth status` and `--version` answer the probes. |
-| `codex` | `exec --json … -` and `exec resume --json … <thread> -` under beekeeper's `codex-run`: `thread.started`, `turn.started`, the items and `turn.completed` with its tokens. `app-server` answers the usage probe; `--version` and `login status` a host's probes. |
-| `agy` | `--input-format stream-json --output-format stream-json` under `agy-run`: `init` with the conversation, a `user_input` step per message, `result`. `models` and `--version`. |
-| `omp` | `--mode rpc` with its standard input on its inbox: one turn per `steer` command. `models --json` and `--version`. |
-| `systemd-run`, `systemctl` | The user's service manager: the world runs each transient unit as its own child and answers `show -p ActiveState`, `list-units`, `stop`, `freeze`, `thaw`, `reset-failed` and `is-system-running`. `--scope` runs the command in place. A unit's processes carry its name in `BEEKEEPER_SCENARIO_UNIT`, which a build with the `scenario` tag reads where a release build reads the cgroup: a sandbox can create none. |
-| `ssh` | Maps a destination to its host's root (`given.hosts`) and runs the remote command there under the host's environment; the name `coordinator` leads back to the desk. A host's fault ends the call as OpenSSH ends it. |
-| `git` | The real git with one transport replaced: `https://github.com/<owner>/<name>.git` leads to the bare origin `/work/origins/<owner>/<name>.git`. Beekeeper names a repository by that URL wherever it fetches or pushes itself, so every transport of a scenario ends in the same origins. |
+- **`claude`**
+  - `--bg … -- <brief>` starts a background session: a `claude daemon` runs
+    the session's CLI under a `bg-pty-host`, with the CLI's record and
+    transcript under `~/.claude`.
+  - `--bg --resume <id> <message>` continues a stopped session,
+    `agents --json [--all]` lists them and `stop <id>` ends one.
+  - `-p … <prompt>` is a headless turn, and
+    `--print --input-format stream-json` an execution host's managed session.
+  - `-p /usage`, `plugin list`, `auth status` and `--version` answer the
+    probes.
+- **`codex`**: `exec --json … -` and `exec resume --json … <thread> -` under
+  beekeeper's `codex-run`, with `thread.started`, `turn.started`, the items
+  and `turn.completed` with its tokens. `app-server` answers the usage probe;
+  `--version` and `login status` answer a host's probes.
+- **`agy`**: `--input-format stream-json --output-format stream-json` under
+  `agy-run`, with `init` naming the conversation, a `user_input` step per
+  message and `result`. Also `models` and `--version`.
+- **`omp`**: `--mode rpc` with its standard input on its inbox, one turn per
+  `steer` command. Also `models --json` and `--version`.
+- **`systemd-run`, `systemctl`**: the user's service manager. The world runs
+  each transient unit as its own child and answers `show -p ActiveState`,
+  `list-units`, `stop`, `freeze`, `thaw`, `reset-failed` and
+  `is-system-running`; `--scope` runs the command in place. A unit's
+  processes carry its name in `BEEKEEPER_SCENARIO_UNIT`, which a build with
+  the `scenario` tag reads where a release build reads the cgroup: a sandbox
+  can create none.
+- **`ssh`**: maps a destination to its host's root (`given.hosts`) and runs
+  the remote command there under the host's environment; the name
+  `coordinator` leads back to the desk. A host's fault ends the call as
+  OpenSSH ends it.
+- **`git`**: the real git with one transport replaced.
+  `https://github.com/<owner>/<name>.git` leads to the bare origin
+  `/work/origins/<owner>/<name>.git`. Beekeeper names a repository by that
+  URL wherever it fetches or pushes itself, so every transport of a scenario
+  ends in the same origins.
 
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
 live background session), the desktop app, and `gh`, which the fake GitHub
@@ -250,3 +279,8 @@ given:
 | `missing-tool` | the remote shell does not find beekeeper: exit 127 |
 | `older-go` | the host pins Go 1.21.0 while its repository's `go.mod` names 1.26.0 |
 | `slow` | every call is delayed; one slower than `ConnectTimeout` times out with 255 |
+
+The `host` step changes a host's faults while the scenario runs:
+`host: {name: builder, fault: unreachable}`, `host: {name: builder, slow: 2s}`
+or `host: {name: builder, clear: true}`. `older-go` is part of a host's
+provisioning and only `given.hosts` names it.
