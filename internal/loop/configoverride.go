@@ -1,0 +1,12 @@
+package loop
+
+import (
+	"context"
+
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+// settleOverrides runs in the command, which holds what it needs (loopSettleOverrides).
+func (l *Loop) settleOverrides(ctx context.Context, st *state.State) {
+	Cmd.LoopSettleOverrides(l, ctx, st)
+}

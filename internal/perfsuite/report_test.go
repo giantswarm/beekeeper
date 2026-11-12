@@ -50,6 +50,7 @@ var rep = &report{}
 var units = map[string]string{
 	"wall": "s", "cpu": "s", "read": "MiB", "write": "MiB", "rss": "MiB", "mem": "MiB",
 	"children": "processes", "procs": "processes", "hold": "s", "growth": "ratio", "exit": "code",
+	"core": "cores", "read/s": "MiB/s",
 }
 
 const mib = 1 << 20

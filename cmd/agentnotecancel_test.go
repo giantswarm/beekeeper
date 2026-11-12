@@ -51,7 +51,7 @@ func TestContinuationShutdownDuringHistoryKeepsTaskAndDoesNotStartWorker(t *test
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	r.a.store = cancelingNoteStore{Store: r.a.store, cancel: cancel}
-	if err := l.continueParks(ctx, st); !errors.Is(err, context.Canceled) {
+	if err := l.ContinueParks(ctx, st); !errors.Is(err, context.Canceled) {
 		t.Fatalf("continuation = %v", err)
 	}
 	for _, call := range r.calls {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -18,13 +19,13 @@ const (
 
 // staleNextLoop is a loop on the fill rig (ceiling 3) that runs each pass
 // to its end.
-func staleNextLoop(t *testing.T, r *loopRig) *supervisorLoop {
+func staleNextLoop(t *testing.T, r *loopRig) *loop.Loop {
 	t.Helper()
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
+	l.Once = true
 	return l
 }
 
@@ -55,7 +56,7 @@ func TestLoopStaleNextBacklogSettlesAndFillsInTheSamePass(t *testing.T) {
 	reads := 0
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopBoard {
+		if args[0] == loop.LoopBoard {
 			reads++
 		}
 		return original(args)
@@ -75,7 +76,7 @@ func TestLoopStaleNextBacklogSettlesAndFillsInTheSamePass(t *testing.T) {
 	r.loopPass(t, l)
 
 	*busy = 0
-	r.a.now = r.a.now.Add(2 * staleNextAfter)
+	r.a.now = r.a.now.Add(2 * loop.StaleNextAfter)
 	before := reads
 	r.loopPass(t, l)
 	if *busy != 3 {
@@ -89,7 +90,7 @@ func TestLoopStaleNextBacklogSettlesAndFillsInTheSamePass(t *testing.T) {
 		t.Fatalf("%d of %d stale next actions settled:\n%s", len(settled), n, r.out)
 	}
 	for _, e := range settled {
-		if !strings.Contains(e.Detail, staleNextWhat) {
+		if !strings.Contains(e.Detail, loop.StaleNextWhat) {
 			t.Fatalf("a stale next action started instead of settling: %s", e.Detail)
 		}
 	}
@@ -117,8 +118,8 @@ func TestLoopFailingNextDoesNotStopTheFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failures := map[string]loopFailure{}
-	if err := l.runPassActions(t.Context(), st, nil, failures, nil, []superloop.Action{freshNext(r)}); err != nil {
+	failures := map[string]loop.LoopFailure{}
+	if err := l.RunPassActions(t.Context(), st, nil, failures, nil, []superloop.Action{freshNext(r)}); err != nil {
 		t.Fatalf("a next action's failure left the stream: %v", err)
 	}
 	if *busy != 3 {
@@ -134,10 +135,10 @@ func TestLoopFailingNextDoesNotStopTheFill(t *testing.T) {
 func TestLoopIntakeInFlightDoesNotStopNextOrFill(t *testing.T) {
 	r, busy := fillRig(t)
 	l := staleNextLoop(t, r)
-	if !l.beginInFlight("stream:intake") {
+	if !l.BeginInFlight("stream:intake") {
 		t.Fatal("intake already in flight")
 	}
-	defer l.endInFlight("stream:intake")
+	defer l.EndInFlight("stream:intake")
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -147,16 +148,16 @@ func TestLoopIntakeInFlightDoesNotStopNextOrFill(t *testing.T) {
 		{Kind: superloop.KindIntake, Key: "intake o/r#98", Ref: "o/r#98", URL: "https://github.com/o/r/issues/98"},
 		freshNext(r),
 	}
-	if err := l.runPassActions(t.Context(), st, nil, map[string]loopFailure{}, nil, acts); err != nil {
+	if err := l.RunPassActions(t.Context(), st, nil, map[string]loop.LoopFailure{}, nil, acts); err != nil {
 		t.Fatal(err)
 	}
-	if !l.isCompleted(staleNextFresh) {
+	if !l.IsCompleted(staleNextFresh) {
 		t.Fatalf("the next action did not run behind an intake in flight:\n%s", r.out)
 	}
 	if *busy != 3 {
 		t.Fatalf("the refill filled %d of 3 slots behind an intake in flight:\n%s", *busy, r.out)
 	}
-	if l.isCompleted("intake o/r#98") {
+	if l.IsCompleted("intake o/r#98") {
 		t.Fatal("the intake ran beside the one in flight")
 	}
 }
@@ -168,7 +169,7 @@ func TestLoopNextSettlesOnAnOpenPullRequestRefusal(t *testing.T) {
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 2 && args[0] == agentsName && args[1] == agentStartName && args[2] == "r 10" {
-			return "beekeeper: o/r#10 " + openPullRefusal + " https://github.com/o/r/pull/11; update it instead", ExitRefused
+			return "beekeeper: o/r#10 " + loop.OpenPullRefusal + " https://github.com/o/r/pull/11; update it instead", ExitRefused
 		}
 		return original(args)
 	}
@@ -177,11 +178,11 @@ func TestLoopNextSettlesOnAnOpenPullRequestRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failures := map[string]loopFailure{}
-	if err := l.runPassActions(t.Context(), st, nil, failures, nil, []superloop.Action{freshNext(r)}); err != nil {
+	failures := map[string]loop.LoopFailure{}
+	if err := l.RunPassActions(t.Context(), st, nil, failures, nil, []superloop.Action{freshNext(r)}); err != nil {
 		t.Fatal(err)
 	}
-	if !l.isCompleted(staleNextFresh) {
+	if !l.IsCompleted(staleNextFresh) {
 		t.Fatalf("the refused next action did not settle:\n%s", r.out)
 	}
 	if _, ok := failures[staleNextFresh]; ok {
@@ -204,10 +205,10 @@ func TestLoopFillWhileNextAndIntakeAreInFlight(t *testing.T) {
 	r, busy := fillRig(t)
 	l := staleNextLoop(t, r)
 	for _, key := range []string{"stream:next", "stream:intake", "stream:worker-retirement"} {
-		if !l.beginInFlight(key) {
+		if !l.BeginInFlight(key) {
 			t.Fatalf("stream already reserved: %s", key)
 		}
-		defer l.endInFlight(key)
+		defer l.EndInFlight(key)
 	}
 	st, err := r.a.store.Read()
 	if err != nil {
@@ -218,13 +219,13 @@ func TestLoopFillWhileNextAndIntakeAreInFlight(t *testing.T) {
 		{Kind: superloop.KindDone, Key: "done retired", Agent: staleNextAgent},
 		{Kind: superloop.KindIntake, Key: "intake o/r#98", Ref: "o/r#98"},
 	}
-	if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+	if err := l.RunPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 3 {
 		t.Fatalf("filled %d of 3 slots while earlier streams remain busy: %s", *busy, r.out)
 	}
-	if l.isCompleted(staleNextFresh) || l.isCompleted("intake o/r#98") {
+	if l.IsCompleted(staleNextFresh) || l.IsCompleted("intake o/r#98") {
 		t.Fatal("executed an already reserved stream")
 	}
 }

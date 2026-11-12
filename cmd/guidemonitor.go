@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -17,7 +18,7 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 	if st.Stop != nil || st.Guide == nil || st.Guide.Holder == nil {
 		return
 	}
-	events, err := w.store.Follow("independent-guide-reports", func(e state.Event) bool { return e.Verb == loopFileVerb })
+	events, err := w.store.Follow("independent-guide-reports", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
 		w.fail("guide-monitor", "cannot read guide reports: %v", err)
 		return
@@ -52,8 +53,8 @@ func (w *watcher) guideMonitor(ctx context.Context, st *state.State, sessions []
 		// Both consumers retain reports under the same lock; the first owns
 		// delivery and the other observes the durable report key.
 		for _, e := range guideReportEvents(st, events, w.now) {
-			key, text, ok := keyed(e.Detail)
-			if !ok || !strings.Contains(text, fileReportSeparator) {
+			key, text, ok := loop.Keyed(e.Detail)
+			if !ok || !strings.Contains(text, loop.FileReportSeparator) {
 				continue
 			}
 			retainGuideReport(st, key, text, e.At, r.Holder.Party)

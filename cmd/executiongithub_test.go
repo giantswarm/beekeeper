@@ -22,6 +22,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -586,9 +587,9 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			a, r := workerGitHubTestApp(t)
 			const branch = "fixture/foreign-source"
-			originalRead := readLoopPull
-			t.Cleanup(func() { readLoopPull = originalRead })
-			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+			originalRead := loop.ReadLoopPull
+			t.Cleanup(func() { loop.ReadLoopPull = originalRead })
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				return superloop.Pull{Ref: r.Repository + "#7", State: superloop.Open, Branch: branch}, nil
 			}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {

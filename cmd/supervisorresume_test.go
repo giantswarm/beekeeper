@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -109,8 +110,8 @@ func TestLoopRecoveryLeavesUnsettledParksAndStoppedDesk(t *testing.T) {
 				live = []*claude.Session{{HostID: ag.HostSession, Name: ag.Name}}
 			}
 			stubFresh(t, &live)
-			l := &supervisorLoop{a: r.a, dryRun: mode == dryRunState}
-			if err := l.recoverParks(t.Context(), st); err != nil {
+			l := &loop.Loop{Host: r.a, DryRun: mode == dryRunState}
+			if err := l.RecoverParks(t.Context(), st); err != nil {
 				t.Fatal(err)
 			}
 			if len(r.calls) != 0 {
@@ -127,8 +128,8 @@ func TestLoopRecoveryRequiresDiscovery(t *testing.T) {
 	want := errors.New("process inventory unavailable")
 	freshSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return nil, nil, want }
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "park inventory worker", HostSession: "codex_inventory"}, Task: recoveryTask, Park: &state.Park{Resumable: r.a.now}}}}
-	l := &supervisorLoop{a: r.a}
-	if err := l.recoverParks(t.Context(), st); !errors.Is(err, want) {
+	l := &loop.Loop{Host: r.a}
+	if err := l.RecoverParks(t.Context(), st); !errors.Is(err, want) {
 		t.Fatalf("discovery: %v", err)
 	}
 	if len(r.calls) != 0 {
@@ -157,8 +158,8 @@ func TestLoopRecoveryKeepsStoppedBackgroundClaude(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			l := &supervisorLoop{a: r.a}
-			if err := l.recoverParks(t.Context(), st); err != nil {
+			l := &loop.Loop{Host: r.a}
+			if err := l.RecoverParks(t.Context(), st); err != nil {
 				t.Fatal(err)
 			}
 			current, err := r.a.store.Read()
@@ -185,8 +186,8 @@ func TestLoopRecoveryRequiresHarnessGone(t *testing.T) {
 		loopResumePark = func(*app, context.Context, state.Party, string) error { return verdict }
 		ag := state.Agent{Party: state.Party{Name: "resumable inbox worker", HostSession: "codex_inbox"}, Task: recoveryTask, Park: &state.Park{At: r.a.now, Resumable: r.a.now}}
 		st := &state.State{Agents: []state.Agent{ag}}
-		l := &supervisorLoop{a: r.a}
-		if err := l.recoverParks(t.Context(), st); err != nil {
+		l := &loop.Loop{Host: r.a}
+		if err := l.RecoverParks(t.Context(), st); err != nil {
 			t.Fatal(err)
 		}
 		if len(r.calls) != 0 {
@@ -226,8 +227,8 @@ func TestRestartPullParkKeepsTaskAndPostMergeWork(t *testing.T) {
 					started = true
 					return "", 0
 				}
-				l := &supervisorLoop{a: r.a}
-				if err := l.restartPark(t.Context(), ag, "o/r#12"); err != nil {
+				l := &loop.Loop{Host: r.a}
+				if err := l.RestartPark(t.Context(), ag, "o/r#12"); err != nil {
 					t.Fatal(err)
 				}
 				if !started {

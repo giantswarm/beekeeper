@@ -1,4 +1,4 @@
-package cmd
+package loop
 
 import (
 	"errors"
@@ -10,19 +10,19 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-// loopStallAfter is how long the refill may not run, or a start wait with
+// LoopStallAfter is how long the refill may not run, or a start wait with
 // room, before the loop raises the alarm; the alarm is raised once
 // per episode until the flow moves again.
-const loopStallAfter = 15 * time.Minute
+const LoopStallAfter = 15 * time.Minute
 
-const loopStallKey = "stall starts "
+const LoopStallKey = "stall starts "
 
 // startStall is the refill's flow as the loop measures it: when fill last
 // ran, and since when (with which item and cause) it had room and the board
 // offered work, yet started nothing.
 type startStall struct {
-	ran   time.Time
-	since time.Time
+	Ran   time.Time
+	Since time.Time
 	ref   string
 	why   string
 	// filed and ranFiled count the alarms raised for the start wait and
@@ -34,7 +34,7 @@ type startStall struct {
 	reviewFiled int
 }
 
-const loopReviewStallKey = "stall reviews "
+const LoopReviewStallKey = "stall reviews "
 
 // reviewWait is a review request the loop planned and has not started:
 // since when, and the cause its last try read.
@@ -45,10 +45,10 @@ type reviewWait struct {
 
 // reviewsPlanned keeps the review waits of this pass's review actions; a
 // request no longer planned (started, merged, its head moved) waits no more.
-func (l *supervisorLoop) reviewsPlanned(acts []superloop.Action) {
-	now := l.a.timeNow()
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Loop) reviewsPlanned(acts []superloop.Action) {
+	now := l.Host.TimeNow()
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	waits := make(map[string]reviewWait, len(acts))
 	for _, act := range acts {
 		w, ok := l.reviewWaits[act.Ref]
@@ -62,9 +62,9 @@ func (l *supervisorLoop) reviewsPlanned(acts []superloop.Action) {
 
 // reviewTried records the outcome of a review action's run: a started
 // reviewer ends its wait, anything else keeps it with the cause it read.
-func (l *supervisorLoop) reviewTried(act superloop.Action, failures map[string]loopFailure) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Loop) reviewTried(act superloop.Action, failures map[string]LoopFailure) {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	w, ok := l.reviewWaits[act.Ref]
 	if !ok {
 		return
@@ -74,7 +74,7 @@ func (l *supervisorLoop) reviewTried(act superloop.Action, failures map[string]l
 		return
 	}
 	if f, failed := failures[act.Key]; failed && f.Message != "" {
-		w.why = "its start failed: " + oneLine(f.Message)
+		w.why = "its start failed: " + Cmd.OneLine(f.Message)
 	} else {
 		w.why = "its start waits: no room for a start on any host, held starts, an incident or an unread repository (the SUPERVISOR REVIEW WAITS lines name it)"
 	}
@@ -82,15 +82,15 @@ func (l *supervisorLoop) reviewTried(act superloop.Action, failures map[string]l
 }
 
 // checkReviewStall raises one alarm when a review request has waited
-// loopStallAfter without a reviewer: it names the oldest request, its
+// LoopStallAfter without a reviewer: it names the oldest request, its
 // cause and how many wait, once per oldest waiting episode.
-func (l *supervisorLoop) checkReviewStall() error {
-	now := l.a.timeNow()
-	l.mu.Lock()
+func (l *Loop) checkReviewStall() error {
+	now := l.Host.TimeNow()
+	l.Mu.Lock()
 	var oldest reviewWait
 	waiting := 0
 	for _, w := range l.reviewWaits {
-		if now.Sub(w.since) < loopStallAfter {
+		if now.Sub(w.since) < LoopStallAfter {
 			continue
 		}
 		waiting++
@@ -99,121 +99,121 @@ func (l *supervisorLoop) checkReviewStall() error {
 		}
 	}
 	if waiting == 0 {
-		if l.stall.reviewFiled > 0 {
-			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR STALL ENDED: no review request waits %s for a reviewer any more (stalled since %s)\n", loopStallAfter, l.stall.reviewSince.UTC().Format(time.RFC3339))
+		if l.Stall.reviewFiled > 0 {
+			_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: no review request waits %s for a reviewer any more (stalled since %s)\n", LoopStallAfter, l.Stall.reviewSince.UTC().Format(time.RFC3339))
 		}
-		l.stall.reviewSince, l.stall.reviewFiled = time.Time{}, 0
-		l.mu.Unlock()
+		l.Stall.reviewSince, l.Stall.reviewFiled = time.Time{}, 0
+		l.Mu.Unlock()
 		return nil
 	}
-	if !oldest.since.Equal(l.stall.reviewSince) {
-		l.stall.reviewSince, l.stall.reviewFiled = oldest.since, 0
+	if !oldest.since.Equal(l.Stall.reviewSince) {
+		l.Stall.reviewSince, l.Stall.reviewFiled = oldest.since, 0
 	}
-	n := int(now.Sub(oldest.since) / loopStallAfter)
-	raised := l.stall.reviewFiled
-	l.mu.Unlock()
+	n := int(now.Sub(oldest.since) / LoopStallAfter)
+	raised := l.Stall.reviewFiled
+	l.Mu.Unlock()
 	if raised > 0 || n == 0 {
 		return nil
 	}
-	text := fmt.Sprintf("Reviews are stalled: %d review request(s) waited %s or longer for a reviewer; the oldest, %s, waits since %s: %s. Own the cause to the component it names; the alarm is delivered once per waiting episode.", waiting, loopStallAfter, oldest.url, oldest.since.UTC().Format(time.RFC3339), oldest.why)
-	line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
-	key := fmt.Sprintf("%s%s %d", loopReviewStallKey, oldest.since.UTC().Format("20060102T150405Z"), n)
-	if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: key}, line); err != nil {
+	text := fmt.Sprintf("Reviews are stalled: %d review request(s) waited %s or longer for a reviewer; the oldest, %s, waits since %s: %s. Own the cause to the component it names; the alarm is delivered once per waiting episode.", waiting, LoopStallAfter, oldest.url, oldest.since.UTC().Format(time.RFC3339), oldest.why)
+	line := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, text)
+	key := fmt.Sprintf("%s%s %d", LoopReviewStallKey, oldest.since.UTC().Format("20060102T150405Z"), n)
+	if err := l.Record(superloop.Action{Kind: superloop.KindFile, Key: key}, line); err != nil {
 		return err
 	}
-	l.mu.Lock()
-	if l.stall.reviewSince.Equal(oldest.since) {
-		l.stall.reviewFiled = n
+	l.Mu.Lock()
+	if l.Stall.reviewSince.Equal(oldest.since) {
+		l.Stall.reviewFiled = n
 	}
-	l.mu.Unlock()
+	l.Mu.Unlock()
 	return nil
 }
 
-// fillRan marks a run of the refill: the worker stream reached it.
-func (l *supervisorLoop) fillRan() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.stall.ranFiled > 0 {
-		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR STALL ENDED: the capacity refill runs again (not since %s)\n", l.stall.ran.UTC().Format(time.RFC3339))
+// FillRan marks a run of the refill: the worker stream reached it.
+func (l *Loop) FillRan() {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if l.Stall.ranFiled > 0 {
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: the capacity refill runs again (not since %s)\n", l.Stall.Ran.UTC().Format(time.RFC3339))
 	}
-	l.stall.ran, l.stall.ranFiled = l.a.timeNow(), 0
+	l.Stall.Ran, l.Stall.ranFiled = l.Host.TimeNow(), 0
 }
 
-// stallWait records that the refill had room yet started nothing, and why.
+// StallWait records that the refill had room yet started nothing, and why.
 // The episode keeps its first time; the item and cause are the latest.
-func (l *supervisorLoop) stallWait(ref, why string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.stall.since.IsZero() {
-		l.stall.since = l.a.timeNow()
-		l.stall.filed = 0
+func (l *Loop) StallWait(ref, why string) {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if l.Stall.Since.IsZero() {
+		l.Stall.Since = l.Host.TimeNow()
+		l.Stall.filed = 0
 	}
-	l.stall.ref, l.stall.why = ref, why
+	l.Stall.ref, l.Stall.why = ref, why
 }
 
-// stallClear ends a start wait: a worker started, the board offers nothing
+// StallClear ends a start wait: a worker started, the board offers nothing
 // or no slot is free.
-func (l *supervisorLoop) stallClear() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.stall.filed > 0 {
-		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR STALL ENDED: worker starts flow again (stalled since %s)\n", l.stall.since.UTC().Format(time.RFC3339))
+func (l *Loop) StallClear() {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if l.Stall.filed > 0 {
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: worker starts flow again (stalled since %s)\n", l.Stall.Since.UTC().Format(time.RFC3339))
 	}
-	l.stall.since, l.stall.ref, l.stall.why, l.stall.filed = time.Time{}, "", "", 0
+	l.Stall.Since, l.Stall.ref, l.Stall.why, l.Stall.filed = time.Time{}, "", "", 0
 }
 
-// checkStall raises one alarm, through the loop's file channel that guide
+// CheckStall raises one alarm, through the loop's file channel that guide
 // watch says as GUIDE PROBLEM, when worker starts do not move: the refill
-// has not run for loopStallAfter (the worker stream is stuck ahead of it),
-// or it had room and a board item for loopStallAfter yet started nothing.
+// has not run for LoopStallAfter (the worker stream is stuck ahead of it),
+// or it had room and a board item for LoopStallAfter yet started nothing.
 // The alarm names the cause it read, once per episode.
-func (l *supervisorLoop) checkStall() error {
+func (l *Loop) CheckStall() error {
 	if err := l.checkReviewStall(); err != nil {
 		return err
 	}
-	if l.a.cfg.Supervisor.WorkerBrief == "" {
+	if l.Host.Cfg().Supervisor.WorkerBrief == "" {
 		return nil
 	}
-	now := l.a.timeNow()
-	l.mu.Lock()
-	if l.stall.ran.IsZero() {
-		l.stall.ran = now // the loop's start is the baseline
+	now := l.Host.TimeNow()
+	l.Mu.Lock()
+	if l.Stall.Ran.IsZero() {
+		l.Stall.Ran = now // the loop's start is the baseline
 	}
-	s := l.stall
-	l.mu.Unlock()
+	s := l.Stall
+	l.Mu.Unlock()
 	var since time.Time
 	var cause string
-	filed := &l.stall.filed
+	filed := &l.Stall.filed
 	switch {
-	case now.Sub(s.ran) >= loopStallAfter:
-		since, filed = s.ran, &l.stall.ranFiled
-		cause = fmt.Sprintf("the capacity refill has not run since %s: %s", s.ran.UTC().Format(time.RFC3339), l.refillBlocker())
-	case !s.since.IsZero() && now.Sub(s.since) >= loopStallAfter:
-		since = s.since
+	case now.Sub(s.Ran) >= LoopStallAfter:
+		since, filed = s.Ran, &l.Stall.ranFiled
+		cause = fmt.Sprintf("the capacity refill has not run since %s: %s", s.Ran.UTC().Format(time.RFC3339), l.refillBlocker())
+	case !s.Since.IsZero() && now.Sub(s.Since) >= LoopStallAfter:
+		since = s.Since
 		item := "no board item read"
 		if s.ref != "" {
 			item = s.ref
 		}
-		cause = fmt.Sprintf("the refill had free slots since %s yet started no worker (%s): %s", s.since.UTC().Format(time.RFC3339), item, s.why)
+		cause = fmt.Sprintf("the refill had free slots since %s yet started no worker (%s): %s", s.Since.UTC().Format(time.RFC3339), item, s.why)
 	default:
 		return nil
 	}
-	n := int(now.Sub(since) / loopStallAfter)
-	l.mu.Lock()
+	n := int(now.Sub(since) / LoopStallAfter)
+	l.Mu.Lock()
 	raised := *filed
-	l.mu.Unlock()
+	l.Mu.Unlock()
 	if raised > 0 || n == 0 {
 		return nil
 	}
 	text := fmt.Sprintf("Worker starts are stalled: %s. Own the cause to the component it names; the alarm is delivered once per waiting episode.", cause)
-	line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
-	key := fmt.Sprintf("%s%s %d", loopStallKey, since.UTC().Format("20060102T150405Z"), n)
-	if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: key}, line); err != nil {
+	line := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, text)
+	key := fmt.Sprintf("%s%s %d", LoopStallKey, since.UTC().Format("20060102T150405Z"), n)
+	if err := l.Record(superloop.Action{Kind: superloop.KindFile, Key: key}, line); err != nil {
 		return err
 	}
-	l.mu.Lock()
+	l.Mu.Lock()
 	*filed = n
-	l.mu.Unlock()
+	l.Mu.Unlock()
 	return nil
 }
 
@@ -221,8 +221,8 @@ func (l *supervisorLoop) checkStall() error {
 // It is independent of refill progress: starting workers must not hide a
 // merge lane that has stopped moving.
 type flowWait struct {
-	act   superloop.Action
-	since time.Time
+	Act   superloop.Action
+	Since time.Time
 	// alarmed are the classes of hold the alarm named, last when it last
 	// rang.
 	alarmed []string
@@ -234,13 +234,13 @@ type flowWait struct {
 const (
 	waitInFlight = "in flight"
 	waitLane     = "lane"
-	waitHold     = "hold"
+	WaitHold     = "hold"
 	waitBudget   = "GitHub budget"
 	waitOutage   = "outage"
 	waitGate     = "merge gate"
 	waitPolicy   = "merge policy"
 	waitQueue    = "merge queue"
-	waitUnread   = "unread"
+	WaitUnread   = "unread"
 	waitRepair   = "repair"
 	waitFailed   = "failed"
 	waitRestart  = "restart"
@@ -248,22 +248,22 @@ const (
 	waitUnnamed  = "unnamed"
 )
 
-// mergeWait is errLoopLater with what the merge decision waits on: the stall
+// mergeWait is ErrLoopLater with what the merge decision waits on: the stall
 // alarm names it instead of a decision that silently never completes
 // (https://github.com/giantswarm/beekeeper/issues/3820).
 type mergeWait struct{ class, cause string }
 
-func (w *mergeWait) Error() string { return w.cause + ": " + errLoopLater.Error() }
-func (w *mergeWait) Unwrap() error { return errLoopLater }
+func (w *mergeWait) Error() string { return w.cause + ": " + ErrLoopLater.Error() }
+func (w *mergeWait) Unwrap() error { return ErrLoopLater }
 
-// mergeHeld is a wait of class for a later pass, with its cause.
-func mergeHeld(class, format string, args ...any) error {
+// MergeHeld is a wait of class for a later pass, with its cause.
+func MergeHeld(class, format string, args ...any) error {
 	return &mergeWait{class: class, cause: fmt.Sprintf(format, args...)}
 }
 
-// laterCause is the cause a wrapped errLoopLater names, "" for a bare one.
+// laterCause is the cause a wrapped ErrLoopLater names, "" for a bare one.
 func laterCause(err error) string {
-	text := strings.TrimSpace(strings.TrimSuffix(err.Error(), errLoopLater.Error()))
+	text := strings.TrimSpace(strings.TrimSuffix(err.Error(), ErrLoopLater.Error()))
 	return strings.TrimSpace(strings.TrimSuffix(text, ":"))
 }
 
@@ -271,7 +271,7 @@ func laterCause(err error) string {
 // the decision was doing (prefix). A named wait and any other error stand.
 func namedWait(err error, class, prefix string) error {
 	var named *mergeWait
-	if err == nil || !errors.Is(err, errLoopLater) || errors.As(err, &named) {
+	if err == nil || !errors.Is(err, ErrLoopLater) || errors.As(err, &named) {
 		return err
 	}
 	cause := laterCause(err)
@@ -286,7 +286,7 @@ func namedWait(err error, class, prefix string) error {
 
 // mergeNote is what a merge decision's last run read: the hold it waits on.
 type mergeNote struct {
-	class, cause string
+	Class, Cause string
 	at           time.Time
 }
 
@@ -297,32 +297,32 @@ type mergeRun struct {
 	behind string
 }
 
-// mergeWaited keeps why a merge decision's run did not settle it.
-func (l *supervisorLoop) mergeWaited(act superloop.Action, err error) {
+// MergeWaited keeps why a merge decision's run did not settle it.
+func (l *Loop) MergeWaited(act superloop.Action, err error) {
 	if act.Kind != superloop.KindGo {
 		return
 	}
-	note := mergeNote{class: waitUnnamed, cause: laterCause(err), at: l.a.timeNow()}
+	note := mergeNote{Class: waitUnnamed, Cause: laterCause(err), at: l.Host.TimeNow()}
 	var named *mergeWait
 	if errors.As(err, &named) {
-		note.class, note.cause = named.class, named.cause
+		note.Class, note.Cause = named.class, named.cause
 	}
-	if note.cause == "" {
-		note.cause = "its run waits for a later pass and named no cause"
+	if note.Cause == "" {
+		note.Cause = "its run waits for a later pass and named no cause"
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.mergeNotes == nil {
-		l.mergeNotes = map[string]mergeNote{}
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if l.MergeNotes == nil {
+		l.MergeNotes = map[string]mergeNote{}
 	}
-	l.mergeNotes[act.Key] = note
+	l.MergeNotes[act.Key] = note
 }
 
 // mergeQueued marks a lane's merge decisions dispatched: the first runs, the
 // others wait behind it in the loop's stream for the lane.
-func (l *supervisorLoop) mergeQueued(acts []superloop.Action) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Loop) mergeQueued(acts []superloop.Action) {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	if l.mergeRuns == nil {
 		l.mergeRuns = map[string]mergeRun{}
 	}
@@ -335,11 +335,11 @@ func (l *supervisorLoop) mergeQueued(acts []superloop.Action) {
 	}
 }
 
-// mergeStarted marks acts[i] running and the rest of its stream behind it.
-func (l *supervisorLoop) mergeStarted(acts []superloop.Action, i int) {
-	now := l.a.timeNow()
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// MergeStarted marks acts[i] running and the rest of its stream behind it.
+func (l *Loop) MergeStarted(acts []superloop.Action, i int) {
+	now := l.Host.TimeNow()
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	if l.mergeRuns == nil {
 		l.mergeRuns = map[string]mergeRun{}
 	}
@@ -349,10 +349,10 @@ func (l *supervisorLoop) mergeStarted(acts []superloop.Action, i int) {
 	}
 }
 
-// mergeStreamEnded forgets the runs of a lane's stream that ended.
-func (l *supervisorLoop) mergeStreamEnded(acts []superloop.Action) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// MergeStreamEnded forgets the runs of a lane's stream that ended.
+func (l *Loop) MergeStreamEnded(acts []superloop.Action) {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	for _, act := range acts {
 		delete(l.mergeRuns, act.Key)
 	}
@@ -362,10 +362,10 @@ func (l *supervisorLoop) mergeStreamEnded(acts []superloop.Action) {
 // class: its command in flight, its lane's stream, or the newer of its last
 // wait and its last failure. settled reports a decision completed since the
 // pass planned it.
-func (l *supervisorLoop) flowCause(key string, failures map[string]loopFailure) (class, cause string, settled bool) {
-	now := l.a.timeNow()
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Loop) flowCause(key string, failures map[string]LoopFailure) (class, cause string, settled bool) {
+	now := l.Host.TimeNow()
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	if l.completed[key] {
 		return "", "", true
 	}
@@ -379,42 +379,42 @@ func (l *supervisorLoop) flowCause(key string, failures map[string]loopFailure) 
 		}
 		return waitInFlight, "its command is still in flight", false
 	}
-	note, noted := l.mergeNotes[key]
+	note, noted := l.MergeNotes[key]
 	if f := failures[key]; f.Message != "" && (!noted || f.At.After(note.at)) {
-		cause := "its last run failed: " + oneLine(f.Message)
+		cause := "its last run failed: " + Cmd.OneLine(f.Message)
 		if f.RetryAt.After(now) {
 			cause += fmt.Sprintf(" (identical failures; the loop retries after %s)", f.RetryAt.UTC().Format(time.RFC3339))
 		}
 		return waitFailed, cause, false
 	}
 	if noted {
-		return note.class, note.cause, false
+		return note.Class, note.Cause, false
 	}
 	return waitUnnamed, "the planner still requests this decision; no run of it recorded a completion, a wait or a failure", false
 }
 
-// flowAlarm rings for a merge decision pending loopStallAfter or longer:
-// once per pending head and class of hold, and no sooner than loopStallAfter
+// flowAlarm rings for a merge decision pending LoopStallAfter or longer:
+// once per pending head and class of hold, and no sooner than LoopStallAfter
 // after the head's last alarm, so a hold that changes is named and one that
 // flaps is not repeated.
-func (l *supervisorLoop) flowAlarm(key string, wait *flowWait, class, cause string, pending int) error {
-	now := l.a.timeNow()
-	if now.Sub(wait.since) < loopStallAfter || slices.Contains(wait.alarmed, class) {
+func (l *Loop) flowAlarm(key string, wait *flowWait, class, cause string, pending int) error {
+	now := l.Host.TimeNow()
+	if now.Sub(wait.Since) < LoopStallAfter || slices.Contains(wait.alarmed, class) {
 		return nil
 	}
-	if !wait.last.IsZero() && now.Sub(wait.last) < loopStallAfter {
+	if !wait.last.IsZero() && now.Sub(wait.last) < LoopStallAfter {
 		return nil
 	}
 	// A restarted loop has run nothing yet: it names a restored wait once
 	// its own run read the hold.
-	if class == waitUnnamed && now.Sub(l.startedAt) < loopStallAfter {
+	if class == waitUnnamed && now.Sub(l.StartedAt) < LoopStallAfter {
 		return nil
 	}
-	n := int(now.Sub(wait.since) / loopStallAfter)
-	text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm is delivered once per pending head and cause.", wait.act.Kind, wait.act.URL, wait.act.Head, wait.since.UTC().Format(time.RFC3339), cause, pending)
-	line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
-	alarmKey := fmt.Sprintf("stall decision %s %s %d %s", key, wait.since.UTC().Format("20060102T150405Z"), n, class)
-	if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: alarmKey}, line); err != nil {
+	n := int(now.Sub(wait.Since) / LoopStallAfter)
+	text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm is delivered once per pending head and cause.", wait.Act.Kind, wait.Act.URL, wait.Act.Head, wait.Since.UTC().Format(time.RFC3339), cause, pending)
+	line := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, text)
+	alarmKey := fmt.Sprintf("stall decision %s %s %d %s", key, wait.Since.UTC().Format("20060102T150405Z"), n, class)
+	if err := l.Record(superloop.Action{Kind: superloop.KindFile, Key: alarmKey}, line); err != nil {
 		return err
 	}
 	wait.alarmed = append(wait.alarmed, class)
@@ -422,36 +422,36 @@ func (l *supervisorLoop) flowAlarm(key string, wait *flowWait, class, cause stri
 	return nil
 }
 
-// checkFlowWaits measures the planner's pending merge decisions
+// CheckFlowWaits measures the planner's pending merge decisions
 // every pass. Holds and in-flight commands remain pending, so they cannot
 // silently turn a stalled lane into a healthy one. A new head starts a new
 // episode; a settled decision clears it. Unread pulls retain their episodes
 // and are alarmed as unread: no pass plans or runs their decision.
-func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.Action, failures map[string]loopFailure) error {
-	now := l.a.timeNow()
+func (l *Loop) CheckFlowWaits(in superloop.Input, actions []superloop.Action, failures map[string]LoopFailure) error {
+	now := l.Host.TimeNow()
 	pending := map[string]superloop.Action{}
 	for _, act := range actions {
 		if act.Kind == superloop.KindGo && !staleMergeDecision(in.Pulls[act.Ref], act.Head) {
 			pending[act.Key] = act
 		}
 	}
-	if l.flowWaits == nil {
-		l.flowWaits = map[string]flowWait{}
+	if l.FlowWaits == nil {
+		l.FlowWaits = map[string]flowWait{}
 	}
 	var unread []string
-	for key, wait := range l.flowWaits {
+	for key, wait := range l.FlowWaits {
 		if _, ok := pending[key]; ok {
 			continue
 		}
 		// An unread GitHub observation is not evidence of recovery.
-		if _, observed := in.Pulls[wait.act.Ref]; !observed {
+		if _, observed := in.Pulls[wait.Act.Ref]; !observed {
 			unread = append(unread, key)
 			continue
 		}
 		if len(wait.alarmed) > 0 {
-			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR STALL ENDED: %s is no longer pending\n", key)
+			_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: %s is no longer pending\n", key)
 		}
-		delete(l.flowWaits, key)
+		delete(l.FlowWaits, key)
 	}
 	keys := make([]string, 0, len(pending))
 	for key := range pending {
@@ -460,46 +460,46 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 	slices.Sort(keys)
 	total := len(pending) + len(unread)
 	for _, key := range keys {
-		wait, exists := l.flowWaits[key]
+		wait, exists := l.FlowWaits[key]
 		if !exists {
-			wait.since = now
+			wait.Since = now
 		}
-		wait.act = pending[key]
+		wait.Act = pending[key]
 		class, cause, settled := l.flowCause(key, failures)
 		if settled {
-			delete(l.flowWaits, key)
+			delete(l.FlowWaits, key)
 			continue
 		}
 		if err := l.flowAlarm(key, &wait, class, cause, total); err != nil {
 			return err
 		}
-		l.flowWaits[key] = wait
+		l.FlowWaits[key] = wait
 	}
 	slices.Sort(unread)
 	for _, key := range unread {
-		wait := l.flowWaits[key]
+		wait := l.FlowWaits[key]
 		class, cause, settled := l.flowCause(key, failures)
 		if settled {
-			delete(l.flowWaits, key)
+			delete(l.FlowWaits, key)
 			continue
 		}
 		if class != waitInFlight && class != waitLane {
-			class = waitUnread
-			cause = fmt.Sprintf("the loop has no current observation of %s (the SUPERVISOR LOOP cannot read and SUPERVISOR PULL WATCH lines name why), so no pass plans or runs its decision", wait.act.Ref)
+			class = WaitUnread
+			cause = fmt.Sprintf("the loop has no current observation of %s (the SUPERVISOR LOOP cannot read and SUPERVISOR PULL WATCH lines name why), so no pass plans or runs its decision", wait.Act.Ref)
 		}
 		if err := l.flowAlarm(key, &wait, class, cause, total); err != nil {
 			return err
 		}
-		l.flowWaits[key] = wait
+		l.FlowWaits[key] = wait
 	}
 	// A decision no longer pending leaves no note behind.
-	l.mu.Lock()
-	for key := range l.mergeNotes {
-		if _, waits := l.flowWaits[key]; !waits {
-			delete(l.mergeNotes, key)
+	l.Mu.Lock()
+	for key := range l.MergeNotes {
+		if _, waits := l.FlowWaits[key]; !waits {
+			delete(l.MergeNotes, key)
 		}
 	}
-	l.mu.Unlock()
+	l.Mu.Unlock()
 	return nil
 }
 
@@ -507,17 +507,17 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 // planned: held GitHub observations, a restart or a failed pass run no merge
 // decision, and must not silence the ones already pending. why names what
 // ended the pass.
-func (l *supervisorLoop) flowWaitsUnplanned(class, why string) error {
-	keys := make([]string, 0, len(l.flowWaits))
-	for key := range l.flowWaits {
+func (l *Loop) flowWaitsUnplanned(class, why string) error {
+	keys := make([]string, 0, len(l.FlowWaits))
+	for key := range l.FlowWaits {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
-		wait := l.flowWaits[key]
+		wait := l.FlowWaits[key]
 		held, cause, settled := l.flowCause(key, nil)
 		if settled {
-			delete(l.flowWaits, key)
+			delete(l.FlowWaits, key)
 			continue
 		}
 		if held != waitInFlight && held != waitLane {
@@ -526,7 +526,7 @@ func (l *supervisorLoop) flowWaitsUnplanned(class, why string) error {
 		if err := l.flowAlarm(key, &wait, held, cause, len(keys)); err != nil {
 			return err
 		}
-		l.flowWaits[key] = wait
+		l.FlowWaits[key] = wait
 	}
 	return nil
 }

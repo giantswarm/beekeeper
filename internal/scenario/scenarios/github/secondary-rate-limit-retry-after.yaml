@@ -1,0 +1,47 @@
+name: secondary-rate-limit-retry-after
+description: >
+  GitHub answers the GraphQL probe with 403 and Retry-After, a secondary
+  rate limit, while the REST probe passes. budget --gate reads it as a
+  refusal that ends with Retry-After and exits 3; the refused request costs
+  nothing, the REST probe one core point.
+issue: https://github.com/giantswarm/beekeeper/issues/3790
+flow: github
+tags: [github, budget, fault]
+timeout: 30s
+control:
+  none: >
+    states budget --gate on a secondary rate limit with Retry-After, which
+    main already has; this pull request changes no beekeeper code, only adds
+    the fake GitHub's fault that answers it
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+  github:
+    repositories:
+      - name: example/app
+    faults:
+      - name: secondary
+        match: {path: graphql}
+        respond: {secondary_rate_limit: true, retry_after: 90s}
+
+when:
+  - name: budget
+    run: {args: [budget, --gate, --json]}
+
+then:
+  - exit: 3
+  - json_path: {path: graphql.secondary, equals: true}
+  - json_path: {path: graphql.reset, exists: true}
+  - output: {contains: ["secondary rate limit"]}
+  - stderr: {contains: ["GitHub refuses GraphQL calls"]}
+  - github: {calls: {path: graphql, caller: budget, via: http, status: 403, fault: secondary, min: 1}}
+  - github: {calls: {path: repos/example/app, caller: budget, via: http, status: 200, min: 1, max: 1}}
+  - github: {budget: {bucket: graphql, spent: 0}}
+  - github: {budget: {bucket: core, caller: budget, spent: 1}}

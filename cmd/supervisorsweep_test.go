@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -21,22 +22,22 @@ func TestLoopSweepsAnOwnerlessPullWithoutReviewMetadata(t *testing.T) {
 	r := newLoopRig(t)
 	const orphan, orphanURL = "o/r#9", "https://github.com/o/r/pull/9"
 	r.pulls[orphan] = superloop.Pull{Ref: orphan, URL: orphanURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk, Branch: "fix-9"}
-	listed := readOpenPulls
-	t.Cleanup(func() { readOpenPulls = listed })
-	readOpenPulls = func(_ context.Context, authors func() ([]string, error), _ []string) ([]string, error) {
+	listed := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = listed })
+	loop.ReadOpenPulls = func(_ context.Context, authors func() ([]string, error), _ []string) ([]string, error) {
 		if a, err := authors(); err != nil || !slices.Equal(a, []string{loopDesk}) {
 			t.Errorf("authors = %v, %v", a, err)
 		}
 		return []string{orphan}, nil
 	}
 	stretches := func() []state.Event {
-		return slices.DeleteFunc(r.logged(t, loopOwnerlessVerb), func(e state.Event) bool { return e.Subject != orphan })
+		return slices.DeleteFunc(r.logged(t, loop.LoopOwnerlessVerb), func(e state.Event) bool { return e.Subject != orphan })
 	}
 	r.pass(t)
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Fatalf("started before the wait: %v\n%s", c, r.out)
 	}
-	if evs := stretches(); len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, "["+orphan+"] "+ownerlessSince) {
+	if evs := stretches(); len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, "["+orphan+"] "+loop.OwnerlessSince) {
 		t.Fatalf("ownerless lines = %+v", evs)
 	}
 	// A restarted loop keeps the stretch: no second line, no start.
@@ -49,7 +50,7 @@ func TestLoopSweepsAnOwnerlessPullWithoutReviewMetadata(t *testing.T) {
 	}
 	// The stretch began OrphanWait ago.
 	began := time.Now().Add(-superloop.OrphanWait - time.Minute)
-	if err := r.a.store.Record(about(event(loopParty, loopOwnerlessVerb, "[%s] %s%s", orphan, ownerlessSince, began.UTC().Format(time.RFC3339Nano)), orphan)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopOwnerlessVerb, "[%s] %s%s", orphan, loop.OwnerlessSince, began.UTC().Format(time.RFC3339Nano)), orphan)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
@@ -74,7 +75,7 @@ func TestLoopSweepsAnOwnerlessPullWithoutReviewMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if evs := stretches(); len(evs) == 0 || evs[len(evs)-1].Detail != "["+orphan+"] "+ownerlessEnd {
+	if evs := stretches(); len(evs) == 0 || evs[len(evs)-1].Detail != "["+orphan+"] "+loop.OwnerlessEnd {
 		t.Errorf("an owner did not end the stretch: %+v", evs)
 	}
 }
@@ -86,9 +87,9 @@ func sweepRef(n int) string { return fmt.Sprintf("o/r#%d", n) }
 // sweep at all.
 func TestSweepPullsSkipsTrackedAndOwnedPulls(t *testing.T) {
 	r := newLoopRig(t)
-	listed := readOpenPulls
-	t.Cleanup(func() { readOpenPulls = listed })
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+	listed := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = listed })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
 		return []string{loopPR, sweepRef(8), sweepRef(9), sweepRef(10), "x/y#1"}, nil
 	}
 	l, err := r.a.newSupervisorLoop(false)
@@ -100,7 +101,7 @@ func TestSweepPullsSkipsTrackedAndOwnedPulls(t *testing.T) {
 		{Name: "someone", ParkedOn: sweepRef(9)},
 		{Name: "left", ParkedOn: sweepRef(10), ReviewRequested: true, Saved: true},
 	}}
-	got := l.sweepPulls(context.Background(), in, []string{loopPR})
+	got := l.SweepPulls(context.Background(), in, []string{loopPR})
 	if want := []string{sweepRef(10)}; !slices.Equal(got, want) {
 		t.Errorf("sweep reads %v, want %v", got, want)
 	}
@@ -114,10 +115,10 @@ func TestSweepDiscoverySurvivesDrainAndRetriesFailedListing(t *testing.T) {
 	if err := r.a.store.WriteFile(loopRESTFile, loopRESTSpend{Reset: r.a.timeNow().Add(time.Hour), Spent: loopRESTLimit}); err != nil {
 		t.Fatal(err)
 	}
-	old := readOpenPulls
-	t.Cleanup(func() { readOpenPulls = old })
+	old := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = old })
 	attempts := 0
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
 		attempts++
 		if attempts == 1 {
 			return nil, fmt.Errorf("temporarily unavailable")
@@ -129,15 +130,15 @@ func TestSweepDiscoverySurvivesDrainAndRetriesFailedListing(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := superloop.Input{Desk: superloop.Desk{Orgs: []string{"o"}, Authors: []string{loopDesk}}}
-	l.sweepPulls(context.Background(), in, nil)
-	if !l.openPullsAt.IsZero() {
+	l.SweepPulls(context.Background(), in, nil)
+	if !l.OpenPullsAt.IsZero() {
 		t.Fatal("failed listing marked fresh")
 	}
-	got := l.sweepPulls(context.Background(), in, nil)
+	got := l.SweepPulls(context.Background(), in, nil)
 	if attempts != 2 || !slices.Equal(got, []string{loopPR}) {
 		t.Fatalf("discovery after drain: %v attempts %d", got, attempts)
 	}
-	l.sweepPulls(context.Background(), in, nil)
+	l.SweepPulls(context.Background(), in, nil)
 	if attempts != 2 {
 		t.Fatal("successful discovery ignored listing interval")
 	}
@@ -149,20 +150,20 @@ func TestSweepFlagBatchesSeparatesOwnersAndChunksRepos(t *testing.T) {
 	sharedRepo := func(i int) string { return fmt.Sprintf("shared/r-%d", i) }
 	var scopes []string
 	scopes = append(scopes, "o")
-	for i := 1; i <= sweepRepoBatch+2; i++ {
+	for i := 1; i <= loop.SweepRepoBatch+2; i++ {
 		scopes = append(scopes, sharedRepo(i))
 	}
-	batches := sweepFlagBatches(scopes)
+	batches := loop.SweepFlagBatches(scopes)
 	if len(batches) != 3 {
 		t.Fatalf("batches = %d, want 3: %v", len(batches), batches)
 	}
-	if !slices.Equal(batches[0], []string{sweepOwnerFlag, "o"}) {
+	if !slices.Equal(batches[0], []string{loop.SweepOwnerFlag, "o"}) {
 		t.Errorf("owner batch = %v", batches[0])
 	}
-	if len(batches[1]) != 2*sweepRepoBatch || batches[1][0] != loopRepoFlag || batches[1][1] != sharedRepo(1) {
+	if len(batches[1]) != 2*loop.SweepRepoBatch || batches[1][0] != loop.LoopRepoFlag || batches[1][1] != sharedRepo(1) {
 		t.Errorf("first repo batch = %v", batches[1])
 	}
-	if !slices.Equal(batches[2], []string{loopRepoFlag, sharedRepo(sweepRepoBatch + 1), loopRepoFlag, sharedRepo(sweepRepoBatch + 2)}) {
+	if !slices.Equal(batches[2], []string{loop.LoopRepoFlag, sharedRepo(loop.SweepRepoBatch + 1), loop.LoopRepoFlag, sharedRepo(loop.SweepRepoBatch + 2)}) {
 		t.Errorf("second repo batch = %v", batches[2])
 	}
 }

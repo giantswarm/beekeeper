@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -34,15 +35,15 @@ func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	e := about(event(loopParty, "supervisor.review", "[review %s#7@%s] worker: independent round", r.Repository, head), fmt.Sprintf("%s#7", r.Repository))
+	e := about(event(loop.LoopParty, "supervisor.review", "[review %s#7@%s] worker: independent round", r.Repository, head), fmt.Sprintf("%s#7", r.Repository))
 	if err := a.store.Record(e); err != nil {
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{ID: "worker-review", Head: head, Verdict: superloop.Approved, At: now.Add(time.Second)}}}
-	old, login := readLoopPull, readDeskLogin
-	t.Cleanup(func() { readLoopPull, readDeskLogin = old, login })
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
-	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
+	old, login := loop.ReadLoopPull, loop.ReadDeskLogin
+	t.Cleanup(func() { loop.ReadLoopPull, loop.ReadDeskLogin = old, login })
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
+	loop.ReadDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
 	use := execution.MergeUse{ID: "review-grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	assignMergeReview(t, a, use, 1)
 	return a, use, pull
@@ -57,7 +58,7 @@ func TestExecutionMergeWorkerApprovalCannotAuthorize(t *testing.T) {
 				completeMergeReview(t, a, use, &rejected)
 				pull.Reviews = append([]superloop.Review{rejected}, pull.Reviews...)
 			}
-			if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty); err == nil {
+			if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loop.LoopParty); err == nil {
 				t.Error("worker-authored approval authorized issuance")
 			}
 			st, err := a.store.Read()
@@ -111,7 +112,7 @@ func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 			if err := a.executionMergeLive(context.Background(), st, use); (err != nil) != test.deny {
 				t.Fatalf("live policy deny=%v: %v", test.deny, err)
 			}
-			if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty); (err != nil) != test.deny {
+			if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loop.LoopParty); (err != nil) != test.deny {
 				t.Fatalf("issuance policy deny=%v: %v", test.deny, err)
 			}
 		})
@@ -126,7 +127,7 @@ func assignMergeReview(t *testing.T, a *app, use execution.MergeUse, number int)
 	var worker string
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		worker = st.Starts[0].Name
-		st.Starts = append(st.Starts, state.Start{Party: reviewer, By: state.Party{Name: loopParty.Name, Host: "coordinator"}, At: time.Now().Add(-time.Second)})
+		st.Starts = append(st.Starts, state.Start{Party: reviewer, By: state.Party{Name: loop.LoopParty.Name, Host: "coordinator"}, At: time.Now().Add(-time.Second)})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -235,7 +236,7 @@ func TestExecutionMergeAuthenticatesSessionAndPinsResultAcrossRestart(t *testing
 	approved := superloop.Review{ID: "authentic-review", Verdict: superloop.Approved}
 	completed := completeMergeReview(t, a, use, &approved)
 	pull.Reviews = append([]superloop.Review{approved}, pull.Reviews...)
-	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty)
+	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loop.LoopParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func TestExecutionMergeRejectsEditedAuthenticatedReview(t *testing.T) {
 	if err := a.executionMergeLive(context.Background(), st, use); err == nil {
 		t.Fatal("edited independent result admitted")
 	}
-	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty); err == nil {
+	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loop.LoopParty); err == nil {
 		t.Fatal("edited independent result granted authority")
 	}
 }
@@ -327,9 +328,9 @@ func TestExecutionMergeRejectsEarlierApprovalOverriddenByChangesRequested(t *tes
 	const resolvedHead = "2222222222222222222222222222222222222222"
 	pull.Head = resolvedHead
 	use.Head = resolvedHead
-	oldBaseMerge := readBaseMerge
-	t.Cleanup(func() { readBaseMerge = oldBaseMerge })
-	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+	oldBaseMerge := loop.ReadBaseMerge
+	t.Cleanup(func() { loop.ReadBaseMerge = oldBaseMerge })
+	loop.ReadBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
 		return p.Head == resolvedHead && approved == pull.Reviews[0].Head, nil
 	}
 	pull.Reviews = append(pull.Reviews, superloop.Review{
@@ -348,7 +349,7 @@ func TestExecutionMergeRejectsEarlierApprovalOverriddenByChangesRequested(t *tes
 	if err := a.executionMergeLive(context.Background(), st, use); err == nil || !strings.Contains(err.Error(), "later review requested changes") {
 		t.Fatalf("later changes-requested review did not override earlier approval: %v", err)
 	}
-	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty); err == nil {
+	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loop.LoopParty); err == nil {
 		t.Fatal("later changes-requested review still granted merge authority")
 	}
 }
@@ -477,9 +478,9 @@ func TestExecutionMergeCoordinatorNeedsTheFixHeadsApprovalAfterTheWorkerEnded(t 
 // path requires the exact-head claim checked by reviewedMerge; workers cannot
 // reuse it through a grant or by leaving the grant ID empty.
 func TestLoopClaimMergesAuthenticatedReviewFixes(t *testing.T) {
-	previous := readBaseMerge
-	t.Cleanup(func() { readBaseMerge = previous })
-	readBaseMerge = func(context.Context, superloop.Pull, string) (bool, error) { return false, nil }
+	previous := loop.ReadBaseMerge
+	t.Cleanup(func() { loop.ReadBaseMerge = previous })
+	loop.ReadBaseMerge = func(context.Context, superloop.Pull, string) (bool, error) { return false, nil }
 	for _, verdict := range []string{superloop.Approved, superloop.ChangesRequested} {
 		t.Run(verdict, func(t *testing.T) {
 			a, use, pull := mergeReviewRig(t)
@@ -571,7 +572,7 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	approved := superloop.Review{ID: "remote-review", Verdict: superloop.Approved}
 	completeMergeReview(t, a, use, &approved)
 	pull.Reviews = []superloop.Review{approved}
-	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty)
+	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loop.LoopParty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +616,7 @@ func TestExecutionMergeRefusesReviewerSelfApproval(t *testing.T) {
 	}); err == nil {
 		t.Fatal("reviewer approved commits beyond the assigned head")
 	}
-	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, fixedHead, loopParty); err == nil {
+	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, fixedHead, loop.LoopParty); err == nil {
 		t.Fatal("reviewer-fixed head received a merge grant")
 	}
 }

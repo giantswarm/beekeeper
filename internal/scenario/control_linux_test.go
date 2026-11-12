@@ -66,7 +66,10 @@ func TestScenarioControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &Runner{Candidate: candidate, Fake: self, Artifacts: dir}
+	// A scenario's releases (given.releases) are builds of the merge base
+	// too: the control judges the base, whatever version it is stamped with.
+	releases := &ReleaseBuilder{Repo: base, Dir: filepath.Dir(candidate)}
+	r := &Runner{Candidate: candidate, Fake: self, Artifacts: dir, Release: releases.Build}
 	var mu sync.Mutex
 	t.Run("control", func(t *testing.T) {
 		for _, c := range plan.Run {

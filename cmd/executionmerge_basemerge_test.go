@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -30,16 +31,16 @@ func TestExecutionApprovalCoversAWorkersBaseUpdateAcrossARestart(t *testing.T) {
 	pull.Ref, pull.Base, pull.MergeState, pull.Checks = ref, mainBranch, mergeStateBehind, []string{behindBuild}
 
 	covers := true
-	baseMerge, behind, command := readBaseMerge, readReviewedBehind, loopCommand
+	baseMerge, behind, command := loop.ReadBaseMerge, readReviewedBehind, loop.LoopCommand
 	t.Cleanup(func() {
-		readBaseMerge, readReviewedBehind, loopCommand = baseMerge, behind, command
+		loop.ReadBaseMerge, readReviewedBehind, loop.LoopCommand = baseMerge, behind, command
 	})
-	readBaseMerge = func(_ context.Context, p superloop.Pull, reviewed string) (bool, error) {
+	loop.ReadBaseMerge = func(_ context.Context, p superloop.Pull, reviewed string) (bool, error) {
 		return covers && reviewed == h0 && p.Head == h1, nil
 	}
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
 	var merges [][]string
-	loopCommand = func(_ context.Context, _ string, argv []string) (string, string, int, error) {
+	loop.LoopCommand = func(_ context.Context, _ string, argv []string) (string, string, int, error) {
 		switch {
 		case len(argv) > 2 && argv[0] == "gh" && argv[2] == superloop.KindMerge:
 			merges = append(merges, argv)
@@ -50,7 +51,7 @@ func TestExecutionApprovalCoversAWorkersBaseUpdateAcrossARestart(t *testing.T) {
 	worker := stWorkerName(t, a)
 	claim := func(head string) {
 		t.Helper()
-		if err := a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", ref, head, worker), ref)); err != nil {
+		if err := a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", ref, head, worker), ref)); err != nil {
 			t.Fatal(err)
 		}
 	}

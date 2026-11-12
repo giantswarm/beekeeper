@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -64,7 +65,7 @@ with execution review flags.`,
 			if !ok {
 				return usageErr("expected owner/repo#n")
 			}
-			p, err := readLoopPull(cmd.Context(), refName(r))
+			p, err := loop.ReadLoopPull(cmd.Context(), refName(r))
 			if err != nil {
 				return err
 			}
@@ -85,7 +86,7 @@ with execution review flags.`,
 				return err
 			}
 			events, err := a.store.Events(0, func(e state.Event) bool {
-				return e.By.Name == loopParty.Name && e.Verb == "supervisor.review" && strings.HasPrefix(e.Detail, "[review "+p.Ref+"@"+p.Head+"]")
+				return e.By.Name == loop.LoopParty.Name && e.Verb == "supervisor.review" && strings.HasPrefix(e.Detail, "[review "+p.Ref+"@"+p.Head+"]")
 			})
 			if err != nil {
 				return err
@@ -135,16 +136,16 @@ with execution review flags.`,
 			if err != nil {
 				return err
 			}
-			l.reviewDir = dir
-			l.cachePull(p.Ref, p)
+			l.ReviewDir = dir
+			l.CachePull(p.Ref, p)
 			oldModel := a.cfg.Supervisor.ReviewModel
 			a.cfg.Supervisor.ReviewModel = cmp.Or(model, oldModel, defaultReviewModel)
 			defer func() { a.cfg.Supervisor.ReviewModel = oldModel }()
-			what, err := l.startReviewer(cmd.Context(), act)
+			what, err := l.StartReviewer(cmd.Context(), act)
 			if err != nil {
 				return err
 			}
-			if err := a.store.Record(about(event(loopParty, "supervisor.review", "%s", act.Line(what)), p.Ref)); err != nil {
+			if err := a.store.Record(about(event(loop.LoopParty, "supervisor.review", "%s", act.Line(what)), p.Ref)); err != nil {
 				return err
 			}
 			if err := a.noteReviewStarter(act); err != nil {
@@ -171,7 +172,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		if r.Verdict == "" {
 			continue
 		}
-		if sameCommit(r.Head, p.Head) {
+		if loop.SameCommit(r.Head, p.Head) {
 			return 0, "", refused("%s already has a review of head %s", p.Ref, p.Head)
 		}
 		round++
@@ -181,7 +182,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		if !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
-		if sameCommit(r.Head, p.Head) && r.Released.IsZero() {
+		if loop.SameCommit(r.Head, p.Head) && r.Released.IsZero() {
 			return 0, "", refused("%s already has a reviewer for head %s", p.Ref, p.Head)
 		}
 		round = max(round, r.Round+1)
@@ -190,7 +191,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		if !reviewRequestActive(st, r) || !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
-		if sameCommit(r.Head, p.Head) {
+		if loop.SameCommit(r.Head, p.Head) {
 			return 0, "", refused("%s already requested review of head %s", p.Ref, p.Head)
 		}
 		round = max(round, r.Round+1)
@@ -331,7 +332,7 @@ func reviewStarter(st *state.State, ag state.Agent, report string) state.Party {
 		}
 	}
 	if k := st.StartIndex(ag.Party); k >= 0 {
-		if by := st.Starts[k].By; by != (state.Party{}) && by.Name != loopParty.Name && !by.Is(ag.Party) {
+		if by := st.Starts[k].By; by != (state.Party{}) && by.Name != loop.LoopParty.Name && !by.Is(ag.Party) {
 			return by
 		}
 	}
@@ -357,7 +358,7 @@ func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
 	for _, r := range reviews {
 		reviewed := cmp.Or(r.Head, r.Commit)
 		line := fmt.Sprintf("%s: %s at head %s by %s, %s", p.Ref, r.Verdict, shortSHA(reviewed), r.Author, r.At.UTC().Format(time.RFC3339))
-		if !sameCommit(reviewed, p.Head) {
+		if !loop.SameCommit(reviewed, p.Head) {
 			line += fmt.Sprintf(" (head is now %s)", shortSHA(p.Head))
 		}
 		if _, err := fmt.Fprintln(a.out, line); err != nil {
@@ -434,7 +435,7 @@ func releaseGoneReviews(st *state.State, ref, head string, live func(state.Party
 			continue
 		}
 		round.Released = now
-		events = append(events, about(event(loopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (done or off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, shortSHA(round.Head), round.Reviewer.Name), round.Ref))
+		events = append(events, about(event(loop.LoopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (done or off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, shortSHA(round.Head), round.Reviewer.Name), round.Ref))
 	}
 	return events
 }

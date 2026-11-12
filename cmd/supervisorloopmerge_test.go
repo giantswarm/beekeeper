@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -53,7 +54,7 @@ func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 				}
 				r.a.now = r.a.now.Add(time.Hour)
 			}
-			for _, verb := range []string{"merge.authorized", "merge.start", loopMergeFailed, loopFailureVerb, loopFileVerb} {
+			for _, verb := range []string{"merge.authorized", "merge.start", loop.LoopMergeFailed, loop.LoopFailureVerb, loop.LoopFileVerb} {
 				if events := r.logged(t, verb); len(events) != 0 {
 					t.Fatalf("hold produced %s: %+v", verb, events)
 				}
@@ -88,7 +89,7 @@ func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 func TestLoopReviewedMergeHonorsHoldExceptions(t *testing.T) {
 	for _, hold := range []state.Hold{
 		{Target: loopMergeRepo, Except: loopPR},
-		{Target: loopMergeRepo, ExceptSession: loopParty.Name},
+		{Target: loopMergeRepo, ExceptSession: loop.LoopParty.Name},
 		{Target: "another/repo"},
 	} {
 		t.Run(fmt.Sprintf("%s/%s/%s", hold.Target, hold.Except, hold.ExceptSession), func(t *testing.T) {
@@ -149,9 +150,9 @@ func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
 	r.pass(t)
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(time.Minute))
-	read := readLoopPull
+	read := loop.ReadLoopPull
 	reads := 0
-	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		p, err := read(ctx, ref)
 		reads++
 		if reads > 1 {
@@ -237,13 +238,13 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 				}
 				r.park(t, loopPR, time.Now())
 				if scenario != "unclaimed" {
-					if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+					if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 						t.Fatal(err)
 					}
 				}
 				switch scenario {
 				case litConflict:
-					r.pull.Mergeable = mergeableConflicting
+					r.pull.Mergeable = loop.MergeableConflicting
 				case "moved":
 					r.pull.Head = loopFixed
 				case reviewedRedCase:
@@ -279,7 +280,7 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
-	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
@@ -301,8 +302,8 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 
 func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 	worker := state.Party{Name: loopWorker}
-	e := about(event(loopParty, "supervisor.merge", "[go %s@%s] %s: merged", loopPR, loopHead, loopWorker), loopPR)
-	legacy := event(loopParty, "supervisor.go", "[go %s@%s] %s: merge go", loopPR, loopHead, loopWorker)
+	e := about(event(loop.LoopParty, "supervisor.merge", "[go %s@%s] %s: merged", loopPR, loopHead, loopWorker), loopPR)
+	legacy := event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: merge go", loopPR, loopHead, loopWorker)
 	if recordedMergeGo([]state.Event{legacy, e}, worker, loopPR, loopHead) {
 		t.Fatal("coordinator merge became a worker grant")
 	}
@@ -312,7 +313,7 @@ func TestReviewedRebaseMergeKeepsABehindHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
-	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	r.pull.MergeState = mergeStateBehind
@@ -330,8 +331,8 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 		wantGates int
 		failure   int
 	}{
-		{name: "without_repark", mergeable: mergeableConflicting, repark: false, wantGates: 1},
-		{name: "with_repark", mergeable: mergeableConflicting, repark: true, wantGates: 1},
+		{name: "without_repark", mergeable: loop.MergeableConflicting, repark: false, wantGates: 1},
+		{name: "with_repark", mergeable: loop.MergeableConflicting, repark: true, wantGates: 1},
 		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashNotApplicable},
 		{name: "gate_red_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashRed},
 	} {
@@ -349,7 +350,7 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 			}
 			// Pass 1: worker ends into ReviewParks and reviewer R1 starts.
 			r.pass(t)
-			if r.called(agentsName, loopRemove, loopWorker) == nil || r.called(agentsName, agentStartName, loopReviewer) == nil {
+			if r.called(agentsName, loop.LoopRemove, loopWorker) == nil || r.called(agentsName, agentStartName, loopReviewer) == nil {
 				t.Fatalf("worker did not end or reviewer did not start: %v", r.calls)
 			}
 
@@ -374,8 +375,8 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 						// Model the real synchronous gate: it persists its failed
 						// outcome before returning the squash document to the loop.
 						if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-							st.Merges = append(st.Merges, state.Merge{Repo: loopMergeRepo, PR: 7, Head: loopHead, By: loopParty})
-							evs := recordRun(st, len(st.Merges)-1, config.Lane{Name: loopMergeRepo}, loopParty,
+							st.Merges = append(st.Merges, state.Merge{Repo: loopMergeRepo, PR: 7, Head: loopHead, By: loop.LoopParty})
+							evs := recordRun(st, len(st.Merges)-1, config.Lane{Name: loopMergeRepo}, loop.LoopParty,
 								runOutcome{rc: tc.failure, reason: "merge validation failed"}, r.a.now, "")
 							if len(st.Failed) != 1 || st.Failed[0].Head != loopHead {
 								t.Fatalf("gate lost the tested head: %+v", st.Failed)
@@ -483,8 +484,8 @@ func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T
 		r.pass(t)
 		r.verdict("R1", loopHead, superloop.Approved, "")
 		if err := r.a.store.Record(
-			about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR),
-			event(loopParty, "agents.wake", "%s: sent by name", loopWorker),
+			about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR),
+			event(loop.LoopParty, "agents.wake", "%s: sent by name", loopWorker),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -548,7 +549,7 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 				Head:   loopHead,
 				PR:     7,
 				Lane:   loopMergeRepo,
-				By:     loopParty,
+				By:     loop.LoopParty,
 				At:     r.a.now,
 				Exit:   github.SquashNotApplicable,
 				Reason: "pull request is not mergeable (CONFLICTING)",
@@ -622,7 +623,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 			close(gateEntered)
 			<-releaseGate
 			return "", 0
-		case slices.Equal(args, []string{loopBoard, boardTidyName}):
+		case slices.Equal(args, []string{loop.LoopBoard, loop.BoardTidyName}):
 			close(tidyRan)
 			return "", 0
 		case len(args) > 0 && args[0] == fillCapacityCommand:
@@ -638,7 +639,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 			// Two existing delivery observations reserve room before their actions
 			// settle. A third place permits unrelated board work during the merge.
 			return `{"ceiling":3,"room":3}`, 0
-		case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
+		case len(args) >= 2 && args[0] == loop.LoopBoard && args[1] == superloop.KindNext:
 			return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
 		case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
 			if slices.Contains(args, "--review") {
@@ -737,7 +738,7 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 						return `{"ceiling":2,"room":2}`, 0
 					}
 					return `{"ceiling":1,"room":1}`, 0
-				case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
+				case len(args) >= 2 && args[0] == loop.LoopBoard && args[1] == superloop.KindNext:
 					return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
 				case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
 					review := slices.Contains(args, "--review")
@@ -762,13 +763,13 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 				if !released {
 					close(release)
 				}
-				l.passActions.Wait()
-				l.mergeActions.Wait()
+				l.PassActions.Wait()
+				l.MergeActions.Wait()
 			}()
 			pass := func() {
 				t.Helper()
 				done := make(chan error, 1)
-				go func() { done <- l.pass(context.Background()) }()
+				go func() { done <- l.Pass(context.Background()) }()
 				select {
 				case err := <-done:
 					if err != nil {
@@ -812,9 +813,9 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 			}
 			close(release)
 			released = true
-			l.passActions.Wait()
-			l.mergeActions.Wait()
-			if reexec, err := l.reexec(t.Context()); err != nil || !reexec {
+			l.PassActions.Wait()
+			l.MergeActions.Wait()
+			if reexec, err := l.Reexec(t.Context()); err != nil || !reexec {
 				t.Fatalf("quiet re-execution = %v, %v", reexec, err)
 			}
 		})
@@ -829,7 +830,7 @@ func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
+	l.Once = true
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -843,7 +844,7 @@ func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
 	}
 	acts := []superloop.Action{{Kind: superloop.KindReview, Key: "review stale snapshot", Ref: loopPR, URL: loopURL, Head: loopHead, Round: 1}}
 	for range 2 {
-		if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+		if err := l.RunPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -858,7 +859,7 @@ func TestReviewedMergeRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.Approved, "Review: approved")
 	r.pull.Head = loopFixed
-	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
@@ -872,7 +873,7 @@ func TestReviewedMergeRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r = newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix planOverlap case matching")
 	r.pull.Head = loopFixed
-	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	r.verdict("R2", loopFixed, superloop.ChangesRequested, "Review: changes requested\n\nstill broken")
@@ -934,7 +935,7 @@ func TestMergeHeadAuthorityReadsTheHeadOfAnIssuedGrant(t *testing.T) {
 	p := r.pull
 	p.Head = loopFixed
 	ref, _ := parseRef(loopPR)
-	if err := r.a.store.Record(event(loopParty, "execution.merge-issued", "%s for https://github.com/%s/pull/%d at %s", grant, ref.Repo, ref.N, loopFixed)); err != nil {
+	if err := r.a.store.Record(event(loop.LoopParty, "execution.merge-issued", "%s for https://github.com/%s/pull/%d at %s", grant, ref.Repo, ref.N, loopFixed)); err != nil {
 		t.Fatal(err)
 	}
 	why, explicit, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed)
@@ -949,10 +950,10 @@ func TestReviewedMergeAdmitsExplicitExactHeadSupervisorGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.Approved, "Review: approved")
 	r.pull.Head = loopFixed
-	if err := r.a.store.Record(about(event(loopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loopWorkerMergeGo), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loop.LoopWorkerMergeGo), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
@@ -973,11 +974,11 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 			r.verdict("R1", loopHead, superloop.Approved, loopApproved)
 			if scenario == revokedGoCase {
 				r.pull.Reviews = nil
-				if err := r.a.store.Record(about(event(loopParty, loopGoVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+				if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopGoVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+			if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 				t.Fatal(err)
 			}
 			// The queue lookup is the last read after merge-result validation,
@@ -989,7 +990,7 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 				case "dismissed approval":
 					r.pull.Reviews = nil
 				case revokedGoCase:
-					if err := r.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[go %s@%s] withdrawn", loopPR, loopHead), loopPR)); err != nil {
+					if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimEndVerb, "[go %s@%s] withdrawn", loopPR, loopHead), loopPR)); err != nil {
 						t.Fatal(err)
 					}
 				case "moved head":
@@ -1001,9 +1002,9 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 				case "draft":
 					r.pull.Draft = true
 				case conflictingWord:
-					r.pull.Mergeable = mergeableConflicting
+					r.pull.Mergeable = loop.MergeableConflicting
 				case unreadableCase:
-					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+					loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 						return superloop.Pull{}, errors.New("reviews unavailable")
 					}
 				case reviewedStoppedCase, reviewedHeldCase:
@@ -1045,8 +1046,8 @@ func TestReopenedPullMergeAuthority(t *testing.T) {
 	r.verdict("R1", loopHead, superloop.Approved, "Review: approved")
 	r.pull.Head = loopFixed
 	suffix := " reopened " + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
-	for _, verb := range []string{loopGoVerb, loopClaimVerb} {
-		if err := r.a.store.Record(about(event(loopParty, verb, "[go %s@%s%s] %s", loopPR, loopFixed, suffix, loopWorker), loopPR)); err != nil {
+	for _, verb := range []string{loop.LoopGoVerb, loop.LoopClaimVerb} {
+		if err := r.a.store.Record(about(event(loop.LoopParty, verb, "[go %s@%s%s] %s", loopPR, loopFixed, suffix, loopWorker), loopPR)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1054,7 +1055,7 @@ func TestReopenedPullMergeAuthority(t *testing.T) {
 	if doc.ExitCode != 0 || len(r.cmds) != 1 {
 		t.Fatalf("reopened go refused: %+v cmds=%v", doc, r.cmds)
 	}
-	if err := r.a.store.Record(about(event(loopParty, loopEndVerb, "[end %s%s] closed", loopPR, suffix), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopEndVerb, "[end %s%s] closed", loopPR, suffix), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	if why, explicit, err := r.a.checkMergeHeadAuthority(t.Context(), nil, r.pull, loopFixed); err != nil || why == "" || explicit {
@@ -1070,7 +1071,7 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Failed = append(st.Failed, state.Failed{Repo: loopMergeRepo, PR: 7, Head: head, By: loopParty, Exit: github.SquashRed})
+				st.Failed = append(st.Failed, state.Failed{Repo: loopMergeRepo, PR: 7, Head: head, By: loop.LoopParty, Exit: github.SquashRed})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -1103,7 +1104,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 			r.park(t, loopPR, time.Now())
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
-			read := readLoopPull
+			read := loop.ReadLoopPull
 			r.answer = func(args []string) (string, int) {
 				if len(args) == 0 || args[0] != gateCmdName {
 					return "", 0
@@ -1119,7 +1120,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 				case branchRepair:
 					return fmt.Sprintf(`{"route":%q,"repository":%q,"number":7,"headSha":%q,"reason":"merge-result check failed"}`, reviewedMergeRoute, loopMergeRepo, loopHead), github.SquashRed
 				case "confirmation read failure":
-					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+					loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 						return superloop.Pull{}, errors.New("confirmation unavailable")
 					}
 					return "", 0
@@ -1128,16 +1129,16 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 				}
 			}
 			r.pass(t)
-			readLoopPull = read
+			loop.ReadLoopPull = read
 			starts := r.logged(t, "merge.start")
 			var outcomes []state.Event
-			for _, verb := range []string{"merge.finished", "merge.pending", loopMergeFailed} {
+			for _, verb := range []string{"merge.finished", "merge.pending", loop.LoopMergeFailed} {
 				outcomes = append(outcomes, r.logged(t, verb)...)
 			}
 			if len(starts) != 1 || len(outcomes) != 1 {
 				t.Fatalf("unpaired merge attempt: starts=%v outcomes=%v", starts, outcomes)
 			}
-			want := loopMergeFailed
+			want := loop.LoopMergeFailed
 			switch outcome {
 			case confirmed:
 				want = "merge.finished"
@@ -1147,7 +1148,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 			if outcomes[0].Verb != want || outcomes[0].Subject != loopPR || !strings.Contains(outcomes[0].Detail, loopHead) {
 				t.Fatalf("incorrect outcome: %+v", outcomes[0])
 			}
-			if len(r.logged(t, loopGoVerb)) != 0 || outcome != branchRepair && r.called(agentsName, agentWakeName, loopWorker) != nil {
+			if len(r.logged(t, loop.LoopGoVerb)) != 0 || outcome != branchRepair && r.called(agentsName, agentWakeName, loopWorker) != nil {
 				t.Fatal("merge outcome bypassed coordinator by waking worker")
 			}
 		})
@@ -1180,7 +1181,7 @@ func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
 			if attempts != 4 || len(r.logged(t, "merge.pending")) != 3 || len(r.logged(t, "merge.finished")) != 1 {
 				t.Fatalf("quota recovery did not retry: attempts=%d output=%s", attempts, r.out)
 			}
-			if len(r.logged(t, loopFailureVerb)) != 0 || r.called(agentsName, agentWakeName, loopWorker) != nil {
+			if len(r.logged(t, loop.LoopFailureVerb)) != 0 || r.called(agentsName, agentWakeName, loopWorker) != nil {
 				t.Fatalf("quota read created backoff or worker bypass: %s", r.out)
 			}
 		})
@@ -1193,12 +1194,12 @@ func TestLoopRetriesLegacyQuotaBackoff(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	key := superloop.KindGo + " " + loopPR + "@" + loopHead
-	failure := loopFailure{Message: "merge gate refused: API rate limit exceeded", Count: 8, Kind: superloop.KindGo, Ref: loopPR, At: r.a.timeNow(), Since: r.a.timeNow(), RetryAt: r.a.timeNow().Add(time.Hour)}
+	failure := loop.LoopFailure{Message: "merge gate refused: API rate limit exceeded", Count: 8, Kind: superloop.KindGo, Ref: loopPR, At: r.a.timeNow(), Since: r.a.timeNow(), RetryAt: r.a.timeNow().Add(time.Hour)}
 	raw, err := json.Marshal(failure)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.a.store.Record(about(event(loopParty, loopFailureVerb, "[%s] %s", key, raw), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopFailureVerb, "[%s] %s", key, raw), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)

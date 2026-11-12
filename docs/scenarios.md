@@ -76,8 +76,9 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
 3. The driver writes the desk: `/work/config.yaml` (a base configuration
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
-   `given.repositories` under `/work/origins/<owner>/<name>.git`, and a
-   root for each of `given.hosts` (see [Execution hosts](#execution-hosts)).
+   `given.repositories` and of `given.github`'s repositories under
+   `/work/origins/<owner>/<name>.git`, and a root for each of
+   `given.hosts` (see [Execution hosts](#execution-hosts)).
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -85,8 +86,10 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
    hands each call to the world. The world logs every call in order. A
    call that no `given.calls` entry answers and no fake models (see
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
-   scenario**. Beside it the world serves its clock (see
-   [The clock](#the-clock)), which every process reads.
+   scenario**. With `given.github`, `gh` and the GitHub API are answered
+   by a model instead: see [The scenario's GitHub](scenarios-github.md).
+   Beside it the world serves its clock (see [The clock](#the-clock)),
+   which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -149,10 +152,12 @@ then:
 
 | Step | Does |
 | --- | --- |
-| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit |
-| `background` | starts the candidate and leaves it running; needs a `name` |
+| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit; `release` runs that release's build |
+| `background` | starts the candidate and leaves it running; needs a `name`; `release` as for `run` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
+| `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
+| `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
 | `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
 
@@ -171,13 +176,17 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `events` | the desk's event log `contains` / `not_contains` verbs | every step |
 | `calls` | the world's calls of `program` matching `args` number at least `min`, at most `max` | every step |
 | `process` | a background step is `running`, or exited with `exit` | every step |
+| `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
+| `log` | what the background step `name` wrote so far: `contains`, `not_contains`, `matches` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
 sessions; `name` and an `origin`'s `branch` are regular expressions that
-match the whole name.
+match the whole name. A `log` reads a background step's standard output and
+error as one text: the lines a running loop and its watch say
+(`SUPERVISOR STARTS HELD`, `HIGH LOAD`), which no event records.
 
 ### The clock
 
@@ -227,6 +236,62 @@ gate, self-update and probation, and the state) and fails when one of their
 files calls the `time` package's clock again. To migrate a flow, replace
 those calls with `internal/clock`'s (imported as `clk` in `cmd`, whose
 `clock` function formats times) and add its files to that list.
+
+### Releases and self-update
+
+`given.releases` gives a scenario beekeeper's own releases, so that
+`self-update` runs for real: the lookup, the download, the verification,
+the canary, the replacement, probation and the recovery controller.
+
+```yaml
+given:
+  releases:
+    installed: v1.0.0-rc.1            # the desk runs this release's build
+    published: [v1.0.0-rc.2, v1.0.0-rc.3]   # on the scenario's GitHub
+when:
+  - run: {args: [self-update, --version, v1.0.0-rc.2]}
+  - run: {release: v1.0.0-rc.1, args: [version]}   # a process still on a release
+```
+
+- **A release is a build.** The suite builds the candidate once more for
+  each version, stamped as the release pipeline stamps it
+  (`-ldflags -X …/pkg/project.version=<version>`), once per run. The builds
+  are in the sandbox under `/work/releases/<version>/`; `installed` is
+  `/work/bin/beekeeper`. Without `installed` the desk runs the candidate,
+  whose version is the checkout's.
+- **Published releases** are releases of `giantswarm/beekeeper` on the
+  scenario's GitHub (`given.github` is created for them when the scenario
+  has none): this platform's binary and its bundle as assets, and a
+  pre-release where the version has a pre-release part.
+- **A scenario build asks the scenario's GitHub** for releases
+  (`BEEKEEPER_GITHUB_API`) and verifies a download against a scenario
+  bundle, the binary's SHA-256, where a release build verifies the cosign
+  bundle of a CircleCI build. A release build has neither seam
+  (`internal/update/source_release.go`).
+- **The recovery controller** of a watched candidate is a unit the updater
+  asks the service manager for (`beekeeper-recovery.service`). It evaluates
+  once a minute, and one evaluation with its isolated workflow probe takes
+  longer than a step of the world's clock, so evaluations would be dropped.
+  A scenario therefore answers that `systemd-run` call in `given.calls` and
+  runs the unit's command itself, as a background step of the last known
+  good release with the controller's own cadence flags:
+  `background: {release: <last known good>, args: [self-update, --recovery-controller,
+  --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]}`.
+  Each evaluation then counts for a minute of probation and comes every
+  500 ms; the controller exits once it has promoted or rolled back, which
+  `process: {name: …, exit: 0}` waits for. A loop that owes the heartbeat
+  runs with `supervisor.loopInterval: 1s` and writes it with every pass:
+  it is there once the loop's log has its first `SUPERVISOR REFILL` line.
+- **Each published release is a commit** of its own on the repository's
+  `main`, in the order of `published`: the lookup takes a tag that shares
+  its commit with an older release for a stale one.
+- **A running loop installs a newer release itself** at its first pass.
+  Where a scenario installs by hand, a fault answers that loop's lookup
+  (`match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: <loop>}`).
+- **Use release candidates** for a rollback. A full release that saved the
+  state stamps it as its writer, and a rollback to an older release is then
+  refused; a pre-release neither stamps the state nor is judged by the
+  stamp.
 
 ### Pending scenarios
 
@@ -288,9 +353,10 @@ record and transcript, and the reset times a usage probe reports.
 `given.clock.start` and `advance` do not move those yet.
 
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
-live background session), the desktop app, and `gh`, which the fake GitHub
-of https://github.com/giantswarm/beekeeper/issues/3790 answers; until then a
-scenario answers the `gh` calls of its flow in `given.calls`.
+live background session) and the desktop app. `gh` is not a fake of this
+package: with `given.github`, [the scenario's GitHub](scenarios-github.md)
+answers it; without, a scenario answers the `gh` calls of its flow in
+`given.calls`. A host's pinned `gh` answers only the host's probes itself.
 
 ### Worker scripts
 

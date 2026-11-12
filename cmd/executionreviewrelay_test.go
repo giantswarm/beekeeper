@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -24,7 +25,7 @@ func reviewRelayRig(t *testing.T) (*app, execution.StartRequest, *superloop.Pull
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		start := &st.Starts[0]
 		start.Name = superloop.ReviewerName(ref, 1)
-		start.By = loopParty
+		start.By = loop.LoopParty
 		start.At = time.Now().Add(-time.Minute)
 		start.Execution.Request = r
 		start.Execution.Handle.Commit = head
@@ -37,9 +38,9 @@ func reviewRelayRig(t *testing.T) (*app, execution.StartRequest, *superloop.Pull
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{Ref: ref, Head: head, State: superloop.Open}
-	old := readLoopPull
-	t.Cleanup(func() { readLoopPull = old })
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
+	old := loop.ReadLoopPull
+	t.Cleanup(func() { loop.ReadLoopPull = old })
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
 	return a, r, pull
 }
 

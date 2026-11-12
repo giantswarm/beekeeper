@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -11,9 +9,8 @@ import (
 	"time"
 
 	clk "github.com/giantswarm/beekeeper/internal/clock"
-	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const throughputOutcomeVerb = "supervisor.operation-outcome"
@@ -23,7 +20,6 @@ const throughputHealthFile = "throughput-health.json"
 const throughputCadence = time.Minute
 const throughputHealthy = "healthy"
 const throughputStalledMerge = "stalled-merge"
-const throughputStartFailed = "start-command-failed"
 const watchThroughputKey = "throughput"
 
 type throughputOutcome struct {
@@ -31,16 +27,6 @@ type throughputOutcome struct {
 	Operation, Reason, Candidate, URL string
 	Success                           bool
 	Unknown                           bool
-}
-type eligibleWait struct {
-	Head, URL string
-	Since     time.Time
-}
-type throughputObservation struct {
-	Candidate string
-	At        time.Time
-	Unknown   bool
-	Eligible  map[string]eligibleWait
 }
 type throughputHealth struct {
 	At       time.Time
@@ -55,7 +41,7 @@ func publicPullURL(raw string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) != 4 || parts[2] != loopPullStep || parts[3] == "" {
+	if len(parts) != 4 || parts[2] != loop.LoopPullStep || parts[3] == "" {
 		return ""
 	}
 	for _, c := range parts[3] {
@@ -67,124 +53,12 @@ func publicPullURL(raw string) string {
 }
 
 func (a *app) operationOutcome(operation, reason, rawURL string, success bool) error {
-	o := throughputOutcome{At: a.timeNow(), Operation: operation, Reason: reason, Candidate: normalizeLoopVersion(loopRunningVersion()), URL: publicPullURL(rawURL), Success: success}
+	o := throughputOutcome{At: a.timeNow(), Operation: operation, Reason: reason, Candidate: loop.NormalizeLoopVersion(loop.LoopRunningVersion()), URL: publicPullURL(rawURL), Success: success}
 	b, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
-	return a.store.Record(event(loopParty, throughputOutcomeVerb, "%s", b))
-}
-
-// Keep retry/backoff decisions out of this ledger. Only a command actually
-// attempted contributes; capacity and budget refusals are intentional holds.
-func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, args ...string) (string, error) {
-	begin := l.a.timeNow()
-	out, err := l.run(ctx, args...)
-	if err != nil && (errors.Is(err, context.Canceled) || Code(err) == ExitRefused || isLoopGitHubHeldOutput(out)) {
-		return out, err
-	}
-	// A start cut off after it registered its session (killed while it
-	// waited for the state lock: exit -1) did start: its roster entry is
-	// the outcome, not the child's exit status. Registration precedes
-	// launch, so also require the child's confirmation that startup finished.
-	// Otherwise a failed launch with a retained roster entry looks successful.
-	if err != nil && len(args) >= 3 && strings.Contains("\n"+out, "\nstarted "+args[2]+":") && l.startRegistered(args[2], begin) {
-		err = nil
-	}
-	reason := throughputStartFailed
-	if err == nil {
-		reason = ""
-	}
-	if saveErr := l.a.operationOutcome(agentStartName, reason, act.URL, err == nil); saveErr != nil {
-		return out, saveErr
-	}
-	return out, err
-}
-
-// startRegistered says whether the roster holds name, registered since begin.
-func (l *supervisorLoop) startRegistered(name string, begin time.Time) bool {
-	st, err := l.a.store.Read()
-	if err != nil {
-		return false
-	}
-	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-		return strings.EqualFold(ag.Name, name) && !ag.Registered.Before(begin)
-	})
-}
-
-// Phase progress refreshes liveness without invalidating the last planner
-// observation before the next pass's health check reads it. The planner's
-// checkpoint below still marks eligibility unknown while gathering inputs.
-func (l *supervisorLoop) refreshThroughputHeartbeat(now time.Time) error {
-	var obs throughputObservation
-	found, err := l.a.store.ReadFile(throughputObservationFile, &obs)
-	if err != nil {
-		return err
-	}
-	candidate := normalizeLoopVersion(loopRunningVersion())
-	if !found || obs.Candidate != candidate {
-		obs.Unknown = true
-	}
-	obs.At, obs.Candidate = now, candidate
-	return l.a.store.WriteFile(throughputObservationFile, obs)
-}
-
-// checkpointThroughput reports bounded pass progress before expensive history
-// loading. Keep eligibility ages intact until planning can observe them afresh.
-// Use wall time: the pass snapshot can already be minutes old after handover.
-// This is not a background keepalive; a stuck pass stops refreshing it.
-func (l *supervisorLoop) checkpointThroughput(now time.Time) error {
-	var obs throughputObservation
-	if _, err := l.a.store.ReadFile(throughputObservationFile, &obs); err != nil {
-		return err
-	}
-	obs.At, obs.Candidate, obs.Unknown = now, normalizeLoopVersion(loopRunningVersion()), true
-	return l.a.store.WriteFile(throughputObservationFile, obs)
-}
-
-func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superloop.Action, unknown bool) error {
-	var old throughputObservation
-	_, err := l.a.store.ReadFile(throughputObservationFile, &old)
-	if err != nil {
-		old = throughputObservation{}
-		unknown = true
-	}
-	now := l.a.timeNow()
-	next := throughputObservation{At: now, Candidate: normalizeLoopVersion(loopRunningVersion()), Unknown: unknown, Eligible: map[string]eligibleWait{}}
-	if l.lifecycle != nil {
-		// Liveness uses completion time, not the frozen planning snapshot.
-		next.At = clk.Now().UTC()
-	}
-	if unknown {
-		for ref, wait := range old.Eligible {
-			if _, observed := in.Pulls[ref]; !observed {
-				next.Eligible[ref] = wait
-			}
-		}
-	}
-	for _, act := range actions {
-		p := in.Pulls[act.Ref]
-		if act.Kind != superloop.KindGo || !p.Green || p.Head != act.Head {
-			continue
-		}
-		// Plan applies ownership, review provenance, holds and merge policy. Only
-		// exact-head approvals count; a base-only update is deliberately excluded.
-		approved := false
-		for _, r := range p.Reviews {
-			if r.Head == p.Head && r.Verdict == superloop.Approved {
-				approved = true
-			}
-		}
-		if !approved || p.Draft || strings.EqualFold(p.Mergeable, mergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
-			continue
-		}
-		wait := eligibleWait{Head: p.Head, URL: publicPullURL(p.URL), Since: now}
-		if prev, ok := old.Eligible[act.Ref]; ok && prev.Head == wait.Head {
-			wait.Since = prev.Since
-		}
-		next.Eligible[act.Ref] = wait
-	}
-	return l.a.store.WriteFile(throughputObservationFile, next)
+	return a.store.Record(event(loop.LoopParty, throughputOutcomeVerb, "%s", b))
 }
 
 // evaluateThroughput is deterministic and reconstructs operation streaks from
@@ -272,7 +146,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 	}
 	keepHistory := func(e state.Event) bool { return e.Verb == throughputOutcomeVerb || e.Verb == throughputHealthVerb }
 	if len(progress) > 0 {
-		keepHistory = eventProgressFilter(keepHistory, progress[0], clk.Now)
+		keepHistory = loop.EventProgressFilter(keepHistory, progress[0], clk.Now)
 	}
 	// Warm a cold reader before taking the state lock. Refresh it inside
 	// the transaction as well to include concurrent health transitions.
@@ -337,7 +211,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 		if after <= 0 {
 			after = 2 * time.Hour
 		}
-		status, detail := evaluateThroughput(now, after, obs, outcomes, held || st.Stop != nil || a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, now))
+		status, detail := evaluateThroughput(now, after, obs, outcomes, held || st.Stop != nil || a.cfg.GitHub.Floor > 0 && loop.LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, now))
 		if status == prev.Status || prev.Status == "" && status == throughputHealthy {
 			if commit {
 				return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: status})
@@ -364,8 +238,8 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 		events := []state.Event{event(watchParty, throughputHealthVerb, "%s", saved)}
 		if report {
 			key := "throughput " + now.UTC().Format(time.RFC3339Nano)
-			report := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail)
-			events = append(events, event(loopParty, loopFileVerb, "[%s] %s", key, report))
+			report := fmt.Sprintf("%s reported at %s%s%s", loop.LoopParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, detail)
+			events = append(events, event(loop.LoopParty, loop.LoopFileVerb, "[%s] %s", key, report))
 		}
 		return events, nil
 	}

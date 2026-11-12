@@ -1,4 +1,4 @@
-package cmd
+package loop
 
 import (
 	"context"
@@ -12,10 +12,10 @@ import (
 
 // startRefillCadence gives refill its own clock. It never overlaps itself,
 // and shutdown joins it before the loop store and action streams are closed.
-func (l *supervisorLoop) startRefillCadence(ctx context.Context) func() {
+func (l *Loop) startRefillCadence(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	interval := l.a.cfg.Supervisor.LoopInterval.Duration
+	interval := l.Host.Cfg().Supervisor.LoopInterval.Duration
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -23,7 +23,7 @@ func (l *supervisorLoop) startRefillCadence(ctx context.Context) func() {
 	go func() {
 		defer close(done)
 		defer ticks.Stop()
-		l.runRefillCadence(ctx, ticks.C)
+		l.RunRefillCadence(ctx, ticks.C)
 	}()
 	return func() {
 		cancel()
@@ -31,21 +31,21 @@ func (l *supervisorLoop) startRefillCadence(ctx context.Context) func() {
 	}
 }
 
-func (l *supervisorLoop) runRefillCadence(ctx context.Context, ticks <-chan time.Time) {
+func (l *Loop) RunRefillCadence(ctx context.Context, ticks <-chan time.Time) {
 	// Refill immediately on startup; subsequent ticks retain the configured cadence.
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		actCtx, cancel := context.WithCancel(l.backgroundContext(ctx))
+		actCtx, cancel := context.WithCancel(l.BackgroundContext(ctx))
 		stop := context.AfterFunc(ctx, cancel)
-		err := l.refillTick(actCtx)
+		err := l.RefillTick(actCtx)
 		stop()
 		cancel()
 		if err != nil {
-			l.sayOnce("refill cadence", "SUPERVISOR REFILL FAILED: %v", err)
+			l.SayOnce("refill cadence", "SUPERVISOR REFILL FAILED: %v", err)
 		} else {
-			l.clearSaid("refill cadence")
+			l.ClearSaid("refill cadence")
 		}
 		select {
 		case <-ctx.Done():
@@ -54,70 +54,70 @@ func (l *supervisorLoop) runRefillCadence(ctx context.Context, ticks <-chan time
 			if !ok {
 				return
 			}
-			if l.a.loopNow != nil {
-				l.a.loopNow.Store(&now)
+			if l.Host.LoopNow() != nil {
+				l.Host.LoopNow().Store(&now)
 			}
 		}
 	}
 }
 
-func (l *supervisorLoop) refillTick(ctx context.Context) error {
+func (l *Loop) RefillTick(ctx context.Context) error {
 	// Configuration is stable for the entire dispatch, including its child commands.
-	l.refillConfigMu.RLock()
-	defer l.refillConfigMu.RUnlock()
-	if ctx.Err() != nil || l.pauseForReexec() || !l.beginInFlight(loopFillStream) {
+	l.RefillConfigMu.RLock()
+	defer l.RefillConfigMu.RUnlock()
+	if ctx.Err() != nil || l.PauseForReexec() || !l.BeginInFlight(LoopFillStream) {
 		return nil
 	}
-	defer l.endInFlight(loopFillStream)
-	if !l.dryRun {
+	defer l.EndInFlight(LoopFillStream)
+	if !l.DryRun {
 		if err := l.refreshStartConditions(ctx); err != nil {
-			l.holdStarts(true)
+			l.HoldStarts(true)
 			return err
 		}
 	}
-	if l.a.cfg.Supervisor.WorkerBrief == "" {
+	if l.Host.Cfg().Supervisor.WorkerBrief == "" {
 		return nil
 	}
-	if l.holdingStarts() {
-		l.fillRan()
-		l.stallClear()
+	if l.HoldingStarts() {
+		l.FillRan()
+		l.StallClear()
 		return nil
 	}
-	l.setFillPhase("read state")
-	defer l.setFillPhase("")
-	st, err := l.a.store.Read()
+	l.SetFillPhase("read state")
+	defer l.SetFillPhase("")
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return err
 	}
-	l.setFillPhase("read refill history")
+	l.SetFillPhase("read refill history")
 	// Use a separate cursor from observation; both can advance concurrently.
-	history, err := state.FollowSnapshot(l.a.store, "supervisor-refill-taken", "v1",
+	history, err := state.FollowSnapshot(l.Host.Store(), "supervisor-refill-taken", "v1",
 		func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
 	if err != nil {
 		return err
 	}
-	folded := l.refillFold.fold(history)
-	for _, taken := range folded.taken {
-		delete(folded.claims, taken.Key)
+	folded := l.refillFold.Fold(history)
+	for _, taken := range folded.Taken {
+		delete(folded.Claims, taken.Key)
 	}
-	reservations, _ := l.deliveryReservations(st)
-	l.mu.Lock()
-	l.boardNone = nil
-	l.mu.Unlock()
-	return l.fill(ctx, st, folded.claims, folded.taken, reservations)
+	reservations, _ := l.DeliveryReservations(st)
+	l.Mu.Lock()
+	l.BoardNone = nil
+	l.Mu.Unlock()
+	return l.Fill(ctx, st, folded.Claims, folded.Taken, reservations)
 }
 
-func (l *supervisorLoop) setFillPhase(phase string) {
-	l.mu.Lock()
+func (l *Loop) SetFillPhase(phase string) {
+	l.Mu.Lock()
 	l.fillPhase = phase
-	l.mu.Unlock()
+	l.Mu.Unlock()
 }
 
-func (l *supervisorLoop) refillBlocker() string {
-	l.mu.Lock()
+func (l *Loop) refillBlocker() string {
+	l.Mu.Lock()
 	phase := l.fillPhase
-	active := l.inFlight[loopFillStream]
-	l.mu.Unlock()
+	active := l.inFlight[LoopFillStream]
+	l.Mu.Unlock()
 	if phase != "" {
 		return fmt.Sprintf("refill action %q is still running", phase)
 	}

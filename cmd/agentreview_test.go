@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -154,7 +155,7 @@ func TestAgentsReviewStartsInCheckoutWithFilledBrief(t *testing.T) {
 func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.RequireReview = true
-	if err := r.a.store.Record(about(event(loopParty, "supervisor.go", "[go %s@%s] %s: merge go", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: merge go", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
@@ -178,7 +179,7 @@ func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *te
 
 func TestSupervisorNitAttestationKeepsApprovalWithoutSecondRound(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.as = loopParty.Name
+	r.a.as = loop.LoopParty.Name
 	r.a.cfg.Merge.RequireReview = true
 	r.park(t, loopPR, r.a.timeNow())
 	r.pass(t)
@@ -300,7 +301,7 @@ func TestReviewReservationRecoversOrphan(t *testing.T) {
 				t.Fatalf("concurrent start allowed: %v", err)
 			}
 			// A historical start event must not keep this failed attempt reserved.
-			if err := r.a.store.Record(event(loopParty, verbStart, "%s: old failed start", superloop.ReviewerName(loopPR, 1))); err != nil {
+			if err := r.a.store.Record(event(loop.LoopParty, verbStart, "%s: old failed start", superloop.ReviewerName(loopPR, 1))); err != nil {
 				t.Fatal(err)
 			}
 			r.a.finishReviewRequest(act, false)
@@ -456,7 +457,7 @@ func TestReleasedRoundDoesNotStandInForItsRestart(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		start := &st.Starts[0]
 		start.Name = superloop.ReviewerName(ref, 1)
-		start.By = loopParty
+		start.By = loop.LoopParty
 		start.At = time.Now().Add(-time.Minute)
 		st.DeskReviews = []state.DeskReview{{ID: "released", Ref: ref, Head: head, Round: 1, Worker: state.Party{Name: act.Agent}, Reviewer: gone, AssignedAt: time.Now().Add(-time.Hour), Released: time.Now().Add(-2 * time.Minute)}}
 		return nil, nil
