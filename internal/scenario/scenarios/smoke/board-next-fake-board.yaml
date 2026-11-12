@@ -1,0 +1,53 @@
+name: board-next-fake-board
+description: >
+  board next reads a fake board of one Ready issue through the world (the
+  board's fields, its items and the repository's open pull requests) and
+  picks that issue.
+flow: smoke
+tags: [smoke, board]
+timeout: 30s
+
+given:
+  repositories:
+    - name: example/app
+  calls:
+    # The board's fields: board.owner example, board.project 1.
+    - program: gh
+      args: [api, graphql, 'query=.*fields\(first:50\).*', 'o=example', 'n=1']
+      respond:
+        stdout: |
+          {"data":{"repositoryOwner":{"projectV2":{"id":"PVT_board","fields":{"nodes":[
+            {"id":"PVTSSF_status","name":"Status","options":[
+              {"id":"opt_ready","name":"Ready"},{"id":"opt_progress","name":"In Progress"},{"id":"opt_done","name":"Done"}]}]}}}}}
+    # The board's open items.
+    - program: gh
+      args: [api, graphql, 'query=.*items\(first:80.*', 'o=example', 'n=1']
+      respond:
+        stdout: |
+          {"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+            {"isArchived":false,"id":"PVTI_1",
+             "status":{"name":"Ready","updatedAt":"2026-11-01T00:00:00Z"},"kind":null,
+             "content":{"number":1,"url":"https://github.com/example/app/issues/1","title":"Smoke item","state":"OPEN",
+               "createdAt":"2026-11-01T00:00:00Z","updatedAt":"2026-11-01T00:00:00Z",
+               "repository":{"nameWithOwner":"example/app"},
+               "labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+               "assignees":{"nodes":[]},
+               "blockedBy":{"totalCount":0,"nodes":[]},
+               "subIssuesSummary":{"total":0,"completed":0},
+               "parent":null}}]}}}}}
+    # The repository's open pull requests (the unmerged-work hold).
+    - program: gh
+      args: [api, graphql, 'query=.*pullRequests\(states:OPEN.*', 'owner=example', 'name=app']
+      respond:
+        stdout: |
+          {"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+
+when:
+  - name: next
+    run: {args: [board, next, --json]}
+
+then:
+  - exit: 0
+  - json_path: {path: pick.ref, equals: example/app#1}
+  - calls: {program: gh, args: [graphql], min: 3}
+  - events: {not_contains: [agents.start]}
