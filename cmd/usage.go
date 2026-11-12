@@ -1296,6 +1296,8 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 // usageUnreadable labels Codex failures that retain windows or the ceiling.
 const usageUnreadable = "usage unreadable; "
 
+const claudeNoPlanWindows = "no plan windows"
+
 func keptReadingFallback(u config.Usage, msg string) string {
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(errors.New(msg)) {
 		return usageUnreadable + "kept last good reading: " + msg

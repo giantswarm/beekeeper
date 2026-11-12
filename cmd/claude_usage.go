@@ -11,10 +11,7 @@ import (
 	_ "time/tzdata" // Named reset zones also work on hosts without zoneinfo.
 )
 
-const (
-	claudeNoPlanWindows = "no plan windows"
-	claudeCodeEnv       = "CLAUDECODE"
-)
+const claudeCodeEnv = "CLAUDECODE"
 
 // parseClaudeUsage reads the local command's JSON result without credentials
 // or a model turn. Model weeks supplement the aggregate subscription windows.

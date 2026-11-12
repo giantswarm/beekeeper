@@ -12,8 +12,6 @@ type (
 	eligibleWait          = loop.EligibleWait
 	epicDelivery          = loop.EpicDelivery
 	epicSnapshot          = loop.EpicSnapshot
-	hostPlacementView     = loop.HostPlacementView
 	throughputObservation = loop.ThroughputObservation
 	unmergedPull          = loop.UnmergedPull
-	watchDiskReading      = loop.WatchDiskReading
 )
