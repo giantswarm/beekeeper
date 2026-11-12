@@ -557,7 +557,9 @@ timer from the running watches.
   due the watch reported, grants, holds, agents, notes, timers, session records, merges, the
   sessions `agents start` started with their mode) and the event log, under a file lock (`Peek`
   reads it without the lock, for the permission hook); `Log` appends the events that change no state
-  (build runs) with a bounded wait for the lock.
+  (build runs) with a bounded wait for the lock. `state.go` holds the document's model, `store.go`
+  `Store` and `FileStore`, `lock.go` the lock and its holder record, `events.go` the event log and
+  `snapshot.go` the document's decode and its writer's stamp.
 - `pkg/apis/beekeeper/v1alpha1`: The `beekeeper.giantswarm.io` kinds of `beekeeper serve`, little
   spec and lots of status: `Environment`, `MergeLane` and `Hold` cluster-scoped, `Note` and
   `RosterEntry` in the team's namespace `beekeeper-<team>`; queues capped at `MaxQueue`.
