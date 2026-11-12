@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/brieflint"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -22,7 +23,7 @@ const continuationNewSession = "continuation-new-session"
 const continuationTaskRef = "o/r#12"
 
 func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
-	for _, harness := range []string{claudeComm, config.CodexHarness, harnessAgy} {
+	for _, harness := range []string{claudeComm, config.CodexHarness, capacity.HarnessAgy} {
 		t.Run(harness, func(t *testing.T) {
 			w := parkingWatch(t, nil)
 			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -175,7 +176,7 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 				t.Fatal("continuation changed its managed publish branch")
 			}
 			brief, err := readStateFixture(r.a.store.Dir(), args[3])
-			if err != nil || !strings.Contains(string(brief), old.Task) || !strings.Contains(string(brief), parkAnswer) || !slices.Contains(args, harnessAuto) {
+			if err != nil || !strings.Contains(string(brief), old.Task) || !strings.Contains(string(brief), parkAnswer) || !slices.Contains(args, capacity.HarnessAuto) {
 				t.Fatalf("continuation brief: %s; %v", brief, err)
 			}
 			r.started(t, args[2], continuationNewSession)
@@ -244,7 +245,7 @@ func TestContinuationWithoutChoicesUsesGatedDefaultStart(t *testing.T) {
 	started := false
 	r.answer = func(args []string) (string, int) {
 		if args[0] == agentsName && args[1] == agentStartName {
-			if slices.Contains(args, harnessAuto) {
+			if slices.Contains(args, capacity.HarnessAuto) {
 				t.Fatal("forced an unavailable choice pool")
 			}
 			started = true

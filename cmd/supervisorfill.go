@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -18,7 +19,7 @@ import (
 // fillCapacityKey is the configured ceiling. Room and the busy count move
 // with every park, resume and wait; none of them can turn an empty board
 // answer into a pick, and no room already stops a read.
-func fillCapacityKey(cap *capacityView) string {
+func fillCapacityKey(cap *capacity.View) string {
 	return strconv.Itoa(cap.Ceiling)
 }
 
@@ -40,7 +41,7 @@ func fillRepositoryHoldsKey(st *state.State, now time.Time) string {
 // host; with supervisor.hosts, a hold across all providers (no choice picked
 // and no local machine headroom block) also yields 0 so the pass does not
 // query the board while every provider is held by pace, usage or its ceiling.
-func loopFillRoom(l *loop.Loop, cap *capacityView) int {
+func loopFillRoom(l *loop.Loop, cap *capacity.View) int {
 	if cap == nil || cap.Stopped != "" || cap.Ceiling <= len(cap.Busy) {
 		return 0
 	}
@@ -48,7 +49,7 @@ func loopFillRoom(l *loop.Loop, cap *capacityView) int {
 	if !l.PlacesRemotely() {
 		return min(room, cap.Room)
 	}
-	if cap.Choice != nil && cap.Choice.Harness == "" && (cap.Headroom == nil || len(cap.Headroom.blocks(cap.Builds)) == 0) {
+	if cap.Choice != nil && cap.Choice.Harness == "" && (cap.Headroom == nil || len(cap.Headroom.Blocks(cap.Builds)) == 0) {
 		return 0
 	}
 	return room
@@ -66,19 +67,19 @@ func fillLive(st *state.State) []string {
 	return live
 }
 
-func loopFillCapacity(l *loop.Loop, ctx context.Context) *capacityView {
+func loopFillCapacity(l *loop.Loop, ctx context.Context) *capacity.View {
 	cap, _ := loopReadFillCapacity(l, ctx)
 	return cap
 }
 
-func loopReadFillCapacity(l *loop.Loop, ctx context.Context) (*capacityView, error) {
+func loopReadFillCapacity(l *loop.Loop, ctx context.Context) (*capacity.View, error) {
 	out, code, err := loop.BeekeeperRun(ctx, l.As("capacity", "--json")...)
 	if err != nil || code != 0 {
 		return nil, fmt.Errorf("capacity --json: exit %d: %v: %s", code, err, oneLine(out))
 	}
 	// The output is stdout and then stderr: the document is its first value.
 	// A diagnostic after it (a stale state snapshot's) is no failed read.
-	var cap capacityView
+	var cap capacity.View
 	if err := json.NewDecoder(strings.NewReader(out)).Decode(&cap); err != nil {
 		return nil, fmt.Errorf("capacity --json: %w", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/codex"
@@ -44,8 +45,6 @@ const (
 	// episodeGap separates consecutive 5-hour windows if watch slept across
 	// a reset boundary while tolerating small resetsAt jitter within one window.
 	episodeGap = 15 * time.Minute
-	// sevenDaySpan is the duration of a 7-day subscription usage window.
-	sevenDaySpan = 7 * 24 * time.Hour
 )
 
 func usageProviderFile(name string) string {
@@ -100,7 +99,7 @@ type usageQuotaLedger struct {
 	Processed map[string]time.Time       `json:"processed,omitempty"`
 }
 
-func applyQuotaForUsageFile(store state.Store, file string, r *usageReading, now time.Time) {
+func applyQuotaForUsageFile(store state.Store, file string, r *capacity.UsageReading, now time.Time) {
 	if store == nil || r == nil {
 		return
 	}
@@ -122,16 +121,16 @@ func applyQuotaForUsageFile(store state.Store, file string, r *usageReading, now
 			continue
 		}
 		if bucket == "" {
-			r.FiveHour = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
-			r.SevenDay = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+			r.FiveHour = &capacity.UsageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+			r.SevenDay = &capacity.UsageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
 			continue
 		}
 		if r.Buckets == nil {
-			r.Buckets = map[string]usageBucket{}
+			r.Buckets = map[string]capacity.UsageBucket{}
 		}
 		b, exists := r.Buckets[bucket]
-		b.FiveHour = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
-		b.SevenDay = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+		b.FiveHour = &capacity.UsageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+		b.SevenDay = &capacity.UsageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
 		if !exists {
 			r.BucketOrder = append(r.BucketOrder, bucket)
 		}
@@ -155,7 +154,7 @@ func (a *app) recordAgyQuotaExhaustedForID(id, model string, qerr *agy.QuotaErro
 	}
 	m := cmp.Or(strings.TrimSpace(model), strings.TrimSpace(qerr.Model))
 	k := a.liveCapacity()
-	prov, bucket := resolveAgentProviderBucket(k, agy.Harness, m)
+	prov, bucket := capacity.ResolveAgentProviderBucket(k, agy.Harness, m)
 	if prov == "" {
 		prov = agy.Harness
 	}
@@ -178,10 +177,10 @@ func (a *app) recordAgyQuotaExhaustedForID(id, model string, qerr *agy.QuotaErro
 	if qerr.ResetsIn > 0 {
 		resetsAt = base.Add(qerr.ResetsIn).UTC()
 	} else {
-		var cached usageReading
+		var cached capacity.UsageReading
 		if found, err := a.store.ReadFile(usageProviderFile(prov), &cached); err == nil && found {
 			if b, ok := cached.Buckets[bucket]; ok {
-				for _, w := range []*usageWindow{b.FiveHour, b.SevenDay} {
+				for _, w := range []*capacity.UsageWindow{b.FiveHour, b.SevenDay} {
 					if w != nil && w.ResetsAt.After(base) && (resetsAt.IsZero() || w.ResetsAt.Before(resetsAt)) {
 						resetsAt = w.ResetsAt.UTC()
 					}
@@ -245,7 +244,7 @@ func (a *app) syncAgyQuotaFromState(st *state.State, now time.Time) {
 		}
 		seen[id] = true
 		if qerr := agy.ReadQuotaError(a.cfg.StateDir, id); qerr != nil {
-			_, model := agentHarnessModel(st, nil, ag)
+			_, model := capacity.AgentHarnessModel(st, nil, ag)
 			a.recordAgyQuotaExhaustedForID(id, model, qerr, now)
 		}
 	}
@@ -259,51 +258,6 @@ func (a *app) syncAgyQuotaFromState(st *state.State, now time.Time) {
 			a.recordAgyQuotaExhaustedForID(id, s.Model, qerr, now)
 		}
 	}
-}
-
-// usageWindow is one subscription usage window (5-hour or 7-day).
-type usageWindow struct {
-	UsedPercent float64   `json:"usedPercent"`
-	ResetsAt    time.Time `json:"resetsAt,omitzero"`
-	Pace        *float64  `json:"pace,omitempty"`
-}
-
-// usageBucket is one named bucket (such as "Gemini Models" or
-// "Claude and GPT models") in a multi-bucket usage reading.
-type usageBucket struct {
-	FiveHour *usageWindow `json:"fiveHour,omitempty"`
-	SevenDay *usageWindow `json:"sevenDay,omitempty"`
-}
-
-// usageReading is the timestamped output of a usage command stored in
-// usageFile or usageProviderFile.
-type usageReading struct {
-	At            time.Time              `json:"at"`
-	Fallback      string                 `json:"fallback,omitempty"`
-	Stop          string                 `json:"stop,omitempty"`
-	SourceAt      time.Time              `json:"sourceAt,omitzero"`
-	AgeMinutes    *float64               `json:"ageMinutes,omitempty"`
-	Stale         bool                   `json:"stale,omitempty"`
-	NoPlanWindows bool                   `json:"noPlanWindows,omitempty"`
-	SingleWindow  bool                   `json:"singleWindow,omitempty"`
-	FiveHour      *usageWindow           `json:"fiveHour,omitempty"`
-	SevenDay      *usageWindow           `json:"sevenDay,omitempty"`
-	Buckets       map[string]usageBucket `json:"buckets,omitempty"`
-	BucketOrder   []string               `json:"bucketOrder,omitempty"`
-}
-
-// usageView is how capacity, watch and snapshot present subscription usage and
-// the target derived from it.
-type usageView struct {
-	Fallback    string       `json:"fallback,omitempty"`
-	At          time.Time    `json:"at,omitzero"`
-	FiveHour    *usageWindow `json:"fiveHour,omitempty"`
-	SevenDay    *usageWindow `json:"sevenDay,omitempty"`
-	Ceiling     int          `json:"ceiling"`
-	High        bool         `json:"high,omitempty"`
-	HighPercent float64      `json:"highPercent,omitempty"`
-	Underused   bool         `json:"underused,omitempty"`
-	Error       string       `json:"error,omitempty"`
 }
 
 // usageHighLedger tracks the current USAGE HIGH episode and who was told.
@@ -320,11 +274,11 @@ type usageUnderusedLedger struct {
 	ReportedAt time.Time `json:"reportedAt,omitzero"`
 }
 
-func runUsageCommand(ctx context.Context, command []string, timeout time.Duration) (usageReading, error) {
+func runUsageCommand(ctx context.Context, command []string, timeout time.Duration) (capacity.UsageReading, error) {
 	return runUsageCommandInDir(ctx, command, timeout, "")
 }
 
-func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Duration, dir string) (usageReading, error) {
+func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Duration, dir string) (capacity.UsageReading, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, command[0], command[1:]...) //nolint:gosec // the configured usage command
@@ -334,12 +288,12 @@ func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Du
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return usageReading{}, fmt.Errorf("%s timed out after %s", filepath.Base(command[0]), timeout)
+			return capacity.UsageReading{}, fmt.Errorf("%s timed out after %s", filepath.Base(command[0]), timeout)
 		}
 		if msg := oneLine(stderr.String()); msg != "" {
-			return usageReading{}, fmt.Errorf("%s: %s", err, truncate(msg, 120))
+			return capacity.UsageReading{}, fmt.Errorf("%s: %s", err, truncate(msg, 120))
 		}
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
 		return parseClaudeUsage(stdout.Bytes(), clk.Now())
@@ -377,10 +331,10 @@ func usageProbeEnv(command []string) []string {
 	return env
 }
 
-func parseUsageOutput(raw []byte) (usageReading, error) {
+func parseUsageOutput(raw []byte) (capacity.UsageReading, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
-		return usageReading{}, errors.New("empty usage output")
+		return capacity.UsageReading{}, errors.New("empty usage output")
 	}
 	if trimmed[0] == '{' {
 		return parseUsageJSON(trimmed)
@@ -388,7 +342,7 @@ func parseUsageOutput(raw []byte) (usageReading, error) {
 	return parseAgyUsage(trimmed)
 }
 
-func parseUsageJSON(raw []byte) (usageReading, error) {
+func parseUsageJSON(raw []byte) (capacity.UsageReading, error) {
 	type rawWindow struct {
 		UsedPercent json.RawMessage `json:"usedPercent"`
 		ResetsAt    json.RawMessage `json:"resetsAt"`
@@ -408,9 +362,9 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 		Buckets    map[string]rawBucket `json:"buckets"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return usageReading{}, fmt.Errorf("invalid JSON: %w", err)
+		return capacity.UsageReading{}, fmt.Errorf("invalid JSON: %w", err)
 	}
-	conv := func(name string, w *rawWindow) (*usageWindow, error) {
+	conv := func(name string, w *rawWindow) (*capacity.UsageWindow, error) {
 		if w == nil {
 			return nil, nil
 		}
@@ -450,14 +404,14 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 			}
 			reset = reset.UTC()
 		}
-		out := &usageWindow{UsedPercent: v, ResetsAt: reset}
+		out := &capacity.UsageWindow{UsedPercent: v, ResetsAt: reset}
 		if w.Pace != nil && !math.IsNaN(*w.Pace) && !math.IsInf(*w.Pace, 0) {
 			p := *w.Pace
 			out.Pace = &p
 		}
 		return out, nil
 	}
-	var r usageReading
+	var r capacity.UsageReading
 	r.Stale = doc.Stale
 	if doc.AgeMinutes != nil && !math.IsNaN(*doc.AgeMinutes) && !math.IsInf(*doc.AgeMinutes, 0) {
 		age := *doc.AgeMinutes
@@ -466,37 +420,37 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 	if s := strings.TrimSpace(doc.At); s != "" {
 		t, err := time.Parse(time.RFC3339Nano, s)
 		if err != nil {
-			return usageReading{}, fmt.Errorf("at: %w", err)
+			return capacity.UsageReading{}, fmt.Errorf("at: %w", err)
 		}
 		r.SourceAt = t.UTC()
 	}
 	var err error
 	if r.FiveHour, err = conv("fiveHour", doc.FiveHour); err != nil {
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	if r.SevenDay, err = conv("sevenDay", doc.SevenDay); err != nil {
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	if r.SevenDay != nil && r.SevenDay.Pace == nil && doc.Pace != nil && !math.IsNaN(*doc.Pace) && !math.IsInf(*doc.Pace, 0) {
 		p := *doc.Pace
 		r.SevenDay.Pace = &p
 	}
 	if len(doc.Buckets) > 0 {
-		r.Buckets = make(map[string]usageBucket, len(doc.Buckets))
+		r.Buckets = make(map[string]capacity.UsageBucket, len(doc.Buckets))
 		for _, bName := range slices.Sorted(maps.Keys(doc.Buckets)) {
 			rb := doc.Buckets[bName]
 			fh, err := conv(bName+".fiveHour", rb.FiveHour)
 			if err != nil {
-				return usageReading{}, err
+				return capacity.UsageReading{}, err
 			}
 			sd, err := conv(bName+".sevenDay", rb.SevenDay)
 			if err != nil {
-				return usageReading{}, err
+				return capacity.UsageReading{}, err
 			}
 			if fh == nil && sd == nil {
-				return usageReading{}, fmt.Errorf("bucket %q has neither fiveHour nor sevenDay", bName)
+				return capacity.UsageReading{}, fmt.Errorf("bucket %q has neither fiveHour nor sevenDay", bName)
 			}
-			r.Buckets[bName] = usageBucket{FiveHour: fh, SevenDay: sd}
+			r.Buckets[bName] = capacity.UsageBucket{FiveHour: fh, SevenDay: sd}
 			r.BucketOrder = append(r.BucketOrder, bName)
 		}
 	}
@@ -504,12 +458,12 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 		if cr, ok, cerr := parseCodexRateLimitsJSON(raw); ok {
 			return cr, cerr
 		}
-		return usageReading{}, errors.New("usage output has neither fiveHour nor sevenDay")
+		return capacity.UsageReading{}, errors.New("usage output has neither fiveHour nor sevenDay")
 	}
 	return r, nil
 }
 
-func parseCodexRateLimitsJSON(raw []byte) (usageReading, bool, error) {
+func parseCodexRateLimitsJSON(raw []byte) (capacity.UsageReading, bool, error) {
 	var probe struct {
 		Type                string          `json:"type"`
 		RateLimits          json.RawMessage `json:"rate_limits"`
@@ -523,18 +477,18 @@ func parseCodexRateLimitsJSON(raw []byte) (usageReading, bool, error) {
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return usageReading{}, false, nil
+		return capacity.UsageReading{}, false, nil
 	}
 	isCodex := len(probe.RateLimits) > 0 || len(probe.Primary) > 0 || len(probe.Secondary) > 0 ||
 		probe.RateLimitReached != nil || probe.SpendControlReached != nil ||
 		probe.Type == "token_count" ||
 		(probe.Payload != nil && (probe.Payload.Type == "token_count" || len(probe.Payload.RateLimits) > 0))
 	if !isCodex {
-		return usageReading{}, false, nil
+		return capacity.UsageReading{}, false, nil
 	}
 	cr, err := codex.ParseRateLimits(raw, time.Time{})
 	if err != nil {
-		return usageReading{}, true, err
+		return capacity.UsageReading{}, true, err
 	}
 	return codexUsageToReading(cr), true, nil
 }
@@ -543,8 +497,8 @@ func parseCodexRateLimitsJSON(raw []byte) (usageReading, bool, error) {
 //
 //	Gemini Models\tWeekly Limit Remaining\t78%\t2026-11-03T09:23:51Z
 //	Gemini Models\tFive Hour Limit Remaining\t94%\t2026-10-28T05:23:51Z
-func parseAgyUsage(raw []byte) (usageReading, error) {
-	r := usageReading{Buckets: map[string]usageBucket{}}
+func parseAgyUsage(raw []byte) (capacity.UsageReading, error) {
+	r := capacity.UsageReading{Buckets: map[string]capacity.UsageBucket{}}
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -562,7 +516,7 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 		}
 		val, err := strconv.ParseFloat(pctStr, 64)
 		if err != nil || math.IsNaN(val) || math.IsInf(val, 0) || val < 0 || val > 100 {
-			return usageReading{}, fmt.Errorf("invalid percentage %q in %q", fields[2], line)
+			return capacity.UsageReading{}, fmt.Errorf("invalid percentage %q in %q", fields[2], line)
 		}
 		var used float64
 		if strings.Contains(label, "remaining") {
@@ -575,12 +529,12 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 			if s := strings.TrimSpace(fields[3]); s != "" {
 				reset, err = time.Parse(time.RFC3339Nano, s)
 				if err != nil {
-					return usageReading{}, fmt.Errorf("invalid reset time %q in %q: %w", s, line, err)
+					return capacity.UsageReading{}, fmt.Errorf("invalid reset time %q in %q: %w", s, line, err)
 				}
 				reset = reset.UTC()
 			}
 		}
-		w := &usageWindow{UsedPercent: used, ResetsAt: reset}
+		w := &capacity.UsageWindow{UsedPercent: used, ResetsAt: reset}
 		b, exists := r.Buckets[bucket]
 		switch {
 		case strings.Contains(label, "five hour") || strings.Contains(label, "5h"):
@@ -596,7 +550,7 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 		r.Buckets[bucket] = b
 	}
 	if len(r.Buckets) == 0 {
-		return usageReading{}, fmt.Errorf("invalid usage output: %s", truncate(oneLine(string(raw)), 120))
+		return capacity.UsageReading{}, fmt.Errorf("invalid usage output: %s", truncate(oneLine(string(raw)), 120))
 	}
 	return r, nil
 }
@@ -605,14 +559,14 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 // bucket maps to its 5-hour and 7-day windows; a bucket that prints only one
 // of them is left out, so a choice on it reads as not in the output and gets
 // no start, while the complete buckets still count.
-func parseAgyBuiltinUsage(raw []byte) (usageReading, error) {
+func parseAgyBuiltinUsage(raw []byte) (capacity.UsageReading, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
-		return usageReading{}, errors.New("agy /usage printed nothing")
+		return capacity.UsageReading{}, errors.New("agy /usage printed nothing")
 	}
 	r, err := parseAgyUsage(trimmed)
 	if err != nil {
-		return usageReading{}, fmt.Errorf("agy /usage: %w", err)
+		return capacity.UsageReading{}, fmt.Errorf("agy /usage: %w", err)
 	}
 	var partial []string
 	order := r.BucketOrder[:0]
@@ -626,218 +580,12 @@ func parseAgyBuiltinUsage(raw []byte) (usageReading, error) {
 	}
 	r.BucketOrder = order
 	if len(r.Buckets) == 0 {
-		return usageReading{}, fmt.Errorf("agy /usage has no bucket with both a five-hour and a weekly window (%s)", strings.Join(partial, ", "))
+		return capacity.UsageReading{}, fmt.Errorf("agy /usage has no bucket with both a five-hour and a weekly window (%s)", strings.Join(partial, ", "))
 	}
 	return r, nil
 }
 
-func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
-	if r.Stop != "" {
-		return codex.UsageStoppedError(r.Stop)
-	}
-	maxAge := u.EffectiveStaleAfter()
-	if r.Stale {
-		return errors.New("usage reading is stale")
-	}
-	if r.AgeMinutes != nil {
-		age := time.Duration(*r.AgeMinutes * float64(time.Minute))
-		// AgeMinutes describes the source at fetch time. Cached reads must
-		// include the time since that fetch, even without an absolute SourceAt.
-		if !r.At.IsZero() && !now.IsZero() {
-			age += max(0, now.Sub(r.At))
-		}
-		if age > maxAge {
-			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
-		}
-	}
-	if !r.SourceAt.IsZero() && !now.IsZero() {
-		if r.SourceAt.After(now.Add(time.Minute)) {
-			return fmt.Errorf("usage reading timestamp %s is in the future", r.SourceAt.Format(time.RFC3339))
-		}
-		// Codex rollout events advance only while a model runs. Their age
-		// alone must not deadlock starts; the built-in reader probes the
-		// account and labels its last-reading fallback when unavailable.
-		if now.Sub(r.SourceAt) > maxAge && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
-			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
-		}
-	}
-	if !r.At.IsZero() && !now.IsZero() {
-		if r.At.After(now.Add(time.Minute)) {
-			return fmt.Errorf("usage reading timestamp %s is in the future", r.At.Format(time.RFC3339))
-		}
-		if now.Sub(r.At) > maxAge {
-			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
-		}
-	}
-	if r.NoPlanWindows {
-		return nil
-	}
-	if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
-		for _, bName := range bucketNames(r) {
-			b := r.Buckets[bName]
-			switch {
-			case b.FiveHour == nil && b.SevenDay == nil:
-				return fmt.Errorf("bucket %q has neither fiveHour nor sevenDay", bName)
-			case len(u.FiveHour) > 0 && b.FiveHour == nil:
-				return fmt.Errorf("bucket %q omits fiveHour (fiveHour is configured)", bName)
-			case u.HighPercentSet() && b.FiveHour == nil:
-				return fmt.Errorf("bucket %q omits fiveHour (highPercent is configured)", bName)
-			case len(u.SevenDay) > 0 && b.SevenDay == nil:
-				return fmt.Errorf("bucket %q omits sevenDay (sevenDay is configured)", bName)
-			}
-		}
-		return nil
-	}
-	switch {
-	case r.FiveHour == nil && r.SevenDay == nil:
-		return errors.New("usage output has neither fiveHour nor sevenDay")
-	case len(u.FiveHour) > 0 && r.FiveHour == nil && !r.SingleWindow:
-		return errors.New("usage output omits fiveHour (capacity.usage.fiveHour is configured)")
-	case u.HighPercentSet() && r.FiveHour == nil && !r.SingleWindow:
-		return errors.New("usage output omits fiveHour (capacity.usage.highPercent is configured)")
-	case len(u.SevenDay) > 0 && r.SevenDay == nil:
-		return errors.New("usage output omits sevenDay (capacity.usage.sevenDay is configured)")
-	}
-	return nil
-}
-
-func bucketNames(r usageReading) []string {
-	if len(r.Buckets) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(r.Buckets))
-	var out []string
-	for _, b := range r.BucketOrder {
-		if _, ok := r.Buckets[b]; ok && !seen[b] {
-			seen[b] = true
-			out = append(out, b)
-		}
-	}
-	for _, b := range slices.Sorted(maps.Keys(r.Buckets)) {
-		if !seen[b] {
-			seen[b] = true
-			out = append(out, b)
-		}
-	}
-	return out
-}
-
-// usageFresh reports whether r is fresh at now: within u.EffectiveEvery(), not
-// stale, and no window crossed its ResetsAt since r.At.
-func usageFresh(r usageReading, u config.Usage, now time.Time) bool {
-	if r.At.IsZero() || now.Sub(r.At) > u.EffectiveEvery() || r.At.After(now.Add(time.Minute)) {
-		return false
-	}
-	if validateReadingAt(r, u, now) != nil {
-		return false
-	}
-	crossed := func(w *usageWindow) bool {
-		return w != nil && !w.ResetsAt.IsZero() && r.At.Before(w.ResetsAt) && !now.Before(w.ResetsAt)
-	}
-	if crossed(r.FiveHour) || crossed(r.SevenDay) {
-		return false
-	}
-	for _, b := range r.Buckets {
-		if crossed(b.FiveHour) || crossed(b.SevenDay) {
-			return false
-		}
-	}
-	return true
-}
-
-// effectiveWindow returns w at now: a window whose ResetsAt has passed has
-// reset to 0% in the new window.
-func effectiveWindow(w *usageWindow, now time.Time) *usageWindow {
-	if w == nil {
-		return nil
-	}
-	if !w.ResetsAt.IsZero() && !now.Before(w.ResetsAt) {
-		return &usageWindow{UsedPercent: 0}
-	}
-	return &usageWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, Pace: w.Pace}
-}
-
-// effectiveSevenDayWindow returns the 7-day window at now with its elapsed
-// weekly pace share in percent attached.
-func effectiveSevenDayWindow(w *usageWindow, now time.Time) *usageWindow {
-	ew := effectiveWindow(w, now)
-	if ew == nil {
-		return nil
-	}
-	ew.Pace = windowPace(ew, now)
-	return ew
-}
-
-// windowPace returns the 7-day window's elapsed share in percent [0, 100] at now,
-// or w.Pace when explicitly supplied in JSON, or nil when resetsAt is unset.
-func windowPace(w *usageWindow, now time.Time) *float64 {
-	if w == nil {
-		return nil
-	}
-	if w.Pace != nil {
-		v := math.Round(max(0, min(100, *w.Pace))*10) / 10
-		return &v
-	}
-	if w.ResetsAt.IsZero() || !now.Before(w.ResetsAt) {
-		return nil
-	}
-	rem := w.ResetsAt.Sub(now)
-	elapsed := sevenDaySpan - rem
-	v := max(0, min(100, float64(elapsed)/float64(sevenDaySpan)*100))
-	v = math.Round(v*10) / 10
-	return &v
-}
-
-func sdPace(w *usageWindow) *float64 {
-	if w == nil {
-		return nil
-	}
-	return w.Pace
-}
-
-func pctPtr(w *usageWindow) *float64 {
-	if w == nil {
-		return nil
-	}
-	v := w.UsedPercent
-	return &v
-}
-
-func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.Capacity, *usageView) {
-	return deriveUsageViewForStart(r, k, forWorker, now)
-}
-
-func deriveUsageViewForStart(r usageReading, k config.Capacity, kind startFor, now time.Time) (config.Capacity, *usageView) {
-	fh := effectiveWindow(r.FiveHour, now)
-	sd := effectiveSevenDayWindow(r.SevenDay, now)
-	var pace *float64
-	if kind == forWorker {
-		pace = sdPace(sd)
-	}
-	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
-	return derived, &usageView{
-		At:          r.At,
-		Fallback:    r.Fallback,
-		FiveHour:    fh,
-		SevenDay:    sd,
-		Ceiling:     derived.Ceiling,
-		High:        high,
-		HighPercent: k.Usage.EffectiveHighPercent(),
-		Underused:   windowUnderused(sd, k.Usage, now),
-	}
-}
-
-func errorUsageView(k config.Capacity, err error) (config.Capacity, *usageView) {
-	derived := k
-	derived.Ceiling = 0
-	return derived, &usageView{
-		Ceiling:     0,
-		HighPercent: k.Usage.EffectiveHighPercent(),
-		Error:       err.Error(),
-	}
-}
-
-func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, error) {
+func (a *app) execUsage(ctx context.Context, u config.Usage) (capacity.UsageReading, error) {
 	if a.readUsage != nil {
 		return a.readUsage(ctx, u.Command, u.EffectiveTimeout())
 	}
@@ -852,7 +600,7 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 		}
 		dir := filepath.Join(a.cfg.StateDir, "usage", builtin[0])
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return usageReading{}, err
+			return capacity.UsageReading{}, err
 		}
 		return runUsageCommandInDir(ctx, u.Command, u.EffectiveTimeout(), dir)
 	}
@@ -940,11 +688,11 @@ func (a *app) runServeMode(ctx context.Context, p config.Provider) (config.Serve
 // codexAccountSnapshot retains explicit account stops as well as healthy usage.
 // A transport failure cannot establish that an earlier stop has cleared.
 type codexAccountSnapshot struct {
-	usageReading
+	capacity.UsageReading
 	Stopped bool `json:"stopped,omitempty"`
 }
 
-func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading, error) {
+func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (capacity.UsageReading, error) {
 	var stateDir, sessionsDir string
 	if a.cfg != nil {
 		stateDir = a.cfg.StateDir
@@ -958,7 +706,7 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	// Fresh explicit local errors remain authoritative. Once old, probe the
 	// account so an idle desk can recover after its quota resets.
 	if err != nil && !errors.Is(err, codex.ErrNoUsage) && (cr.At.IsZero() || now.Sub(cr.At) <= u.EffectiveEvery()) {
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	// Prefer a fresh account snapshot over an older rollout. Still read local
 	// events first so a new explicit stop cannot hide behind the snapshot.
@@ -968,20 +716,20 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 		found, e := a.store.ReadFile(codexAccountUsageFile, &snapshot)
 		haveCached = e == nil && found && !snapshot.SourceAt.IsZero()
 	}
-	cached := snapshot.usageReading
+	cached := snapshot.UsageReading
 	stopped := haveCached && snapshot.Stopped && !cached.SourceAt.Before(cr.At)
 	if stopped && now.Sub(cached.SourceAt) <= u.EffectiveEvery() {
-		return usageReading{}, codex.ErrUsageStopped
+		return capacity.UsageReading{}, codex.ErrUsageStopped
 	}
 	if !stopped && err == nil && now.Sub(cr.At) <= u.EffectiveEvery() {
 		return codexUsageToReading(cr), nil
 	}
-	if haveCached && !snapshot.Stopped && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && usageFresh(cached, u, now) {
+	if haveCached && !snapshot.Stopped && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && capacity.UsageFresh(cached, u, now) {
 		return cached, nil
 	}
 	dir := filepath.Join(stateDir, "usage", "codex")
 	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
-		return usageReading{}, mkdirErr
+		return capacity.UsageReading{}, mkdirErr
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, u.EffectiveTimeout())
 	defer cancel()
@@ -1000,35 +748,35 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	}
 	if errors.Is(probeErr, codex.ErrUsageStopped) {
 		if a.store != nil {
-			snapshot = codexAccountSnapshot{usageReading: usageReading{At: now.UTC(), SourceAt: now.UTC()}, Stopped: true}
+			snapshot = codexAccountSnapshot{UsageReading: capacity.UsageReading{At: now.UTC(), SourceAt: now.UTC()}, Stopped: true}
 			if writeErr := a.store.WriteFile(codexAccountUsageFile, snapshot); writeErr != nil {
-				return usageReading{}, fmt.Errorf("%w: persist account stop: %v", probeErr, writeErr)
+				return capacity.UsageReading{}, fmt.Errorf("%w: persist account stop: %v", probeErr, writeErr)
 			}
 		}
-		return usageReading{}, probeErr
+		return capacity.UsageReading{}, probeErr
 	}
 	if stopped {
-		return usageReading{}, codex.ErrUsageStopped
+		return capacity.UsageReading{}, codex.ErrUsageStopped
 	}
 	if codex.QuotaStop(err) {
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	if haveCached && !snapshot.Stopped && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
 		cached.At = now.UTC()
-		if validateReadingAt(cached, u, now) == nil {
+		if capacity.ValidateReadingAt(cached, u, now) == nil {
 			cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
 			return cached, nil
 		}
 	}
 	if err != nil {
-		return usageReading{}, probeErr
+		return capacity.UsageReading{}, probeErr
 	}
 	r := codexUsageToReading(cr)
 	r.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
 	return r, nil
 }
 
-func (a *app) useCodexRolloutUsage(u config.Usage, cached usageReading) bool {
+func (a *app) useCodexRolloutUsage(u config.Usage, cached capacity.UsageReading) bool {
 	if a.readUsage != nil || !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 		return false
 	}
@@ -1040,19 +788,19 @@ func (a *app) useCodexRolloutUsage(u config.Usage, cached usageReading) bool {
 	return codex.HasRollouts(stateDir, sessionsDir) || !cached.SourceAt.IsZero()
 }
 
-func codexUsageToReading(cr codex.UsageReading) usageReading {
-	r := usageReading{
+func codexUsageToReading(cr codex.UsageReading) capacity.UsageReading {
+	r := capacity.UsageReading{
 		SourceAt:     cr.At,
 		SingleWindow: cr.FiveHour == nil && cr.SevenDay != nil,
 	}
 	if cr.FiveHour != nil {
-		r.FiveHour = &usageWindow{
+		r.FiveHour = &capacity.UsageWindow{
 			UsedPercent: cr.FiveHour.UsedPercent,
 			ResetsAt:    cr.FiveHour.ResetsAt,
 		}
 	}
 	if cr.SevenDay != nil {
-		r.SevenDay = &usageWindow{
+		r.SevenDay = &capacity.UsageWindow{
 			UsedPercent: cr.SevenDay.UsedPercent,
 			ResetsAt:    cr.SevenDay.ResetsAt,
 		}
@@ -1062,22 +810,22 @@ func codexUsageToReading(cr codex.UsageReading) usageReading {
 
 // cachedUsageCapacity derives Capacity from a fresh usage.json (or cached
 // provider usage files) if one exists, without running any subprocess.
-func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *usageView) {
+func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *capacity.UsageView) {
 	if len(k.Providers) > 0 {
 		return a.cachedProvidersCapacityAt(k, a.now, nil)
 	}
 	if !k.Usage.Enabled() || a.store == nil {
 		return k, nil
 	}
-	var r usageReading
+	var r capacity.UsageReading
 	if found, err := a.store.ReadFile(usageFile, &r); err == nil && found &&
-		usageFresh(r, k.Usage, a.now) && validateReadingAt(r, k.Usage, a.now) == nil {
-		return deriveUsageView(r, k, a.now)
+		capacity.UsageFresh(r, k.Usage, a.now) && capacity.ValidateReadingAt(r, k.Usage, a.now) == nil {
+		return capacity.DeriveUsageView(r, k, a.now)
 	}
 	return k, nil
 }
 
-func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, providerErrs map[string]string) (config.Capacity, *usageView) {
+func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, providerErrs map[string]string) (config.Capacity, *capacity.UsageView) {
 	derived := k
 	// subDerivedCeiling is the subscription providers' own ceiling as the
 	// cached readings derive it; selfHostedCeiling the self-hosted providers'
@@ -1115,7 +863,7 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			errs = append(errs, name+": "+err.Error())
 			continue
 		}
-		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+		pv := capacity.BuildSingleProviderView(name, p, capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, now)
 		anySubscription = true
 		subDerivedCeiling += pv.Ceiling
 	}
@@ -1127,51 +875,51 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 		// side to 0, while the self-hosted ceiling stands beside it.
 		derived.Ceiling = min(k.Ceiling, subDerivedCeiling) + selfHostedCeiling
 	}
-	var u *usageView
+	var u *capacity.UsageView
 	if len(errs) > 0 {
-		u = &usageView{Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
+		u = &capacity.UsageView{Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
 	}
 	return derived, u
 }
 
-// resolveUsage returns the derived Capacity and usageView for k, reusing a
+// resolveUsage returns the derived Capacity and capacity.UsageView for k, reusing a
 // fresh usage.json or running capacity.usage.command and saving usage.json.
 // In the agent sandbox (where home credentials and external domains are
 // closed), a recent usage.json written by the host's watch within 2 × every
 // (before resetsAt) is kept when the command cannot run inside the sandbox.
-func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capacity, *usageView) {
-	return a.resolveUsageForStart(ctx, k, forWorker)
+func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capacity, *capacity.UsageView) {
+	return a.resolveUsageForStart(ctx, k, capacity.ForWorker)
 }
 
-func (a *app) resolveUsageForStart(ctx context.Context, k config.Capacity, kind startFor) (config.Capacity, *usageView) {
+func (a *app) resolveUsageForStart(ctx context.Context, k config.Capacity, kind capacity.StartFor) (config.Capacity, *capacity.UsageView) {
 	if !k.Usage.Enabled() {
 		return k, nil
 	}
 	r, err := a.resolveReading(ctx, usageFile, k.Usage)
 	if err != nil {
-		return errorUsageView(k, err)
+		return capacity.ErrorUsageView(k, err)
 	}
-	return deriveUsageViewForStart(r, k, kind, a.now)
+	return capacity.DeriveUsageViewForStart(r, k, kind, a.now)
 }
 
-func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
 	return a.resolveReadingAt(ctx, file, u, nil)
 }
 
-func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage, completed func() time.Time) (usageReading, error) {
+func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage, completed func() time.Time) (capacity.UsageReading, error) {
 	if err := ctx.Err(); err != nil {
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	started := clk.Now()
 	now := a.now
 	if now.IsZero() {
 		now = started
 	}
-	var cached usageReading
+	var cached capacity.UsageReading
 	var haveCached bool
 	if a.store != nil {
-		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
-			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && capacity.ValidateReadingAt(cached, u, now) == nil {
+			if !a.useCodexRolloutUsage(u, cached) && capacity.UsageFresh(cached, u, now) {
 				applyQuotaForUsageFile(a.store, file, &cached, now)
 				return cached, nil
 			}
@@ -1190,10 +938,10 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 	// Recheck under the provider lock: another process may have published
 	// the reading between our caller deciding to refresh and admission.
 	if a.store != nil {
-		cached = usageReading{}
+		cached = capacity.UsageReading{}
 		haveCached = false
-		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
-			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && capacity.ValidateReadingAt(cached, u, now) == nil {
+			if !a.useCodexRolloutUsage(u, cached) && capacity.UsageFresh(cached, u, now) {
 				applyQuotaForUsageFile(a.store, file, &cached, now)
 				return cached, nil
 			}
@@ -1210,19 +958,19 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 	}
 	if err == nil {
 		r.At = now.UTC()
-		err = validateReadingAt(r, u, now)
+		err = capacity.ValidateReadingAt(r, u, now)
 	}
 	if err != nil {
 		if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 			a.retainUsageStop(file, err)
 			return a.cachedUsageReading(file, u, now, err)
 		}
-		if haveCached && validateReadingAt(cached, u, now) == nil {
+		if haveCached && capacity.ValidateReadingAt(cached, u, now) == nil {
 			cached.Fallback = err.Error()
 			applyQuotaForUsageFile(a.store, file, &cached, now)
 			return cached, nil
 		}
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	if a.store != nil {
 		_ = a.store.WriteFile(file, r)
@@ -1235,15 +983,15 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 // ordinary failure cannot reopen capacity until a successful read clears it.
 func (a *app) retainUsageStop(file string, err error) {
 	if a.store != nil && codex.QuotaStop(err) {
-		_ = a.store.WriteFile(file, usageReading{Stop: err.Error()})
+		_ = a.store.WriteFile(file, capacity.UsageReading{Stop: err.Error()})
 	}
 }
 
 // cachedUsageReading preserves a valid last good reading, including its limits.
 // Built-in Codex read/validation failures without one use the configured ceiling;
 // this in-memory fallback is never saved as a successful observation.
-func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cause error) (usageReading, error) {
-	var r usageReading
+func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cause error) (capacity.UsageReading, error) {
+	var r capacity.UsageReading
 	found := false
 	if a.store != nil {
 		var err error
@@ -1253,19 +1001,19 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 		}
 	}
 	if found && r.Stop != "" {
-		return usageReading{}, codex.UsageStoppedError(r.Stop)
+		return capacity.UsageReading{}, codex.UsageStoppedError(r.Stop)
 	}
 	if codex.QuotaStop(cause) {
-		return usageReading{}, cause
+		return capacity.UsageReading{}, cause
 	}
 	if found {
-		err := validateReadingAt(r, u, now)
+		err := capacity.ValidateReadingAt(r, u, now)
 		// A known window still constrains starts until its reset even if the
 		// observation is old. Keep its original timestamp for the warning.
 		if err != nil && slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !r.At.After(now) {
 			check := r
 			check.At = now
-			if validateReadingAt(check, u, now) == nil {
+			if capacity.ValidateReadingAt(check, u, now) == nil {
 				if cause == nil {
 					cause = err
 				}
@@ -1286,25 +1034,22 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 		cause = errors.New("usage not read")
 	}
 	if !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
-		return usageReading{}, cause
+		return capacity.UsageReading{}, cause
 	}
-	r = usageReading{Fallback: configuredCeilingFallback(cause.Error())}
+	r = capacity.UsageReading{Fallback: configuredCeilingFallback(cause.Error())}
 	applyQuotaForUsageFile(a.store, file, &r, now)
 	return r, nil
 }
 
-// usageUnreadable labels Codex failures that retain windows or the ceiling.
-const usageUnreadable = "usage unreadable; "
-
 func keptReadingFallback(u config.Usage, msg string) string {
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(errors.New(msg)) {
-		return usageUnreadable + "kept last good reading: " + msg
+		return capacity.UsageUnreadable + "kept last good reading: " + msg
 	}
 	return msg
 }
 
 func configuredCeilingFallback(msg string) string {
-	return usageUnreadable + "using configured ceiling: " + msg
+	return capacity.UsageUnreadable + "using configured ceiling: " + msg
 }
 
 // usageHighBlockForAgent returns the USAGE HIGH block reason for ag if USAGE
@@ -1323,9 +1068,9 @@ func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessi
 		return ""
 	}
 	if u.High {
-		return u.highBlock(a.now)
+		return u.HighBlock(a.now)
 	}
-	noReading := u.Error != "" || (u.At.IsZero() && strings.HasPrefix(u.Fallback, usageUnreadable))
+	noReading := u.Error != "" || (u.At.IsZero() && strings.HasPrefix(u.Fallback, capacity.UsageUnreadable))
 	if noReading && a.store != nil {
 		var l usageHighLedger
 		if found, err := a.store.ReadFile(usageHighFile, &l); err == nil && found &&
@@ -1348,8 +1093,8 @@ func (a *app) providersUsageHighBlockForAgent(ctx context.Context, k config.Capa
 		if sessions == nil {
 			sessions, _, _ = a.sessions()
 		}
-		harness, model := agentHarnessModel(st, sessions, *ag)
-		prov, bucket := resolveAgentProviderBucket(k, harness, model)
+		harness, model := capacity.AgentHarnessModel(st, sessions, *ag)
+		prov, bucket := capacity.ResolveAgentProviderBucket(k, harness, model)
 		return a.singleProviderUsageHighBlock(ctx, prov, bucket, k.Providers[prov])
 	}
 	var highReasons []string
@@ -1405,11 +1150,11 @@ func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket str
 		}
 		return ""
 	}
-	pv := buildSingleProviderView(prov, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, a.now)
-	if len(pv.Buckets) > 0 && bucket != "" && !pv.supplementalBuckets {
-		if bv := pv.findBucket(bucket); bv != nil {
+	pv := capacity.BuildSingleProviderView(prov, p, capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, a.now)
+	if len(pv.Buckets) > 0 && bucket != "" && !pv.SupplementalBuckets {
+		if bv := pv.FindBucket(bucket); bv != nil {
 			if bv.High {
-				return fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, highBlockText(bv.FiveHour, pv.HighPercent, a.now))
+				return fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, capacity.HighBlockText(bv.FiveHour, pv.HighPercent, a.now))
 			}
 			return ""
 		}
@@ -1417,116 +1162,7 @@ func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket str
 	if !pv.High {
 		return ""
 	}
-	return fmt.Sprintf("provider %s: %s", prov, highBlockText(pv.FiveHour, pv.HighPercent, a.now))
-}
-
-func windowFigure(label string, w *usageWindow, now time.Time) string {
-	s := fmt.Sprintf("%s %s", label, pct(w.UsedPercent))
-	if !w.ResetsAt.IsZero() && now.Before(w.ResetsAt) {
-		if w.Pace != nil {
-			s += fmt.Sprintf(" (resets %s, in %s, pace %s)", clock(now.Local(), w.ResetsAt), dur(w.ResetsAt.Sub(now)), pct(*w.Pace))
-		} else {
-			s += fmt.Sprintf(" (resets %s, in %s)", clock(now.Local(), w.ResetsAt), dur(w.ResetsAt.Sub(now)))
-		}
-	} else if w.Pace != nil {
-		s += fmt.Sprintf(" (pace %s)", pct(*w.Pace))
-	}
-	return s
-}
-
-func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
-	var parts []string
-	if fh != nil {
-		parts = append(parts, windowFigure("5h", fh, now))
-	}
-	if sd != nil {
-		parts = append(parts, windowFigure("7d", sd, now))
-	}
-	return strings.Join(parts, ", ")
-}
-
-func (u *usageView) windowsLine(now time.Time) string {
-	return withFallback(windowsPairLine(u.FiveHour, u.SevenDay, now), u.Fallback, u.At, now)
-}
-
-func withFallback(s, fallback string, at, now time.Time) string {
-	switch {
-	case fallback == "":
-		return s
-	case at.IsZero() && s == "":
-		return truncate(fallback, 120)
-	case at.IsZero():
-		return s + "; " + truncate(fallback, 120)
-	}
-	return s + fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(at)), truncate(fallback, 120))
-}
-
-func (u *usageView) capacitySuffix(now time.Time) string {
-	if u.Error != "" {
-		return "usage unknown (" + truncate(u.Error, 120) + ")"
-	}
-	line := u.windowsLine(now)
-	if strings.HasPrefix(line, usageUnreadable) {
-		return line
-	}
-	return "usage " + line
-}
-
-func (u *usageView) watchLine(now time.Time) string {
-	s := fmt.Sprintf("%s; target ceiling %d", u.windowsLine(now), u.Ceiling)
-	if u.High {
-		s += " (USAGE HIGH)"
-	}
-	return s
-}
-
-func (u *usageView) snapshotLine(now time.Time) string {
-	if u.Error != "" {
-		return "usage: unknown (" + truncate(u.Error, 120) + ")"
-	}
-	return "usage: " + u.watchLine(now)
-}
-
-func highFigureText(fh *usageWindow, highPct float64, now time.Time) string {
-	used := highPct
-	var reset time.Time
-	if fh != nil {
-		used, reset = fh.UsedPercent, fh.ResetsAt
-	}
-	s := fmt.Sprintf("5h %s at or past %s", pct(used), pct(highPct))
-	if !reset.IsZero() && now.Before(reset) {
-		s += fmt.Sprintf(" (resets %s, in %s)", clock(now.Local(), reset), dur(reset.Sub(now)))
-	}
-	return s
-}
-
-func highBlockText(fh *usageWindow, highPct float64, now time.Time) string {
-	return "usage high: " + highFigureText(fh, highPct, now)
-}
-
-func (u *usageView) highFigure(now time.Time) string {
-	return highFigureText(u.FiveHour, u.HighPercent, now)
-}
-
-func (u *usageView) highBlock(now time.Time) string {
-	return "usage high: " + u.highFigure(now)
-}
-
-func (u *usageView) highWatchLine(now time.Time) string {
-	return "USAGE HIGH: " + u.highFigure(now) + "; new starts and resumes wait until reset, telling busy workers to finish their step and park"
-}
-
-func underusedFigureText(sd *usageWindow, u config.Usage, now time.Time) string {
-	if sd == nil || sd.Pace == nil {
-		return ""
-	}
-	behind := math.Round(max(0, *sd.Pace-sd.UsedPercent)*10) / 10
-	s := fmt.Sprintf("7d %s is %s behind pace %s (below %s of pace",
-		pct(sd.UsedPercent), pct(behind), pct(*sd.Pace), pct(math.Round(u.EffectiveUnderuseRatio()*1000)/10))
-	if !sd.ResetsAt.IsZero() && now.Before(sd.ResetsAt) {
-		s += fmt.Sprintf(", resets %s, in %s", clock(now.Local(), sd.ResetsAt), dur(sd.ResetsAt.Sub(now)))
-	}
-	return s + ")"
+	return fmt.Sprintf("provider %s: %s", prov, capacity.HighBlockText(pv.FiveHour, pv.HighPercent, a.now))
 }
 
 func sameUnderuseWindow(prev, cur time.Time) bool {
@@ -1543,8 +1179,8 @@ func sameUnderuseWindow(prev, cur time.Time) bool {
 	return diff <= episodeGap
 }
 
-func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *usageWindow, u config.Usage) {
-	underused := windowUnderused(sd, u, w.now)
+func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *capacity.UsageWindow, u config.Usage) {
+	underused := capacity.WindowUnderused(sd, u, w.now)
 	if !underused {
 		w.check(condKey, false, "")
 		if w.chores && w.store != nil && sd != nil && !sd.ResetsAt.IsZero() {
@@ -1555,7 +1191,7 @@ func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *usageWin
 		}
 		return
 	}
-	fig := underusedFigureText(sd, u, w.now)
+	fig := capacity.UnderusedFigureText(sd, u, w.now)
 	line := "USAGE UNDERUSED: " + fig + "; P1 finding filed"
 	if target != "" {
 		line = fmt.Sprintf("USAGE UNDERUSED (%s): %s; P1 finding filed", target, fig)
@@ -1595,9 +1231,9 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 		}
 		return false
 	}
-	var cached usageReading
+	var cached capacity.UsageReading
 	if found, err := w.store.ReadFile(usageFile, &cached); err == nil && found &&
-		usageFresh(cached, k.Usage, now) && validateReadingAt(cached, k.Usage, now) == nil {
+		capacity.UsageFresh(cached, k.Usage, now) && capacity.ValidateReadingAt(cached, k.Usage, now) == nil {
 		w.mu.Lock()
 		w.usageErr = ""
 		w.mu.Unlock()
@@ -1611,10 +1247,10 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 }
 
 func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now time.Time) bool {
-	var cached usageReading
+	var cached capacity.UsageReading
 	if found, err := w.store.ReadFile(usageProviderFile(name), &cached); err == nil && found &&
 		!w.useCodexRolloutUsage(u, cached) &&
-		usageFresh(cached, u, now) && validateReadingAt(cached, u, now) == nil {
+		capacity.UsageFresh(cached, u, now) && capacity.ValidateReadingAt(cached, u, now) == nil {
 		w.mu.Lock()
 		delete(w.providerUsageErr, name)
 		w.mu.Unlock()
@@ -1655,7 +1291,7 @@ func (w *watcher) usageNow() time.Time {
 // execUsageNow gives each provider its own observation time, then validates at
 // completion. A refresh can spend minutes on earlier providers; its scheduling
 // time must not make a newly written Codex event appear to be in the future.
-func (w *watcher) execUsageNow(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+func (w *watcher) execUsageNow(ctx context.Context, file string, u config.Usage) (capacity.UsageReading, error) {
 	started := w.clk().Now()
 	obs := w.usageNow()
 	reader := w.snapshotAtNow()
@@ -1718,7 +1354,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity) {
 	w.mu.Unlock()
 }
 
-func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacity, *usageView) {
+func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacity, *capacity.UsageView) {
 	if len(k.Providers) > 0 {
 		w.mu.Lock()
 		errs := maps.Clone(w.providerUsageErr)
@@ -1740,9 +1376,9 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 		if uerr == "" && !slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
 			return k, nil
 		}
-		return errorUsageView(k, err)
+		return capacity.ErrorUsageView(k, err)
 	}
-	return deriveUsageView(r, k, now)
+	return capacity.DeriveUsageView(r, k, now)
 }
 
 // reportUsageFallback keeps unreadability visible even when starts can continue.
@@ -1768,7 +1404,7 @@ func (w *watcher) reportUsageFallback(key, provider, failure string) {
 // watchUsage refreshes subscription usage when due, prints USAGE lines, tracks
 // USAGE HIGH / ENDED USAGE HIGH and tells live busy workers once per USAGE HIGH
 // episode to finish their step and park.
-func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*claude.Session) *usageView {
+func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*claude.Session) *capacity.UsageView {
 	k := w.liveCapacity()
 	if len(k.Providers) > 0 {
 		return w.watchProvidersUsage(ctx, k, st, sessions)
@@ -1790,8 +1426,8 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 			return u
 		}
 		w.reportUsageFallback("usage-error", "", u.Fallback)
-		w.emitNow("usage", "USAGE: %s", u.watchLine(w.now))
-		w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
+		w.emitNow("usage", "USAGE: %s", u.WatchLine(w.now))
+		w.check("usage-high", u.High, "%s", u.HighWatchLine(w.now))
 		w.checkUsageUnderused("usage-underused", usageUnderusedFile, "", u.SevenDay, k.Usage)
 		return u
 	}
@@ -1822,10 +1458,10 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 		}
 		w.mu.Unlock()
 		if due {
-			w.emitNow("usage", "USAGE: %s", u.watchLine(w.now))
+			w.emitNow("usage", "USAGE: %s", u.WatchLine(w.now))
 		}
 	}
-	w.check("usage-high", u.High, "%s", u.highWatchLine(w.now))
+	w.check("usage-high", u.High, "%s", u.HighWatchLine(w.now))
 	w.checkUsageUnderused("usage-underused", usageUnderusedFile, "", u.SevenDay, k.Usage)
 	if !u.High {
 		w.clearUsageHighEpisode(usageHighFile)
@@ -1837,9 +1473,9 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	return u
 }
 
-func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session) *usageView {
+func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session) *capacity.UsageView {
 	w.syncAgyQuotaFromState(st, w.now)
-	readings := map[string]providerReadingResult{}
+	readings := map[string]capacity.ProviderReadingResult{}
 	if !w.chores {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
@@ -1854,10 +1490,10 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 				}
 				w.providerUsageErr[name] = err.Error()
 				w.mu.Unlock()
-				readings[name] = providerReadingResult{err: err}
+				readings[name] = capacity.ProviderReadingResult{Err: err}
 				continue
 			}
-			readings[name] = providerReadingResult{reading: r, ok: true}
+			readings[name] = capacity.ProviderReadingResult{Reading: r, OK: true}
 		}
 	} else {
 		now := w.usageNow()
@@ -1882,7 +1518,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 				cause = errors.New(uerr)
 			}
 			r, err := w.cachedUsageReading(usageProviderFile(name), p.Usage, w.now, cause)
-			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+			readings[name] = capacity.ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 		}
 	}
 
@@ -1901,13 +1537,13 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	w.mu.Lock()
 	swap := w.swap
 	w.mu.Unlock()
-	var h *headroom
+	var h *capacity.Headroom
 	if w.readHeadroom != nil {
 		h = w.readHeadroom(ctx, swap)
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
-	v := buildProvidersCapacity(c, pa, k, readings, h, false, nil, forWorker, w.now).stopped(w.app, st)
+	v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, k, readings, h, false, nil, capacity.ForWorker, w.now), w.app, st)
 
 	var parts []string
 	allHigh := len(k.Providers) > 0
@@ -1931,7 +1567,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			} else {
 				w.clear("serve-mode-error-" + name)
 			}
-			parts = append(parts, name+": "+pv.watchSummary(w.now))
+			parts = append(parts, name+": "+pv.WatchSummary(w.now))
 			continue
 		}
 		if pv.Error != "" {
@@ -1939,16 +1575,16 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		} else {
 			w.reportUsageFallback("usage-error-"+name, name, pv.Fallback)
 		}
-		parts = append(parts, name+": "+pv.watchSummary(w.now))
-		if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
-			for _, bName := range pv.bucketOrder {
+		parts = append(parts, name+": "+pv.WatchSummary(w.now))
+		if len(pv.Buckets) > 0 && !pv.SupplementalBuckets {
+			for _, bName := range pv.BucketOrder {
 				bv := pv.Buckets[bName]
 				if bv == nil {
 					continue
 				}
 				target := name + "/" + bName
 				highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
-					target, highFigureText(bv.FiveHour, pv.HighPercent, w.now), target)
+					target, capacity.HighFigureText(bv.FiveHour, pv.HighPercent, w.now), target)
 				w.check("usage-high-"+name+"-"+bName, bv.High, "%s", highLine)
 				w.checkUsageUnderused("usage-underused-"+name+"-"+bName, usageUnderusedTargetFile(target), target, bv.SevenDay, p.Usage)
 				ledgerFile := usageHighBucketFile(name, bName)
@@ -1956,7 +1592,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 					allHigh = false
 					w.clearUsageHighEpisode(ledgerFile)
 				} else if st.Stop == nil {
-					u := &usageView{FiveHour: bv.FiveHour, High: true, HighPercent: pv.HighPercent}
+					u := &capacity.UsageView{FiveHour: bv.FiveHour, High: true, HighPercent: pv.HighPercent}
 					w.tellBusyWorkersUsageHigh(ctx, st, sessions, u, ledgerFile, func(ag state.Agent) bool {
 						return slices.Contains(bv.Busy, ag.Name)
 					})
@@ -1965,21 +1601,21 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			continue
 		}
 		highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
-			name, highFigureText(pv.FiveHour, pv.HighPercent, w.now), name)
+			name, capacity.HighFigureText(pv.FiveHour, pv.HighPercent, w.now), name)
 		w.check("usage-high-"+name, pv.High, "%s", highLine)
 		w.checkUsageUnderused("usage-underused-"+name, usageUnderusedTargetFile(name), name, pv.SevenDay, p.Usage)
 		if !pv.High {
 			allHigh = false
 			w.clearUsageHighEpisode(usageHighProviderFile(name))
 		} else if st.Stop == nil {
-			u := &usageView{FiveHour: pv.FiveHour, High: true, HighPercent: pv.HighPercent}
+			u := &capacity.UsageView{FiveHour: pv.FiveHour, High: true, HighPercent: pv.HighPercent}
 			w.tellBusyWorkersUsageHigh(ctx, st, sessions, u, usageHighProviderFile(name), func(ag state.Agent) bool {
 				return slices.Contains(pv.Busy, ag.Name)
 			})
 		}
 	}
 	if v.Choice != nil {
-		parts = append(parts, "choice: "+v.Choice.summary())
+		parts = append(parts, "choice: "+v.Choice.Summary())
 	}
 	shouldEmit := !w.chores
 	if w.chores {
@@ -2000,7 +1636,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	if shouldEmit && len(parts) > 0 {
 		w.emitNow("usage", "USAGE: %s", strings.Join(parts, "; "))
 	}
-	return &usageView{Ceiling: v.Ceiling, High: allHigh, Underused: anyUnderused}
+	return &capacity.UsageView{Ceiling: v.Ceiling, High: allHigh, Underused: anyUnderused}
 }
 
 func (w *watcher) clearUsageHighEpisode(file string) {
@@ -2013,7 +1649,7 @@ func (w *watcher) clearUsageHighEpisode(file string) {
 	}
 }
 
-func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State, sessions []*claude.Session, u *usageView, ledgerFile string, match func(state.Agent) bool) {
+func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State, sessions []*claude.Session, u *capacity.UsageView, ledgerFile string, match func(state.Agent) bool) {
 	var l usageHighLedger
 	if w.store != nil {
 		_, _ = w.store.ReadFile(ledgerFile, &l)
@@ -2040,7 +1676,7 @@ func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State,
 		l.Told = map[string]string{}
 	}
 	msg := fmt.Sprintf("USAGE HIGH (%s): finish your current step, commit or save any work in flight, and park with `beekeeper agents park \"5-hour usage window reset\"` (or `--on` your open PR or note) so the 5-hour window can reset.",
-		u.highFigure(w.now))
+		u.HighFigure(w.now))
 	for _, ag := range liveBusyWorkers(st, sessions, w.now) {
 		if match != nil && !match(ag) {
 			continue
@@ -2058,7 +1694,7 @@ func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State,
 		w.clear("usage-wake-" + key)
 		l.Told[key] = w.now.UTC().Format(time.RFC3339)
 		changed = true
-		_ = w.store.Log(event(watchParty, verbUsageHigh, "%s: told to finish its step and park (%s)", ag.Name, u.highFigure(w.now)))
+		_ = w.store.Log(event(watchParty, verbUsageHigh, "%s: told to finish its step and park (%s)", ag.Name, u.HighFigure(w.now)))
 	}
 	if changed && w.store != nil {
 		_ = w.store.WriteFile(ledgerFile, l)

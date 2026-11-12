@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -696,7 +697,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 }
 
 func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
-	for _, slow := range []string{taskKindReview, workerRole} {
+	for _, slow := range []string{capacity.TaskKindReview, workerRole} {
 		t.Run(slow, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, r.a.now)
@@ -745,7 +746,7 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 					if !review {
 						busy.Add(1)
 					}
-					if review == (slow == taskKindReview) {
+					if review == (slow == capacity.TaskKindReview) {
 						if starts.Add(1) == 1 {
 							close(entered)
 						}

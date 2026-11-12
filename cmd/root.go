@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
@@ -197,7 +198,7 @@ type app struct {
 	// omp models.
 	ompModelList func(ctx context.Context) ([]string, error)
 	// readUsage runs capacity.usage.command; nil is runUsageCommand.
-	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
+	readUsage func(ctx context.Context, command []string, timeout time.Duration) (capacity.UsageReading, error)
 	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
 	// the command itself.
 	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sim"
@@ -359,7 +360,7 @@ problems still stand.`,
 
 // simItems is the active deliveries with their agents' states, and the
 // roster's count and reviewers.
-func (a *app) simItems(st *state.State) ([]sim.Item, agentCount, []string) {
+func (a *app) simItems(st *state.State) ([]sim.Item, capacity.AgentCount, []string) {
 	sessions, _, err := a.sessions()
 	if err != nil && !platform.Missing(err) {
 		sessions = nil
@@ -398,7 +399,7 @@ func (a *app) simSnapshot(ctx context.Context, stderr io.Writer, withBoard bool)
 		return sim.Snapshot{}, err
 	}
 	s := sim.Snapshot{At: a.timeNow(), LoopRunning: a.loopPID() != 0}
-	var c agentCount
+	var c capacity.AgentCount
 	s.Items, c, s.Reviewers = a.simItems(st)
 	s.Busy, s.Parked, s.Idle = len(c.Busy), len(c.Parked), len(c.Idle)
 	for _, ag := range st.Agents {

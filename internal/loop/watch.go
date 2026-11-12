@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -16,18 +17,6 @@ const LoopDiskKind = "disk"
 const WatchDiskStateVerb = "watch.disk-state"
 
 const loopDiskPruneFailed = "prune failed: "
-
-type WatchDiskReading struct {
-	Low bool
-	// Filling says / would run full within watch.diskFillWithin at its
-	// recent rate. It is a forecast: it triggers an early disk step and
-	// is said in the watch, but it never holds starts on its own — only
-	// Low (free space under the floor) does.
-	Filling bool
-	Writers string
-	FreeMiB int
-	MinMiB  int
-}
 
 // Retain only events this projection consumes. Broad watch.* and file-event
 // prefixes otherwise copy large, unrelated report bodies into the checkpoint.
@@ -76,7 +65,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 	active := map[string]string{}
 	var budgetAt, machineAt time.Time
 	budgetHeld := true
-	var disk WatchDiskReading
+	var disk capacity.WatchDiskReading
 	var diskKey string
 	var diskAt time.Time
 	pruned := map[string]time.Time{}
@@ -153,7 +142,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 	} else if at.After(machineAt) {
 		active = freshMachine
 	}
-	var freshDisk WatchDiskReading
+	var freshDisk capacity.WatchDiskReading
 	if at, err := l.Host.ReadWatchLevel("disk-state", &freshDisk); err != nil {
 		return err
 	} else if at.After(diskAt) {

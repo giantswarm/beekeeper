@@ -23,6 +23,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -191,9 +192,9 @@ func modeIsHeld(p config.Provider, mode string, heldBy func(string) []string) bo
 // lowers the model's ceiling to the mode the machine runs with — a
 // constraint lowers and never raises — and a drain holds the provider at
 // the ceiling of the mode it drains to.
-func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provider) providerReadingResult {
+func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provider) capacity.ProviderReadingResult {
 	r := a.serveMode(ctx, name, p)
-	res := providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+	res := capacity.ProviderReadingResult{ServeMode: r.Mode, ServeModeErr: r.Err}
 	dir := lease.Dir(a.cfg.LeaseDir)
 	heldBy := func(mode string) []string { return a.serveModeNodesHeld(p, mode, dir) }
 	// The ceiling the constraints stand the provider under: a mode the
@@ -223,18 +224,18 @@ func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provi
 	// mode the model already runs — a request settled by a switch that
 	// ran is no drain.
 	if sm, err := a.serveModeState(name); err == nil && sm.Pending != "" && !strings.EqualFold(sm.Pending, r.Mode) {
-		res.pendingMode = sm.Pending
+		res.PendingMode = sm.Pending
 	}
 	if pnd, err := a.pendingServeMode(name); err == nil && pnd.Pending != "" && !strings.EqualFold(pnd.Pending, r.Mode) {
-		res.pendingMode = pnd.Pending
+		res.PendingMode = pnd.Pending
 	}
 	// The drain waiting narrows the provider to the ceiling of the mode
 	// it drains into: no session starts on the model beyond what the
 	// mode the machine moves to sustains.
-	if res.pendingMode != "" {
-		narrow(p.ServeModeCeiling(res.pendingMode))
+	if res.PendingMode != "" {
+		narrow(p.ServeModeCeiling(res.PendingMode))
 	}
-	res.hasConstraintCeiling, res.constraintCeiling = hasCeiling, ceiling
+	res.HasConstraintCeiling, res.ConstraintCeiling = hasCeiling, ceiling
 	return res
 }
 

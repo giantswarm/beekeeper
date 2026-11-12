@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -10,7 +11,7 @@ const reviewWriteRefusal = "Refused: review sessions cannot commit or push fixes
 
 func reviewerSession(st *state.State, by state.Party) bool {
 	for _, start := range st.Starts {
-		if start.Kind == taskKindReview && start.Is(by) {
+		if start.Kind == capacity.TaskKindReview && start.Is(by) {
 			return true
 		}
 	}

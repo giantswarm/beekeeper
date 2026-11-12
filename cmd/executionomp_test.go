@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -23,7 +24,7 @@ func TestExecutionOmpCoordinatorAdmission(t *testing.T) {
 	h := a.cfg.Agents.Hosts[sshTestSelector]
 	h.Harnesses = []string{omp.Harness}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
-	if _, err := runAgents(a, agentStartName, "--name", "remote-omp", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto, effortFlag, testEffortHigh); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-omp", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAuto, effortFlag, testEffortHigh); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != omp.Harness || (*requests)[1].Model != "fixture/model" || (*requests)[1].Effort != testEffortHigh || !(*requests)[1].Messaging || !(*requests)[1].LeaseRequired {
@@ -46,7 +47,7 @@ func TestExecutionOmpRemoteStartDoesNotReadCoordinatorCredentials(t *testing.T) 
 	a, _ := sshStartTestApp(t)
 	a.cfg.Omp.Providers = map[string]config.OmpProvider{executionOmpFixture: {APIKey: "op://fixture/item/key"}} //nolint:gosec // fixture vault reference, never a credential value
 	for _, host := range [][]string{{"--host", sshTestSelector}, {"--host=" + sshTestSelector}} {
-		for _, harness := range []string{omp.Harness, harnessAuto} {
+		for _, harness := range []string{omp.Harness, capacity.HarnessAuto} {
 			args := append([]string{agentStartName, "--harness=" + harness, "--model=fixture/model"}, host...)
 			if a.ompStartNeedsVault(args) {
 				t.Fatalf("remote start asked for coordinator credentials: %q", args)
