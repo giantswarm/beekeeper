@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 // The state lock's holder record named the supervisor loop and every start it
@@ -11,7 +13,7 @@ import (
 func TestDiagnosticCommandKeepsNoArgumentOrValue(t *testing.T) {
 	const (
 		private    = "private"
-		loop       = "loop"
+		loopName   = "loop"
 		configPath = "/home/" + private + "/config.yaml"
 	)
 	for _, c := range []struct {
@@ -19,11 +21,11 @@ func TestDiagnosticCommandKeepsNoArgumentOrValue(t *testing.T) {
 		want string
 	}{
 		{nil, pluginName},
-		{[]string{workerGitHubConfigOption, configPath, supervisorCommand, loop}, "beekeeper supervisor loop --config"},
-		{[]string{supervisorCommand, loop, "--once", testDryRunFlag}, "beekeeper supervisor loop --once --dry-run"},
-		{[]string{workerGitHubConfigOption + "=" + configPath, fatalAsFlag, supervisorCommand + " " + loop, agentsName, agentStartName, "Review " + private + " 1 r1", "/home/" + private + "/brief.md"}, "beekeeper agents start --config --as"},
-		{[]string{loopNote, loopAdd, "a " + private + " question", "--" + private + "-flag", "--", deliveryJSONFlag}, "beekeeper note add"},
-		{[]string{deliveryJSONFlag, testStatusWord}, "beekeeper status --json"},
+		{[]string{workerGitHubConfigOption, configPath, supervisorCommand, loopName}, "beekeeper supervisor loop --config"},
+		{[]string{supervisorCommand, loopName, "--once", testDryRunFlag}, "beekeeper supervisor loop --once --dry-run"},
+		{[]string{workerGitHubConfigOption + "=" + configPath, fatalAsFlag, supervisorCommand + " " + loopName, agentsName, agentStartName, "Review " + private + " 1 r1", "/home/" + private + "/brief.md"}, "beekeeper agents start --config --as"},
+		{[]string{loop.LoopNote, loop.LoopAdd, "a " + private + " question", "--" + private + "-flag", "--", jsonFlag}, "beekeeper note add"},
+		{[]string{jsonFlag, testStatusWord}, "beekeeper status --json"},
 	} {
 		got := diagnosticCommand(New(), c.args)
 		if got != c.want || strings.Contains(got, private) {
