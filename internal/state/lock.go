@@ -27,6 +27,16 @@ const (
 // reacquire ahead of a waiting writer. Older binaries still share state.lock,
 // but must be restarted on this protocol for the fairness guarantee to hold.
 func (s *FileStore) lock(shared bool, wait time.Duration) (func(), error) {
+	timing := startLockClock("", shared)
+	unlock, err := s.acquireLock(shared, wait, timing)
+	var busy *LockBusyError
+	if errors.As(err, &busy) {
+		timing.busy()
+	}
+	return unlock, err
+}
+
+func (s *FileStore) acquireLock(shared bool, wait time.Duration, timing *lockClock) (func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -55,19 +65,19 @@ func (s *FileStore) lock(shared bool, wait time.Duration) (func(), error) {
 	if !ok {
 		return nil, s.busy(wait)
 	}
-	acquired := clock.Now()
+	timing.acquire()
 	if shared {
 		return func() {
 			_ = l.Unlock()
-			traceLockHold(acquired, clock.Now(), true)
+			timing.release()
 		}, nil
 	}
 	holder := s.path(holderFile)
-	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: command(os.Args), At: acquired})
+	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: holderCommand(), At: timing.acquired})
 	return func() {
 		_ = os.Remove(holder)
 		_ = l.Unlock()
-		traceLockHold(acquired, clock.Now(), false)
+		timing.release()
 	}, nil
 }
 
