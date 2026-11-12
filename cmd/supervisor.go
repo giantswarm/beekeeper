@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -21,17 +22,6 @@ const supervisorCommand = "supervisor"
 
 // supervisorGroup is the command group of the supervisor's commands.
 const supervisorGroup = "supervising"
-
-// loopVersionFile is the running loop's version marker, beside the state.
-const loopVersionFile = "supervisor-loop-version.json"
-
-type loopVersionRecord struct {
-	PID     int    `json:"pid"`
-	Version string `json:"version"`
-}
-
-// loopRunningVersion returns the binary version of the current process.
-var loopRunningVersion = project.Version
 
 // installedLoopBinary returns the path of the installed beekeeper binary.
 var installedLoopBinary = os.Executable
@@ -46,34 +36,23 @@ var loopVersionOf = func(ctx context.Context, path string) string {
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) >= 2 && fields[0] == project.Name {
-		return normalizeLoopVersion(fields[1])
+		return loop.NormalizeLoopVersion(fields[1])
 	}
 	if len(fields) > 0 {
-		return normalizeLoopVersion(fields[0])
+		return loop.NormalizeLoopVersion(fields[0])
 	}
 	return ""
 }
 
-func normalizeLoopVersion(ver string) string {
-	ver = strings.TrimSpace(ver)
-	if ver == "" {
-		return ""
-	}
-	if !strings.HasPrefix(ver, "v") && ver[0] >= '0' && ver[0] <= '9' {
-		return "v" + ver
-	}
-	return ver
-}
-
 func (a *app) writeLoopVersion() error {
-	return a.store.WriteFile(loopVersionFile, loopVersionRecord{
+	return a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{
 		PID:     os.Getpid(),
-		Version: normalizeLoopVersion(loopRunningVersion()),
+		Version: loop.NormalizeLoopVersion(loop.LoopRunningVersion()),
 	})
 }
 
 func (a *app) clearLoopVersion() {
-	_ = a.store.WriteFile(loopVersionFile, loopVersionRecord{})
+	_ = a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{})
 }
 
 func (a *app) supervisorCmd() *cobra.Command {
@@ -104,7 +83,7 @@ Without a subcommand, shows whether the loop runs. A stopped loop is a valid sta
 // loopPID is the PID of the running supervisor loop, 0 when none runs.
 func (a *app) loopPID() int {
 	var pid int
-	found, err := a.store.ReadFile(loopPIDFile, &pid)
+	found, err := a.store.ReadFile(loop.LoopPIDFile, &pid)
 	if err != nil || !found || pid <= 0 || !proc.Alive(pid) {
 		return 0
 	}
@@ -144,7 +123,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		c = ctx[0]
 	}
 	var pid int
-	if _, err := a.store.ReadFile(loopPIDFile, &pid); err != nil {
+	if _, err := a.store.ReadFile(loop.LoopPIDFile, &pid); err != nil {
 		return fmt.Errorf("reading supervisor loop PID: %w", err)
 	}
 	if pid <= 0 || !proc.Alive(pid) {
@@ -168,7 +147,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		return a.printJSON(supervisorView{Hosts: a.hostPlacementViews(st), Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}
 	for _, host := range a.hostPlacementViews(st) {
-		if _, err := fmt.Fprintln(a.out, host.line()); err != nil {
+		if _, err := fmt.Fprintln(a.out, host.Line()); err != nil {
 			return err
 		}
 	}
@@ -202,13 +181,13 @@ func (a *app) loopWaitLines() (held, pulls string) {
 	if found, err := a.store.ReadFile(loopGraphQLFile, &spend); err == nil && found {
 		held = a.heldLine(spend)
 	}
-	var count loopSweepCount
-	if found, err := a.store.ReadFile(loopSweepFile, &count); err == nil && found {
-		pulls = count.line(a)
+	var count loop.LoopSweepCount
+	if found, err := a.store.ReadFile(loop.LoopSweepFile, &count); err == nil && found {
+		pulls = count.Line(a)
 	}
-	var snapshot loopPullSnapshot
-	if found, err := a.store.ReadFile(loopPullWatchFile, &snapshot); found && err == nil {
-		if line := snapshot.ageLine(a.timeNow()); line != "" {
+	var snapshot loop.LoopPullSnapshot
+	if found, err := a.store.ReadFile(loop.LoopPullWatchFile, &snapshot); found && err == nil {
+		if line := snapshot.AgeLine(a.timeNow()); line != "" {
 			pulls = strings.TrimSpace(pulls + "\n" + line)
 		}
 	}
@@ -220,12 +199,12 @@ func (a *app) loopVersion(ctx context.Context, pid int) string {
 	if pid <= 0 {
 		return ""
 	}
-	var rec loopVersionRecord
-	if found, err := a.store.ReadFile(loopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
-		return normalizeLoopVersion(rec.Version)
+	var rec loop.LoopVersionRecord
+	if found, err := a.store.ReadFile(loop.LoopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
+		return loop.NormalizeLoopVersion(rec.Version)
 	}
 	if pid == os.Getpid() {
-		return normalizeLoopVersion(loopRunningVersion())
+		return loop.NormalizeLoopVersion(loop.LoopRunningVersion())
 	}
 	for _, path := range []string{
 		fmt.Sprintf("/proc/%d/exe", pid),
@@ -240,7 +219,7 @@ func (a *app) loopVersion(ctx context.Context, pid int) string {
 	}
 	if path, replaced := processBinary(pid); path != "" && !replaced {
 		if installed, err := installedLoopBinary(); err == nil && sameBinaryFile(path, installed) {
-			return normalizeLoopVersion(loopRunningVersion())
+			return loop.NormalizeLoopVersion(loop.LoopRunningVersion())
 		}
 	}
 	return ""
@@ -278,7 +257,7 @@ func (a *app) staleLoopLine(ctx context.Context) string {
 	if pid <= 0 {
 		return ""
 	}
-	installedVer := normalizeLoopVersion(loopRunningVersion())
+	installedVer := loop.NormalizeLoopVersion(loop.LoopRunningVersion())
 	if installed, err := installedLoopBinary(); err == nil && installed != "" {
 		_, selfReplaced := replacedBinary(os.Getpid())
 		if self, selfErr := os.Executable(); selfErr != nil || !sameBinaryFile(installed, self) || selfReplaced {

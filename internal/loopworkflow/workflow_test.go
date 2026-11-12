@@ -356,7 +356,7 @@ func runWorkflow(t *testing.T, binary, scenario string) {
 // must refuse before any merge, while the identical complete fixture passes in
 // TestWorkflow/no-checkout. It detects a test that bypasses parseLoopPull.
 func TestHistoricalParserRegression(t *testing.T) {
-	source, err := filepath.Abs("../../cmd/supervisorloop.go")
+	source, err := filepath.Abs("../loop/loop.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestHistoricalParserRegression(t *testing.T) {
 	}
 	mutated := strings.Replace(string(original), before, `Base: "",`, 1)
 	dir := t.TempDir()
-	replacement := filepath.Join(dir, "supervisorloop.go")
+	replacement := filepath.Join(dir, "loop.go")
 	if err = os.WriteFile(replacement, []byte(mutated), 0600); err != nil {
 		t.Fatal(err)
 	}

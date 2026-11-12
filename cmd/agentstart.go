@@ -28,6 +28,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -414,7 +415,7 @@ work, which takes no choice on a self-hosted provider.`,
 			// The supervisor loop has a repository, no checkout: its workers
 			// and reviewers start in agents.dir, and a resumed or replaced
 			// worker keeps a branch and worktree that already exist.
-			worktreeManaged := a.as != loopParty.Name
+			worktreeManaged := a.as != loop.LoopParty.Name
 			if worktreeManaged {
 				dir, err = a.startCheckout(dir)
 				if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -276,7 +277,7 @@ func TestLeaseClaimWaitIsShort(t *testing.T) {
 }
 
 // asSupervisor makes a's caller the supervisor loop.
-func asSupervisor(a *app) { a.as = loopParty.Name }
+func asSupervisor(a *app) { a.as = loop.LoopParty.Name }
 
 // A worker's grant --first is refused; the supervisor loop's grant --first
 // to a session queued second or third moves its grant to the head of the

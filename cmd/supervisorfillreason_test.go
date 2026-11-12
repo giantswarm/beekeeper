@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -20,7 +21,7 @@ const (
 // already emitted its detailed warning. Admission recovery must need no restart.
 func TestRefillZeroStartReasons(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{
-		{loopCapacity, "no room for a worker"},
+		{loop.LoopCapacity, "no room for a worker"},
 		{refillCapacityErrorCase, "state lock is busy"},
 		{reviewedHeldCase, "held: starts held"},
 		{refillEmptyCase, "no free board item"},
@@ -35,7 +36,7 @@ func TestRefillZeroStartReasons(t *testing.T) {
 			r.answer = func(args []string) (string, int) {
 				if args[0] == fillCapacityCommand {
 					switch tc.name {
-					case loopCapacity:
+					case loop.LoopCapacity:
 						return fillNoRoomJSON, 0
 					case refillCapacityErrorCase:
 						return "the state lock is busy", 1
@@ -43,7 +44,7 @@ func TestRefillZeroStartReasons(t *testing.T) {
 						return `{"ceiling":3,"room":0,"stopped":"starts held"}`, 0
 					}
 				}
-				if tc.name == refillEmptyCase && args[0] == loopBoard {
+				if tc.name == refillEmptyCase && args[0] == loop.LoopBoard {
 					return fillEmptyBoardJSON, ExitRefused
 				}
 				return original(args)
@@ -72,8 +73,8 @@ func TestRefillZeroStartReasons(t *testing.T) {
 					t.Fatal(err)
 				}
 				// A real pass resets the per-pass board cache before dispatch.
-				l.boardNone = nil
-				if err := l.fill(t.Context(), st, nil, nil); err != nil {
+				l.BoardNone = nil
+				if err := l.Fill(t.Context(), st, nil, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -103,14 +104,14 @@ func TestRefillZeroStartReasons(t *testing.T) {
 					st.Deliveries[i].Step = state.DeliveryDone
 				}
 			})
-			l.boardNone = nil
-			l.fillPause = fillPause{}
+			l.BoardNone = nil
+			l.FillPause = loop.FillPause{}
 			st, err := r.a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
 			r.out.Reset()
-			if err := l.fill(t.Context(), st, nil, nil); err != nil {
+			if err := l.Fill(t.Context(), st, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			if *busy == 0 {
@@ -129,17 +130,17 @@ func TestRefillReportsPriorPassStillRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
-	if !l.beginInFlight(loopFillStream) {
+	l.Once = true
+	if !l.BeginInFlight(loop.LoopFillStream) {
 		t.Fatal("could not reserve refill stream")
 	}
-	defer l.endInFlight(loopFillStream)
+	defer l.EndInFlight(loop.LoopFillStream)
 	for range 2 {
 		st, err := r.a.store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := l.runPassActions(t.Context(), st, nil, nil, nil, nil); err != nil {
+		if err := l.RunPassActions(t.Context(), st, nil, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

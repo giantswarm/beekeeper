@@ -18,6 +18,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -266,7 +267,7 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 		Reset:     reset,
 		Remaining: 4920,
 		Spent:     42,
-		Steps:     map[string]int{loopBoard: 39, loopPullStep: 3},
+		Steps:     map[string]int{loop.LoopBoard: 39, loop.LoopPullStep: 3},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +275,7 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 		Reset:     reset,
 		Remaining: 4500,
 		Spent:     150,
-		Steps:     map[string]int{"inventory": 100, loopSweepStep: 50},
+		Steps:     map[string]int{"inventory": 100, loop.LoopSweepStep: 50},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -90,7 +91,7 @@ func TestLoopMergeRetriesSavedAdminPolicyFailure(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Failed = append(st.Failed, state.Failed{Repo: loopMergeRepo, PR: 7, By: loopParty, Exit: github.SquashNotApplicable, Reason: adminPolicyTestReason})
+		st.Failed = append(st.Failed, state.Failed{Repo: loopMergeRepo, PR: 7, By: loop.LoopParty, Exit: github.SquashNotApplicable, Reason: adminPolicyTestReason})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -116,8 +117,8 @@ func seedOlderRepair(t *testing.T, r *loopRig, reason string) {
 	t.Helper()
 	key := "go " + loopPR + "@" + loopHead
 	for _, e := range []state.Event{
-		about(event(loopParty, loopStageVerb, "[%s repair] (exit %d): %s", key, github.SquashNotApplicable, reason), loopPR),
-		about(event(loopParty, "supervisor."+superloop.KindMerge, "[%s] %s: merge failed; branch repair requested", key, loopWorker), loopPR),
+		about(event(loop.LoopParty, loop.LoopStageVerb, "[%s repair] (exit %d): %s", key, github.SquashNotApplicable, reason), loopPR),
+		about(event(loop.LoopParty, "supervisor."+superloop.KindMerge, "[%s] %s: merge failed; branch repair requested", key, loopWorker), loopPR),
 	} {
 		if err := r.a.store.Record(e); err != nil {
 			t.Fatal(err)
@@ -148,7 +149,7 @@ func TestLoopRestartRecoversOlderAdminPolicyRepair(t *testing.T) {
 	if attempts != 1 {
 		t.Fatalf("older policy repair stage kept the approved head out of the lane: attempts=%d output=%s", attempts, r.out)
 	}
-	if len(r.logged(t, loopUnstageVerb)) != 1 || len(r.logged(t, loopClaimEndVerb)) != 1 {
+	if len(r.logged(t, loop.LoopUnstageVerb)) != 1 || len(r.logged(t, loop.LoopClaimEndVerb)) != 1 {
 		t.Fatalf("obsolete repair stage and go not closed durably: %s", r.out)
 	}
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
@@ -162,7 +163,7 @@ func TestLoopRestartRecoversOlderAdminPolicyRepair(t *testing.T) {
 	if review := r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 2)); review != nil {
 		t.Fatalf("recovery required another review: %v", review)
 	}
-	if n := len(r.logged(t, loopUnstageVerb)); n != 1 {
+	if n := len(r.logged(t, loop.LoopUnstageVerb)); n != 1 {
 		t.Fatalf("obsolete repair closed %d times", n)
 	}
 }
@@ -179,7 +180,7 @@ func TestLoopRestartKeepsGenuineBranchRepair(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
-	if attempts != 0 || len(r.logged(t, loopUnstageVerb)) != 0 || len(r.logged(t, loopClaimEndVerb)) != 0 {
+	if attempts != 0 || len(r.logged(t, loop.LoopUnstageVerb)) != 0 || len(r.logged(t, loop.LoopClaimEndVerb)) != 0 {
 		t.Fatalf("genuine branch repair was undone: attempts=%d output=%s", attempts, r.out)
 	}
 }
@@ -258,7 +259,7 @@ func TestLoopDryRunPreservesOlderAdminPolicyRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(after) != len(before) {
-		t.Fatalf("dry run appended %d events, including %d unstages and %d unclaims", len(after)-len(before), len(r.logged(t, loopUnstageVerb)), len(r.logged(t, loopClaimEndVerb)))
+		t.Fatalf("dry run appended %d events, including %d unstages and %d unclaims", len(after)-len(before), len(r.logged(t, loop.LoopUnstageVerb)), len(r.logged(t, loop.LoopClaimEndVerb)))
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD GO") {
 		t.Fatalf("dry run did not preview the recovered merge: %s", r.out)
@@ -266,7 +267,7 @@ func TestLoopDryRunPreservesOlderAdminPolicyRepair(t *testing.T) {
 	// A subsequent real pass must still perform and record the recovery.
 	r.command = func([]string) (string, int) { return adminPolicyTestReason, 1 }
 	r.pass(t)
-	if len(r.logged(t, loopUnstageVerb)) != 1 || len(r.logged(t, loopClaimEndVerb)) != 1 {
+	if len(r.logged(t, loop.LoopUnstageVerb)) != 1 || len(r.logged(t, loop.LoopClaimEndVerb)) != 1 {
 		t.Fatalf("real pass did not close the saved repair exactly once: %s", r.out)
 	}
 }

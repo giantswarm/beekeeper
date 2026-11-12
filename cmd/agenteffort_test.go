@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -87,8 +88,8 @@ func TestEffortDryRunAndWake(t *testing.T) {
 func TestEffortLoopStartDefault(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
-	l := &supervisorLoop{a: r.a}
-	if _, err := l.run(t.Context(), agentsName, agentStartName, "effort-worker", "brief"); err != nil {
+	l := &loop.Loop{Host: r.a}
+	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief"); err != nil {
 		t.Fatal(err)
 	}
 	call := r.called(agentsName, agentStartName)
@@ -97,7 +98,7 @@ func TestEffortLoopStartDefault(t *testing.T) {
 		t.Fatalf("start omitted supervisor effort: %q", call)
 	}
 	r.calls = nil
-	if _, err := l.run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", effortFlag, testEffortLow); err != nil {
+	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", effortFlag, testEffortLow); err != nil {
 		t.Fatal(err)
 	}
 	call = r.called(agentsName, agentStartName)
@@ -139,15 +140,15 @@ func TestEffortLoopYieldsToRule(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
 	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: taskKindReview, Effort: testEffortLow}}
-	l := &supervisorLoop{a: r.a}
-	if _, err := l.run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
+	l := &loop.Loop{Host: r.a}
+	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
 		t.Fatal(err)
 	}
 	if call := r.called(agentsName, agentStartName); slices.Contains(call, effortFlag) {
 		t.Fatalf("loop default masked the matching rule: %q", call)
 	}
 	r.calls = nil
-	if _, err := l.run(t.Context(), agentsName, agentStartName, "scan-worker", "brief"); err != nil {
+	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-worker", "brief"); err != nil {
 		t.Fatal(err)
 	}
 	call := r.called(agentsName, agentStartName)

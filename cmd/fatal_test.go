@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -68,13 +69,13 @@ func TestFatalRecoveryStartsAfterObservationBudgetExpires(t *testing.T) {
 }
 
 func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
-	for _, held := range []string{"", bgStopCmd, holdStarts, holdGitHub, sshTestRepository, loopCapacity} {
+	for _, held := range []string{"", bgStopCmd, holdStarts, holdGitHub, sshTestRepository, loop.LoopCapacity} {
 		t.Run("hold="+held, func(t *testing.T) {
 			a, _ := stubApp(t)
 			dir := a.store.Dir()
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			raw := fmt.Sprintf("stateDir: %q\nfatal: {repositories: []}\n", dir)
-			if held == loopCapacity {
+			if held == loop.LoopCapacity {
 				raw += "capacity: {local: {ceiling: 0}}\n"
 			}
 			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
@@ -98,16 +99,16 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 				if held == bgStopCmd {
 					st.Stop = &state.Stop{At: a.now}
 				}
-				if held != "" && held != bgStopCmd && held != loopCapacity {
+				if held != "" && held != bgStopCmd && held != loop.LoopCapacity {
 					st.Holds = []state.Hold{{Target: held, At: a.now}}
 				}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			oldRun := beekeeperRun
+			oldRun := loop.BeekeeperRun
 			starts := 0
-			beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+			loop.BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
 				if args[1] != config.RecoveryPath(dir) {
 					t.Fatal("launch did not use trusted admission", args)
 				}
@@ -121,7 +122,7 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 				if err := child.withKindAdmission(ctx, owner, func() error { return nil }); err != nil {
 					t.Fatal(err)
 				}
-				if held == loopCapacity {
+				if held == loop.LoopCapacity {
 					_, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, forWorker)
 					if Code(err) != ExitRefused {
 						t.Fatalf("capacity not enforced: %v", err)
@@ -136,7 +137,7 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 				// The repair backend restores the main config; a later scan must verify it.
 				return "", 0, os.WriteFile(path, []byte(raw), 0600)
 			}
-			t.Cleanup(func() { beekeeperRun = oldRun })
+			t.Cleanup(func() { loop.BeekeeperRun = oldRun })
 			var out bytes.Buffer
 			c := New()
 			c.SetOut(&out)
@@ -241,10 +242,10 @@ func TestFatalRepairOwnerUsesProcessLiveness(t *testing.T) {
 				return tc.live, nil
 			}
 			t.Cleanup(func() { fatalSessionAlive = oldLive })
-			oldRun := beekeeperRun
+			oldRun := loop.BeekeeperRun
 			starts := 0
-			beekeeperRun = func(context.Context, ...string) (string, int, error) { starts++; return "", 0, nil }
-			t.Cleanup(func() { beekeeperRun = oldRun })
+			loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) { starts++; return "", 0, nil }
+			t.Cleanup(func() { loop.BeekeeperRun = oldRun })
 			if err := a.fatalScan(t.Context(), dir); err != nil {
 				t.Fatal(err)
 			}
@@ -315,9 +316,9 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				}
 				return "", 0
 			})
-			old := beekeeperRun
+			old := loop.BeekeeperRun
 			starts := 0
-			beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+			loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 				starts++
 				if slices.Contains(args, "--force") {
 					t.Fatal("forced start")
@@ -331,7 +332,7 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				}
 				return "", 0, nil
 			}
-			t.Cleanup(func() { beekeeperRun = old })
+			t.Cleanup(func() { loop.BeekeeperRun = old })
 			for range 2 {
 				if err := a.fatalScan(t.Context(), dir); err != nil {
 					t.Fatal(err)
@@ -459,9 +460,9 @@ func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 		}
 		return "", 0
 	})
-	old := beekeeperRun
-	beekeeperRun = func(context.Context, ...string) (string, int, error) { return "", ExitRefused, nil }
-	t.Cleanup(func() { beekeeperRun = old })
+	old := loop.BeekeeperRun
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) { return "", ExitRefused, nil }
+	t.Cleanup(func() { loop.BeekeeperRun = old })
 	if err := a.fatalScan(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}
@@ -500,8 +501,8 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 		}
 		return "", 3
 	})
-	old := beekeeperRun
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+	old := loop.BeekeeperRun
+	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		starts++
 		i := slices.Index(args, fatalNameOption)
 		if i < 0 {
@@ -515,7 +516,7 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	t.Cleanup(func() { beekeeperRun = old })
+	t.Cleanup(func() { loop.BeekeeperRun = old })
 	for range 2 {
 		if err := a.fatalScan(t.Context(), dir); err != nil {
 			t.Fatal(err)

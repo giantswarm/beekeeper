@@ -28,6 +28,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -1281,7 +1282,7 @@ func (a *app) gateCaller(repo string, pr int, argv []string, queued bool) state.
 				}
 			}
 			if loopPID := a.loopPID(); loopPID > 0 && os.Getppid() == loopPID {
-				return state.Party{Name: loopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
+				return state.Party{Name: loop.LoopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
 			}
 			sessions, t, serr := a.sessions()
 			if serr == nil && t != nil {
@@ -1298,7 +1299,7 @@ func (a *app) gateCaller(repo string, pr int, argv []string, queued bool) state.
 				}
 				for _, anc := range t.Ancestors(os.Getpid()) {
 					if loopPID > 0 && anc.PID == loopPID {
-						return state.Party{Name: loopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
+						return state.Party{Name: loop.LoopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
 					}
 					if s, ok := byPID[anc.PID]; ok {
 						p := s.Party()
@@ -2419,14 +2420,14 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	ev := recordDeliveryRelease(st, repo, pr, out, handCut, now)
 	// The detached gate, rather than its submitting loop, owns the actual
 	// merge outcome. Record it atomically with the merge's terminal event.
-	if m.By.Name == loopParty.Name && pr > 0 && (out.Merged || r.unanswered != nil || st.Stop == nil && rc != github.SquashRed && rc != github.SquashNotApplicable && rc != github.SquashRefused && rc != ExitGateRefused && rc != ExitGateUnread) {
+	if m.By.Name == loop.LoopParty.Name && pr > 0 && (out.Merged || r.unanswered != nil || st.Stop == nil && rc != github.SquashRed && rc != github.SquashNotApplicable && rc != github.SquashRefused && rc != ExitGateRefused && rc != ExitGateUnread) {
 		reason := fmt.Sprintf("merge-command-exit-%d", rc)
 		if out.Merged {
 			reason = ""
 		}
-		o := throughputOutcome{At: now, Operation: runMerge, Reason: reason, Candidate: normalizeLoopVersion(loopRunningVersion()), URL: publicPullURL(fmt.Sprintf("https://github.com/%s/pull/%d", repo, pr)), Success: out.Merged, Unknown: r.unanswered != nil}
+		o := throughputOutcome{At: now, Operation: runMerge, Reason: reason, Candidate: loop.NormalizeLoopVersion(loop.LoopRunningVersion()), URL: publicPullURL(fmt.Sprintf("https://github.com/%s/pull/%d", repo, pr)), Success: out.Merged, Unknown: r.unanswered != nil}
 		b, _ := json.Marshal(o)
-		ev = append(ev, event(loopParty, throughputOutcomeVerb, "%s", b))
+		ev = append(ev, event(loop.LoopParty, throughputOutcomeVerb, "%s", b))
 	}
 	switch {
 	case out.Merged:

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -332,13 +333,13 @@ func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
 	}
 }
 
-// settleOverrides is the loop's tick of the overrides: its GitHub reads
+// loopSettleOverrides is the loop's tick of the overrides: its GitHub reads
 // take the loop's allowance and wait under the budget floor as its timers'.
-func (l *supervisorLoop) settleOverrides(ctx context.Context, st *state.State) {
-	a := l.a
-	held := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
-		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st)
-	lines, err := a.settleOverrides(ctx, loopParty, func(ts []state.Timer) map[int]checkResult {
+func loopSettleOverrides(l *loop.Loop, ctx context.Context, st *state.State) {
+	a := asApp(l.Host)
+	held := loop.BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
+		a.cfg.GitHub.Floor > 0 && loop.LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st)
+	lines, err := a.settleOverrides(ctx, loop.LoopParty, func(ts []state.Timer) map[int]checkResult {
 		return a.loopTimerChecks(ctx, ts, a.now, held)
 	})
 	snapshot := *a
@@ -347,10 +348,10 @@ func (l *supervisorLoop) settleOverrides(ctx context.Context, st *state.State) {
 		w.emitNow("timer", "%s", line)
 	}
 	if err != nil {
-		l.sayOnce("overrides", "SUPERVISOR CONFIG OVERRIDES FAILED: %v", err)
+		l.SayOnce("overrides", "SUPERVISOR CONFIG OVERRIDES FAILED: %v", err)
 		return
 	}
-	delete(l.said, "overrides")
+	delete(l.Said, "overrides")
 }
 
 // finishOverride records how the restore of the ended override o went:

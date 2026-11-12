@@ -8,23 +8,14 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const (
 	deliveryExemptOnlyFlag = "--wip-exempt-only"
-	deliveryNextCommand    = "next"
-	deliveryJSONFlag       = "--json"
 )
-
-type deliveryWIP struct {
-	Limit      int              `json:"limit"`
-	Count      int              `json:"count"`
-	Items      []state.Delivery `json:"items"`
-	CompleteAt time.Time        `json:"complete_at"`
-	Reason     string           `json:"reason,omitempty"`
-}
 
 type deliveryPolicy struct {
 	person     string
@@ -60,10 +51,10 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 		if d.Agent != "" && strings.EqualFold(ag.Name, d.Agent) {
 			return true
 		}
-		serves := loopServes(st, ag)
+		serves := loop.LoopServes(st, ag)
 		if serves != "" && (strings.EqualFold(serves, d.Ref) ||
 			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) })) ||
-			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) }) {
+			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loop.LoopParkOn(ag.Park), ref) }) {
 			return true
 		}
 	}
@@ -134,67 +125,17 @@ func (a *app) deliveryExemptIntake(st *state.State) bool {
 
 // Only new issue starts use this check. The frozen references travel with
 // their worker stream, never in a field another pass could overwrite.
-func (l *supervisorLoop) deliveryPriority(ctx context.Context, reserved ...[]string) error {
-	st, err := l.a.store.Read()
+func loopDeliveryPriority(l *loop.Loop, ctx context.Context, reserved ...[]string) error {
+	st, err := asApp(l.Host).store.Read()
 	if err != nil {
 		return err
 	}
-	refs, _ := l.deliveryReservedRefs(st, reserved...)
+	refs, _ := l.DeliveryReservedRefs(st, reserved...)
 	if len(refs) == 0 {
 		return nil
 	}
-	if l.deliveryRoom(l.fillRoom(l.fillCapacity(ctx)), st, refs) <= 0 {
-		return errLoopLater
+	if l.DeliveryRoom(loopFillRoom(l, loopFillCapacity(l, ctx)), st, refs) <= 0 {
+		return loop.ErrLoopLater
 	}
 	return nil
-}
-
-func (l *supervisorLoop) deliveryStart(ref string, exempt bool) error {
-	if l.a.cfg.Delivery.WIPLimit == 0 {
-		return nil
-	}
-	st, err := l.a.store.Read()
-	if err != nil {
-		return err
-	}
-	if l.dryRun && l.fillPreview != nil {
-		st = l.fillPreview
-	}
-	v := readDeliveryWIP(st, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy())
-	if v.Reason != "" && !deliveryExempt(st, l.a.timeNow(), ref, exempt) {
-		label := deliveryURL(ref, false)
-		if label == "" {
-			label = "new work"
-		}
-		l.sayOnce("delivery admission "+ref, "SUPERVISOR NEXT WAITS %s: %s", label, v.Reason)
-		return fmt.Errorf("%s: %w", v.Reason, errLoopLater)
-	}
-	l.clearSaid("delivery admission " + ref)
-	return nil
-}
-
-func (l *supervisorLoop) deliveryFillRoom(room int, st *state.State, reserved ...[]string) int {
-	if l.dryRun && l.fillPreview != nil {
-		st = l.fillPreview
-	}
-	v := readDeliveryWIP(st, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy())
-	room = l.deliveryRoom(room, st, reserved...)
-	if v.Reason != "" {
-		// Full intake did no walk. Discard an older empty-board backoff too,
-		// so a released place can be used on the very next pass.
-		if !l.dryRun {
-			l.mu.Lock()
-			l.fillPause = fillPause{}
-			l.fillEmpty = 0
-			l.mu.Unlock()
-		}
-		if l.a.deliveryExemptIntake(st) {
-			return room
-		}
-		return 0
-	}
-	if v.Limit > 0 {
-		room = min(room, max(0, v.Limit-v.Count))
-	}
-	return room
 }

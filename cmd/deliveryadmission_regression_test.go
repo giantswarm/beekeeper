@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -147,7 +148,7 @@ func TestDeliveryStallsAreBatchedWithWaitReasons(t *testing.T) {
 	if err != nil || strings.Contains(line, "\n") || !strings.Contains(line, "30 deliveries") || strings.Contains(line, "waits: ;") || strings.HasSuffix(line, "waits: ") {
 		t.Fatalf("unbatched or empty stall: %s %v", line, err)
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("got %d reports: %v", len(evs), err)
 	}
@@ -162,13 +163,13 @@ func TestDeliveryStallsAreBatchedWithWaitReasons(t *testing.T) {
 	if line, err := a.checkDeliveries(now.Add(2 * time.Minute)); err != nil || strings.Contains(line, "\n") || !strings.HasPrefix(line, "RECOVERED:") {
 		t.Fatalf("unbatched recovery: %s %v", line, err)
 	}
-	evs, err = a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	evs, err = a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	st := &state.State{Guide: &state.Role{}}
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, ev := range evs {
-		key, text, ok := keyed(ev.Detail)
+		key, text, ok := loop.Keyed(ev.Detail)
 		if ok {
 			retainGuideReport(st, key, text, ev.At, state.Party{})
 		}
@@ -189,7 +190,7 @@ func TestDeliveryTrackedPullsSkipsUnreadRepositories(t *testing.T) {
 		{Ref: deliveryTestIssue, Step: state.DeliveryReviewQueued, Pulls: []string{deliveryTestPull, deliveryTestOtherPull}},
 		{Ref: "example/project#4", Step: state.DeliveryDone, Pulls: []string{"example/project#5"}},
 	}
-	got := deliveryTrackedPulls([]string{deliveryTestOtherPull}, deliveries, desk)
+	got := loop.DeliveryTrackedPulls([]string{deliveryTestOtherPull}, deliveries, desk)
 	want := []string{deliveryTestOtherPull, deliveryTestPull}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tracked = %v, want %v", got, want)
