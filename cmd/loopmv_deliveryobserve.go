@@ -25,7 +25,7 @@ const DeliveryReleaseReads = 2
 // ReadDeliveryRelease uses REST only. The newest tag may be a prerelease;
 // existence alone is insufficient: compare must prove it contains this merge.
 var ReadDeliveryRelease = func(ctx context.Context, p superloop.Pull) (string, string, error) {
-	r, ok := parseRef(p.Ref)
+	r, ok := Cmd.ParseRef(p.Ref)
 	if !ok || p.MergeCommit == "" || p.Base == "" {
 		return "", "", nil
 	}
@@ -86,7 +86,7 @@ func (l *Loop) ObserveDeliveries(ctx context.Context, in superloop.Input, unread
 	l.Mu.Lock()
 	in.OpenPulls = slices.Clone(l.OpenPulls)
 	l.Mu.Unlock()
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return err
 	}
@@ -125,10 +125,10 @@ func (l *Loop) ObserveDeliveries(ctx context.Context, in superloop.Input, unread
 	if hasReleaseProbe {
 		// Commit discovered identities before any release probe so its reservation
 		// and step event survive a crash even for a newly observed external merge.
-		if err := updateDeliveryObservation(ctx, l.Host.store, in, nil, false); err != nil {
+		if err := updateDeliveryObservation(ctx, l.Host.Store(), in, nil, false); err != nil {
 			return err
 		}
-		st, err = l.Host.store.Read()
+		st, err = l.Host.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -162,7 +162,7 @@ func (l *Loop) ObserveDeliveries(ctx context.Context, in superloop.Input, unread
 					continue
 				}
 				results[ref] = deliveryReleaseResult{at: in.Now}
-				if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+				if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 					for i := range current.Deliveries {
 						if slices.Contains(current.Deliveries[i].Pulls, ref) {
 							current.Deliveries[i].ReleaseChecked = in.Now
@@ -189,7 +189,7 @@ func (l *Loop) ObserveDeliveries(ctx context.Context, in superloop.Input, unread
 			complete = false
 		}
 	}
-	return updateDeliveryObservation(commitCtx, l.Host.store, in, results, complete)
+	return updateDeliveryObservation(commitCtx, l.Host.Store(), in, results, complete)
 }
 
 func updateDeliveryObservation(ctx context.Context, store state.Store, in superloop.Input, results map[string]deliveryReleaseResult, complete bool) error {
@@ -200,7 +200,7 @@ func updateDeliveryObservation(ctx context.Context, store state.Store, in superl
 				if r, ok := results[ref]; ok {
 					next[i].ReleaseChecked = r.at
 					if r.verdict != "" && next[i].Step == state.DeliveryReleasing && (next[i].Verdict != state.DeliveryReleaseFailed || r.tag != next[i].Release) {
-						applyDeliveryVerdict(&next[i], r.verdict, r.tag, in.Now)
+						Cmd.ApplyDeliveryVerdict(&next[i], r.verdict, r.tag, in.Now)
 					}
 				}
 			}
@@ -284,10 +284,10 @@ func DeliveryTrackedPulls(tracked []string, deliveries []state.Delivery, desk su
 // deliveryPullUnread reports whether desk leaves the pull request ref unread,
 // judged on its normalized repository name as supervisorLoop.unreadRepo does.
 func deliveryPullUnread(desk superloop.Desk, ref string) bool {
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok {
 		return false
 	}
-	reason, _ := desk.Unread(refName(r))
+	reason, _ := desk.Unread(Cmd.RefName(r))
 	return reason != ""
 }

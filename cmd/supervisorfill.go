@@ -83,7 +83,7 @@ func loopReadFillCapacity(l *Loop, ctx context.Context) (*capacityView, error) {
 }
 
 func loopPreviewFill(l *Loop, ctx context.Context) error {
-	st, err := l.Host.store.Read()
+	st, err := asApp(l.Host).store.Read()
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func loopPreviewFill(l *Loop, ctx context.Context) error {
 	}
 	next, err := l.NextItem(ctx)
 	if errors.Is(err, ErrLoopLater) {
-		_, err = fmt.Fprintln(l.Host.out, "SUPERVISOR WOULD NEXT wait: admission or GitHub budget holds new work")
+		_, err = fmt.Fprintln(asApp(l.Host).out, "SUPERVISOR WOULD NEXT wait: admission or GitHub budget holds new work")
 		return err
 	}
 	if err != nil {
@@ -113,7 +113,7 @@ func loopPreviewFill(l *Loop, ctx context.Context) error {
 	if next != nil {
 		count, first = room, next.URL
 	}
-	_, err = fmt.Fprintf(l.Host.out, "SUPERVISOR WOULD NEXT fill %d to capacity.ceiling (first: %s)\n", count, first)
+	_, err = fmt.Fprintf(asApp(l.Host).out, "SUPERVISOR WOULD NEXT fill %d to capacity.ceiling (first: %s)\n", count, first)
 	return err
 }
 
@@ -129,14 +129,14 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 	startedCount := 0
 	why := "no worker brief configured"
 	defer func() {
-		if !l.DryRun && l.Host.cfg.Supervisor.WorkerBrief != "" && startedCount == 0 {
+		if !l.DryRun && asApp(l.Host).cfg.Supervisor.WorkerBrief != "" && startedCount == 0 {
 			if result != nil {
 				why = oneLine(result.Error())
 			}
-			_, _ = fmt.Fprintf(l.Host.out, RefillZeroFormat, why)
+			_, _ = fmt.Fprintf(asApp(l.Host).out, RefillZeroFormat, why)
 		}
 	}()
-	if l.Host.cfg.Supervisor.WorkerBrief == "" {
+	if asApp(l.Host).cfg.Supervisor.WorkerBrief == "" {
 		return nil
 	}
 	if l.DryRun {
@@ -200,7 +200,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 			return nil // a gate refusal is never a reason to start
 		}
 		l.SetFillPhase("read capacity reservations")
-		live, err := l.Host.store.Read()
+		live, err := asApp(l.Host).store.Read()
 		if err != nil {
 			return err
 		}
@@ -217,16 +217,16 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 					why += ": " + cap.Choice.Reason
 				}
 			} else {
-				v := readDeliveryWIP(live, l.Host.cfg.Delivery.WIPLimit, l.Host.cfg.Supervisor.LoopInterval.Duration, l.Host.timeNow(), l.Host.deliveryPolicy())
+				v := readDeliveryWIP(live, asApp(l.Host).cfg.Delivery.WIPLimit, asApp(l.Host).cfg.Supervisor.LoopInterval.Duration, asApp(l.Host).timeNow(), asApp(l.Host).deliveryPolicy())
 				why = fmt.Sprintf("delivery admission: %s (%d flowing, limit %d; last complete observation %s)", v.Reason, v.Count, v.Limit, v.CompleteAt.UTC().Format(time.RFC3339))
 			}
 			l.StallClear() // no admitted slot: nothing waits on the refill
 			return nil
 		}
-		ordinary := readDeliveryWIP(live, l.Host.cfg.Delivery.WIPLimit, l.Host.cfg.Supervisor.LoopInterval.Duration, l.Host.timeNow(), l.Host.deliveryPolicy()).Reason == ""
-		capacity, alive := fillCapacityKey(cap)+"/"+fillRepositoryHoldsKey(live, l.Host.timeNow()), fillLive(live)
+		ordinary := readDeliveryWIP(live, asApp(l.Host).cfg.Delivery.WIPLimit, asApp(l.Host).cfg.Supervisor.LoopInterval.Duration, asApp(l.Host).timeNow(), asApp(l.Host).deliveryPolicy()).Reason == ""
+		capacity, alive := fillCapacityKey(cap)+"/"+fillRepositoryHoldsKey(live, asApp(l.Host).timeNow()), fillLive(live)
 		l.Mu.Lock()
-		if !l.FillPause.Holds(l.Host.timeNow(), capacity, alive) {
+		if !l.FillPause.Holds(asApp(l.Host).timeNow(), capacity, alive) {
 			if !l.FillPause.Until.IsZero() && l.FillPause.Changed(capacity, alive) {
 				l.FillEmpty = 0 // a change may make room: the backoff starts over
 			}

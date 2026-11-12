@@ -18,7 +18,7 @@ var ReadRedJobLog = func(ctx context.Context, repo string, job int64) (string, e
 // Attach bounded failure output at the handoff, once per planned red wake.
 // Non-Actions checks and unavailable logs retain their original check links.
 func AttachRedLogs(ctx context.Context, act superloop.Action) superloop.Action {
-	ref, ok := parseRef(act.Ref)
+	ref, ok := Cmd.ParseRef(act.Ref)
 	if !ok {
 		return act
 	}

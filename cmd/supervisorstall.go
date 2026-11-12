@@ -46,7 +46,7 @@ type reviewWait struct {
 // reviewsPlanned keeps the review waits of this pass's review actions; a
 // request no longer planned (started, merged, its head moved) waits no more.
 func (l *Loop) reviewsPlanned(acts []superloop.Action) {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	waits := make(map[string]reviewWait, len(acts))
@@ -74,7 +74,7 @@ func (l *Loop) reviewTried(act superloop.Action, failures map[string]LoopFailure
 		return
 	}
 	if f, failed := failures[act.Key]; failed && f.Message != "" {
-		w.why = "its start failed: " + oneLine(f.Message)
+		w.why = "its start failed: " + Cmd.OneLine(f.Message)
 	} else {
 		w.why = "its start waits: no room for a start on any host, held starts, an incident or an unread repository (the SUPERVISOR REVIEW WAITS lines name it)"
 	}
@@ -85,7 +85,7 @@ func (l *Loop) reviewTried(act superloop.Action, failures map[string]LoopFailure
 // loopStallAfter without a reviewer: it names the oldest request, its
 // cause and how many wait, once per oldest waiting episode.
 func (l *Loop) checkReviewStall() error {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	l.Mu.Lock()
 	var oldest reviewWait
 	waiting := 0
@@ -100,7 +100,7 @@ func (l *Loop) checkReviewStall() error {
 	}
 	if waiting == 0 {
 		if l.Stall.reviewFiled > 0 {
-			_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR STALL ENDED: no review request waits %s for a reviewer any more (stalled since %s)\n", LoopStallAfter, l.Stall.reviewSince.UTC().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: no review request waits %s for a reviewer any more (stalled since %s)\n", LoopStallAfter, l.Stall.reviewSince.UTC().Format(time.RFC3339))
 		}
 		l.Stall.reviewSince, l.Stall.reviewFiled = time.Time{}, 0
 		l.Mu.Unlock()
@@ -134,9 +134,9 @@ func (l *Loop) FillRan() {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if l.Stall.ranFiled > 0 {
-		_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR STALL ENDED: the capacity refill runs again (not since %s)\n", l.Stall.Ran.UTC().Format(time.RFC3339))
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: the capacity refill runs again (not since %s)\n", l.Stall.Ran.UTC().Format(time.RFC3339))
 	}
-	l.Stall.Ran, l.Stall.ranFiled = l.Host.timeNow(), 0
+	l.Stall.Ran, l.Stall.ranFiled = l.Host.TimeNow(), 0
 }
 
 // StallWait records that the refill had room yet started nothing, and why.
@@ -145,7 +145,7 @@ func (l *Loop) StallWait(ref, why string) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if l.Stall.Since.IsZero() {
-		l.Stall.Since = l.Host.timeNow()
+		l.Stall.Since = l.Host.TimeNow()
 		l.Stall.filed = 0
 	}
 	l.Stall.ref, l.Stall.why = ref, why
@@ -157,7 +157,7 @@ func (l *Loop) StallClear() {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if l.Stall.filed > 0 {
-		_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR STALL ENDED: worker starts flow again (stalled since %s)\n", l.Stall.Since.UTC().Format(time.RFC3339))
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: worker starts flow again (stalled since %s)\n", l.Stall.Since.UTC().Format(time.RFC3339))
 	}
 	l.Stall.Since, l.Stall.ref, l.Stall.why, l.Stall.filed = time.Time{}, "", "", 0
 }
@@ -171,10 +171,10 @@ func (l *Loop) CheckStall() error {
 	if err := l.checkReviewStall(); err != nil {
 		return err
 	}
-	if l.Host.cfg.Supervisor.WorkerBrief == "" {
+	if l.Host.Cfg().Supervisor.WorkerBrief == "" {
 		return nil
 	}
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	l.Mu.Lock()
 	if l.Stall.Ran.IsZero() {
 		l.Stall.Ran = now // the loop's start is the baseline
@@ -302,7 +302,7 @@ func (l *Loop) MergeWaited(act superloop.Action, err error) {
 	if act.Kind != superloop.KindGo {
 		return
 	}
-	note := mergeNote{Class: waitUnnamed, Cause: laterCause(err), at: l.Host.timeNow()}
+	note := mergeNote{Class: waitUnnamed, Cause: laterCause(err), at: l.Host.TimeNow()}
 	var named *mergeWait
 	if errors.As(err, &named) {
 		note.Class, note.Cause = named.class, named.cause
@@ -337,7 +337,7 @@ func (l *Loop) mergeQueued(acts []superloop.Action) {
 
 // MergeStarted marks acts[i] running and the rest of its stream behind it.
 func (l *Loop) MergeStarted(acts []superloop.Action, i int) {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if l.mergeRuns == nil {
@@ -363,7 +363,7 @@ func (l *Loop) MergeStreamEnded(acts []superloop.Action) {
 // wait and its last failure. settled reports a decision completed since the
 // pass planned it.
 func (l *Loop) flowCause(key string, failures map[string]LoopFailure) (class, cause string, settled bool) {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if l.completed[key] {
@@ -381,7 +381,7 @@ func (l *Loop) flowCause(key string, failures map[string]LoopFailure) (class, ca
 	}
 	note, noted := l.MergeNotes[key]
 	if f := failures[key]; f.Message != "" && (!noted || f.At.After(note.at)) {
-		cause := "its last run failed: " + oneLine(f.Message)
+		cause := "its last run failed: " + Cmd.OneLine(f.Message)
 		if f.RetryAt.After(now) {
 			cause += fmt.Sprintf(" (identical failures; the loop retries after %s)", f.RetryAt.UTC().Format(time.RFC3339))
 		}
@@ -398,7 +398,7 @@ func (l *Loop) flowCause(key string, failures map[string]LoopFailure) (class, ca
 // after the head's last alarm, so a hold that changes is named and one that
 // flaps is not repeated.
 func (l *Loop) flowAlarm(key string, wait *flowWait, class, cause string, pending int) error {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	if now.Sub(wait.Since) < LoopStallAfter || slices.Contains(wait.alarmed, class) {
 		return nil
 	}
@@ -428,7 +428,7 @@ func (l *Loop) flowAlarm(key string, wait *flowWait, class, cause string, pendin
 // episode; a settled decision clears it. Unread pulls retain their episodes
 // and are alarmed as unread: no pass plans or runs their decision.
 func (l *Loop) CheckFlowWaits(in superloop.Input, actions []superloop.Action, failures map[string]LoopFailure) error {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	pending := map[string]superloop.Action{}
 	for _, act := range actions {
 		if act.Kind == superloop.KindGo && !staleMergeDecision(in.Pulls[act.Ref], act.Head) {
@@ -449,7 +449,7 @@ func (l *Loop) CheckFlowWaits(in superloop.Input, actions []superloop.Action, fa
 			continue
 		}
 		if len(wait.alarmed) > 0 {
-			_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR STALL ENDED: %s is no longer pending\n", key)
+			_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: %s is no longer pending\n", key)
 		}
 		delete(l.FlowWaits, key)
 	}

@@ -15,7 +15,7 @@ import (
 func (l *Loop) startRefillCadence(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	interval := l.Host.cfg.Supervisor.LoopInterval.Duration
+	interval := l.Host.Cfg().Supervisor.LoopInterval.Duration
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -54,8 +54,8 @@ func (l *Loop) RunRefillCadence(ctx context.Context, ticks <-chan time.Time) {
 			if !ok {
 				return
 			}
-			if l.Host.loopNow != nil {
-				l.Host.loopNow.Store(&now)
+			if l.Host.LoopNow() != nil {
+				l.Host.LoopNow().Store(&now)
 			}
 		}
 	}
@@ -75,7 +75,7 @@ func (l *Loop) RefillTick(ctx context.Context) error {
 			return err
 		}
 	}
-	if l.Host.cfg.Supervisor.WorkerBrief == "" {
+	if l.Host.Cfg().Supervisor.WorkerBrief == "" {
 		return nil
 	}
 	if l.HoldingStarts() {
@@ -85,13 +85,13 @@ func (l *Loop) RefillTick(ctx context.Context) error {
 	}
 	l.SetFillPhase("read state")
 	defer l.SetFillPhase("")
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return err
 	}
 	l.SetFillPhase("read refill history")
 	// Use a separate cursor from observation; both can advance concurrently.
-	history, err := state.FollowSnapshot(l.Host.store, "supervisor-refill-taken", "v1",
+	history, err := state.FollowSnapshot(l.Host.Store(), "supervisor-refill-taken", "v1",
 		func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
 	if err != nil {
 		return err

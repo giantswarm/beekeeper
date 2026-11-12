@@ -84,7 +84,7 @@ func (l *Loop) PullWatcher() *loopPullWatcher {
 	if l.pullWatch == nil {
 		l.pullWatch = newPullWatcher()
 		var saved LoopPullSnapshot
-		if ok, err := l.Host.store.ReadFile(LoopPullWatchFile, &saved); ok && err == nil && saved.Pulls != nil {
+		if ok, err := l.Host.Store().ReadFile(LoopPullWatchFile, &saved); ok && err == nil && saved.Pulls != nil {
 			l.pullWatch.Snapshot = saved
 		}
 	}
@@ -178,7 +178,7 @@ func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out,
 			short = append(short, login)
 		}
 		for _, ref := range listed {
-			if r, ok := parseRef(ref); ok && desk.BotRepo(r.Repo, teams[strings.ToLower(r.Repo)], known) {
+			if r, ok := Cmd.ParseRef(ref); ok && desk.BotRepo(r.Repo, teams[strings.ToLower(r.Repo)], known) {
 				out = append(out, ref)
 			}
 		}
@@ -236,8 +236,8 @@ var ReadObservedLoopPull = func(l *Loop, ctx context.Context, ref string, _ time
 	if err := ctx.Err(); err != nil {
 		return LoopPullObservation{}, err
 	}
-	now := l.Host.timeNow()
-	if l.Host.loopNow != nil {
+	now := l.Host.TimeNow()
+	if l.Host.LoopNow() != nil {
 		now = clk.Now()
 	}
 	p, err := l.PullWatcher().Read(ref, now)
@@ -254,9 +254,9 @@ func (l *Loop) readPull(ctx context.Context, ref string) (superloop.Pull, error)
 var StartLoopPullWatcher = func(ctx context.Context, l *Loop) func() {
 	ctx, cancel := context.WithCancel(ctx)
 	w := l.PullWatcher()
-	w.Set(nil, l.Host.cfg.Supervisor.Ownership.Authors, l.Host.cfg.GitHub.AllowedOrgs, l.Host.cfg.GitHub.Floor, l.Host.cfg.Supervisor.Ownership.Never)
-	own := l.Host.cfg.Supervisor.Ownership
-	w.SetBots(own.Bots, superloop.Desk{Orgs: l.Host.cfg.GitHub.AllowedOrgs, Team: own.Team, Review: own.Review, Never: own.Never}, nil, false)
+	w.Set(nil, l.Host.Cfg().Supervisor.Ownership.Authors, l.Host.Cfg().GitHub.AllowedOrgs, l.Host.Cfg().GitHub.Floor, l.Host.Cfg().Supervisor.Ownership.Never)
+	own := l.Host.Cfg().Supervisor.Ownership
+	w.SetBots(own.Bots, superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Team: own.Team, Review: own.Review, Never: own.Never}, nil, false)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -333,7 +333,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	// The beside-running budget watch owns probes. Polling PRs adds no budget
 	// probes and never holds the pass's GraphQL admission lock during network IO.
 	if floor > 0 {
-		st, err := l.Host.store.Peek()
+		st, err := l.Host.Store().Peek()
 		if err != nil {
 			return 0, err
 		}
@@ -390,7 +390,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 		if p, ok := before.Pulls[ref]; ok && (p.Pull.State == superloop.Merged || p.Pull.State == superloop.Closed) {
 			continue
 		}
-		if _, ok := parseRef(ref); ok {
+		if _, ok := Cmd.ParseRef(ref); ok {
 			query = append(query, ref)
 		}
 	}
@@ -425,7 +425,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	}
 	w.Mu.Unlock()
 	if !l.DryRun {
-		_ = l.Host.store.WriteFile(LoopPullWatchFile, before)
+		_ = l.Host.Store().WriteFile(LoopPullWatchFile, before)
 	}
 	signalPullWatch(w.ready)
 	return next, discoveryErr
@@ -502,7 +502,7 @@ func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]b
 	var q strings.Builder
 	q.WriteString("query { rateLimit { remaining resetAt cost }")
 	for i, ref := range refs {
-		r, ok := parseRef(ref)
+		r, ok := Cmd.ParseRef(ref)
 		if !ok {
 			return nil, fmt.Errorf("invalid pull reference %q", ref)
 		}
@@ -778,7 +778,7 @@ func expandLoopPullConnections(ctx context.Context, ref string, raw []byte, deta
 		for name, cursor := range cursors {
 			fields = strings.Replace(fields, name+"(first:100)", fmt.Sprintf("%s(first:100,after:%q)", name, cursor), 1)
 		}
-		r, _ := parseRef(ref)
+		r, _ := Cmd.ParseRef(ref)
 		owner, repo, _ := strings.Cut(r.Repo, "/")
 		query := fmt.Sprintf("query { rateLimit { remaining } p0: repository(owner:%q,name:%q) { pullRequest(number:%d) { %s } } }", owner, repo, r.N, fields)
 		data, err := runLoopPullGraphQL(ctx, query, floor)

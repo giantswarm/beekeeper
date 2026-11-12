@@ -12,7 +12,7 @@ import (
 )
 
 func (l *Loop) otherReviewParks(party state.Party, ref string) bool {
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		// Preserve the task if pending requests cannot be read.
 		return true
@@ -33,7 +33,7 @@ func (l *Loop) RecoverReviewRequests(ctx context.Context, st *state.State) error
 	if l.DryRun || st.Stop != nil {
 		return nil
 	}
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	if l.reviewRecoveries == nil {
 		l.reviewRecoveries = map[string]reviewRecovery{}
 	}
@@ -43,10 +43,10 @@ func (l *Loop) RecoverReviewRequests(ctx context.Context, st *state.State) error
 			return err
 		}
 		p := ag.Park
-		if ag.Done || ag.Execution != nil || p == nil || p.External || p.Checks || p.ReviewHead != "" || !isDeskReviewWait(p.Waits) {
+		if ag.Done || ag.Execution != nil || p == nil || p.External || p.Checks || p.ReviewHead != "" || !Cmd.IsDeskReviewWait(p.Waits) {
 			continue
 		}
-		if _, ok := parseRef(p.On); !ok || l.agentUnreadRepo(st, ag, p.On) != "" {
+		if _, ok := Cmd.ParseRef(p.On); !ok || l.agentUnreadRepo(st, ag, p.On) != "" {
 			continue
 		}
 		dir := p.Worktree
@@ -83,23 +83,23 @@ func (l *Loop) RecoverReviewRequests(ctx context.Context, st *state.State) error
 		}
 		delete(l.reviewRecoveries, key)
 		verified := false
-		if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			for i := range current.Agents {
 				a := &current.Agents[i]
 				if !a.Is(ag.Party) || a.Done || a.Park == nil || a.Park.On != p.On || !a.Park.At.Equal(p.At) || a.Park.Waits != p.Waits || a.Park.ReviewHead != "" {
 					continue
 				}
 				a.Park.ReviewHead, a.Park.Worktree, a.Park.RefKind = head, dir, github.RefPullRequest
-				recordAgentReviewPark(current, *a)
+				Cmd.RecordAgentReviewPark(current, *a)
 				verified = true
-				return []state.Event{event(LoopParty, "agents.review-verified", "%s: review request verified for %s at pushed HEAD %s", a.Name, p.On, head)}, nil
+				return []state.Event{Cmd.Event(LoopParty, "agents.review-verified", "%s: review request verified for %s at pushed HEAD %s", a.Name, p.On, head)}, nil
 			}
 			return nil, nil
 		}); err != nil {
 			return err
 		}
 		if verified {
-			if err := l.Host.recordFatalRepair(ag.Name, p.On); err != nil {
+			if err := l.Host.RecordFatalRepair(ag.Name, p.On); err != nil {
 				return err
 			}
 		}
@@ -140,5 +140,5 @@ var RecoverParkReviewHead = func(ctx context.Context, on, dir string) string {
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return ""
 	}
-	return publishedParkHead(ctx, on, dir, runGit, github.RunGH)
+	return publishedParkHead(ctx, on, dir, Cmd.RunGit, github.RunGH)
 }

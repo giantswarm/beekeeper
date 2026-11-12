@@ -39,7 +39,7 @@ func (l *Loop) StaleNext(act superloop.Action) bool {
 	// A single pass (--once, --dry-run) is a loop of its own: its start
 	// says nothing about the events before it.
 	running := !l.Once && !l.DryRun
-	return running && at.Before(l.StartedAt) || l.Host.timeNow().Sub(at) > StaleNextAfter
+	return running && at.Before(l.StartedAt) || l.Host.TimeNow().Sub(at) > StaleNextAfter
 }
 
 // SettleStaleNext records the stale next actions as taken, in one write and
@@ -55,19 +55,19 @@ func (l *Loop) SettleStaleNext(stale []superloop.Action) error {
 		if l.IsCompleted(act.Key) {
 			continue
 		}
-		evs = append(evs, about(event(LoopParty, "supervisor."+superloop.KindNext, "%s", superloop.Detail(act, StaleNextWhat)), act.Ref))
+		evs = append(evs, Cmd.About(Cmd.Event(LoopParty, "supervisor."+superloop.KindNext, "%s", superloop.Detail(act, StaleNextWhat)), act.Ref))
 		settled = append(settled, act)
 	}
 	if len(evs) == 0 {
 		return nil
 	}
-	if err := l.Host.store.Record(evs...); err != nil {
+	if err := l.Host.Store().Record(evs...); err != nil {
 		return fmt.Errorf("recording stale next actions: %w", err)
 	}
 	for _, act := range settled {
 		l.rememberAction(act)
 	}
-	_, err := fmt.Fprintf(l.Host.out, "SUPERVISOR NEXT SKIPPED %d stale done events; the refill fills capacity\n", len(settled))
+	_, err := fmt.Fprintf(l.Host.Out(), "SUPERVISOR NEXT SKIPPED %d stale done events; the refill fills capacity\n", len(settled))
 	return err
 }
 
@@ -75,7 +75,7 @@ func (l *Loop) SettleStaleNext(stale []superloop.Action) error {
 // waits for its retry, and the refill still runs in the same pass.
 func (l *Loop) nextFailed(act superloop.Action, failures map[string]LoopFailure, err error) error {
 	if failures == nil {
-		_, werr := fmt.Fprintf(l.Host.out, "SUPERVISOR NEXT FAILED %s: %v\n", act.Key, err)
+		_, werr := fmt.Fprintf(l.Host.Out(), "SUPERVISOR NEXT FAILED %s: %v\n", act.Key, err)
 		return werr
 	}
 	return l.Failed(act, failures, err)
@@ -102,7 +102,7 @@ func (l *Loop) FillSkipped() []string {
 	defer l.Mu.Unlock()
 	var refs []string
 	for ref, retry := range l.FillRetries {
-		if l.Host.timeNow().Before(retry.Until) {
+		if l.Host.TimeNow().Before(retry.Until) {
 			refs = append(refs, ref)
 		}
 	}
@@ -117,11 +117,11 @@ func (l *Loop) DeferFill(ref string) {
 		l.FillRetries = map[string]fillRetry{}
 	}
 	retry := l.FillRetries[ref]
-	every := l.Host.cfg.Supervisor.FillRetryEvery.Duration
+	every := l.Host.Cfg().Supervisor.FillRetryEvery.Duration
 	if every <= 0 {
 		every = time.Minute
 	}
-	retry.Until = l.Host.timeNow().Add(every << min(retry.failures, fillBackoff))
+	retry.Until = l.Host.TimeNow().Add(every << min(retry.failures, fillBackoff))
 	retry.failures++
 	l.FillRetries[ref] = retry
 }
@@ -151,7 +151,7 @@ func (s deliverySkips) String() string {
 		{s.outside, "outside the desk"},
 		{s.held, "under a hold"},
 		{s.requested, "review already requested"},
-		{s.old, "older than " + shortDur(s.reserveFor)},
+		{s.old, "older than " + Cmd.ShortDur(s.reserveFor)},
 	} {
 		if p.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.why))
@@ -168,8 +168,8 @@ func (s deliverySkips) String() string {
 // supervisor.reserveFor after its step began. Older ones are stalled
 // deliveries, not slots held from new work.
 func (l *Loop) DeliveryReservations(st *state.State) ([]string, deliverySkips) {
-	now := l.Host.timeNow()
-	skips := deliverySkips{reserveFor: l.Host.cfg.Supervisor.ReserveFor.Duration}
+	now := l.Host.TimeNow()
+	skips := deliverySkips{reserveFor: l.Host.Cfg().Supervisor.ReserveFor.Duration}
 	if skips.reserveFor <= 0 {
 		skips.reserveFor = config.DefaultReserveFor
 	}
@@ -185,7 +185,7 @@ func (l *Loop) DeliveryReservations(st *state.State) ([]string, deliverySkips) {
 		switch {
 		case slices.ContainsFunc(repos, func(ref string) bool { return l.unreadRepo(ref) != "" }):
 			skips.outside++
-		case classifyDelivery(st, d, now, l.Host.deliveryPolicy()).Class != deliveryFlowing:
+		case Cmd.ClassifyDelivery(st, d, now, l.Host.DeliveryPolicy()).Class != deliveryFlowing:
 			skips.held++
 		case slices.ContainsFunc(repos, func(ref string) bool { return deliveryRepoHeld(st, ref, now) }):
 			skips.held++
@@ -194,7 +194,7 @@ func (l *Loop) DeliveryReservations(st *state.State) ([]string, deliverySkips) {
 		case now.Sub(d.Since) > skips.reserveFor:
 			skips.old++
 		default:
-			refs = append(refs, deliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)))
+			refs = append(refs, Cmd.DeliveryURL(d.Ref, slices.Contains(d.Pulls, d.Ref)))
 		}
 	}
 	return refs, skips
@@ -202,7 +202,7 @@ func (l *Loop) DeliveryReservations(st *state.State) ([]string, deliverySkips) {
 
 // deliveryRepoHeld says whether an active hold of ref's repository is in st.
 func deliveryRepoHeld(st *state.State, ref string, now time.Time) bool {
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	return ok && slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return strings.EqualFold(h.Target, r.Repo) && h.Active(now) })
 }
 
@@ -297,11 +297,11 @@ const fillBackoff = 2
 func (l *Loop) PauseFill(capacity string, live []string) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
-	every := l.Host.cfg.Supervisor.FillRetryEvery.Duration << min(l.FillEmpty, fillBackoff)
+	every := l.Host.Cfg().Supervisor.FillRetryEvery.Duration << min(l.FillEmpty, fillBackoff)
 	l.FillEmpty++
-	until := l.Host.timeNow().Add(every)
+	until := l.Host.TimeNow().Add(every)
 	for _, retry := range l.FillRetries {
-		if retry.Until.After(l.Host.timeNow()) && retry.Until.Before(until) {
+		if retry.Until.After(l.Host.TimeNow()) && retry.Until.Before(until) {
 			until = retry.Until
 		}
 	}
@@ -310,10 +310,10 @@ func (l *Loop) PauseFill(capacity string, live []string) {
 
 // PreviewFill runs in the command, which holds what it needs (loopPreviewFill).
 func (l *Loop) PreviewFill(ctx context.Context) error {
-	return loopPreviewFill(l, ctx)
+	return Cmd.LoopPreviewFill(l, ctx)
 }
 
 // Fill runs in the command, which holds what it needs (loopFill).
 func (l *Loop) Fill(ctx context.Context, st *state.State, claims map[string]LoopClaim, taken []superloop.Taken, reserved ...[]string) (result error) {
-	return loopFill(l, ctx, st, claims, taken, reserved...)
+	return Cmd.LoopFill(l, ctx, st, claims, taken, reserved...)
 }

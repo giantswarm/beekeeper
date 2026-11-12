@@ -49,7 +49,7 @@ type LoopSweepCount struct {
 }
 
 // Line says the count in one line, "" when no pull request lacks an owner.
-func (c LoopSweepCount) Line(a *app) string {
+func (c LoopSweepCount) Line(a Host) string {
 	if c.Ownerless == 0 && c.Unread == 0 && !c.AtLimit {
 		return ""
 	}
@@ -59,7 +59,7 @@ func (c LoopSweepCount) Line(a *app) string {
 	}
 	line += fmt.Sprintf(", %d without a live owner", c.Ownerless)
 	if !c.Oldest.IsZero() {
-		line += ", the oldest since " + clock(a.now, c.Oldest)
+		line += ", the oldest since " + Cmd.Clock(a.Now(), c.Oldest)
 	}
 	if c.Unread > 0 {
 		line += fmt.Sprintf(", %d not read yet", c.Unread)
@@ -70,7 +70,7 @@ func (c LoopSweepCount) Line(a *app) string {
 // reportSweep publishes the pass's count for supervisor status, and says
 // it in the loop's log each time the pile grows by sweepPileStep.
 func (l *Loop) reportSweep(ownerless map[string]time.Time, unread map[string]bool) error {
-	c := LoopSweepCount{At: l.Host.timeNow(), Listed: len(l.OpenPulls), AtLimit: len(l.OpenPulls) >= SweepListLimit, Ownerless: len(ownerless), Unread: len(unread)}
+	c := LoopSweepCount{At: l.Host.TimeNow(), Listed: len(l.OpenPulls), AtLimit: len(l.OpenPulls) >= SweepListLimit, Ownerless: len(ownerless), Unread: len(unread)}
 	for _, since := range ownerless {
 		if c.Oldest.IsZero() || since.Before(c.Oldest) {
 			c.Oldest = since
@@ -79,7 +79,7 @@ func (l *Loop) reportSweep(ownerless map[string]time.Time, unread map[string]boo
 	if pile := c.Ownerless / sweepPileStep; pile > 0 {
 		l.SayOnce(fmt.Sprintf("sweep pile %d", pile), "SUPERVISOR SWEEP %s", c.Line(l.Host))
 	}
-	return l.Host.store.WriteFile(LoopSweepFile, c)
+	return l.Host.Store().WriteFile(LoopSweepFile, c)
 }
 
 const (
@@ -202,7 +202,7 @@ const (
 // across restarts. An action of the loop's claimed or in flight on it owns
 // it meanwhile. logged is what the log says so far.
 func (l *Loop) markOwnerless(in superloop.Input, claims map[string]LoopClaim, logged map[string]time.Time, unread map[string]bool) (map[string]time.Time, error) {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	acting := func(ref string) bool {
 		on := func(key string) bool { return strings.Contains(key, " "+ref+"@") || strings.HasSuffix(key, " "+ref) }
 		if slices.ContainsFunc(slices.Collect(maps.Keys(claims)), on) {
@@ -228,7 +228,7 @@ func (l *Loop) markOwnerless(in superloop.Input, claims map[string]LoopClaim, lo
 		}
 		next[ref] = now
 		if !l.DryRun {
-			if err := l.Host.store.Record(about(event(LoopParty, LoopOwnerlessVerb, "[%s] %s%s", ref, OwnerlessSince, now.UTC().Format(time.RFC3339Nano)), ref)); err != nil {
+			if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopOwnerlessVerb, "[%s] %s%s", ref, OwnerlessSince, now.UTC().Format(time.RFC3339Nano)), ref)); err != nil {
 				return nil, err
 			}
 		}
@@ -245,7 +245,7 @@ func (l *Loop) markOwnerless(in superloop.Input, claims map[string]LoopClaim, lo
 		if _, still := next[ref]; still || l.DryRun {
 			continue
 		}
-		if err := l.Host.store.Record(about(event(LoopParty, LoopOwnerlessVerb, "[%s] %s", ref, OwnerlessEnd), ref)); err != nil {
+		if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopOwnerlessVerb, "[%s] %s", ref, OwnerlessEnd), ref)); err != nil {
 			return nil, err
 		}
 	}

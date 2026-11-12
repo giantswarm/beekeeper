@@ -31,10 +31,10 @@ func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if ag.Done || ag.Task == "" || ag.Execution != nil || roleRun(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
+		if ag.Done || ag.Task == "" || ag.Execution != nil || Cmd.RoleRun(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
 			continue
 		}
-		qerr := agyQuotaError(l.Host.cfg, ag)
+		qerr := Cmd.AgyQuotaError(l.Host.Cfg(), ag)
 		if qerr == nil {
 			continue
 		}
@@ -48,14 +48,14 @@ func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 		}
 		l.LifecyclePhase(LoopPhaseRecover)
 		if l.DryRun {
-			if _, err := fmt.Fprintf(l.Host.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
+			if _, err := fmt.Fprintf(l.Host.Out(), "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 				return err
 			}
 			continue
 		}
-		startID := agyAgentStartID(ag)
-		_, model := agentHarnessModel(st, nil, ag)
-		l.Host.recordAgyQuotaExhaustedForID(startID, model, qerr, l.Host.now)
+		startID := Cmd.AgyAgentStartID(ag)
+		_, model := Cmd.AgentHarnessModel(st, nil, ag)
+		l.Host.RecordAgyQuotaExhaustedForID(startID, model, qerr, l.Host.Now())
 		if l.StartsHeld {
 			l.SayOnce("quota held "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, starts are held: %s waits for its re-queue", ag.Name, qerr.Error(), target)
 			continue
@@ -75,9 +75,9 @@ func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 			l.SayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
 			continue
 		}
-		note, _, _ := l.Host.lastNoteContext(ctx, ag.Party, time.Time{}, func() { l.LifecyclePhase(LoopPhaseRecover) })
+		note, _, _ := l.Host.LastNoteContext(ctx, ag.Party, time.Time{}, func() { l.LifecyclePhase(LoopPhaseRecover) })
 		l.LifecyclePhase(LoopPhaseRecover)
-		err = l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		err = l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 			// The replacement took the name, and with it the task; it
 			// serves what the old session served.
 			var next *state.Agent
@@ -94,28 +94,28 @@ func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 					st.Records[j].Session = next.Party
 					continue
 				}
-				st.Records[j].Ended, st.Records[j].Waits = l.Host.now.UTC(), ""
+				st.Records[j].Ended, st.Records[j].Waits = l.Host.Now().UTC(), ""
 			}
 			if i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(ag.Party) }); i >= 0 {
-				removeAgent(st, i)
+				Cmd.RemoveAgent(st, i)
 			}
 			return []state.Event{
-				event(LoopParty, "agents.gone", "%s: %s; task: %s; hand-over: %s", ag.Name, qerr.Error(), ag.Task, note),
-				event(LoopParty, "supervisor.quota", "%s: %s; slot freed, task %s re-queued", ag.Name, qerr.Error(), target),
+				Cmd.Event(LoopParty, "agents.gone", "%s: %s; task: %s; hand-over: %s", ag.Name, qerr.Error(), ag.Task, note),
+				Cmd.Event(LoopParty, "supervisor.quota", "%s: %s; slot freed, task %s re-queued", ag.Name, qerr.Error(), target),
 			}, nil
 		})
 		if err != nil {
 			return err
 		}
 		if startID != "" {
-			_ = l.Host.endAgy(ctx, startID)
+			_ = l.Host.EndAgy(ctx, startID)
 		}
 		l.Mu.Lock()
 		l.FillPause = FillPause{}
 		l.FillEmpty = 0
 		l.BoardNone = nil
 		l.Mu.Unlock()
-		if _, err := fmt.Fprintf(l.Host.out, "SUPERVISOR QUOTA %s: %s; slot freed, re-queuing %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
+		if _, err := fmt.Fprintf(l.Host.Out(), "SUPERVISOR QUOTA %s: %s; slot freed, re-queuing %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 			return err
 		}
 	}
@@ -135,7 +135,7 @@ type quotaRound struct {
 // started, from the last claim the loop logged under ag's name; nil for
 // any other session.
 func (l *Loop) quotaReview(st *state.State, ag state.Agent) (*quotaRound, error) {
-	evs, err := state.FollowSnapshot(l.Host.store, "supervisor-review-quota", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.By.Name == LoopParty.Name && e.Verb == LoopClaimVerb }))
+	evs, err := state.FollowSnapshot(l.Host.Store(), "supervisor-review-quota", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.By.Name == LoopParty.Name && e.Verb == LoopClaimVerb }))
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (l *Loop) quotaReview(st *state.State, ag state.Agent) (*quotaRound, error)
 		if err != nil || rd < 1 || superloop.ReviewerName(ref, rd) != ag.Name {
 			return nil, nil
 		}
-		return &quotaRound{key: key, ref: ref, round: rd, selfHosted: reviewedSelfHosted(l.Host.cfg.Capacity, st, ref)}, nil
+		return &quotaRound{key: key, ref: ref, round: rd, selfHosted: reviewedSelfHosted(l.Host.Cfg().Capacity, st, ref)}, nil
 	}
 	return nil, nil
 }
@@ -189,7 +189,7 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	if review != nil {
 		ref = review.ref
 	}
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok {
 		return fmt.Errorf("no task reference")
 	}
@@ -201,16 +201,16 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	}
 	var brief string
 	if review != nil {
-		brief = filepath.Join(l.Host.store.Dir(), "supervisor-loop", briefName.ReplaceAllString(review.key, "-")+".md")
+		brief = filepath.Join(l.Host.Store().Dir(), "supervisor-loop", briefName.ReplaceAllString(review.key, "-")+".md")
 		if _, err := os.Stat(brief); err != nil {
 			return fmt.Errorf("the brief of review round %d: %w", review.round, err)
 		}
 	} else {
-		if l.Host.cfg.Supervisor.WorkerBrief == "" {
+		if l.Host.Cfg().Supervisor.WorkerBrief == "" {
 			return fmt.Errorf("no supervisor.workerBrief")
 		}
 		var err error
-		brief, err = l.Brief(l.Host.cfg.Supervisor.WorkerBrief, "", "quota "+ag.Name, BriefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
+		brief, err = l.Brief(l.Host.Cfg().Supervisor.WorkerBrief, "", "quota "+ag.Name, BriefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	if review != nil {
 		args = append(args, "--"+reviewFlag)
 	}
-	if len(l.Host.cfg.Capacity.Choices) > 0 {
+	if len(l.Host.Cfg().Capacity.Choices) > 0 {
 		args = append(args, "--harness", harnessAuto)
 		if review != nil && review.selfHosted {
 			args = append(args, "--"+reviewOfSelfHostedFlag)
@@ -235,7 +235,7 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
 	if _, err := l.Run(ctx, args...); err != nil {
-		if Code(err) == ExitRefused {
+		if Cmd.Code(err) == ExitRefused {
 			if place.remote() {
 				if _, rerr := l.remoteStartRefused(ctx, ag.Name); rerr == nil {
 					return nil
@@ -268,10 +268,10 @@ func (l *Loop) RecoverParks(ctx context.Context, st *state.State) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if st.Stop != nil || !slices.ContainsFunc(st.Agents, endedParkCandidate) {
+	if st.Stop != nil || !slices.ContainsFunc(st.Agents, Cmd.EndedParkCandidate) {
 		return nil
 	}
-	sessions, _, err := freshSessions(l.Host)
+	sessions, _, err := Cmd.FreshSessions(l.Host)
 	if err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func (l *Loop) RecoverParks(ctx context.Context, st *state.State) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !endedParkCandidate(ag) {
+		if !Cmd.EndedParkCandidate(ag) {
 			continue
 		}
 		alive := false
@@ -308,14 +308,14 @@ func (l *Loop) RecoverParks(ctx context.Context, st *state.State) error {
 			continue
 		}
 		if l.DryRun {
-			if _, err := fmt.Fprintf(l.Host.out, "SUPERVISOR WOULD RESUME %s: check its harness before restarting a gone session\n", ag.Name); err != nil {
+			if _, err := fmt.Fprintf(l.Host.Out(), "SUPERVISOR WOULD RESUME %s: check its harness before restarting a gone session\n", ag.Name); err != nil {
 				return err
 			}
 			continue
 		}
 		// A missing process alone is not a gone verdict. Ask the harness
 		// to resume its inbox first; only errGone permits replacement.
-		if err := loopResumePark(l.Host, ctx, LoopParty, ag.Name); !errors.Is(err, errGone) {
+		if err := Cmd.LoopResumePark(l.Host, ctx, LoopParty, ag.Name); !errors.Is(err, Cmd.ErrGone()) {
 			continue
 		}
 		if err := l.RestartPark(ctx, ag, ref); err != nil {
@@ -330,16 +330,16 @@ func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) erro
 	if pullPark {
 		ref = ag.Park.On
 	}
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	var startErr error
-	if !ok || (!pullPark && l.Host.cfg.Supervisor.WorkerBrief == "") {
+	if !ok || (!pullPark && l.Host.Cfg().Supervisor.WorkerBrief == "") {
 		startErr = fmt.Errorf("no task reference or supervisor.workerBrief")
 	} else if l.agentUnreadRepo(nil, ag, ref) != "" {
 		startErr = fmt.Errorf("repository of %s is not owned by supervisor", ref)
 	} else if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 		startErr = fmt.Errorf("pull request %s is not open", ref)
 	} else {
-		file, def := l.Host.cfg.Supervisor.WorkerBrief, ""
+		file, def := l.Host.Cfg().Supervisor.WorkerBrief, ""
 		url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
 		if pullPark {
 			// A recovery continues the parked task; the board template would
@@ -349,7 +349,7 @@ func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) erro
 		}
 		brief, err := l.Brief(file, def, "resume "+ag.Name, BriefData{URL: url, Repo: r.Repo, Number: r.N, Worker: ag.Name})
 		if err == nil {
-			text := fmt.Sprintf("\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, parkMessage(ag.Park, LoopParty.Name))
+			text := fmt.Sprintf("\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, Cmd.ParkMessage(ag.Park, LoopParty.Name))
 			if ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
 				text += fmt.Sprintf("\nRemaining post-merge work: %s\n", *ag.Park.PostMerge)
 			}
@@ -367,20 +367,20 @@ func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) erro
 	// start may already have installed a resumable replacement.
 	gone := ag.Party
 	if startErr != nil {
-		current, err := l.Host.store.Read()
+		current, err := l.Host.Store().Read()
 		if err != nil {
 			return err
 		}
 		for _, cur := range current.Agents {
-			if cur.Name == ag.Name && cur.Task == ag.Task && !cur.Is(ag.Party) && endedParkCandidate(cur) && cur.Park.At.Equal(ag.Park.At) {
-				if err := loopResumePark(l.Host, ctx, LoopParty, cur.Name); errors.Is(err, errGone) {
+			if cur.Name == ag.Name && cur.Task == ag.Task && !cur.Is(ag.Party) && Cmd.EndedParkCandidate(cur) && cur.Park.At.Equal(ag.Park.At) {
+				if err := Cmd.LoopResumePark(l.Host, ctx, LoopParty, cur.Name); errors.Is(err, Cmd.ErrGone()) {
 					gone = cur.Party
 				}
 			}
 		}
 	}
 	// A successful start inherits the old task and park through registerAgent.
-	return l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	return l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Agents {
 			cur := &st.Agents[i]
 			if cur.Name != ag.Name || cur.Task != ag.Task || cur.Park == nil || !cur.Park.At.Equal(ag.Park.At) {
@@ -389,9 +389,9 @@ func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) erro
 			if startErr == nil {
 				cur.Park = nil
 			} else if cur.Is(gone) {
-				removeAgent(st, i)
+				Cmd.RemoveAgent(st, i)
 			}
-			return []state.Event{event(LoopParty, "supervisor.resume", "%s: restart result: %v", ag.Name, startErr)}, nil
+			return []state.Event{Cmd.Event(LoopParty, "supervisor.resume", "%s: restart result: %v", ag.Name, startErr)}, nil
 		}
 		return nil, nil
 	})
@@ -399,5 +399,5 @@ func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) erro
 
 // recoverUnfinishedTurns runs in the command, which holds what it needs (loopRecoverUnfinishedTurns).
 func (l *Loop) recoverUnfinishedTurns(ctx context.Context, st *state.State) error {
-	return loopRecoverUnfinishedTurns(l, ctx, st)
+	return Cmd.LoopRecoverUnfinishedTurns(l, ctx, st)
 }

@@ -30,24 +30,24 @@ type epicSnapshot struct {
 // A saved signature survives loop restarts, while an unsuccessful wake retries.
 func (l *Loop) WakeEpicOwners(ctx context.Context, st *state.State) error {
 	var view epicSnapshot
-	if _, err := l.Host.store.ReadFile(epicSnapshotFile, &view); err != nil {
+	if _, err := l.Host.Store().ReadFile(epicSnapshotFile, &view); err != nil {
 		return err
 	}
 	for _, e := range view.Epics {
-		owner := epicOwner(st, e.Ref)
+		owner := Cmd.EpicOwner(st, e.Ref)
 		if owner == nil || owner.Park == nil || !strings.EqualFold(LoopParkOn(owner.Park), e.Ref) {
 			continue
 		}
 		var parts []string
 		for _, ch := range e.Children {
-			part := ch.Ref + ": " + epicChildStatus(st, ch, l.Host.timeNow(), l.Host.deliveryPolicy())
+			part := ch.Ref + ": " + Cmd.EpicChildStatus(st, ch, l.Host.TimeNow(), l.Host.DeliveryPolicy())
 			for _, d := range st.Deliveries {
 				if strings.EqualFold(d.Ref, ch.Ref) {
 					part += fmt.Sprintf(" %s %s %s", d.Step, d.Since.Format(time.RFC3339Nano), d.Verdict)
 				}
 			}
 			for _, report := range st.WorkerReports {
-				linked := slices.ContainsFunc(namedRefs(report.Task, ""), func(ref string) bool { return strings.EqualFold(ref, ch.Ref) })
+				linked := slices.ContainsFunc(Cmd.NamedRefs(report.Task, ""), func(ref string) bool { return strings.EqualFold(ref, ch.Ref) })
 				if !linked {
 					for _, d := range st.Deliveries {
 						if strings.EqualFold(d.Ref, ch.Ref) && strings.EqualFold(d.Agent, report.By.Name) {
@@ -69,7 +69,7 @@ func (l *Loop) WakeEpicOwners(ctx context.Context, st *state.State) error {
 		signature := "children:\n" + strings.Join(parts, "\n")
 		file := "epic-owner-" + strings.NewReplacer("/", "-", "#", "-").Replace(e.Ref) + ".json"
 		var previous string
-		if _, err := l.Host.store.ReadFile(file, &previous); err != nil {
+		if _, err := l.Host.Store().ReadFile(file, &previous); err != nil {
 			return err
 		}
 		if signature == previous {
@@ -78,7 +78,7 @@ func (l *Loop) WakeEpicOwners(ctx context.Context, st *state.State) error {
 		if _, err := l.Run(ctx, agentsName, agentWakeName, owner.Name, "Epic sub-issue observations changed. Read worker reports and reviews, maintain the plan, and prove acceptance when ready.\n"+signature); err != nil {
 			return err
 		}
-		if err := l.Host.store.WriteFile(file, signature); err != nil {
+		if err := l.Host.Store().WriteFile(file, signature); err != nil {
 			return err
 		}
 	}
@@ -87,7 +87,7 @@ func (l *Loop) WakeEpicOwners(ctx context.Context, st *state.State) error {
 
 // epicStart runs in the command, which holds what it needs (loopEpicStart).
 func (l *Loop) epicStart(next LoopBoardItem) error {
-	return loopEpicStart(l, next)
+	return Cmd.LoopEpicStart(l, next)
 }
 
 var EpicGitHub = github.RunGH
@@ -102,13 +102,13 @@ func (l *Loop) CompleteEpics(ctx context.Context, st *state.State) error {
 		if !ok || !report.Finished || !strings.HasPrefix(strings.TrimSpace(report.Text), EpicAcceptanceProven) || strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(report.Text), EpicAcceptanceProven)) == "" {
 			continue
 		}
-		r, ok := parseRef(ref)
+		r, ok := Cmd.ParseRef(ref)
 		if !ok {
 			continue
 		}
 		receipt := "epic-complete-" + strings.NewReplacer("/", "-", "#", "-").Replace(ref) + ".json"
 		var completed bool
-		if _, err := l.Host.store.ReadFile(receipt, &completed); err != nil {
+		if _, err := l.Host.Store().ReadFile(receipt, &completed); err != nil {
 			return err
 		}
 		if completed {
@@ -127,7 +127,7 @@ func (l *Loop) CompleteEpics(ctx context.Context, st *state.State) error {
 		if _, err := l.Run(ctx, LoopBoard, "move", ref, "done"); err != nil {
 			return err
 		}
-		if err := l.Host.store.WriteFile(receipt, true); err != nil {
+		if err := l.Host.Store().WriteFile(receipt, true); err != nil {
 			return err
 		}
 	}

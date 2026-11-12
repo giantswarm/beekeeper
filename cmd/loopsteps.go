@@ -113,7 +113,7 @@ func loopRoster(l *Loop, ctx context.Context, planned map[string]bool) error {
 	if l.PauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
-	a := l.Host.snapshotAtNow()
+	a := asApp(l.Host).snapshotAtNow()
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -162,7 +162,7 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 // started (Work.Created), with the item or pull request each session was
 // working on when it filed the issue.
 func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
-	sessions, _, err := loopSessions(l.Host)
+	sessions, _, err := loopSessions(asApp(l.Host))
 	if err != nil || len(sessions) == 0 {
 		return nil
 	}
@@ -171,7 +171,7 @@ func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
 		if !s.LastActive.IsZero() && s.LastActive.Before(l.Since) {
 			continue
 		}
-		w, _ := harnessForSession(s).ReadTranscript(l.Host, s, l.Host.timeNow())
+		w, _ := harnessForSession(s).ReadTranscript(asApp(l.Host), s, asApp(l.Host).timeNow())
 		if len(w.Created) == 0 {
 			continue
 		}
@@ -209,8 +209,8 @@ func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
 			out = append(out, superloop.FiledIssue{Ref: ref, URL: url, Agent: agent, From: from})
 		}
 		if !l.DryRun && len(createdRefs) > 0 && from == "" && agent != guideName && !holdsRole(st, p) && !agentIdle(st, p) && !endedOwner(st, p) {
-			_ = l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
-				return recordSessionIssues(current, p, p, l.Host.timeNow(), createdRefs), nil
+			_ = asApp(l.Host).store.Update(func(current *state.State) ([]state.Event, error) {
+				return recordSessionIssues(current, p, p, asApp(l.Host).timeNow(), createdRefs), nil
 			})
 		}
 	}
@@ -222,7 +222,7 @@ func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
 // lock; settling inside Update lets a concurrent watch take a timer first
 // without either firing it twice. Side effects follow the successful save.
 func loopFireTimers(l *Loop, ctx context.Context, st *state.State) error {
-	a := l.Host
+	a := asApp(l.Host)
 	var acting []state.Timer
 	for _, t := range st.Timers {
 		if timerActs(t) {

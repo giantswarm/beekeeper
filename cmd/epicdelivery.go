@@ -208,19 +208,19 @@ func loopEpicStart(l *Loop, next LoopBoardItem) error {
 	if !next.EpicOwner && next.Epic == "" {
 		return nil
 	}
-	st, err := l.Host.store.Read()
+	st, err := asApp(l.Host).store.Read()
 	if err != nil {
 		return err
 	}
 	var view epicSnapshot
-	if _, err := l.Host.store.ReadFile(epicSnapshotFile, &view); err != nil {
+	if _, err := asApp(l.Host).store.ReadFile(epicSnapshotFile, &view); err != nil {
 		return err
 	}
 	if next.EpicOwner && epicOwner(st, next.Ref) != nil {
 		return ErrLoopLater
 	}
 	c := board.Candidate{Item: board.Item{Ref: next.Ref}, Epic: next.Epic, EpicOwner: next.EpicOwner}
-	sc := pickScope{epics: view, epicLimit: l.Host.cfg.Delivery.EpicLimit, epicParallel: l.Host.cfg.Delivery.EpicParallel, listed: l.Host.timeNow(), wipPolicy: l.Host.deliveryPolicy()}
+	sc := pickScope{epics: view, epicLimit: asApp(l.Host).cfg.Delivery.EpicLimit, epicParallel: asApp(l.Host).cfg.Delivery.EpicParallel, listed: asApp(l.Host).timeNow(), wipPolicy: asApp(l.Host).deliveryPolicy()}
 	if why := epicAdmission(st, c, sc); why != "" {
 		return fmt.Errorf("%s: %s: %w", next.URL, why, ErrLoopLater)
 	}

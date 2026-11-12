@@ -104,7 +104,7 @@ func continuationName(ag state.Agent) string {
 
 func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
 	finished := false
-	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := asApp(l.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(cur state.Agent) bool { return cur.Name == name })
 		j := slices.IndexFunc(st.Agents, func(cur state.Agent) bool { return cur.Is(old.Party) })
 		if i < 0 || j < 0 || st.Agents[i].Undelivered != "" {
@@ -131,7 +131,7 @@ func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
 				st.Records[k].Session = next.Party
 				st.Records[k].Waits = ""
 				if next.Done {
-					st.Records[k].Ended = l.Host.now.UTC()
+					st.Records[k].Ended = asApp(l.Host).now.UTC()
 				}
 			}
 		}
@@ -167,7 +167,7 @@ func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
 				st.Merges[k].By = next.Party
 			}
 		}
-		if _, err := handClaims(st, lease.Dir(l.Host.cfg.LeaseDir), prev.Party, next.Party); err != nil {
+		if _, err := handClaims(st, lease.Dir(asApp(l.Host).cfg.LeaseDir), prev.Party, next.Party); err != nil {
 			return nil, err
 		}
 		e := event(LoopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
@@ -190,7 +190,7 @@ func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
 		if h, id, ok := harnessOf(old.Party); ok {
 			_ = plat.Launcher.Stop(context.Background(), h.Unit(id))
 		}
-		_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
+		_, _ = fmt.Fprintf(asApp(l.Host).out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
 	}
 	return err
 }

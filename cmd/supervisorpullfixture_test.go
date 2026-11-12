@@ -12,7 +12,7 @@ import (
 func fixtureLoopObservation(l *Loop, ctx context.Context, ref string, changed time.Time, step string) (LoopPullObservation, error) {
 	if step == "" {
 		p, err := ReadLoopPull(ctx, ref)
-		return LoopPullObservation{Pull: p, At: l.Host.timeNow()}, err
+		return LoopPullObservation{Pull: p, At: asApp(l.Host).timeNow()}, err
 	}
 	p, err := fixtureObservePull(l, ctx, ref, changed, step)
 	return LoopPullObservation{Pull: p, At: l.Pulls[ref].At, Changed: changed}, err
@@ -26,11 +26,11 @@ func fixtureObservePull(l *Loop, ctx context.Context, ref string, changed time.T
 	if err := ctx.Err(); err != nil {
 		return superloop.Pull{}, err
 	}
-	if seen, ok := l.Pulls[ref]; ok && seen.Changed.Equal(changed) && l.Host.timeNow().Sub(seen.At) < loopPullEvery {
+	if seen, ok := l.Pulls[ref]; ok && seen.Changed.Equal(changed) && asApp(l.Host).timeNow().Sub(seen.At) < loopPullEvery {
 		return seen.Pull, nil
 	}
 	var p superloop.Pull
-	err := l.Host.loopGitHub(ctx, step, func() (err error) {
+	err := asApp(l.Host).loopGitHub(ctx, step, func() (err error) {
 		p, err = ReadLoopPull(ctx, ref)
 		return err
 	})
@@ -40,10 +40,10 @@ func fixtureObservePull(l *Loop, ctx context.Context, ref string, changed time.T
 	if l.Pulls == nil {
 		l.Pulls = map[string]LoopPullObservation{}
 	}
-	at := l.Host.timeNow()
+	at := asApp(l.Host).timeNow()
 	// A running loop's clock stays at the start of its pass: this read may be
 	// minutes later, and the next pass must not take it for an old one.
-	if l.Host.loopNow != nil {
+	if asApp(l.Host).loopNow != nil {
 		at = time.Now()
 	}
 	l.Pulls[ref] = LoopPullObservation{Pull: p, At: at, Changed: changed}
@@ -53,7 +53,7 @@ func fixtureObservePull(l *Loop, ctx context.Context, ref string, changed time.T
 func fixtureLoopSweep(l *Loop, ctx context.Context, in superloop.Input) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	now := l.Host.timeNow()
+	now := asApp(l.Host).timeNow()
 	if l.OpenPullsAt.IsZero() || now.Sub(l.OpenPullsAt) >= SweepListEvery {
 		authors := func() ([]string, error) {
 			if len(in.Desk.Authors) > 0 {
@@ -72,8 +72,8 @@ func fixtureLoopSweep(l *Loop, ctx context.Context, in superloop.Input) {
 		// must not spend its allowance and hide approved heads. The
 		// listing interval still bounds searches; shared floors still apply.
 		var open []string
-		err := l.Host.loopGitHub(ctx, "pull discovery", func() (err error) {
-			open, err = ReadOpenPulls(ctx, authors, l.Host.cfg.GitHub.AllowedOrgs)
+		err := asApp(l.Host).loopGitHub(ctx, "pull discovery", func() (err error) {
+			open, err = ReadOpenPulls(ctx, authors, asApp(l.Host).cfg.GitHub.AllowedOrgs)
 			return err
 		})
 		l.SweepIncomplete = err != nil || len(open) >= SweepListLimit

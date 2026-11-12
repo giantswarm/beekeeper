@@ -335,7 +335,7 @@ func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
 // loopSettleOverrides is the loop's tick of the overrides: its GitHub reads
 // take the loop's allowance and wait under the budget floor as its timers'.
 func loopSettleOverrides(l *Loop, ctx context.Context, st *state.State) {
-	a := l.Host
+	a := asApp(l.Host)
 	held := BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
 		a.cfg.GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st)
 	lines, err := a.settleOverrides(ctx, LoopParty, func(ts []state.Timer) map[int]checkResult {

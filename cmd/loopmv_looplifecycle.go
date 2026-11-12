@@ -105,7 +105,7 @@ func (l *Loop) LifecyclePhase(phase string) {
 	l.Lifecycle.Phase, l.Lifecycle.At = phase, LoopLifecycleNow().UTC()
 	// Diagnostics must not change loop admission or turn a successful pass
 	// into a failure. Recovery reports missing evidence when this write fails.
-	_ = l.Host.store.WriteFile(LoopLifecycleFile, l.Lifecycle)
+	_ = l.Host.Store().WriteFile(LoopLifecycleFile, l.Lifecycle)
 	if !l.DryRun && phase != LoopPhaseBetween {
 		// Retained controllers understand this observation, even when they do
 		// not understand lifecycle records. No goroutine refreshes a stuck phase.

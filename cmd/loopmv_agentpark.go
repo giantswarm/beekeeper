@@ -8,6 +8,6 @@ import (
 )
 
 func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {
-	head, _ := publishedParkVerification(ctx, on, dir, git, gh)
+	head, _ := Cmd.PublishedParkVerification(ctx, on, dir, git, gh)
 	return head
 }

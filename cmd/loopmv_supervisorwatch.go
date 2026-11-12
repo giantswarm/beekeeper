@@ -50,15 +50,15 @@ func watchConditionEvent(e state.Event) bool {
 // Budget readings expire rather than treating a dead watch as permission
 // to start workers. Thresholds and all source reads stay in watch.
 func (l *Loop) WatchConditions(ctx context.Context) error {
-	if line, err := l.Host.checkDeliveries(l.Host.timeNow()); err != nil {
+	if line, err := l.Host.CheckDeliveries(l.Host.TimeNow()); err != nil {
 		return err
 	} else if line != "" {
-		_, _ = fmt.Fprintln(l.Host.out, line)
+		_, _ = fmt.Fprintln(l.Host.Out(), line)
 	}
-	if line, err := l.Host.checkThroughput(l.Host.timeNow(), false, func() { l.LifecyclePhase("read throughput history") }); err != nil {
+	if line, err := l.Host.CheckThroughput(l.Host.TimeNow(), false, func() { l.LifecyclePhase("read throughput history") }); err != nil {
 		return err
 	} else if line != "" {
-		_, _ = fmt.Fprintln(l.Host.out, line)
+		_, _ = fmt.Fprintln(l.Host.Out(), line)
 	}
 	if l.IndependentFill {
 		return nil // the refill stream owns admission while observations may block
@@ -69,7 +69,7 @@ func (l *Loop) WatchConditions(ctx context.Context) error {
 // refreshStartConditions belongs to the refill stream in continuous mode and
 // the main pass in once mode. It must not refresh the observation heartbeat.
 func (l *Loop) refreshStartConditions(ctx context.Context) error {
-	evs, err := state.FollowSnapshot(l.Host.store, "supervisor-watch-conditions", "v2", watchConditionEvent)
+	evs, err := state.FollowSnapshot(l.Host.Store(), "supervisor-watch-conditions", "v2", watchConditionEvent)
 	if err != nil {
 		return err
 	}
@@ -142,19 +142,19 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 	}
 	// Prefer fresh levels without replaying identical samples into events.jsonl.
 	var freshBudget bool
-	if at, err := l.Host.readWatchLevel("budget-state", &freshBudget); err != nil {
+	if at, err := l.Host.ReadWatchLevel("budget-state", &freshBudget); err != nil {
 		return err
 	} else if at.After(budgetAt) {
 		budgetAt, budgetHeld = at, freshBudget
 	}
 	var freshMachine map[string]string
-	if at, err := l.Host.readWatchLevel("machine-state", &freshMachine); err != nil {
+	if at, err := l.Host.ReadWatchLevel("machine-state", &freshMachine); err != nil {
 		return err
 	} else if at.After(machineAt) {
 		active = freshMachine
 	}
 	var freshDisk watchDiskReading
-	if at, err := l.Host.readWatchLevel("disk-state", &freshDisk); err != nil {
+	if at, err := l.Host.ReadWatchLevel("disk-state", &freshDisk); err != nil {
 		return err
 	} else if at.After(diskAt) {
 		diskAt, disk = at, freshDisk
@@ -174,7 +174,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 				}
 				if _, err := l.Run(ctx, LoopDiskKind, "prune", "--apply"); err != nil {
 					l.SayOnce(diskKey+" prune", "SUPERVISOR DISK prune failed; starts remain held: %v", err)
-					outcome = loopDiskPruneFailed + oneLine(err.Error())
+					outcome = loopDiskPruneFailed + Cmd.OneLine(err.Error())
 				}
 			}
 			if err := l.Record(act, outcome); err != nil {
@@ -192,12 +192,12 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 				text += ". Cleanup failed: " + reason
 			}
 			var holding diskHolding
-			if found, _ := l.Host.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.Host.timeNow().Sub(holding.At) < time.Hour {
+			if found, _ := l.Host.Store().ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.Host.TimeNow().Sub(holding.At) < time.Hour {
 				text += ". Holding the space: " + holding.Text
 			}
 			text += ". `beekeeper disk usage` lists what holds the space by owner; the writers above are process counters, not what stayed on disk. Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
 			fileAct := superloop.Action{Kind: superloop.KindFile, Key: diskKey}
-			line := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, l.Host.timeNow().UTC().Format(time.RFC3339), FileReportSeparator, text)
+			line := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, l.Host.TimeNow().UTC().Format(time.RFC3339), FileReportSeparator, text)
 			if err := l.Record(fileAct, line); err != nil {
 				l.SayOnce(diskKey+" file", "SUPERVISOR DISK finding failed; starts remain held: %v", err)
 			}
@@ -205,7 +205,7 @@ func (l *Loop) refreshStartConditions(ctx context.Context) error {
 	}
 	// A live watch's tick can wait minutes on the state lock: only a reading
 	// older than that says the watch is gone.
-	stale := budgetAt.IsZero() || l.Host.timeNow().Sub(budgetAt) > max(3*l.Host.cfg.Watch.Interval.Duration, loopBudgetStale)
+	stale := budgetAt.IsZero() || l.Host.TimeNow().Sub(budgetAt) > max(3*l.Host.Cfg().Watch.Interval.Duration, loopBudgetStale)
 	l.HoldStarts(budgetHeld || stale || len(active) > 0)
 	if l.HoldingStarts() {
 		l.SayOnce("watch-hold", "SUPERVISOR STARTS HELD: watch budget held=%t stale=%t; machine conditions %v", budgetHeld, stale, active)

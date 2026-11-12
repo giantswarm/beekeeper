@@ -29,7 +29,7 @@ type alertReplacement struct {
 
 func (l *Loop) watchAlerts(ctx context.Context) error {
 	a := l.Host
-	evs, err := state.FollowSnapshot(a.store, "supervisor-alert-history", "v2", l.eventHistoryFilter(func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.Store(), "supervisor-alert-history", "v2", l.eventHistoryFilter(func(e state.Event) bool {
 		return e.Verb == LoopAlertVerb || e.Verb == loopAlertIntent || e.Verb == LoopClaimVerb || e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent || e.Verb == "agents.start"
 	}))
 	if err != nil {
@@ -68,18 +68,18 @@ func (l *Loop) watchAlerts(ctx context.Context) error {
 			done[r.Key] = true
 		}
 	}
-	firing, err := readLoopAlerts(ctx, a)
+	firing, err := Cmd.ReadLoopAlerts(ctx, a)
 	if err != nil {
 		return err
 	}
-	st, err := a.store.Read()
+	st, err := a.Store().Read()
 	if err != nil {
 		return err
 	}
 	var sessions []*claude.Session
 	if slices.ContainsFunc(st.AlertOwners, func(o state.AlertOwner) bool { return !o.Person() && o.Ended.IsZero() }) {
 		var err error
-		sessions, _, err = a.sessions()
+		sessions, _, err = a.Sessions()
 		if err != nil {
 			return fmt.Errorf("reading alert owners: %w", err)
 		}
@@ -88,12 +88,12 @@ func (l *Loop) watchAlerts(ctx context.Context) error {
 	for _, f := range firing {
 		// A preceding event may have resumed or replaced a parked worker.
 		// Use its current roster entry before routing the next instance.
-		st, err = a.store.Read()
+		st, err = a.Store().Read()
 		if err != nil {
 			return err
 		}
 		owned := slices.ContainsFunc(st.AlertOwners, func(o state.AlertOwner) bool {
-			if alertOwnerKey(o) != f.ScopedKey() || !o.Ended.IsZero() {
+			if Cmd.AlertOwnerKey(o) != f.ScopedKey() || !o.Ended.IsZero() {
 				return false
 			}
 			_, live := claude.Live(sessions, o.By)
@@ -131,7 +131,7 @@ func (l *Loop) watchAlerts(ctx context.Context) error {
 				break
 			}
 		}
-		if owned || waiting || staffed || done[key] || f.Severity != a.cfg.Alerts.PageSeverity || !teamAlert(a.cfg.Alerts.Team, f) {
+		if owned || waiting || staffed || done[key] || f.Severity != a.Cfg().Alerts.PageSeverity || !teamAlert(a.Cfg().Alerts.Team, f) {
 			continue
 		}
 		refs := blockedAlertRefs(st, f)
@@ -166,7 +166,7 @@ func (l *Loop) watchAlerts(ctx context.Context) error {
 		if !oldest.IsZero() {
 			since = oldest.UTC().Format(time.RFC3339Nano)
 		}
-		_, err := fmt.Fprintf(a.out, "SUPERVISOR ALERTS unowned: %s; count=%d; oldest firing=%s\n", strings.Join(installations, ", "), len(unowned), since)
+		_, err := fmt.Fprintf(a.Out(), "SUPERVISOR ALERTS unowned: %s; count=%d; oldest firing=%s\n", strings.Join(installations, ", "), len(unowned), since)
 		return err
 	}
 	return nil
@@ -188,11 +188,11 @@ func blockedAlertRefs(st *state.State, f alerts.Firing) []string {
 	var refs []string
 	for _, r := range st.Records {
 		q, ok := strings.CutPrefix(r.Waits, AlertParkPrefix)
-		ref, valid := parseRef(r.Issue)
+		ref, valid := Cmd.ParseRef(r.Issue)
 		if !r.Ended.IsZero() || !valid || !ok || len(alerts.Match([]alerts.Firing{f}, q)) == 0 {
 			continue
 		}
-		name := refName(ref)
+		name := Cmd.RefName(ref)
 		if !slices.Contains(refs, name) {
 			refs = append(refs, name)
 		}
@@ -201,27 +201,27 @@ func blockedAlertRefs(st *state.State, f alerts.Firing) []string {
 }
 
 func (l *Loop) alertNote(act superloop.Action, question string, f alerts.Firing, refs []string) error {
-	if l.Host.cfg.Guide.Person == "" {
+	if l.Host.Cfg().Guide.Person == "" {
 		return fmt.Errorf("guide.person is unset: cannot route unowned alert %s", f.Name())
 	}
-	question = truncate(question, 150)
-	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	question = Cmd.Truncate(question, 150)
+	err := l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		// Use the same durable note state as note add, without GitHub calls.
 		st.NextNote++
 		id := st.NextNote
 		status := fmt.Sprintf("%s %s since %s blocks %s", f.Instance(), f.Where, f.Since, strings.Join(refs, ", "))
 		st.Notes = append(st.Notes, state.Note{
-			Refs: refs, ID: id, For: l.Host.cfg.Guide.Person, By: LoopParty,
-			Text: question + "\n" + status, At: l.Host.timeNow(), Kind: noteDecision,
+			Refs: refs, ID: id, For: l.Host.Cfg().Guide.Person, By: LoopParty,
+			Text: question + "\n" + status, At: l.Host.TimeNow(), Kind: noteDecision,
 			Question: question, StatusQuo: status,
 			Default: "keep this alert unowned until an owner is assigned",
 		})
-		return []state.Event{event(LoopParty, "note.add", "#%d %s: %s %s since %s", id, question, f.Instance(), f.Where, f.Since), event(LoopParty, LoopAlertVerb, "%s", superloop.Detail(act, "unowned alert sent to the guide: "+f.Instance()))}, nil
+		return []state.Event{Cmd.Event(LoopParty, "note.add", "#%d %s: %s %s since %s", id, question, f.Instance(), f.Where, f.Since), Cmd.Event(LoopParty, LoopAlertVerb, "%s", superloop.Detail(act, "unowned alert sent to the guide: "+f.Instance()))}, nil
 	})
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(l.Host.out, "SUPERVISOR ALERT unowned alert sent to the guide:", f.Instance())
+	_, err = fmt.Fprintln(l.Host.Out(), "SUPERVISOR ALERT unowned alert sent to the guide:", f.Instance())
 	return err
 }
 
@@ -231,7 +231,7 @@ func (l *Loop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs [
 	}
 	// The intent precedes remove/start. Reconcile a successful start after
 	// a crash before recording completion, without retiring the replacement.
-	intents, err := l.Host.store.Events(0, func(e state.Event) bool { return e.Verb == loopAlertIntent && replacementKey(e.Detail) == r.Key })
+	intents, err := l.Host.Store().Events(0, func(e state.Event) bool { return e.Verb == loopAlertIntent && replacementKey(e.Detail) == r.Key })
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func (l *Loop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs [
 		})
 	}
 	if !started {
-		st, err := l.Host.store.Read()
+		st, err := l.Host.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -256,7 +256,7 @@ func (l *Loop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs [
 			}
 		}
 		args := []string{agentsName, agentStartName, r.Name, r.Brief}
-		if len(l.Host.cfg.Capacity.Choices) > 0 {
+		if len(l.Host.Cfg().Capacity.Choices) > 0 {
 			args = append(args, "--harness", harnessAuto)
 		}
 		if _, err := l.Run(ctx, args...); err != nil {
@@ -280,7 +280,7 @@ func (l *Loop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Ag
 	}) {
 		return l.SettleAlertWake(act, ag)
 	}
-	if !loopResumable(a, st, ag) {
+	if !Cmd.LoopResumable(a, st, ag) {
 		// Write the complete replacement brief before retiring the old
 		// roster entry: a restart can finish staffing exactly this task.
 		task := ag.Task
@@ -288,10 +288,10 @@ func (l *Loop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Ag
 			task += "\nWork the original item " + ref + "; read its acceptance criteria and finish it in full."
 		}
 		data := BriefData{Task: task + "\n\n" + act.Message, Worker: ag.Name}
-		if ref, ok := parseRef(AgentRef(st, ag.Name)); ok {
+		if ref, ok := Cmd.ParseRef(AgentRef(st, ag.Name)); ok {
 			data.Repo, data.Number, data.URL = ref.Repo, ref.N, fmt.Sprintf("https://github.com/%s/issues/%d", ref.Repo, ref.N)
 		}
-		brief, err := l.Brief(a.cfg.Supervisor.WorkerBrief, "{{.Task}}", key, data)
+		brief, err := l.Brief(a.Cfg().Supervisor.WorkerBrief, "{{.Task}}", key, data)
 		if err != nil {
 			return err
 		}
@@ -300,7 +300,7 @@ func (l *Loop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Ag
 		if err != nil {
 			return err
 		}
-		if err := a.store.Record(event(LoopParty, loopAlertIntent, "%s", raw)); err != nil {
+		if err := a.Store().Record(Cmd.Event(LoopParty, loopAlertIntent, "%s", raw)); err != nil {
 			return err
 		}
 		if err := l.replaceAlertWorker(ctx, r, evs); err != nil {
@@ -318,20 +318,20 @@ func (l *Loop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Ag
 // End exactly the park whose wake was delivered, and record completion in
 // the same save. A fast worker may already have parked on a new event.
 func (l *Loop) SettleAlertWake(act superloop.Action, ag state.Agent) error {
-	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		for i := range st.Agents {
 			current := &st.Agents[i]
 			if current.Is(ag.Party) && current.Park != nil && current.Park.On == ag.Park.On && current.Park.At.Equal(ag.Park.At) && len(current.Park.Continuation) == 0 {
 				current.Park = nil
-				evs = append(evs, event(LoopParty, resumedEvent, "%s: alert event fired", ag.Name))
+				evs = append(evs, Cmd.Event(LoopParty, resumedEvent, "%s: alert event fired", ag.Name))
 			}
 		}
-		return append(evs, event(LoopParty, LoopAlertVerb, "%s", superloop.Detail(act, "alert wake delivered to "+ag.Name))), nil
+		return append(evs, Cmd.Event(LoopParty, LoopAlertVerb, "%s", superloop.Detail(act, "alert wake delivered to "+ag.Name))), nil
 	})
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(l.Host.out, "SUPERVISOR ALERT woke", ag.Name)
+	_, err = fmt.Fprintln(l.Host.Out(), "SUPERVISOR ALERT woke", ag.Name)
 	return err
 }

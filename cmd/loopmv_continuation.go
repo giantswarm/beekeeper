@@ -45,23 +45,23 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !freshPark(st, ag) || len(ag.Park.Continuation) == 0 {
+		if !Cmd.FreshPark(st, ag) || len(ag.Park.Continuation) == 0 {
 			continue
 		}
 		ref := AgentRef(st, ag.Name)
-		if _, ok := parseRef(ag.Park.On); ok {
+		if _, ok := Cmd.ParseRef(ag.Park.On); ok {
 			ref = ag.Park.On
 		}
-		if _, ok := parseRef(ref); !ok {
-			if refs := namedRefs(ag.Task+" "+ag.LastTask, l.Host.cfg.Board.Owner); len(refs) > 0 {
+		if _, ok := Cmd.ParseRef(ref); !ok {
+			if refs := Cmd.NamedRefs(ag.Task+" "+ag.LastTask, l.Host.Cfg().Board.Owner); len(refs) > 0 {
 				ref = refs[0]
 			}
 		}
-		r, ok := parseRef(ref)
+		r, ok := Cmd.ParseRef(ref)
 		if !ok || l.agentUnreadRepo(st, ag, ref) != "" {
 			continue
 		}
-		ref = refName(r)
+		ref = Cmd.RefName(r)
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
@@ -70,8 +70,8 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			l.SayOnce("continue "+ag.Name, "SUPERVISOR WOULD CONTINUE %s with a fresh worker for %s", ag.Name, ref)
 			continue
 		}
-		name := continuationName(ag)
-		current, err := l.Host.store.Read()
+		name := Cmd.ContinuationName(ag)
+		current, err := l.Host.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -81,7 +81,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			// coordinator. A new managed execution owns a new publish branch,
 			// so it cannot safely continue the original pull request. agents
 			// start still applies current local headroom and provider pace.
-			url := issueURL(ref)
+			url := Cmd.IssueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
 				pull, err := readLoopContextPull(ctx, ref)
@@ -106,7 +106,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			context += "\nPrevious workspace (inspect for unpublished work): " + workspace
 			for _, rp := range st.ReviewParks {
 				if rp.Party.Is(ag.Party) {
-					pr, ok := parseRef(rp.On)
+					pr, ok := Cmd.ParseRef(rp.On)
 					if ok {
 						context += fmt.Sprintf("\nRelated PR: https://github.com/%s/pull/%d at %s", pr.Repo, pr.N, rp.ReviewHead)
 						if rp.PostMerge != nil && *rp.PostMerge != "" {
@@ -115,13 +115,13 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 					}
 				}
 			}
-			note, _, err := l.Host.lastNoteContext(ctx, ag.Party, ag.AssignedAt, func() { l.LifecyclePhase(loopPhaseContinueParks) })
+			note, _, err := l.Host.LastNoteContext(ctx, ag.Party, ag.AssignedAt, func() { l.LifecyclePhase(loopPhaseContinueParks) })
 			if err != nil {
 				return err
 			}
 			l.LifecyclePhase(loopPhaseContinueParks)
 			if note != "" {
-				context += "\nLatest handover note (full record in beekeeper log --verb agents.note):\n" + truncate(note, 8192)
+				context += "\nLatest handover note (full record in beekeeper log --verb agents.note):\n" + Cmd.Truncate(note, 8192)
 			}
 
 			if ag.Park.PostMerge != nil {
@@ -129,7 +129,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			}
 			servesURL := ""
 			if serves := cmp.Or(LoopServes(st, ag), LoopTaskServes(ag, ref)); serves != "" {
-				servesURL = issueURL(serves)
+				servesURL = Cmd.IssueURL(serves)
 			}
 			brief, err := l.Brief("", freshContinuationBrief, "continuation "+name, BriefData{URL: url, Repo: r.Repo, Number: r.N, ServesURL: servesURL, Task: brieflint.QuoteData(ag.Task), Context: brieflint.QuoteData(context)})
 			if err != nil {
@@ -139,10 +139,10 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 				continue
 			}
 			args := []string{agentsName, agentStartName, name, brief}
-			if len(l.Host.cfg.Capacity.Choices) > 0 {
+			if len(l.Host.Cfg().Capacity.Choices) > 0 {
 				args = append(args, "--harness", harnessAuto)
 			}
-			if err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 				for k := range st.Agents {
 					cur := &st.Agents[k]
 					if cur.Is(ag.Party) && cur.Park != nil && cur.Park.At.Equal(ag.Park.At) && slices.Equal(cur.Park.Continuation, ag.Park.Continuation) {
@@ -150,7 +150,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 						return nil, nil
 					}
 				}
-				return nil, refused("continuation changed before startup")
+				return nil, Cmd.Refused("continuation changed before startup")
 			}); err != nil {
 				if errors.Is(err, state.ErrRecoveryWriterFenced) {
 					return err
@@ -161,7 +161,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 				if errors.Is(err, state.ErrRecoveryWriterFenced) {
 					return err
 				}
-				_ = l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+				_ = l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 					if !slices.ContainsFunc(st.Agents, func(cur state.Agent) bool { return cur.Name == name }) {
 						for k := range st.Agents {
 							if st.Agents[k].Is(ag.Party) && st.Agents[k].Park != nil {
@@ -177,7 +177,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			l.LifecyclePhase(loopPhaseContinueParks)
 		}
 		if i >= 0 && current.Agents[i].Execution != nil {
-			if rec, _ := executionRecord(current, *current.Agents[i].Execution); rec != nil && unactivated(rec) {
+			if rec, _ := Cmd.ExecutionRecord(current, *current.Agents[i].Execution); rec != nil && Cmd.Unactivated(rec) {
 				if _, err := l.remoteStartRefused(ctx, name); err != nil {
 					if errors.Is(err, state.ErrRecoveryWriterFenced) {
 						return err
@@ -204,5 +204,5 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 
 // FinishContinuation runs in the command, which holds what it needs (loopFinishContinuation).
 func (l *Loop) FinishContinuation(old state.Agent, name string) error {
-	return loopFinishContinuation(l, old, name)
+	return Cmd.LoopFinishContinuation(l, old, name)
 }

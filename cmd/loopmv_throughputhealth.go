@@ -30,9 +30,9 @@ type throughputObservation struct {
 // Keep retry/backoff decisions out of this ledger. Only a command actually
 // attempted contributes; capacity and budget refusals are intentional holds.
 func (l *Loop) RunStart(ctx context.Context, act superloop.Action, args ...string) (string, error) {
-	begin := l.Host.timeNow()
+	begin := l.Host.TimeNow()
 	out, err := l.Run(ctx, args...)
-	if err != nil && (errors.Is(err, context.Canceled) || Code(err) == ExitRefused || isLoopGitHubHeldOutput(out)) {
+	if err != nil && (errors.Is(err, context.Canceled) || Cmd.Code(err) == ExitRefused || isLoopGitHubHeldOutput(out)) {
 		return out, err
 	}
 	// A start cut off after it registered its session (killed while it
@@ -47,7 +47,7 @@ func (l *Loop) RunStart(ctx context.Context, act superloop.Action, args ...strin
 	if err == nil {
 		reason = ""
 	}
-	if saveErr := l.Host.operationOutcome(agentStartName, reason, act.URL, err == nil); saveErr != nil {
+	if saveErr := l.Host.OperationOutcome(agentStartName, reason, act.URL, err == nil); saveErr != nil {
 		return out, saveErr
 	}
 	return out, err
@@ -55,7 +55,7 @@ func (l *Loop) RunStart(ctx context.Context, act superloop.Action, args ...strin
 
 // startRegistered says whether the roster holds name, registered since begin.
 func (l *Loop) startRegistered(name string, begin time.Time) bool {
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return false
 	}
@@ -69,7 +69,7 @@ func (l *Loop) startRegistered(name string, begin time.Time) bool {
 // checkpoint below still marks eligibility unknown while gathering inputs.
 func (l *Loop) refreshThroughputHeartbeat(now time.Time) error {
 	var obs throughputObservation
-	found, err := l.Host.store.ReadFile(throughputObservationFile, &obs)
+	found, err := l.Host.Store().ReadFile(throughputObservationFile, &obs)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (l *Loop) refreshThroughputHeartbeat(now time.Time) error {
 		obs.Unknown = true
 	}
 	obs.At, obs.Candidate = now, candidate
-	return l.Host.store.WriteFile(throughputObservationFile, obs)
+	return l.Host.Store().WriteFile(throughputObservationFile, obs)
 }
 
 // CheckpointThroughput reports bounded pass progress before expensive history
@@ -87,21 +87,21 @@ func (l *Loop) refreshThroughputHeartbeat(now time.Time) error {
 // This is not a background keepalive; a stuck pass stops refreshing it.
 func (l *Loop) CheckpointThroughput(now time.Time) error {
 	var obs throughputObservation
-	if _, err := l.Host.store.ReadFile(throughputObservationFile, &obs); err != nil {
+	if _, err := l.Host.Store().ReadFile(throughputObservationFile, &obs); err != nil {
 		return err
 	}
 	obs.At, obs.Candidate, obs.Unknown = now, NormalizeLoopVersion(LoopRunningVersion()), true
-	return l.Host.store.WriteFile(throughputObservationFile, obs)
+	return l.Host.Store().WriteFile(throughputObservationFile, obs)
 }
 
 func (l *Loop) ObserveThroughput(in superloop.Input, actions []superloop.Action, unknown bool) error {
 	var old throughputObservation
-	_, err := l.Host.store.ReadFile(throughputObservationFile, &old)
+	_, err := l.Host.Store().ReadFile(throughputObservationFile, &old)
 	if err != nil {
 		old = throughputObservation{}
 		unknown = true
 	}
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	next := throughputObservation{At: now, Candidate: NormalizeLoopVersion(LoopRunningVersion()), Unknown: unknown, Eligible: map[string]eligibleWait{}}
 	if l.Lifecycle != nil {
 		// Liveness uses completion time, not the frozen planning snapshot.
@@ -130,11 +130,11 @@ func (l *Loop) ObserveThroughput(in superloop.Input, actions []superloop.Action,
 		if !approved || p.Draft || strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
 			continue
 		}
-		wait := eligibleWait{Head: p.Head, URL: publicPullURL(p.URL), Since: now}
+		wait := eligibleWait{Head: p.Head, URL: Cmd.PublicPullURL(p.URL), Since: now}
 		if prev, ok := old.Eligible[act.Ref]; ok && prev.Head == wait.Head {
 			wait.Since = prev.Since
 		}
 		next.Eligible[act.Ref] = wait
 	}
-	return l.Host.store.WriteFile(throughputObservationFile, next)
+	return l.Host.Store().WriteFile(throughputObservationFile, next)
 }

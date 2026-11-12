@@ -65,35 +65,35 @@ func hostHoldRateReset(held string) (time.Time, bool) {
 // behind for more than one release, with why.
 func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 	a := l.Host
-	version := coordinatorVersion()
-	if !releaseVersion(version) || st.Stop != nil || len(a.cfg.Agents.Hosts) == 0 {
+	version := Cmd.CoordinatorVersion()
+	if !Cmd.ReleaseVersion(version) || st.Stop != nil || len(a.Cfg().Agents.Hosts) == 0 {
 		return
 	}
-	if err := coordinatorHostUpdateReady(version); err != nil {
+	if err := Cmd.CoordinatorHostUpdateReady(version); err != nil {
 		l.SayOnce("host probation "+version, "SUPERVISOR HOST WAITS: %v", err)
 		return
 	}
-	for _, selector := range slices.Sorted(maps.Keys(a.cfg.Agents.Hosts)) {
+	for _, selector := range slices.Sorted(maps.Keys(a.Cfg().Agents.Hosts)) {
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return
 		}
 		l.LifecyclePhase(loopPhaseTidy)
 		pin := st.HostPin(selector)
-		if pin != nil && pin.Identity != a.cfg.Agents.Hosts[selector].Identity {
+		if pin != nil && pin.Identity != a.Cfg().Agents.Hosts[selector].Identity {
 			pin = nil
 		}
-		if pin != nil && pin.UpdateError != "" && pin.UpdateVersion == version && HostHoldWait(state.HostPin{Held: pin.UpdateError, Tried: pin.Tried}, st.Budget, a.timeNow()) {
+		if pin != nil && pin.UpdateError != "" && pin.UpdateVersion == version && HostHoldWait(state.HostPin{Held: pin.UpdateError, Tried: pin.Tried}, st.Budget, a.TimeNow()) {
 			continue
 		}
 		switch {
-		case pin != nil && pin.Held == "" && pin.Version == version && a.hostPinToolsCurrent(*pin, a.cfg.Agents.Hosts[selector]):
+		case pin != nil && pin.Held == "" && pin.Version == version && a.HostPinToolsCurrent(*pin, a.Cfg().Agents.Hosts[selector]):
 			continue
-		case pin != nil && pin.Held != "" && pin.HeldVersion == version && HostHoldWait(*pin, st.Budget, a.timeNow()):
+		case pin != nil && pin.Held != "" && pin.HeldVersion == version && HostHoldWait(*pin, st.Budget, a.TimeNow()):
 			continue
-		case pin != nil && pin.Held == "" && a.timeNow().Sub(pin.Tried) < hostDrainRetry:
+		case pin != nil && pin.Held == "" && a.TimeNow().Sub(pin.Tried) < hostDrainRetry:
 			continue
 		}
-		if n := hostExecutions(st, selector); n > 0 {
+		if n := Cmd.HostExecutions(st, selector); n > 0 {
 			reason := fmt.Sprintf("%d executions are in a turn on it (%s); it updates to %s once they are between turns", n, strings.Join(drainingWorkerNames(st, selector), ", "), version)
 			l.SayOnce("host drains "+selector+" "+version, "SUPERVISOR HOST DRAINS %s: %s", selector, reason)
 			l.noteBehind(selector, version, reason)
@@ -106,11 +106,11 @@ func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 			}
 			l.SayOnce("host update "+selector+" "+version, "SUPERVISOR HOST WAITS %s: %v", selector, err)
 			if !strings.Contains(err.Error(), hostUpdateDeferred) {
-				l.noteBehind(selector, version, oneLine(err.Error()))
+				l.noteBehind(selector, version, Cmd.OneLine(err.Error()))
 			}
 			continue
 		}
-		_, _ = fmt.Fprintln(a.out, "SUPERVISOR HOST UPDATED "+oneLine(out))
+		_, _ = fmt.Fprintln(a.Out(), "SUPERVISOR HOST UPDATED "+Cmd.OneLine(out))
 	}
 	if err := l.reportHeldHosts(); err != nil {
 		l.SayOnce("host held report", "SUPERVISOR HOST HELD not reported: %v", err)
@@ -122,7 +122,7 @@ func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 func drainingWorkerNames(st *state.State, selector string) []string {
 	var names []string
 	for i := range st.Starts {
-		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() && !parkedBetweenTurns(st, x) {
+		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() && !Cmd.ParkedBetweenTurns(st, x) {
 			names = append(names, st.Starts[i].Name)
 		}
 	}
@@ -136,11 +136,11 @@ func drainingWorkerNames(st *state.State, selector string) []string {
 func (l *Loop) noteBehind(selector, version, reason string) {
 	a := l.Host
 	var finding string
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := a.Store().Update(func(st *state.State) ([]state.Event, error) {
 		finding = ""
 		pin := st.HostPin(selector)
 		if pin == nil {
-			st.HostPins = append(st.HostPins, state.HostPin{Selector: selector, Identity: a.cfg.Agents.Hosts[selector].Identity})
+			st.HostPins = append(st.HostPins, state.HostPin{Selector: selector, Identity: a.Cfg().Agents.Hosts[selector].Identity})
 			pin = &st.HostPins[len(st.HostPins)-1]
 		}
 		switch {
@@ -158,14 +158,14 @@ func (l *Loop) noteBehind(selector, version, reason string) {
 			on = "a release it was never pinned to"
 		}
 		finding = fmt.Sprintf("Execution host %s stays on %s for more than one release: it did not follow %s and does not follow %s either, its current policy remains subject to admission checks: %s. beekeeper agents hosts update %s retries it at once.", selector, on, pin.Behind, version, reason, selector)
-		return []state.Event{event(LoopParty, "supervisor."+superloop.KindFile, "[host-behind %s %s] execution host %s behind since %s%s%s", selector, version, selector, pin.Behind, FileReportSeparator, finding)}, nil
+		return []state.Event{Cmd.Event(LoopParty, "supervisor."+superloop.KindFile, "[host-behind %s %s] execution host %s behind since %s%s%s", selector, version, selector, pin.Behind, FileReportSeparator, finding)}, nil
 	})
 	if err != nil {
 		l.SayOnce("host behind report "+selector, "SUPERVISOR HOST BEHIND not reported: %v", err)
 		return
 	}
 	if finding != "" {
-		_, _ = fmt.Fprintln(a.out, "SUPERVISOR HOST BEHIND "+finding)
+		_, _ = fmt.Fprintln(a.Out(), "SUPERVISOR HOST BEHIND "+finding)
 	}
 }
 
@@ -173,12 +173,12 @@ func (l *Loop) noteBehind(selector, version, reason string) {
 // (supervisor.file, which guide watch delivers as GUIDE PROBLEM) and says
 // it, once per hold.
 func (l *Loop) reportHeldHosts() error {
-	st, err := l.Host.store.Peek()
+	st, err := l.Host.Store().Peek()
 	if err != nil || !slices.ContainsFunc(st.HostPins, func(p state.HostPin) bool { return HostHoldBlocks(p) && !p.Reported }) {
 		return err
 	}
 	var lines []string
-	err = l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		lines = nil
 		var events []state.Event
 		for i := range st.HostPins {
@@ -189,13 +189,13 @@ func (l *Loop) reportHeldHosts() error {
 			p.Reported = true
 			finding := fmt.Sprintf("Execution host %s could not be updated to %s and takes no start: %s. The other execution hosts keep running; beekeeper agents hosts update %s lifts the hold once its cause is fixed, and the supervisor loop tries it again hourly.", p.Selector, p.HeldVersion, p.Held, p.Selector)
 			at := p.HeldAt.UTC().Format(time.RFC3339)
-			events = append(events, event(LoopParty, "supervisor."+superloop.KindFile, "[host-held %s %s] execution host %s held at %s%s%s", p.Selector, at, p.Selector, at, FileReportSeparator, finding))
+			events = append(events, Cmd.Event(LoopParty, "supervisor."+superloop.KindFile, "[host-held %s %s] execution host %s held at %s%s%s", p.Selector, at, p.Selector, at, FileReportSeparator, finding))
 			lines = append(lines, "SUPERVISOR HOST HELD "+finding)
 		}
 		return events, nil
 	})
 	for _, line := range lines {
-		_, _ = fmt.Fprintln(l.Host.out, line)
+		_, _ = fmt.Fprintln(l.Host.Out(), line)
 	}
 	return err
 }

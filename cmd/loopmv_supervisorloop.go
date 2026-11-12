@@ -105,7 +105,7 @@ func RunArgv(ctx context.Context, stdin string, argv []string) (string, string, 
 		return "", "", 0, errors.New("no command")
 	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
-	c.Env = devctlCommandEnv("")
+	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdin = strings.NewReader(stdin)
 	var out, errOut bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errOut
@@ -135,7 +135,7 @@ var LoopBinary = func() Replaceable {
 // ReadLoopPull reads a tracked pull request (owner/repo#n): its state, head,
 // the checks on the head and its reviews.
 var ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok {
 		return superloop.Pull{}, fmt.Errorf("%s names no pull request", ref)
 	}
@@ -235,7 +235,7 @@ func ApplyLoopWorkflowRuns(p *superloop.Pull, raw []byte, rollup []LoopCheck) er
 // ReadBaseMerge reads whether the approval of approved covers p's head: it
 // only merges its base into approved with the reviewed patch unchanged.
 var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
-	r, ok := parseRef(p.Ref)
+	r, ok := Cmd.ParseRef(p.Ref)
 	if !ok || p.Base == "" {
 		return false, fmt.Errorf("%s names no pull request with a base", p.Ref)
 	}
@@ -407,13 +407,13 @@ func ParseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	p.Updated = j.Updated
 	p.Absorbs = superloop.ParseAbsorbedPulls(ref, j.Title, j.Body)
 	for _, issue := range j.Closes {
-		if r, ok := parseRef(issue.URL); ok {
-			p.Closes = append(p.Closes, refName(r))
+		if r, ok := Cmd.ParseRef(issue.URL); ok {
+			p.Closes = append(p.Closes, Cmd.RefName(r))
 		}
 	}
 	for _, issue := range superloop.ParseClosingIssues(ref, j.Title+"\n"+j.Body) {
-		if r, ok := parseRef(issue); ok {
-			name := refName(r)
+		if r, ok := Cmd.ParseRef(issue); ok {
+			name := Cmd.RefName(r)
 			if !slices.ContainsFunc(p.Closes, func(existing string) bool { return strings.EqualFold(existing, name) }) {
 				p.Closes = append(p.Closes, name)
 			}
@@ -450,7 +450,7 @@ type Loop struct {
 	Lifecycle *LoopLifecycle
 	ReviewDir string // explicit agents review checkout
 	Mu        sync.Mutex
-	Host      *app
+	Host      Host
 	Since     time.Time
 	// startedAt is when this process's loop started: a next action for a
 	// done event before it is settled by the refill (staleNext).
@@ -570,16 +570,16 @@ func (l *Loop) open(ctx context.Context, ref string) bool {
 		return err != nil || p.State == superloop.Open
 	}
 	l.Mu.Lock()
-	if o, ok := l.opens[ref]; ok && l.Host.timeNow().Sub(o.at) < loopOpenEvery {
+	if o, ok := l.opens[ref]; ok && l.Host.TimeNow().Sub(o.at) < loopOpenEvery {
 		l.Mu.Unlock()
 		return o.open
 	}
 	l.Mu.Unlock()
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok {
 		return true
 	}
-	states, err := refStates(ctx, []github.PR{r})
+	states, err := Cmd.RefStates(ctx, []github.PR{r})
 	st, read := states[r]
 	if err != nil || !read {
 		l.SayOnce("open "+ref, "SUPERVISOR LOOP cannot tell whether %s is open (%v): its worker stays", ref, err)
@@ -590,7 +590,7 @@ func (l *Loop) open(ctx context.Context, ref string) bool {
 	if l.opens == nil {
 		l.opens = map[string]loopOpen{}
 	}
-	l.opens[ref] = loopOpen{open: open, at: l.Host.timeNow()}
+	l.opens[ref] = loopOpen{open: open, at: l.Host.TimeNow()}
 	l.Mu.Unlock()
 	return open
 }
@@ -603,11 +603,11 @@ func (l *Loop) liveOpen(ctx context.Context, ref string) bool {
 		p, err := l.readPull(ctx, ref)
 		return err == nil && p.State == superloop.Open
 	}
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok {
 		return false
 	}
-	states, err := refStates(ctx, []github.PR{r})
+	states, err := Cmd.RefStates(ctx, []github.PR{r})
 	st, read := states[r]
 	if err != nil || !read {
 		return false
@@ -617,7 +617,7 @@ func (l *Loop) liveOpen(ctx context.Context, ref string) bool {
 	if l.opens == nil {
 		l.opens = map[string]loopOpen{}
 	}
-	l.opens[refName(r)] = loopOpen{open: open, at: l.Host.timeNow()}
+	l.opens[Cmd.RefName(r)] = loopOpen{open: open, at: l.Host.TimeNow()}
 	l.Mu.Unlock()
 	return open
 }
@@ -634,8 +634,8 @@ func LoopServes(st *state.State, ag state.Agent) string {
 		if !r.Ended.IsZero() || strings.HasPrefix(strings.ToLower(r.Waits), "done") {
 			return ""
 		}
-		if ref, ok := parseRef(r.Issue); ok {
-			return refName(ref)
+		if ref, ok := Cmd.ParseRef(r.Issue); ok {
+			return Cmd.RefName(ref)
 		}
 		return ""
 	}
@@ -644,9 +644,9 @@ func LoopServes(st *state.State, ag state.Agent) string {
 
 func LoopTaskServes(ag state.Agent, parkedOn string) string {
 	for _, task := range []string{ag.Task, ag.LastTask} {
-		if m := refURL.FindString(task); m != "" && !strings.Contains(strings.ToLower(m), "/pull/") {
-			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
-				return refName(r)
+		if m := Cmd.RefURL().FindString(task); m != "" && !strings.Contains(strings.ToLower(m), "/pull/") {
+			if r, ok := Cmd.ParseRef(m); ok && !strings.EqualFold(Cmd.RefName(r), parkedOn) {
+				return Cmd.RefName(r)
 			}
 		}
 	}
@@ -666,32 +666,32 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 }
 
 // RunLoop runs the loop: every pass until ctx ends, or one with once.
-func RunLoop(ctx context.Context, a *app, once bool) (runErr error) {
+func RunLoop(ctx context.Context, a Host, once bool) (runErr error) {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	// One loop per state: a second would take each action again.
-	lock := flock.New(filepath.Join(a.store.Dir(), LoopLockFile))
+	lock := flock.New(filepath.Join(a.Store().Dir(), LoopLockFile))
 	held, err := lock.TryLock()
 	if err != nil {
 		return err
 	}
 	if !held {
-		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
+		return Cmd.Refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
 	life := &LoopLifecycle{Version: NormalizeLoopVersion(LoopRunningVersion()), Started: clk.Now().UTC(), Phase: LoopPhaseStartup}
 	life.At = life.Started
-	_ = a.store.WriteFile(LoopLifecycleFile, life)
+	_ = a.Store().WriteFile(LoopLifecycleFile, life)
 	defer func() {
 		crash := recover()
 		life.At, life.Exited, life.Failure = clk.Now().UTC(), true, LoopFailureKind(runErr)
 		if runErr != nil {
-			life.Code = Code(runErr)
+			life.Code = Cmd.Code(runErr)
 		}
 		if crash != nil {
 			life.Code, life.Failure = ExitError, "panic (see candidate service journal)"
 		}
-		_ = a.store.WriteFile(LoopLifecycleFile, life)
+		_ = a.Store().WriteFile(LoopLifecycleFile, life)
 		if crash != nil {
 			panic(crash)
 		}
@@ -699,23 +699,23 @@ func RunLoop(ctx context.Context, a *app, once bool) (runErr error) {
 	// The stop signal bounds the exit, however the pass is stuck.
 	shutdownDone := make(chan struct{})
 	defer close(shutdownDone)
-	go BoundLoopShutdown(ctx, shutdownDone, a.store, a.out)
+	go BoundLoopShutdown(ctx, shutdownDone, a.Store(), a.Out())
 	// Observers read a PID marker instead of briefly contending for this lock.
-	if err := a.store.WriteFile(LoopPIDFile, os.Getpid()); err != nil {
+	if err := a.Store().WriteFile(LoopPIDFile, os.Getpid()); err != nil {
 		return err
 	}
-	defer func() { _ = a.store.WriteFile(LoopPIDFile, 0) }()
-	if err := a.writeLoopVersion(); err != nil {
+	defer func() { _ = a.Store().WriteFile(LoopPIDFile, 0) }()
+	if err := a.WriteLoopVersion(); err != nil {
 		return err
 	}
-	defer a.clearLoopVersion()
-	out := a.out
-	defer func() { a.out = out }()
-	if a.loopNow == nil {
-		a.loopNow = &atomic.Pointer[time.Time]{}
+	defer a.ClearLoopVersion()
+	out := a.Out()
+	defer func() { a.SetOut(out) }()
+	if a.LoopNow() == nil {
+		a.SetLoopNow(&atomic.Pointer[time.Time]{})
 	}
-	defer a.loopNow.Store(nil)
-	if err := a.prepareEventSegmentation(); err != nil {
+	defer a.LoopNow().Store(nil)
+	if err := a.PrepareEventSegmentation(); err != nil {
 		return err
 	}
 	startup := &Loop{Host: a, Lifecycle: life}
@@ -748,7 +748,7 @@ func RunLoop(ctx context.Context, a *app, once bool) (runErr error) {
 		}
 	}()
 	if !once {
-		l.StopWatch = a.startLoopWatch(ctx)
+		l.StopWatch = a.StartLoopWatch(ctx)
 		defer func() {
 			if l.StopWatch != nil {
 				l.StopWatch()
@@ -768,9 +768,9 @@ func RunLoop(ctx context.Context, a *app, once bool) (runErr error) {
 	for {
 		now := clk.Now()
 		if once {
-			a.now = now
+			a.SetNow(now)
 		}
-		a.loopNow.Store(&now)
+		a.LoopNow().Store(&now)
 		l.Reexecuted = false
 		l.Mu.Lock()
 		l.reexecFailed = false
@@ -785,7 +785,7 @@ func RunLoop(ctx context.Context, a *app, once bool) (runErr error) {
 				}
 				continue
 			}
-			fenced := errors.Is(err, state.ErrRecoveryWriterFenced) || state.WriterFenced(a.store)
+			fenced := errors.Is(err, state.ErrRecoveryWriterFenced) || state.WriterFenced(a.Store())
 			if (!LockBusy(err) && !fenced) || once {
 				return err
 			}
@@ -835,16 +835,16 @@ func LockBusy(err error) bool {
 // an external self-update during the idle sleep triggers re-execution
 // without waiting the full LoopInterval on the old binary.
 func (l *Loop) WaitNextPass(ctx context.Context) bool {
-	d := l.Host.cfg.Supervisor.LoopInterval.Duration
+	d := l.Host.Cfg().Supervisor.LoopInterval.Duration
 	if d <= 0 {
 		return ctx.Err() == nil
 	}
-	changes, closeChanges := state.Changes(ctx, filepath.Join(l.Host.store.Dir(), "state.json"), filepath.Join(l.Host.store.Dir(), "events.jsonl"))
+	changes, closeChanges := state.Changes(ctx, filepath.Join(l.Host.Store().Dir(), "state.json"), filepath.Join(l.Host.Store().Dir(), "events.jsonl"))
 	defer closeChanges()
 	ended := clk.Now()
 	// A change wakes the next pass early, but not sooner than passChangeGap
 	// after this one ended, nor later than the interval.
-	changed := func() bool { return pauseChangeFor(ctx, min(PassChangeGap, d)-clk.Since(ended)) }
+	changed := func() bool { return Cmd.PauseChangeFor(ctx, min(PassChangeGap, d)-clk.Since(ended)) }
 	timer := clk.NewTimer(d)
 	defer timer.Stop()
 	const checkEvery = time.Second
@@ -880,7 +880,7 @@ func (l *Loop) WaitNextPass(ctx context.Context) bool {
 				l.Bin = b
 				l.Mu.Unlock()
 			}
-			if b != nil && b.Replaced() && !l.reexecFailed && (!l.ReexecBusy() || (l.Host != nil && state.WriterFenced(l.Host.store))) {
+			if b != nil && b.Replaced() && !l.reexecFailed && (!l.ReexecBusy() || (l.Host != nil && state.WriterFenced(l.Host.Store()))) {
 				return true
 			}
 		}
@@ -897,7 +897,7 @@ const LoopPIDFile = "supervisor-loop-pid.json"
 // DryRunLoop is one pass that says what it would take: it runs
 // only read-only queries, logs nothing, fires no timer and takes no lock,
 // so it can run beside the loop.
-func DryRunLoop(ctx context.Context, a *app, recordDirs ...string) error {
+func DryRunLoop(ctx context.Context, a Host, recordDirs ...string) error {
 	l, err := NewLoop(a, true)
 	if err != nil {
 		return err
@@ -905,7 +905,7 @@ func DryRunLoop(ctx context.Context, a *app, recordDirs ...string) error {
 	if len(recordDirs) > 0 {
 		l.recordDir = recordDirs[0]
 	}
-	a.now = clk.Now()
+	a.SetNow(clk.Now())
 	if err := l.Pass(ctx); err != nil {
 		return err
 	}
@@ -920,23 +920,23 @@ func DryRunLoop(ctx context.Context, a *app, recordDirs ...string) error {
 
 // NewLoop logs the loop's start, unless it is a dry run, and
 // bounds its events by its first.
-func NewLoop(a *app, dryRun bool, progress ...func()) (*Loop, error) {
+func NewLoop(a Host, dryRun bool, progress ...func()) (*Loop, error) {
 	// Every loop can run actions concurrently, including a directly constructed
 	// loop. Give all its output paths the same synchronized writer.
-	if _, ok := a.out.(*loopOutput); !ok {
-		a.out = &loopOutput{out: a.out}
+	if _, ok := a.Out().(*loopOutput); !ok {
+		a.SetOut(&loopOutput{out: a.Out()})
 	}
 	keepStart := func(e state.Event) bool { return e.Verb == LoopStartVerb }
 	if len(progress) > 0 {
 		keepStart = EventProgressFilter(keepStart, progress[0], clk.Now)
 	}
-	starts, err := state.FollowSnapshot(a.store, "supervisor-loop-starts", "v1", keepStart)
+	starts, err := state.FollowSnapshot(a.Store(), "supervisor-loop-starts", "v1", keepStart)
 	if err != nil {
 		return nil, err
 	}
-	l := &Loop{Host: a, Since: a.timeNow().UTC(), StartedAt: a.timeNow().UTC(), Said: map[string]bool{}, baseMerges: map[string]bool{}, DryRun: dryRun, Bin: LoopBinary()}
-	if a.loadedCfg != "" {
-		if raw, readErr := os.ReadFile(a.loadedCfg); readErr == nil { //nolint:gosec // configured path
+	l := &Loop{Host: a, Since: a.TimeNow().UTC(), StartedAt: a.TimeNow().UTC(), Said: map[string]bool{}, baseMerges: map[string]bool{}, DryRun: dryRun, Bin: LoopBinary()}
+	if a.LoadedCfg() != "" {
+		if raw, readErr := os.ReadFile(a.LoadedCfg()); readErr == nil { //nolint:gosec // configured path
 			l.cfgSum = sha256.Sum256(raw)
 		}
 	}
@@ -946,7 +946,7 @@ func NewLoop(a *app, dryRun bool, progress ...func()) (*Loop, error) {
 	if dryRun {
 		return l, nil
 	}
-	if err := a.store.Record(event(LoopParty, LoopStartVerb, "started; acting on the events since %s", l.Since.Format(time.RFC3339))); err != nil {
+	if err := a.Store().Record(Cmd.Event(LoopParty, LoopStartVerb, "started; acting on the events since %s", l.Since.Format(time.RFC3339))); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -994,7 +994,7 @@ func (l *Loop) Reexec(ctx context.Context) (bool, error) {
 	if l == nil || ctx.Err() != nil || l.DryRun || l.Reexecuted || l.reexecFailed {
 		return false, nil
 	}
-	fenced := l.Host != nil && state.WriterFenced(l.Host.store)
+	fenced := l.Host != nil && state.WriterFenced(l.Host.Store())
 	b := l.Bin
 	if b == nil {
 		b = LoopBinary()
@@ -1027,13 +1027,13 @@ func (l *Loop) Reexec(ctx context.Context) (bool, error) {
 	}
 	l.MergeActions.Wait()
 	l.PassActions.Wait()
-	if _, err := fmt.Fprintln(l.Host.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
+	if _, err := fmt.Fprintln(l.Host.Out(), "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 		return false, err
 	}
-	if out, code, err := BeekeeperRun(ctx, l.As(budgetGateArgs...)...); (err != nil || code != 0) && ctx.Err() == nil {
-		detail := oneLine(out)
+	if out, code, err := BeekeeperRun(ctx, l.As(Cmd.BudgetGateArgs()...)...); (err != nil || code != 0) && ctx.Err() == nil {
+		detail := Cmd.OneLine(out)
 		if detail == "" && err != nil {
-			detail = oneLine(err.Error())
+			detail = Cmd.OneLine(err.Error())
 		}
 		l.SayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, detail)
 	}
@@ -1069,12 +1069,12 @@ func (l *Loop) Reexec(ctx context.Context) (bool, error) {
 			l.stopPullWatch = StartLoopPullWatcher(ctx, l)
 		}
 		if wasWatching {
-			l.StopWatch = l.Host.startLoopWatch(ctx)
+			l.StopWatch = l.Host.StartLoopWatch(ctx)
 		}
 		return false, nil
 	}
 	l.Reexecuted = true
-	_ = l.Host.writeLoopVersion()
+	_ = l.Host.WriteLoopVersion()
 	return true, nil
 }
 
@@ -1084,7 +1084,7 @@ func (l *Loop) Reexec(ctx context.Context) (bool, error) {
 func (l *Loop) ReloadConfig() {
 	l.RefillConfigMu.Lock()
 	defer l.RefillConfigMu.Unlock()
-	path := cmp.Or(l.Host.cfgPath, l.Host.loadedCfg)
+	path := cmp.Or(l.Host.CfgPath(), l.Host.LoadedCfg())
 	if path == "" {
 		return
 	}
@@ -1100,40 +1100,40 @@ func (l *Loop) ReloadConfig() {
 	if err != nil {
 		return
 	}
-	if l.Host.loadedCfg != "" {
-		l.Host.cfg = c
+	if l.Host.LoadedCfg() != "" {
+		l.Host.SetCfg(c)
 	} else {
-		l.Host.cfg.GitHub.PublicOnlyOwners = slices.Clone(c.GitHub.PublicOnlyOwners)
-		l.Host.cfg.Hooks.Guards = c.Hooks.Guards
+		l.Host.Cfg().GitHub.PublicOnlyOwners = slices.Clone(c.GitHub.PublicOnlyOwners)
+		l.Host.Cfg().Hooks.Guards = c.Hooks.Guards
 		if len(c.GitHub.AllowedOrgs) > 0 {
-			l.Host.cfg.GitHub.AllowedOrgs = c.GitHub.AllowedOrgs
+			l.Host.Cfg().GitHub.AllowedOrgs = c.GitHub.AllowedOrgs
 		}
 		if len(c.Supervisor.Ownership.Never) > 0 {
-			l.Host.cfg.Supervisor.Ownership.Never = c.Supervisor.Ownership.Never
+			l.Host.Cfg().Supervisor.Ownership.Never = c.Supervisor.Ownership.Never
 		}
 		if len(c.Supervisor.Ownership.Authors) > 0 {
-			l.Host.cfg.Supervisor.Ownership.Authors = c.Supervisor.Ownership.Authors
+			l.Host.Cfg().Supervisor.Ownership.Authors = c.Supervisor.Ownership.Authors
 		}
 		if len(c.Supervisor.Ownership.Bots) > 0 {
-			l.Host.cfg.Supervisor.Ownership.Bots = c.Supervisor.Ownership.Bots
+			l.Host.Cfg().Supervisor.Ownership.Bots = c.Supervisor.Ownership.Bots
 		}
 		if len(c.Supervisor.Ownership.Review) > 0 {
-			l.Host.cfg.Supervisor.Ownership.Review = c.Supervisor.Ownership.Review
+			l.Host.Cfg().Supervisor.Ownership.Review = c.Supervisor.Ownership.Review
 		}
 		if c.Supervisor.Ownership.Team != "" {
-			l.Host.cfg.Supervisor.Ownership.Team = c.Supervisor.Ownership.Team
+			l.Host.Cfg().Supervisor.Ownership.Team = c.Supervisor.Ownership.Team
 		}
 	}
-	github.SetDevctlSkipVersionCheck(!l.Host.cfg.Hooks.GuardsEnabled())
+	github.SetDevctlSkipVersionCheck(!l.Host.Cfg().Hooks.GuardsEnabled())
 	l.cfgSum = sum
 }
 
 func (l *Loop) unreadRepo(ref string) string {
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok {
 		return ""
 	}
-	_, why := (superloop.Desk{Orgs: l.Host.cfg.GitHub.AllowedOrgs, Never: l.Host.cfg.Supervisor.Ownership.Never}).Unread(refName(r))
+	_, why := (superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Never: l.Host.Cfg().Supervisor.Ownership.Never}).Unread(Cmd.RefName(r))
 	return why
 }
 
@@ -1155,12 +1155,12 @@ func (l *Loop) agentUnreadRepo(st *state.State, ag state.Agent, ref string) stri
 			}
 		}
 	}
-	for _, m := range namedRefs(ag.Task+" "+ag.LastTask, l.Host.cfg.Board.Owner) {
+	for _, m := range Cmd.NamedRefs(ag.Task+" "+ag.LastTask, l.Host.Cfg().Board.Owner) {
 		if why := l.unreadRepo(m); why != "" {
 			return why
 		}
 	}
-	for _, pat := range l.Host.cfg.Supervisor.Ownership.Never {
+	for _, pat := range l.Host.Cfg().Supervisor.Ownership.Never {
 		if pat = strings.TrimSpace(pat); pat != "" && !strings.ContainsAny(pat, "*?") {
 			if strings.Contains(strings.ToLower(ag.Task+" "+ag.LastTask), strings.ToLower(pat)) {
 				return pat + " is in supervisor.ownership.never"
@@ -1182,7 +1182,7 @@ func (l *Loop) CachePull(ref string, p superloop.Pull) {
 	prev := l.Pulls[ref]
 	prev.Pull = p
 	if prev.At.IsZero() {
-		prev.At = l.Host.timeNow()
+		prev.At = l.Host.TimeNow()
 	}
 	l.Pulls[ref] = prev
 	if p.State == superloop.Merged {
@@ -1195,7 +1195,7 @@ func (l *Loop) CachePull(ref string, p superloop.Pull) {
 		l.OpenPulls = slices.DeleteFunc(l.OpenPulls, func(r string) bool { return strings.EqualFold(r, ref) })
 	}
 	if p.State != superloop.Open && l.Unmerged != nil {
-		if r, ok := parseRef(ref); ok {
+		if r, ok := Cmd.ParseRef(ref); ok {
 			key := strings.ToLower(r.Repo)
 			if obs, exists := l.Unmerged[key]; exists {
 				obs.Pulls = slices.DeleteFunc(obs.Pulls, func(u unmergedPull) bool { return u.Number == r.N })
@@ -1247,11 +1247,11 @@ type cachedFlowWait struct {
 }
 
 func (l *Loop) LoadCache() {
-	if l == nil || l.Host == nil || l.Host.store == nil {
+	if l == nil || l.Host == nil || l.Host.Store() == nil {
 		return
 	}
 	var c loopCache
-	if ok, err := l.Host.store.ReadFile(LoopCacheFile, &c); err != nil || !ok {
+	if ok, err := l.Host.Store().ReadFile(LoopCacheFile, &c); err != nil || !ok {
 		return
 	}
 	l.Mu.Lock()
@@ -1305,7 +1305,7 @@ func (l *Loop) LoadCache() {
 }
 
 func (l *Loop) SaveCache() {
-	if l == nil || l.DryRun || l.Host == nil || l.Host.store == nil {
+	if l == nil || l.DryRun || l.Host == nil || l.Host.Store() == nil {
 		return
 	}
 	l.Mu.Lock()
@@ -1338,7 +1338,7 @@ func (l *Loop) SaveCache() {
 		}
 	}
 	l.Mu.Unlock()
-	_ = l.Host.store.WriteFile(LoopCacheFile, c)
+	_ = l.Host.Store().WriteFile(LoopCacheFile, c)
 }
 
 // Pass is one look: gather, plan, act.
@@ -1346,12 +1346,12 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	ctx = context.WithValue(ctx, loopPullContextKey{}, l)
 	dispatched := false
 	defer func() {
-		if !l.DryRun && l.Host.cfg.Supervisor.WorkerBrief != "" && !dispatched && !l.IndependentFill {
+		if !l.DryRun && l.Host.Cfg().Supervisor.WorkerBrief != "" && !dispatched && !l.IndependentFill {
 			why := "pass ended before refill dispatch (GitHub observation held or loop stopping)"
 			if result != nil {
-				why = "pass ended before refill dispatch: " + oneLine(result.Error())
+				why = "pass ended before refill dispatch: " + Cmd.OneLine(result.Error())
 			}
-			_, _ = fmt.Fprintf(l.Host.out, RefillZeroFormat, why)
+			_, _ = fmt.Fprintf(l.Host.Out(), RefillZeroFormat, why)
 		}
 	}()
 	// A pass that ends before it plans runs no merge decision. The stall
@@ -1365,7 +1365,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			return
 		}
 		if result != nil {
-			ended = mergeWait{class: waitPass, cause: "the loop's pass failed before it planned or ran this decision: " + oneLine(result.Error())}
+			ended = mergeWait{class: waitPass, cause: "the loop's pass failed before it planned or ran this decision: " + Cmd.OneLine(result.Error())}
 		}
 		if err := l.flowWaitsUnplanned(ended.class, ended.cause); err != nil {
 			l.SayOnce("flow waits", "SUPERVISOR STALL alarm for the pending merge decisions failed: %v", err)
@@ -1375,7 +1375,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}()
 	l.LifecyclePhase("reload configuration")
 	l.ReloadConfig()
-	a := l.Host.snapshotAtNow()
+	a := l.Host.SnapshotAtNow()
 	if !l.IndependentFill {
 		l.Mu.Lock()
 		l.BoardNone = nil
@@ -1388,7 +1388,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	if !l.DryRun {
 		l.LifecyclePhase("apply session reports")
-		if err := a.consumeReports(ctx); err != nil {
+		if err := a.ConsumeReports(ctx); err != nil {
 			return err
 		}
 	}
@@ -1415,9 +1415,9 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
 	}
-	readState := a.store.Read
+	readState := a.Store().Read
 	if l.DryRun {
-		readState = a.store.Peek
+		readState = a.Store().Peek
 	}
 	st, err := readState()
 	if err != nil {
@@ -1435,7 +1435,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		}
 		l.settleOverrides(ctx, st)
 		l.ReloadConfig()
-		a = l.Host.snapshotAtNow()
+		a = l.Host.SnapshotAtNow()
 	}
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 		return err
@@ -1443,8 +1443,8 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	// An unknown or stale reading is resolved by a reading of the loop's
 	// own: the watch may sample too rarely or not at all, and a hold that
 	// waits on a pass it ends early never recovers (#3724).
-	if !l.DryRun && a.cfg.GitHub.Floor > 0 && loopReadingStale(st.Budget, a.timeNow()) {
-		if err := refreshLoopBudget(a, ctx); err == nil {
+	if !l.DryRun && a.Cfg().GitHub.Floor > 0 && loopReadingStale(st.Budget, a.TimeNow()) {
+		if err := Cmd.RefreshLoopBudget(a, ctx); err == nil {
 			if fresh, err := readState(); err == nil {
 				st = fresh
 			}
@@ -1452,7 +1452,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
-	if a.cfg.GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+	if a.Cfg().GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.Cfg().GitHub.Floor, a.TimeNow()) {
 		if !l.DryRun {
 			if err := l.ObserveThroughput(superloop.Input{}, nil, false); err != nil {
 				return err
@@ -1464,12 +1464,12 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	l.ClearSaid("graphql budget")
 	if !l.DryRun {
-		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+		if err := a.LoopGitHub(ctx, "pass", func() error { return nil }); err != nil {
 			if saveErr := l.ObserveThroughput(superloop.Input{}, nil, false); saveErr != nil {
 				return saveErr
 			}
 			l.SayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-			ended = mergeWait{class: waitBudget, cause: "the loop holds its passes on its GitHub allowance, so it reads no pull request and runs no merge decision: " + cmp.Or(laterCause(err), oneLine(err.Error()))}
+			ended = mergeWait{class: waitBudget, cause: "the loop holds its passes on its GitHub allowance, so it reads no pull request and runs no merge decision: " + cmp.Or(laterCause(err), Cmd.OneLine(err.Error()))}
 			return nil
 		}
 		l.ClearSaid("graphql allowance")
@@ -1499,7 +1499,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			return err
 		}
 		l.LifecyclePhase(loopPhaseTidy)
-		if err := a.syncClaims(ctx); err != nil {
+		if err := a.SyncClaims(ctx); err != nil {
 			l.SayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
@@ -1522,7 +1522,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	l.LifecyclePhase(loopPhaseContinueParks)
 	if !l.DryRun {
-		st, err = a.store.Read()
+		st, err = a.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -1535,7 +1535,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	l.LifecyclePhase(loopPhaseRecoverParks)
 	if !l.DryRun {
-		st, err = a.store.Read()
+		st, err = a.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -1548,7 +1548,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	l.LifecyclePhase(loopPhaseRecoverReviews)
 	if !l.DryRun {
-		st, err = a.store.Read()
+		st, err = a.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -1561,7 +1561,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	l.LifecyclePhase(loopPhaseEndReviews)
 	if !l.DryRun {
-		st, err = a.store.Read()
+		st, err = a.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -1570,7 +1570,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		return err
 	}
 	if !l.DryRun {
-		st, err = a.store.Read()
+		st, err = a.Store().Read()
 		if err != nil {
 			return err
 		}
@@ -1579,21 +1579,21 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		return err
 	}
 	l.LifecyclePhase(LoopPhaseObserve)
-	own := a.cfg.Supervisor.Ownership
+	own := a.Cfg().Supervisor.Ownership
 	observationUnknown := false
-	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
-		Desk: superloop.Desk{Since: l.Since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Bots: own.Bots, Team: own.Team,
+	in := superloop.Input{Rounds: a.Cfg().Supervisor.ReviewRounds, Person: a.Cfg().Guide.Person, Now: a.TimeNow(), PostMergeWindow: a.Cfg().Supervisor.PostMergeWindow.Duration,
+		Desk: superloop.Desk{Since: l.Since, Orgs: a.Cfg().GitHub.AllowedOrgs, Authors: own.Authors, Bots: own.Bots, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
-		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin, MergeMethods: a.cfg.Merge.Methods,
+		DevctlOwners: a.Cfg().Merge.DevctlOwners, Admin: a.Cfg().Merge.Admin, MergeMethods: a.Cfg().Merge.Methods,
 		BaseMerged:  func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
 		NitsChecked: func(p superloop.Pull, approved string) bool { return st.ReviewNitsChecked(p.Ref, p.Head, approved) },
-		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
-		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
+		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.Cfg().Agents.StaleAfter.Duration,
+		Board: a.Cfg().Board.Owner != "" && a.Cfg().Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
 	}
 	for _, ag := range st.Agents {
-		w := superloop.Worker{Done: ag.Done, Name: ag.Name, SelfHosted: SelfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
+		w := superloop.Worker{Done: ag.Done, Name: ag.Name, SelfHosted: SelfHostedModel(a.Cfg().Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt, w.Waits = LoopParkOn(ag.Park), ag.Park.At, ag.Park.Waits
 			// A verified park requests review even while retirement waits for
@@ -1614,7 +1614,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			}
 		}
 		if !ag.Done {
-			w.Mentions = namedRefs(ag.Task, a.cfg.Board.Owner)
+			w.Mentions = Cmd.NamedRefs(ag.Task, a.Cfg().Board.Owner)
 		}
 		if w.Serves == "" && ag.Park != nil && ag.Park.ReviewHead == "" {
 			w.Serves = LoopTaskServes(ag, w.ParkedOn)
@@ -1636,7 +1636,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			return err
 		}
 	}
-	taken, err := state.FollowSnapshot(a.store, "supervisor-loop-taken", "v1", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
+	taken, err := state.FollowSnapshot(a.Store(), "supervisor-loop-taken", "v1", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
 	if err != nil {
 		return err
 	}
@@ -1654,7 +1654,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	l.Stages, l.StageDetail = stages, stageDetail
 	l.Mu.Unlock()
 	since := l.Since
-	evs, err := state.FollowSnapshot(a.store, "supervisor-loop", "v1:"+l.Since.Format(time.RFC3339Nano), l.eventHistoryFilter(func(e state.Event) bool {
+	evs, err := state.FollowSnapshot(a.Store(), "supervisor-loop", "v1:"+l.Since.Format(time.RFC3339Nano), l.eventHistoryFilter(func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
 	}))
 	if err != nil {
@@ -1683,26 +1683,26 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			ParkedAt:        rp.At,
 			ReviewRequested: true,
 			ParkedHead:      rp.ReviewHead,
-			SelfHosted:      SelfHostedModel(a.cfg.Capacity, rp.Model),
+			SelfHosted:      SelfHostedModel(a.Cfg().Capacity, rp.Model),
 			Started:         false,
 			Serves:          rp.Serves,
 			Saved:           true,
 		})
 	}
 	if endedParks && !l.DryRun {
-		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+		_ = a.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool { return ReviewParkEnded(in.Taken, rp) })
 			return nil, nil
 		})
 	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
-	answers, err := state.FollowSnapshot(a.store, "supervisor-loop-answers", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
+	answers, err := state.FollowSnapshot(a.Store(), "supervisor-loop-answers", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.Verb == answerRecorded }))
 	if err != nil {
 		return err
 	}
 	for _, e := range answers {
-		if an, ok := parseAnswered(e); ok && an.Asker == LoopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) {
+		if an, ok := Cmd.ParseAnswered(e); ok && an.Asker == LoopParty.Name && strings.EqualFold(an.For, a.Cfg().Guide.Person) {
 			in.Answers = append(in.Answers, superloop.Answer{Ref: an.About, Note: an.ID, Question: an.Question, Text: an.Answer, By: an.For, At: an.At})
 		}
 	}
@@ -1710,12 +1710,12 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	in.PullReadAt = map[string]time.Time{}
 	tracked := DeliveryTrackedPulls(superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk), st.Deliveries, in.Desk)
 	tracked = slices.DeleteFunc(tracked, func(ref string) bool {
-		return !a.parkIsPull(ctx, st, ref)
+		return !a.ParkIsPull(ctx, st, ref)
 	})
 	SortTrackedPulls(in, tracked)
-	l.PullWatcher().Set(tracked, in.Desk.Authors, a.cfg.GitHub.AllowedOrgs, a.cfg.GitHub.Floor, a.cfg.Supervisor.Ownership.Never)
+	l.PullWatcher().Set(tracked, in.Desk.Authors, a.Cfg().GitHub.AllowedOrgs, a.Cfg().GitHub.Floor, a.Cfg().Supervisor.Ownership.Never)
 	l.PullWatcher().SetBots(in.Desk.Bots, in.Desk, l.Teams, l.Teams != nil)
-	if l.Once && l.Host.loopNow != nil && !l.DryRun || l.DryRun && l.PullWatcher().needsPoll(tracked, in.Now) {
+	if l.Once && l.Host.LoopNow() != nil && !l.DryRun || l.DryRun && l.PullWatcher().needsPoll(tracked, in.Now) {
 		PollOncePullWatcher(ctx, l)
 	}
 	// The sweep reads the desk's open pull requests that nothing tracks:
@@ -1770,7 +1770,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		}
 		l.ClearSaid("graphql allowance")
 		l.ClearSaid("read " + ref)
-		if r, ok := parseRef(ref); ok {
+		if r, ok := Cmd.ParseRef(ref); ok {
 			p.Team = l.Teams[strings.ToLower(r.Repo)]
 		}
 		p.Reviews = DeskVerdicts(p.Reviews, in.Desk.Authors)
@@ -1792,7 +1792,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 				for _, orig := range p.Absorbs {
 					stage := "absorbed " + strings.ToLower(orig)
 					if !stages[stage] {
-						_ = a.store.Record(about(event(LoopParty, LoopStageVerb, "[%s] %s", stage, ref), orig))
+						_ = a.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopStageVerb, "[%s] %s", stage, ref), orig))
 						stages[stage] = true
 						stageDetail[stage] = ref
 					}
@@ -1823,7 +1823,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	if len(unreviewedEnded) > 0 && !l.DryRun && slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
 		return unreviewedEnded[strings.ToLower(rp.On)]
 	}) {
-		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+		_ = a.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
 				return unreviewedEnded[strings.ToLower(rp.On)]
 			})
@@ -1847,7 +1847,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			}
 			if staleMergeDecision(p, head) && (p.State != superloop.Merged || p.Head != head) {
 				why := "merge decision overtaken by " + p.State + " head " + p.Head
-				if err := a.store.Record(about(event(LoopParty, LoopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+				if err := a.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
 					return err
 				}
 				delete(claims, key)
@@ -1861,7 +1861,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			if err := l.Record(act, "merged before an interruption; confirmed at "+head); err != nil {
 				return err
 			}
-			in.Taken = append(in.Taken, superloop.Taken{Key: key, Kind: superloop.KindGo, Ref: ref, Agent: c.Target, At: a.timeNow()})
+			in.Taken = append(in.Taken, superloop.Taken{Key: key, Kind: superloop.KindGo, Ref: ref, Agent: c.Target, At: a.TimeNow()})
 			delete(claims, key)
 		}
 	}
@@ -1871,12 +1871,12 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	l.PostMerge = postMerge
 	l.Mu.Unlock()
 	if len(postMerge) > 0 || superloop.HasOverlapWait(in.Workers, in.Taken, in.Answers) {
-		sessions, _, sessionErr := loopSessions(a)
+		sessions, _, sessionErr := Cmd.LoopSessions(a)
 		for i, ag := range st.Agents {
 			if ag.Execution != nil {
-				in.Workers[i].LastActive = executionLastActive(st, ag, a.timeNow())
+				in.Workers[i].LastActive = executionLastActive(st, ag, a.TimeNow())
 			} else if sessionErr != nil && !platform.Missing(sessionErr) {
-				in.Workers[i].LastActive = a.timeNow() // never retire on a failed observation
+				in.Workers[i].LastActive = a.TimeNow() // never retire on a failed observation
 			} else if s, ok := claude.Live(sessions, ag.Party); ok {
 				in.Workers[i].LastActive = s.LastActive
 			}
@@ -1901,8 +1901,8 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 				in.Release = v
 			}
 		}
-		if in.Release == "" && !l.DryRun && a.timeNow().Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
-			l.releaseAt = a.timeNow()
+		if in.Release == "" && !l.DryRun && a.TimeNow().Sub(l.releaseAt) >= a.Cfg().Supervisor.ReleaseEvery.Duration {
+			l.releaseAt = a.TimeNow()
 			in.Release = l.NewerRelease(ctx)
 		}
 	}
@@ -1982,12 +1982,12 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 				stale++
 				continue
 			}
-			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
+			if _, err := fmt.Fprintf(a.Out(), "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
 				return err
 			}
 		}
 		if stale > 0 {
-			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD NEXT skip %d stale done events; the refill fills capacity\n", stale); err != nil {
+			if _, err := fmt.Fprintf(a.Out(), "SUPERVISOR WOULD NEXT skip %d stale done events; the refill fills capacity\n", stale); err != nil {
 				return err
 			}
 		}
@@ -2039,7 +2039,7 @@ func (l *Loop) ExecAction(ctx context.Context, st *state.State, claims map[strin
 	// Older versions backed quota-only merge refusals off for up to an
 	// hour. Fresh budget admission and the gate decide when they can retry.
 	quotaRetry := act.Kind == superloop.KindGo && github.RateLimited(errors.New(failures[act.Key].Message))
-	if l.Host.timeNow().Before(failures[act.Key].RetryAt) && !quotaRetry {
+	if l.Host.TimeNow().Before(failures[act.Key].RetryAt) && !quotaRetry {
 		l.Mu.Unlock()
 		return nil
 	}
@@ -2055,7 +2055,7 @@ func (l *Loop) ExecAction(ctx context.Context, st *state.State, claims map[strin
 			return nil
 		}
 		if err != nil {
-			l.MergeWaited(act, MergeHeld(waitFailed, "reconciling its claim failed: %s", oneLine(err.Error())))
+			l.MergeWaited(act, MergeHeld(waitFailed, "reconciling its claim failed: %s", Cmd.OneLine(err.Error())))
 			return err
 		}
 		if done {
@@ -2097,12 +2097,12 @@ func (l *Loop) ExecAction(ctx context.Context, st *state.State, claims map[strin
 func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[string]LoopClaim, failures map[string]LoopFailure, taken []superloop.Taken, actions []superloop.Action) (result error) {
 	fillLaunched := false
 	defer func() {
-		if l.Host.cfg.Supervisor.WorkerBrief != "" && !fillLaunched {
+		if l.Host.Cfg().Supervisor.WorkerBrief != "" && !fillLaunched {
 			why := "action dispatch cancelled before refill"
 			if result != nil {
-				why = "action dispatch failed before refill: " + oneLine(result.Error())
+				why = "action dispatch failed before refill: " + Cmd.OneLine(result.Error())
 			}
-			_, _ = fmt.Fprintf(l.Host.out, RefillZeroFormat, why)
+			_, _ = fmt.Fprintf(l.Host.Out(), RefillZeroFormat, why)
 		}
 	}()
 	if ctx.Err() != nil {
@@ -2112,7 +2112,7 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	if !l.Once {
 		bgCtx = l.BackgroundContext(ctx)
 	}
-	current, readErr := l.Host.store.Read()
+	current, readErr := l.Host.Store().Read()
 	if readErr != nil {
 		return readErr
 	}
@@ -2141,7 +2141,7 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 				continue
 			}
 			lane := act.Ref
-			if r, ok := parseRef(act.Ref); ok {
+			if r, ok := Cmd.ParseRef(act.Ref); ok {
 				lane = strings.ToLower(r.Repo)
 			}
 			if _, ok := laneMerges[lane]; !ok {
@@ -2203,7 +2203,7 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 				if err != nil {
 					// The decisions behind it did not run this pass: say why.
 					for _, later := range acts[i+1:] {
-						l.MergeWaited(later, MergeHeld(waitLane, "the loop's merge stream of its lane ended on %s before it ran: %s", act.URL, oneLine(err.Error())))
+						l.MergeWaited(later, MergeHeld(waitLane, "the loop's merge stream of its lane ended on %s before it ran: %s", act.URL, Cmd.OneLine(err.Error())))
 					}
 					setErr(err)
 					return
@@ -2257,8 +2257,8 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 			defer l.EndInFlight(LoopFillStream)
 			setErr(l.Fill(bgCtx, st, claims, taken, reservations))
 		})
-	} else if l.Host.cfg.Supervisor.WorkerBrief != "" {
-		_, _ = fmt.Fprintln(l.Host.out, "SUPERVISOR REFILL started 0: previous refill still running")
+	} else if l.Host.Cfg().Supervisor.WorkerBrief != "" {
+		_, _ = fmt.Fprintln(l.Host.Out(), "SUPERVISOR REFILL started 0: previous refill still running")
 	}
 	launch("stream:next", func() error {
 		var errs []error
@@ -2374,14 +2374,14 @@ func (l *Loop) ownership(ctx context.Context, d *superloop.Desk) bool {
 		}
 		d.Authors = []string{l.Login}
 	}
-	own := l.Host.cfg.Supervisor.Ownership
-	if own.Team == "" || l.Teams != nil && l.Host.timeNow().Sub(l.TeamsAt) < teamsEvery {
+	own := l.Host.Cfg().Supervisor.Ownership
+	if own.Team == "" || l.Teams != nil && l.Host.TimeNow().Sub(l.TeamsAt) < teamsEvery {
 		return true
 	}
 	teams, err := ReadTeams(ctx, own)
 	switch {
 	case err == nil:
-		l.Teams, l.TeamsAt = teams, l.Host.timeNow()
+		l.Teams, l.TeamsAt = teams, l.Host.TimeNow()
 	case l.Teams == nil:
 		l.SayOnce("teams", "SUPERVISOR LOOP cannot read the team files %s (%v): until it can, it acts only on supervisor.ownership.review and overridden pull requests", own.TeamFiles, err)
 		d.TeamsUnknown = true
@@ -2414,9 +2414,9 @@ func would(act superloop.Action) string {
 	case superloop.KindOwner:
 		return fmt.Sprintf("give %s an owner (%s)", act.Ref, act.Agent)
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
-		return "tell: " + truncate(oneLine(act.Message), 300)
+		return "tell: " + Cmd.Truncate(Cmd.OneLine(act.Message), 300)
 	}
-	return truncate(oneLine(act.Message), 300)
+	return Cmd.Truncate(Cmd.OneLine(act.Message), 300)
 }
 
 // Record logs act taken, which no pass takes again, and says it.
@@ -2426,10 +2426,10 @@ func (l *Loop) Record(act superloop.Action, what string) error {
 	if kind == superloop.KindGo && !strings.HasPrefix(what, LoopWorkerMergeGo) {
 		kind = superloop.KindMerge
 	}
-	if err := l.Host.store.Record(about(event(LoopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
+	if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(l.Host.out, "SUPERVISOR %s %s\n", strings.ToUpper(kind), escapedLine(detail))
+	_, err := fmt.Fprintf(l.Host.Out(), "SUPERVISOR %s %s\n", strings.ToUpper(kind), Cmd.EscapedLine(detail))
 	return err
 }
 
@@ -2481,7 +2481,7 @@ func orphanedReviewClaims(claims map[string]LoopClaim, in superloop.Input) []sup
 			continue
 		}
 		ref, head, ok := strings.Cut(pending, "@")
-		pr, valid := parseRef(ref)
+		pr, valid := Cmd.ParseRef(ref)
 		if !ok || !valid || head == "" {
 			continue
 		}
@@ -2516,7 +2516,7 @@ var keyedLine = regexp.MustCompile(`(?s)^\[([^\]]+)\] (.*)$`)
 // claim logs act's side effect about to happen on target, before it does:
 // a restart finds it and reconciles instead of acting twice.
 func (l *Loop) claim(act superloop.Action, target string) error {
-	return l.Host.store.Record(about(event(LoopParty, LoopClaimVerb, "[%s] %s", act.Key, target), act.Ref))
+	return l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopClaimVerb, "[%s] %s", act.Key, target), act.Ref))
 }
 
 // Reconcile decides a claimed action from the log since its claim: done
@@ -2525,7 +2525,7 @@ func (l *Loop) claim(act superloop.Action, target string) error {
 func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Action, c LoopClaim) (string, bool, error) {
 	// Reconciliation runs in background action streams. Its history reads must
 	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
-	all, err := state.FollowSnapshot(l.Host.store, "supervisor-loop-reconcile", "v1", func(e state.Event) bool {
+	all, err := state.FollowSnapshot(l.Host.Store(), "supervisor-loop-reconcile", "v1", func(e state.Event) bool {
 		return e.By.Name == LoopParty.Name
 	})
 	if err != nil {
@@ -2603,7 +2603,7 @@ func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Act
 		return "", false, nil
 	}
 	if act.Kind == superloop.KindReview {
-		if err := l.Host.assignExecutionReview(ctx, act); err != nil {
+		if err := l.Host.AssignExecutionReview(ctx, act); err != nil {
 			return "", false, err
 		}
 	}
@@ -2613,20 +2613,20 @@ func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Act
 // readdress puts a worker's question into the guide's queue and logs it in
 // one write.
 func (l *Loop) readdress(act superloop.Action) error {
-	person := l.Host.cfg.Guide.Person
+	person := l.Host.Cfg().Guide.Person
 	detail := superloop.Detail(act, "re-addressed to the guide's person: "+act.Message)
-	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == act.Note })
 		if i < 0 {
 			return nil, fmt.Errorf("note #%d is closed", act.Note)
 		}
 		st.Notes[i].For = person
-		return []state.Event{event(LoopParty, "supervisor."+act.Kind, "%s", detail)}, nil
+		return []state.Event{Cmd.Event(LoopParty, "supervisor."+act.Kind, "%s", detail)}, nil
 	})
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(l.Host.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
+	_, err = fmt.Fprintf(l.Host.Out(), "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), Cmd.EscapedLine(detail))
 	return err
 }
 
@@ -2681,7 +2681,7 @@ func (f LoopFailure) recent(now time.Time) bool {
 
 // Failed logs act's failure and keeps it in failures, by key.
 func (l *Loop) Failed(act superloop.Action, failures map[string]LoopFailure, cause error) error {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	l.Mu.Lock()
 	previous := failures[act.Key]
 	f := LoopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: now, At: now}
@@ -2707,21 +2707,21 @@ func (l *Loop) Failed(act superloop.Action, failures map[string]LoopFailure, cau
 	if err != nil {
 		return err
 	}
-	if err := l.Host.store.Record(about(event(LoopParty, LoopFailureVerb, "[%s] %s", act.Key, b), act.Ref)); err != nil {
+	if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopFailureVerb, "[%s] %s", act.Key, b), act.Ref)); err != nil {
 		return err
 	}
 	switch f.Count {
 	case 1:
-		_, err = fmt.Fprintf(l.Host.out, "SUPERVISOR %s FAILED %s: %v\n", strings.ToUpper(act.Kind), act.Key, cause)
+		_, err = fmt.Fprintf(l.Host.Out(), "SUPERVISOR %s FAILED %s: %v\n", strings.ToUpper(act.Kind), act.Key, cause)
 	case 2:
-		_, err = fmt.Fprintf(l.Host.out, "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
+		_, err = fmt.Fprintf(l.Host.Out(), "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
 	}
 	return err
 }
 
 // StuckGroup are the failures of kind with message attempted recently, by key.
 func (l *Loop) StuckGroup(failures map[string]LoopFailure, kind, message string) map[string]LoopFailure {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	group := map[string]LoopFailure{}
 	for key, f := range failures {
 		if f.Kind == kind && f.Message == message && f.recent(now) {
@@ -2736,7 +2736,7 @@ func (l *Loop) StuckGroup(failures map[string]LoopFailure, kind, message string)
 // PROBLEM. An episode filed before it began (filed, by step and error) is a
 // new one.
 func (l *Loop) Stuck(failures map[string]LoopFailure, filed map[string]time.Time) error {
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	keys := slices.Sorted(maps.Keys(failures))
 	done := map[string]bool{}
 	for _, key := range keys {
@@ -2797,7 +2797,7 @@ func unreadCause(err error) string {
 	if errors.Is(err, ErrLoopLater) {
 		return cmp.Or(laterCause(err), "no current observation")
 	}
-	return oneLine(err.Error())
+	return Cmd.OneLine(err.Error())
 }
 
 // SayOnce prints a failure once per key and run.
@@ -2809,7 +2809,7 @@ func (l *Loop) SayOnce(key, format string, args ...any) {
 	}
 	l.Said[key] = true
 	l.Mu.Unlock()
-	_, _ = fmt.Fprintf(l.Host.out, format+"\n", args...)
+	_, _ = fmt.Fprintf(l.Host.Out(), format+"\n", args...)
 }
 
 func (l *Loop) ClearSaid(key string) {
@@ -2828,7 +2828,7 @@ func (l *Loop) NewerRelease(ctx context.Context) string {
 		l.SayOnce(releaseLookupKey, "SUPERVISOR RELEASE LOOKUP FAILED: %v", err)
 		return ""
 	case code != 0 && code != ExitOutdated:
-		l.SayOnce(releaseLookupKey, "SUPERVISOR RELEASE LOOKUP FAILED: self-update --check exits %d: %s", code, oneLine(out))
+		l.SayOnce(releaseLookupKey, "SUPERVISOR RELEASE LOOKUP FAILED: self-update --check exits %d: %s", code, Cmd.OneLine(out))
 		return ""
 	}
 	delete(l.Said, releaseLookupKey)
@@ -2845,12 +2845,12 @@ func (l *Loop) NewerRelease(ctx context.Context) string {
 // and the GitHub budget is above its floor, and says what it did.
 func (l *Loop) Tidy(ctx context.Context, st *state.State) {
 	a := l.Host
-	b := a.cfg.Board
-	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.timeNow().Sub(l.TidyAt) < b.TidyEvery.Duration ||
-		BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+	b := a.Cfg().Board
+	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.TimeNow().Sub(l.TidyAt) < b.TidyEvery.Duration ||
+		BoardBudgetLow(st.Budget, a.Cfg().GitHub.Floor, a.TimeNow()) {
 		return
 	}
-	l.TidyAt = a.timeNow()
+	l.TidyAt = a.TimeNow()
 	out, err := l.Run(ctx, LoopBoard, BoardTidyName)
 	if err != nil {
 		if !errors.Is(err, ErrLoopLater) {
@@ -2876,10 +2876,10 @@ func (l *Loop) Tidy(ctx context.Context, st *state.State) {
 }
 
 // sayBoard prints each line of a board command's output as the loop's.
-func sayBoard(a *app, out string) {
+func sayBoard(a Host, out string) {
 	for line := range strings.Lines(out) {
 		if line = strings.TrimSpace(line); line != "" {
-			_, _ = fmt.Fprintln(a.out, "SUPERVISOR BOARD "+line)
+			_, _ = fmt.Fprintln(a.Out(), "SUPERVISOR BOARD "+line)
 		}
 	}
 }
@@ -2918,8 +2918,8 @@ const AsFlag = "as"
 // As is a beekeeper command line the loop runs as itself.
 func (l *Loop) As(args ...string) []string {
 	out := []string{"--" + AsFlag, LoopParty.Name}
-	if l.Host.cfgPath != "" {
-		out = append([]string{"--" + configFlag, l.Host.cfgPath}, out...)
+	if l.Host.CfgPath() != "" {
+		out = append([]string{"--" + configFlag, l.Host.CfgPath()}, out...)
 	}
 	return append(out, args...)
 }
@@ -2939,7 +2939,7 @@ func (l *Loop) Run(ctx context.Context, args ...string) (string, error) {
 		return out, err
 	}
 	if code != 0 {
-		line := oneLine(out)
+		line := Cmd.OneLine(out)
 		if isLoopGitHubHeldOutput(line) {
 			return out, fmt.Errorf("beekeeper %s: %s: %w", strings.Join(args[:min(2, len(args))], " "), line, ErrLoopLater)
 		}
@@ -2947,7 +2947,7 @@ func (l *Loop) Run(ctx context.Context, args ...string) (string, error) {
 		if strings.Contains(line, state.ErrRecoveryWriterFenced.Error()) {
 			wrapped = state.ErrRecoveryWriterFenced
 		}
-		return out, newExitError(code, fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, line), wrapped)
+		return out, Cmd.NewExitError(code, fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, line), wrapped)
 	}
 	return out, nil
 }
@@ -2957,10 +2957,10 @@ func (l *Loop) Run(ctx context.Context, args ...string) (string, error) {
 // reading and this call, and a step must not fail forever on work done.
 func (l *Loop) Remove(ctx context.Context, name, reason string) error {
 	_, err := l.Run(ctx, agentsName, LoopRemove, name, "--"+reasonFlagName, reason)
-	if err == nil || Code(err) != ExitRefused {
+	if err == nil || Cmd.Code(err) != ExitRefused {
 		return err
 	}
-	st, readErr := l.Host.store.Read()
+	st, readErr := l.Host.Store().Read()
 	if readErr != nil {
 		return err
 	}
@@ -3025,7 +3025,7 @@ func (l *Loop) act(ctx context.Context, st *state.State, act superloop.Action, r
 		// A removal or retirement waits for the session's turn to end:
 		// its last report is not cut off, and its session can be archived
 		// or stopped.
-		if loopInTurn(a, st.Agents[i].Party) {
+		if Cmd.LoopInTurn(a, st.Agents[i].Party) {
 			l.SayOnce("turn "+act.Key, "SUPERVISOR DONE WAITS %s: its session runs a turn", act.Agent)
 			return "", ErrLoopLater
 		}
@@ -3033,7 +3033,7 @@ func (l *Loop) act(ctx context.Context, st *state.State, act superloop.Action, r
 		// removal is refused while its reservation stands. An unreachable
 		// host fails the stop; the loop says so once and tries again.
 		if ref := st.Agents[i].Execution; ref != nil {
-			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
+			if r, _ := Cmd.ExecutionRecord(st, *ref); r == nil || !r.Terminal() {
 				if _, err := l.Run(ctx, agentsName, LoopStop, act.Agent, "--reason", "supervisor loop: task done"); err != nil {
 					return "", err
 				}
@@ -3078,7 +3078,7 @@ func executionLastActive(st *state.State, ag state.Agent, now time.Time) time.Ti
 	if ag.Execution == nil {
 		return time.Time{}
 	}
-	r, _ := executionRecord(st, *ag.Execution)
+	r, _ := Cmd.ExecutionRecord(st, *ag.Execution)
 	if r == nil {
 		return time.Time{}
 	}
@@ -3136,8 +3136,8 @@ func ReviewParkServes(st *state.State, ag state.Agent, on string) string {
 		return s
 	}
 	if ref := AgentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) && !strings.Contains(strings.ToLower(ref), "/pull/") {
-		if r, ok := parseRef(ref); ok && !strings.EqualFold(refName(r), on) {
-			return refName(r)
+		if r, ok := Cmd.ParseRef(ref); ok && !strings.EqualFold(Cmd.RefName(r), on) {
+			return Cmd.RefName(r)
 		}
 	}
 	if rp, ok := st.ReviewParkFor(on); ok && rp.Serves != "" {
@@ -3212,7 +3212,7 @@ func (l *Loop) EndReviewWorkers(ctx context.Context, st *state.State) error {
 			continue
 		}
 		l.LifecyclePhase(loopPhaseEndReviews)
-		if loopInTurn(l.Host, ag.Party) {
+		if Cmd.LoopInTurn(l.Host, ag.Party) {
 			l.SayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
 			continue
 		}
@@ -3240,14 +3240,14 @@ func (l *Loop) EndReviewWorkers(ctx context.Context, st *state.State) error {
 			PostMerge:  ag.Park.PostMerge,
 			Worktree:   worktreeDir,
 		}
-		if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.UpsertReviewPark(rp)
 			return nil, nil
 		}); err != nil {
 			return err
 		}
 		if ref := ag.Execution; ref != nil {
-			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
+			if r, _ := Cmd.ExecutionRecord(st, *ref); r == nil || !r.Terminal() {
 				if _, err := l.Run(ctx, agentsName, LoopStop, ag.Name, "--reason", "supervisor loop: desk review requested"); err != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()
@@ -3258,8 +3258,8 @@ func (l *Loop) EndReviewWorkers(ctx context.Context, st *state.State) error {
 					l.SayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
 					continue
 				}
-				if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
-					if r, _ := executionRecord(current, *ref); r != nil {
+				if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
+					if r, _ := Cmd.ExecutionRecord(current, *ref); r != nil {
 						r.Observation.StopAcknowledged = true
 						r.Observation.ProcessState = execution.Exited
 					}
@@ -3279,16 +3279,16 @@ func (l *Loop) EndReviewWorkers(ctx context.Context, st *state.State) error {
 			l.SayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
 		}
-		if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.UpsertReviewPark(rp)
 			if i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) }); i >= 0 {
-				removeAgent(current, i)
+				Cmd.RemoveAgent(current, i)
 			}
 			return nil, nil
 		}); err != nil {
 			return err
 		}
-		l.Host.cleanRemovedWorktree(ctx, worktreeDir, ag.Park.ReviewHead)
+		l.Host.CleanRemovedWorktree(ctx, worktreeDir, ag.Park.ReviewHead)
 	}
 	return nil
 }
@@ -3315,7 +3315,7 @@ func (l *Loop) WakeOrStartFixer(ctx context.Context, st *state.State, act superl
 		// activate that execution. Recover the original start before telling
 		// it the current findings, and keep the action pending on failure.
 		if ref := st.Agents[i].Execution; ref != nil {
-			if rec, _ := executionRecord(st, *ref); rec != nil && unactivated(rec) {
+			if rec, _ := Cmd.ExecutionRecord(st, *ref); rec != nil && Cmd.Unactivated(rec) {
 				if _, err := l.remoteStartRefused(ctx, act.Agent); err != nil {
 					return err
 				}
@@ -3360,9 +3360,9 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 	if l.HoldingStarts() {
 		return fmt.Errorf("starts are held (the SUPERVISOR STARTS HELD line names the watch budget or machine condition): %w", ErrLoopLater)
 	}
-	r, ok := parseRef(act.Ref)
+	r, ok := Cmd.ParseRef(act.Ref)
 	if !ok {
-		return refused("invalid pull request ref %q", act.Ref)
+		return Cmd.Refused("invalid pull request ref %q", act.Ref)
 	}
 	var livePull superloop.Pull
 	if act.Kind != superloop.KindEnd {
@@ -3380,7 +3380,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 	var servesURL, postMerge string
 	if hasRP {
 		if rp.Serves != "" && !strings.EqualFold(rp.Serves, act.Ref) {
-			servesURL = issueURL(rp.Serves)
+			servesURL = Cmd.IssueURL(rp.Serves)
 		}
 		if rp.PostMerge != nil {
 			postMerge = strings.TrimSpace(*rp.PostMerge)
@@ -3394,7 +3394,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		// policy sync. Execution hosts only have prepared workspaces, so
 		// keep this work on the coordinator even under hostsFirst.
 		flags := startFlags(false, false)
-		if model := l.Host.ruleModel(name, workerRole); model != "" {
+		if model := l.Host.RuleModel(name, workerRole); model != "" {
 			flags = append(flags, modelFlag, model)
 		}
 		out, code, readErr := BeekeeperRun(ctx, l.As(append([]string{LoopCapacity}, flags...)...)...)
@@ -3455,7 +3455,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		return err
 	}
 	args := []string{agentsName, agentStartName, name, brief}
-	if len(l.Host.cfg.Capacity.Choices) > 0 {
+	if len(l.Host.Cfg().Capacity.Choices) > 0 {
 		args = append(args, "--harness", harnessAuto)
 	}
 	if place.remote() {
@@ -3470,22 +3470,22 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		return err
 	}
 	if _, err := l.RunStart(ctx, act, args...); err != nil {
-		if Code(err) == ExitRefused && place.remote() {
+		if Cmd.Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-				return l.Host.operationOutcome(agentStartName, "", act.URL, true)
+				return l.Host.OperationOutcome(agentStartName, "", act.URL, true)
 			} else if !errors.Is(rerr, ErrLoopLater) {
 				return rerr
 			}
 		}
-		if Code(err) == ExitRefused {
-			return fmt.Errorf("its worker start was refused (%s): %w", truncate(oneLine(err.Error()), 300), ErrLoopLater)
+		if Cmd.Code(err) == ExitRefused {
+			return fmt.Errorf("its worker start was refused (%s): %w", Cmd.Truncate(Cmd.OneLine(err.Error()), 300), ErrLoopLater)
 		}
 		return err
 	}
 	if hasRP && rp.Serves != "" {
-		if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
-				inheritReviewParkOnAgent(current, &current.Agents[i], rp, l.Host.timeNow().UTC())
+				Cmd.InheritReviewParkOnAgent(current, &current.Agents[i], rp, l.Host.TimeNow().UTC())
 			}
 			return nil, nil
 		}); err != nil {
@@ -3559,16 +3559,16 @@ func (l *Loop) Brief(file, def, key string, d BriefData) (string, error) {
 	if err := t.Execute(&b, d); err != nil {
 		return "", err
 	}
-	if st, err := l.Host.store.Read(); err != nil {
+	if st, err := l.Host.Store().Read(); err != nil {
 		return "", err
 	} else {
 		for _, delivery := range st.Deliveries {
-			if delivery.Outcome == state.OutcomeStalled && (deliveryURL(delivery.Ref, false) == d.URL || delivery.Ref == key) {
+			if delivery.Outcome == state.OutcomeStalled && (Cmd.DeliveryURL(delivery.Ref, false) == d.URL || delivery.Ref == key) {
 				fmt.Fprintf(&b, "\nPrevious worker exhausted its continuations. Last evidence: %s\n", delivery.Evidence)
 			}
 		}
 	}
-	dir := filepath.Join(l.Host.store.Dir(), "supervisor-loop")
+	dir := filepath.Join(l.Host.Store().Dir(), "supervisor-loop")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -3590,23 +3590,23 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 	if l.HoldingStarts() {
 		return "", ErrLoopLater
 	}
-	r, _ := parseRef(act.Ref)
+	r, _ := Cmd.ParseRef(act.Ref)
 	var authorFlags []string
-	if l.Host.cfg.Capacity.TaskPolicies[taskKindReview].DifferentFamily {
-		st, err := l.Host.store.Read()
+	if l.Host.Cfg().Capacity.TaskPolicies[taskKindReview].DifferentFamily {
+		st, err := l.Host.Store().Read()
 		if err != nil {
 			return "", err
 		}
 		if m := reviewAuthorModel(st, act); m != "" {
 			authorFlags = []string{"--" + authorModelFlag, m}
 		} else {
-			return "", refused("model policy: review requires the author's recorded model")
+			return "", Cmd.Refused("model policy: review requires the author's recorded model")
 		}
 	}
 	name := superloop.ReviewerName(act.Ref, act.Round)
 	placementFlags := slices.Clone(authorFlags)
-	if l.Host.cfg.Supervisor.ReviewModel != "" {
-		placementFlags = append(placementFlags, modelFlag, l.Host.cfg.Supervisor.ReviewModel)
+	if l.Host.Cfg().Supervisor.ReviewModel != "" {
+		placementFlags = append(placementFlags, modelFlag, l.Host.Cfg().Supervisor.ReviewModel)
 	}
 	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, placementFlags...)
 	if err != nil {
@@ -3633,7 +3633,7 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 			return "", ErrLoopLater
 		}
 		if p.Head != act.Head || !p.Green {
-			return "", refused("review head moved or CI is not green")
+			return "", Cmd.Refused("review head moved or CI is not green")
 		}
 		previous := ""
 		for _, review := range p.Reviews {
@@ -3641,7 +3641,7 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 				previous = review.Body
 			}
 		}
-		act.Message, err = reviewContext(ctx, p, previous, l.Host.cfg.Supervisor.ReviewLightLines)
+		act.Message, err = Cmd.ReviewContext(ctx, p, previous, l.Host.Cfg().Supervisor.ReviewLightLines)
 		if err != nil {
 			return "", err
 		}
@@ -3652,7 +3652,7 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 		}
 	}
 	branch := cmp.Or(rawBranch, fmt.Sprintf("pr-%d", r.N))
-	brief, err := l.Brief(l.Host.cfg.Supervisor.ReviewBrief, DefaultReviewBrief, act.Key, BriefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Branch: branch, Round: act.Round, Worker: act.Agent, Context: act.Message})
+	brief, err := l.Brief(l.Host.Cfg().Supervisor.ReviewBrief, DefaultReviewBrief, act.Key, BriefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Branch: branch, Round: act.Round, Worker: act.Agent, Context: act.Message})
 	if err != nil {
 		return "", err
 	}
@@ -3663,11 +3663,11 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 	if l.ReviewDir != "" {
 		args = append(args, "--dir", l.ReviewDir)
 	}
-	if l.Host.cfg.Supervisor.ReviewModel != "" {
-		args = append(args, modelFlag, l.Host.cfg.Supervisor.ReviewModel)
+	if l.Host.Cfg().Supervisor.ReviewModel != "" {
+		args = append(args, modelFlag, l.Host.Cfg().Supervisor.ReviewModel)
 	}
 	args = append(args, authorFlags...)
-	if len(l.Host.cfg.Capacity.Choices) > 0 && l.Host.cfg.Supervisor.ReviewModel == "" {
+	if len(l.Host.Cfg().Capacity.Choices) > 0 && l.Host.Cfg().Supervisor.ReviewModel == "" {
 		// The reviewer takes capacity's pick, decided as a worker's start
 		// is; a self-hosted model's work gets one on no self-hosted provider.
 		args = append(args, "--harness", harnessAuto)
@@ -3681,23 +3681,23 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 	if err := l.RepositoryStart(act.Ref); err != nil {
 		return "", err
 	}
-	if err := l.Host.reserveReview(act); err != nil {
+	if err := l.Host.ReserveReview(act); err != nil {
 		return "", err
 	}
 	started := false
 	defer func() {
-		l.Host.finishReviewRequest(act, started)
+		l.Host.FinishReviewRequest(act, started)
 	}()
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
 	if _, err := l.RunStart(ctx, act, args...); err != nil {
-		if Code(err) == ExitRefused {
+		if Cmd.Code(err) == ExitRefused {
 			if place.remote() {
 				// A refusal of a placed start on a host is either room or
 				// an execution its interrupted start left reserved.
 				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-					if saveErr := l.Host.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+					if saveErr := l.Host.OperationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 						return "", saveErr
 					}
 					return what, nil
@@ -3711,7 +3711,7 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 		return "", err
 	}
 	started = true
-	if err := l.Host.assignExecutionReview(ctx, act); err != nil {
+	if err := l.Host.AssignExecutionReview(ctx, act); err != nil {
 		return "", err
 	}
 	if place.remote() {
@@ -3773,7 +3773,7 @@ func SelfHostedModel(k config.Capacity, model string) bool {
 		return false
 	}
 	for _, c := range k.Choices {
-		if c.Model == model || c.Harness+"/"+c.Model == model || ompChoiceModel(c, model) {
+		if c.Model == model || c.Harness+"/"+c.Model == model || Cmd.OmpChoiceModel(c, model) {
 			if p, ok := k.Providers[c.EffectiveProvider()]; ok && p.SelfHosted() {
 				return true
 			}
@@ -3847,7 +3847,7 @@ func startFlags(review, selfHosted bool) []string {
 // remote start its model name. Then the local room alone never stops a
 // start; startPlacement judges each host's too.
 func (l *Loop) PlacesRemotely() bool {
-	return len(l.Host.cfg.Supervisor.Hosts) > 0 && len(l.Host.cfg.Capacity.Choices) > 0
+	return len(l.Host.Cfg().Supervisor.Hosts) > 0 && len(l.Host.Cfg().Capacity.Choices) > 0
 }
 
 // startPlacement prefers configured execution hosts by default. If none can
@@ -3858,7 +3858,7 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 	if review {
 		kind = taskKindReview
 	}
-	model := l.Host.ruleModel(name, kind)
+	model := l.Host.RuleModel(name, kind)
 	flags := startFlags(review, selfHosted)
 	if model != "" {
 		flags = append(flags, modelFlag, model)
@@ -3871,7 +3871,7 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		}
 		return startHost{}, nil
 	}
-	k := l.Host.cfg.Supervisor
+	k := l.Host.Cfg().Supervisor
 	if !l.PlacesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
@@ -3894,7 +3894,7 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		return startHost{}, nil
 	}
 	for i, selector := range k.Hosts {
-		h, err := l.Host.executionHost(selector)
+		h, err := l.Host.ExecutionHost(selector)
 		if err != nil {
 			l.RecordHostPlacement(selector, repo, err.Error())
 			l.SayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
@@ -3975,7 +3975,7 @@ func (l *Loop) defaultBranch(ctx context.Context, repo string) (string, error) {
 // A start a host refused for room, with nothing reserved, waits for a
 // later pass as before.
 func (l *Loop) remoteStartRefused(ctx context.Context, name string) (string, error) {
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return "", err
 	}
@@ -3983,7 +3983,7 @@ func (l *Loop) remoteStartRefused(ctx context.Context, name string) (string, err
 	if i < 0 {
 		return "", ErrLoopLater
 	}
-	if rec, _ := executionRecord(st, *st.Agents[i].Execution); rec != nil && rec.Terminal() {
+	if rec, _ := Cmd.ExecutionRecord(st, *st.Agents[i].Execution); rec != nil && rec.Terminal() {
 		return "", ErrLoopLater
 	}
 	out, err := l.Run(ctx, agentsName, LoopRecover, name)
@@ -3991,7 +3991,7 @@ func (l *Loop) remoteStartRefused(ctx context.Context, name string) (string, err
 		l.SayOnce("recover "+name, "SUPERVISOR RECOVER FAILED %s: %v", name, err)
 		return "", ErrLoopLater
 	}
-	return fmt.Sprintf("%q recovered the execution its interrupted start reserved: %s", name, oneLine(out)), nil
+	return fmt.Sprintf("%q recovered the execution its interrupted start reserved: %s", name, Cmd.OneLine(out)), nil
 }
 
 // StartNext starts the next ranked item with the worker brief, when
@@ -3999,10 +3999,10 @@ func (l *Loop) remoteStartRefused(ctx context.Context, name string) (string, err
 // with room (and the board item's repository is mapped there), else on the
 // coordinator's own machine.
 func (l *Loop) StartNext(ctx context.Context, act superloop.Action, reserved ...[]string) (string, error) {
-	if l.HoldingStarts() || l.Host.recoveryHeld() != "" {
+	if l.HoldingStarts() || l.Host.RecoveryHeld() != "" {
 		return "", ErrLoopLater
 	}
-	k := l.Host.cfg.Supervisor
+	k := l.Host.Cfg().Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
 	}
@@ -4050,16 +4050,16 @@ type loopBoardNone struct {
 // No walk runs while the GitHub budget is under github.floor: the pass
 // answers errLoopLater, so a done event waits unsettled and costs nothing.
 func (l *Loop) NextItem(ctx context.Context) (*LoopBoardItem, error) {
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return nil, err
 	}
 	if l.DryRun && l.FillPreview != nil {
 		st = l.FillPreview
 	}
-	v := readDeliveryWIP(st, l.Host.cfg.Delivery.WIPLimit, l.Host.cfg.Supervisor.LoopInterval.Duration, l.Host.timeNow(), l.Host.deliveryPolicy())
+	v := Cmd.ReadDeliveryWIP(st, l.Host.Cfg().Delivery.WIPLimit, l.Host.Cfg().Supervisor.LoopInterval.Duration, l.Host.TimeNow(), l.Host.DeliveryPolicy())
 	exemptOnly := v.Reason != ""
-	if exemptOnly && !l.Host.deliveryExemptIntake(st) {
+	if exemptOnly && !l.Host.DeliveryExemptIntake(st) {
 		return nil, fmt.Errorf("%s: %w", v.Reason, ErrLoopLater)
 	}
 	l.Mu.Lock()
@@ -4069,19 +4069,19 @@ func (l *Loop) NextItem(ctx context.Context) (*LoopBoardItem, error) {
 		return nil, err
 	}
 	l.Mu.Unlock()
-	if BoardBudgetLow(st.Budget, l.Host.cfg.GitHub.Floor, l.Host.timeNow()) {
+	if BoardBudgetLow(st.Budget, l.Host.Cfg().GitHub.Floor, l.Host.TimeNow()) {
 		l.Mu.Lock()
-		wait := fmt.Errorf("GitHub budget under github.floor (%d): %w", l.Host.cfg.GitHub.Floor, ErrLoopLater)
+		wait := fmt.Errorf("GitHub budget under github.floor (%d): %w", l.Host.Cfg().GitHub.Floor, ErrLoopLater)
 		l.BoardNone = &loopBoardNone{err: wait, exemptOnly: exemptOnly}
 		l.Mu.Unlock()
-		l.SayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.Host.cfg.GitHub.Floor)
+		l.SayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.Host.Cfg().GitHub.Floor)
 		return nil, wait
 	}
 	l.ClearSaid("board budget")
 	next, err := l.readNextItemSkipping(ctx, exemptOnly, l.FillSkipped())
 	// A scoped read can never fall back to ordinary work, even if the
 	// observation becomes fresh or a delivery ends while the read runs.
-	if next != nil && exemptOnly && !deliveryExempt(st, l.Host.timeNow(), next.Ref, next.WIPExempt) {
+	if next != nil && exemptOnly && !Cmd.DeliveryExempt(st, l.Host.TimeNow(), next.Ref, next.WIPExempt) {
 		return nil, ErrLoopLater
 	}
 	if next == nil {
@@ -4097,7 +4097,7 @@ func (l *Loop) NextItem(ctx context.Context) (*LoopBoardItem, error) {
 // reset, GraphQL refuses, or the last GraphQL reading is under floor until
 // its window resets (its reset, else an hour after the reading).
 func BoardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
-	if lowBudget(b, floor, now) {
+	if Cmd.LowBudget(b, floor, now) {
 		return true
 	}
 	if b == nil || b.GraphQL == nil {
@@ -4126,7 +4126,7 @@ func (l *Loop) ReadNextItem(ctx context.Context, onlyExempt ...bool) (*LoopBoard
 
 func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip []string) (*LoopBoardItem, error) {
 	if !exemptOnly {
-		if next, err := l.Host.nextMonitoredIssue(ctx, skip...); next != nil || err != nil {
+		if next, err := l.Host.NextMonitoredIssue(ctx, skip...); next != nil || err != nil {
 			return next, err
 		}
 	}
@@ -4142,10 +4142,10 @@ func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip [
 		return nil, err
 	}
 	failed := func() error {
-		return newExitError(code, fmt.Sprintf("beekeeper %s next: exit %d: %s", LoopBoard, code, oneLine(out)), nil)
+		return Cmd.NewExitError(code, fmt.Sprintf("beekeeper %s next: exit %d: %s", LoopBoard, code, Cmd.OneLine(out)), nil)
 	}
 	if code != 0 && code != ExitRefused {
-		if isLoopGitHubHeldOutput(oneLine(out)) {
+		if isLoopGitHubHeldOutput(Cmd.OneLine(out)) {
 			return nil, ErrLoopLater
 		}
 		return nil, failed()
@@ -4185,7 +4185,7 @@ func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip [
 	if err := json.Unmarshal(next.Pick, &pick); err != nil {
 		return nil, fmt.Errorf("board next --json: %w", err)
 	}
-	if _, ok := parseRef(pick.Ref); !ok {
+	if _, ok := Cmd.ParseRef(pick.Ref); !ok {
 		return nil, fmt.Errorf("board next: invalid item ref %q", pick.Ref)
 	}
 	l.ClearSaid("repository hold " + pick.Ref)
@@ -4213,7 +4213,7 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 	if why := l.unreadRepo(next.Ref); why != "" {
 		return "", fmt.Errorf("repository unread: %s: %w", why, ErrLoopLater)
 	}
-	if err := l.Host.allowMonitoredIssue(ctx, next.Ref); err != nil {
+	if err := l.Host.AllowMonitoredIssue(ctx, next.Ref); err != nil {
 		return "", err
 	}
 	if err := l.RepositoryStart(next.Ref); err != nil {
@@ -4222,13 +4222,13 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 	if err := l.UnmergedStart(ctx, next.Ref); err != nil {
 		return "", err
 	}
-	k := l.Host.cfg.Supervisor
-	r, _ := parseRef(next.Ref)
+	k := l.Host.Cfg().Supervisor
+	r, _ := Cmd.ParseRef(next.Ref)
 	name := fmt.Sprintf("%s %d", RepoName(r.Repo), r.N)
 	if next.EpicOwner {
 		name = "Epic owner " + next.Ref
 	}
-	if err := l.Host.fatalAdmission(name, false); err != nil {
+	if err := l.Host.FatalAdmission(name, false); err != nil {
 		return "", fmt.Errorf("fatal admission: %v: %w", err, ErrLoopLater)
 	}
 	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
@@ -4253,7 +4253,7 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 	if next.EpicOwner {
 		args = append(args, "--task", epicOwnerTask+next.Ref)
 	}
-	if len(l.Host.cfg.Capacity.Choices) > 0 {
+	if len(l.Host.Cfg().Capacity.Choices) > 0 {
 		// The start takes capacity's choice of harness and model, as a
 		// reviewer's does.
 		args = append(args, "--harness", harnessAuto)
@@ -4285,7 +4285,7 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 		return "", err
 	}
 	if out, err := l.RunStart(ctx, act, args...); err != nil {
-		if Code(err) == ExitRefused && place.remote() {
+		if Cmd.Code(err) == ExitRefused && place.remote() {
 			// A refusal of a placed start on a host is either room or
 			// an execution its interrupted start left reserved. The
 			// recovery, when it succeeds, is the start taken after all:
@@ -4294,7 +4294,7 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 			// when the pass dies before the taken line.
 			what, rerr := l.remoteStartRefused(ctx, name)
 			if rerr == nil {
-				if saveErr := l.Host.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+				if saveErr := l.Host.OperationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 					return "", saveErr
 				}
 				l.StallClear()
@@ -4307,17 +4307,17 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 		if strings.HasPrefix(act.Key, LoopFillKey) {
 			// A returned failure is settled, rather than an interruption
 			// that a later start under the same name could reconcile.
-			closed := about(event(LoopParty, LoopClaimEndVerb, "[%s] start failed or refused: %v; %s", act.Key, err, oneLine(out)), next.Ref)
-			if closeErr := l.Host.store.Record(closed); closeErr != nil {
+			closed := Cmd.About(Cmd.Event(LoopParty, LoopClaimEndVerb, "[%s] start failed or refused: %v; %s", act.Key, err, Cmd.OneLine(out)), next.Ref)
+			if closeErr := l.Host.Store().Record(closed); closeErr != nil {
 				return "", fmt.Errorf("closing failed start claim: %w", closeErr)
 			}
 		}
-		if Code(err) == ExitRefused {
-			return "", &RefillStartError{cause: err, output: oneLine(out)}
+		if Cmd.Code(err) == ExitRefused {
+			return "", &RefillStartError{cause: err, output: Cmd.OneLine(out)}
 		}
 		return "", err
 	}
-	if err := l.Host.monitoredIssueStarted(ctx, next.Ref); err != nil {
+	if err := l.Host.MonitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
 	l.StallClear()
@@ -4332,14 +4332,14 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 // while --check still finds it newer), the broker on the installed binary,
 // supervisor.postInstall (once), then --check finding it the latest.
 func (l *Loop) Install(ctx context.Context, act superloop.Action) (string, error) {
-	st, err := l.Host.store.Read()
+	st, err := l.Host.Store().Read()
 	if err != nil {
 		return "", err
 	}
 	if st.AutoInstallPaused {
 		return "", ErrLoopLater
 	}
-	if why := l.Host.recoveryHeld(); why != "" {
+	if why := l.Host.RecoveryHeld(); why != "" {
 		l.SayOnce("recovery-hold", "%s", why)
 		return "", ErrLoopLater
 	}
@@ -4358,19 +4358,19 @@ func (l *Loop) Install(ctx context.Context, act superloop.Action) (string, error
 	}
 	if code == ExitOutdated {
 		if _, err := l.Run(ctx, selfUpdateCmdName); err != nil {
-			_ = l.Host.store.Record(event(LoopParty, LoopClaimEndVerb, "[%s] %v", act.Key, err))
+			_ = l.Host.Store().Record(Cmd.Event(LoopParty, LoopClaimEndVerb, "[%s] %v", act.Key, err))
 			return "", err
 		}
 	}
-	if out, code, err := BeekeeperRun(ctx, l.As(budgetGateArgs...)...); err != nil || code != 0 {
-		detail := oneLine(out)
+	if out, code, err := BeekeeperRun(ctx, l.As(Cmd.BudgetGateArgs()...)...); err != nil || code != 0 {
+		detail := Cmd.OneLine(out)
 		if detail == "" && err != nil {
-			detail = oneLine(err.Error())
+			detail = Cmd.OneLine(err.Error())
 		}
 		return "", fmt.Errorf("%s installed, but budget --gate exits %d: %s", version, code, detail)
 	}
 	what := []string{version + " installed"}
-	broker, err := loopBroker(ctx)
+	broker, err := Cmd.LoopBroker(ctx)
 	if errors.Is(err, ErrLoopLater) {
 		l.SayOnce("broker "+act.Key, "SUPERVISOR RELEASE WAITS %s: %s, its restart waits for them", version, broker)
 		return "", ErrLoopLater
@@ -4379,7 +4379,7 @@ func (l *Loop) Install(ctx context.Context, act superloop.Action) (string, error
 		return "", err
 	}
 	what = append(what, broker)
-	if argv := l.Host.cfg.Supervisor.PostInstall; len(argv) > 0 {
+	if argv := l.Host.Cfg().Supervisor.PostInstall; len(argv) > 0 {
 		stage := act.Key + " post-install"
 		l.Mu.Lock()
 		doneStage := l.Stages[stage]
@@ -4387,9 +4387,9 @@ func (l *Loop) Install(ctx context.Context, act superloop.Action) (string, error
 		if !doneStage {
 			out, errOut, code, err := LoopCommand(ctx, "", argv)
 			if err != nil || code != 0 {
-				return "", fmt.Errorf("%s installed, supervisor.postInstall failed (exit %d, %v): %s", version, code, err, oneLine(out+errOut))
+				return "", fmt.Errorf("%s installed, supervisor.postInstall failed (exit %d, %v): %s", version, code, err, Cmd.OneLine(out+errOut))
 			}
-			if err := l.Host.store.Record(event(LoopParty, LoopStageVerb, "[%s] ran", stage)); err != nil {
+			if err := l.Host.Store().Record(Cmd.Event(LoopParty, LoopStageVerb, "[%s] ran", stage)); err != nil {
 				return "", err
 			}
 			l.Mu.Lock()
@@ -4400,7 +4400,7 @@ func (l *Loop) Install(ctx context.Context, act superloop.Action) (string, error
 	}
 	out, code, err := BeekeeperRun(ctx, l.As(SelfUpdateCheck...)...)
 	if err != nil || code != 0 {
-		return "", fmt.Errorf("%s installed, but self-update --check exits %d: %s", version, code, oneLine(out))
+		return "", fmt.Errorf("%s installed, but self-update --check exits %d: %s", version, code, Cmd.OneLine(out))
 	}
 	if err := l.WakeReleased(ctx, act); err != nil {
 		return "", err
@@ -4449,12 +4449,12 @@ var loopClasses = []string{"needs-person", "blocked", "failed", "question"}
 // Classify routes an event the rules cannot place to the guide, with the
 // classifier's class when it is sure enough.
 func (l *Loop) Classify(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	k := l.Host.cfg.Supervisor
+	k := l.Host.Cfg().Supervisor
 	e := *act.Event
 	if e.Verb == parkEvent {
 		// Planning can precede a timer add, a replacement park, or idle
 		// --done. Never send a corrective wake from that old snapshot.
-		current, err := l.Host.store.Read()
+		current, err := l.Host.Store().Read()
 		if err != nil {
 			return "", err
 		}
@@ -4483,9 +4483,9 @@ func (l *Loop) Classify(ctx context.Context, st *state.State, act superloop.Acti
 		var c classification
 		switch {
 		case err != nil || code != 0:
-			why = fmt.Sprintf("its classifier failed (exit %d, %v): %s", code, err, oneLine(errOut))
+			why = fmt.Sprintf("its classifier failed (exit %d, %v): %s", code, err, Cmd.OneLine(errOut))
 		case json.Unmarshal([]byte(strings.TrimSpace(out)), &c) != nil || !slices.Contains(loopClasses, c.Class):
-			why = "its classifier answered no class: " + oneLine(out)
+			why = "its classifier answered no class: " + Cmd.OneLine(out)
 		case c.Confidence < k.ClassifierConfidence:
 			why = fmt.Sprintf("its classifier says %s at confidence %.2f, below %.2f", c.Class, c.Confidence, k.ClassifierConfidence)
 		default:
@@ -4502,7 +4502,7 @@ func (l *Loop) Classify(ctx context.Context, st *state.State, act superloop.Acti
 				continue
 			}
 			for _, ag := range st.Agents {
-				if strings.EqualFold(ag.Name, e.Agent) && deliveryAgent(st, d, ag) && classifyDelivery(st, d, l.Host.timeNow(), l.Host.deliveryPolicy()).Class == deliveryBlocked {
+				if strings.EqualFold(ag.Name, e.Agent) && Cmd.DeliveryAgent(st, d, ag) && Cmd.ClassifyDelivery(st, d, l.Host.TimeNow(), l.Host.DeliveryPolicy()).Class == deliveryBlocked {
 					return fmt.Sprintf("%s remains blocked on an external delivery wait", e.Agent), nil
 				}
 			}
@@ -4532,7 +4532,7 @@ func unclassifiedParkMessage(e superloop.Event) string {
 		"If your task is finished, report it: agents idle --done --report and --problem. Otherwise park again on what you wait for: "+
 		"a pull request (agents park --on <owner/repo#n>), a time or an external state (timer add --wake <you>, then agents park), "+
 		"or a person's decision (note add --for <person> with its status quo, why, options and default, then agents park --on '#<note>').",
-		e.At.UTC().Format(time.RFC3339), truncate(oneLine(e.Detail), 300))
+		e.At.UTC().Format(time.RFC3339), Cmd.Truncate(Cmd.OneLine(e.Detail), 300))
 }
 
 // FileReportSeparator identifies reports stored in the event itself. Older
@@ -4558,14 +4558,14 @@ func (l *Loop) ownOverlap(ctx context.Context, st *state.State, act superloop.Ac
 	l.Mu.Lock()
 	blocked := l.Stages[blockStage]
 	l.Mu.Unlock()
-	if act.OwnerIssue != "" && act.BlockIssue != "" && !blocked && l.Host.cfg.Board.Owner != "" && l.Host.cfg.Board.Project != 0 {
+	if act.OwnerIssue != "" && act.BlockIssue != "" && !blocked && l.Host.Cfg().Board.Owner != "" && l.Host.Cfg().Board.Project != 0 {
 		if _, err := l.Run(ctx, LoopBoard, "unblock", act.OwnerIssue, "--by", act.BlockIssue); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
 		if _, err := l.Run(ctx, LoopBoard, "block", act.BlockIssue, "--by", act.OwnerIssue); err != nil {
 			return "", fmt.Errorf("record overlap dependency: %w", err)
 		}
-		if err := l.Host.store.Record(about(event(LoopParty, LoopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
+		if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
 			return "", err
 		}
 		l.Mu.Lock()
@@ -4585,7 +4585,7 @@ func (l *Loop) ownOverlap(ctx context.Context, st *state.State, act superloop.Ac
 // already sits on another board where it is being worked, and ranks it on the
 // board right after the epic or item it blocks or follows from.
 func (l *Loop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if BoardBudgetLow(st.Budget, l.Host.cfg.GitHub.Floor, l.Host.timeNow()) {
+	if BoardBudgetLow(st.Budget, l.Host.Cfg().GitHub.Floor, l.Host.TimeNow()) {
 		return "", ErrLoopLater
 	}
 	moveStage := act.Key + " move"
@@ -4599,8 +4599,8 @@ func (l *Loop) intakeIssue(ctx context.Context, st *state.State, act superloop.A
 		}
 		out, err := l.Run(ctx, LoopBoard, "move", act.Ref, "backlog", "--intake")
 		if err != nil {
-			if Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
-				return fmt.Sprintf("dropped intake of %s: not an issue (%s)", act.Ref, oneLine(out)), nil
+			if Cmd.Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
+				return fmt.Sprintf("dropped intake of %s: not an issue (%s)", act.Ref, Cmd.OneLine(out)), nil
 			}
 			return "", err
 		}
@@ -4608,11 +4608,11 @@ func (l *Loop) intakeIssue(ctx context.Context, st *state.State, act superloop.A
 		l.BoardNone = nil
 		l.FillPause = FillPause{}
 		l.Mu.Unlock()
-		moveLine = oneLine(out)
+		moveLine = Cmd.OneLine(out)
 		if strings.HasPrefix(moveLine, "left ") {
 			return moveLine, nil
 		}
-		if err := l.Host.store.Record(event(LoopParty, LoopStageVerb, "[%s] %s", moveStage, moveLine)); err != nil {
+		if err := l.Host.Store().Record(Cmd.Event(LoopParty, LoopStageVerb, "[%s] %s", moveStage, moveLine)); err != nil {
 			return "", err
 		}
 		l.Mu.Lock()
@@ -4623,13 +4623,13 @@ func (l *Loop) intakeIssue(ctx context.Context, st *state.State, act superloop.A
 		l.Mu.Unlock()
 	}
 	from := cmp.Or(act.Message, AgentRef(st, act.Agent))
-	anchor, err := readIntakeAnchor(ctx, l.Host, act.Ref, from)
+	anchor, err := Cmd.ReadIntakeAnchor(ctx, l.Host, act.Ref, from)
 	if err != nil {
 		return "", err
 	}
 	if anchor == "" && from != "" && !superloop.IsPull(from) {
-		if r, ok := parseRef(from); ok && !strings.EqualFold(refName(r), act.Ref) {
-			anchor = refName(r)
+		if r, ok := Cmd.ParseRef(from); ok && !strings.EqualFold(Cmd.RefName(r), act.Ref) {
+			anchor = Cmd.RefName(r)
 		}
 	}
 	if anchor != "" && !strings.EqualFold(anchor, act.Ref) {
@@ -4638,9 +4638,9 @@ func (l *Loop) intakeIssue(ctx context.Context, st *state.State, act superloop.A
 			return "", err
 		}
 		if moveLine == "" {
-			return oneLine(rankOut), nil
+			return Cmd.OneLine(rankOut), nil
 		}
-		return fmt.Sprintf("%s; %s", moveLine, oneLine(rankOut)), nil
+		return fmt.Sprintf("%s; %s", moveLine, Cmd.OneLine(rankOut)), nil
 	}
 	return moveLine, nil
 }
@@ -4661,13 +4661,13 @@ func AgentRef(st *state.State, name string) string {
 			}
 		}
 		for _, task := range []string{ag.Task, ag.LastTask} {
-			if m := refURL.FindString(task); m != "" {
+			if m := Cmd.RefURL().FindString(task); m != "" {
 				return m
 			}
 		}
 		for i := len(st.WorkerReports) - 1; i >= 0; i-- {
 			if r := st.WorkerReports[i]; r.By.Is(ag.Party) || r.By.Name == name {
-				if m := refURL.FindString(r.Task + " " + r.Text); m != "" {
+				if m := Cmd.RefURL().FindString(r.Task + " " + r.Text); m != "" {
 					return m
 				}
 			}
@@ -4675,7 +4675,7 @@ func AgentRef(st *state.State, name string) string {
 	}
 	for i := len(st.WorkerReports) - 1; i >= 0; i-- {
 		if r := st.WorkerReports[i]; r.By.Name == name {
-			if m := refURL.FindString(r.Task + " " + r.Text); m != "" {
+			if m := Cmd.RefURL().FindString(r.Task + " " + r.Text); m != "" {
 				return m
 			}
 		}
@@ -4685,11 +4685,11 @@ func AgentRef(st *state.State, name string) string {
 
 // toGuide files a decision for the guide's person on ref (note add).
 func (l *Loop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
-	person := l.Host.cfg.Guide.Person
+	person := l.Host.Cfg().Guide.Person
 	if person == "" {
 		return errors.New("guide.person is unset: no guide's queue to file it in")
 	}
-	question = truncate(question, 150)
+	question = Cmd.Truncate(question, 150)
 	if err := l.claim(act, question); err != nil {
 		return err
 	}
@@ -4697,8 +4697,8 @@ func (l *Loop) toGuide(ctx context.Context, act superloop.Action, ref, question,
 	if ref != "" {
 		args = append(args, "--ref", ref)
 	}
-	args = append(args, "--due", l.Host.cfg.Supervisor.NoteDue.String(),
-		"--status-quo", truncate(statusQuo, 2900), "--why", why, "--default", dflt,
+	args = append(args, "--due", l.Host.Cfg().Supervisor.NoteDue.String(),
+		"--status-quo", Cmd.Truncate(statusQuo, 2900), "--why", why, "--default", dflt,
 		"--checked", "beekeeper supervisor loop: dated pull observations and the event log")
 	for _, o := range options {
 		args = append(args, "--option", o)
@@ -4721,7 +4721,7 @@ func loopEventAgent(st *state.State, e state.Event) string {
 // LoopReleaseContains keeps self-update wakes scoped to this program's repository.
 // Delivery release recovery uses the general containment check independently.
 var LoopReleaseContains = func(ctx context.Context, ref, commit, version string) (bool, error) {
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok || r.Repo != "giantswarm/beekeeper" {
 		return false, nil
 	}
@@ -4730,7 +4730,7 @@ var LoopReleaseContains = func(ctx context.Context, ref, commit, version string)
 
 // ReleaseTagContains proves the actual merge is an ancestor of the tag using REST.
 func ReleaseTagContains(ctx context.Context, ref, commit, version string) (bool, error) {
-	r, ok := parseRef(ref)
+	r, ok := Cmd.ParseRef(ref)
 	if !ok || commit == "" {
 		return false, nil
 	}
@@ -4762,7 +4762,7 @@ func (l *Loop) WakeReleased(ctx context.Context, release superloop.Action) error
 			return err
 		}
 		if !contains {
-			if err := l.Host.store.Record(event(LoopParty, LoopStageVerb, "[%s] merge absent from installed release", checked)); err != nil {
+			if err := l.Host.Store().Record(Cmd.Event(LoopParty, LoopStageVerb, "[%s] merge absent from installed release", checked)); err != nil {
 				return err
 			}
 			l.Mu.Lock()
@@ -4775,7 +4775,7 @@ func (l *Loop) WakeReleased(ctx context.Context, release superloop.Action) error
 		if err := l.wake(ctx, w); err != nil {
 			return err
 		}
-		if err := l.Host.store.Record(event(LoopParty, LoopStageVerb, "[%s] woke worker", stage)); err != nil {
+		if err := l.Host.Store().Record(Cmd.Event(LoopParty, LoopStageVerb, "[%s] woke worker", stage)); err != nil {
 			return err
 		}
 		l.Mu.Lock()
@@ -4795,10 +4795,10 @@ func (l *Loop) startEffort(args []string) []string {
 	if i := slices.Index(args, taskKindArg); i >= 0 && i+1 < len(args) {
 		kind = args[i+1]
 	}
-	if l.Host.cfg.Agents.EffortFor(args[2], kind) != "" {
+	if l.Host.Cfg().Agents.EffortFor(args[2], kind) != "" {
 		return nil
 	}
-	return effortFlags(l.Host.cfg.Supervisor.Effort)
+	return Cmd.EffortFlags(l.Host.Cfg().Supervisor.Effort)
 }
 
 func (l *Loop) HoldingStarts() bool {
@@ -4816,7 +4816,7 @@ func (l *Loop) HoldStarts(held bool) {
 // PauseForReexec lets outstanding streams drain without launching more work
 // on a replaced binary. Only the main loop calls reexec at the quiet point.
 func (l *Loop) PauseForReexec() bool {
-	if l != nil && l.Host != nil && state.WriterFenced(l.Host.store) {
+	if l != nil && l.Host != nil && state.WriterFenced(l.Host.Store()) {
 		return true
 	}
 	l.Mu.Lock()

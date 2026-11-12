@@ -125,7 +125,7 @@ func (a *app) deliveryExemptIntake(st *state.State) bool {
 // Only new issue starts use this check. The frozen references travel with
 // their worker stream, never in a field another pass could overwrite.
 func loopDeliveryPriority(l *Loop, ctx context.Context, reserved ...[]string) error {
-	st, err := l.Host.store.Read()
+	st, err := asApp(l.Host).store.Read()
 	if err != nil {
 		return err
 	}

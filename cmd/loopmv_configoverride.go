@@ -8,5 +8,5 @@ import (
 
 // settleOverrides runs in the command, which holds what it needs (loopSettleOverrides).
 func (l *Loop) settleOverrides(ctx context.Context, st *state.State) {
-	loopSettleOverrides(l, ctx, st)
+	Cmd.LoopSettleOverrides(l, ctx, st)
 }

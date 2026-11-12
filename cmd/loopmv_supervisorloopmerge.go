@@ -45,36 +45,36 @@ func GhMergePolicyRefused(reason string) bool {
 // never delegates a direct merge around the required server-side queue.
 func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Action) (result string, resultErr error) {
 	a := l.Host
-	ref, ok := parseRef(act.Ref)
+	ref, ok := Cmd.ParseRef(act.Ref)
 	if !ok || act.Head == "" {
-		return "", refused("invalid merge decision")
+		return "", Cmd.Refused("invalid merge decision")
 	}
-	st, err := a.store.Read()
+	st, err := a.Store().Read()
 	if err != nil {
 		return "", err
 	}
 	if st.Stop != nil {
-		return "", refused("the desk is stopped")
+		return "", Cmd.Refused("the desk is stopped")
 	}
 	// A hold is a wait, not a failed merge attempt. Keep the exact-head
 	// review available and reconsider it on the next pass, without claiming
 	// the go, entering the gate or starting failure backoff. Every wait
 	// names what it waits on: the stall alarm reads it (checkFlowWaits).
 	waitKey := act.Key + " hold"
-	if h, held := merge.BlockingFor(st, a.timeNow(), LoopParty.Name, ref.Repo, ref.N, a.cfg.LaneOf(ref.Repo)); held {
+	if h, held := merge.BlockingFor(st, a.TimeNow(), LoopParty.Name, ref.Repo, ref.N, a.Cfg().LaneOf(ref.Repo)); held {
 		l.SayOnce(waitKey, "SUPERVISOR WAIT %s on hold:%s", act.URL, h.Target)
 		return "", MergeHeld(WaitHold, "it is held by hold:%s (beekeeper hold lists it); the merge starts once the hold is lifted", h.Target)
 	}
 	l.ClearSaid(waitKey)
-	if BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
-		return "", MergeHeld(waitBudget, "the GitHub budget is under github.floor (%d): no merge starts until its reset", a.cfg.GitHub.Floor)
+	if BoardBudgetLow(st.Budget, a.Cfg().GitHub.Floor, a.TimeNow()) {
+		return "", MergeHeld(waitBudget, "the GitHub budget is under github.floor (%d): no merge starts until its reset", a.Cfg().GitHub.Floor)
 	}
-	if a.resetFirst(st) {
+	if a.ResetFirst(st) {
 		return "", MergeHeld(waitBudget, "merges queued under github.floor for the GitHub budget's reset go first (merge.resetFirst)")
 	}
-	if err := a.fatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
+	if err := a.FatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
 		l.SayOnce(waitKey, "SUPERVISOR WAIT %s: %v", act.URL, err)
-		return "", MergeHeld(waitOutage, "an outage of its repository's default branch holds it: %s", oneLine(err.Error()))
+		return "", MergeHeld(waitOutage, "an outage of its repository's default branch holds it: %s", Cmd.OneLine(err.Error()))
 	}
 	repairStage := act.Key + " repair"
 	l.Mu.Lock()
@@ -96,27 +96,27 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		return fmt.Sprintf("merged %s at %s", act.URL, p.Head), nil
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
-		return "", refused("merge head moved or current CI is not green")
+		return "", Cmd.Refused("merge head moved or current CI is not green")
 	}
 	if err := EnsureCombinedPullCloses(ctx, st, &p); err != nil {
 		return "", err
 	}
 	if LatestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
-		return "", refused("a review requested changes; new supervisor approval required")
+		return "", Cmd.Refused("a review requested changes; new supervisor approval required")
 	}
 	repair := func(code int, reason string) (string, error) {
-		_, _ = stopMerges(a.store, LoopParty, func(m state.Merge) bool {
+		_, _ = Cmd.StopMerges(a.Store(), LoopParty, func(m state.Merge) bool {
 			return m.Repo == ref.Repo && m.PR == ref.N && m.Phase == state.Waiting
 		}, false, func(state.Merge) string {
 			return reason
 		})
-		if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := a.Store().Update(func(current *state.State) ([]state.Event, error) {
 			merge.Retry(current, ref.Repo, ref.N)
 			return nil, nil
 		}); err != nil {
 			return "", err
 		}
-		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, oneLine(reason)))
+		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, Cmd.OneLine(reason)))
 	}
 	if p.Draft || strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
 		return repair(github.SquashNotApplicable, "branch is draft or conflicts with its base")
@@ -140,7 +140,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		if f.Head != act.Head || StaleMergeResultFailure(f.Reason, act.Head) || GhMergePolicyRefused(f.Reason) || github.RateLimited(errors.New(f.Reason)) {
 			// A different (or unknown legacy) head supplies no failure proof
 			// for this approved commit. Let the gate validate it again.
-			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+			if err := a.Store().Update(func(current *state.State) ([]state.Event, error) {
 				merge.Retry(current, ref.Repo, ref.N)
 				return nil, nil
 			}); err != nil {
@@ -171,17 +171,17 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	}
 	if execRef != nil {
 		use := execution.MergeUse{Ref: *execRef, Repository: ref.Repo, PR: ref.N, Head: act.Head}
-		if err := a.executionMergeDecisionLive(ctx, st, use, true); err != nil {
+		if err := a.ExecutionMergeDecisionLive(ctx, st, use, true); err != nil {
 			return "", err
 		}
 	}
 	if err := l.claim(act, act.Agent); err != nil {
 		return "", err
 	}
-	if err := a.store.Record(about(event(LoopParty, "merge.authorized", "%s at %s: the supervisor loop authorizes the reviewed green fixes", act.URL, act.Head), act.Ref)); err != nil {
+	if err := a.Store().Record(Cmd.About(Cmd.Event(LoopParty, "merge.authorized", "%s at %s: the supervisor loop authorizes the reviewed green fixes", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
-	if err := a.store.Record(about(event(LoopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
+	if err := a.Store().Record(Cmd.About(Cmd.Event(LoopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
 	// Every submitted attempt has an outcome in this pass, including waits
@@ -199,14 +199,14 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		case resultErr != nil:
 			verb, detail = LoopMergeFailed, resultErr.Error()
 		}
-		if err := a.store.Record(about(event(LoopParty, verb, "%s at %s: %s", act.URL, act.Head, oneLine(detail)), act.Ref)); err != nil {
+		if err := a.Store().Record(Cmd.About(Cmd.Event(LoopParty, verb, "%s at %s: %s", act.URL, act.Head, Cmd.OneLine(detail)), act.Ref)); err != nil {
 			resultErr = errors.Join(resultErr, err)
 		}
 	}()
 	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := BeekeeperRun(ctx, l.As(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
-		if saveErr := a.operationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
+		if saveErr := a.OperationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
 			return "", saveErr
 		}
 	}
@@ -223,7 +223,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		// first: a merged head that only merges the base into the reviewed
 		// one is the reviewed change.
 		if p.Head != act.Head && !l.baseMerged(ctx, p, act.Head) {
-			return "", refused("merged head differs from the reviewed head; reconciliation required")
+			return "", Cmd.Refused("merged head differs from the reviewed head; reconciliation required")
 		}
 		closed, closeErr := CloseMergedPullIssues(ctx, st, p)
 		l.recordClosedPullIssues(closed)
@@ -239,7 +239,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		policyReason = reply.Reason
 	}
 	if GhMergePolicyRefused(policyReason) {
-		pending = "repository merge policy refused; retrying next round: " + oneLine(policyReason)
+		pending = "repository merge policy refused; retrying next round: " + Cmd.OneLine(policyReason)
 		stage := act.Key + " admin configuration"
 		l.Mu.Lock()
 		reported := l.Stages[stage]
@@ -249,49 +249,49 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 			if strings.Contains(policyReason, "--admin") {
 				guidance = "check merge.admin for " + ref.Repo
 			}
-			message := fmt.Sprintf("SUPERVISOR MERGE POLICY REFUSED %s: %s; reviewDecision=%s; retrying next round: %s", act.URL, guidance, p.ReviewDecision, oneLine(policyReason))
-			if err := a.store.Record(about(event(LoopParty, LoopStageVerb, "[%s] %s", stage, message), act.Ref)); err != nil {
+			message := fmt.Sprintf("SUPERVISOR MERGE POLICY REFUSED %s: %s; reviewDecision=%s; retrying next round: %s", act.URL, guidance, p.ReviewDecision, Cmd.OneLine(policyReason))
+			if err := a.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopStageVerb, "[%s] %s", stage, message), act.Ref)); err != nil {
 				return "", err
 			}
 			l.Mu.Lock()
 			l.Stages[stage] = true
 			l.Mu.Unlock()
-			_, _ = fmt.Fprintln(a.out, message)
+			_, _ = fmt.Fprintln(a.Out(), message)
 		}
 		return "", MergeHeld(waitPolicy, "%s", pending)
 	}
 	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
-		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, oneLine(out))
+		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, Cmd.OneLine(out))
 		return "", MergeHeld(waitGate, "%s", pending)
 	}
 	// An unavailable read never authorizes a merge and is not a durable
 	// policy refusal. Reconsider it on a budget-admitted pass, so quota
 	// recovery does not wait for the generic exponential failure backoff.
 	if err == nil && (code == ExitGateUnread || code == ExitGateRefused && github.RateLimited(errors.New(out))) {
-		pending = "GitHub read unavailable; retrying when GitHub answers: " + oneLine(out)
+		pending = "GitHub read unavailable; retrying when GitHub answers: " + Cmd.OneLine(out)
 		return "", MergeHeld(WaitUnread, "%s", pending)
 	}
 	if err == nil && code == ExitGateRefused || mutationResult && code == github.SquashRefused {
 		if mutationResult && reply.Reason != "" {
 			out = reply.Reason
 		}
-		return "", refused("merge gate refused: %s", oneLine(out))
+		return "", Cmd.Refused("merge gate refused: %s", Cmd.OneLine(out))
 	}
 	if code == 0 && mutationResult && reply.Verdict == ReviewedMergeQueued {
-		pending = "server-side merge queued; awaiting merge-result checks: " + oneLine(reply.Reason)
+		pending = "server-side merge queued; awaiting merge-result checks: " + Cmd.OneLine(reply.Reason)
 		return "", MergeHeld(waitQueue, "%s", pending)
 	}
 	if mutationResult && code == github.SquashTooling {
 		if strings.HasPrefix(reply.Reason, reasonMergeValidationUnavailable) {
-			return "", refused("%s", reply.Reason)
+			return "", Cmd.Refused("%s", reply.Reason)
 		}
-		return "", refused("%s: %s", reasonMergeValidationUnavailable, reply.Reason)
+		return "", Cmd.Refused("%s: %s", reasonMergeValidationUnavailable, reply.Reason)
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
-		return "", refused("merge head moved or current CI is not green")
+		return "", Cmd.Refused("merge head moved or current CI is not green")
 	}
 	if LatestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
-		return "", refused("a review requested changes; new supervisor approval required")
+		return "", Cmd.Refused("a review requested changes; new supervisor approval required")
 	}
 	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
 		if reply.Reason != "" {
@@ -301,7 +301,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 			pending = "stale merge-result failure dropped; awaiting fresh validation"
 			return repair(code, out)
 		}
-		failed = fmt.Sprintf("merge failed (exit %d): %s; branch repair requested", code, oneLine(out))
+		failed = fmt.Sprintf("merge failed (exit %d): %s; branch repair requested", code, Cmd.OneLine(out))
 		return repair(code, out)
 	}
 	// An unreadable gate result supplies no merge-result proof either.
@@ -311,12 +311,12 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		return "", err
 	}
 	if code == 0 {
-		return "", refused("merge command ended without a confirmed merge")
+		return "", Cmd.Refused("merge command ended without a confirmed merge")
 	}
 	if mutationResult && reply.Reason != "" {
 		out = reply.Reason
 	}
-	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
+	return "", Cmd.Refused("merge command failed (exit %d): %s", code, Cmd.OneLine(out))
 }
 
 // Older repair records have only the checker's diagnostic. Its head must
@@ -330,7 +330,7 @@ func StaleMergeResultFailure(reason, head string) bool {
 		}
 		identity, tail, closed := strings.Cut(rest, ")")
 		_, tested, paired := strings.Cut(identity, " + ")
-		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != shortSHA(head)) {
+		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != Cmd.ShortSHA(head)) {
 			return true
 		}
 		reason = tail
@@ -339,10 +339,10 @@ func StaleMergeResultFailure(reason, head string) bool {
 
 func (l *Loop) logStaleMergeFailure(ref, head string) error {
 	message := fmt.Sprintf("SUPERVISOR MERGE DROPPED stale failure for %s at %s; rechecking through the merge gate", ref, head)
-	if err := l.Host.store.Record(about(event(LoopParty, LoopMergeFailureDropped, "%s", message), ref)); err != nil {
+	if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopMergeFailureDropped, "%s", message), ref)); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(l.Host.out, message)
+	_, _ = fmt.Fprintln(l.Host.Out(), message)
 	return nil
 }
 
@@ -376,7 +376,7 @@ func (l *Loop) DropInvalidMergeRepairs(taken []superloop.Taken, stages map[strin
 		// A preview reconciles only its in-memory plan. Leave the durable
 		// records for the next real pass, which holds the loop lock.
 		if !l.DryRun {
-			if err := l.Host.store.Record(about(event(LoopParty, LoopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
+			if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
 				return taken, err
 			}
 		}
@@ -384,7 +384,7 @@ func (l *Loop) DropInvalidMergeRepairs(taken []superloop.Taken, stages map[strin
 		delete(stageDetail, stage)
 		if slices.ContainsFunc(taken, func(t superloop.Taken) bool { return t.Key == key }) {
 			if !l.DryRun {
-				if err := l.Host.store.Record(about(event(LoopParty, LoopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+				if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
 					return taken, err
 				}
 			}
@@ -395,7 +395,7 @@ func (l *Loop) DropInvalidMergeRepairs(taken []superloop.Taken, stages map[strin
 				return taken, err
 			}
 		} else if !l.DryRun {
-			_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR MERGE RETRY %s: %s; retrying with configured merge identity and policy\n", key, why)
+			_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR MERGE RETRY %s: %s; retrying with configured merge identity and policy\n", key, why)
 		}
 	}
 	return taken, nil
@@ -416,7 +416,7 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 	repairing := l.Stages[repairStage]
 	l.Mu.Unlock()
 	if !repairing {
-		if err := l.Host.store.Record(about(event(LoopParty, LoopStageVerb, "[%s] %s", repairStage, reason), act.Ref)); err != nil {
+		if err := l.Host.Store().Record(Cmd.About(Cmd.Event(LoopParty, LoopStageVerb, "[%s] %s", repairStage, reason), act.Ref)); err != nil {
 			return "", err
 		}
 		l.Mu.Lock()
@@ -434,7 +434,7 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 	if err := l.WakeOrStartFixer(ctx, st, act); err != nil {
 		// The merge is over; the decision stays pending until a worker has
 		// the repair. Say both, or the wait reads as a merge that never ran.
-		return "", namedWait(err, waitRepair, fmt.Sprintf("its merge failed %s; the branch repair it requested waits for a worker", truncate(oneLine(reason), 300)))
+		return "", namedWait(err, waitRepair, fmt.Sprintf("its merge failed %s; the branch repair it requested waits for a worker", Cmd.Truncate(Cmd.OneLine(reason), 300)))
 	}
 	return "merge failed; branch repair requested", nil
 }
@@ -443,7 +443,7 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 // wakes only tasks with a remaining release, rollout or proof. Older parks
 // retain the existing release-containment and retirement behavior.
 func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if latest, err := l.Host.store.Read(); err == nil {
+	if latest, err := l.Host.Store().Read(); err == nil {
 		st = latest
 	}
 	if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok {
@@ -474,7 +474,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 	if i < 0 {
 		rp, ok := st.ReviewParkFor(act.Ref)
 		if !ok || rp.PostMerge == nil {
-			_ = l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+			_ = l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 				current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 				return nil, nil
 			})
@@ -484,7 +484,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 			return "", err
 		}
 		clearReviewPark := func() {
-			_ = l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+			_ = l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 				current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 				return nil, nil
 			})
@@ -499,17 +499,17 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 				clearReviewPark()
 				return "closed; worker told to continue its task", nil
 			}
-			err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+			err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 				current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 				for i := range current.Agents {
 					worker := &current.Agents[i]
 					if worker.Is(rp.Party) && worker.Park != nil && worker.Park.ReviewHead != "" {
-						reportIdle(worker, l.Host.timeNow())
+						Cmd.ReportIdle(worker, l.Host.TimeNow())
 						worker.Done = true
 					}
 				}
-				endNotes(current, rp.Party, l.Host.timeNow())
-				clearRecords(current, rp.Party)
+				Cmd.EndNotes(current, rp.Party, l.Host.TimeNow())
+				Cmd.ClearRecords(current, rp.Party)
 				return nil, nil
 			})
 			return "closed; task already settled", err
@@ -541,7 +541,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
-			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
+			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, Cmd.IssueURL(rp.Serves))
 			if err := l.WakeOrStartFixer(ctx, st, act); err != nil {
 				return "", err
 			}
@@ -551,23 +551,23 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 		if err := l.moveServedDone(ctx, rp.Serves, act.Ref); err != nil {
 			return "", err
 		}
-		err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 			// The last completed ref may differ from the worker's current
 			// park when its PRs merge out of order. Finish that parked owner too.
 			for i := range current.Agents {
 				worker := &current.Agents[i]
 				if worker.Is(rp.Party) && worker.Park != nil && worker.Park.ReviewHead != "" {
-					reportIdle(worker, l.Host.timeNow())
+					Cmd.ReportIdle(worker, l.Host.TimeNow())
 					worker.Done = true
 				}
 			}
-			endNotes(current, rp.Party, l.Host.timeNow())
-			clearRecords(current, rp.Party)
+			Cmd.EndNotes(current, rp.Party, l.Host.TimeNow())
+			Cmd.ClearRecords(current, rp.Party)
 			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.Merged[act.Ref].MergeCommit)
 			task := cmp.Or(rp.Serves, act.Ref)
-			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.Host.timeNow(), Task: task, Text: report})
-			return []state.Event{event(rp.Party, superloop.VerbDone, "%s done: %s", rp.Agent, task), event(rp.Party, superloop.VerbReport, "%s: %s", rp.Agent, report)}, nil
+			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.Host.TimeNow(), Task: task, Text: report})
+			return []state.Event{Cmd.Event(rp.Party, superloop.VerbDone, "%s done: %s", rp.Agent, task), Cmd.Event(rp.Party, superloop.VerbReport, "%s: %s", rp.Agent, report)}, nil
 		})
 		return "merged; task closed without waking worker", err
 	}
@@ -576,7 +576,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 		return "", err
 	}
 	defer func() {
-		_ = l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		_ = l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 			return nil, nil
 		})
@@ -584,17 +584,17 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 	if act.Message == strings.ToLower(superloop.Closed) {
 		serves := cmp.Or(LoopServes(st, ag), LoopTaskServes(ag, act.Ref))
 		if strings.TrimSpace(*ag.Park.PostMerge) == "" && (serves == "" || strings.EqualFold(serves, act.Ref) || !l.open(ctx, serves)) {
-			err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+			err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 				i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) })
 				if i < 0 || current.Agents[i].Done {
 					return nil, nil
 				}
 				worker := &current.Agents[i]
-				reportIdle(worker, clk.Now())
+				Cmd.ReportIdle(worker, clk.Now())
 				worker.Done = true
-				endNotes(current, worker.Party, l.Host.timeNow())
-				clearRecords(current, worker.Party)
-				return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask)}, nil
+				Cmd.EndNotes(current, worker.Party, l.Host.TimeNow())
+				Cmd.ClearRecords(current, worker.Party)
+				return []state.Event{Cmd.Event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask)}, nil
 			})
 			return "closed; task already settled", err
 		}
@@ -620,7 +620,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 	serves := LoopServes(st, ag)
 	if serves != "" && serves != act.Ref && l.open(ctx, serves) {
 		act.Agent = ag.Name
-		act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(serves))
+		act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, Cmd.IssueURL(serves))
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
 		}
@@ -629,19 +629,19 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 	if err := l.moveServedDone(ctx, serves, act.Ref); err != nil {
 		return "", err
 	}
-	err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+	err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) })
 		if i < 0 || current.Agents[i].Done {
 			return nil, nil
 		}
 		worker := &current.Agents[i]
 		report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.Merged[act.Ref].MergeCommit)
-		reportIdle(worker, clk.Now())
+		Cmd.ReportIdle(worker, clk.Now())
 		worker.Done = true
-		endNotes(current, worker.Party, l.Host.timeNow())
-		clearRecords(current, worker.Party)
-		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.Host.timeNow(), Task: worker.LastTask, Text: report})
-		return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
+		Cmd.EndNotes(current, worker.Party, l.Host.TimeNow())
+		Cmd.ClearRecords(current, worker.Party)
+		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.Host.TimeNow(), Task: worker.LastTask, Text: report})
+		return []state.Event{Cmd.Event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), Cmd.Event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
 	})
 	return "merged; task closed without waking worker", err
 }
@@ -689,7 +689,7 @@ func (l *Loop) endAbsorbed(ctx context.Context, st *state.State, act superloop.A
 		postMerge = strings.TrimSpace(*rp.PostMerge)
 		serves = rp.Serves
 	default:
-		_ = l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+		_ = l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 			return nil, nil
 		})
@@ -701,7 +701,7 @@ func (l *Loop) endAbsorbed(ctx context.Context, st *state.State, act superloop.A
 	isRescue := strings.EqualFold(targetAgent, superloop.PullWorkerName(act.Ref))
 	serveOpen := serves != "" && !strings.EqualFold(serves, act.Ref) && l.open(ctx, serves)
 	reconciledToCombining := false
-	err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+	err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
 		mergePostMerge := func(existing *string, add string) *string {
 			cur := ""
 			if existing != nil {
@@ -742,12 +742,12 @@ func (l *Loop) endAbsorbed(ctx context.Context, st *state.State, act superloop.A
 			for j := range current.Agents {
 				worker := &current.Agents[j]
 				if worker.Is(targetParty) && (isRescue || (worker.Park != nil && worker.Park.ReviewHead != "")) {
-					reportIdle(worker, l.Host.timeNow())
+					Cmd.ReportIdle(worker, l.Host.TimeNow())
 					worker.Done = true
 				}
 			}
-			endNotes(current, targetParty, l.Host.timeNow())
-			clearRecords(current, targetParty)
+			Cmd.EndNotes(current, targetParty, l.Host.TimeNow())
+			Cmd.ClearRecords(current, targetParty)
 		}
 		return nil, nil
 	})
@@ -771,7 +771,7 @@ func (l *Loop) endAbsorbed(ctx context.Context, st *state.State, act superloop.A
 			act.Ref = by
 			act.URL = byURL
 			act.Agent = targetAgent
-			act.Message = fmt.Sprintf("Combining pull request %s merged and absorbed %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", byURL, origURL, issueURL(serves))
+			act.Message = fmt.Sprintf("Combining pull request %s merged and absorbed %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", byURL, origURL, Cmd.IssueURL(serves))
 			if err := l.WakeOrStartFixer(ctx, st, act); err != nil {
 				return "", err
 			}
@@ -782,7 +782,7 @@ func (l *Loop) endAbsorbed(ctx context.Context, st *state.State, act superloop.A
 }
 
 func PullRefURL(ref string) string {
-	if r, ok := parseRef(ref); ok {
+	if r, ok := Cmd.ParseRef(ref); ok {
 		return fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
 	}
 	return ref
@@ -811,7 +811,7 @@ func (l *Loop) recordClosedPullIssues(closed []string) {
 	if l.opens == nil {
 		l.opens = map[string]loopOpen{}
 	}
-	now := l.Host.timeNow()
+	now := l.Host.TimeNow()
 	for _, ref := range closed {
 		l.opens[ref] = loopOpen{open: false, at: now}
 	}
@@ -820,11 +820,11 @@ func (l *Loop) recordClosedPullIssues(closed []string) {
 func AbsorbedClosingIssues(ctx context.Context, st *state.State, absorbs []string) ([]string, error) {
 	var out []string
 	add := func(raw string) {
-		r, ok := parseRef(raw)
+		r, ok := Cmd.ParseRef(raw)
 		if !ok {
 			return
 		}
-		name := refName(r)
+		name := Cmd.RefName(r)
 		if !slices.ContainsFunc(out, func(e string) bool { return strings.EqualFold(e, name) }) {
 			out = append(out, name)
 		}
@@ -876,7 +876,7 @@ func EnsureCombinedPullCloses(ctx context.Context, st *state.State, p *superloop
 	if updated == p.Body {
 		return nil
 	}
-	pr, ok := parseRef(p.Ref)
+	pr, ok := Cmd.ParseRef(p.Ref)
 	if !ok {
 		return nil
 	}
@@ -890,11 +890,11 @@ func EnsureCombinedPullCloses(ctx context.Context, st *state.State, p *superloop
 func CloseMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pull) ([]string, error) {
 	var candidates []string
 	add := func(raw string) {
-		r, ok := parseRef(raw)
-		if !ok || strings.EqualFold(refName(r), p.Ref) {
+		r, ok := Cmd.ParseRef(raw)
+		if !ok || strings.EqualFold(Cmd.RefName(r), p.Ref) {
 			return
 		}
-		name := refName(r)
+		name := Cmd.RefName(r)
 		if !slices.ContainsFunc(candidates, func(e string) bool { return strings.EqualFold(e, name) }) {
 			candidates = append(candidates, name)
 		}
@@ -917,11 +917,11 @@ func CloseMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pul
 	}
 	var refs []github.PR
 	for _, c := range candidates {
-		if r, ok := parseRef(c); ok {
+		if r, ok := Cmd.ParseRef(c); ok {
 			refs = append(refs, r)
 		}
 	}
-	states, err := refStates(ctx, refs)
+	states, err := Cmd.RefStates(ctx, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -930,14 +930,14 @@ func CloseMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pul
 	for _, r := range refs {
 		s, ok := states[r]
 		if !ok || s.Kind != github.RefIssue || (s.State != github.Open && s.State != github.Closed) {
-			return closed, fmt.Errorf("issue closure for %s is unconfirmed", refName(r))
+			return closed, fmt.Errorf("issue closure for %s is unconfirmed", Cmd.RefName(r))
 		}
 		if s.State == github.Open {
 			if err := ClosePullIssue(ctx, r, pullURL); err != nil {
 				return closed, err
 			}
 		}
-		closed = append(closed, refName(r))
+		closed = append(closed, Cmd.RefName(r))
 	}
 	return closed, nil
 }
@@ -945,11 +945,11 @@ func CloseMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pul
 // moveServedDone moves the task ref served to Done. A saved Serves can name a
 // pull request, which the board refuses as no issue: that must not fail the end.
 func (l *Loop) moveServedDone(ctx context.Context, serves, ref string) error {
-	if serves == "" || serves == ref || l.Host.cfg.Board.Owner == "" {
+	if serves == "" || serves == ref || l.Host.Cfg().Board.Owner == "" {
 		return nil
 	}
 	_, err := l.Run(ctx, LoopBoard, "move", serves, "Done")
-	if err != nil && Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
+	if err != nil && Cmd.Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
 		return nil
 	}
 	return err
