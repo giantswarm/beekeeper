@@ -45,3 +45,12 @@ below. Where they differ from this block, they take precedence.
   `docs/README.md`. `.github/check-markdown-budget.sh` (the `markdown-budget`
   workflow) fails a README over 150 lines or any Markdown line over 200 bytes
   in README.md or `docs/`; wrap prose at 100 columns.
+- A pull request that fixes or changes behavior of beekeeper's core (the binary's Go code under
+  `cmd/`, `internal/` and `pkg/`; not docs, CI, skills, the chart or test code) adds or extends a
+  behavioral scenario under `internal/scenario/scenarios/` that fails without the change
+  ([docs/scenarios.md](docs/scenarios.md)). A bug's scenario names the bug's issue (`issue:`, the
+  full URL). A change that cannot be expressed as a scenario says why in its pull request and
+  links the follow-up issue that gives the harness the missing step. CI's `scenario-control` step
+  runs each added or changed scenario against the merge base, where it must fail on an assertion;
+  a scenario that cannot fail there, such as one of behavior main already has, says why with
+  `control: {none: <reason>}`. Reviews reject a core fix without a scenario.
