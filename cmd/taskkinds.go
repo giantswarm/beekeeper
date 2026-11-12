@@ -19,15 +19,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// kindBlock is a task kind at one of its caps (agents.kinds): the reason a
-// start of one of its agents is refused.
-type kindBlock struct {
-	Kind   string `json:"kind"`
-	Reason string `json:"reason"`
-}
-
-func (b kindBlock) line() string { return "no start " + b.Kind + ": " + b.Reason }
-
 // kindBlocks are the kinds of ks at a cap now: maxBusy against the busy
 // agents capacity counts, minInterval against the kind's last recorded
 // start. A kind at both says both.

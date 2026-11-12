@@ -12,14 +12,6 @@ import (
 
 const transcriptResumeEvent = "agents.transcript-resume"
 
-// Counts cover the last 24 hours, including retired workers. Starts count
-// session identities, not the several agents.start lines one launch writes.
-type providerActivity struct {
-	Wakes       int `json:"wakes"`
-	Resumes     int `json:"resumes"`
-	FreshStarts int `json:"freshStarts"`
-}
-
 func activityCounts(st *state.State, events []state.Event, k config.Capacity, now time.Time) map[string]*providerActivity {
 	out := map[string]*providerActivity{}
 	seen := map[string]bool{}

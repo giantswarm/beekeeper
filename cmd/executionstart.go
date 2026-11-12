@@ -311,7 +311,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	if len(blocks) > 0 {
 		v.Room = 0
 	}
-	return v.stopped(a, st)
+	return capacityStopped(v, a, st)
 }
 
 // hostUnsupportedHarnesses are the harnesses an execution host has no
