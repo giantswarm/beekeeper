@@ -1428,6 +1428,9 @@ func (l *supervisorLoop) reloadConfig() {
 		if len(c.Supervisor.Ownership.Authors) > 0 {
 			l.a.cfg.Supervisor.Ownership.Authors = c.Supervisor.Ownership.Authors
 		}
+		if len(c.Supervisor.Ownership.Bots) > 0 {
+			l.a.cfg.Supervisor.Ownership.Bots = c.Supervisor.Ownership.Bots
+		}
 		if len(c.Supervisor.Ownership.Review) > 0 {
 			l.a.cfg.Supervisor.Ownership.Review = c.Supervisor.Ownership.Review
 		}
@@ -1976,11 +1979,12 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		return err
 	}
 	l.lifecyclePhase("observe repository ownership")
-	if len(tracked)+len(swept) > 0 && !l.ownership(ctx, &in.Desk) {
+	if len(tracked)+len(swept)+len(in.Desk.Bots) > 0 && !l.ownership(ctx, &in.Desk) {
 		tracked = nil
 	} else {
 		tracked = append(tracked, swept...)
 	}
+	l.pullWatcher().setBots(in.Desk.Bots, in.Desk, l.teams, l.teams != nil)
 	unread := map[string]bool{}
 	unreviewedEnded := map[string]bool{}
 	for _, ref := range tracked {

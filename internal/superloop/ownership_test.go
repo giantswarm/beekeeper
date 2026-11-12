@@ -177,10 +177,15 @@ func TestAPullRequestSomebodyElseOpenedIsLeftAlone(t *testing.T) {
 
 func TestTheDesksOwnAndSharedRepositoriesAreReviewedAsToday(t *testing.T) {
 	only(t, Plan(Input{Workers: parked(t0), Pulls: owned(ourTeam), Rounds: 1, Desk: desk(), Now: t0}), KindReview)
-	// No team configured: every repository of the orgs is the desk's.
+	// Neither team nor review list configured: every repository of the orgs
+	// is the desk's.
 	d := desk()
-	d.Team = ""
+	d.Team, d.Review = "", nil
 	only(t, Plan(Input{Workers: parked(t0), Pulls: owned(teamB), Rounds: 1, Desk: d, Now: t0}), KindReview)
+	// No team configured, review list set: only the review list's
+	// repositories are the desk's.
+	d.Review = []string{"o/*-configs"}
+	left(t, Plan(Input{Workers: parked(t0), Pulls: owned(teamB), Rounds: 1, Desk: d, Now: t0}), leftTeam)
 	// A repository of the review list, whoever owns it.
 	const shared = "o/x-configs#3"
 	p := owned(teamB)[pr]
@@ -444,11 +449,45 @@ func TestABotRepositoryIsTheDesksOwn(t *testing.T) {
 		"review list":           {d: d, repo: "o/x-configs", team: teamB, known: true, want: true},
 		"review list, unread":   {d: d, repo: "o/x-configs", want: true},
 		"never":                 {d: d, repo: tool, team: ourTeam, known: true},
-		"outside the orgs":      {d: d, repo: "elsewhere/r", team: ourTeam, known: true},
-		"no team, all the orgs": {d: Desk{Orgs: []string{"o"}}, repo: botRepo, want: true},
+		"outside the orgs":               {d: d, repo: "elsewhere/r", team: ourTeam, known: true},
+		"no team, all the orgs":          {d: Desk{Orgs: []string{"o"}}, repo: botRepo, want: true},
+		"no team, review list matches":   {d: Desk{Orgs: []string{"o", "shared"}, Review: []string{"o/*", "shared/one"}}, repo: "shared/one", want: true},
+		"no team, outside review list":   {d: Desk{Orgs: []string{"o", "shared"}, Review: []string{"o/*", "shared/one"}}, repo: "shared/two"},
 	} {
 		if got := tc.d.BotRepo(tc.repo, tc.team, tc.known); got != tc.want {
 			t.Errorf("%s: BotRepo(%s) = %v, want %v", name, tc.repo, got, tc.want)
+		}
+	}
+	for name, tc := range map[string]struct {
+		d     Desk
+		teams map[string]string
+		known bool
+		want  []string
+		ok    bool
+	}{
+		"no team, all orgs": {
+			d: Desk{Orgs: []string{"o", "shared"}}, want: []string{"o", "shared"}, ok: true,
+		},
+		"no team, review scopes org and named repos": {
+			d:    Desk{Orgs: []string{"o", "shared"}, Review: []string{"o/*", "shared/one", "shared/two"}, Never: []string{"shared/two"}},
+			want: []string{"o", "shared/one"}, ok: true,
+		},
+		"team unread, no review": {
+			d: Desk{Orgs: []string{"o"}, Team: ourTeam},
+		},
+		"team read, team repos only": {
+			d:     Desk{Orgs: []string{"o"}, Team: ourTeam, Never: []string{tool}},
+			teams: map[string]string{botRepo: ourTeam, "o/other": teamB, tool: ourTeam},
+			known: true, want: []string{botRepo}, ok: true,
+		},
+		"team and wildcard review": {
+			d:     d,
+			teams: map[string]string{botRepo: ourTeam},
+			known: true, want: []string{"o"}, ok: true,
+		},
+	} {
+		if got, ok := tc.d.BotScopes(tc.teams, tc.known); ok != tc.ok || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: BotScopes = (%v, %v), want (%v, %v)", name, got, ok, tc.want, tc.ok)
 		}
 	}
 	if got := BotLogin(botLogin); got != botApp {

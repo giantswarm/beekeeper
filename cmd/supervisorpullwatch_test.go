@@ -563,4 +563,31 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	if !slices.Equal(searched, []string{"me"}) || !slices.Equal(w.view().Open, []string{reserveIssue}) {
 		t.Errorf("without bots: searched %v, open %v", searched, w.view().Open)
 	}
+	// A multi-org desk without a team file that names its repositories in
+	// supervisor.ownership.review searches only those scopes for bots, not
+	// whole shared orgs.
+	var gotScopes [][]string
+	readOpenPulls = func(_ context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
+		logins, err := authors()
+		if err != nil {
+			return nil, err
+		}
+		gotScopes = append(gotScopes, slices.Clone(scopes))
+		if slices.Equal(logins, []string{botLogin}) {
+			return []string{idleRef, "shared/one#7", "shared/other#8"}, nil
+		}
+		return []string{reserveIssue}, nil
+	}
+	w.set(nil, []string{"me"}, []string{"o", "shared"}, 0, nil)
+	scoped := superloop.Desk{Orgs: []string{"o", "shared"}, Review: []string{"o/*", "shared/one"}}
+	w.setBots([]string{botName}, scoped, nil, false)
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotScopes) != 2 || !slices.Equal(gotScopes[0], []string{"o", "shared"}) || !slices.Equal(gotScopes[1], []string{"o", "shared/one"}) {
+		t.Errorf("scoped bot search scopes = %v", gotScopes)
+	}
+	if got, want := w.view().Open, []string{reserveIssue, idleRef, "shared/one#7"}; !slices.Equal(got, want) {
+		t.Errorf("scoped open = %v, want %v", got, want)
+	}
 }
