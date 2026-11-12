@@ -29,6 +29,9 @@ type CallRequest struct {
 	Dir     string   `json:"dir,omitempty"`
 	// Env is the fake's environment as far as a handler reads it (FakeEnv).
 	Env map[string]string `json:"env,omitempty"`
+	// Modeled says the fake answers the call itself unless a given call
+	// of the scenario does: the world logs it as answered by its model.
+	Modeled bool `json:"modeled,omitempty"`
 }
 
 // CallResponse is what the fake prints and exits with.
@@ -36,6 +39,9 @@ type CallResponse struct {
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
 	Exit   int    `json:"exit"`
+	// Given says a given call answered; false leaves a modeled call to its
+	// fake.
+	Given bool `json:"given,omitempty"`
 }
 
 // CallRecord is one call in the world's log, in order.
@@ -48,7 +54,10 @@ type CallRecord struct {
 	// Answer is the index of the given call that answered it, -1 for none.
 	Answer   int  `json:"answer"`
 	Answered bool `json:"answered"`
-	Exit     int  `json:"exit"`
+	// Modeled says the call's fake answered it from its model of the
+	// program, no given call; its exit code is the fake's own.
+	Modeled bool `json:"modeled,omitempty"`
+	Exit    int  `json:"exit"`
 	// Handler says the program's handler answered it, not a given call;
 	// Reason why nothing answered it, when a handler said.
 	Handler bool   `json:"handler,omitempty"`
@@ -143,8 +152,12 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		}
 		a.used++
 		rec.Answer, rec.Answered = i, true
-		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit}
+		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit, Given: true}
 		break
+	}
+	if !rec.Answered && req.Modeled {
+		rec.Answered, rec.Modeled = true, true
+		resp = CallResponse{}
 	}
 	handler := w.handlers[req.Program]
 	w.mu.Unlock()

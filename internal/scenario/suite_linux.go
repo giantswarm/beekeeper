@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	fakes "github.com/giantswarm/beekeeper/internal/scenario/harness"
 	"github.com/giantswarm/beekeeper/internal/testenv"
 )
 
@@ -118,7 +120,20 @@ func (r *Runner) run(ctx context.Context, s *Scenario, root string) *Result {
 	if git, err = filepath.EvalSymlinks(git); err != nil {
 		return harness(err)
 	}
-	for name, target := range map[string]string{"git": git, "sh": "/bin/sh"} {
+	// git is the fake too: the real git with GitHub's URLs led to the
+	// scenario's origins by a remote helper of the fake's (harness.RealGit).
+	execPath, err := exec.CommandContext(ctx, git, "--exec-path").Output() //nolint:gosec // the real git
+	if err != nil {
+		return harness(fmt.Errorf("real git's exec path: %w", err))
+	}
+	if err := os.MkdirAll(filepath.Join(bin, "git-core"), 0o700); err != nil {
+		return harness(err)
+	}
+	links := map[string]string{"git": fakeBinary, "real-git": git, "real-git-core": strings.TrimSpace(string(execPath)), "sh": "/bin/sh"}
+	for _, helper := range fakes.RemoteHelpers {
+		links[filepath.Join("git-core", helper)] = filepath.Join("..", fakeBinary)
+	}
+	for name, target := range links {
 		if err := os.Symlink(target, filepath.Join(bin, name)); err != nil {
 			return harness(err)
 		}

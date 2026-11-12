@@ -1,0 +1,72 @@
+name: execution-host-faults
+description: >
+  Five execution hosts, each with one fault: one refuses the connection,
+  one answers under a changed host key, one has no beekeeper, one pins an
+  older Go than its repository names, and one is slow but answers. The
+  check of each says so; the host that was down passes once it is back.
+issue: https://github.com/giantswarm/beekeeper/issues/3791
+flow: harness
+tags: [harness, hosts, faults]
+timeout: 90s
+
+given:
+  repositories:
+    - name: example/app
+  hosts:
+    - {name: down, fault: unreachable}
+    - {name: rekeyed, fault: host-key-changed}
+    - {name: bare, fault: missing-tool}
+    - {name: old, fault: older-go}
+    - {name: slow, slow: 300ms}
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    # A reachable host's sources are compared with the default branch.
+    - program: gh
+      args: [api, repos/example/app, --jq, .default_branch]
+      respond: {stdout: "main\n"}
+    - program: gh
+      args: [api, 'repos/example/app/compare/.*\.\.\.main', --jq, .ahead_by]
+      respond: {stdout: "0\n"}
+
+when:
+  - name: down
+    run: {args: [agents, hosts, check, down]}
+  - name: rekeyed
+    run: {args: [agents, hosts, check, rekeyed]}
+  - name: bare
+    run: {args: [agents, hosts, check, bare]}
+  - name: old
+    run: {args: [agents, hosts, check, old]}
+  - name: slow
+    run: {args: [agents, hosts, check, slow]}
+  - host: {name: down, clear: true}
+  - name: back
+    run: {args: [agents, hosts, check, down]}
+
+then:
+  # A refused connection and a changed host key both end ssh with 255: the
+  # host is unreachable, and nothing of it is known.
+  - {step: down, exit: 1}
+  - {step: down, stderr: {contains: ["execution host unreachable during check", "exit status 255"]}}
+  - {step: down, json_path: {path: 'resourceAudit[0].state', equals: unknown}}
+  - {step: rekeyed, exit: 1}
+  - {step: rekeyed, stderr: {contains: ["execution host unreachable during check", "exit status 255"]}}
+  # No beekeeper on the host: the remote shell's 127.
+  - {step: bare, exit: 1}
+  - {step: bare, stderr: {contains: ["exit status 127"]}}
+  # The host answers, and says its pinned Go is older than its repository's.
+  - {step: old, exit: 1}
+  - {step: old, stderr: {contains: ["execution host lacks the worker toolchain", "go: pinned 1.21.0 is older than 1.26.0"]}}
+  - {step: old, json_path: {path: tools, exists: false}}
+  # A slow host is a healthy one.
+  - {step: slow, exit: 0}
+  - {step: slow, json_path: {path: identity, equals: slow}}
+  - {step: slow, json_path: {path: tools.go, equals: "1.26.0"}}
+  - {step: slow, duration: {max: 20s}}
+  # Back up, the host that refused the connection passes its check.
+  - {step: back, exit: 0}
+  - {step: back, json_path: {path: identity, equals: down}}
+  - {step: back, json_path: {path: readiness.claude.versionCheck, equals: passed}}
+  - calls: {program: ssh, args: [bare], min: 1}
