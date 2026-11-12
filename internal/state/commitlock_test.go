@@ -77,15 +77,15 @@ func TestUpdateReadsStateWithoutCommitLock(t *testing.T) {
 // older writer's commit, and the renewal survives.
 func TestUpdateRefusesNewerWriterOfARenewal(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenVersion(dir, "v1.0.0")
+	s, err := OpenVersion(dir, recoveryRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, err := OpenVersion(dir, "v2.0.0")
+	newer, err := OpenVersion(dir, recoveryNewer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := execution.Ref{Host: "fixture-host", Execution: "fixture-execution", Generation: 1}
+	ref := execution.Ref{Host: "renewal-host", Execution: "renewal-execution", Generation: 1}
 	if err := s.Update(func(st *State) ([]Event, error) {
 		st.Starts = []Start{{Execution: &ExecutionRecord{Request: execution.StartRequest{Ref: ref}}}}
 		return nil, nil
@@ -102,7 +102,7 @@ func TestUpdateRefusesNewerWriterOfARenewal(t *testing.T) {
 		return nil, nil
 	})
 	var stale *StaleWriterError
-	if !errors.As(err, &stale) || stale.Newer != "v2.0.0" {
+	if !errors.As(err, &stale) || stale.Newer != recoveryNewer {
 		t.Fatalf("an older writer committed over a newer release's renewal: %v", err)
 	}
 	st, err := newer.Read()

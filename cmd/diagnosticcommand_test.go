@@ -9,17 +9,21 @@ import (
 // runs "beekeeper": the root's --config ended the subcommand words. It names
 // the resolved command and the flags given, never an argument or a value.
 func TestDiagnosticCommandKeepsNoArgumentOrValue(t *testing.T) {
-	const private = "private"
+	const (
+		private    = "private"
+		loop       = "loop"
+		configPath = "/home/" + private + "/config.yaml"
+	)
 	for _, c := range []struct {
 		args []string
 		want string
 	}{
-		{nil, "beekeeper"},
-		{[]string{"--config", "/home/" + private + "/config.yaml", "supervisor", "loop"}, "beekeeper supervisor loop --config"},
-		{[]string{"supervisor", "loop", "--once", "--dry-run"}, "beekeeper supervisor loop --once --dry-run"},
-		{[]string{"--config=/home/" + private + "/config.yaml", "--as", "supervisor loop", "agents", "start", "Review " + private + " 1 r1", "/home/" + private + "/brief.md"}, "beekeeper agents start --config --as"},
-		{[]string{"note", "add", "a " + private + " question", "--" + private + "-flag", "--", "--json"}, "beekeeper note add"},
-		{[]string{"--json", "status"}, "beekeeper status --json"},
+		{nil, pluginName},
+		{[]string{workerGitHubConfigOption, configPath, supervisorCommand, loop}, "beekeeper supervisor loop --config"},
+		{[]string{supervisorCommand, loop, "--once", testDryRunFlag}, "beekeeper supervisor loop --once --dry-run"},
+		{[]string{workerGitHubConfigOption + "=" + configPath, fatalAsFlag, supervisorCommand + " " + loop, agentsName, agentStartName, "Review " + private + " 1 r1", "/home/" + private + "/brief.md"}, "beekeeper agents start --config --as"},
+		{[]string{loopNote, loopAdd, "a " + private + " question", "--" + private + "-flag", "--", deliveryJSONFlag}, "beekeeper note add"},
+		{[]string{deliveryJSONFlag, testStatusWord}, "beekeeper status --json"},
 	} {
 		got := diagnosticCommand(New(), c.args)
 		if got != c.want || strings.Contains(got, private) {
