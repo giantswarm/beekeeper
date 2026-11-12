@@ -74,6 +74,12 @@ func Code(err error) int {
 	return ExitError
 }
 
+// newExitError is a failed command's error: its exit code, its message and
+// what it wraps, if anything.
+func newExitError(code int, msg string, err error) error {
+	return &exitError{code: code, msg: msg, err: err}
+}
+
 func refused(format string, a ...any) error {
 	return &exitError{code: ExitRefused, msg: fmt.Sprintf(format, a...)}
 }

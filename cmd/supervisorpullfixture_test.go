@@ -14,11 +14,11 @@ func fixtureLoopObservation(l *supervisorLoop, ctx context.Context, ref string, 
 		p, err := readLoopPull(ctx, ref)
 		return loopPullObservation{pull: p, at: l.a.timeNow()}, err
 	}
-	p, err := l.fixtureObservePull(ctx, ref, changed, step)
+	p, err := fixtureObservePull(l, ctx, ref, changed, step)
 	return loopPullObservation{pull: p, at: l.pulls[ref].at, changed: changed}, err
 }
 
-func (l *supervisorLoop) fixtureObservePull(ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
+func fixtureObservePull(l *supervisorLoop, ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
 	// Bound the entire observation, including shared admission-lock waits
 	// and budget probes, rather than only the eventual gh pr view.
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
