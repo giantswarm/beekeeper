@@ -297,13 +297,36 @@ func (r Runner) try(ctx context.Context, argv []string, tool string) (handled bo
 		}
 	}
 	_ = cleanup(interrupt)
-	end(125, "remote journal lost; the command was not retried locally")
-	_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: remote journal unavailable; command was not retried locally")
+	reason := "remote journal unavailable"
+	if r.builderOOMKilled(ctx, pod) {
+		reason = "builder OOMKilled: container memory limit exceeded; remote journal unavailable"
+	}
+	end(125, "remote journal lost; "+reason+"; the command was not retried locally")
+	_, _ = fmt.Fprintf(r.Stderr, "beekeeper run: %s; command was not retried locally\n", reason)
 	return true, 125
 }
 
+// The journal dies with the container on a group OOM. Read only the typed
+// termination reason, never arbitrary pod diagnostics or environment values.
+func (r Runner) builderOOMKilled(ctx context.Context, pod string) bool {
+	var response bytes.Buffer
+	if r.kubectl(ctx, nil, &response, "get", "pod", pod, "-o", "json") != nil {
+		return false
+	}
+	var status corev1.Pod
+	if json.Unmarshal(response.Bytes(), &status) != nil {
+		return false
+	}
+	for _, container := range status.Status.ContainerStatuses {
+		if container.Name == builderContainer && container.State.Terminated != nil && container.State.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Runner) exec(ctx context.Context, pod string, in io.Reader, out io.Writer, args ...string) error {
-	flags := []string{"exec", pod, "-c", "builder"}
+	flags := []string{"exec", pod, "-c", builderContainer}
 	if in != nil {
 		flags = append(flags, "-i")
 	}
