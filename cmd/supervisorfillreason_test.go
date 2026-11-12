@@ -158,23 +158,23 @@ func TestRefillReportsPriorPassStillRunning(t *testing.T) {
 // reads it, then it reads the document: the loop's read is stdout and then
 // stderr, and a line after the document must not cost the refill its starts.
 func TestRefillReadsCapacityBeforeItsDiagnostics(t *testing.T) {
-	original := beekeeperRun
-	t.Cleanup(func() { beekeeperRun = original })
-	beekeeperRun = func(context.Context, ...string) (string, int, error) {
+	original := loop.BeekeeperRun
+	t.Cleanup(func() { loop.BeekeeperRun = original })
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) {
 		return `{"room": 2, "blocks": []}` + "\nstate snapshot is 2m0s old (supervisor pass 30s)\n", 0, nil
 	}
-	l := &supervisorLoop{a: &app{}}
-	got, err := l.readFillCapacity(t.Context())
+	l := &loop.Loop{Host: &app{}}
+	got, err := loopReadFillCapacity(l, t.Context())
 	if err != nil {
 		t.Fatalf("a diagnostic after the document failed the read: %v", err)
 	}
 	if got.Room != 2 {
 		t.Fatalf("room = %d, want 2", got.Room)
 	}
-	beekeeperRun = func(context.Context, ...string) (string, int, error) {
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) {
 		return "state snapshot is 2m0s old (supervisor pass 30s)\n", 0, nil
 	}
-	if _, err := l.readFillCapacity(t.Context()); err == nil {
+	if _, err := loopReadFillCapacity(l, t.Context()); err == nil {
 		t.Fatal("output without a document was read as capacity")
 	}
 }
