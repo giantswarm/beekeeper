@@ -84,7 +84,8 @@ func (l *supervisorLoop) nextFailed(act superloop.Action, failures map[string]lo
 	return l.failed(act, failures, err)
 }
 
-// A command refusal is item-specific; admission gates remain pass-wide waits.
+// Command refusals and repository observation failures are item-specific;
+// global admission gates remain pass-wide waits.
 type refillStartError struct {
 	cause  error
 	output string
