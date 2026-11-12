@@ -70,7 +70,9 @@ func TestMain(m *testing.M) {
 	screenLocker = func() string { return "" }
 	// Nor does a held loop pass read the GitHub budget afresh: the saved
 	// reading stands; a test of the reading stubs its own.
-	refreshLoopBudget = func(*app, context.Context) error { return errors.New("no budget reading in a test") }
+	refreshLoopBudget = func(*app, context.Context) (*state.Budget, error) {
+		return nil, errors.New("no budget reading in a test")
+	}
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }

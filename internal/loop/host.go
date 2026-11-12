@@ -153,7 +153,7 @@ type Command struct {
 	RefName                    func(r github.PR) string
 	RefStates                  func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error)
 	RefURL                     func() *regexp.Regexp
-	RefreshLoopBudget          func(a Host, ctx context.Context) error
+	RefreshLoopBudget          func(a Host, ctx context.Context) (*state.Budget, error)
 	Refused                    func(format string, a ...any) error
 	ReleaseVersion             func(v string) bool
 	RemoveAgent                func(st *state.State, i int)

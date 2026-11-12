@@ -1446,13 +1446,16 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	// An unknown or stale reading is resolved by a reading of the loop's
 	// own: the watch may sample too rarely or not at all, and a hold that
-	// waits on a pass it ends early never recovers (#3724).
+	// waits on a pass it ends early never recovers (#3724). The pass holds
+	// on that reading, also when a busy state commit kept it from being
+	// saved (#3841); st is this pass's own copy.
+	var readErr error
 	if !l.DryRun && a.Cfg().GitHub.Floor > 0 && loopReadingStale(st.Budget, a.TimeNow()) {
-		if err := Cmd.RefreshLoopBudget(a, ctx); err == nil {
-			if fresh, err := readState(); err == nil {
-				st = fresh
-			}
+		fresh, err := Cmd.RefreshLoopBudget(a, ctx)
+		if err == nil {
+			st.Budget = fresh
 		}
+		readErr = err
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
@@ -1462,7 +1465,11 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 				return err
 			}
 		}
-		l.SayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
+		cause, _, _ := LoopBudgetHold(st.Budget, a.Cfg().GitHub.Floor, 0, a.TimeNow())
+		if readErr != nil {
+			cause += "; the pass's own reading failed: " + Cmd.OneLine(readErr.Error())
+		}
+		l.SayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor (%s); no board, ownership or PR reads until a fresh reading recovers", cause)
 		ended = mergeWait{class: waitBudget, cause: "the loop holds its passes while the GitHub GraphQL budget is unknown or under github.floor: it reads no pull request and runs no merge decision until a fresh reading recovers"}
 		return nil
 	}

@@ -34,7 +34,14 @@ its key first in the detail):
             alert. Event wakes are held with starts: an alert that resolves
             before the hold lifts does not wake a parked worker.
   budget    every poll consumes watch budget readings; a low or unknown budget
-            holds new worker/reviewer starts and event wakes and says so
+            holds new worker/reviewer starts and event wakes and says so.
+            A held pass and the pull watcher take a rate-limit reading of
+            their own when the saved one is unknown, over a minute old or
+            of a reset window; the pull watcher leaves a GraphQL refusal
+            to the pass's readings. A reading GitHub answered stands when
+            only saving it failed on a busy state or lease commit. A hold
+            names its cause; the pull watcher retries a low budget at its
+            reset and an unknown one within two minutes
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
   tidy      every board.tidyEvery (1h) while a board is configured and the
