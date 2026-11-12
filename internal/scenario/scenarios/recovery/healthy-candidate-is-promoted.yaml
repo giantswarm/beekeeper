@@ -36,7 +36,7 @@ when:
   - name: writes
     run:
       release: v1.0.0-rc.2
-      args: [--as, scenario, note, add, --for, scenario, --status-quo, the desk works, --why, the work in flight outlives an update, --default, nothing happens, --due, 3h, "Does the promoted release write?"]
+      args: [--as, scenario, note, add, --for, scenario, --status-quo, the desk works, --why, the work in flight outlives an update, --default, the desk keeps its work in flight and goes on, --due, 3h, "Does the promoted release write?"]
     expect:
       - exit: 0
 

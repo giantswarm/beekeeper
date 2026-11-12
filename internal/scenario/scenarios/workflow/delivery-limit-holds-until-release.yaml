@@ -179,6 +179,11 @@ when:
     expect:
       - exit: 0
       - output: {contains: ["SUPERVISOR REFILL started 1"]}
+  # The board offers the fourth issue only; the third has started.
+  - name: next
+    run: {args: [board, next, --json]}
+    expect:
+      - output: {contains: [example/app#4]}
   - name: stats
     run: {args: [delivery, --stats, --json]}
 
