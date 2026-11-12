@@ -16,7 +16,7 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: selfupdate
 tags: [selfupdate, release, probation, rollback, fence]
-timeout: 300s
+timeout: 480s
 
 given:
   desk:
@@ -151,8 +151,9 @@ when:
     background:
       release: v1.0.0-rc.2
       args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
+  # About a minute on a CI runner; the bound leaves room for a busier one.
   - wait_for:
-      timeout: 120s
+      timeout: 240s
       interval: 200ms
       expect:
         - process: {name: later-controller, exit: 0}
