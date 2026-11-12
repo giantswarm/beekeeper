@@ -60,8 +60,8 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_CONFIG":    configFile,
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
-		harness.SocketEnv:     harness.DefaultSocket,
 		clock.Env:             clockSocket,
+		harness.SocketEnv:     harness.DefaultSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
 		"GIT_ALLOW_PROTOCOL":  "file:https",
@@ -116,9 +116,9 @@ func (p *proc) stop() {
 type driver struct {
 	s     *Scenario
 	world *World
+	clock *clock.Server
 	// fakes is the world of the fake harnesses, units and hosts.
 	fakes *harness.World
-	clock *clock.Server
 	res   *Result
 	procs map[string]*proc
 	views map[string]View
@@ -129,7 +129,15 @@ type driver struct {
 	githubLog   *os.File
 	boardOwner  string
 	boardNumber int
+	// cfg is the desk's configuration as setup wrote it, orgs its
+	// github.allowedOrgs: the hosts are provisioned against them.
+	cfg  map[string]any
+	orgs []string
 }
+
+// deskCaller names the desk itself to the scenario's GitHub: what a unit
+// of its service manager or a host's coordinator spends.
+const deskCaller = "desk"
 
 // Drive runs the scenario at /work/scenario.yaml inside the sandbox and
 // writes its result to /work/result.json.
@@ -174,22 +182,16 @@ func (d *driver) run() {
 		err = d.startClock()
 	}
 	if err == nil {
-		d.fakes, err = harness.NewWorld(harness.Options{
-			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
-			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
-				r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
-				return r.Stdout, r.Stderr, r.Exit, r.Given
-			},
-		})
-	}
-	if err == nil {
-		err = d.fakes.Serve(harness.DefaultSocket)
-	}
-	if err == nil {
 		err = d.setup(ctx)
 	}
 	if err == nil {
 		err = d.startGitHub(&logMu)
+	}
+	if err == nil {
+		err = d.startFakes()
+	}
+	if err == nil {
+		err = d.provisionHosts(ctx)
 	}
 	if err != nil {
 		if d.fakes != nil {
@@ -297,18 +299,42 @@ func (d *driver) setup(ctx context.Context) error {
 		d.boardOwner, _ = board["owner"].(string)
 		d.boardNumber, _ = board["project"].(int)
 	}
-	// The hosts are provisioned against the desk's configuration, which
-	// then names each with the policy digest its host prepared.
+	d.cfg, d.orgs = cfg, orgs
+	return nil
+}
+
+// startFakes starts the world of the fake harnesses, units and hosts. Its
+// environment is the desk's with the scenario's GitHub, so a unit or a
+// host's coordinator reaches the same GitHub as the step that started it.
+func (d *driver) startFakes() error {
+	var err error
+	d.fakes, err = harness.NewWorld(harness.Options{
+		Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: d.stepEnv(deskCaller, nil), Artifacts: artifactsDir,
+		Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
+			r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
+			return r.Stdout, r.Stderr, r.Exit, r.Given
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return d.fakes.Serve(harness.DefaultSocket)
+}
+
+// provisionHosts provisions the hosts against the desk's configuration,
+// which then names each with the policy digest its host prepared.
+func (d *driver) provisionHosts(ctx context.Context) error {
 	hosts, err := harness.Provision(ctx, harness.Desk{
 		Candidate: candidate, Fake: binDir + "/" + fakeBinary, Git: binDir + "/git", Config: configFile,
-		Identity: deskIdentity, Orgs: orgs, Env: env(nil),
-	}, d.s.Given.Hosts, repos)
+		Identity: deskIdentity, Orgs: d.orgs, Env: d.stepEnv(deskCaller, nil),
+	}, d.s.Given.Hosts, d.repositories())
 	if err != nil || len(hosts) == 0 {
 		return err
 	}
-	overlay(cfg, map[string]any{"agents": map[string]any{"hosts": hosts}})
-	overlay(cfg, d.s.Given.Desk.Config)
-	if raw, err = yaml.Marshal(cfg); err != nil {
+	overlay(d.cfg, map[string]any{"agents": map[string]any{"hosts": hosts}})
+	overlay(d.cfg, d.s.Given.Desk.Config)
+	raw, err := yaml.Marshal(d.cfg)
+	if err != nil {
 		return err
 	}
 	return os.WriteFile(configFile, raw, 0o600)
@@ -316,20 +342,7 @@ func (d *driver) setup(ctx context.Context) error {
 
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
-func (d *driver) repositories() []string {
-	var out []string
-	for _, r := range d.s.Given.Repositories {
-		out = append(out, r.Name)
-	}
-	if g := d.s.Given.GitHub; g != nil {
-		for _, name := range g.RepositoryNames() {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
+func (d *driver) repositories() []string { return d.s.repositoryNames() }
 
 // startGitHub builds the scenario's GitHub from given.github over the
 // origins, serves it on a loopback port and makes it answer gh.
@@ -344,7 +357,6 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
-		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
 			logMu.Lock()
@@ -508,6 +520,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		}
 	case KindWaitFor:
 		sr.Failures = append(sr.Failures, d.waitFor(ctx, st.WaitFor)...)
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	case KindGitHub, KindFault:
 		var err error
 		switch {
@@ -525,10 +541,6 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
-	case KindAdvance:
-		var failures []string
-		sr.Args, failures = d.advance(ctx, st.Advance)
-		sr.Failures = append(sr.Failures, failures...)
 	}
 	dur := time.Since(started)
 	sr.Duration = dur

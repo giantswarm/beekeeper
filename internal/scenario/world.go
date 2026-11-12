@@ -155,13 +155,14 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit, Given: true}
 		break
 	}
-	if !rec.Answered && req.Modeled {
-		rec.Answered, rec.Modeled = true, true
-		resp = CallResponse{}
-	}
 	handler := w.handlers[req.Program]
 	w.mu.Unlock()
-	if !rec.Answered && handler != nil {
+	switch {
+	case rec.Answered:
+	case req.Modeled:
+		rec.Answered, rec.Modeled = true, true
+		resp = CallResponse{}
+	case handler != nil:
 		// A handler may hold its answer (a slow GitHub): the other fakes
 		// are answered meanwhile.
 		if got, answered, reason := handler(req); answered {

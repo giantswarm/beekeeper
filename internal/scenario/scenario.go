@@ -77,6 +77,8 @@ type Given struct {
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
+	// Clock is the world's clock.
+	Clock Clock `yaml:"clock"`
 	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
 	// that answers gh and the API base variables (docs/scenarios-github.md).
 	// Its repositories get origins like Repositories.
@@ -87,8 +89,6 @@ type Given struct {
 	// Hosts are the SSH execution hosts: each gets a root of its own and
 	// an agents.hosts entry of the desk.
 	Hosts []harness.Host `yaml:"hosts"`
-	// Clock is the world's clock.
-	Clock Clock `yaml:"clock"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -121,7 +121,7 @@ type Response struct {
 }
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// github, fault, host and advance, with optional expectations of its own
+// advance, github, fault and host, with optional expectations of its own
 // response.
 type Step struct {
 	Name string `yaml:"name"`
@@ -134,15 +134,15 @@ type Step struct {
 	Stop string `yaml:"stop"`
 	// WaitFor polls its expectations until they hold, bounded.
 	WaitFor *WaitFor `yaml:"wait_for"`
+	// Advance moves the world's clock forward.
+	Advance *Advance `yaml:"advance"`
 	// GitHub is something that happens on the scenario's GitHub; Fault
 	// arms or clears one of its faults.
 	GitHub *fakegithub.Step      `yaml:"github"`
 	Fault  *fakegithub.FaultStep `yaml:"fault"`
 	// Host changes an execution host's faults.
-	Host *harness.HostStep `yaml:"host"`
-	// Advance moves the world's clock forward.
-	Advance *Advance `yaml:"advance"`
-	Expect  []Expect `yaml:"expect"`
+	Host   *harness.HostStep `yaml:"host"`
+	Expect []Expect          `yaml:"expect"`
 }
 
 // Run is a call of the candidate binary.
@@ -166,10 +166,10 @@ const (
 	KindBackground = "background"
 	KindStop       = "stop"
 	KindWaitFor    = "wait_for"
+	KindAdvance    = "advance"
 	KindGitHub     = "github"
 	KindFault      = "fault"
 	KindHost       = "host"
-	KindAdvance    = "advance"
 )
 
 // Kind is the step's kind, "" unless exactly one is set.
@@ -187,6 +187,9 @@ func (s Step) Kind() string {
 	if s.WaitFor != nil {
 		kinds = append(kinds, KindWaitFor)
 	}
+	if s.Advance != nil {
+		kinds = append(kinds, KindAdvance)
+	}
 	if s.GitHub != nil {
 		kinds = append(kinds, KindGitHub)
 	}
@@ -195,9 +198,6 @@ func (s Step) Kind() string {
 	}
 	if s.Host != nil {
 		kinds = append(kinds, KindHost)
-	}
-	if s.Advance != nil {
-		kinds = append(kinds, KindAdvance)
 	}
 	if len(kinds) != 1 {
 		return ""
@@ -351,6 +351,23 @@ func Parse(file string, raw []byte) (*Scenario, error) {
 	return &s, nil
 }
 
+// repositoryNames are the scenario's repositories: given.repositories and
+// given.github's, each once. Every one has an origin.
+func (s *Scenario) repositoryNames() []string {
+	var out []string
+	for _, r := range s.Given.Repositories {
+		out = append(out, r.Name)
+	}
+	if g := s.Given.GitHub; g != nil {
+		for _, name := range g.RepositoryNames() {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
 // Validate checks what the decoder cannot: required fields, exactly one
 // kind per step and expectation, references and patterns.
 func (s *Scenario) Validate() error {
@@ -395,11 +412,7 @@ func (s *Scenario) Validate() error {
 			bad("given.calls[%d]: %v", i, err)
 		}
 	}
-	repositories := make([]string, 0, len(s.Given.Repositories))
-	for _, r := range s.Given.Repositories {
-		repositories = append(repositories, r.Name)
-	}
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts)} {
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, s.repositoryNames()), s.Given.Harness.Validate(s.Given.Hosts)} {
 		if err == nil {
 			continue
 		}
@@ -429,7 +442,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, github, fault, host and advance", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, github, fault and host", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {
@@ -510,10 +523,10 @@ var stepObserves = map[string][]string{
 	KindBackground: {"duration"},
 	KindStop:       {"duration"},
 	KindWaitFor:    {"duration"},
+	KindAdvance:    {"duration"},
 	KindGitHub:     {"duration"},
 	KindFault:      {"duration"},
 	KindHost:       {"duration"},
-	KindAdvance:    {"duration"},
 }
 
 func (s *Scenario) validateExpect(where string, e Expect, stepKind string, background []string, inThen bool) []error {
@@ -593,7 +606,7 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if o := e.Origin; o != nil {
-		if !slices.ContainsFunc(s.Given.Repositories, func(r Repository) bool { return r.Name == o.Repository }) {
+		if !slices.Contains(s.repositoryNames(), o.Repository) {
 			bad("origin: repository %q is none of given.repositories", o.Repository)
 		}
 		if o.Branch == "" {
