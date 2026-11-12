@@ -197,6 +197,9 @@ func (d *driver) run() {
 		err = d.setup(ctx)
 	}
 	if err == nil {
+		err = d.tagReleases(ctx)
+	}
+	if err == nil {
 		err = d.startGitHub(&logMu)
 	}
 	if err == nil {
@@ -420,7 +423,9 @@ func baseConfig(orgs []string) map[string]any {
 			"providers": map[string]any{"claude": map[string]any{"ceiling": 2}},
 			"choices":   []any{map[string]any{"harness": "claude", "model": "sonnet"}},
 		},
-		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000},
+		// The machine's own pressure is no part of a scenario: a busy CI
+		// runner must not hold a scenario's starts.
+		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000, "cpuPSIMax": 100, "psiMax": 100},
 		"supervisor": map[string]any{
 			"effort": "low", "workerBrief": workDir + "/worker.txt",
 			"ownership": map[string]any{"authors": []any{"desk"}},

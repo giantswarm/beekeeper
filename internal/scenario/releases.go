@@ -25,9 +25,9 @@ type Releases struct {
 	// whose version is the checkout's.
 	Installed string `yaml:"installed"`
 	// Published are the releases of giantswarm/beekeeper on the scenario's
-	// GitHub, each with this platform's binary and its bundle, tagged on
-	// the repository's main. A version with a pre-release part is a
-	// pre-release there.
+	// GitHub, each with this platform's binary and its bundle and tagged
+	// on a commit of its own on the repository's main, in this order. A
+	// version with a pre-release part is a pre-release there.
 	Published []string `yaml:"published"`
 }
 
