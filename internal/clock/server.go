@@ -96,7 +96,6 @@ func (s *Server) serve(c net.Conn) {
 		return
 	}
 	p := &conn{c: c, enc: json.NewEncoder(c), hello: h, acks: make(chan ack, 16), gone: make(chan struct{})}
-	defer close(p.gone)
 	s.mu.Lock()
 	err := p.enc.Encode(offset{Seq: s.seq, Offset: s.offset.Load()})
 	if err == nil {
@@ -108,6 +107,10 @@ func (s *Server) serve(c net.Conn) {
 	}
 	_ = c.SetDeadline(time.Time{})
 	defer func() {
+		// Say the process is gone before taking the lock: an advance
+		// waiting for its acknowledgement holds the lock until it has
+		// one, the process's end or ackTimeout.
+		close(p.gone)
 		s.mu.Lock()
 		delete(s.conns, p)
 		s.mu.Unlock()
@@ -152,8 +155,9 @@ type Advanced struct {
 
 // Advance moves the world's time forward by d and returns once every
 // connected process has fired what was then due and acknowledged it. A
-// process that ends meanwhile is skipped; one that does not answer within
-// ackTimeout is an error naming it.
+// process that ends meanwhile counts if it acknowledged before it ended and
+// is skipped at once otherwise; one that does not answer within ackTimeout
+// is an error naming it.
 func (s *Server) Advance(d time.Duration) (Advanced, error) {
 	if d < 0 {
 		return Advanced{}, fmt.Errorf("clock: the world's time does not go back (advance %s)", d)
@@ -211,7 +215,7 @@ func (p *conn) await(seq int64, deadline <-chan time.Time, expired *bool) (ack, 
 				}
 				continue
 			case <-p.gone:
-				return ack{}, awaitGone
+				return p.last(seq)
 			default:
 				return ack{}, awaitLate
 			}
@@ -222,9 +226,25 @@ func (p *conn) await(seq int64, deadline <-chan time.Time, expired *bool) (ack, 
 				return a, awaitAcked
 			}
 		case <-p.gone:
-			return ack{}, awaitGone
+			return p.last(seq)
 		case <-deadline:
 			*expired = true
+		}
+	}
+}
+
+// last is the outcome for p once it has gone: its acknowledgement of seq if
+// it sent one before it ended, which its handler queued before it said the
+// process was gone, else gone.
+func (p *conn) last(seq int64) (ack, int) {
+	for {
+		select {
+		case a := <-p.acks:
+			if a.Seq == seq {
+				return a, awaitAcked
+			}
+		default:
+			return ack{}, awaitGone
 		}
 	}
 }
