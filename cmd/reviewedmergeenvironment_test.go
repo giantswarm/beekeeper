@@ -59,6 +59,9 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 				case mode == modeRunnerDown:
 					return false, 0
 				case mode == modeCodeFailure:
+					if argv[0] == "golangci-lint" {
+						return true, 0
+					}
 					_, _ = fmt.Fprintln(runner.Stdout, "--- FAIL: TestCombinedRegression")
 					return true, 1
 				case mode == modeQuotaPersists || len(commands) == 1:

@@ -125,12 +125,6 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 // Each attempt owns a new worktree and remote builder, never a failed cache or
 // temporary directory from the previous attempt.
 func (a *app) checkReviewedMergeAttempt(ctx context.Context, repoDir, baseSHA string, p superloop.Pull, head string) (string, int) {
-	mbOut, err := runGit(ctx, repoDir, "merge-base", baseSHA, head)
-	if err != nil {
-		return mergeValidationUnavailable("reading merge base: %v", err), github.SquashTooling
-	}
-	mb := strings.TrimSpace(string(mbOut))
-
 	stateDir := a.cfg.StateDir
 	if stateDir == "" && a.store != nil {
 		stateDir = a.store.Dir()
@@ -165,7 +159,7 @@ func (a *app) checkReviewedMergeAttempt(ctx context.Context, repoDir, baseSHA st
 		}
 		return mergeValidationUnavailable("creating merge result: %v", err), github.SquashTooling
 	}
-	reason, code := a.runReviewedMergeChecks(ctx, tmpDir, mb, p.Base, head)
+	reason, code := a.runReviewedMergeChecks(ctx, tmpDir, baseSHA, p.Base, head)
 	return reason, code
 }
 
@@ -258,13 +252,13 @@ func hasReviewedCommit(ctx context.Context, repoDir, rev string) bool {
 
 // runReviewedMergeChecks runs repository-configured golangci-lint and go test on the Go
 // module in worktreeDir, including reverse dependents and unchanged tests.
-func runReviewedMergeChecks(ctx context.Context, worktreeDir, _, baseBranch, head string) (string, int) {
-	return runReviewedMergeChecksWith(ctx, worktreeDir, baseBranch, head, runMergeCheckCmd, true)
+func runReviewedMergeChecks(ctx context.Context, worktreeDir, baseSHA, baseBranch, head string) (string, int) {
+	return runReviewedMergeChecksWith(ctx, worktreeDir, baseSHA, baseBranch, head, runMergeCheckCmd, true)
 }
 
 type mergeCheckCommand func(context.Context, string, string, ...string) (string, error)
 
-func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseBranch, head string, run mergeCheckCommand, local bool) (string, int) {
+func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseBranch, head string, run mergeCheckCommand, local bool) (string, int) {
 	if _, err := os.Stat(filepath.Join(worktreeDir, "go.mod")); err != nil {
 		return "", 0
 	}
@@ -298,7 +292,16 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseBranch, he
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
-		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, shortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
+		if baseSHA != "" {
+			var baselineErr error
+			out, baselineErr = reviewedLintRegressions(ctx, worktreeDir, baseSHA, lintArgs, run, local)
+			if baselineErr != nil {
+				return mergeValidationUnavailable("lint baseline: %v", baselineErr), github.SquashTooling
+			}
+		}
+		if baseSHA == "" || out != "" {
+			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, shortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
+		}
 	}
 	// Keep heavyweight live canaries in full CI, outside the coordinator merge
 	// path. Short mode still checks every package and its reverse dependents.

@@ -33,9 +33,14 @@ Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`
 `.golangci.json` explicitly (in that order), without additional linters or a separate
 goconst pre-check. Without a repository config it uses `--no-config` and the tool's
 default linters, preventing inherited home or parent-directory policy. A lint refusal
-names the selected config (or the explicit default). A
-failing combination goes back to its owner. A failed fetch, a reviewed commit that cannot
-be read or a missing lint tool refuses the merge with
+names the selected config (or the explicit default). When lint fails, the checker compares
+structured whole-module findings with the exact fetched base using the same runner and toolchain.
+Existing findings are matched by file, linter, message and source text, with occurrence counts;
+line-number shifts do not turn existing findings into regressions. Only new findings go back to
+the PR worker, including findings in unchanged files. An unreadable baseline is a checker
+environment failure, not a branch repair. The full-module test check still runs when only
+existing lint findings remain. A failing combination goes back to its owner. A failed fetch,
+a reviewed commit that cannot be read or a missing lint tool refuses the merge with
 `merge-result validation unavailable: <the condition that failed>`. A repository with no
 local checkout is not validated: the merge's reason says so and the pull request's own
 checks stand, as for a head that already contains its base.

@@ -454,7 +454,7 @@ func TestTimerDispatcherObservesStopWithoutStateLock(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		cancel()
 		store.once.Do(func() { close(store.release) })
-		<-done
+		_ = <-done // The timeout below is already the failure.
 		t.Fatal("stop monitor waited for the state lock")
 	}
 }

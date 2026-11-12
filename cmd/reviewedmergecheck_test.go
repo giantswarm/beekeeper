@@ -542,7 +542,7 @@ func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-				reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
+				reason, code := runReviewedMergeChecks(t.Context(), repo.dir, "", mainBranch, repo.head2)
 				wantArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
 				label := "no repository config"
 				if configName == "" {
