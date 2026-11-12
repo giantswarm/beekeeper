@@ -233,7 +233,11 @@ func ApplyLoopWorkflowRuns(p *superloop.Pull, raw []byte, rollup []LoopCheck) er
 }
 
 // ReadBaseMerge reads whether the approval of approved covers p's head: it
-// only merges its base into approved with the reviewed patch unchanged.
+// only brings its base into approved (github.ApprovalCovers), by a merge, a
+// merge whose conflicts it resolves, or a rebase, with no change of its
+// own. A pull request gets one desk review
+// (https://github.com/giantswarm/beekeeper/issues/3861): the merge-result
+// check against the current base is such a head's gate, never a new review.
 var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
 	r, ok := Cmd.ParseRef(p.Ref)
 	if !ok || p.Base == "" {
@@ -241,8 +245,8 @@ var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	only, _, err := github.BaseMergeCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
-	return only, err
+	covered, _, err := github.ApprovalCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return covered, err
 }
 
 // ReadDeskLogin is the login gh acts as: the one the desk's agents open

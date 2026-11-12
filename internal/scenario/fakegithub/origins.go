@@ -4,6 +4,7 @@ package fakegithub
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -211,6 +212,97 @@ func (o *Origins) Changed(r *Repo, base, head string) ([]PullFile, error) {
 		files = append(files, PullFile{Path: f[2], Additions: add, Deletions: del})
 	}
 	return files, nil
+}
+
+// CompareFile is one file of a comparison as GitHub's compare API lists
+// it: its status (added, removed, modified, renamed, copied, changed), the
+// name it had before a rename or copy, its blob, and its patch, the
+// unified diff's hunks without their headers ("" for a binary file).
+type CompareFile struct {
+	Path      string
+	Previous  string
+	Status    string
+	SHA       string
+	Patch     string
+	Additions int
+	Deletions int
+}
+
+// compareStatus maps git's --name-status letters to GitHub's statuses.
+var compareStatus = map[byte]string{'A': "added", 'D': "removed", 'M': "modified", 'R': "renamed", 'C': "copied", 'T': "changed"}
+
+// CompareFiles are the files head changes against its merge base with
+// base, as GitHub's compare API (base...head) lists them.
+func (o *Origins) CompareFiles(r *Repo, base, head string) ([]CompareFile, error) {
+	out, err := o.run(r, nil, "", "diff", "--name-status", "-M", "-z", base+"..."+head)
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	var files []CompareFile
+	for i := 0; i < len(fields); i++ {
+		code := fields[i]
+		if code == "" {
+			continue
+		}
+		f := CompareFile{Status: compareStatus[code[0]]}
+		if f.Status == "" {
+			f.Status = "modified"
+		}
+		paths := []string{}
+		if code[0] == 'R' || code[0] == 'C' {
+			if i+2 >= len(fields) {
+				return nil, fmt.Errorf("git diff --name-status: %q has no paths", code)
+			}
+			f.Previous, f.Path = fields[i+1], fields[i+2]
+			paths = append(paths, f.Previous, f.Path)
+			i += 2
+		} else {
+			if i+1 >= len(fields) {
+				return nil, fmt.Errorf("git diff --name-status: %q has no path", code)
+			}
+			f.Path = fields[i+1]
+			paths = append(paths, f.Path)
+			i++
+		}
+		diff, err := o.run(r, nil, "", append([]string{"diff", "--no-color", "--no-ext-diff", "-M", base + "..." + head, "--"}, paths...)...)
+		if err != nil {
+			return nil, err
+		}
+		if at := strings.Index(diff, "\n@@"); at >= 0 {
+			f.Patch = strings.TrimSuffix(diff[at+1:], "\n")
+		} else if strings.HasPrefix(diff, "@@") {
+			f.Patch = strings.TrimSuffix(diff, "\n")
+		}
+		for _, l := range strings.Split(f.Patch, "\n") {
+			switch {
+			case strings.HasPrefix(l, "+"):
+				f.Additions++
+			case strings.HasPrefix(l, "-"):
+				f.Deletions++
+			}
+		}
+		at := head
+		if f.Status == "removed" {
+			at = base
+		}
+		f.SHA = o.BlobSHA(r, at, cmpOr(f.Path, f.Previous))
+		files = append(files, f)
+	}
+	return files, nil
+}
+
+// Conflicts reports whether head does not merge into base without
+// conflicts: what GitHub's mergeable reports as CONFLICTING.
+func (o *Origins) Conflicts(r *Repo, base, head string) (bool, error) {
+	c := exec.Command(o.Git, "--git-dir", o.Dir(r), "merge-tree", "--write-tree", base, head) //nolint:gosec // real git on the scenario's own origin
+	c.Env = append([]string(nil), o.Env...)
+	err := c.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, err
 }
 
 // identity is who the origin's own commits are by.

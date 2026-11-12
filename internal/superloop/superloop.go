@@ -175,11 +175,29 @@ type Review struct {
 	At      time.Time
 }
 
-// MaxReviews is how many reviews the loop starts for one pull request,
-// whatever happens: one, and a second only for a change an approval does
-// not cover. A later change merges on the loop's go: the loop merges after
-// the reviews and their fixes, and never asks a person whether to merge.
+// MaxReviews is how many review rounds the loop starts for one pull
+// request, whatever happens. A pull request gets one desk review: once a
+// round gave a verdict, no further round starts
+// (https://github.com/giantswarm/beekeeper/issues/3861). A second round
+// starts only when the first ended without any verdict, so the one review
+// still has to come. Every later head merges on the loop's go: the
+// reviewer's fixes, the worker's fixes of findings the reviewer left, a
+// merge of the base, a rebase, a conflict's resolution. The loop never asks
+// a person whether to merge.
 const MaxReviews = 2
+
+// reviewed is the verdict of the pull request's one desk review: the
+// latest one any of its rounds rs gave, and that round's number from 1; 0
+// and nil before any round gave one. Once it is there, no review round
+// starts again.
+func (p Pull) reviewed(rs []round, pushed func(Review) bool) (int, *Review) {
+	for i, rd := range slices.Backward(rs) {
+		if v := p.verdict(rd, pushed); v != nil {
+			return i + 1, v
+		}
+	}
+	return 0, nil
+}
 
 // verdictSlack is how much earlier than its round's start a verdict may
 // be stamped: GitHub's clock and the machine's differ a little.
@@ -309,7 +327,8 @@ type Input struct {
 	Release string
 	// Taken are the actions already taken, oldest first.
 	Taken []Taken
-	// Rounds is supervisor.reviewRounds.
+	// Rounds is supervisor.reviewRounds. Plan no longer reads it: a pull
+	// request gets one desk review whatever it says (MaxReviews).
 	Rounds int
 	// Person is the guide's person.
 	Person string
@@ -332,7 +351,8 @@ type Input struct {
 	// BaseMerged reports whether p's head only brings its base into
 	// approved, an earlier head the loop's go covers: it merges the base,
 	// resolving the merge's conflicts or not, or rebases onto it
-	// (github.ApprovalCovers); nil: never, every new head is a new review.
+	// (github.ApprovalCovers); nil: never, every new head waits for a park
+	// before its go.
 	BaseMerged func(p Pull, approved string) bool
 	// NitsChecked is an explicit supervisor attestation against the approved head.
 	NitsChecked func(p Pull, approved string) bool
@@ -865,7 +885,6 @@ func Plan(in Input) []Action {
 	for _, e := range in.Events {
 		eventsByAgent[e.Agent] = append(eventsByAgent[e.Agent], e)
 	}
-	rounds := max(in.Rounds, 1)
 	var out []Action
 	plannedKeys := make(map[string]bool)
 	add := func(a Action) {
@@ -1006,7 +1025,7 @@ func Plan(in Input) []Action {
 			}
 			continue
 		}
-		planPull(in, l, rounds, ref, p, parked, ask, asked, leave, add)
+		planPull(in, l, ref, p, parked, ask, asked, leave, add)
 		planOverlap(in, l, ref, p, parked, func(r string) bool {
 			return slices.ContainsFunc(out, func(a Action) bool { return strings.EqualFold(a.Ref, r) })
 		}, add)
@@ -1249,7 +1268,7 @@ func Plan(in Input) []Action {
 	return out
 }
 
-func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[string]Worker, ask question, asked bool, leave func(string, string, string, string, string), add func(Action)) {
+func planPull(in Input, l ledger, ref string, p Pull, parked map[string]Worker, ask question, asked bool, leave func(string, string, string, string, string), add func(Action)) {
 	w, isParked := parked[ref]
 	if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.Name == l.reviewer[ref] && w.ParkedOn == ref && !w.ReviewRequested }) {
 		return
@@ -1318,16 +1337,6 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
 		add(a)
 	}
-	// cycles is how many of the rounds asked for changes: the rounds
-	// supervisor.reviewRounds caps. An approved head is no cycle; a new
-	// head after it gets a review only for a change the approval does
-	// not cover, and never past MaxReviews.
-	cycles := 0
-	for _, rd := range rs {
-		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested {
-			cycles++
-		}
-	}
 	if len(rs) == 0 {
 		if p.Green && isParked {
 			review()
@@ -1356,37 +1365,36 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	if v == nil {
 		// The round runs until its reviewer reports done. One done
 		// without a verdict on the round's head or on the head now
-		// reviewed a head the worker pushed in between: the newest
-		// head gets its round.
+		// reviewed a head the worker pushed in between.
 		done := slices.ContainsFunc(in.Events, func(e Event) bool {
 			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
 		})
 		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
 			return
 		}
+		// An earlier round's verdict was the pull request's one review:
+		// the loop acts on it and starts no other review, never asking a
+		// person and never merging without a verdict.
+		if i, ev := p.reviewed(rs[:len(rs)-1], l.pushed(p)); ev != nil {
+			if ev.Verdict == ChangesRequested && (sameHead(ev.Head, p.Head) || in.baseMerged(p, ev.Head)) {
+				a := base
+				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
+				a.Message = reworkMessage(p, ev.Head) + "\n\nThe review, word for word:\n\n" + ev.Body
+				add(a)
+				return
+			}
+			add(goAction(in, base, fmt.Sprintf("its one review, round %d, %s head %s and the last reviewer finished without a verdict; no second review", i, ev.Verdict, short(ev.Head))))
+			return
+		}
+		// No round gave a verdict yet: the newest head gets the one
+		// review while a round is left.
 		if len(rs) < MaxReviews {
 			review()
 			return
 		}
-		// The reviews are used: the loop merges after a verdict, never
-		// asking a person, and never without one.
-		for i, rd := range slices.Backward(rs[:len(rs)-1]) {
-			if ev := p.verdict(rd, l.pushed(p)); ev != nil {
-				if ev.Verdict == ChangesRequested && (sameHead(ev.Head, p.Head) || in.baseMerged(p, ev.Head)) {
-					a := base
-					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-					a.Message = reworkMessage(p, ev.Head, cycles, rounds, false) + "\n\nThe review, word for word:\n\n" + ev.Body
-					add(a)
-					return
-				}
-				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, round %d %s head %s and the last reviewer finished without a verdict", len(rs), i+1, ev.Verdict, short(ev.Head))))
-				return
-			}
-		}
-		leave(ref, p.URL, agent, leftNoVerdict(p.Head), fmt.Sprintf("its %d reviews are used and none gave a verdict: no merge go comes without a desk review's verdict", len(rs)))
+		leave(ref, p.URL, agent, leftNoVerdict(p.Head), fmt.Sprintf("its %d review rounds ended and none gave a verdict: no merge go comes without a desk review's verdict", len(rs)))
 		return
 	}
-	left := cycles < rounds && len(rs) < MaxReviews
 	// reviewed is the head the verdict is on: the round's, or a newer
 	// one the worker pushed while the round ran.
 	reviewed, moved := v.Head, ""
@@ -1402,13 +1410,12 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return
 		}
 		// The head moved past the approval. The approval covers a head
-		// that only brings the base into the approved one (a
-		// worker's merge of the base and its
-		// conflicts' resolution, a rebase onto it); any other change
-		// gets a review while one of MaxReviews is left, else the go.
-		// A base merge needs no new park: it brings no
-		// change of the worker's. Any other head asks for a park
-		// since the round opened.
+		// that only brings the base into the approved one (a merge of
+		// the base, a conflict's resolution, a rebase onto it): its go
+		// needs no new park, it brings no change of the worker's. Any
+		// other head asks for a park since the round opened, and then
+		// gets the go too: the pull request had its one review, and no
+		// second review starts.
 		if !p.Green {
 			return
 		}
@@ -1428,23 +1435,18 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return
 		}
 		if !requested {
-			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
+			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its merge go (no second review runs)", short(p.Head), short(reviewed), len(rs)))
 			return
 		}
-		if len(rs) < MaxReviews {
-			review()
-			return
-		}
-		// The reviews are used: the head merges as the desk's standing
-		// rule says, the reviews, then the fixes and the merge. No
-		// person is asked whether to merge.
-		add(goAction(in, base, fmt.Sprintf("its %d reviews are used, the last approving head %s", len(rs), short(reviewed))))
+		// One review, then the fixes and the merge, as the desk's
+		// standing rule says. No person is asked whether to merge.
+		add(goAction(in, base, fmt.Sprintf("its one review, round %d, approved head %s; head %s merges without a second review", len(rs), short(reviewed), short(p.Head))))
 	case ChangesRequested:
 		fk := forwardKey(ref, v.ID)
 		if !l.has(fk) {
 			a := base
 			a.Key, a.Kind = fk, KindForward
-			a.Message = forwardMessage(p, *v, left)
+			a.Message = forwardMessage(p, *v)
 			add(a)
 			return
 		}
@@ -1459,22 +1461,16 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			// The findings stand unfixed: the worker reworks once per park.
 			// Review and rework are the loop's; no merge question goes
 			// to the person.
-			if !left || merged {
-				a := base
-				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-				a.Message = reworkMessage(p, reviewed, cycles, rounds, left)
-				add(a)
-			}
+			a := base
+			a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
+			a.Message = reworkMessage(p, reviewed)
+			add(a)
 			return
 		}
 		if !p.Green {
 			return
 		}
-		if left {
-			review()
-			return
-		}
-		add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used, %d of %d review(s); head %s carries the fixes of the last round's findings on %s", cycles, rounds, len(rs), MaxReviews, short(p.Head), short(reviewed))))
+		add(goAction(in, base, fmt.Sprintf("its one review, round %d, asked for changes on head %s; head %s carries the fixes and merges without a second review", len(rs), short(reviewed), short(p.Head))))
 	}
 }
 
@@ -2304,30 +2300,24 @@ func baseName(p Pull) string {
 }
 
 // reworkMessage tells the worker of p, parked again on reviewed, the head
-// its last review asked changes on, or on a head that only merges the base
+// its one review asked changes on, or on a head that only merges the base
 // into it, to fix them.
-func reworkMessage(p Pull, reviewed string, cycles, rounds int, left bool) string {
-	at := fmt.Sprintf("at head %s, the head its last review asked for changes on", short(p.Head))
+func reworkMessage(p Pull, reviewed string) string {
+	at := fmt.Sprintf("at head %s, the head its review asked for changes on", short(p.Head))
 	if !sameHead(p.Head, reviewed) {
-		at = fmt.Sprintf("at head %s, which only brings %s into head %s, the head its last review asked for changes on", short(p.Head), baseName(p), short(reviewed))
+		at = fmt.Sprintf("at head %s, which only brings %s into head %s, the head its review asked for changes on", short(p.Head), baseName(p), short(reviewed))
 	}
-	next := "the merge go for the new head follows"
-	if left {
-		next = "the next review round starts then"
-	}
-	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, %d of %d change-request round(s) are used, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: %s.",
-		p.URL, at, cycles, rounds, next)
+	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows.",
+		p.URL, at)
 }
 
 // oneLine is s on one line.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// forwardMessage forwards review r of p word for word.
-func forwardMessage(p Pull, r Review, again bool) string {
-	next := "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: the next review round starts then."
-	if !again {
-		next = "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows."
-	}
+// forwardMessage forwards review r of p word for word: the pull request's
+// one review, so the fixes merge on the loop's go without another.
+func forwardMessage(p Pull, r Review) string {
+	next := "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows."
 	return fmt.Sprintf("The review of %s asks for changes on head %s. %s The review, word for word:\n\n%s", p.URL, r.Head, next, r.Body)
 }
 
