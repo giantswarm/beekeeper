@@ -16,6 +16,8 @@ given:
       capacity: {ceiling: 0}
       # One watch reading admits the pass's starts: only the room holds it.
       watch: {interval: 1h}
+      # The budget is probed on the scenario's repository.
+      github: {probeRepo: example/app}
   github:
     repositories:
       - name: example/app
@@ -24,9 +26,10 @@ given:
   calls:
     - program: journalctl
       respond: {stdout: ""}
+    # No GitHub App login beside the gh login: the budget is gh's.
     - program: devctl
       args: [auth, status]
-      respond: {stderr: "not logged in\n", exit: 1}
+      respond: {stdout: '{"github":{"present":false}}'}
 
 when:
   # Only the candidate itself is reachable: PATH holds no harness at all.
@@ -45,7 +48,7 @@ when:
   - name: watch
     run: {args: [watch, --once]}
     expect:
-      - exit: 0
+      - events: {contains: [watch.budget-state], not_contains: [watch.budget-error]}
   - name: pass
     run: {args: [supervisor, loop, --once]}
     expect:

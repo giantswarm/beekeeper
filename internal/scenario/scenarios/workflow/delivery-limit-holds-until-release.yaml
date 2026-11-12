@@ -21,6 +21,8 @@ given:
       supervisor: {reviewRounds: 1}
       # One watch reading admits the passes' starts for the whole scenario.
       watch: {interval: 1h}
+      # The budget is probed on the scenario's repository.
+      github: {probeRepo: example/app}
   github:
     repositories:
       - name: example/app
@@ -79,9 +81,10 @@ given:
   calls:
     - program: journalctl
       respond: {stdout: ""}
+    # No GitHub App login beside the gh login: the budget is gh's.
     - program: devctl
       args: [auth, status]
-      respond: {stderr: "not logged in\n", exit: 1}
+      respond: {stdout: '{"github":{"present":false}}'}
 
 when:
   # The repository releases what lands on main.
@@ -95,7 +98,7 @@ when:
   - name: watch
     run: {args: [watch, --once]}
     expect:
-      - exit: 0
+      - events: {contains: [watch.budget-state], not_contains: [watch.budget-error]}
   - name: admit
     run: {args: [supervisor, loop, --once]}
     expect:
