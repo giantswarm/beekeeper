@@ -1,0 +1,65 @@
+name: timer-fires-when-the-world-advances
+description: >
+  Every process reads the world's time, and an advance wakes the ticker of
+  a process already running. A timer added at the world's 04:05 for 30
+  minutes is due at 04:35, and a dispatcher pass at 04:05 leaves it,
+  although the system's time is years past it. A running dispatcher fires a
+  timer due now on its first pass, then waits on its 30-second ticker. The
+  world advances 30 minutes: the ticker wakes, the pass sees 04:35, fires
+  the first timer and runs its command.
+issue: https://github.com/giantswarm/beekeeper/issues/3792
+flow: clock
+tags: [clock, timer]
+timeout: 30s
+
+given:
+  clock:
+    start: "2001-02-03T04:05:06Z"
+  calls:
+    # The commands the two timers run.
+    - program: gh
+      args: [api, user, --jq, .login]
+      respond: {stdout: "scenario\n"}
+    - program: gh
+      args: [api, repos/example/app, --jq, .name]
+      respond: {stdout: "app\n"}
+
+when:
+  - name: add
+    run: {args: [--as, scenario, timer, add, 30m, look at the world clock, --run, gh api repos/example/app --jq .name]}
+    expect:
+      - exit: 0
+      - output: {contains: ["timer #1 at 04:35 UTC"]}
+  - name: early
+    run: {args: [timer, dispatch, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [timer.add], not_contains: [timer.fired, timer.ran]}
+      - calls: {program: gh, max: 0}
+  - name: now
+    run: {args: [--as, scenario, timer, add, now, the dispatcher's first pass, --run, gh api user --jq .login]}
+    expect:
+      - exit: 0
+      - output: {contains: ["timer #2 at 04:05 UTC"]}
+  - name: dispatch
+    background: {args: [timer, dispatch]}
+  # The first pass fires the timer due now: the dispatcher's ticker is on
+  # the world's clock, and the first timer still waits.
+  - wait_for:
+      timeout: 10s
+      expect:
+        - calls: {program: gh, args: [api, user], min: 1}
+        - calls: {program: gh, args: [api, repos/example/app], max: 0}
+  - name: half-hour
+    advance: 30m
+  - wait_for:
+      timeout: 10s
+      expect:
+        - calls: {program: gh, args: [api, repos/example/app], min: 1}
+        - events: {contains: [timer.fired, timer.ran]}
+  - stop: dispatch
+
+then:
+  - calls: {program: gh, args: [api, user], min: 1, max: 1}
+  - calls: {program: gh, args: [api, repos/example/app], min: 1, max: 1}
+  - process: {name: dispatch, running: false}

@@ -2,6 +2,7 @@ package superloop
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -24,8 +25,8 @@ type Desk struct {
 	// the desk's own: on a park on one, or through the sweep, which lists
 	// them in the repositories BotRepo admits.
 	Bots []string
-	// Team is the desk's team as the team files name it; empty: every
-	// repository in Orgs is the desk's.
+	// Team is the desk's team as the team files name it; when both Team and
+	// Review are empty, every repository in Orgs is the desk's.
 	Team string
 	// Review are the repositories (path.Match patterns over owner/name) the
 	// desk reviews whoever owns them; Never the ones it does no work on,
@@ -108,13 +109,13 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 	if len(d.Authors) > 0 && !slices.ContainsFunc(d.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) && !d.bot(p.Author) {
 		return nobodys, leftAuthor, fmt.Sprintf("opened by %s, not by the desk (%s): it is not the desk's to review", p.Author, strings.Join(d.Authors, ", "))
 	}
-	if overridden || d.Team == "" || matchesAny(d.Review, repo) {
+	if overridden || d.Team == "" && len(d.Review) == 0 || matchesAny(d.Review, repo) {
 		return ours, "", ""
 	}
 	if d.TeamsUnknown {
 		return unknown, "", ""
 	}
-	if strings.EqualFold(p.Team, d.Team) {
+	if d.Team != "" && strings.EqualFold(p.Team, d.Team) {
 		return ours, "", ""
 	}
 	return theirs, leftTeam, fmt.Sprintf("%s: its review is theirs; the loop starts no reviewer and gives no go", ownedBy(p.Team, repo))
@@ -122,20 +123,80 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 
 // BotRepo reports whether repo (owner/name) is one where the sweep lists
 // Bots' pull requests: read by the desk, and its own by Review, by having
-// no Team, or by the team files, which name team as repo's owner ("" for
-// none). Until they are read (teamsKnown false) only Review admits one, so
-// the listing never reads another team's bot pull requests.
+// neither Team nor Review, or by the team files, which name team as repo's
+// owner ("" for none). Until they are read (teamsKnown false) only Review
+// admits one, so the listing never reads another team's bot pull requests.
 func (d Desk) BotRepo(repo, team string, teamsKnown bool) bool {
 	if reason, _ := d.unread(repo); reason != "" {
 		return false
 	}
 	switch {
-	case d.Team == "", matchesAny(d.Review, repo):
+	case d.Team == "" && len(d.Review) == 0, matchesAny(d.Review, repo):
 		return true
-	case !teamsKnown:
+	case d.Team == "", !teamsKnown:
 		return false
 	}
 	return strings.EqualFold(team, d.Team)
+}
+
+// BotScopes are the owners (org) and repositories (owner/name) where the
+// sweep searches for Bots' pull requests, and whether any repository may
+// match BotRepo. An entry with a slash is a repository (--repo); one without
+// a slash is an owner (--owner).
+func (d Desk) BotScopes(teams map[string]string, teamsKnown bool) ([]string, bool) {
+	if d.Team == "" && len(d.Review) == 0 {
+		return slices.Clone(d.Orgs), true
+	}
+	var owners, repos []string
+	addOwner := func(o string) {
+		if o == "" || d.Outside(o+"/_") {
+			return
+		}
+		if !slices.ContainsFunc(owners, func(existing string) bool { return strings.EqualFold(existing, o) }) {
+			owners = append(owners, o)
+		}
+	}
+	addRepo := func(r string) {
+		if reason, _ := d.unread(r); reason != "" {
+			return
+		}
+		if !slices.ContainsFunc(repos, func(existing string) bool { return strings.EqualFold(existing, r) }) {
+			repos = append(repos, r)
+		}
+	}
+	for _, p := range d.Review {
+		org, name, ok := strings.Cut(p, "/")
+		if !ok || name == "" {
+			continue
+		}
+		switch {
+		case strings.ContainsAny(org, "*?["):
+			for _, o := range d.Orgs {
+				if matched, _ := path.Match(strings.ToLower(org), strings.ToLower(o)); matched {
+					addOwner(o)
+				}
+			}
+		case strings.ContainsAny(name, "*?["):
+			addOwner(org)
+		default:
+			addRepo(p)
+		}
+	}
+	if d.Team != "" && teamsKnown {
+		for _, r := range slices.Sorted(maps.Keys(teams)) {
+			if strings.EqualFold(teams[r], d.Team) {
+				addRepo(r)
+			}
+		}
+	}
+	out := slices.Clone(owners)
+	for _, r := range repos {
+		org, _, _ := strings.Cut(r, "/")
+		if !slices.ContainsFunc(owners, func(o string) bool { return strings.EqualFold(o, org) }) {
+			out = append(out, r)
+		}
+	}
+	return out, len(out) > 0
 }
 
 // BotLogin is bot's login as GitHub's search names an app: app/<name>.

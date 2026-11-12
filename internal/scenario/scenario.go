@@ -82,6 +82,8 @@ type Given struct {
 	// Hosts are the SSH execution hosts: each gets a root of its own and
 	// an agents.hosts entry of the desk.
 	Hosts []harness.Host `yaml:"hosts"`
+	// Clock is the world's clock.
+	Clock Clock `yaml:"clock"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -113,8 +115,8 @@ type Response struct {
 	Exit   int    `yaml:"exit"`
 }
 
-// Step is one when step: exactly one of run, background, stop, wait_for
-// and host, with optional expectations of its own response.
+// Step is one when step: exactly one of run, background, stop, wait_for,
+// advance and host, with optional expectations of its own response.
 type Step struct {
 	Name string `yaml:"name"`
 	// Run runs the candidate to its exit.
@@ -126,6 +128,8 @@ type Step struct {
 	Stop string `yaml:"stop"`
 	// WaitFor polls its expectations until they hold, bounded.
 	WaitFor *WaitFor `yaml:"wait_for"`
+	// Advance moves the world's clock forward.
+	Advance *Advance `yaml:"advance"`
 	// Host changes an execution host's faults.
 	Host   *harness.HostStep `yaml:"host"`
 	Expect []Expect          `yaml:"expect"`
@@ -152,6 +156,7 @@ const (
 	KindBackground = "background"
 	KindStop       = "stop"
 	KindWaitFor    = "wait_for"
+	KindAdvance    = "advance"
 	KindHost       = "host"
 )
 
@@ -169,6 +174,9 @@ func (s Step) Kind() string {
 	}
 	if s.WaitFor != nil {
 		kinds = append(kinds, KindWaitFor)
+	}
+	if s.Advance != nil {
+		kinds = append(kinds, KindAdvance)
 	}
 	if s.Host != nil {
 		kinds = append(kinds, KindHost)
@@ -342,6 +350,9 @@ func (s *Scenario) Validate() error {
 	if s.Timeout.Duration == 0 {
 		s.Timeout.Duration = DefaultTimeout
 	}
+	if _, err := s.Given.Clock.StartTime(); err != nil {
+		bad("given.clock.start: %v", err)
+	}
 	for _, r := range s.Given.Repositories {
 		if !repoRE.MatchString(r.Name) {
 			bad("given.repositories: %q is not owner/name", r.Name)
@@ -392,7 +403,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for and host", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance and host", where)
 		case KindRun, KindBackground:
 			r := st.Run
 			if kind == KindBackground {
@@ -425,6 +436,8 @@ func (s *Scenario) Validate() error {
 			for j, e := range st.WaitFor.Expect {
 				errs = append(errs, s.validateExpect(fmt.Sprintf("%s wait_for[%d]", where, j), e, kind, background, false)...)
 			}
+		case KindAdvance:
+			errs = append(errs, s.validateAdvance(where, st.Advance, background)...)
 		}
 		if st.Name != "" {
 			names[st.Name] = kind
@@ -458,6 +471,7 @@ var stepObserves = map[string][]string{
 	KindBackground: {"duration"},
 	KindStop:       {"duration"},
 	KindWaitFor:    {"duration"},
+	KindAdvance:    {"duration"},
 	KindHost:       {"duration"},
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -58,6 +59,7 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_CONFIG":    configFile,
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
+		clock.Env:             clockSocket,
 		harness.SocketEnv:     harness.DefaultSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
@@ -113,6 +115,7 @@ func (p *proc) stop() {
 type driver struct {
 	s     *Scenario
 	world *World
+	clock *clock.Server
 	// fakes is the world of the fake harnesses, units and hosts.
 	fakes *harness.World
 	res   *Result
@@ -161,6 +164,9 @@ func (d *driver) run() {
 		err = d.world.Serve(worldSocket)
 	}
 	if err == nil {
+		err = d.startClock()
+	}
+	if err == nil {
 		d.fakes, err = harness.NewWorld(harness.Options{
 			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
 			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
@@ -191,6 +197,9 @@ func (d *driver) run() {
 			d.res.Fail("%s", f)
 		}
 		_ = d.world.Close()
+		if d.clock != nil {
+			_ = d.clock.Close()
+		}
 		d.res.Calls = d.world.Calls()
 		for _, c := range d.world.Unanswered() {
 			d.res.Fail("unanswered call #%d: %s", c.Seq, c.Line())
@@ -406,6 +415,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		}
 	case KindWaitFor:
 		sr.Failures = append(sr.Failures, d.waitFor(ctx, st.WaitFor)...)
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	case KindHost:
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())

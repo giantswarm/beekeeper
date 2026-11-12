@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -43,11 +44,11 @@ func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
 	var events []state.Event
 	for _, call := range calls {
 		detail, _ := json.Marshal(call)
-		events = append(events, state.Event{At: time.Now(), By: who, Verb: verbGitHubCall, Detail: string(detail)})
+		events = append(events, state.Event{At: clk.Now(), By: who, Verb: verbGitHubCall, Detail: string(detail)})
 	}
 	for _, call := range restCalls {
 		detail, _ := json.Marshal(call)
-		events = append(events, state.Event{At: time.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail)})
+		events = append(events, state.Event{At: clk.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail)})
 	}
 	_ = store.RecordWithin(200*time.Millisecond, events...)
 }
@@ -133,7 +134,7 @@ func (a *app) observeREST() {
 			who.Name = "beekeeper"
 		}
 		_ = a.store.RecordWithin(200*time.Millisecond, state.Event{
-			At: time.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail),
+			At: clk.Now(), By: who, Verb: verbGitHubRESTCall, Detail: string(detail),
 		})
 	}
 }
