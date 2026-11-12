@@ -64,7 +64,7 @@ func TestMutationControls(t *testing.T) {
 				t.Fatalf("the mutant failed elsewhere than on %q:\n%s", c.failure, strings.Join(res.Failures, "\n"))
 			}
 			if !outputNames(t, filepath.Join(artifacts, s.Flow, s.Name), c.refusal) {
-				t.Fatalf("no step's output of the mutant names %q", c.refusal)
+				t.Fatalf("no step's output of the mutant names %q; the mutant's failures:\n%s", c.refusal, strings.Join(res.Failures, "\n"))
 			}
 			raw, _ := json.MarshalIndent(res, "", "  ")
 			t.Logf("%s caught by %s:\n%s", c.mutation, c.scenario, raw)
