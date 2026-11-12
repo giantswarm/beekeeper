@@ -1,0 +1,69 @@
+name: pull-watch-reads-its-own-budget
+description: >
+  The GitHub budget is ample, but the reading the desk saved is older than
+  a minute whenever the loop's pull watcher polls: the loop's watch samples
+  the budget every half hour, its passes run every half hour and the refill
+  reads no board. The watcher takes a rate-limit reading of its own, as a
+  held pass does, and lists the desk's pull requests at every poll, six
+  minutes apart. It never holds on a reading nobody else refreshed: on a
+  loaded desk it held on "GitHub budget unknown or below github.floor" with
+  4900 REST and 1500 GraphQL points left, backed off for up to ten minutes
+  at each try, and every pull observation went stale for half an hour,
+  holding starts and merge decisions.
+issue: https://github.com/giantswarm/beekeeper/issues/3841
+flow: budget
+tags: [budget, github, loop, pullwatch]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      github: {floor: 500, probeRepo: example/app}
+      # No board read by the refill, which reads the budget around it.
+      supervisor: {loopInterval: 30m, releaseEvery: 24h, workerBrief: ""}
+      watch: {interval: 30m}
+  github:
+    repositories:
+      - name: example/app
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The watch's machine reads: empty journals.
+    - program: journalctl
+      respond: {stdout: ""}
+    # The pull watcher's listing: the desk has no open pull request.
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # The first pass and the watch's first sample read the budget.
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  # Four polls six minutes apart, with no newer reading saved by anyone
+  # else: each one reads the budget itself and lists the pull requests.
+  - name: polls
+    advance:
+      by: 24m
+      step: 6m
+      quiet: 200ms
+      settle:
+        timeout: 10s
+        interval: 20ms
+        expect:
+          - calls: {program: gh, args: [search, prs], min: 1}
+    expect:
+      - log: {name: loop, not_contains: ["SUPERVISOR PULL WATCH held"]}
+      - process: {name: loop, running: true}
+  - stop: loop
+
+then:
+  - calls: {program: gh, args: [search, prs], min: 4}
+  # The watcher's readings cost a point each: nothing near the floor.
+  - github: {budget: {bucket: graphql, remaining: {min: 4900}}}
