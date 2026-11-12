@@ -1,0 +1,65 @@
+name: room-bounds-the-starts
+description: >
+  The refill fills no further than the room capacity gives. The desk's
+  ceiling is three and three items are Ready, but this machine's own cap
+  (capacity.local.ceiling) is one. Capacity says room for one start, the
+  pass starts one worker, and with that worker busy the next pass starts
+  none and names the cap.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: refill
+tags: [refill, loop, capacity]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      capacity:
+        ceiling: 3
+        local: {ceiling: 1}
+        providers: {claude: {ceiling: 3}}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+          - {number: 2, title: Second item, board: Ready}
+          - {number: 3, title: Third item, board: Ready}
+  harness:
+    workers:
+      - name: 'app \d'
+        turns:
+          - outcome: hang
+
+when:
+  - name: before
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ceiling, equals: 3}
+      - json_path: {path: room, equals: 1}
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app \d', turns: 1}
+  - name: after
+    run: {args: [capacity, --json]}
+    expect:
+      - json_path: {path: room, equals: 0}
+      - json_path: {path: local.room, equals: 0}
+  - name: full
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR REFILL started 0: no room for a worker", "capacity.local.ceiling 1"]}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: roster, json_path: {path: ., len: 1}}
+  - worker: {name: 'app \d', turns: 1, running: true}
+  - calls: {program: claude, args: [--bg, --remote-control], min: 1, max: 1}

@@ -1,0 +1,70 @@
+name: repository-hold-skips-its-items
+description: >
+  A hold on a repository keeps the refill from starting workers there and
+  leaves the other repositories alone. Two repositories each have a Ready
+  item and example/held is held: the pass starts the worker of example/app
+  only and says which item it skips. Once the hold is lifted, the next pass
+  starts the held repository's worker.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: refill
+tags: [refill, loop, hold]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      capacity: {ceiling: 2}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: An item of app, board: Ready}
+      - name: example/held
+        issues:
+          - {number: 1, title: An item of the held repository, board: Ready}
+  harness:
+    workers:
+      - name: '(app|held) 1'
+        turns:
+          - outcome: hang
+
+when:
+  - name: hold
+    run: {args: [--as, scenario, hold, set, example/held, --reason, the repository is being migrated]}
+    expect:
+      - exit: 0
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR NEXT SKIPS example/held#1: held: repository"]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 1}
+  - name: held
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: ., len: 1}
+      - json_path: {path: '[0].name', equals: app 1}
+      - worker: {name: held 1, turns: 0}
+  - name: lift
+    run: {args: [--as, scenario, hold, lift, example/held]}
+    expect:
+      - exit: 0
+  - name: refill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: held 1, turns: 1}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: roster, json_path: {path: ., len: 2}}
+  - worker: {name: app 1, turns: 1}
+  - worker: {name: held 1, turns: 1}
+  - events: {contains: [hold.set, agents.start]}

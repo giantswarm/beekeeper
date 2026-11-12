@@ -92,6 +92,9 @@ type Given struct {
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
+	// Tools are further programs on the desk's PATH (go, golangci-lint):
+	// fakes like Fakes, which only given.calls answer.
+	Tools []string `yaml:"tools"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -320,7 +323,21 @@ func (e Expect) Kind() string {
 // dispatching on its name.
 var Fakes = []string{"gh", "claude", "codex", "agy", "omp", "ssh", "devctl", "systemctl", "systemd-run", "journalctl"}
 
+// ToolsEnv names a scenario's given.tools to the fake executable, which
+// serves them beside Fakes.
+const ToolsEnv = "BEEKEEPER_SCENARIO_TOOLS"
+
+// reservedPrograms are the names on the desk's PATH no tool may take.
+var reservedPrograms = []string{"beekeeper", "git", "sh", "real-git", "real-git-core", "git-core", "scenario-fake"}
+
+// programs are the programs the scenario's world answers: Fakes and
+// given.tools.
+func (s *Scenario) programs() []string {
+	return append(slices.Clone(Fakes), s.Given.Tools...)
+}
+
 var (
+	toolRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 	nameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	issueRE = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
 	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -412,9 +429,19 @@ func (s *Scenario) Validate() error {
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
 	}
+	for i, tool := range s.Given.Tools {
+		switch {
+		case !toolRE.MatchString(tool):
+			bad("given.tools[%d]: %q is no program name", i, tool)
+		case slices.Contains(Fakes, tool) || slices.Contains(reservedPrograms, tool):
+			bad("given.tools[%d]: %q is on the desk's PATH already", i, tool)
+		case slices.Index(s.Given.Tools, tool) != i:
+			bad("given.tools[%d]: %q is named twice", i, tool)
+		}
+	}
 	for i, c := range s.Given.Calls {
-		if !slices.Contains(Fakes, c.Program) {
-			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(Fakes, ", "))
+		if !slices.Contains(s.programs(), c.Program) {
+			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(s.programs(), ", "))
 		}
 		if c.Times < 0 {
 			bad("given.calls[%d]: times %d", i, c.Times)
@@ -638,8 +665,8 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if c := e.Calls; c != nil {
-		if c.Program != "" && !slices.Contains(Fakes, c.Program) {
-			bad("calls: program %q is none of %s", c.Program, strings.Join(Fakes, ", "))
+		if c.Program != "" && !slices.Contains(s.programs(), c.Program) {
+			bad("calls: program %q is none of %s", c.Program, strings.Join(s.programs(), ", "))
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("calls: %v", err)

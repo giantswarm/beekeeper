@@ -1,0 +1,60 @@
+name: fills-free-slots-to-the-ceiling
+description: >
+  The refill starts a worker for each free slot and Ready item, up to
+  capacity.ceiling. Three items are Ready and the ceiling is two: one pass
+  starts two workers, each named after its item and briefed with it. A
+  second pass has no free slot and starts nothing, and the third item stays
+  Ready on the board.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: refill
+tags: [refill, loop, capacity]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      capacity: {ceiling: 2}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+          - {number: 2, title: Second item, board: Ready}
+          - {number: 3, title: Third item, board: Ready}
+  harness:
+    workers:
+      # Each worker stays on its task: its turn runs on.
+      - name: 'app \d'
+        turns:
+          - outcome: hang
+
+when:
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start, supervisor.next]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app \d', turns: 2}
+  - name: capacity
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: busy, len: 2}
+      - json_path: {path: room, equals: 0}
+  # No free slot: the second pass reads no board and starts nothing.
+  - name: full
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR REFILL started 0: no room for a worker"]}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: roster, exit: 0}
+  - {step: roster, json_path: {path: ., len: 2}}
+  - worker: {name: 'app \d', harness: claude, turns: 2, running: true}
+  - calls: {program: claude, args: [--bg, --remote-control], min: 2, max: 2}

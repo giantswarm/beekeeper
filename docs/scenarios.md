@@ -88,6 +88,7 @@ given:
       times: 1                       # answer at most once; default always
   clock:
     start: "2026-11-12T09:00:00Z"   # the world's time at the start; default now
+  tools: [go, golangci-lint]         # further programs on PATH, answered by given.calls only
 
 when:
   - name: next

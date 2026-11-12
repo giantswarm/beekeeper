@@ -382,11 +382,15 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 }
 
 // stepEnv is the environment of a step's candidate: the allowlist, the
-// scenario's GitHub with the step as its caller, and the step's own.
+// scenario's GitHub with the step as its caller, the scenario's tools and
+// the step's own.
 func (d *driver) stepEnv(caller string, extra map[string]string) []string {
 	vars := map[string]string{}
 	if d.github != nil {
 		maps.Copy(vars, d.github.Env(caller))
+	}
+	if tools := d.s.Given.Tools; len(tools) > 0 {
+		vars[ToolsEnv] = strings.Join(tools, ",")
 	}
 	maps.Copy(vars, extra)
 	return env(vars)
