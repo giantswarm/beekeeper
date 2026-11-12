@@ -62,6 +62,7 @@ given:
             checks: [{name: build, state: pending}]   # queued, pending, green, red
         releases:
           - {tag: v1.0.0, assets: [{name: notes.txt, content: "text\n"}]}
+          - {tag: v1.1.0, assets: [{name: tool, file: /work/tool}]}   # read at each download
     projects:                          # optional: see below
       - owner: example
         number: 1
@@ -86,6 +87,11 @@ issues the pull request closes.
 `board.project`), with the Status options Todo, Ready, In Progress, Blocked and Done plus any an
 issue's `board` names, and any field an issue's `fields` names. With `projects`, the first is the
 scenario's board and holds exactly the fields and options it declares.
+
+**Releases.** A release is tagged on its target (the default branch) unless its tag exists, so
+`git/matching-refs/tags/…` lists it. An asset holds its `content`, or with `file` the content of a
+file in the sandbox, read at each download: a binary. [`given.releases`](scenarios.md#releases-and-self-update)
+publishes beekeeper's own releases this way.
 
 **Mergeability.** `mergeStateStatus` and `reviewDecision` follow from the reviews, the checks on
 the head and the base's `protection`, as on GitHub: BLOCKED without the required approval or check,

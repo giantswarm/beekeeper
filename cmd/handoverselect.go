@@ -111,22 +111,6 @@ func shortDur(d time.Duration) string {
 	return strings.TrimSuffix(s, "0m")
 }
 
-// answered is a person's answer recorded: the answer.recorded event read
-// back; Comment is its comment's URL, "" when none was posted. ID is the note it answered, 0 for none.
-type answered struct {
-	About    string
-	Comment  string
-	ID       int
-	For      string
-	Via      string
-	Answer   string
-	Asker    string
-	Question string
-	Audience string // original note audience; empty in older audit events.
-	At       time.Time
-	By       string
-}
-
 // answeredDetail is answer.recorded's detail, as beekeeper answer writes it
 // (answerEvent).
 var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by ("(?:[^"\\]|\\.)*") via (\w+)(?:, recorded at (\S+?))?(?:, note #(\d+) asked by ("(?:[^"\\]|\\.)*")(?: for ("(?:[^"\\]|\\.)*"))?: ("(?:[^"\\]|\\.)*"))?: (.*)$`)

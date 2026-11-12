@@ -74,7 +74,7 @@ func versioned(t *testing.T, version, overlay string) []byte {
 // parserOverlay is the historical defect, the base dropped by the pull parser.
 func parserOverlay(t *testing.T) string {
 	t.Helper()
-	source, err := filepath.Abs("../../cmd/supervisorloop.go")
+	source, err := filepath.Abs("../loop/loop.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func parserOverlay(t *testing.T) string {
 		t.Fatal("parser mutation no longer targets exactly one assignment")
 	}
 	dir := t.TempDir()
-	replacement := filepath.Join(dir, "supervisorloop.go")
+	replacement := filepath.Join(dir, "loop.go")
 	if err = os.WriteFile(replacement, []byte(strings.Replace(string(original), before, `Base: "",`, 1)), 0600); err != nil {
 		t.Fatal(err)
 	}

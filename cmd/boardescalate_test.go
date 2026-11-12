@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -82,7 +83,7 @@ func TestEscalationsTakeEachBlockedItemOnce(t *testing.T) {
 func TestEscalateFilesOneNoteAndARecheckTimer(t *testing.T) {
 	r := newLoopRig(t)
 	e := escalation{Ref: refOne, URL: issueOneURL, Title: escalatedTitle, Why: "Status " + blockedName}
-	if err := r.a.escalate(context.Background(), loopParty, e, 24*time.Hour); err != nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, e, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls) != 2 {
@@ -90,17 +91,17 @@ func TestEscalateFilesOneNoteAndARecheckTimer(t *testing.T) {
 	}
 	// The timer first: a failed note is retried when it fires.
 	timer, note := r.calls[0], r.calls[1]
-	if !slices.Equal(note[:6], []string{loopNote, loopAdd, flagFor, loopPerson, loopRefFlag, refOne}) ||
+	if !slices.Equal(note[:6], []string{loop.LoopNote, loop.LoopAdd, flagFor, loopPerson, loop.LoopRefFlag, refOne}) ||
 		note[len(note)-1] != "What unblocks "+issueOneURL+"?" {
 		t.Errorf("note %q", note)
 	}
-	if !slices.Equal(timer[:4], []string{loopTimer, loopAdd, "24h0m0s", escalateWhat + refOne}) || timer[4] != "--run" ||
-		!strings.HasSuffix(timer[5], " --as '"+loopParty.Name+"' board escalate 'o/r#1'") {
+	if !slices.Equal(timer[:4], []string{loop.LoopTimer, loop.LoopAdd, "24h0m0s", escalateWhat + refOne}) || timer[4] != "--run" ||
+		!strings.HasSuffix(timer[5], " --as '"+loop.LoopParty.Name+"' board escalate 'o/r#1'") {
 		t.Errorf("timer %q", timer)
 	}
 	// Without a person nothing is filed.
 	r.a.cfg.Guide.Person = ""
-	if err := r.a.escalate(context.Background(), loopParty, e, time.Hour); err == nil || len(r.calls) != 2 {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, e, time.Hour); err == nil || len(r.calls) != 2 {
 		t.Errorf("escalated without guide.person: %v, calls %v", err, r.calls)
 	}
 }
@@ -110,16 +111,16 @@ func TestEscalateFilesOneNoteAndARecheckTimer(t *testing.T) {
 func TestEscalateAddsTheTimerBeforeTheNote(t *testing.T) {
 	r := newLoopRig(t)
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopNote {
+		if args[0] == loop.LoopNote {
 			return "refused", 1
 		}
 		return "", 0
 	}
 	e := escalation{Ref: refOne, URL: issueOneURL, Title: escalatedTitle, Why: "Status " + blockedName}
-	if err := r.a.escalate(context.Background(), loopParty, e, time.Hour); err == nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, e, time.Hour); err == nil {
 		t.Fatal("a failed note add is no error")
 	}
-	if len(r.calls) != 2 || r.calls[0][0] != loopTimer || r.calls[1][0] != loopNote {
+	if len(r.calls) != 2 || r.calls[0][0] != loop.LoopTimer || r.calls[1][0] != loop.LoopNote {
 		t.Errorf("calls %v, want the timer, then the note", r.calls)
 	}
 }
@@ -142,7 +143,7 @@ func TestEscalateNoteAsksAndLinksEveryIssue(t *testing.T) {
 	e := escalation{Ref: "o/wepa#137", URL: "https://github.com/o/wepa/issues/137",
 		Title: strings.Repeat("a long title ", 20) + "waits on o/adidas#1512 and #9",
 		Why:   "held: blocked by o/x#19; 1 of 1 blockers open"}
-	if err := r.a.escalate(context.Background(), loopParty, e, time.Hour); err != nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, e, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	note := r.calls[1]
@@ -160,13 +161,13 @@ func TestEscalateNoteAsksAndLinksEveryIssue(t *testing.T) {
 func TestEscalateAllGoesOnPastAFailure(t *testing.T) {
 	r := newLoopRig(t)
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopNote && slices.Contains(args, refOne) {
+		if args[0] == loop.LoopNote && slices.Contains(args, refOne) {
 			return "note for pat refused", 2
 		}
 		return "", 0
 	}
 	es := []escalation{{Ref: refOne, URL: issueOneURL}, {Ref: idleRef, URL: "https://github.com/o/r/issues/2"}}
-	done, err := r.a.escalateAll(context.Background(), loopParty, es, time.Hour)
+	done, err := r.a.escalateAll(context.Background(), loop.LoopParty, es, time.Hour)
 	if err == nil || len(done) != 1 || done[0].Ref != idleRef {
 		t.Errorf("escalated %+v, err %v: want o/r#2 escalated and o/r#1's failure returned", done, err)
 	}
@@ -223,7 +224,7 @@ func TestJudgeNamesWhatWhoSinceAndEvidence(t *testing.T) {
 	}
 	// The note carries it, every issue by its URL.
 	got.Skip = ""
-	if err := r.a.escalate(context.Background(), loopParty, got, time.Hour); err != nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, got, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	note := r.calls[len(r.calls)-1]
@@ -317,7 +318,7 @@ func TestJudgeAsksOnceWhileUnchanged(t *testing.T) {
 func TestEscalateTimerCarriesTheAskedState(t *testing.T) {
 	r := newLoopRig(t)
 	e := escalation{Ref: refOne, URL: issueOneURL, Title: escalatedTitle, Why: "Status " + blockedName, State: askedState}
-	if err := r.a.escalate(context.Background(), loopParty, e, time.Hour); err != nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, e, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls) != 2 || !strings.HasSuffix(r.calls[0][5], " board escalate --asked '"+askedState+"' 'o/r#1'") {
@@ -331,10 +332,10 @@ func TestEscalateTimerCarriesTheAskedState(t *testing.T) {
 		{escalation{Ref: refOne, URL: issueOneURL, State: askedState, Unchanged: true}, " board escalate --asked '" + askedState + "' 'o/r#1'"},
 	} {
 		r.calls = nil
-		if err := r.a.escalate(context.Background(), loopParty, tc.e, time.Hour); err != nil {
+		if err := r.a.escalate(context.Background(), loop.LoopParty, tc.e, time.Hour); err != nil {
 			t.Fatal(err)
 		}
-		if len(r.calls) != 1 || r.calls[0][0] != loopTimer || !strings.HasSuffix(r.calls[0][5], tc.suffix) {
+		if len(r.calls) != 1 || r.calls[0][0] != loop.LoopTimer || !strings.HasSuffix(r.calls[0][5], tc.suffix) {
 			t.Errorf("calls %q, want only the timer ending %q", r.calls, tc.suffix)
 		}
 	}
@@ -355,7 +356,7 @@ func TestEscalateSkipKeepsTheAskedState(t *testing.T) {
 	if skipped.Skip == "" || skipped.Asked != asked {
 		t.Fatalf("judged %+v, want a skip that keeps %s", skipped, asked)
 	}
-	if err := r.a.escalate(context.Background(), loopParty, skipped, time.Hour); err != nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, skipped, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls) != 1 || !strings.HasSuffix(r.calls[0][5], " board escalate --asked '"+asked+"' 'o/r#1'") {
@@ -368,10 +369,10 @@ func TestEscalateSkipKeepsTheAskedState(t *testing.T) {
 		t.Fatalf("judged %+v, want it unchanged", again)
 	}
 	r.calls = nil
-	if err := r.a.escalate(context.Background(), loopParty, again, time.Hour); err != nil {
+	if err := r.a.escalate(context.Background(), loop.LoopParty, again, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 1 || r.calls[0][0] != loopTimer {
+	if len(r.calls) != 1 || r.calls[0][0] != loop.LoopTimer {
 		t.Errorf("calls %q, want only the timer and no note", r.calls)
 	}
 }

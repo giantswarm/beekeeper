@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -69,13 +70,13 @@ func (a *app) relayInstruction(ctx context.Context, session, address, msg string
 		// an explicit retry leaves only one hook payload; the log retains the text.
 		root, openErr := os.OpenRoot(filepath.Dir(path))
 		if openErr != nil {
-			return reviewedMergeQueued, fmt.Errorf("instruction queued, but cannot open inbox: %w", openErr)
+			return loop.ReviewedMergeQueued, fmt.Errorf("instruction queued, but cannot open inbox: %w", openErr)
 		}
 		defer func() { _ = root.Close() }()
 		if removeErr := root.Remove(filepath.Base(path)); errors.Is(removeErr, os.ErrNotExist) {
 			return relayInstructionConsumed, nil
 		} else if removeErr != nil {
-			return reviewedMergeQueued, fmt.Errorf("instruction queued, but notification failed: %w", err)
+			return loop.ReviewedMergeQueued, fmt.Errorf("instruction queued, but notification failed: %w", err)
 		}
 		return "", err
 	}

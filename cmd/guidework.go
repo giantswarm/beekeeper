@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -225,8 +226,8 @@ func guideReportEvents(st *state.State, events []state.Event, now time.Time) []s
 	var fresh []state.Event
 	oldSources := map[string]bool{}
 	for _, e := range events {
-		key, text, ok := keyed(e.Detail)
-		if !ok || !strings.Contains(text, fileReportSeparator) {
+		key, text, ok := loop.Keyed(e.Detail)
+		if !ok || !strings.Contains(text, loop.FileReportSeparator) {
 			continue
 		}
 		if e.At.Before(now.Add(-24 * time.Hour)) {
@@ -274,7 +275,7 @@ func guideWorkBlocks(work state.GuideWork, now time.Time) bool {
 
 // Fingerprint only the finding, not the reporter or observation time.
 func guideFindingFingerprint(text string) string {
-	_, body, ok := strings.Cut(text, fileReportSeparator)
+	_, body, ok := strings.Cut(text, loop.FileReportSeparator)
 	if !ok {
 		body = text
 	}
@@ -284,7 +285,7 @@ func guideFindingFingerprint(text string) string {
 // retainGuideReport is shared by both feeds under the state lock. Recovery is
 // bookkeeping, never new work; a known issue owns subsequent matching reports.
 func retainGuideReport(st *state.State, key, text string, at time.Time, by state.Party) bool {
-	_, body, _ := strings.Cut(text, fileReportSeparator)
+	_, body, _ := strings.Cut(text, loop.FileReportSeparator)
 	if strings.HasPrefix(body, "RECOVERED:") {
 		source := strings.Replace(key, "delivery recovered ", "delivery ", 1)
 		source = strings.Replace(source, "delivery full recovered ", "delivery full ", 1)
@@ -292,7 +293,7 @@ func retainGuideReport(st *state.State, key, text string, at time.Time, by state
 			st.GuideReports = append(st.GuideReports, source)
 		}
 		st.GuideWork = slices.DeleteFunc(st.GuideWork, func(w state.GuideWork) bool {
-			_, previous, _ := strings.Cut(w.Text, fileReportSeparator)
+			_, previous, _ := strings.Cut(w.Text, loop.FileReportSeparator)
 			return w.Source != "" && (strings.HasPrefix(key, "throughput ") && strings.HasPrefix(w.Source, "throughput ") || w.Source == source || strings.TrimSpace(strings.TrimPrefix(body, "RECOVERED:")) == strings.TrimSpace(previous))
 		})
 		return false
@@ -325,12 +326,12 @@ func retainGuideReport(st *state.State, key, text string, at time.Time, by state
 // episode between polls must not spend a guide turn.
 func settleGuideRecoveries(st *state.State, events []state.Event) []state.Event {
 	for _, e := range events {
-		key, text, ok := keyed(e.Detail)
-		_, body, _ := strings.Cut(text, fileReportSeparator)
+		key, text, ok := loop.Keyed(e.Detail)
+		_, body, _ := strings.Cut(text, loop.FileReportSeparator)
 		if ok && strings.HasPrefix(body, "RECOVERED:") {
 			if strings.HasPrefix(key, "throughput ") {
 				for _, prior := range events {
-					previous, _, _ := keyed(prior.Detail)
+					previous, _, _ := loop.Keyed(prior.Detail)
 					if !prior.At.After(e.At) && strings.HasPrefix(previous, "throughput ") && !slices.Contains(st.GuideReports, previous) {
 						st.GuideReports = append(st.GuideReports, previous)
 					}
@@ -340,8 +341,8 @@ func settleGuideRecoveries(st *state.State, events []state.Event) []state.Event 
 		}
 	}
 	return slices.DeleteFunc(slices.Clone(events), func(e state.Event) bool {
-		_, text, _ := keyed(e.Detail)
-		_, body, _ := strings.Cut(text, fileReportSeparator)
+		_, text, _ := loop.Keyed(e.Detail)
+		_, body, _ := strings.Cut(text, loop.FileReportSeparator)
 		return strings.HasPrefix(body, "RECOVERED:")
 	})
 }

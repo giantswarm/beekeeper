@@ -664,11 +664,6 @@ func removedDetail(name, reason string) string {
 	return name
 }
 
-// removedAgent reports whether detail, an agents.remove line's, names name.
-func removedAgent(detail, name string) bool {
-	return detail == name || strings.HasPrefix(detail, name+": ")
-}
-
 func findAgent(st *state.State, q string) (int, error) {
 	parties := make([]state.Party, len(st.Agents))
 	for i, ag := range st.Agents {

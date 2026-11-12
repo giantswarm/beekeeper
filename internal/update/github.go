@@ -90,11 +90,18 @@ func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{APIToken: token})
+	cfg := selfupdate.GitHubConfig{APIToken: token}
+	opts := []github.ClientOptionsFunc{github.WithAuthToken(token)}
+	// Only a scenario build names another API than GitHub's (apiBase).
+	if base := apiBase(); base != "" {
+		cfg.EnterpriseBaseURL = base
+		opts = append(opts, github.WithEnterpriseURLs(base, base))
+	}
+	source, err := selfupdate.NewGitHubSource(cfg)
 	if err != nil {
 		return nil, err
 	}
-	client, err := github.NewClient(github.WithAuthToken(token))
+	client, err := github.NewClient(opts...)
 	if err != nil {
 		return nil, err
 	}

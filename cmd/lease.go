@@ -489,7 +489,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 // grant queue, merge authorizations): a caller with no session, that is the
 // supervisor loop or a person (--as), never a session. caller() stamps the
 // configured person, team and host on every party, so the loop's own
-// --as calls are matched by that, not by equality with loopParty.
+// --as calls are matched by that, not by equality with loop.LoopParty.
 func supervising(me state.Party) bool { return me.Session == "" && me.HostSession == "" }
 
 // claimBudget is the GiB a claim of res carries: set only on the model

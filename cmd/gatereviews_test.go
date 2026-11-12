@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -189,7 +190,7 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 	reviewGuard = func(context.Context, string, int) (string, error) {
 		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
 	}
-	if err := r.a.store.Record(about(event(loopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loopWorkerMergeGo), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loop.LoopWorkerMergeGo), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	why, err = g.reviewHold()
@@ -207,12 +208,12 @@ func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r.pull.Head = loopFixed
 	mergeAuthority = gateMergeHeadAuthority
 	g := &gateRun{app: r.a, ctx: t.Context(), repo: loopMergeRepo, pr: 7, lane: r.a.cfg.LaneOf(loopMergeRepo),
-		me: loopParty, pid: os.Getpid(), reviewedHead: loopFixed,
+		me: loop.LoopParty, pid: os.Getpid(), reviewedHead: loopFixed,
 		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
 	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
 		t.Fatalf("reviewHold without a claim = %q, %v; want a refusal", why, err)
 	}
-	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	reviewGuard = func(context.Context, string, int) (string, error) {

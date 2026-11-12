@@ -21,36 +21,100 @@ type EventOutbox struct {
 	Data   []byte `json:"data"`
 }
 
-func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[execution.Ref]execution.LeaseGrant) error {
+// begin reads a transaction's state under the exclusive state lock, without
+// the commit lock. The only writer without the state lock, a lease renewal,
+// replaces state.json in one rename, and commitEvents carries its grant
+// forward: a renewal never waits for this decode and copy of the whole
+// document. A pending outbox is still recovered under the commit lock. base,
+// open until the commit, pins the file the state was read from, so the commit
+// can tell whether a renewal replaced it since; nil when unknown.
+func (s *FileStore) begin() (st *State, base *os.File, err error) {
+	f, err := os.Open(s.path("state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return &State{}, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err = s.readSnapshot(f)
+	if err == nil && st.EventOutbox == nil {
+		return st, f, nil
+	}
+	_ = f.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err = s.recoverEvents()
+	return st, nil, err
+}
+
+// commitEvents writes a transaction's state and events under the commit lock.
+// What needs no commit lock happens before it: the event log changes only
+// under the exclusive state lock the caller holds (appends, rotation and
+// outbox recovery all take it), and both documents are encoded ahead. A lease
+// renewal waits briefly for the commit lock (execution.ErrCoordinatorBusy):
+// it must never wait for an encoding of the whole state. Only a renewal that
+// replaced state.json since begin makes the commit encode again, under the
+// lock, with the renewed grant carried forward.
+func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[execution.Ref]execution.LeaseGrant, base *os.File) error {
+	var outbox *EventOutbox
+	var log *os.File
+	if len(events) > 0 {
+		if err := s.rotateEvents(); err != nil {
+			return err
+		}
+		f, err := s.openEventLog()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		if outbox, err = newOutbox(f, events); err != nil {
+			return err
+		}
+		log = f
+	}
+	staged, final, err := encodeCommit(st, outbox)
+	if err != nil {
+		return err
+	}
 	unlock, err := s.commitLock(context.Background())
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	if err := s.preserveRenewals(st, leasesBefore); err != nil {
-		return err
-	}
-
-	if len(events) == 0 {
-		return s.writeState(st)
-	}
-	if err := s.rotateEvents(); err != nil {
-		return err
-	}
-	f, err := s.openEventLog()
+	renewed, err := s.preserveRenewals(st, leasesBefore, base)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	if renewed {
+		if staged, final, err = encodeCommit(st, outbox); err != nil {
+			return err
+		}
+	}
+	if outbox == nil {
+		return s.replaceState(final)
+	}
+	if err := writeRaw(s.path("state.json"), staged); err != nil {
+		return err
+	}
+	if err := appendOutbox(outbox, log); err != nil {
+		return err
+	}
+	return s.replaceState(final)
+}
+
+// newOutbox is events' append at the end of the log f, after a newline that
+// completes a torn last line.
+func newOutbox(f *os.File, events []Event) (*EventOutbox, error) {
 	info, err := f.Stat()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var data bytes.Buffer
 	if info.Size() > 0 {
 		last := make([]byte, 1)
 		if _, err := f.ReadAt(last, info.Size()-1); err != nil {
-			return err
+			return nil, err
 		}
 		if last[0] != '\n' {
 			data.WriteByte('\n')
@@ -59,14 +123,56 @@ func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[exe
 	for _, e := range events {
 		e.At = e.At.UTC()
 		if err := json.NewEncoder(&data).Encode(e); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	st.EventOutbox = &EventOutbox{Offset: info.Size(), Data: data.Bytes()}
-	if err := writeJSON(s.path("state.json"), st); err != nil {
-		return err
+	return &EventOutbox{Offset: info.Size(), Data: data.Bytes()}, nil
+}
+
+// encodeCommit is what a commit writes: final, the state without an outbox,
+// and with an outbox staged, the state carrying it, written before the
+// append so a crash cannot lose it. st keeps no outbox.
+func encodeCommit(st *State, outbox *EventOutbox) (staged, final []byte, err error) {
+	st.EventOutbox = nil
+	if final, err = encodeState(st); err != nil || outbox == nil {
+		return nil, final, err
 	}
-	return s.flushEvents(st, f)
+	staged, err = stageOutbox(final, outbox)
+	return staged, final, err
+}
+
+const outboxMember = "eventOutbox"
+
+// stageOutbox is final, an encoded state without an outbox, with outbox added
+// as its last member: the document the state with outbox encodes to, but for
+// the members' order, which no reader depends on. The state is encoded once,
+// not twice, under the state lock.
+func stageOutbox(final []byte, outbox *EventOutbox) ([]byte, error) {
+	member, err := json.MarshalIndent(outbox, "  ", "  ")
+	if err != nil {
+		return nil, err
+	}
+	body := bytes.TrimRight(final, " \t\r\n")
+	if len(body) < 2 || body[0] != '{' || body[len(body)-1] != '}' {
+		return nil, errors.New("encoded state is not a JSON object")
+	}
+	body = bytes.TrimRight(body[:len(body)-1], " \t\r\n")
+	staged := make([]byte, 0, len(body)+len(member)+len(outboxMember)+16)
+	staged = append(staged, body...)
+	if len(body) > 1 {
+		staged = append(staged, ',')
+	}
+	staged = append(staged, "\n  \""+outboxMember+"\": "...)
+	staged = append(staged, member...)
+	return append(staged, "\n}\n"...), nil
+}
+
+func encodeState(st *State) ([]byte, error) {
+	raw, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(raw, '\n'), nil
 }
 
 // recoverEvents runs under the exclusive state lock. A failure keeps the
@@ -146,10 +252,20 @@ type outboxFile interface {
 	Close() error
 }
 
-// flushEvents accepts only the exact prefix of the committed append. It never
-// truncates unrelated history, and never duplicates a complete recovered event.
+// flushEvents completes the outbox of st in the log f, then saves st without
+// it.
 func (s *FileStore) flushEvents(st *State, f outboxFile) error {
-	p := st.EventOutbox
+	if err := appendOutbox(st.EventOutbox, f); err != nil {
+		return err
+	}
+	st.EventOutbox = nil
+	return s.writeState(st)
+}
+
+// appendOutbox appends what of p the log f lacks, then syncs and closes f. It
+// accepts only the exact prefix of the committed append: it never truncates
+// unrelated history, and never duplicates a complete recovered event.
+func appendOutbox(p *EventOutbox, f outboxFile) error {
 	info, err := f.Stat()
 	if err != nil {
 		return err
@@ -171,25 +287,26 @@ func (s *FileStore) flushEvents(st *State, f outboxFile) error {
 	if err := f.Sync(); err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	st.EventOutbox = nil
-	return s.writeState(st)
+	return f.Close()
 }
 
-// writeState replaces state.json unless the document would stay byte for byte
-// the same. A save that changes nothing must not change the file's identity:
-// every process's snapshot cache keys on it, and the loop, the guide and lease
-// waits wake on its replacement. The transaction loaded the current document
-// through the snapshot cache, which keeps its digest. The caller holds the
+// writeState replaces state.json with st (replaceState). The caller holds the
 // commit lock.
 func (s *FileStore) writeState(st *State) error {
-	raw, err := json.MarshalIndent(st, "", "  ")
+	raw, err := encodeState(st)
 	if err != nil {
 		return err
 	}
-	raw = append(raw, '\n')
+	return s.replaceState(raw)
+}
+
+// replaceState replaces state.json with raw unless the document would stay
+// byte for byte the same. A save that changes nothing must not change the
+// file's identity: every process's snapshot cache keys on it, and the loop,
+// the guide and lease waits wake on its replacement. The transaction loaded
+// the current document through the snapshot cache, which keeps its digest.
+// The caller holds the commit lock.
+func (s *FileStore) replaceState(raw []byte) error {
 	if s.unchangedSnapshot(raw) {
 		return nil
 	}

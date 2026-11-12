@@ -542,6 +542,12 @@ timer from the running watches.
 - `internal/github`: The budget from rate-limit headers, the GraphQL limit and its refusal from a
   `rateLimit` query, the search limits from `/rate_limit` (`BEEKEEPER_GITHUB_API` points the probes
   at a test's server); a pull request's state from `gh pr view`.
+- `internal/loop`: The supervisor loop: the pass, the streams its actions run in, the refill and
+  the stall alarms. `cmd` runs it and is its `Host`. What it still needs of the command is named in
+  `host.go` (`Host` for the app, `Cmd` for the package's functions) and `vocabulary.go` (the
+  command's names, flags and exit codes, kept equal by `cmd`'s `TestLoopVocabulary`). Steps whose
+  bodies need the command's own types stay in `cmd` as functions over `*loop.Loop`, behind a
+  forwarder that says so. A seam entry goes when its target moves to a package the loop can import.
 - `internal/lease`: Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim.
 - `internal/peer`: The command-line send to a running Claude session: one headless `claude -p` turn
   whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's
@@ -1200,7 +1206,7 @@ without path filters, and on release tags. Run it locally with
 runs the public `supervisor loop --once`, `board next` and worker-start commands
 in subprocesses. The test executable supplies only the external GitHub CLI and
 Git trace wrapper; a local HTTP adapter supplies the budget API. The planner,
-`readLoopPull`/`parseLoopPull`, merge-result validation and gate are production
+`loop.ReadLoopPull`/`loop.ParseLoopPull`, merge-result validation and gate are production
 code. Raw pull responses include base, head, branch, checks and reviews; raw
 project responses include metadata and a selectable issue. The merge adapter
 actually squashes the branch and pushes a local bare origin. Success requires

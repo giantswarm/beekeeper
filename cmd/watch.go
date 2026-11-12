@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/notify"
@@ -624,9 +625,8 @@ type watchClock interface {
 	Timer(d time.Duration) (fire <-chan time.Time, stop func())
 }
 
-// wallClock is the time a watch keeps outside its tests: the system's, or
-// in a behavioral scenario the world's (internal/clock), so that the loop's
-// own watch polls, and reads the GitHub budget, as the scenario's time moves.
+// wallClock is the time a watch keeps outside its tests: beekeeper's clock,
+// the system's in a release build and a scenario world's in a scenario.
 type wallClock struct{}
 
 func (wallClock) Now() time.Time { return clk.Now() }
@@ -662,7 +662,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.ctx = ctx
 		w.upgradeCycle(ctx)
 		w.sample(ctx)
-		w.lastSweep = time.Now() // swept here, not in the poll's background
+		w.lastSweep = clk.Now() // swept here, not in the poll's background
 		w.exposures()
 		w.lastKindSpend = w.clk().Now() // summed here, not in the poll's background
 		w.kindSpending(w.lastKindSpend)
@@ -786,19 +786,19 @@ const slowReads = 4
 // runs every slowReads × interval, at nice 10, while the machine is
 // strained.
 func (w *watcher) loop(ctx context.Context, interval time.Duration, reads bool, fn func(context.Context)) {
-	clk := w.clk()
+	own := w.clk()
 	for {
-		start, every, rctx := clk.Now(), interval, ctx
+		start, every, rctx := own.Now(), interval, ctx
 		if reads {
 			every, rctx = w.readEvery(interval), w.readCtx(ctx)
 		}
 		fn(rctx)
 		next := start.Add(every)
-		now := clk.Now()
+		now := own.Now()
 		for !next.After(now) {
 			next = next.Add(every)
 		}
-		fire, stop := clk.Timer(next.Sub(now))
+		fire, stop := own.Timer(next.Sub(now))
 		select {
 		case <-ctx.Done():
 			stop()
@@ -842,7 +842,7 @@ func (w *watcher) inFlight(ctx context.Context, wait time.Duration, running *ato
 		defer close(done)
 		fn(ctx)
 	}()
-	t := time.NewTimer(wait)
+	t := clk.NewTimer(wait)
 	defer t.Stop()
 	select {
 	case <-done:
@@ -902,7 +902,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 func (w *watcher) emit(key, format string, args ...any) string {
 	line := fmt.Sprintf(format, args...)
 	w.mu.Lock()
-	now := time.Now()
+	now := clk.Now()
 	if w.active == nil {
 		w.active = map[string]condition{}
 	}
@@ -1225,7 +1225,7 @@ func (w *watcher) emitLinesNow(key string, lines []string) {
 // the desktop scope) from /proc and /sys, and decides whether the machine
 // is strained. It keeps its own time: it runs in a loop of its own.
 func (w *watcher) sample(ctx context.Context) {
-	now := time.Now()
+	now := clk.Now()
 	if st, err := w.readSnapshot(); err == nil {
 		w.sayAppDrifts(w.appDrifts(ctx, st.Apps))
 	}
@@ -1631,7 +1631,7 @@ func (w *watcher) teleport(ctx context.Context) {
 		}
 	}
 	if v.Key != "" {
-		w.emit(v.Key, "%s", v.line(time.Now()))
+		w.emit(v.Key, "%s", v.line(clk.Now()))
 	}
 }
 
@@ -2164,7 +2164,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	githubHeld := boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	githubHeld := loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
 	var found map[int]checkResult
 	if w.loopOwned {
 		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)

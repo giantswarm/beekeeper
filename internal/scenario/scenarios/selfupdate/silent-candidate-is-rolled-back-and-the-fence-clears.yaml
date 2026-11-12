@@ -1,0 +1,187 @@
+name: silent-candidate-is-rolled-back-and-the-fence-clears
+description: >
+  The desk runs release candidate 2, its last known good, with a loop that
+  ran lately. Candidate 3 is installed and its loop never starts. The
+  recovery controller of candidate 2 waits the heartbeat's grace of ten
+  minutes, then restores candidate 2 and quarantines candidate 3, naming
+  the reason in one line for the person: no health heartbeat from the
+  candidate's loop. The rollback fences the state: a process still running
+  candidate 3 is refused every save, while the restored release works on,
+  and the failed candidate goes on the lookup's skip list. Candidate 4, a
+  later compatible release, is not fenced: it installs, serves its probation with
+  a loop that sends its heartbeat, and is promoted. With that the fence is
+  lifted for every process. Each controller's unit is the scenario's to
+  run: it runs the same command with the controller's cadence flags, so an
+  evaluation that counts for a minute comes every 500 ms.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: selfupdate
+tags: [selfupdate, release, probation, rollback, fence]
+timeout: 480s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      # A loop passes, and sends its heartbeat, every second.
+      supervisor: {loopInterval: 1s, releaseEvery: 24h}
+      watch: {interval: 30s}
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.2, v1.0.0-rc.3, v1.0.0-rc.4]
+  github:
+    repositories:
+      - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
+    # The scenario installs each release by hand: the first loop's own
+    # release lookup finds nothing, or it would install the newest itself.
+    faults:
+      - name: no-lookup
+        match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: good-loop}
+        respond: {status: 404}
+  calls:
+    # The service manager takes a controller's unit and starts nothing:
+    # the scenario runs the unit's command itself (the controller steps).
+    - program: systemd-run
+      args: ['--unit=beekeeper-recovery\.service']
+      respond: {exit: 0}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  # Candidate 2 becomes the last known good.
+  - name: first
+    run: {args: [self-update, --version, v1.0.0-rc.2]}
+    expect:
+      - exit: 0
+  - name: promote-first
+    run: {args: [self-update, --complete-probation]}
+    expect:
+      - exit: 0
+  # Its loop runs for a while: this machine runs a loop, so a candidate
+  # owes a heartbeat. Once its refill has read the board, the loop is up
+  # and has sent its own.
+  - name: good-loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: good-loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
+        - events: {contains: [watch.budget-state]}
+  - stop: good-loop
+  # Candidate 3 is installed; nothing starts its loop.
+  - name: second
+    run: {args: [self-update, --version, v1.0.0-rc.3]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.2 to v1.0.0-rc.3."]}
+      - calls: {program: systemd-run, args: ['--unit=beekeeper-recovery\.service', --recovery-controller], min: 1, max: 1}
+  - name: candidate
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.3\b'}
+  # The controller of candidate 2: the heartbeat's grace passes in silence.
+  - name: controller
+    background:
+      release: v1.0.0-rc.2
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
+  - wait_for:
+      timeout: 120s
+      interval: 200ms
+      expect:
+        - process: {name: controller, exit: 0}
+        - events: {contains: [self-update.canary]}
+  - name: restored
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.2\b'}
+  - name: reason
+    run: {args: [log, --verb, supervisor.file]}
+    expect:
+      - output: {contains: ["RELEASE ROLLED BACK: v1.0.0-rc.3 failed (no health heartbeat from the candidate's loop", "restored v1.0.0-rc.2"]}
+  # The fence: the failed candidate's processes save nothing, the restored
+  # release does.
+  - name: fenced
+    run:
+      release: v1.0.0-rc.3
+      args: [--as, scenario, timer, add, 1h, a save by the failed candidate]
+    expect:
+      - exit: 1
+      - stderr: {contains: ["state writes fenced after binary recovery"]}
+  - name: restored-saves
+    run: {args: [--as, scenario, timer, add, 1h, a save by the restored release]}
+    expect:
+      - exit: 0
+  # The rollback put the failed candidate on the lookup's skip list.
+  - name: skipped
+    run: {args: [log, --verb, self-update.canary]}
+    expect:
+      - exit: 0
+      - output: {contains: ["skipping v1.0.0-rc.3: "]}
+  # The next release is offered. It is compatible with the state and not
+  # fenced, or it could never pass its probation.
+  - name: later
+    run: {args: [self-update, --check]}
+    expect:
+      - exit: 125
+      - output: {contains: ["beekeeper v1.0.0-rc.4 is out", "this is v1.0.0-rc.2"]}
+  - name: third
+    run: {args: [self-update]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper to v1.0.0-rc.4."]}
+      - calls: {program: systemd-run, args: ['--unit=beekeeper-recovery\.service', --recovery-controller], min: 2, max: 2}
+  # Its loop runs and sends its heartbeat through its probation.
+  - name: later-loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: later-loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
+  - name: still-fenced
+    run:
+      release: v1.0.0-rc.3
+      args: [--as, scenario, timer, add, 1h, a second save by the failed candidate]
+    expect:
+      - exit: 1
+      - stderr: {contains: ["state writes fenced after binary recovery"]}
+  - name: later-controller
+    background:
+      release: v1.0.0-rc.2
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
+  # About a minute on a CI runner; the bound leaves room for a busier one.
+  - wait_for:
+      timeout: 240s
+      interval: 200ms
+      expect:
+        - process: {name: later-controller, exit: 0}
+        - events: {contains: [self-update.recovery]}
+  # The compatible release passed: the fence is gone for every process.
+  - name: unfenced
+    run:
+      release: v1.0.0-rc.3
+      args: [--as, scenario, timer, add, 1h, a save once the fence is lifted]
+    expect:
+      - exit: 0
+  - name: installed
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.4\b'}
+  - name: verdicts
+    run: {args: [log, --verb, self-update.recovery]}
+    expect:
+      - output: {contains: ["v1.0.0-rc.4 passed its probation: last known good"], not_contains: ["v1.0.0-rc.3 passed its probation"]}
+  - stop: later-loop
+
+then:
+  - events: {contains: [self-update.canary, supervisor.file, self-update.recovery, timer.add]}
+  - {step: restored, exit: 0}
+  - log: {name: controller, contains: ["RELEASE ROLLED BACK: v1.0.0-rc.3 failed (no health heartbeat from the candidate's loop"]}
+  - log: {name: later-controller, not_contains: ["RELEASE ROLLED BACK", "RELEASE RECOVERY FAILED"]}
