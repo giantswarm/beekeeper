@@ -3,7 +3,8 @@ description: >
   delivery.wipLimit 2 with four Ready issues and room for four workers: the
   loop starts exactly two. A delivery keeps its place while its worker
   waits on CI, while the independent reviewer reviews, while the worker
-  fixes the requested changes and after the merge until the release that
+  fixes the requested changes (a continuation of its task) and after the
+  merge until the release that
   carries the merge commit is out. The pass after the release starts the
   third issue and still holds the fourth. Every delivery step is recorded:
   implementing, ci, reviewing, fixing, releasing and done.
@@ -40,28 +41,34 @@ given:
         harness: claude
         turns:
           - steps:
-              - git: [clone, --quiet, https://github.com/example/app.git, app1]
+              - git: [clone, --quiet, https://github.com/example/app.git, /work/repo/app1]
               - git: [checkout, --quiet, -b, app-1]
-                dir: app1
-              - write: {path: app1/change.txt, content: "the change\n"}
+                dir: /work/repo/app1
+              - write: {path: /work/repo/app1/change.txt, content: "the change\n"}
               - git: [add, change.txt]
-                dir: app1
+                dir: /work/repo/app1
               - git: [commit, --quiet, -m, "feat: the first change"]
-                dir: app1
+                dir: /work/repo/app1
               - git: [push, --quiet, origin, app-1]
-                dir: app1
+                dir: /work/repo/app1
               - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the first change", --body, "Closes #1"]
-                dir: app1
+                dir: /work/repo/app1
               - beekeeper: [agents, park, --on, 'example/app#5', desk review]
-                dir: app1
+                dir: /work/repo/app1
+      # The review's findings reach the parked worker as a fresh
+      # continuation of its task, which fixes them in the published
+      # worktree and parks again until the release.
+      - name: 'app 1 next-[0-9a-f]+'
+        harness: claude
+        turns:
           - steps:
-              - write: {path: app1/change.txt, content: "the corrected change\n"}
+              - write: {path: /work/repo/app1/change.txt, content: "the corrected change\n"}
               - git: [commit, --quiet, -am, "fix: the wording"]
-                dir: app1
+                dir: /work/repo/app1
               - git: [push, --quiet, origin, app-1]
-                dir: app1
+                dir: /work/repo/app1
               - beekeeper: [agents, park, --on, 'example/app#5', --post-merge, post-release proof, desk review]
-                dir: app1
+                dir: /work/repo/app1
       # The second issue's worker waits on its implementation, holding its
       # delivery place but no slot.
       - name: app 2
@@ -134,10 +141,15 @@ when:
     expect:
       - exit: 0
       - events: {contains: [supervisor.forward]}
+  - advance: 1m
+  - name: continue
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
   - wait_for:
       timeout: 30s
       expect:
-        - worker: {name: app 1, turns: 2, outcome: finish}
+        - worker: {name: 'app 1 next-[0-9a-f]+', turns: 1, outcome: finish}
   - name: ci-fixed
     github: {check: {repo: example/app, pull: 5, name: build, state: green}}
   - advance: 1m

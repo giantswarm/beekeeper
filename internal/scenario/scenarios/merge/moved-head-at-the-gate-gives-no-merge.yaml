@@ -67,6 +67,12 @@ when:
     run: {args: [watch, --once]}
     expect:
       - events: {contains: [watch.budget-state], not_contains: [watch.budget-error]}
+  # The loop's first pass: a park from before it would be left alone.
+  - name: first
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 1m
   - name: start
     run:
       args: [--as, supervisor loop, agents, start, app-1, /work/worker.txt, --harness, claude, --model, sonnet]

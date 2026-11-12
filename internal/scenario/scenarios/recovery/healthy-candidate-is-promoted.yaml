@@ -34,7 +34,7 @@ when:
   - name: writes
     run:
       release: v1.0.0-rc.2
-      args: [note, add, "Does the promoted release write?"]
+      args: [--as, scenario, note, add, "Does the promoted release write?"]
     expect:
       - exit: 0
 

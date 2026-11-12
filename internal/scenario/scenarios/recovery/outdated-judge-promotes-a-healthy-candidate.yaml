@@ -24,7 +24,7 @@ given:
 
 when:
   - name: work
-    run: {args: [note, add, "Is the work in flight kept?"]}
+    run: {args: [--as, scenario, note, add, "Is the work in flight kept?"]}
     expect:
       - exit: 0
       - install: {installed: v1.0.0-rc.1, probation: rolled-back, quarantined: v1.0.0-rc.2}
@@ -44,7 +44,7 @@ when:
   - name: writes
     run:
       release: v1.0.0-rc.2
-      args: [note, add, "Does the recovered release write?"]
+      args: [--as, scenario, note, add, "Does the recovered release write?"]
     expect:
       - exit: 0
 

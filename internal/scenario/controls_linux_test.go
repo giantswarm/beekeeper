@@ -41,8 +41,11 @@ var mutationControls = []mutationControl{
 }
 
 // TestMutationControls runs every mutation control: each scenario passes on
-// the candidate (TestScenarios) and fails on its mutant.
+// the candidate (TestScenarios) and fails on its mutant. It runs after the
+// suite, whose wall-time budget is the scenarios', and takes its mutants
+// from the suite's release builds.
 func TestMutationControls(t *testing.T) {
+	t.Parallel()
 	r := runner(t)
 	for _, c := range mutationControls {
 		t.Run(c.mutation, func(t *testing.T) {
