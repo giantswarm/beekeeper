@@ -39,15 +39,17 @@ scenario's own artifacts under `<flow>/<name>/`: the world's call log
 3. The driver writes the desk: `/work/config.yaml` (a base configuration
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
-   `given.repositories` under `/work/origins/<owner>/<name>.git`.
+   `given.repositories` under `/work/origins/<owner>/<name>.git`, and a
+   root for each of `given.hosts` (see [Execution hosts](#execution-hosts)).
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
-   the candidate, real `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
-   `agy`, `omp`, `ssh`, `devctl`, `systemctl` and `journalctl`. They are one
-   executable that dispatches on its name and hands each call to the world.
-   The world logs every call in order. A call that no `given.calls` entry
-   answers gets exit 1 and **fails the scenario**. With `given.github`, `gh`
-   and the GitHub API are answered by a model instead: see
-   [The scenario's GitHub](scenarios-github.md).
+   the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
+   `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
+   `journalctl`. They are one executable that dispatches on its name and
+   hands each call to the world. The world logs every call in order. A
+   call that no `given.calls` entry answers and no fake models (see
+   [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
+   scenario**. With `given.github`, `gh` and the GitHub API are answered
+   by a model: see [The scenario's GitHub](scenarios-github.md).
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -56,7 +58,8 @@ scenario's own artifacts under `<flow>/<name>/`: the world's call log
 Put a file at `internal/scenario/scenarios/<flow>/<name>.yaml`. The loader
 is strict. A scenario fails to load when it has an unknown key, step or
 expectation, has no `when` or no `then`, has a step or expectation with more
-or fewer than one kind, or has a `wait_for` without a timeout. A unit test
+or fewer than one kind, has a `wait_for` without a timeout, or has a worker
+script that names an unknown harness, outcome or saved name. A unit test
 loads every file.
 
 ```yaml
@@ -112,6 +115,7 @@ then:
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
+| `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
 
 ### Expectations
 
@@ -129,8 +133,13 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `calls` | the world's calls of `program` matching `args` number at least `min`, at most `max` | every step |
 | `process` | a background step is `running`, or exited with `exit` | every step |
 | `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
+| `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
+| `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
+A `worker` expectation may also name the `harness` and the `host` of the
+sessions; `name` and an `origin`'s `branch` are regular expressions that
+match the whole name.
 
 ### Pending scenarios
 
@@ -139,3 +148,143 @@ the scenario to fail and reports it as pending. Once the scenario passes,
 the run fails and asks for the marker's removal, so the fix removes the
 marker in the same pull request. A failure of the harness itself, such as
 no sandbox, fails the run even for a pending scenario.
+
+## The fake machines
+
+`internal/scenario/harness` models the programs beekeeper runs its workers
+with. A fake is a real process named as the real CLI is, because beekeeper
+finds its sessions in the process table. A `given.calls` entry still wins
+over a model, so a scenario can override any call.
+
+- **`claude`**
+  - `--bg … -- <brief>` starts a background session: a `claude daemon` runs
+    the session's CLI under a `bg-pty-host`, with the CLI's record and
+    transcript under `~/.claude`.
+  - `--bg --resume <id> <message>` continues a stopped session,
+    `agents --json [--all]` lists them and `stop <id>` ends one.
+  - `-p … <prompt>` is a headless turn, and
+    `--print --input-format stream-json` an execution host's managed session.
+  - `-p /usage`, `plugin list`, `auth status` and `--version` answer the
+    probes.
+- **`codex`**: `exec --json … -` and `exec resume --json … <thread> -` under
+  beekeeper's `codex-run`, with `thread.started`, `turn.started`, the items
+  and `turn.completed` with its tokens. `app-server` answers the usage probe;
+  `--version` and `login status` answer a host's probes.
+- **`agy`**: `--input-format stream-json --output-format stream-json` under
+  `agy-run`, with `init` naming the conversation, a `user_input` step per
+  message and `result`. Also `models` and `--version`.
+- **`omp`**: `--mode rpc` with its standard input on its inbox, one turn per
+  `steer` command. Also `models --json` and `--version`.
+- **`systemd-run`, `systemctl`**: the user's service manager. The world runs
+  each transient unit as its own child and answers `show -p ActiveState`,
+  `list-units`, `stop`, `freeze`, `thaw`, `reset-failed` and
+  `is-system-running`; `--scope` runs the command in place. A unit's
+  processes carry its name in `BEEKEEPER_SCENARIO_UNIT`, which a build with
+  the `scenario` tag reads where a release build reads the cgroup: a sandbox
+  can create none.
+- **`ssh`**: maps a destination to its host's root (`given.hosts`) and runs
+  the remote command there under the host's environment; the name
+  `coordinator` leads back to the desk. A host's fault ends the call as
+  OpenSSH ends it.
+- **`git`**: the real git with one transport replaced.
+  `https://github.com/<owner>/<name>.git` leads to the bare origin
+  `/work/origins/<owner>/<name>.git`. Beekeeper names a repository by that
+  URL wherever it fetches or pushes itself, so every transport of a scenario
+  ends in the same origins.
+
+`gh` is answered by [the scenario's GitHub](scenarios-github.md) with
+`given.github`, else by `given.calls`. Not modeled yet: a message to a
+running `claude` session (`agents wake` of a live background session) and
+the desktop app.
+
+### Worker scripts
+
+`given.harness.workers` says what the sessions do. A session runs the first
+script whose `name` (a regular expression matching the whole name),
+`harness` and `host` match; a session without a script ends its turn idle.
+
+```yaml
+given:
+  harness:
+    usage:                           # what a harness's usage probe reports
+      claude: {session: 40, week: 20}  # percent of the 5-hour and 7-day windows
+      codex: {session: 10, week: 5}
+    models:                          # what agy models and omp models list
+      agy: [gemini-3-pro]
+    workers:
+      - name: app-worker             # default: every session
+        harness: claude              # default: every harness
+        host: builder                # default: every machine; local is the desk
+        repeat: false                # repeat the last turn beyond the list
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - write: {path: app/change.txt, content: "a change\n"}
+              - git: [commit, --quiet, -am, "feat: a change"]
+                dir: app             # relative to the session's directory
+              - gh: [pr, create, --repo, example/app, --head, work, --title, t, --body, b]
+                save: pull           # the trimmed output, as ${pull} later
+              - beekeeper: [agents, park, --on, '${pull}', desk review]
+              - run: [sh, -c, 'exit 3']
+                exit: 3              # the exit code the step must end with (0)
+            outcome: finish          # finish, hang, crash or budget
+            tokens: {input: 1200, output: 300}
+            usage: {session: 60, week: 25}  # the probe's answer from this turn on
+            reply: done
+          - outcome: crash
+            exit: 3                  # a crash's exit code (1)
+```
+
+A step runs as the session's tool command: in its directory, under its
+identity (`CLAUDE_CODE_SESSION_ID`, the runner's `BEEKEEPER_*_AGENT`), with
+the real `beekeeper` and `git`. `${name}`, `${session}`, `${harness}`,
+`${dir}`, `${turn}` and `${host}` are the session's own. A step that ends
+with another exit code than its script says stops the script and **fails
+the scenario**: a refused park is not a silent no-op.
+
+| Outcome | The turn |
+| --- | --- |
+| `finish` | ends with its reply and its tokens; the session stays as its harness leaves it between turns |
+| `hang` | never ends: the CLI stays alive and silent |
+| `crash` | ends the CLI with `exit` (1) and no reply |
+| `budget` | ends on the provider's limit as the harness reports it (Claude's limit message, codex's `turn.failed`, agy's `AGY_ERROR` 429); the usage probe then says the session window is full |
+
+Every turn is kept in the scenario's artifacts (`workers.jsonl`), with each
+step's command line, exit code and output; the units' output is under
+`units/` and the claude daemon's in `claude-daemon-<machine>.log`.
+
+### Execution hosts
+
+`given.hosts` gives the desk SSH execution hosts. Each is a root of its own
+under `/work/hosts/<name>` (home, `bin`, the pinned `go` and `gh`, a source
+checkout of every repository it serves, its own `config.yaml` with
+`agents.execution`), provisioned as an operator would and prepared with the
+real `beekeeper agents hosts prepare`; the desk's `agents.hosts.<name>` names
+it with the policy digest it prepared.
+
+```yaml
+given:
+  repositories:
+    - name: example/app
+  hosts:
+    - name: builder                  # ssh alias, selector and identity
+      harnesses: [claude]            # default: claude
+      repositories: [example/app]    # default: every repository
+      maxBusy: 2
+      fault: unreachable             # optional, see below
+      slow: 300ms                    # delay of every ssh call to it
+      config: {}                     # laid over the host's own config.yaml
+```
+
+| Fault | What happens |
+| --- | --- |
+| `unreachable` | `ssh` refuses the connection: exit 255 |
+| `host-key-changed` | `ssh` fails the host key check: exit 255 with OpenSSH's warning |
+| `missing-tool` | the remote shell does not find beekeeper: exit 127 |
+| `older-go` | the host pins Go 1.21.0 while its repository's `go.mod` names 1.26.0 |
+| `slow` | every call is delayed; one slower than `ConnectTimeout` times out with 255 |
+
+The `host` step changes a host's faults while the scenario runs:
+`host: {name: builder, fault: unreachable}`, `host: {name: builder, slow: 2s}`
+or `host: {name: builder, clear: true}`. `older-go` is part of a host's
+provisioning and only `given.hosts` names it.
