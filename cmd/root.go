@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
@@ -99,7 +100,9 @@ func Main() int {
 		return secret.AskpassMain(os.Args[1+len(secret.AskpassArgs):], os.Stdout, os.Stderr)
 	}
 	defer cpuProfile(os.Getenv(cpuProfileEnv))()
-	err := New().Execute()
+	root := New()
+	state.SetCommand(diagnosticCommand(root, os.Args[1:]))
+	err := root.Execute()
 	if err == nil {
 		return 0
 	}
@@ -107,6 +110,32 @@ func Main() int {
 		fmt.Fprintln(os.Stderr, project.Name+":", msg)
 	}
 	return Code(err)
+}
+
+// diagnosticCommand names the command args run in the state lock's holder
+// record and trace: the subcommand path cobra resolves, root flags and their
+// values skipped, and the names of the flags given. It never holds an
+// argument or a flag's value: a note's text, a start's brief, a
+// configuration path, a session's name. "beekeeper supervisor loop --config".
+func diagnosticCommand(root *cobra.Command, args []string) string {
+	c, _, _ := root.Find(args)
+	if c == nil {
+		return ""
+	}
+	words := strings.Fields(c.CommandPath())
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		name, _, _ := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if !strings.HasPrefix(arg, "--") || c.Flags().Lookup(name) == nil && c.InheritedFlags().Lookup(name) == nil {
+			continue
+		}
+		if flag := "--" + name; !slices.Contains(words, flag) {
+			words = append(words, flag)
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 type app struct {
@@ -169,7 +198,7 @@ type app struct {
 	// omp models.
 	ompModelList func(ctx context.Context) ([]string, error)
 	// readUsage runs capacity.usage.command; nil is runUsageCommand.
-	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
+	readUsage func(ctx context.Context, command []string, timeout time.Duration) (capacity.UsageReading, error)
 	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
 	// the command itself.
 	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)

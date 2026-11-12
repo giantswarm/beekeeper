@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
@@ -37,7 +38,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
 		"gateCmdName":                      gateCmdName,
-		"harnessAuto":                      harnessAuto,
+		"harnessAuto":                      capacity.HarnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
 		"hostUpdateDeferred":               hostUpdateDeferred,
 		"inventoryGraphQLCommand":          inventoryGraphQLCommand,
@@ -56,7 +57,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"runMerge":                         runMerge,
 		"selfUpdateCmdName":                selfUpdateCmdName,
 		"taskKindArg":                      taskKindArg,
-		"taskKindReview":                   taskKindReview,
+		"taskKindReview":                   capacity.TaskKindReview,
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,
 		"verbStart":                        verbStart,

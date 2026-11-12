@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -21,21 +22,21 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 	now := time.Now()
 	file := usageProviderFile(probeProvider)
 	u := config.Usage{Command: []string{"fixture-usage"}}
-	old := usageReading{At: now.Add(-6 * time.Minute), FiveHour: &usageWindow{UsedPercent: 99, ResetsAt: now.Add(time.Hour)}}
+	old := capacity.UsageReading{At: now.Add(-6 * time.Minute), FiveHour: &capacity.UsageWindow{UsedPercent: 99, ResetsAt: now.Add(time.Hour)}}
 	if err := store.WriteFile(file, old); err != nil {
 		t.Fatal(err)
 	}
 	entered, finish := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	probe := func(ctx context.Context, _ []string, _ time.Duration) (usageReading, error) {
+	probe := func(ctx context.Context, _ []string, _ time.Duration) (capacity.UsageReading, error) {
 		if calls.Add(1) == 1 {
 			close(entered)
 		}
 		select {
 		case <-ctx.Done():
-			return usageReading{}, ctx.Err()
+			return capacity.UsageReading{}, ctx.Err()
 		case <-finish:
-			return usageReading{FiveHour: &usageWindow{UsedPercent: 20, ResetsAt: now.Add(time.Hour)}}, nil
+			return capacity.UsageReading{FiveHour: &capacity.UsageWindow{UsedPercent: 20, ResetsAt: now.Add(time.Hour)}}, nil
 		}
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -55,7 +56,7 @@ func TestUsageRefreshSharedByCommandsAndWatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		caller := &app{store: other, now: now, readUsage: probe}
-		var r usageReading
+		var r capacity.UsageReading
 		if i%2 == 0 {
 			r, err = caller.resolveReading(ctx, file, u)
 		} else {

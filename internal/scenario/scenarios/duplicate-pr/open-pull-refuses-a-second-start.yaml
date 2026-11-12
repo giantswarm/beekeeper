@@ -1,0 +1,114 @@
+name: open-pull-refuses-a-second-start
+description: >
+  While the pull request of a task is open, no second worker starts on that
+  task. The worker opened its pull request and parked; its session is gone
+  and the item is still on the board. The refill starts no second worker
+  for the item, and a start by hand on the same issue is refused with the
+  open pull request to continue instead. The task keeps its one pull
+  request.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: duplicate-pr
+tags: [duplicate-pr, refill, loop, start]
+timeout: 120s
+control:
+  none: states the duplicate pull request prevention main already has; this change only adds the scenario
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  # The park is taken, the worker's session ends; CI is pending. The item is
+  # free on the board again, but its pull request is open.
+  - name: parked
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park], not_contains: [session.report-rejected]}
+      # The refill tried the item, and its start was refused.
+      - output: {contains: ["SUPERVISOR NEXT FAILED https://github.com/example/app/issues/1", "example/app#1 already has an open pull request https://github.com/example/app/pull/2"]}
+  - name: roster
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: ., len: 0}
+  # A start by hand on the same issue, with the brief of the first.
+  - name: second
+    run:
+      args: [--as, supervisor loop, agents, start, another worker, /work/state/supervisor-loop/next-example-app-1.md, --harness, codex, --model, gpt-5.2-codex]
+    expect:
+      - exit: 3
+      - stderr: {contains: ["example/app#1 already has an open pull request https://github.com/example/app/pull/2", "instead of starting a second worker"]}
+  - advance: 2s
+  # However often the refill looks, the open pull request refuses the start.
+  - name: again
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["example/app#1 already has an open pull request https://github.com/example/app/pull/2"]}
+
+then:
+  - worker: {name: app 1, turns: 1}
+  - worker: {name: another worker, turns: 0}
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - github: {issue: {repo: example/app, number: 1, state: open, pulls: 1, open_pulls: 1}}
+  - calls: {program: gh, args: [pr, create], min: 1, max: 1}

@@ -114,9 +114,9 @@ func (a *app) promptAgents(p printer, agents []state.Agent, sessions []*claude.S
 func (a *app) promptCapacity(p printer, st *state.State, sessions []*claude.Session) {
 	section(p, "Capacity", false, "")
 	k, u := a.cachedUsageCapacity(a.liveCapacity())
-	line := countAgents(st, sessions, a.now, a.cfg).line(k)
+	line := countAgents(st, sessions, a.now, a.cfg).Line(k)
 	if u != nil && u.Error == "" {
-		line += "; " + u.capacitySuffix(a.now)
+		line += "; " + u.CapacitySuffix(a.now)
 	}
 	p("%s; `beekeeper capacity` says whether a start fits.\n", line)
 }

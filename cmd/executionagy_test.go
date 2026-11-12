@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -29,17 +30,17 @@ func sshAgyTestApp(t *testing.T, offered map[string]string) (*app, string, *[]ex
 		Ceiling: 10,
 		Local:   config.LocalCapacity{Ceiling: &localCeiling},
 		Providers: map[string]config.Provider{
-			claudeComm: {Ceiling: 1},
-			harnessAgy: {Ceiling: 2, Usage: config.Usage{Command: config.DefaultAgyUsageCommand}},
+			claudeComm:          {Ceiling: 1},
+			capacity.HarnessAgy: {Ceiling: 2, Usage: config.Usage{Command: config.DefaultAgyUsageCommand}},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: bgModel},
-			{Harness: harnessAgy, Model: agyTestModel},
+			{Harness: capacity.HarnessAgy, Model: agyTestModel},
 		},
 	}
 	stubSubscriptionUsage(a)
 	h := a.cfg.Agents.Hosts[sshTestSelector]
-	h.Harnesses = []string{claudeComm, harnessAgy}
+	h.Harnesses = []string{claudeComm, capacity.HarnessAgy}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
 	a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
 		return execution.Capabilities{CIWait: true, SourcePreparation: true, Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: project.Version(), PolicyDigest: h.PolicyDigest, Harnesses: offered, Unavailable: map[string]string{}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
@@ -63,42 +64,42 @@ func sshAgyTestApp(t *testing.T, offered map[string]string) (*app, string, *[]ex
 }
 
 func TestExecutionStartsAgyOnAHostThatOffersItAndCountsProviderNotLocalCeiling(t *testing.T) {
-	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, harnessAgy: testAgyVersion})
-	if _, err := runAgents(a, agentStartName, "--name", "remote-agy", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAgy, "--model", agyTestModel); err != nil {
+	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, capacity.HarnessAgy: testAgyVersion})
+	if _, err := runAgents(a, agentStartName, "--name", "remote-agy", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAgy, "--model", agyTestModel); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 2 || (*requests)[1].Harness != harnessAgy || (*requests)[1].Model != agyTestModel || !(*requests)[1].Messaging || !(*requests)[1].LeaseRequired {
+	if len(*requests) != 2 || (*requests)[1].Harness != capacity.HarnessAgy || (*requests)[1].Model != agyTestModel || !(*requests)[1].Messaging || !(*requests)[1].LeaseRequired {
 		t.Fatalf("remote agy request: %+v", *requests)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Starts[0].Harness != harnessAgy || st.Starts[0].Execution.Provider != harnessAgy {
+	if st.Starts[0].Harness != capacity.HarnessAgy || st.Starts[0].Execution.Provider != capacity.HarnessAgy {
 		t.Fatalf("remote agy is recorded against %q/%q", st.Starts[0].Harness, st.Starts[0].Execution.Provider)
 	}
 	// Remote agy counts against the agy provider ceiling, never the coordinator's local ceiling.
 	counts := countAgents(st, nil, a.now, a.cfg)
 	pcounts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, a.cfg)
-	if len(pcounts[harnessAgy].Busy) != 1 || len(pcounts[claudeComm].Busy) != 0 || len(localBusy(st, counts.Busy)) != 0 {
-		t.Fatalf("remote agy counted against local=%v provider=%+v", localBusy(st, counts.Busy), pcounts)
+	if len(pcounts[capacity.HarnessAgy].Busy) != 1 || len(pcounts[claudeComm].Busy) != 0 || len(capacity.LocalBusy(st, counts.Busy)) != 0 {
+		t.Fatalf("remote agy counted against local=%v provider=%+v", capacity.LocalBusy(st, counts.Busy), pcounts)
 	}
-	v := buildProvidersCapacity(counts, pcounts, a.cfg.Capacity, a.executionReadings(context.Background(), a.cfg.Capacity), &headroom{AvailableMiB: 1 << 16, Slots: 1, SlotsFree: 1}, true, nil, forWorker, a.now).withLocal(st, a.cfg.Capacity)
-	if v.Local == nil || len(v.Local.Busy) != 0 || v.Local.Room != 1 || len(v.Providers[harnessAgy].Busy) != 1 || v.Providers[harnessAgy].Room != 1 {
-		t.Fatalf("capacity view: local=%+v agy=%+v", v.Local, v.Providers[harnessAgy])
+	v := capacity.BuildProvidersCapacity(counts, pcounts, a.cfg.Capacity, a.executionReadings(context.Background(), a.cfg.Capacity), &capacity.Headroom{AvailableMiB: 1 << 16, Slots: 1, SlotsFree: 1}, true, nil, capacity.ForWorker, a.now).WithLocal(st, a.cfg.Capacity)
+	if v.Local == nil || len(v.Local.Busy) != 0 || v.Local.Room != 1 || len(v.Providers[capacity.HarnessAgy].Busy) != 1 || v.Providers[capacity.HarnessAgy].Room != 1 {
+		t.Fatalf("capacity view: local=%+v agy=%+v", v.Local, v.Providers[capacity.HarnessAgy])
 	}
-	if _, err := runAgents(a, agentStartName, "--name", "remote-agy-2", brief, "--host", sshTestOtherSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAgy, "--model", agyTestModel); err == nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-agy-2", brief, "--host", sshTestOtherSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAgy, "--model", agyTestModel); err == nil {
 		t.Fatal("a host that does not list agy started it")
 	}
 }
 
 func TestExecutionRefusesAgyTheHostDoesNotOffer(t *testing.T) {
 	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer})
-	_, err := runAgents(a, agentStartName, "--name", "remote-agy", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAgy, "--model", agyTestModel)
+	_, err := runAgents(a, agentStartName, "--name", "remote-agy", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAgy, "--model", agyTestModel)
 	if err == nil || !strings.Contains(err.Error(), "does not offer harness agy") || len(*requests) != 0 {
 		t.Fatalf("a host whose agy check failed started it: %v", err)
 	}
-	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != claudeComm {
@@ -107,11 +108,11 @@ func TestExecutionRefusesAgyTheHostDoesNotOffer(t *testing.T) {
 }
 
 func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
-	a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: testAgyVersion})
-	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
+	a, brief, requests := sshAgyTestApp(t, map[string]string{capacity.HarnessAgy: testAgyVersion})
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 2 || (*requests)[1].Harness != harnessAgy || (*requests)[1].Model != agyTestModel {
+	if len(*requests) != 2 || (*requests)[1].Harness != capacity.HarnessAgy || (*requests)[1].Model != agyTestModel {
 		t.Fatalf("auto on an agy-only host picked %+v", *requests)
 	}
 }
@@ -120,8 +121,8 @@ func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
 // event, however it was selected and whichever way agy was chosen.
 func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
 	remote := []string{loop.LoopHostFlag, sshTestSelector, loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch}
-	explicit := []string{testHarnessFlag, harnessAgy, modelFlag, agyTestModel}
-	auto := []string{testHarnessFlag, harnessAuto}
+	explicit := []string{testHarnessFlag, capacity.HarnessAgy, modelFlag, agyTestModel}
+	auto := []string{testHarnessFlag, capacity.HarnessAuto}
 	flag := []string{effortFlag, testEffortHigh}
 	for _, tc := range []struct {
 		name   string
@@ -136,7 +137,7 @@ func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
 		{name: "auto dry run", args: slices.Concat(auto, flag, []string{testDryRunFlag})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: testAgyVersion})
+			a, brief, requests := sshAgyTestApp(t, map[string]string{capacity.HarnessAgy: testAgyVersion})
 			a.cfg.Agents.Models = tc.models
 			args := slices.Concat([]string{agentStartName, nameFlag, "remote-agy", brief}, remote, tc.args)
 			_, err := runAgents(a, args...)
@@ -157,7 +158,7 @@ func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
 // The refusal follows the harness auto resolved, not the choices it could have made.
 func TestExecutionAutoKeepsEffortOnAHarnessThatTakesIt(t *testing.T) {
 	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer})
-	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, testHarnessFlag, harnessAuto, effortFlag, testEffortHigh); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, testHarnessFlag, capacity.HarnessAuto, effortFlag, testEffortHigh); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != claudeComm || (*requests)[1].Effort != testEffortHigh {
@@ -170,7 +171,7 @@ func TestExecutionPublicationAndMergeAcceptRemoteAgy(t *testing.T) {
 	owner, _, _ := strings.Cut(sshTestRepository, "/")
 	a.cfg.GitHub.AllowedOrgs = []string{owner}
 	ref := execution.Ref{Host: sshTestSelector, Execution: "3aa27721-fb1e-4f07-b0aa-bdf100e0fdd9", Generation: 1}
-	rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Commit: strings.Repeat("a", 40)}, Request: execution.StartRequest{Ref: ref, Repository: sshTestRepository, Harness: harnessAgy, LeaseRequired: true}, Lease: &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}}
+	rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Commit: strings.Repeat("a", 40)}, Request: execution.StartRequest{Ref: ref, Repository: sshTestRepository, Harness: capacity.HarnessAgy, LeaseRequired: true}, Lease: &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}}
 	st := &state.State{Starts: []state.Start{{Party: state.Party{Name: "remote-agy-worker"}, Execution: rec}}}
 	if _, err := a.executionPublicationLive(st, ref); err != nil {
 		t.Fatalf("publication for agy: %v", err)
@@ -190,13 +191,13 @@ func TestExecutionGuardDecisionMatchesAgyHookFormat(t *testing.T) {
 	agyRaw := []byte(`{"conversationId":"` + thread + `","workspacePaths":["` + workspace + `"],"toolCall":{"name":"run_command","args":{"CommandLine":"git status"}}}`)
 	deniedAgy := func(b []byte) bool { return strings.Contains(string(b), `"decision":"deny"`) }
 	convID := "c0ffee01-0000-4000-8000-000000000000"
-	agyJournal := execution.Journal{Request: execution.StartRequest{Harness: harnessAgy, ConversationID: convID}, Handle: execution.Handle{Workspace: workspace, ConversationID: convID}, Thread: thread}
-	if out := executionGuardDecision(guard.Hook{}, harnessAgy, agyJournal, nil)(agyRaw); deniedAgy(out) {
+	agyJournal := execution.Journal{Request: execution.StartRequest{Harness: capacity.HarnessAgy, ConversationID: convID}, Handle: execution.Handle{Workspace: workspace, ConversationID: convID}, Thread: thread}
+	if out := executionGuardDecision(guard.Hook{}, capacity.HarnessAgy, agyJournal, nil)(agyRaw); deniedAgy(out) {
 		t.Fatalf("agy hook on its own thread was denied: %s", out)
 	}
 	unrecorded := agyJournal
 	unrecorded.Thread = ""
-	if out := executionGuardDecision(guard.Hook{}, harnessAgy, unrecorded, nil)(agyRaw); !deniedAgy(out) {
+	if out := executionGuardDecision(guard.Hook{}, capacity.HarnessAgy, unrecorded, nil)(agyRaw); !deniedAgy(out) {
 		t.Fatal("agy hook passed before its thread was recorded")
 	}
 	for _, otherFormat := range []string{"", codex.Harness} {
@@ -206,7 +207,7 @@ func TestExecutionGuardDecisionMatchesAgyHookFormat(t *testing.T) {
 	}
 	claudeJournal := agyJournal
 	claudeJournal.Request.Harness = claudeComm
-	if out := executionGuardDecision(guard.Hook{}, harnessAgy, claudeJournal, nil)(agyRaw); !deniedAgy(out) {
+	if out := executionGuardDecision(guard.Hook{}, capacity.HarnessAgy, claudeJournal, nil)(agyRaw); !deniedAgy(out) {
 		t.Fatal("agy-format hook ran in a claude execution")
 	}
 
@@ -255,7 +256,7 @@ func TestExecutionGuardDecisionMatchesAgyHookFormat(t *testing.T) {
 	if _, err := guardSrv.InstalledPolicy(); err != nil {
 		t.Fatalf("guard InstalledPolicy under agy HOME override: %v", err)
 	}
-	if out := executionGuardDecision(guardApp.executionHook(), harnessAgy, agyJournal, guardApp.executionProtected(guardSrv))(agyRaw); deniedAgy(out) {
+	if out := executionGuardDecision(guardApp.executionHook(), capacity.HarnessAgy, agyJournal, guardApp.executionProtected(guardSrv))(agyRaw); deniedAgy(out) {
 		t.Fatalf("agy guard under agy HOME override denied valid command: %s", out)
 	}
 }

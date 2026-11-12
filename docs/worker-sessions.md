@@ -202,7 +202,10 @@ final report.
 `beekeeper agents review <owner/repo>#<n>` starts a fresh independent reviewer
 in a checkout of that repository. It requires green CI at the pinned head and
 refuses a second review of a head already reviewed or requested, including after
-a restart. The brief includes closing issues, their parent epic, the round and
+a restart. An assigned reviewer that is gone without a result (done or off the
+roster, no live process, no running remote execution) no longer holds its head: the loop's
+next start of that review releases the assignment, logs `review.released` and starts
+the next round's reviewer. The brief includes closing issues, their parent epic, the round and
 previous findings. The shipped [review skill](../plugin/skills/review/SKILL.md)
 checks acceptance criteria and behavioural coverage as well as correctness.
 `--model` overrides `supervisor.reviewModel` (default `opus`).

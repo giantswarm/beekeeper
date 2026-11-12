@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -33,7 +34,7 @@ func TestLoopComparisonRejectsLostTransitionsAndRetriesFailures(t *testing.T) {
 		{name: "healthy-pass", before: comparisonStarts, after: comparisonStarts},
 		{name: "no starts", before: comparisonStarts, missing: labStart},
 		{name: "no continuations", before: "SUPERVISOR WOULD CONTINUE worker-1", missing: loopContinuationTransition},
-		{name: "no reviews", before: "SUPERVISOR WOULD REVIEW pull", missing: taskKindReview},
+		{name: "no reviews", before: "SUPERVISOR WOULD REVIEW pull", missing: capacity.TaskKindReview},
 		{name: "no merges", before: "SUPERVISOR WOULD GO pull", missing: gitMerge},
 		{name: "deadline exceeded", before: comparisonStarts, failure: context.DeadlineExceeded, missing: wantRetryable},
 		{name: "github error", before: comparisonStarts, failure: errors.New("comparison GitHub unavailable"), missing: wantRetryable},

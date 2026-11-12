@@ -20,6 +20,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -1041,7 +1042,7 @@ func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 							t.Errorf("local review has placement flag %s: %v", flag, start)
 						}
 					}
-					if !slices.Contains(start, "--review") || !slices.Contains(start, harnessAuto) || slices.Contains(start, "--"+reviewOfSelfHostedFlag) != selfHosted {
+					if !slices.Contains(start, "--review") || !slices.Contains(start, capacity.HarnessAuto) || slices.Contains(start, "--"+reviewOfSelfHostedFlag) != selfHosted {
 						t.Fatalf("review start lost capacity flags: %v", start)
 					}
 				})
@@ -2059,7 +2060,7 @@ func TestLoopStartsTheNextWorkerOnCapacitysChoice(t *testing.T) {
 	}
 	r.pass(t)
 	start := r.called(agentsName, agentStartName, "r 9")
-	if start == nil || !slices.Contains(start, harnessAuto) {
+	if start == nil || !slices.Contains(start, capacity.HarnessAuto) {
 		t.Errorf("the next start = %v", start)
 	}
 }
@@ -2933,7 +2934,7 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	if slices.Contains(start, "--"+excludeFlag) {
 		t.Errorf("local fallback must preserve capacity choices: %v", start)
 	}
-	if !slices.Contains(start, harnessAuto) {
+	if !slices.Contains(start, capacity.HarnessAuto) {
 		t.Errorf("the local start loses capacity's pick: %v", start)
 	}
 }

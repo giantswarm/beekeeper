@@ -216,7 +216,7 @@ func TestStopAndResume(t *testing.T) {
 		t.Errorf("wake while stopped: %v", err)
 	}
 	v, err := a.startCapacity(context.Background(), false)
-	if err != nil || v.Room != 0 || !strings.Contains(v.verdict(), "no start: beekeeper is stopped") {
+	if err != nil || v.Room != 0 || !strings.Contains(v.Verdict(), "no start: beekeeper is stopped") {
 		t.Errorf("capacity while stopped: %v %+v", err, v)
 	}
 	if _, err := gateStart(v, true); !refusedStop(err) || strings.Contains(err.Error(), "--force") {

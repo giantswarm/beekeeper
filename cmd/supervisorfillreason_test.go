@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -149,5 +150,31 @@ func TestRefillReportsPriorPassStillRunning(t *testing.T) {
 	}
 	if got := strings.Count(r.out.String(), refillZeroLine+"previous refill still running"); got != 2 {
 		t.Fatalf("want one wait per pass, got %d: %s", got, r.out)
+	}
+}
+
+// Given capacity --json says there is room and writes a diagnostic to its
+// standard error (a state snapshot older than a pass), when the refill
+// reads it, then it reads the document: the loop's read is stdout and then
+// stderr, and a line after the document must not cost the refill its starts.
+func TestRefillReadsCapacityBeforeItsDiagnostics(t *testing.T) {
+	original := loop.BeekeeperRun
+	t.Cleanup(func() { loop.BeekeeperRun = original })
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) {
+		return `{"room": 2, "blocks": []}` + "\nstate snapshot is 2m0s old (supervisor pass 30s)\n", 0, nil
+	}
+	l := &loop.Loop{Host: &app{}}
+	got, err := loopReadFillCapacity(l, t.Context())
+	if err != nil {
+		t.Fatalf("a diagnostic after the document failed the read: %v", err)
+	}
+	if got.Room != 2 {
+		t.Fatalf("room = %d, want 2", got.Room)
+	}
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) {
+		return "state snapshot is 2m0s old (supervisor pass 30s)\n", 0, nil
+	}
+	if _, err := loopReadFillCapacity(l, t.Context()); err == nil {
+		t.Fatal("output without a document was read as capacity")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -111,7 +112,7 @@ func TestHostPlacementDiagnosticsSurviveLoopRestart(t *testing.T) {
 	if !strings.Contains(r.out.String(), views[0].Line()) {
 		t.Fatalf("status lost host reason: %s", r.out)
 	}
-	encoded, err := json.Marshal(&capacityView{Hosts: views})
+	encoded, err := json.Marshal(&capacity.View{Hosts: views})
 	if err != nil || !strings.Contains(string(encoded), `"selector":"`+sshTestSelector+`"`) || !strings.Contains(string(encoded), `"reason":"repository is not mapped"`) {
 		t.Fatalf("capacity JSON lost host diagnostics: %s, %v", encoded, err)
 	}
