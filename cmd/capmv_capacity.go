@@ -234,7 +234,7 @@ func (p *ProviderView) WindowsSummary(now time.Time) (summary string) {
 	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
-			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
+			return "serving mode unknown (" + Cmd.Truncate(p.ServingModeError, 120) + ")"
 		}
 		if p.ServingMode != "" {
 			line := "serving mode " + p.ServingMode
@@ -249,7 +249,7 @@ func (p *ProviderView) WindowsSummary(now time.Time) (summary string) {
 		return ClaudeNoPlanWindows
 	}
 	if p.Error != "" {
-		return "usage unknown (" + truncate(p.Error, 120) + ")"
+		return "usage unknown (" + Cmd.Truncate(p.Error, 120) + ")"
 	}
 	if len(p.Buckets) > 0 {
 		var parts []string
@@ -384,7 +384,7 @@ func (c *ChoiceView) Line() string {
 		if c.Review {
 			s += ", review"
 		}
-		return s + effortText(c.Effort) + ")"
+		return s + Cmd.EffortText(c.Effort) + ")"
 	}
 	if c.Reason != "" {
 		return noProblems + " (" + c.Reason + ")"
@@ -504,7 +504,7 @@ func ResolveAgentProviderBucket(k config.Capacity, harness, model string) (prov,
 	// exactly one: an omp model selector names a models.yml provider, which
 	// need not carry the capacity.providers key's name.
 	if h == omp.Harness {
-		if p := ompProvider(m); p != "" {
+		if p := Cmd.OmpProvider(m); p != "" {
 			if pp, ok := k.Providers[p]; ok && pp.SelfHosted() {
 				return p, pp.BucketFor(m)
 			}
@@ -628,7 +628,7 @@ func (h *Headroom) Blocks(builds bool) []string {
 	case h.MemErr != "":
 		out = append(out, "MemAvailable unknown ("+h.MemErr+")")
 	case h.AvailableMiB < h.AvailMinMiB:
-		out = append(out, fmt.Sprintf("MemAvailable %.1f GiB under %d GiB", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB)))
+		out = append(out, fmt.Sprintf("MemAvailable %.1f GiB under %d GiB", float64(h.AvailableMiB)/1024, Cmd.Gib(h.AvailMinMiB)))
 	}
 	if line, blocks := h.SwapGuard(); blocks {
 		out = append(out, line)
@@ -685,9 +685,9 @@ func (h *Headroom) availFigure() string {
 	case h.MemErr != "":
 		return "MemAvailable unknown (" + h.MemErr + ")"
 	case h.AvailableMiB < h.AvailMinMiB:
-		return fmt.Sprintf("MemAvailable %.1f GiB under the floor of %d GiB", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
+		return fmt.Sprintf("MemAvailable %.1f GiB under the floor of %d GiB", float64(h.AvailableMiB)/1024, Cmd.Gib(h.AvailMinMiB))
 	}
-	return fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
+	return fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, Cmd.Gib(h.AvailMinMiB))
 }
 
 // pct renders a pressure share as read ("0%", "0.4%", "12%").
@@ -704,7 +704,7 @@ func (h *Headroom) diskFigure() string {
 func (h *Headroom) Line() string {
 	mem := "MemAvailable unknown"
 	if h.MemErr == "" {
-		mem = fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
+		mem = fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, Cmd.Gib(h.AvailMinMiB))
 	}
 	mem += ", " + h.psiFigure()
 	if h.Disk != nil {

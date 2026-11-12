@@ -77,7 +77,7 @@ func ValidateReadingAt(r UsageReading, u config.Usage, now time.Time) error {
 			age += max(0, now.Sub(r.At))
 		}
 		if age > maxAge {
-			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", Cmd.Dur(age), Cmd.Dur(maxAge))
 		}
 	}
 	if !r.SourceAt.IsZero() && !now.IsZero() {
@@ -88,7 +88,7 @@ func ValidateReadingAt(r UsageReading, u config.Usage, now time.Time) error {
 		// alone must not deadlock starts; the built-in reader probes the
 		// account and labels its last-reading fallback when unavailable.
 		if now.Sub(r.SourceAt) > maxAge && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
-			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", Cmd.Dur(now.Sub(r.SourceAt)), Cmd.Dur(maxAge))
 		}
 	}
 	if !r.At.IsZero() && !now.IsZero() {
@@ -96,7 +96,7 @@ func ValidateReadingAt(r UsageReading, u config.Usage, now time.Time) error {
 			return fmt.Errorf("usage reading timestamp %s is in the future", r.At.Format(time.RFC3339))
 		}
 		if now.Sub(r.At) > maxAge {
-			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", Cmd.Dur(now.Sub(r.At)), Cmd.Dur(maxAge))
 		}
 	}
 	if r.NoPlanWindows {
@@ -276,9 +276,9 @@ func windowFigure(label string, w *UsageWindow, now time.Time) string {
 	s := fmt.Sprintf("%s %s", label, pct(w.UsedPercent))
 	if !w.ResetsAt.IsZero() && now.Before(w.ResetsAt) {
 		if w.Pace != nil {
-			s += fmt.Sprintf(" (resets %s, in %s, pace %s)", clock(now.Local(), w.ResetsAt), dur(w.ResetsAt.Sub(now)), pct(*w.Pace))
+			s += fmt.Sprintf(" (resets %s, in %s, pace %s)", Cmd.Clock(now.Local(), w.ResetsAt), Cmd.Dur(w.ResetsAt.Sub(now)), pct(*w.Pace))
 		} else {
-			s += fmt.Sprintf(" (resets %s, in %s)", clock(now.Local(), w.ResetsAt), dur(w.ResetsAt.Sub(now)))
+			s += fmt.Sprintf(" (resets %s, in %s)", Cmd.Clock(now.Local(), w.ResetsAt), Cmd.Dur(w.ResetsAt.Sub(now)))
 		}
 	} else if w.Pace != nil {
 		s += fmt.Sprintf(" (pace %s)", pct(*w.Pace))
@@ -306,16 +306,16 @@ func withFallback(s, fallback string, at, now time.Time) string {
 	case fallback == "":
 		return s
 	case at.IsZero() && s == "":
-		return truncate(fallback, 120)
+		return Cmd.Truncate(fallback, 120)
 	case at.IsZero():
-		return s + "; " + truncate(fallback, 120)
+		return s + "; " + Cmd.Truncate(fallback, 120)
 	}
-	return s + fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(at)), truncate(fallback, 120))
+	return s + fmt.Sprintf("; last good read %s ago (%s)", Cmd.Dur(now.Sub(at)), Cmd.Truncate(fallback, 120))
 }
 
 func (u *UsageView) CapacitySuffix(now time.Time) string {
 	if u.Error != "" {
-		return "usage unknown (" + truncate(u.Error, 120) + ")"
+		return "usage unknown (" + Cmd.Truncate(u.Error, 120) + ")"
 	}
 	line := u.windowsLine(now)
 	if strings.HasPrefix(line, UsageUnreadable) {
@@ -334,7 +334,7 @@ func (u *UsageView) WatchLine(now time.Time) string {
 
 func (u *UsageView) SnapshotLine(now time.Time) string {
 	if u.Error != "" {
-		return "usage: unknown (" + truncate(u.Error, 120) + ")"
+		return "usage: unknown (" + Cmd.Truncate(u.Error, 120) + ")"
 	}
 	return "usage: " + u.WatchLine(now)
 }
@@ -347,7 +347,7 @@ func HighFigureText(fh *UsageWindow, highPct float64, now time.Time) string {
 	}
 	s := fmt.Sprintf("5h %s at or past %s", pct(used), pct(highPct))
 	if !reset.IsZero() && now.Before(reset) {
-		s += fmt.Sprintf(" (resets %s, in %s)", clock(now.Local(), reset), dur(reset.Sub(now)))
+		s += fmt.Sprintf(" (resets %s, in %s)", Cmd.Clock(now.Local(), reset), Cmd.Dur(reset.Sub(now)))
 	}
 	return s
 }
@@ -376,7 +376,7 @@ func UnderusedFigureText(sd *UsageWindow, u config.Usage, now time.Time) string 
 	s := fmt.Sprintf("7d %s is %s behind pace %s (below %s of pace",
 		pct(sd.UsedPercent), pct(behind), pct(*sd.Pace), pct(math.Round(u.EffectiveUnderuseRatio()*1000)/10))
 	if !sd.ResetsAt.IsZero() && now.Before(sd.ResetsAt) {
-		s += fmt.Sprintf(", resets %s, in %s", clock(now.Local(), sd.ResetsAt), dur(sd.ResetsAt.Sub(now)))
+		s += fmt.Sprintf(", resets %s, in %s", Cmd.Clock(now.Local(), sd.ResetsAt), Cmd.Dur(sd.ResetsAt.Sub(now)))
 	}
 	return s + ")"
 }
