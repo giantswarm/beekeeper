@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 )
 
@@ -32,6 +33,8 @@ type View struct {
 	Calls func(program string, args []string) (int, error)
 	// Process reads a background step's state.
 	Process func(name string) (running bool, exit int, ok bool)
+	// GitHub checks an expectation of the scenario's GitHub.
+	GitHub func(e *fakegithub.Expect) error
 	// Worker checks what a scripted worker did.
 	Worker func(harness.WorkerExpect) error
 	// Origin reads a branch of a repository's origin.
@@ -107,6 +110,11 @@ func Check(e Expect, v View) error {
 		if c.Max != nil && n > *c.Max {
 			return fmt.Errorf("calls of %s: %d, at most %d", what, n, *c.Max)
 		}
+	case "github":
+		if v.GitHub == nil {
+			return missing("github")
+		}
+		return v.GitHub(e.GitHub)
 	case "process":
 		if v.Process == nil {
 			return missing("process")
