@@ -60,19 +60,23 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	// A hold is a wait, not a failed merge attempt. Keep the exact-head
 	// review available and reconsider it on the next pass, without claiming
-	// the go, entering the gate or starting failure backoff.
+	// the go, entering the gate or starting failure backoff. Every wait
+	// names what it waits on: the stall alarm reads it (checkFlowWaits).
 	waitKey := act.Key + " hold"
 	if h, held := merge.BlockingFor(st, a.timeNow(), loopParty.Name, ref.Repo, ref.N, a.cfg.LaneOf(ref.Repo)); held {
 		l.sayOnce(waitKey, "SUPERVISOR WAIT %s on hold:%s", act.URL, h.Target)
-		return "", errLoopLater
+		return "", mergeHeld(waitHold, "it is held by hold:%s (beekeeper hold lists it); the merge starts once the hold is lifted", h.Target)
 	}
 	l.clearSaid(waitKey)
-	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) || a.resetFirst(st) {
-		return "", errLoopLater
+	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		return "", mergeHeld(waitBudget, "the GitHub budget is under github.floor (%d): no merge starts until its reset", a.cfg.GitHub.Floor)
+	}
+	if a.resetFirst(st) {
+		return "", mergeHeld(waitBudget, "merges queued under github.floor for the GitHub budget's reset go first (merge.resetFirst)")
 	}
 	if err := a.fatalPublicationBarrier(ctx, st, ref.Repo, ref.N); err != nil {
 		l.sayOnce(waitKey, "SUPERVISOR WAIT %s: %v", act.URL, err)
-		return "", errLoopLater
+		return "", mergeHeld(waitOutage, "an outage of its repository's default branch holds it: %s", oneLine(err.Error()))
 	}
 	repairStage := act.Key + " repair"
 	l.mu.Lock()
@@ -83,7 +87,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	p, err := readLoopPull(ctx, act.Ref)
 	if err != nil {
-		return "", err
+		return "", namedWait(err, waitUnread, "its pull request is unread")
 	}
 	if p.State == superloop.Merged && (p.Head == act.Head || l.baseMerged(ctx, p, act.Head)) {
 		closed, closeErr := closeMergedPullIssues(ctx, st, p)
@@ -121,10 +125,15 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	// A detached gate owns the queued/running mutation. Observe its result
 	// on later passes; do not submit another command for the same PR.
-	if slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 		return m.Repo == ref.Repo && m.PR == ref.N && (m.Phase == state.Waiting || m.Phase == state.Running) && merge.Runs(m, proc.Alive)
-	}) {
-		return "", errLoopLater
+	}); i >= 0 {
+		m := st.Merges[i]
+		since := m.Joined
+		if m.Phase == state.Running && !m.Started.IsZero() {
+			since = m.Started
+		}
+		return "", mergeHeld(waitGate, "the merge gate's own run has it %s in lane %s since %s (pid %d; beekeeper lanes shows it): its outcome settles the decision", m.Phase, m.Lane, since.UTC().Format(time.RFC3339), m.PID)
 	}
 	for _, f := range st.Failed {
 		if f.Repo != ref.Repo || f.PR != ref.N || f.By.Name != loopParty.Name {
@@ -207,7 +216,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	// repeats a mutation already observed merged.
 	p, readErr := readLoopPull(ctx, act.Ref)
 	if readErr != nil {
-		return "", readErr
+		return "", namedWait(readErr, waitUnread, "its pull request is unread after the merge command")
 	}
 	l.cachePull(act.Ref, p)
 	if p.State == superloop.Merged {
@@ -251,18 +260,18 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 			l.mu.Unlock()
 			_, _ = fmt.Fprintln(a.out, message)
 		}
-		return "", errLoopLater
+		return "", mergeHeld(waitPolicy, "%s", pending)
 	}
 	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
 		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, oneLine(out))
-		return "", errLoopLater
+		return "", mergeHeld(waitGate, "%s", pending)
 	}
 	// An unavailable read never authorizes a merge and is not a durable
 	// policy refusal. Reconsider it on a budget-admitted pass, so quota
 	// recovery does not wait for the generic exponential failure backoff.
 	if err == nil && (code == ExitGateUnread || code == ExitGateRefused && github.RateLimited(errors.New(out))) {
 		pending = "GitHub read unavailable; retrying when GitHub answers: " + oneLine(out)
-		return "", errLoopLater
+		return "", mergeHeld(waitUnread, "%s", pending)
 	}
 	if err == nil && code == ExitGateRefused || mutationResult && code == github.SquashRefused {
 		if mutationResult && reply.Reason != "" {
@@ -272,7 +281,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	if code == 0 && mutationResult && reply.Verdict == reviewedMergeQueued {
 		pending = "server-side merge queued; awaiting merge-result checks: " + oneLine(reply.Reason)
-		return "", errLoopLater
+		return "", mergeHeld(waitQueue, "%s", pending)
 	}
 	if mutationResult && code == github.SquashTooling {
 		if strings.HasPrefix(reply.Reason, reasonMergeValidationUnavailable) {
@@ -402,7 +411,7 @@ func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act su
 		if err := l.logStaleMergeFailure(act.Ref, act.Head); err != nil {
 			return "", err
 		}
-		return "", errLoopLater
+		return "", mergeHeld(waitGate, "a stale merge-result failure was dropped; the merge gate validates the reviewed head again on the next pass")
 	}
 	repairStage := act.Key + " repair"
 	l.mu.Lock()
@@ -425,7 +434,9 @@ func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act su
 	}
 	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
-		return "", err
+		// The merge is over; the decision stays pending until a worker has
+		// the repair. Say both, or the wait reads as a merge that never ran.
+		return "", namedWait(err, waitRepair, fmt.Sprintf("its merge failed %s; the branch repair it requested waits for a worker", truncate(oneLine(reason), 300)))
 	}
 	return "merge failed; branch repair requested", nil
 }

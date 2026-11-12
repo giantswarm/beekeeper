@@ -836,6 +836,11 @@ type supervisorLoop struct {
 	// waits with room (checkStall alarms on it).
 	stall     startStall
 	flowWaits map[string]flowWait
+	// mergeNotes are the holds the pending merge decisions' last runs read,
+	// mergeRuns the decisions dispatched to their lane's stream, both by key:
+	// the stall alarm names them (checkFlowWaits).
+	mergeNotes map[string]mergeNote
+	mergeRuns  map[string]mergeRun
 	// reviewWaits are the review requests this loop planned and has not
 	// started, by pull request (checkStall alarms on the oldest).
 	reviewWaits map[string]reviewWait
@@ -1565,6 +1570,24 @@ type loopCache struct {
 	Unmerged        map[string]cachedUnmergedObservation `json:"unmerged,omitempty"`
 	UnmergedCursor  string                               `json:"unmerged_cursor,omitempty"`
 	DefaultBranches map[string]string                    `json:"default_branches,omitempty"`
+	// FlowWaits keeps the pending merge decisions' waits across a restart:
+	// a new release must not restart the stall alarm's clock.
+	FlowWaits map[string]cachedFlowWait `json:"flow_waits,omitempty"`
+}
+
+// cachedFlowWait is a pending merge decision's wait as the cache keeps it,
+// with the hold its last run read.
+type cachedFlowWait struct {
+	Kind    string    `json:"kind"`
+	Ref     string    `json:"ref"`
+	URL     string    `json:"url,omitempty"`
+	Head    string    `json:"head,omitempty"`
+	Since   time.Time `json:"since"`
+	Alarmed []string  `json:"alarmed,omitempty"`
+	Last    time.Time `json:"last,omitzero"`
+	Class   string    `json:"class,omitempty"`
+	Cause   string    `json:"cause,omitempty"`
+	At      time.Time `json:"at,omitzero"`
 }
 
 func (l *supervisorLoop) loadCache() {
@@ -1607,6 +1630,22 @@ func (l *supervisorLoop) loadCache() {
 	if len(l.defaultBranches) == 0 && len(c.DefaultBranches) > 0 {
 		l.defaultBranches = maps.Clone(c.DefaultBranches)
 	}
+	if len(l.flowWaits) == 0 && len(c.FlowWaits) > 0 {
+		l.flowWaits = make(map[string]flowWait, len(c.FlowWaits))
+		if l.mergeNotes == nil {
+			l.mergeNotes = map[string]mergeNote{}
+		}
+		for key, w := range c.FlowWaits {
+			if w.Ref == "" || w.Since.IsZero() {
+				continue
+			}
+			l.flowWaits[key] = flowWait{act: superloop.Action{Key: key, Kind: w.Kind, Ref: w.Ref, URL: w.URL, Head: w.Head},
+				since: w.Since, alarmed: slices.Clone(w.Alarmed), last: w.Last}
+			if w.Cause != "" {
+				l.mergeNotes[key] = mergeNote{class: w.Class, cause: w.Cause, at: w.At}
+			}
+		}
+	}
 }
 
 func (l *supervisorLoop) saveCache() {
@@ -1634,6 +1673,14 @@ func (l *supervisorLoop) saveCache() {
 			c.Unmerged[k] = obs
 		}
 	}
+	if len(l.flowWaits) > 0 {
+		c.FlowWaits = make(map[string]cachedFlowWait, len(l.flowWaits))
+		for key, w := range l.flowWaits {
+			note := l.mergeNotes[key]
+			c.FlowWaits[key] = cachedFlowWait{Kind: w.act.Kind, Ref: w.act.Ref, URL: w.act.URL, Head: w.act.Head,
+				Since: w.since, Alarmed: slices.Clone(w.alarmed), Last: w.last, Class: note.class, Cause: note.cause, At: note.at}
+		}
+	}
 	l.mu.Unlock()
 	_ = l.a.store.WriteFile(loopCacheFile, c)
 }
@@ -1649,6 +1696,25 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 				why = "pass ended before refill dispatch: " + oneLine(result.Error())
 			}
 			_, _ = fmt.Fprintf(l.a.out, refillZeroFormat, why)
+		}
+	}()
+	// A pass that ends before it plans runs no merge decision. The stall
+	// alarm still measures the pending ones and names what ended the pass:
+	// a held or failing pass must not silence it
+	// (https://github.com/giantswarm/beekeeper/issues/3820).
+	flowChecked := false
+	ended := mergeWait{class: waitRestart, cause: "the loop ends its passes before planning while it restarts into its replaced binary, so it runs no merge decision"}
+	defer func() {
+		if l.dryRun || flowChecked || ctx.Err() != nil {
+			return
+		}
+		if result != nil {
+			ended = mergeWait{class: waitPass, cause: "the loop's pass failed before it planned or ran this decision: " + oneLine(result.Error())}
+		}
+		if err := l.flowWaitsUnplanned(ended.class, ended.cause); err != nil {
+			l.sayOnce("flow waits", "SUPERVISOR STALL alarm for the pending merge decisions failed: %v", err)
+		} else {
+			l.clearSaid("flow waits")
 		}
 	}()
 	l.lifecyclePhase("reload configuration")
@@ -1737,6 +1803,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 			}
 		}
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
+		ended = mergeWait{class: waitBudget, cause: "the loop holds its passes while the GitHub GraphQL budget is unknown or under github.floor: it reads no pull request and runs no merge decision until a fresh reading recovers"}
 		return nil
 	}
 	l.clearSaid("graphql budget")
@@ -1746,6 +1813,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 				return saveErr
 			}
 			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
+			ended = mergeWait{class: waitBudget, cause: "the loop holds its passes on its GitHub allowance, so it reads no pull request and runs no merge decision: " + cmp.Or(laterCause(err), oneLine(err.Error()))}
 			return nil
 		}
 		l.clearSaid("graphql allowance")
@@ -2228,6 +2296,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
 		}
+		flowChecked = true
 		if err := l.checkFlowWaits(in, actions, failures); err != nil {
 			return err
 		}
@@ -2296,7 +2365,11 @@ func (l *supervisorLoop) endInFlight(key string) {
 }
 
 func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action, reserved ...[]string) error {
-	if l.pauseForReexec() || ctx.Err() != nil {
+	if ctx.Err() != nil {
+		return nil
+	}
+	if l.pauseForReexec() {
+		l.mergeWaited(act, mergeHeld(waitRestart, "the loop runs no action while it restarts into its replaced binary"))
 		return nil
 	}
 	// An earlier pass can finish after this pass took its snapshot.
@@ -2319,7 +2392,14 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 		// Claimed before an interruption: what the log shows of its
 		// side effect decides, never a second one.
 		what, done, err := l.reconcile(ctx, st, act, c)
+		if act.Kind == superloop.KindGo && errors.Is(err, errLoopLater) {
+			// An observation the claim's reconciliation cannot read yet is a
+			// wait for the next pass, never the end of the loop.
+			l.mergeWaited(act, namedWait(err, waitUnread, "its claim cannot be reconciled, its pull request is unread"))
+			return nil
+		}
 		if err != nil {
+			l.mergeWaited(act, mergeHeld(waitFailed, "reconciling its claim failed: %s", oneLine(err.Error())))
 			return err
 		}
 		if done {
@@ -2338,6 +2418,7 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	what, err := l.act(ctx, st, act, reserved...)
 	switch {
 	case errors.Is(err, errLoopLater):
+		l.mergeWaited(act, err)
 		return nil
 	case err != nil && ctx.Err() != nil:
 		// The loop is stopping: its cancellation is no failure of the
@@ -2451,16 +2532,23 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	for _, lane := range laneOrder {
 		acts := laneMerges[lane]
 		passMerges.Add(1)
+		l.mergeQueued(acts)
 		l.mergeActions.Go(func() {
 			defer passMerges.Done()
 			defer func() {
+				l.mergeStreamEnded(acts)
 				for _, act := range acts {
 					l.endInFlight(act.Key)
 				}
 			}()
-			for _, act := range acts {
+			for i, act := range acts {
+				l.mergeStarted(acts, i)
 				err := l.execAction(bgCtx, st, claims, failures, act)
 				if err != nil {
+					// The decisions behind it did not run this pass: say why.
+					for _, later := range acts[i+1:] {
+						l.mergeWaited(later, mergeHeld(waitLane, "the loop's merge stream of its lane ended on %s before it ran: %s", act.URL, oneLine(err.Error())))
+					}
 					setErr(err)
 					return
 				}
@@ -3047,6 +3135,14 @@ func minTime(a, b time.Time) time.Time {
 // errLoopLater is an action that waits for a later pass, quietly: no room
 // for a start yet.
 var errLoopLater = errors.New("later")
+
+// unreadCause is why a read that waits for a later pass has no answer.
+func unreadCause(err error) string {
+	if errors.Is(err, errLoopLater) {
+		return cmp.Or(laterCause(err), "no current observation")
+	}
+	return oneLine(err.Error())
+}
 
 // sayOnce prints a failure once per key and run.
 func (l *supervisorLoop) sayOnce(key, format string, args ...any) {
@@ -3646,19 +3742,21 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 	return nil
 }
 
+// wakeOrStartFixer tells act's worker, or starts one for it. Each wait for a
+// later pass names its cause: a merge decision's stall alarm reads it.
 func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, act superloop.Action) error {
-	if l.unreadRepo(act.Ref) != "" {
-		return errLoopLater
+	if why := l.unreadRepo(act.Ref); why != "" {
+		return fmt.Errorf("its repository is unread (%s): %w", why, errLoopLater)
 	}
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
 			p, err := l.readPull(ctx, act.Ref)
 			if err != nil {
-				return errLoopLater
+				return fmt.Errorf("its pull request is unread (%s): %w", unreadCause(err), errLoopLater)
 			}
 			l.cachePull(act.Ref, p)
 			if p.State != superloop.Open {
-				return errLoopLater
+				return fmt.Errorf("its pull request is %s, not open: %w", cmp.Or(p.State, "in no known state"), errLoopLater)
 			}
 		}
 		// A timed-out remote start registers the worker before its first
@@ -3702,14 +3800,14 @@ Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekee
 `
 
 func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
-	if l.unreadRepo(act.Ref) != "" {
-		return errLoopLater
+	if why := l.unreadRepo(act.Ref); why != "" {
+		return fmt.Errorf("its repository is unread (%s): %w", why, errLoopLater)
 	}
 	if err := l.repositoryStart(act.Ref); err != nil {
 		return err
 	}
 	if l.holdingStarts() {
-		return errLoopLater
+		return fmt.Errorf("starts are held (the SUPERVISOR STARTS HELD line names the watch budget or machine condition): %w", errLoopLater)
 	}
 	r, ok := parseRef(act.Ref)
 	if !ok {
@@ -3719,11 +3817,11 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if act.Kind != superloop.KindEnd {
 		p, err := l.readPull(ctx, act.Ref)
 		if err != nil {
-			return errLoopLater
+			return fmt.Errorf("its pull request is unread (%s): %w", unreadCause(err), errLoopLater)
 		}
 		l.cachePull(act.Ref, p)
 		if p.State != superloop.Open {
-			return errLoopLater
+			return fmt.Errorf("its pull request is %s, not open: %w", cmp.Or(p.State, "in no known state"), errLoopLater)
 		}
 		livePull = p
 	}
@@ -3765,7 +3863,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 				where = "on the coordinator"
 			}
 			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
-			return errLoopLater
+			return fmt.Errorf("no room for a worker start yet %s (beekeeper capacity and the SUPERVISOR HOST WAITS lines name the limit): %w", where, errLoopLater)
 		}
 		return err
 	}
@@ -3829,7 +3927,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 			}
 		}
 		if Code(err) == ExitRefused {
-			return errLoopLater
+			return fmt.Errorf("its worker start was refused (%s): %w", truncate(oneLine(err.Error()), 300), errLoopLater)
 		}
 		return err
 	}
