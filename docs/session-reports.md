@@ -13,6 +13,12 @@ transition again. The loop revalidates the session assignment and the command
 against current state. A rejected message records `session.report-rejected`
 and wakes its sender with the reason. Failed wakes remain pending for retry.
 
+The doctor and the loop leave a session on the roster while a report of its
+current assignment waits in the inbox, also once its CLI ended. Otherwise the
+loop would reject the report as one of an ended assignment, and a completion
+or a review verdict would be lost. They read the inbox under the state lock
+before they take an entry off.
+
 `note add` returns `report:<message-id>` before a note number exists. Use that
 reference directly with `agents park --on report:<message-id>`. The loop
 resolves it to the created note, including when the note folds into an

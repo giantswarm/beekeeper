@@ -242,6 +242,32 @@ func (a *app) consumeReports(ctx context.Context) error {
 	return a.notifyRejectedReports(ctx)
 }
 
+// reportsPending returns, for a roster entry, the id of the first inbox
+// message sent for its current assignment, "" when none waits. The consumer
+// rejects a message whose assignment left the roster, so whoever takes an
+// entry off leaves it while one waits: the doctor once took a reviewer off as
+// gone with its approval in the inbox, and the approval was lost
+// (https://github.com/giantswarm/beekeeper/issues/3625).
+func reportsPending(messages []state.ReportMessage) func(state.Agent) string {
+	var waiting []sessionReport
+	var ids []string
+	for _, m := range messages {
+		var p sessionReport
+		if json.Unmarshal(m.Payload, &p) != nil || !p.Registered {
+			continue
+		}
+		waiting, ids = append(waiting, p), append(ids, m.ID)
+	}
+	return func(ag state.Agent) string {
+		for i, p := range waiting {
+			if ag.Is(p.Assignee) && ag.Task == p.Task && ag.AssignedAt.Equal(p.AssignedAt) {
+				return ids[i]
+			}
+		}
+		return ""
+	}
+}
+
 func (a *app) notifyRejectedReports(ctx context.Context) error {
 	st, err := a.store.Peek()
 	if err != nil {
