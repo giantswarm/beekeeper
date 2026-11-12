@@ -2,7 +2,10 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -13,23 +16,36 @@ import (
 
 // commitLock serializes the durable state boundary, not desk callbacks. The
 // order is state.lock then state.commit.lock; renewal takes only the latter.
-// Never run network calls or command callbacks while holding this lock.
+// Never run network calls or command callbacks while holding this lock. A
+// transaction's commit neither decodes nor encodes the whole state under it:
+// a renewal waits commitWait at most. A renewal itself still reads, decodes
+// and writes the whole state under it (RenewExecutionLease).
 func (s *FileStore) commitLock(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timing := startLockClock(commitLockName, false)
+	ctx, cancel := context.WithTimeout(ctx, commitWait)
 	defer cancel()
 	l := flock.New(s.path("state.commit.lock"))
 	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil {
+		timing.busy()
 		return nil, errors.Join(execution.ErrCoordinatorBusy, err)
 	}
 	if !ok {
+		timing.busy()
 		return nil, execution.ErrCoordinatorBusy
 	}
-	return func() { _ = l.Unlock() }, nil
+	timing.acquire()
+	return func() {
+		_ = l.Unlock()
+		timing.release()
+	}, nil
 }
+
+// commitWait bounds every wait for the commit lock.
+const commitWait = 5 * time.Second
 
 // RenewExecutionLease changes only the lease of an authenticated execution.
 // The issuer sees the authoritative, locked state, including global stop and
@@ -88,18 +104,28 @@ func (s *FileStore) RenewExecutionLease(ctx context.Context, ref execution.Ref, 
 // earlier sequence. Carry forward only grants for its exact registration;
 // explicit lease edits, deletion, stop and a replacement generation still commit
 // atomically. Only a lease left unchanged by the callback can be carried forward.
-func (s *FileStore) preserveRenewals(st *State, leasesBefore map[execution.Ref]execution.LeaseGrant) error {
-	current, err := s.load()
+// While state.json is still base, the file the transaction read, no renewal
+// replaced it and its writer was judged at begin: nothing is read again.
+// Otherwise only the writer and the leases are decoded, not the whole document.
+// renewed says a grant was carried into st.
+func (s *FileStore) preserveRenewals(st *State, leasesBefore map[execution.Ref]execution.LeaseGrant, base *os.File) (renewed bool, err error) {
+	if err := s.checkRecoveryFence(); err != nil {
+		return false, err
+	}
+	if unchangedSince(base, s.path("state.json")) {
+		return false, nil
+	}
+	current, err := s.readLeases()
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := s.checkWriter(current, clock.Now()); err != nil {
-		return err
+	if err := s.checkWriterVersion(current.writer(), clock.Now()); err != nil {
+		return false, err
 	}
-	leases := make(map[execution.Ref]*ExecutionRecord)
+	leases := make(map[execution.Ref]leaseRecord)
 	for _, start := range current.Starts {
 		if r := start.Execution; r != nil && r.Lease != nil {
-			leases[r.Request.Ref] = r
+			leases[r.Request.Ref] = *r
 		}
 	}
 	for _, start := range st.Starts {
@@ -111,10 +137,66 @@ func (s *FileStore) preserveRenewals(st *State, leasesBefore map[execution.Ref]e
 		if (r.Lease == nil && hadLease) || (r.Lease != nil && (!hadLease || *r.Lease != before)) {
 			continue
 		}
-		latest := leases[r.Request.Ref]
-		if latest != nil && latest.RequestDigest == r.RequestDigest && (r.Lease == nil || latest.Lease.Sequence > r.Lease.Sequence) {
+		latest, ok := leases[r.Request.Ref]
+		if ok && latest.RequestDigest == r.RequestDigest && (r.Lease == nil || latest.Lease.Sequence > r.Lease.Sequence) {
 			r.Lease = latest.Lease
+			renewed = true
 		}
 	}
-	return nil
+	return renewed, nil
+}
+
+// unchangedSince says path is still the file base is open on, unchanged: an
+// open descriptor keeps its inode from being reused by a later file.
+func unchangedSince(base *os.File, path string) bool {
+	if base == nil {
+		return false
+	}
+	was, err := base.Stat()
+	if err != nil {
+		return false
+	}
+	now, err := os.Stat(path)
+	return err == nil && sameSnapshot(was, now)
+}
+
+// leaseView is what preserveRenewals reads of a state a renewal replaced: the
+// writer and the execution leases, without allocating every other record.
+type leaseView struct {
+	Writer *struct {
+		Version string `json:"version"`
+	} `json:"writer"`
+	Starts []struct {
+		Execution *leaseRecord `json:"execution"`
+	} `json:"starts"`
+}
+
+type leaseRecord struct {
+	Request struct {
+		Ref execution.Ref `json:"ref"`
+	} `json:"request"`
+	RequestDigest string                `json:"requestDigest"`
+	Lease         *execution.LeaseGrant `json:"lease"`
+}
+
+func (v *leaseView) writer() string {
+	if v.Writer == nil {
+		return ""
+	}
+	return v.Writer.Version
+}
+
+func (s *FileStore) readLeases() (*leaseView, error) {
+	raw, err := os.ReadFile(s.path("state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return &leaseView{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	v := &leaseView{}
+	if err := json.Unmarshal(raw, v); err != nil {
+		return nil, fmt.Errorf("%s: %w", s.path("state.json"), err)
+	}
+	return v, nil
 }
