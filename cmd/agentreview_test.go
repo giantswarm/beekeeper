@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -362,6 +364,11 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 		{name: "live process", held: func(r *loopRig, _ *state.State) {
 			r.sessions = []*claude.Session{{ID: reviewer.Session}}
 		}},
+		{name: "process table unreadable", held: func(*loopRig, *state.State) {
+			loopSessions = func(*app) ([]*claude.Session, *proc.Table, error) {
+				return nil, nil, errors.New("process table unreadable")
+			}
+		}},
 		{name: "remote execution running", held: func(_ *loopRig, st *state.State) {
 			st.Starts = append(st.Starts, state.Start{Party: reviewer, Execution: running})
 		}},
@@ -433,6 +440,48 @@ func TestReleasedReviewKeepsItsRoundButNotItsHead(t *testing.T) {
 	st := &state.State{DeskReviews: []state.DeskReview{{Ref: loopPR, Head: loopHead, Round: 1, Released: time.Unix(1, 0)}}}
 	if round, _, err := reviewRound(st, superloop.Pull{Ref: loopPR, Head: loopHead}); err != nil || round != 2 {
 		t.Fatalf("released round: round %d, %v", round, err)
+	}
+}
+
+// A restart can carry the number of the round it released (agents review
+// numbers rounds from member verdicts the loop's ledger does not count): its
+// reviewer still gets an assignment of its own, the one its result and the
+// merge gate read, instead of the released round standing in for it.
+func TestReleasedRoundDoesNotStandInForItsRestart(t *testing.T) {
+	a, r := executionTestApp(t)
+	head := strings.Repeat("a", 40)
+	ref := r.Repository + "#7"
+	act := superloop.Action{Ref: ref, Head: head, Round: 1, Agent: "local-author"}
+	gone := state.Party{Session: "gone-reviewer", Name: superloop.ReviewerName(ref, 1)}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		start := &st.Starts[0]
+		start.Name = superloop.ReviewerName(ref, 1)
+		start.By = loopParty
+		start.At = time.Now().Add(-time.Minute)
+		st.DeskReviews = []state.DeskReview{{ID: "released", Ref: ref, Head: head, Round: 1, Worker: state.Party{Name: act.Agent}, Reviewer: gone, AssignedAt: time.Now().Add(-time.Hour), Released: time.Now().Add(-2 * time.Minute)}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Twice: the restart's own assignment stays idempotent.
+	for range 2 {
+		if err := a.assignExecutionReview(context.Background(), act); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.DeskReviews) != 2 {
+		t.Fatalf("restart not assigned once beside its released round: %+v", st.DeskReviews)
+	}
+	restart := st.DeskReviews[1]
+	if !restart.Released.IsZero() || restart.Round != 1 || !sameReviewSession(restart.Reviewer, st.Starts[0].Party) {
+		t.Fatalf("restart's assignment: %+v", restart)
+	}
+	if round := executionReviewRound(st, execution.MergeUse{Repository: r.Repository, PR: 7}); round == nil || round.ID != restart.ID {
+		t.Fatalf("merge gate reads %+v, not the restart's assignment", round)
 	}
 }
 

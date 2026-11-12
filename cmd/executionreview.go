@@ -24,11 +24,14 @@ func sameReviewSession(a, b state.Party) bool {
 
 // Assignment is recorded only from a supervisor-loop start, never from a
 // worker-selected name or a review's prose. Reconciliation is idempotent.
+// A released round never stands for its successor: a restart can carry the
+// released round's number (agents review numbers rounds from member
+// verdicts the loop's ledger does not count) and needs its own assignment.
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
 		worker, ok := executionReviewWorker(st, act)
 		for _, round := range st.DeskReviews {
-			if round.Ref == act.Ref && round.Head == act.Head && round.Round == act.Round {
+			if round.Released.IsZero() && round.Ref == act.Ref && round.Head == act.Head && round.Round == act.Round {
 				return nil, nil
 			}
 		}

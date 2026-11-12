@@ -434,7 +434,7 @@ func releaseGoneReviews(st *state.State, ref, head string, live func(state.Party
 			continue
 		}
 		round.Released = now
-		events = append(events, about(event(loopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, shortSHA(round.Head), round.Reviewer.Name), round.Ref))
+		events = append(events, about(event(loopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (done or off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, shortSHA(round.Head), round.Reviewer.Name), round.Ref))
 	}
 	return events
 }
