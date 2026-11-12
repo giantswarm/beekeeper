@@ -107,3 +107,22 @@ func TestFatalPreflightRejectsMalformedHarnessSettings(t *testing.T) {
 		})
 	}
 }
+
+// A preflight killed at its deadline exits -1 without an error from the
+// command runner; that timeout is unknown health, never a harness outage.
+func TestFatalHarnessTimeoutIsUnknownNotFailed(t *testing.T) {
+	oldRun, oldTimeout := fatalRun, fatalProbeTimeout
+	t.Cleanup(func() { fatalRun, fatalProbeTimeout = oldRun, oldTimeout })
+	fatalProbeTimeout = 50 * time.Millisecond
+	fatalRun = func(ctx context.Context, stdin string, _ []string) (string, string, int, error) {
+		return runArgv(ctx, stdin, []string{"sleep", "5"})
+	}
+	o := fatalHarness(t.Context(), filepath.Join(t.TempDir(), "config.yaml"), config.AgyHarness)
+	if o.Failed || !o.Unknown {
+		t.Fatalf("timed-out harness preflight = %+v, want unknown and not failed", o)
+	}
+	fatalRun = func(context.Context, string, []string) (string, string, int, error) { return "", "", 1, nil }
+	if o := fatalHarness(t.Context(), filepath.Join(t.TempDir(), "config.yaml"), config.AgyHarness); !o.Failed || o.Unknown {
+		t.Fatalf("failing harness preflight = %+v, want failed", o)
+	}
+}

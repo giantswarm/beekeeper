@@ -1,0 +1,105 @@
+name: loop-hour-in-seconds
+description: >
+  An hour of supervisor loop passes, a GitHub budget reset included, takes
+  seconds of real time. The loop runs in the background on the world's
+  clock with a 5-minute pass interval, and the world advances in 6-minute
+  steps, each waking the loop's pass and its pull watcher; each step waits
+  until the desk is quiet, the work the last one woke done. The watcher
+  lists the open pull requests of the desk's 15 authors at most every 5
+  minutes (a minute's margin per step): 15 background REST searches each
+  time. While the GitHub budget is unknown, the background REST allowance
+  admits 100 an hour. So after 09:30 (90 searches) the 09:36 listing is
+  cut short at the allowance, nothing more reaches GitHub until the
+  allowance's hour has passed, and after 10:00 the listings go out again.
+issue: https://github.com/giantswarm/beekeeper/issues/3792
+flow: clock
+tags: [clock, loop, github]
+timeout: 30s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      supervisor:
+        loopInterval: 5m
+        # One release lookup on the first pass, none in the hour.
+        releaseEvery: 2h
+        ownership:
+          authors: [desk, author-01, author-02, author-03, author-04, author-05, author-06, author-07,
+                    author-08, author-09, author-10, author-11, author-12, author-13, author-14]
+  repositories:
+    - name: example/app
+  calls:
+    # The pull watcher's listing: one search per author, none open.
+    - program: gh
+      args: [search, prs, --author, '.+']
+      respond: {stdout: "[]\n"}
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    - program: claude
+      args: ['-p', /usage, --output-format, json]
+      respond: {stderr: "Not logged in\n", exit: 1}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+    # The watch's machine reads: empty journals, no units.
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: systemctl
+      args: [--user, list-units]
+      respond: {stdout: ""}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # 09:00, the first pass: the first listing, 15 searches.
+  - wait_for:
+      timeout: 10s
+      interval: 20ms
+      expect:
+        - calls: {program: gh, args: [search, prs], min: 15}
+  # 09:06 to 09:30: each step wakes the loop, and the watcher lists again.
+  - name: fill
+    advance:
+      by: 30m
+      step: 6m
+      quiet: 100ms
+      settle:
+        timeout: 5s
+        interval: 20ms
+        expect:
+          - calls: {program: gh, args: [search, prs], min: 15}
+    expect:
+      - calls: {program: gh, args: [search, prs], min: 90, max: 90}
+      - process: {name: loop, running: true}
+  # 09:36 to 09:54: the allowance cuts the 09:36 listing short and holds
+  # every later one.
+  - name: held
+    advance:
+      by: 24m
+      step: 6m
+      quiet: 100ms
+  - wait_for:
+      timeout: 5s
+      interval: 20ms
+      expect:
+        - calls: {program: gh, args: [search, prs], min: 91, max: 100}
+        - process: {name: loop, running: true}
+  # 10:10: the allowance's hour has passed; the watcher's next retry lists
+  # again.
+  - name: reset
+    advance: 16m
+  - wait_for:
+      timeout: 10s
+      interval: 20ms
+      expect:
+        - calls: {program: gh, args: [search, prs], min: 101}
+        - process: {name: loop, running: true}
+  - stop: loop
+
+then:
+  - {step: fill, duration: {max: 10s}}
+  - {step: held, duration: {max: 10s}}
+  - calls: {program: gh, args: [search, prs], min: 101, max: 115}

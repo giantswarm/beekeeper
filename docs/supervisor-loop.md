@@ -5,21 +5,28 @@ the desk from the board, watches pull requests and outages, and routes alerts.
 
 ## Filling the desk
 
-With `supervisor.workerBrief` configured, each pass fills the desk to `capacity.ceiling` from the
+With `supervisor.workerBrief` configured, refill runs on its own `supervisor.loopInterval` cadence,
+independently of slow observations, retirement, intake and next bookkeeping. The first refill runs
+immediately on startup. Each tick refreshes watch budget, machine and disk holds before filling
+the desk to `capacity.ceiling` from the
 next free board items, including after a restart or roster loss without a done report. Each start
 rechecks capacity and stops when its gates refuse, the ceiling is reached, or the board offers
-nothing. The existing done-triggered next-item transition remains active. An empty or failed board
+nothing. Refills never overlap. Shutdown and binary replacement cancel and drain the active refill;
+a failed binary replacement restarts its cadence. Configuration reload waits for the active refill.
+Completed start claims are not replayed on later ticks. Background refills never refresh the
+observation pass's health heartbeat. Start holds and capacity, budget and delivery gates still apply. The stall alarm names the active
+refill action (for example, capacity, board next or a worker start). `--once` refills within its pass.
+Legacy done-triggered next actions settle as bookkeeping. An empty or failed board
 read waits `supervisor.fillRetryEvery` (5m by default) before retrying, doubled for each further
 empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
 one of the changes below, unless `capacity.ceiling` changes or an agent is done or leaves the roster
 first; a park, a resume, a wait or a new task, and the busy count and room they move, do not end it.
 
-An empty or failed read answers the rest of its pass, the done-triggered starts included. `board
-next` exiting 3 with no pick (nothing free) is that empty read: a done event's next start settles on
-it ("the board offers nothing") and is never retried as a failure. No board read runs while the
-GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading until its
-reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait
-unsettled and the refill skips its read, without a failure or a pause.
+An empty or failed read answers the rest of that refill. `board next` exiting 3 with no pick
+(nothing free) is an empty read and is never retried as a failed start. No board read runs while
+the GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading
+until its reset, an hour after the reading when GitHub named none, or a GraphQL refusal):
+the refill skips its read, without a failure or a pause.
 
 The loop also holds ownership and PR observations under the GraphQL floor or while the reading is
 unknown or stale. Board queries and tracked PR reads check a fresh budget against a durable
@@ -179,3 +186,32 @@ candidate version, oldest eligible wait and public PR URLs. Recovery is filed on
 Capacity and budget refusals, stops, red CI and pending review do not add failures.
 Missing observations get one minute for initialization; unreadable observations, or a snapshot
 older than three minutes, report unknown rather than healthy. Retry backoff is independent.
+
+### Pending merge decisions
+
+The loop itself measures every merge decision the planner requests for an approved head. A
+decision that neither merged nor was overtaken (merged, closed or a new head) within 15 minutes
+files one alarm for the guide that names what holds it:
+
+| Cause | What the alarm names |
+| --- | --- |
+| hold | the `hold:<target>` that stops the merge |
+| GitHub budget | the budget under `github.floor`, `merge.resetFirst`, or held loop passes |
+| outage | the default-branch outage that holds its repository |
+| in flight | since when its merge command runs in the merge gate |
+| lane | the pull request whose merge command runs ahead of it in the loop's stream for its lane |
+| merge gate | the gate's own queued or running run, with its lane, phase and PID |
+| merge policy | the repository policy refusal the loop retries |
+| merge queue | the server-side merge queue it waits in |
+| unread | the pull request the loop cannot read, so no pass plans or runs its decision |
+| repair | the failed merge and why the branch repair it requested has no worker yet |
+| failed | the last run's error and, under backoff, when the loop retries |
+| restart | a loop that runs no action while it restarts into a replaced binary |
+| pass | the error that ended the pass before it planned |
+
+The alarm is delivered once per pending head and cause, and no sooner than 15 minutes after
+that head's last alarm: a hold that changes is named again, one that alternates is not repeated.
+A pass that ends before it plans (held GitHub observations, a restart, an error) still measures
+the pending decisions and names what ended it. The waits, the causes already named and the last
+cause read survive a restart of the loop, so a new release neither restarts the 15 minutes nor
+repeats an alarm. `SUPERVISOR STALL ENDED` says when an alarmed decision is no longer pending.

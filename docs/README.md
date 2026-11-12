@@ -60,6 +60,8 @@ A change that adds or changes behaviour documents it on its topic page.
 ## Development
 
 - [Developing on beekeeper](development.md)
+- [Behavioral scenarios](scenarios.md)
+- [The scenario's GitHub](scenarios-github.md)
 - [Performance budgets](performance.md)
 - [Standstill replays](standstill-replays.md)
 

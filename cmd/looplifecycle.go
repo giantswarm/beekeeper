@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -56,7 +57,7 @@ func boundLoopShutdown(ctx context.Context, done <-chan struct{}, store state.St
 		return
 	case <-ctx.Done():
 	}
-	t := time.NewTimer(loopShutdownGrace)
+	t := clk.NewTimer(loopShutdownGrace)
 	defer t.Stop()
 	select {
 	case <-done:
@@ -74,7 +75,7 @@ func boundLoopShutdown(ctx context.Context, done <-chan struct{}, store state.St
 	}
 	var life loopLifecycle
 	if found, err := store.ReadFile(loopLifecycleFile, &life); err == nil && found {
-		life.At, life.Exited, life.Code, life.Failure = time.Now().UTC(), true, 0, loopFailureAbandoned
+		life.At, life.Exited, life.Code, life.Failure = clk.Now().UTC(), true, 0, loopFailureAbandoned
 		_ = store.WriteFile(loopLifecycleFile, life)
 	}
 	_ = store.WriteFile(loopPIDFile, 0)
@@ -96,7 +97,7 @@ type loopLifecycle struct {
 	Failure string    `json:"failure,omitempty"`
 }
 
-var loopLifecycleNow = time.Now
+var loopLifecycleNow = clk.Now
 
 func (l *supervisorLoop) lifecyclePhase(phase string) {
 	if l.lifecycle == nil {
@@ -183,7 +184,7 @@ func (c *recoveryController) loopSilence(jVersion string, installed time.Time) s
 // event, including events the caller discards. A blocked read or parser cannot
 // keep itself alive. Side-file writes do not acquire the event reader's mutex.
 func (l *supervisorLoop) eventHistoryFilter(keep func(state.Event) bool) func(state.Event) bool {
-	return eventProgressFilter(keep, func() { l.lifecyclePhase("read event history") }, time.Now)
+	return eventProgressFilter(keep, func() { l.lifecyclePhase("read event history") }, clk.Now)
 }
 
 func eventProgressFilter(keep func(state.Event) bool, checkpoint func(), now func() time.Time) func(state.Event) bool {

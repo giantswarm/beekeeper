@@ -1,0 +1,45 @@
+name: fault-arm-and-clear
+description: >
+  A fault step arms an outage of GraphQL: gh cannot connect, board next
+  fails with gh's words and spends nothing. Once the fault is cleared the
+  same call picks the Ready issue.
+issue: https://github.com/giantswarm/beekeeper/issues/3790
+flow: github
+tags: [github, fault]
+timeout: 30s
+control:
+  none: >
+    states how board next fails on a GraphQL outage and picks once it ends,
+    which main already does; this pull request changes no beekeeper code,
+    only adds the fake GitHub and its fault step
+
+given:
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Ready item, board: Ready}
+
+when:
+  - name: arm
+    fault:
+      arm:
+        name: down
+        match: {path: graphql}
+        respond: {outage: true}
+  - name: during
+    run: {args: [board, next, --json]}
+    expect:
+      - stderr: {contains: ["error connecting to api.github.com"]}
+  - name: clear
+    fault: {clear: down}
+  - name: after
+    run: {args: [board, next, --json]}
+
+then:
+  - exit: 0
+  - json_path: {path: pick.ref, equals: example/app#1}
+  - github: {calls: {fault: down, caller: during, min: 1}}
+  - github: {calls: {fault: down, caller: after, max: 0}}
+  - github: {budget: {bucket: graphql, caller: during, spent: 0}}
+  - github: {budget: {bucket: graphql, caller: after, spent: {min: 3}}}

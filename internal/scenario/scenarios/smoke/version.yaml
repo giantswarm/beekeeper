@@ -1,0 +1,17 @@
+name: version
+description: >
+  The candidate prints its name and version and exits 0, without a single
+  external call.
+flow: smoke
+tags: [smoke]
+timeout: 20s
+
+when:
+  - name: version
+    run: {args: [version]}
+
+then:
+  - exit: 0
+  - output: {matches: '^beekeeper \S+'}
+  - calls: {max: 0}
+  - duration: {max: 10s}

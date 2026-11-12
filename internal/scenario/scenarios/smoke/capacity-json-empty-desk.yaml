@@ -1,0 +1,27 @@
+name: capacity-json-empty-desk
+description: >
+  capacity --json on an empty desk (no agents, no state, no Claude login)
+  asks Claude for its usage once, and still answers with a verdict and its
+  worker ceiling, records no start and calls nothing else.
+flow: smoke
+tags: [smoke, capacity]
+timeout: 30s
+
+given:
+  calls:
+    - program: claude
+      args: ['-p', /usage, --output-format, json]
+      respond: {stderr: "Not logged in\n", exit: 1}
+
+when:
+  - name: capacity
+    run: {args: [capacity, --json]}
+
+then:
+  - exit: 0
+  - json_path: {path: verdict, exists: true}
+  - json_path: {path: workerCeiling, exists: true}
+  - json_path: {path: headroom, exists: true}
+  - events: {not_contains: [agents.start]}
+  - calls: {program: claude, args: [/usage], min: 1, max: 1}
+  - calls: {max: 1}

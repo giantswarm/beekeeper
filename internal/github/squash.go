@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 // The plain squash merge's exit codes and verdicts, devctl pr merge's own
@@ -62,7 +64,7 @@ type GH func(ctx context.Context, args ...string) ([]byte, error)
 // RunGH is GH through the gh binary, acting on the repository ctx names
 // (ActingOn) through GH_REPO; a read GitHub answers with a 5xx, an empty or
 // a cut-off body is asked again (Retrying).
-var RunGH = newRepositoryCache(Retrying(execGH, ReadBackoff), time.Now).call
+var RunGH = newRepositoryCache(Retrying(execGH, ReadBackoff), clock.Now).call
 
 // execGH is one run of the gh binary.
 func execGH(ctx context.Context, args ...string) ([]byte, error) {

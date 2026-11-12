@@ -396,7 +396,7 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 			if args[1] == "graphql" {
 				return []byte(`{"data":{"repository":{"ref":{"branchProtectionRule":null}}}}`), nil
 			}
-			return []byte(`[[]]`), nil
+			return []byte(`[[{"type":"pull_request","parameters":{"require_extra_approval_for_unattributed_changes":true}}]]`), nil
 		}
 		calls = append(calls, slices.Clone(args))
 		return nil, nil

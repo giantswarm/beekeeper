@@ -33,9 +33,14 @@ Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`
 `.golangci.json` explicitly (in that order), without additional linters or a separate
 goconst pre-check. Without a repository config it uses `--no-config` and the tool's
 default linters, preventing inherited home or parent-directory policy. A lint refusal
-names the selected config (or the explicit default). A
-failing combination goes back to its owner. A failed fetch, a reviewed commit that cannot
-be read or a missing lint tool refuses the merge with
+names the selected config (or the explicit default). When lint fails, the checker compares
+structured whole-module findings with the exact fetched base using the same runner and toolchain.
+Existing findings are matched by file, linter, message and source text, with occurrence counts;
+line-number shifts do not turn existing findings into regressions. Only new findings go back to
+the PR worker, including findings in unchanged files. An unreadable baseline is a checker
+environment failure, not a branch repair. The full-module test check still runs when only
+existing lint findings remain. A failing combination goes back to its owner. A failed fetch,
+a reviewed commit that cannot be read or a missing lint tool refuses the merge with
 `merge-result validation unavailable: <the condition that failed>`. A repository with no
 local checkout is not validated: the merge's reason says so and the pull request's own
 checks stand, as for a head that already contains its base.
@@ -44,6 +49,12 @@ Where the base branch has a GitHub merge queue (required CI on `merge_group` eve
 merge is submitted to the queue, which retests the combination if the base advances, and
 never with `--admin`. Without a queue the lane's own check is the validation and the
 desk's admin merge (`merge.admin`) applies; an unreadable queue answer refuses the merge.
+That admin mutation uses the desk's `gh` login rather than the devctl App identity,
+and records a `merge.admin` event naming the approved head before sending
+`--admin --match-head-commit`. The review exception includes
+`require_extra_approval_for_unattributed_changes`. Emergency admin merges accept
+that review requirement too, with the exact-head authority and grant audit intact;
+required checks and unsupported non-review requirements still hold.
 
 A merge to `main` cuts a release candidate, `vX.Y.Z-rc.N` (a GitHub pre-release with signed assets);
 `devctl release promote giantswarm/beekeeper` makes the stable release, and `self-update` installs
@@ -505,7 +516,8 @@ measured with `beekeeper sessions --json` against the installed release on the s
 
 A long-running command's CPU is profiled where it runs: `BEEKEEPER_CPUPROFILE=<file>` writes the
 process's CPU profile to the file until it exits (a watch, on SIGINT or SIGTERM), for
-`go tool pprof -top -cum <binary> <file>`. Profile a watch against a copy of the state directory
+`go tool pprof -top -cum <binary> <file>`. Only that process profiles: the variable is cleared
+before it starts another beekeeper. Profile a watch against a copy of the state directory
 (`stateDir` in a copy of the configuration, `BEEKEEPER_CONFIG`), so that it takes no line, note or
 timer from the running watches.
 

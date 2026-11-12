@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -133,7 +134,9 @@ func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []s
 // a green bot pull request without a worker waits for nobody.
 func (w *loopPullWatcher) setBots(bots []string, desk superloop.Desk, teams map[string]string, known bool) {
 	w.mu.Lock()
-	changed := !slices.Equal(w.bots, bots) || len(bots) > 0 && known && !w.teamsKnown
+	oldScopes, oldOK := w.botDesk.BotScopes(w.teams, w.teamsKnown)
+	newScopes, newOK := desk.BotScopes(teams, known)
+	changed := !slices.Equal(w.bots, bots) || len(bots) > 0 && (known != w.teamsKnown || oldOK != newOK || !slices.Equal(oldScopes, newScopes))
 	w.bots, w.botDesk, w.teams, w.teamsKnown = slices.Clone(bots), desk, maps.Clone(teams), known
 	if changed {
 		w.snapshot.ListedAt = time.Time{}
@@ -153,9 +156,16 @@ func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out,
 	w.mu.Lock()
 	bots, desk, teams, known := slices.Clone(w.bots), w.botDesk, maps.Clone(w.teams), w.teamsKnown
 	w.mu.Unlock()
+	if len(desk.Orgs) == 0 {
+		desk.Orgs = orgs
+	}
+	scopes, ok := desk.BotScopes(teams, known)
+	if !ok {
+		return nil, nil, nil, nil
+	}
 	for _, b := range bots {
 		login := superloop.BotLogin(b)
-		listed, err := readOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, orgs)
+		listed, err := readOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, scopes)
 		if err != nil {
 			if failed == nil {
 				failed = map[string]error{}
@@ -228,7 +238,7 @@ var readObservedLoopPull = func(l *supervisorLoop, ctx context.Context, ref stri
 	}
 	now := l.a.timeNow()
 	if l.a.loopNow != nil {
-		now = time.Now()
+		now = clk.Now()
 	}
 	p, err := l.pullWatcher().read(ref, now)
 	return loopPullObservation{pull: p.Pull, at: p.At}, err
@@ -250,7 +260,7 @@ var startLoopPullWatcher = func(ctx context.Context, l *supervisorLoop) func() {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		timer := time.NewTimer(0)
+		timer := clk.NewTimer(0)
 		defer timer.Stop()
 		schedule := loopPullSchedule{}
 		var lastPoll time.Time
@@ -265,13 +275,13 @@ var startLoopPullWatcher = func(ctx context.Context, l *supervisorLoop) func() {
 				}
 				// Coalesce arrivals from any number of sessions into the same
 				// short interval rather than spending a request per new park.
-				if delay := time.Until(lastPoll.Add(loopPullShort)); delay > 0 {
+				if delay := clk.Until(lastPoll.Add(loopPullShort)); delay > 0 {
 					timer.Reset(delay)
 					continue
 				}
 			case <-timer.C:
 			}
-			lastPoll = time.Now()
+			lastPoll = clk.Now()
 			next, err := w.poll(ctx, l)
 			if ctx.Err() != nil {
 				return
@@ -319,7 +329,7 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 	before := w.snapshot
 	before.Pulls, before.Open = maps.Clone(before.Pulls), slices.Clone(before.Open)
 	w.mu.Unlock()
-	now := time.Now()
+	now := clk.Now()
 	// The beside-running budget watch owns probes. Polling PRs adds no budget
 	// probes and never holds the pass's GraphQL admission lock during network IO.
 	if floor > 0 {
@@ -362,7 +372,7 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 		}
 		discoveryErr = err
 		if err == nil {
-			before.Open, before.ListedAt = open, time.Now()
+			before.Open, before.ListedAt = open, clk.Now()
 			before.Incomplete = incomplete
 		} else {
 			before.Incomplete = true
@@ -520,10 +530,10 @@ func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]b
 		p, pending, err := parseWatchedLoopPull(ref, expanded, details[ref])
 		err = errors.Join(expandErr, err)
 		if err != nil {
-			out[ref] = watchedLoopPull{Pull: superloop.Pull{Ref: ref}, At: time.Now(), Error: err.Error()}
+			out[ref] = watchedLoopPull{Pull: superloop.Pull{Ref: ref}, At: clk.Now(), Error: err.Error()}
 			continue
 		}
-		out[ref] = watchedLoopPull{Pull: p, Pending: pending, At: time.Now()}
+		out[ref] = watchedLoopPull{Pull: p, Pending: pending, At: clk.Now()}
 	}
 	return out, nil
 }

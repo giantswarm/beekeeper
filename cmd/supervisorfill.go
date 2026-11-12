@@ -450,6 +450,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 	}
 	l.fillRan()
+	defer l.setFillPhase("")
 	why = "loop stopping or waiting to re-exec"
 	startedHere := map[string]bool{}
 	attemptedHere := map[string]bool{}
@@ -461,6 +462,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			continue
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: key}
+		l.setFillPhase("reconcile " + key)
 		what, done, err := l.reconcile(ctx, st, act, c)
 		if err != nil {
 			return err
@@ -478,15 +480,22 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	// A non-positive limit means the first fresh capacity read sets it.
 	limit := 0
 	for started := 0; ; started++ {
+		if l.holdingStarts() {
+			why = "starts held"
+			l.stallClear()
+			return nil
+		}
 		if l.pauseForReexec() || ctx.Err() != nil {
 			return nil
 		}
+		l.setFillPhase("capacity --json")
 		cap, capacityErr := l.readFillCapacity(ctx)
 		if capacityErr != nil {
 			why = oneLine(capacityErr.Error())
 			l.stallWait("", why)
 			return nil // a gate refusal is never a reason to start
 		}
+		l.setFillPhase("read capacity reservations")
 		live, err := l.a.store.Read()
 		if err != nil {
 			return err
@@ -537,6 +546,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			why = "board retry backoff until " + pauseUntil.UTC().Format(time.RFC3339)
 			return nil
 		}
+		l.setFillPhase("board next")
 		next, err := l.nextItem(ctx)
 		if errors.Is(err, errLoopLater) {
 			why = oneLine(err.Error())
@@ -574,6 +584,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
 		attemptedHere[next.Ref] = true
+		l.setFillPhase("start " + next.URL)
 		what, err := l.startItem(ctx, act, *next, reserved...)
 		if err == nil {
 			startedCount++ // a later recording failure must not report zero starts

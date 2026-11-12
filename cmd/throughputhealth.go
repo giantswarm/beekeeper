@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -152,7 +153,7 @@ func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superlo
 	next := throughputObservation{At: now, Candidate: normalizeLoopVersion(loopRunningVersion()), Unknown: unknown, Eligible: map[string]eligibleWait{}}
 	if l.lifecycle != nil {
 		// Liveness uses completion time, not the frozen planning snapshot.
-		next.At = time.Now().UTC()
+		next.At = clk.Now().UTC()
 	}
 	if unknown {
 		for ref, wait := range old.Eligible {
@@ -271,7 +272,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 	}
 	keepHistory := func(e state.Event) bool { return e.Verb == throughputOutcomeVerb || e.Verb == throughputHealthVerb }
 	if len(progress) > 0 {
-		keepHistory = eventProgressFilter(keepHistory, progress[0], time.Now)
+		keepHistory = eventProgressFilter(keepHistory, progress[0], clk.Now)
 	}
 	// Warm a cold reader before taking the state lock. Refresh it inside
 	// the transaction as well to include concurrent health transitions.

@@ -131,7 +131,9 @@ func fatalHarness(ctx context.Context, path, harness string) fatal.Observation {
 		}
 	}
 	o := fatal.Observation{ID: "harness:" + harness, Failed: err != nil || code != 0, Evidence: "configured harness fails non-model startup preflight"}
-	if ctx.Err() != nil {
+	// A preflight that outlives its deadline (a slow network fetch, a loaded
+	// host) has not shown a broken configuration: it is unknown, not an outage.
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
 		o.Failed, o.Unknown = false, true
 	}
 	return o

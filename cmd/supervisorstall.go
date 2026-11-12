@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -185,7 +187,7 @@ func (l *supervisorLoop) checkStall() error {
 	switch {
 	case now.Sub(s.ran) >= loopStallAfter:
 		since, filed = s.ran, &l.stall.ranFiled
-		cause = fmt.Sprintf("the capacity refill has not run since %s: the worker stream is still busy with done, intake or next actions of an earlier pass, so no board item gets a worker", s.ran.UTC().Format(time.RFC3339))
+		cause = fmt.Sprintf("the capacity refill has not run since %s: %s", s.ran.UTC().Format(time.RFC3339), l.refillBlocker())
 	case !s.since.IsZero() && now.Sub(s.since) >= loopStallAfter:
 		since = s.since
 		item := "no board item read"
@@ -219,15 +221,212 @@ func (l *supervisorLoop) checkStall() error {
 // It is independent of refill progress: starting workers must not hide a
 // merge lane that has stopped moving.
 type flowWait struct {
-	ref   string
+	act   superloop.Action
 	since time.Time
-	filed int
+	// alarmed are the classes of hold the alarm named, last when it last
+	// rang.
+	alarmed []string
+	last    time.Time
+}
+
+// The classes of what holds a merge decision. The stall alarm rings once per
+// pending head and class, so a decision whose hold changes is named again.
+const (
+	waitInFlight = "in flight"
+	waitLane     = "lane"
+	waitHold     = "hold"
+	waitBudget   = "GitHub budget"
+	waitOutage   = "outage"
+	waitGate     = "merge gate"
+	waitPolicy   = "merge policy"
+	waitQueue    = "merge queue"
+	waitUnread   = "unread"
+	waitRepair   = "repair"
+	waitFailed   = "failed"
+	waitRestart  = "restart"
+	waitPass     = "pass"
+	waitUnnamed  = "unnamed"
+)
+
+// mergeWait is errLoopLater with what the merge decision waits on: the stall
+// alarm names it instead of a decision that silently never completes
+// (https://github.com/giantswarm/beekeeper/issues/3820).
+type mergeWait struct{ class, cause string }
+
+func (w *mergeWait) Error() string { return w.cause + ": " + errLoopLater.Error() }
+func (w *mergeWait) Unwrap() error { return errLoopLater }
+
+// mergeHeld is a wait of class for a later pass, with its cause.
+func mergeHeld(class, format string, args ...any) error {
+	return &mergeWait{class: class, cause: fmt.Sprintf(format, args...)}
+}
+
+// laterCause is the cause a wrapped errLoopLater names, "" for a bare one.
+func laterCause(err error) string {
+	text := strings.TrimSpace(strings.TrimSuffix(err.Error(), errLoopLater.Error()))
+	return strings.TrimSpace(strings.TrimSuffix(text, ":"))
+}
+
+// namedWait gives a wait read below the merge path its class and says what
+// the decision was doing (prefix). A named wait and any other error stand.
+func namedWait(err error, class, prefix string) error {
+	var named *mergeWait
+	if err == nil || !errors.Is(err, errLoopLater) || errors.As(err, &named) {
+		return err
+	}
+	cause := laterCause(err)
+	switch {
+	case cause == "":
+		cause = prefix
+	case prefix != "":
+		cause = prefix + ": " + cause
+	}
+	return &mergeWait{class: class, cause: cause}
+}
+
+// mergeNote is what a merge decision's last run read: the hold it waits on.
+type mergeNote struct {
+	class, cause string
+	at           time.Time
+}
+
+// mergeRun is a merge decision dispatched to its lane's stream: since when
+// its command runs, or the pull request whose command runs ahead of it.
+type mergeRun struct {
+	since  time.Time
+	behind string
+}
+
+// mergeWaited keeps why a merge decision's run did not settle it.
+func (l *supervisorLoop) mergeWaited(act superloop.Action, err error) {
+	if act.Kind != superloop.KindGo {
+		return
+	}
+	note := mergeNote{class: waitUnnamed, cause: laterCause(err), at: l.a.timeNow()}
+	var named *mergeWait
+	if errors.As(err, &named) {
+		note.class, note.cause = named.class, named.cause
+	}
+	if note.cause == "" {
+		note.cause = "its run waits for a later pass and named no cause"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.mergeNotes == nil {
+		l.mergeNotes = map[string]mergeNote{}
+	}
+	l.mergeNotes[act.Key] = note
+}
+
+// mergeQueued marks a lane's merge decisions dispatched: the first runs, the
+// others wait behind it in the loop's stream for the lane.
+func (l *supervisorLoop) mergeQueued(acts []superloop.Action) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.mergeRuns == nil {
+		l.mergeRuns = map[string]mergeRun{}
+	}
+	for i, act := range acts {
+		run := mergeRun{}
+		if i > 0 {
+			run.behind = acts[0].URL
+		}
+		l.mergeRuns[act.Key] = run
+	}
+}
+
+// mergeStarted marks acts[i] running and the rest of its stream behind it.
+func (l *supervisorLoop) mergeStarted(acts []superloop.Action, i int) {
+	now := l.a.timeNow()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.mergeRuns == nil {
+		l.mergeRuns = map[string]mergeRun{}
+	}
+	l.mergeRuns[acts[i].Key] = mergeRun{since: now}
+	for _, later := range acts[i+1:] {
+		l.mergeRuns[later.Key] = mergeRun{behind: acts[i].URL}
+	}
+}
+
+// mergeStreamEnded forgets the runs of a lane's stream that ended.
+func (l *supervisorLoop) mergeStreamEnded(acts []superloop.Action) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, act := range acts {
+		delete(l.mergeRuns, act.Key)
+	}
+}
+
+// flowCause reads what holds the pending merge decision of key now, by
+// class: its command in flight, its lane's stream, or the newer of its last
+// wait and its last failure. settled reports a decision completed since the
+// pass planned it.
+func (l *supervisorLoop) flowCause(key string, failures map[string]loopFailure) (class, cause string, settled bool) {
+	now := l.a.timeNow()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.completed[key] {
+		return "", "", true
+	}
+	if l.inFlight[key] {
+		run := l.mergeRuns[key]
+		switch {
+		case run.behind != "":
+			return waitLane, fmt.Sprintf("it is queued in the loop's merge stream of its lane behind %s, whose merge command is still in flight", run.behind), false
+		case !run.since.IsZero():
+			return waitInFlight, fmt.Sprintf("its merge command has been in flight since %s: the merge gate holds it for its lane's turn, the merge-result check and GitHub's answer", run.since.UTC().Format(time.RFC3339)), false
+		}
+		return waitInFlight, "its command is still in flight", false
+	}
+	note, noted := l.mergeNotes[key]
+	if f := failures[key]; f.Message != "" && (!noted || f.At.After(note.at)) {
+		cause := "its last run failed: " + oneLine(f.Message)
+		if f.RetryAt.After(now) {
+			cause += fmt.Sprintf(" (identical failures; the loop retries after %s)", f.RetryAt.UTC().Format(time.RFC3339))
+		}
+		return waitFailed, cause, false
+	}
+	if noted {
+		return note.class, note.cause, false
+	}
+	return waitUnnamed, "the planner still requests this decision; no run of it recorded a completion, a wait or a failure", false
+}
+
+// flowAlarm rings for a merge decision pending loopStallAfter or longer:
+// once per pending head and class of hold, and no sooner than loopStallAfter
+// after the head's last alarm, so a hold that changes is named and one that
+// flaps is not repeated.
+func (l *supervisorLoop) flowAlarm(key string, wait *flowWait, class, cause string, pending int) error {
+	now := l.a.timeNow()
+	if now.Sub(wait.since) < loopStallAfter || slices.Contains(wait.alarmed, class) {
+		return nil
+	}
+	if !wait.last.IsZero() && now.Sub(wait.last) < loopStallAfter {
+		return nil
+	}
+	// A restarted loop has run nothing yet: it names a restored wait once
+	// its own run read the hold.
+	if class == waitUnnamed && now.Sub(l.startedAt) < loopStallAfter {
+		return nil
+	}
+	n := int(now.Sub(wait.since) / loopStallAfter)
+	text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm is delivered once per pending head and cause.", wait.act.Kind, wait.act.URL, wait.act.Head, wait.since.UTC().Format(time.RFC3339), cause, pending)
+	line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+	alarmKey := fmt.Sprintf("stall decision %s %s %d %s", key, wait.since.UTC().Format("20060102T150405Z"), n, class)
+	if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: alarmKey}, line); err != nil {
+		return err
+	}
+	wait.alarmed = append(wait.alarmed, class)
+	wait.last = now
+	return nil
 }
 
 // checkFlowWaits measures the planner's pending merge decisions
 // every pass. Holds and in-flight commands remain pending, so they cannot
 // silently turn a stalled lane into a healthy one. A new head starts a new
-// episode; a settled decision clears it. Unread pulls retain their episodes.
+// episode; a settled decision clears it. Unread pulls retain their episodes
+// and are alarmed as unread: no pass plans or runs their decision.
 func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.Action, failures map[string]loopFailure) error {
 	now := l.a.timeNow()
 	pending := map[string]superloop.Action{}
@@ -239,16 +438,17 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 	if l.flowWaits == nil {
 		l.flowWaits = map[string]flowWait{}
 	}
+	var unread []string
 	for key, wait := range l.flowWaits {
 		if _, ok := pending[key]; ok {
 			continue
 		}
 		// An unread GitHub observation is not evidence of recovery.
-		ref := wait.ref
-		if _, observed := in.Pulls[ref]; !observed {
+		if _, observed := in.Pulls[wait.act.Ref]; !observed {
+			unread = append(unread, key)
 			continue
 		}
-		if wait.filed > 0 {
+		if len(wait.alarmed) > 0 {
 			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR STALL ENDED: %s is no longer pending\n", key)
 		}
 		delete(l.flowWaits, key)
@@ -258,36 +458,73 @@ func (l *supervisorLoop) checkFlowWaits(in superloop.Input, actions []superloop.
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
+	total := len(pending) + len(unread)
 	for _, key := range keys {
-		act := pending[key]
 		wait, exists := l.flowWaits[key]
 		if !exists {
-			wait.since, wait.ref = now, act.Ref
+			wait.since = now
 		}
-		n := int(now.Sub(wait.since) / loopStallAfter)
-		if n > 0 && wait.filed == 0 {
-			cause := "the planner still requests this decision; no successful completion recorded"
-			l.mu.Lock()
-			failure := failures[key]
-			completed := l.completed[key]
-			if l.inFlight[key] {
-				cause = "its command is still in flight"
-			}
-			l.mu.Unlock()
-			if completed {
-				delete(l.flowWaits, key)
-				continue
-			}
-			if failure.Message != "" {
-				cause = oneLine(failure.Message)
-			}
-			text := fmt.Sprintf("The supervisor %s decision for %s at %s has waited since %s: %s. Pending merge decisions: %d; the alarm is delivered once per pending head.", act.Kind, act.URL, act.Head, wait.since.UTC().Format(time.RFC3339), cause, len(pending))
-			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
-			alarmKey := fmt.Sprintf("stall decision %s %s %d", key, wait.since.UTC().Format("20060102T150405Z"), n)
-			if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: alarmKey}, line); err != nil {
-				return err
-			}
-			wait.filed = n
+		wait.act = pending[key]
+		class, cause, settled := l.flowCause(key, failures)
+		if settled {
+			delete(l.flowWaits, key)
+			continue
+		}
+		if err := l.flowAlarm(key, &wait, class, cause, total); err != nil {
+			return err
+		}
+		l.flowWaits[key] = wait
+	}
+	slices.Sort(unread)
+	for _, key := range unread {
+		wait := l.flowWaits[key]
+		class, cause, settled := l.flowCause(key, failures)
+		if settled {
+			delete(l.flowWaits, key)
+			continue
+		}
+		if class != waitInFlight && class != waitLane {
+			class = waitUnread
+			cause = fmt.Sprintf("the loop has no current observation of %s (the SUPERVISOR LOOP cannot read and SUPERVISOR PULL WATCH lines name why), so no pass plans or runs its decision", wait.act.Ref)
+		}
+		if err := l.flowAlarm(key, &wait, class, cause, total); err != nil {
+			return err
+		}
+		l.flowWaits[key] = wait
+	}
+	// A decision no longer pending leaves no note behind.
+	l.mu.Lock()
+	for key := range l.mergeNotes {
+		if _, waits := l.flowWaits[key]; !waits {
+			delete(l.mergeNotes, key)
+		}
+	}
+	l.mu.Unlock()
+	return nil
+}
+
+// flowWaitsUnplanned keeps the alarm alive on a pass that ended before it
+// planned: held GitHub observations, a restart or a failed pass run no merge
+// decision, and must not silence the ones already pending. why names what
+// ended the pass.
+func (l *supervisorLoop) flowWaitsUnplanned(class, why string) error {
+	keys := make([]string, 0, len(l.flowWaits))
+	for key := range l.flowWaits {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		wait := l.flowWaits[key]
+		held, cause, settled := l.flowCause(key, nil)
+		if settled {
+			delete(l.flowWaits, key)
+			continue
+		}
+		if held != waitInFlight && held != waitLane {
+			held, cause = class, why
+		}
+		if err := l.flowAlarm(key, &wait, held, cause, len(keys)); err != nil {
+			return err
 		}
 		l.flowWaits[key] = wait
 	}

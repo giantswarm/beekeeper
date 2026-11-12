@@ -466,13 +466,16 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 // desk owns: until the team files are read, only the review list's.
 func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	const (
-		botTeam  = "team-a"
-		botName  = "renovate[bot]"
-		botTool  = "o/tool"
-		botOther = "o/other"
-		botPull  = "o/x-configs#4"
-		botLogin = "app/renovate"
-		badLogin = "app/renovat"
+		botTeam     = "team-a"
+		botName     = "renovate[bot]"
+		botTool     = "o/tool"
+		botOther    = "o/other"
+		botPull     = "o/x-configs#4"
+		botLogin    = "app/renovate"
+		badLogin    = "app/renovat"
+		orgWildcard = "o/*"
+		sharedRepo  = "shared/one"
+		sharedPull  = "shared/one#7"
 	)
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -562,5 +565,32 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	}
 	if !slices.Equal(searched, []string{"me"}) || !slices.Equal(w.view().Open, []string{reserveIssue}) {
 		t.Errorf("without bots: searched %v, open %v", searched, w.view().Open)
+	}
+	// A multi-org desk without a team file that names its repositories in
+	// supervisor.ownership.review searches only those scopes for bots, not
+	// whole shared orgs.
+	var gotScopes [][]string
+	readOpenPulls = func(_ context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
+		logins, err := authors()
+		if err != nil {
+			return nil, err
+		}
+		gotScopes = append(gotScopes, slices.Clone(scopes))
+		if slices.Equal(logins, []string{botLogin}) {
+			return []string{idleRef, sharedPull, "shared/other#8"}, nil
+		}
+		return []string{reserveIssue}, nil
+	}
+	w.set(nil, []string{"me"}, []string{"o", litShared}, 0, nil)
+	scoped := superloop.Desk{Orgs: []string{"o", litShared}, Review: []string{orgWildcard, sharedRepo}}
+	w.setBots([]string{botName}, scoped, nil, false)
+	if _, err := w.poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotScopes) != 2 || !slices.Equal(gotScopes[0], []string{"o", litShared}) || !slices.Equal(gotScopes[1], []string{"o", sharedRepo}) {
+		t.Errorf("scoped bot search scopes = %v", gotScopes)
+	}
+	if got, want := w.view().Open, []string{reserveIssue, idleRef, sharedPull}; !slices.Equal(got, want) {
+		t.Errorf("scoped open = %v, want %v", got, want)
 	}
 }

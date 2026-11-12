@@ -82,38 +82,79 @@ func (l *supervisorLoop) reportSweep(ownerless map[string]time.Time, unread map[
 	return l.a.store.WriteFile(loopSweepFile, c)
 }
 
+const (
+	// sweepRepoBatch bounds the --repo flags in a single gh search prs call so a
+	// desk with many team repositories stays within GitHub's search query limits.
+	sweepRepoBatch = 25
+	sweepOwnerFlag = "--owner"
+)
+
+// sweepFlagBatches splits scopes (owners without a slash, owner/repo with
+// one) into gh search prs flag slices. Owners and repositories are searched in
+// separate calls because gh ANDs --owner with --repo when both are given.
+func sweepFlagBatches(scopes []string) [][]string {
+	var owners, repos []string
+	for _, s := range scopes {
+		if strings.Contains(s, "/") {
+			repos = append(repos, s)
+		} else if s != "" {
+			owners = append(owners, s)
+		}
+	}
+	var batches [][]string
+	if len(owners) > 0 {
+		var flags []string
+		for _, o := range owners {
+			flags = append(flags, sweepOwnerFlag, o)
+		}
+		batches = append(batches, flags)
+	}
+	for start := 0; start < len(repos); start += sweepRepoBatch {
+		var flags []string
+		for _, r := range repos[start:min(start+sweepRepoBatch, len(repos))] {
+			flags = append(flags, loopRepoFlag, r)
+		}
+		batches = append(batches, flags)
+	}
+	if len(batches) == 0 {
+		return [][]string{nil}
+	}
+	return batches
+}
+
 // readOpenPulls lists the open pull requests (owner/repo#n) the logins
-// authors opened, in orgs when any are named: one REST search per login,
-// which spends no GraphQL budget.
-var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), orgs []string) ([]string, error) {
+// authors opened, in scopes (owners without a slash, repositories with one)
+// when any are named: REST searches per login that spend no GraphQL budget.
+var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
 	logins, err := authors()
 	if err != nil {
 		return nil, err
 	}
+	batches := sweepFlagBatches(scopes)
 	var out []string
 	for _, login := range logins {
-		args := append(strings.Fields("search prs --state open --json repository,number"), "--limit", strconv.Itoa(sweepListLimit), "--author", login)
-		for _, o := range orgs {
-			args = append(args, "--owner", o)
-		}
-		c, cancel := context.WithTimeout(ctx, time.Minute)
-		b, err := github.RunGH(c, args...)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("gh search prs --author %s: %w", login, err)
-		}
-		var found []struct {
-			Number     int `json:"number"`
-			Repository struct {
-				NameWithOwner string `json:"nameWithOwner"`
-			} `json:"repository"`
-		}
-		if err := json.Unmarshal(b, &found); err != nil {
-			return nil, fmt.Errorf("gh search prs --author %s: %w", login, err)
-		}
-		for _, f := range found {
-			if f.Repository.NameWithOwner != "" && f.Number > 0 {
-				out = append(out, fmt.Sprintf("%s#%d", f.Repository.NameWithOwner, f.Number))
+		for _, flags := range batches {
+			args := append(strings.Fields("search prs --state open --json repository,number"), "--limit", strconv.Itoa(sweepListLimit), "--author", login)
+			args = append(args, flags...)
+			c, cancel := context.WithTimeout(ctx, time.Minute)
+			b, err := github.RunGH(c, args...)
+			cancel()
+			if err != nil {
+				return nil, fmt.Errorf("gh search prs --author %s: %w", login, err)
+			}
+			var found []struct {
+				Number     int `json:"number"`
+				Repository struct {
+					NameWithOwner string `json:"nameWithOwner"`
+				} `json:"repository"`
+			}
+			if err := json.Unmarshal(b, &found); err != nil {
+				return nil, fmt.Errorf("gh search prs --author %s: %w", login, err)
+			}
+			for _, f := range found {
+				if f.Repository.NameWithOwner != "" && f.Number > 0 {
+					out = append(out, fmt.Sprintf("%s#%d", f.Repository.NameWithOwner, f.Number))
+				}
 			}
 		}
 	}
