@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const revisionTestETag = "revision-v1"
+
 func TestPullRevisionRejectsUnusableResponses(t *testing.T) {
 	failure := errors.New("gh failed")
 	for _, tc := range []struct {
@@ -19,9 +21,9 @@ func TestPullRevisionRejectsUnusableResponses(t *testing.T) {
 		err  error
 	}{
 		{name: "304 without cache", raw: "HTTP/2.0 304 Not Modified\r\n\r\n", err: failure},
-		{name: "transport error", etag: "old", err: failure},
-		{name: "malformed response", raw: "not HTTP", etag: "old"},
-		{name: "failed 200", raw: "HTTP/2.0 200 OK\r\n\r\n", etag: "old", err: failure},
+		{name: "transport error", etag: revisionTestETag, err: failure},
+		{name: "malformed response", raw: "not HTTP", etag: revisionTestETag},
+		{name: "failed 200", raw: "HTTP/2.0 200 OK\r\n\r\n", etag: revisionTestETag, err: failure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(context.Context, ...string) ([]byte, error) { return []byte(tc.raw), tc.err }
@@ -40,7 +42,7 @@ func TestUnmergedRevision304ReusesCachedPulls(t *testing.T) {
 	}
 	now := r.a.timeNow()
 	l.unmerged = map[string]loopUnmergedObservation{
-		repo: {etag: "old", at: now.Add(-unmergedCacheTTL), fullAt: now.Add(-10 * time.Minute),
+		repo: {etag: revisionTestETag, at: now.Add(-unmergedCacheTTL), fullAt: now.Add(-10 * time.Minute),
 			pulls: []unmergedPull{{Number: 7, CreatedAt: now.Add(-time.Hour)}}},
 	}
 	readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) {
@@ -49,7 +51,7 @@ func TestUnmergedRevision304ReusesCachedPulls(t *testing.T) {
 	}
 	readRepoPullRevision = func(ctx context.Context, target, etag string) (string, bool, error) {
 		return readRepoPullRevisionWithGH(ctx, func(_ context.Context, args ...string) ([]byte, error) {
-			if !slices.Contains(args, "If-None-Match: old") {
+			if !slices.Contains(args, "If-None-Match: "+revisionTestETag) {
 				t.Fatalf("missing cached validator: %v", args)
 			}
 			return []byte("HTTP/2.0 304 Not Modified\r\n\r\n"), errors.New("exit status 1: gh: HTTP 304")
