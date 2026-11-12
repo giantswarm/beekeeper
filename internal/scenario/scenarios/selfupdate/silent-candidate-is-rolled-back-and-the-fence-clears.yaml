@@ -7,8 +7,8 @@ description: >
   the reason in one line for the person: no health heartbeat from the
   candidate's loop. The rollback fences the state: a process still running
   candidate 3 is refused every save, while the restored release works on,
-  and the failed candidate is not offered again. Candidate 4, a later
-  compatible release, is not fenced: it installs, serves its probation with
+  and the failed candidate goes on the lookup's skip list. Candidate 4, a
+  later compatible release, is not fenced: it installs, serves its probation with
   a loop that sends its heartbeat, and is promoted. With that the fence is
   lifted for every process. Each controller's unit is the scenario's to
   run: it runs the same command with the controller's cadence flags, so an
@@ -119,9 +119,14 @@ when:
     run: {args: [--as, scenario, timer, add, 1h, a save by the restored release]}
     expect:
       - exit: 0
-  # The failed candidate is not offered again: the next release is. It is
-  # compatible with the state and not fenced, or it could never pass its
-  # probation.
+  # The rollback put the failed candidate on the lookup's skip list.
+  - name: skipped
+    run: {args: [log, --verb, self-update.canary]}
+    expect:
+      - exit: 0
+      - output: {contains: ["skipping v1.0.0-rc.3: "]}
+  # The next release is offered. It is compatible with the state and not
+  # fenced, or it could never pass its probation.
   - name: later
     run: {args: [self-update, --check]}
     expect:

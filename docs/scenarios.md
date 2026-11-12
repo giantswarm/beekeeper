@@ -153,7 +153,7 @@ then:
 | Step | Does |
 | --- | --- |
 | `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit; `release` runs that release's build |
-| `background` | starts the candidate and leaves it running; needs a `name` |
+| `background` | starts the candidate and leaves it running; needs a `name`; `release` as for `run` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
