@@ -110,9 +110,20 @@ when:
   # so that every step brings a pass and a budget reading of the loop's
   # watch (at most one every 30 seconds); each step waits until the work
   # the last one woke is done.
+  - name: ten-minutes
+    advance:
+      by: 10m
+      step: 35s
+      quiet: 50ms
+  - name: status-at-ten
+    run: {args: [supervisor, status]}
+  - name: budget-at-ten
+    run: {args: [budget, --json]}
+  - name: story-at-ten
+    run: {args: [log, -n, '0']}
   - name: hour
     advance:
-      by: 1h
+      by: 50m
       step: 35s
       quiet: 50ms
     expect:

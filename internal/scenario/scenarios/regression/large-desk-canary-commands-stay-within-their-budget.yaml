@@ -56,18 +56,22 @@ when:
   - name: budget
     run: {args: [budget, --gate]}
     expect:
+      - exit: 0
       - duration: {max: 3s}
   - name: status
     run: {args: [supervisor, status]}
     expect:
+      - exit: 0
       - duration: {max: 3s}
   - name: capacity
     run: {args: [capacity]}
     expect:
+      - exit: 0
       - duration: {max: 3s}
   - name: capacity-json
     run: {args: [capacity, --json]}
     expect:
+      - exit: 0
       - duration: {max: 3s}
 
 then:

@@ -23,8 +23,11 @@ given:
     config:
       github: {probeRepo: example/app}
       watch: {interval: 1h}
-      # The loop places its starts on the execution host.
+      # The loop places its starts on the execution host, and the desk's
+      # own machine has no memory to spare for a worker: every start of
+      # the scenario, a continuation's too, runs on the host.
       supervisor: {loopInterval: 1m, hosts: [builder]}
+      capacity: {availMinMiB: 100000000}
   hosts:
     - name: builder
   github:
@@ -78,7 +81,8 @@ given:
                     exit 1
                   - sh
                   - '${dir}/.beekeeper-scratch/review.md'
-              - beekeeper: [agents, idle, --done, --report, "Review: approved\nhttps://github.com/example/app/pull/2", --problem, none]
+                save: review
+              - beekeeper: [agents, idle, --done, --report, "Review: approved\n${review}", --problem, none]
   calls:
     - program: devctl
       args: [auth, status]
@@ -145,6 +149,8 @@ when:
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - stop: loop
+  - name: story
+    run: {args: [log, -n, '0']}
 
 then:
   # After the merge the task is closed and none of its pull requests is
