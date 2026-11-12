@@ -10,11 +10,12 @@ lock, after their attempt reservation has been committed.
 
 ## Transactions and the commit lock
 
-Every state write holds two locks. `state.lock` serializes the transactions of
+Every transaction holds two locks. `state.lock` serializes the transactions of
 all processes. `state.commit.lock` serializes writes of `state.json` and is also
 the only lock a remote execution's lease renewal takes; a renewal waits for it
 at most 5 seconds and otherwise fails with "coordinator lease state commit busy".
-So the commit lock covers only the writes themselves:
+A renewal holds it while it reads, decodes and writes the whole state. A
+transaction holds it only for its writes:
 
 - A transaction reads, decodes and copies the state under `state.lock` alone.
   Only a pending event outbox is recovered under the commit lock.

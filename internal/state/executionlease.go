@@ -16,8 +16,10 @@ import (
 
 // commitLock serializes the durable state boundary, not desk callbacks. The
 // order is state.lock then state.commit.lock; renewal takes only the latter.
-// Never run network calls or command callbacks while holding this lock, nor
-// decode or encode the whole state: a renewal waits commitWait at most.
+// Never run network calls or command callbacks while holding this lock. A
+// transaction's commit neither decodes nor encodes the whole state under it:
+// a renewal waits commitWait at most. A renewal itself still reads, decodes
+// and writes the whole state under it (RenewExecutionLease).
 func (s *FileStore) commitLock(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

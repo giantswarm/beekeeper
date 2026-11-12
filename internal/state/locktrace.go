@@ -60,8 +60,10 @@ func (c *lockClock) busy() {
 	traceLock(lockTiming{Lock: c.lock, Shared: c.shared, Busy: true, WaitNS: clock.Since(c.requested).Nanoseconds()})
 }
 
-// traceLock is opt-in, best-effort diagnostics. All diagnostic I/O happens
-// after unlocking so a slow trace destination cannot lengthen a state hold.
+// traceLock is opt-in, best-effort diagnostics. A row is written after its
+// lock is released, so a slow trace destination cannot lengthen that hold. A
+// transaction's commit-lock rows are written inside its state-lock hold, which
+// a slow destination does lengthen: the trace is a regular file, never a pipe.
 // Operators bound the capture window and retain the trace as proof evidence.
 func traceLock(t lockTiming) {
 	path := os.Getenv(lockTraceEnv)
