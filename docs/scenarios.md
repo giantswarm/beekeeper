@@ -58,11 +58,53 @@ the merge base does not build.
   against that pull request's base again; a reason written for one change does not cover the
   next.
 
-The step passes at once, without a build, on a branch that adds or changes no scenario, on `main`
-and on tags. The job's artifacts hold its log (`control.log`), its report (`control/report.txt`
-and `control/report.json`: every scenario with its change, verdict, first failures on the base
-and opt-out reason) and each run's artifacts under `control/<flow>/<name>/`. To run it on a
-branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
+### Go tests
+
+A fix whose regression test is a Go test, not a scenario, needs the same proof. The same step
+(`internal/testcontrol`) takes the `Test…` functions the pull request adds or changes in any
+`_test.go`, applies the pull request's test files (its `_test.go` files and the files under
+`testdata/`, as it adds, changes or deletes them) to a checkout of the merge base, and runs those
+tests there with `go test`. The ones that fail on the base run again on the pull request's code,
+where they must pass: a test that fails on both shows nothing. At least one test must fail on the
+base and pass on the change; the step fails when none does. A pull request with both scenarios
+and Go tests passes both parts.
+
+- **Added** is a test whose package on the base has no test of its name. **Changed** is one whose
+  code differs from the base's; its doc comment, comments and blank lines do not count. A test the
+  pull request moves unchanged from another package is **moved** and does not run.
+- A test runs with the fewest of the build tags CI tests with (`scenario`, `integration`, `perf`)
+  that build its file. One that builds only with another tag, such as a live test, is listed and
+  does not run.
+- A package that does not build on the base is reported with its compiler errors. Its tests show
+  nothing, as a test the base skips, or whose package's `TestMain` fails, shows nothing.
+- The tests of a new package, whose code the base does not have, are listed and do not run. Nor
+  does any test of a pull request that changes no code the Go build reads (Go files, `go.mod`,
+  `go.sum`, embedded files) beyond its tests: the base with its test files is its own code.
+- A test that cannot fail on the base, such as one of behavior main already has or one of code the
+  base lacks, opts out with a paragraph of its doc comment that gives the reason, which the review
+  checks:
+
+  ```go
+  // TestDoubleFlag checks --double.
+  //
+  // control: none: --double is new, so the base cannot parse it
+  func TestDoubleFlag(t *testing.T) {
+  ```
+
+  The opt-out holds for the change that writes it, as a scenario's does. The step passes when each
+  new and changed test opts out or is not run, and fails on a control paragraph it cannot read.
+
+The step passes at once, without a build, on a branch that adds or changes neither a scenario nor
+a `_test.go` file, on `main` and on tags. The job's artifacts hold its log (`control.log`), the
+scenarios' report (`control/report.txt` and `control/report.json`: every scenario with its change,
+verdict, first failures on the base and opt-out reason) with each run's artifacts under
+`control/<flow>/<name>/`, and the Go tests' report (`go-control/report.txt` and
+`go-control/report.json`: every test with its change, tags, run on the base and on the change,
+first failures or build errors and opt-out reason) with each `go test` run's command, events and
+stderr under `go-control/runs/`. A pull request that changes the Go-test control first runs it on
+the clock fix of https://github.com/giantswarm/beekeeper/pull/3832, whose regression test must
+fail on the fix's parent (`go-control-history/`). To run the step on a branch:
+`bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
 
 ## How a scenario runs
 
