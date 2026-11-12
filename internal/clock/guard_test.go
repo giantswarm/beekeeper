@@ -32,6 +32,9 @@ var migrated = []string{
 	"cmd/selfupdate*.go", "cmd/recovery.go", "internal/update",
 	// The state every flow records in.
 	"internal/state",
+	// The watch's loops and samples: the supervisor loop owns one, whose
+	// budget reading admits the loop's starts.
+	"cmd/watch.go",
 }
 
 // clockFuncs are the time package's clock functions, each with what

@@ -207,6 +207,27 @@ func branches() {
 		}
 		return out, nil
 	}
+	// The refs whose name starts with the given one, branches before tags
+	// and each sorted by name: an empty list when none does, no 404.
+	handle("GET", "/repos/{owner}/{repo}/git/matching-refs/{ref...}", func(c *restCtx) (any, error) {
+		r, err := c.repo()
+		if err != nil {
+			return nil, err
+		}
+		prefix := "refs/" + strings.TrimPrefix(c.param("ref"), "refs/")
+		var names []string
+		for _, b := range c.m.BranchNames(r) {
+			names = append(names, "refs/heads/"+b)
+		}
+		for _, t := range c.m.TagNames(r) {
+			names = append(names, "refs/tags/"+t)
+		}
+		names = slices.DeleteFunc(names, func(name string) bool { return !strings.HasPrefix(name, prefix) })
+		return list(c, names, func(name string) obj {
+			out, _ := ref(c, r, name)
+			return out
+		}), nil
+	})
 	handle("GET", "/repos/{owner}/{repo}/git/ref/{ref...}", getRef)
 	handle("GET", "/repos/{owner}/{repo}/git/refs/{ref...}", getRef)
 	handle("DELETE", "/repos/{owner}/{repo}/git/refs/{ref...}", func(c *restCtx) (any, error) {
@@ -1185,7 +1206,11 @@ func releases() {
 			return nil, err
 		}
 		if c.accepts("application/octet-stream") {
-			return rawBody{ContentType: a.ContentType, Data: a.Content}, nil
+			data, err := a.Bytes()
+			if err != nil {
+				return nil, fmt.Errorf("release asset %s: %w", a.Name, err)
+			}
+			return rawBody{ContentType: a.ContentType, Data: data}, nil
 		}
 		return c.assetShape(rel)(a), nil
 	})

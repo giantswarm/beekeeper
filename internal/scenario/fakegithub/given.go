@@ -166,10 +166,12 @@ type GivenPull struct {
 	Files          []GivenFile       `yaml:"files"`
 }
 
-// GivenAsset is a release asset.
+// GivenAsset is a release asset: its Content, or the content of File, a
+// path in the scenario's sandbox, read at each download (a binary).
 type GivenAsset struct {
 	Name        string `yaml:"name"`
 	Content     string `yaml:"content"`
+	File        string `yaml:"file"`
 	ContentType string `yaml:"content_type"`
 }
 
@@ -515,7 +517,11 @@ func (b *builder) repo(r *Repo, gr GivenRepo) {
 			continue
 		}
 		for _, a := range gl.Assets {
-			b.m.AddAsset(rel, a.Name, a.ContentType, []byte(a.Content))
+			if a.File != "" && a.Content != "" {
+				b.bad("repositories: %s release %s: asset %s has both content and file", r.Full(), gl.Tag, a.Name)
+				continue
+			}
+			b.m.AddAsset(rel, a.Name, a.ContentType, []byte(a.Content)).File = a.File
 		}
 		if _, tagged := b.m.Tag(r, gl.Tag); !tagged && !gl.Draft {
 			if sha, ok := b.m.Commit(r, rel.Target); ok {

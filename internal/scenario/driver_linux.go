@@ -189,6 +189,9 @@ func (d *driver) run() {
 		err = d.setup(ctx)
 	}
 	if err == nil {
+		err = d.tagReleases(ctx)
+	}
+	if err == nil {
 		err = d.startGitHub(&logMu)
 	}
 	if err != nil {
@@ -396,7 +399,9 @@ func baseConfig(orgs []string) map[string]any {
 			"providers": map[string]any{"claude": map[string]any{"ceiling": 2}},
 			"choices":   []any{map[string]any{"harness": "claude", "model": "sonnet"}},
 		},
-		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000},
+		// The machine's own pressure is no part of a scenario: a busy CI
+		// runner must not hold a scenario's starts.
+		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000, "cpuPSIMax": 100, "psiMax": 100},
 		"supervisor": map[string]any{
 			"effort": "low", "workerBrief": workDir + "/worker.txt",
 			"ownership": map[string]any{"authors": []any{"desk"}},
@@ -472,6 +477,7 @@ func (d *driver) globals(v View) View {
 		v.GitHub = d.github.Check
 	}
 	v.Worker = d.fakes.CheckWorker
+	v.Log = d.backgroundLog
 	v.Origin = func(repository, branch string) (bool, int, error) { return originBranch(repository, branch) }
 	v.Process = func(name string) (bool, int, bool) {
 		p, ok := d.procs[name]
@@ -549,7 +555,7 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 }
 
 func (d *driver) runCandidate(ctx context.Context, i int, st Step) (exit int, stdout, stderr string, err error) {
-	c := exec.CommandContext(ctx, candidate, st.Run.Args...) //nolint:gosec // the candidate with the scenario's arguments
+	c := exec.CommandContext(ctx, binaryOf(st.Run), st.Run.Args...) //nolint:gosec // the candidate, or a release build, with the scenario's arguments
 	c.Dir = repoDir
 	c.Env = d.stepEnv(cmpOr(st.Name, fmt.Sprintf("step-%d", i)), st.Run.Env)
 	c.Stdin = strings.NewReader(st.Run.Stdin)
@@ -581,7 +587,7 @@ func (d *driver) start(st Step) error {
 	if err != nil {
 		return err
 	}
-	c := exec.Command(candidate, st.Background.Args...) //nolint:gosec // the candidate with the scenario's arguments
+	c := exec.Command(binaryOf(st.Background), st.Background.Args...) //nolint:gosec // the candidate, or a release build, with the scenario's arguments
 	c.Dir = repoDir
 	c.Env = d.stepEnv(st.Name, st.Background.Env)
 	c.Stdin = strings.NewReader(st.Background.Stdin)

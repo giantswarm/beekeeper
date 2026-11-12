@@ -1,0 +1,159 @@
+name: release-installs-and-serves-probation
+description: >
+  The desk runs release candidate 1 and GitHub publishes two newer ones.
+  self-update finds the release, downloads its binary and verifies it
+  against its bundle, stages it and runs the canary on the staged binary
+  with the live configuration (the version, the budget gate, the
+  supervisor's status, capacity, and a dry-run loop pass beside the running
+  release's); only then it replaces the executable. The first install has
+  no recovery target yet and is promoted by its own health checks. The
+  second install is watched: the updater starts a recovery controller from
+  the retained bytes of the last known good release, and no further update
+  installs before its verdict. The controller judges the candidate for 30
+  minutes of probation, in which the candidate's loop sends its heartbeat
+  and the isolated workflow probe passes, and then promotes it to last
+  known good. The controller's unit is the scenario's to run: it runs the
+  same command with the controller's cadence flags, so an evaluation that
+  counts for a minute comes every 500 ms.
+issue: https://github.com/giantswarm/beekeeper/issues/3794
+flow: selfupdate
+tags: [selfupdate, release, canary, probation]
+timeout: 360s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      # The candidate's loop passes, and sends its heartbeat, every second.
+      supervisor: {loopInterval: 1s, releaseEvery: 24h}
+      watch: {interval: 30s}
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.2, v1.0.0-rc.3]
+  github:
+    repositories:
+      - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
+  calls:
+    # The service manager takes the controller's unit and starts nothing:
+    # the scenario runs the unit's command itself (the controller step).
+    - program: systemd-run
+      args: ['--unit=beekeeper-recovery\.service']
+      respond: {exit: 0}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: running
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.1\b'}
+  # The canary compares a dry-run pass of the candidate with one of the
+  # running release: on this desk that pass is clean.
+  - name: dry-run
+    run: {args: [supervisor, loop, --once, --dry-run]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["FAILED", "UNREAD", "SUPERVISOR GITHUB HELD"]}
+  - name: check
+    run: {args: [self-update, --check, --version, v1.0.0-rc.2]}
+    expect:
+      - exit: 125
+      - output: {contains: ["beekeeper v1.0.0-rc.2 is available, this is v1.0.0-rc.1."]}
+  # The first install: found, verified, staged, canaried, installed.
+  - name: first
+    run: {args: [self-update, --version, v1.0.0-rc.2]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.1 to v1.0.0-rc.2."]}
+      - github: {calls: {path: 'repos/giantswarm/beekeeper/releases/tags/v1\.0\.0-rc\.2', caller: first, status: 200, min: 1}}
+      # The binary and its bundle.
+      - github: {calls: {path: 'repos/giantswarm/beekeeper/releases/assets/\d+', caller: first, status: 200, min: 2}}
+      # No recovery target yet, so no controller.
+      - calls: {program: systemd-run, args: ['--unit=beekeeper-recovery\.service'], max: 0}
+  - name: installed
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.2\b'}
+  # The installed candidate's own health checks promote it.
+  - name: promote-first
+    run: {args: [self-update, --complete-probation]}
+    expect:
+      - exit: 0
+  # The second install is the newest release, found by the lookup itself.
+  - name: lookup
+    run: {args: [self-update, --check]}
+    expect:
+      - exit: 125
+      - output: {contains: ["beekeeper v1.0.0-rc.3 is out", "this is v1.0.0-rc.2"]}
+      - github: {calls: {path: 'repos/giantswarm/beekeeper/git/matching-refs/tags/v', caller: lookup, status: 200, min: 1}}
+  - name: second
+    run: {args: [self-update]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper to v1.0.0-rc.3."]}
+      # The updater starts the controller from the retained bytes of the
+      # last known good release, for the installed executable.
+      - calls:
+          program: systemd-run
+          args: ['--unit=beekeeper-recovery\.service', '/work/bin/beekeeper\.update/[0-9a-f]{64}', --recovery-controller, /work/bin/beekeeper]
+          min: 1
+          max: 1
+  - name: candidate
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.3\b'}
+  # A watched candidate's verdict is the controller's: no further update
+  # installs meanwhile.
+  - name: watched
+    run: {args: [self-update, --version, v1.0.0-rc.2]}
+    expect:
+      - exit: 1
+      - stderr: {contains: ["a recovery controller supervises the installed candidate's probation"]}
+  # The candidate's loop runs and sends its heartbeat with every pass:
+  # once its refill has read the board, it is up and passing.
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
+  # The controller's unit, run by the scenario: the last known good
+  # release judges the candidate, an evaluation every 500 ms that counts
+  # for a minute of probation.
+  - name: controller
+    background:
+      release: v1.0.0-rc.2
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
+  # About a minute on a CI runner: 30 evaluations, six of them with the
+  # workflow probe. The bound leaves room for a busier runner.
+  - wait_for:
+      timeout: 240s
+      interval: 200ms
+      expect:
+        - process: {name: controller, exit: 0}
+        - events: {contains: [self-update.recovery]}
+  - name: verdict
+    run: {args: [log, --verb, self-update.recovery]}
+    expect:
+      - output: {contains: ["v1.0.0-rc.3 passed its probation: last known good"]}
+  - name: latest
+    run: {args: [self-update, --check]}
+    expect:
+      - exit: 0
+      - output: {contains: ["beekeeper v1.0.0-rc.3 is the latest release."]}
+  - stop: loop
+
+then:
+  - {step: candidate, exit: 0}
+  - events: {contains: [self-update.recovery], not_contains: [self-update.canary]}
+  - log: {name: controller, not_contains: ["probe of v1.0.0-rc.3 failed", "RELEASE ROLLED BACK", "RELEASE RECOVERY FAILED"]}
+  - {step: latest, output: {not_contains: ["is out"]}}
