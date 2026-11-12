@@ -44,13 +44,24 @@ this plan takes from it:
 Beekeeper already has four partial harnesses. The plan unifies them instead of
 adding a fifth:
 
-| Harness | What it does | Fate |
-| --- | --- | --- |
-| `cmd` `loopRig` (`cmd/supervisorloop_test.go`) | the loop's `app` in-process with faked commands and pull reads | stays: unit tests of the planner's small cases |
-| `internal/superloop/testdata/standstills` | recorded planner inputs replayed through the pure planner, with negative controls in CI | stays: planner-level replays |
-| `internal/loopworkflow` (5,200 lines, `make test-loop-workflow`) | real binary, scratch Git origin, fake `gh` and `claude` behind one fixture directory | its flows move into scenarios, then it is retired |
-| `internal/testenv` (`TestSupervisorWorkflow`) | real binary in user/mount/PID/network namespaces, fake `gh`, `claude`, Git remote helper | its sandbox is reused as the scenario sandbox; its workflow moves into a scenario |
-| `internal/perfsuite` (`-tags perf`) | real binary on a generated desk of realistic size; `gh`, `ssh`, harness fakes by argv[0] | stays for budgets; its desk generator is shared with scenarios |
+- `cmd` `loopRig` (`cmd/supervisorloop_test.go`)
+  **What it does:** the loop's `app` in-process with faked commands and pull reads
+  **Fate:** stays: unit tests of the planner's small cases
+- `internal/superloop/testdata/standstills`
+  **What it does:** recorded planner inputs replayed through the pure planner, with negative controls in
+  CI
+  **Fate:** stays: planner-level replays
+- `internal/loopworkflow` (5,200 lines, `make test-loop-workflow`)
+  **What it does:** real binary, scratch Git origin, fake `gh` and `claude` behind one fixture directory
+  **Fate:** its flows move into scenarios, then it is retired
+- `internal/testenv` (`TestSupervisorWorkflow`)
+  **What it does:** real binary in user/mount/PID/network namespaces, fake `gh`, `claude`, Git remote
+  helper
+  **Fate:** its sandbox is reused as the scenario sandbox; its workflow moves into a scenario
+- `internal/perfsuite` (`-tags perf`)
+  **What it does:** real binary on a generated desk of realistic size; `gh`, `ssh`, harness fakes by
+  argv[0]
+  **Fate:** stays for budgets; its desk generator is shared with scenarios
 
 Gaps none of them close: fakes are hand-matched on whole argument strings
 (`joined == "api repos/o/r/pulls/7"`), so every new call needs a new case; no
@@ -261,14 +272,27 @@ Each is one or more scenarios in its own directory:
 
 ## Tonight's bugs as regression scenarios
 
-| Bug | Scenario |
-| --- | --- |
-| https://github.com/giantswarm/beekeeper/issues/3738 duplicate PRs per continuation | an open PR from one execution; a continuation on an execution host publishes; then one open PR for the task, and after its merge none of the task's other PRs stays open |
-| https://github.com/giantswarm/beekeeper/issues/3772 HTTP 304 held every start | the scenario in the format section: a 304 uses the cached read; another repository's 502 holds only that repository |
-| https://github.com/giantswarm/beekeeper/issues/3769 loop drains GraphQL | one simulated hour of loop passes on a desk of realistic size: the loop's own GraphQL spend leaves the budget above `github.floor`, and starts are never held by the loop's own reads |
-| https://github.com/giantswarm/beekeeper/issues/3636 refill starved by a busy stream | a worker stream held by a slow GitHub response (8 s): the refill still starts a worker within one pass interval, and no process holds the state lock across the slow call |
-| https://github.com/giantswarm/beekeeper/issues/3742 merge-result checker without the linter | the check's host lacks `golangci-lint` (exit 127): the finding is an environment finding, the check is not dispatched there again, and the loop still reaches a go on green CI for the exact head |
-| https://github.com/giantswarm/beekeeper/issues/3345 and https://github.com/giantswarm/beekeeper/issues/3657 canary killed by a slow `supervisor status` | self-update on a large generated desk where `supervisor status` takes longer than the probe: probation is not failed by a slow but healthy loop, a real failure is rolled back with its reason, and `supervisor status` and `capacity --json` stay under their budgets |
+- https://github.com/giantswarm/beekeeper/issues/3738 duplicate PRs per continuation
+  **Scenario:** an open PR from one execution; a continuation on an execution host publishes; then one
+  open PR for the task, and after its merge none of the task's other PRs stays open
+- https://github.com/giantswarm/beekeeper/issues/3772 HTTP 304 held every start
+  **Scenario:** the scenario in the format section: a 304 uses the cached read; another repository's 502
+  holds only that repository
+- https://github.com/giantswarm/beekeeper/issues/3769 loop drains GraphQL
+  **Scenario:** one simulated hour of loop passes on a desk of realistic size: the loop's own GraphQL
+  spend leaves the budget above `github.floor`, and starts are never held by the loop's own reads
+- https://github.com/giantswarm/beekeeper/issues/3636 refill starved by a busy stream
+  **Scenario:** a worker stream held by a slow GitHub response (8 s): the refill still starts a worker
+  within one pass interval, and no process holds the state lock across the slow call
+- https://github.com/giantswarm/beekeeper/issues/3742 merge-result checker without the linter
+  **Scenario:** the check's host lacks `golangci-lint` (exit 127): the finding is an environment
+  finding, the check is not dispatched there again, and the loop still reaches a go on green CI for
+  the exact head
+- https://github.com/giantswarm/beekeeper/issues/3345
+  and https://github.com/giantswarm/beekeeper/issues/3657 canary killed by a slow `supervisor status`
+  **Scenario:** self-update on a large generated desk where `supervisor status` takes longer than the
+  probe: probation is not failed by a slow but healthy loop, a real failure is rolled back with its
+  reason, and `supervisor status` and `capacity --json` stay under their budgets
 
 Open bugs land their scenario with `pending:`; the fix removes it.
 
