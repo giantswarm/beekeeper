@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -44,7 +45,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 				t.Fatal(err)
 			}
 			return string(out), 0
-		case LoopBoard:
+		case loop.LoopBoard:
 			return fmt.Sprintf(`{"pick":{"ref":"o/r#%d","url":"https://github.com/o/r/issues/%d"}}`, busy+10, busy+10), 0
 		case agentsName:
 			if args[1] == agentStartName {
@@ -74,7 +75,7 @@ func TestLoopFillOnStartupAndAfterRosterLoss(t *testing.T) {
 	}
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			return `{"pick":{"ref":"o/r#10","url":"https://github.com/o/r/issues/10"}}`, 0
 		}
 		return original(args)
@@ -181,7 +182,7 @@ func TestLoopFillSkipsBoardWhenAllProvidersHeldByPaceEvenWithHosts(t *testing.T)
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
 		case fillCapacityCommand:
-			if slices.Contains(args, LoopHostFlag) {
+			if slices.Contains(args, loop.LoopHostFlag) {
 				return loopRoomJSON, 0
 			}
 			out, err := json.Marshal(capacityView{
@@ -193,7 +194,7 @@ func TestLoopFillSkipsBoardWhenAllProvidersHeldByPaceEvenWithHosts(t *testing.T)
 				t.Fatal(err)
 			}
 			return string(out), 0
-		case LoopBoard:
+		case loop.LoopBoard:
 			boardReads++
 		}
 		return original(args)
@@ -225,7 +226,7 @@ func TestLoopFillStopsAtGatesAndEmptyBoard(t *testing.T) {
 						return "broken JSON", 0
 					}
 				}
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					switch name {
 					case "empty board":
 						return fillEmptyBoardJSON, 0
@@ -308,7 +309,7 @@ func TestLoopFillNeverRepeatsStaleBoardItem(t *testing.T) {
 	r, busy := fillRig(t)
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			return `{"pick":{"ref":"o/r#30","url":"https://github.com/o/r/issues/30"}}`, 0
 		}
 		return original(args)
@@ -335,7 +336,7 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 			original := r.answer
 			reads := 0
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					reads++
 					return answer.body, answer.code
 				}
@@ -393,7 +394,7 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 			reads := 0
 			changedRoom, ceiling := false, 5
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					reads++
 					return fillEmptyBoardJSON, 0
 				}
@@ -459,13 +460,13 @@ func busyJSON(n int) string {
 }
 
 // emptyBoardFill is a refill rig whose board offers nothing, counting reads.
-func emptyBoardFill(t *testing.T) (*loopRig, *Loop, *int) {
+func emptyBoardFill(t *testing.T) (*loopRig, *loop.Loop, *int) {
 	t.Helper()
 	r, _ := fillRig(t)
 	original := r.answer
 	reads := 0
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			reads++
 			return fillEmptyBoardJSON, 0
 		}
@@ -569,12 +570,12 @@ func TestLoopFillFailedStartClosesClaim(t *testing.T) {
 				return original(args)
 			}
 			r.pass(t)
-			if evs := r.logged(t, LoopClaimEndVerb); len(evs) != 1 {
+			if evs := r.logged(t, loop.LoopClaimEndVerb); len(evs) != 1 {
 				t.Fatalf("failed claim not closed: %+v", evs)
 			}
 			// A later unrelated start with the same name must not settle the
 			// failed attempt as though it had started before an interruption.
-			if err := r.a.store.Record(event(LoopParty, "agents.start", "r 10: later start")); err != nil {
+			if err := r.a.store.Record(event(loop.LoopParty, "agents.start", "r 10: later start")); err != nil {
 				t.Fatal(err)
 			}
 			r.answer = func(args []string) (string, int) {
@@ -601,7 +602,7 @@ func TestLoopFillDryRunPreviewsWithoutStartingOrWriting(t *testing.T) {
 				if args[0] == fillCapacityCommand {
 					capacityReads++
 				}
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					boardReads++
 					if empty {
 						return fillEmptyBoardJSON, 0
@@ -648,14 +649,14 @@ func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
 	t.Helper()
 	r, busy := fillRig(t)
 	r.sshLoopHost(t, true)
-	branch := GhDefaultBranch
-	t.Cleanup(func() { GhDefaultBranch = branch })
-	GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	branch := loop.GhDefaultBranch
+	t.Cleanup(func() { loop.GhDefaultBranch = branch })
+	loop.GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
 		case fillCapacityCommand:
-			if slices.Contains(args, LoopHostFlag) {
+			if slices.Contains(args, loop.LoopHostFlag) {
 				return loopRoomJSON, 0
 			}
 			out, err := json.Marshal(capacityView{Ceiling: 3, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
@@ -663,7 +664,7 @@ func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
 				t.Fatal(err)
 			}
 			return string(out), 0
-		case LoopBoard:
+		case loop.LoopBoard:
 			n := *busy + 10
 			return fmt.Sprintf(`{"pick":{"ref":"%s#%d","url":"https://github.com/%s/issues/%d"}}`, sshTestRepository, n, sshTestRepository, n), 0
 		}
@@ -689,7 +690,7 @@ func TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull(t *testing.T) {
 	}
 	for _, c := range r.calls {
 		if c[0] == agentsName && c[1] == agentStartName {
-			for _, want := range []string{LoopHostFlag, sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch} {
+			for _, want := range []string{loop.LoopHostFlag, sshTestSelector, loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch} {
 				if !slices.Contains(c, want) {
 					t.Errorf("the fill's start names no %q: %v", want, c)
 				}
@@ -718,7 +719,7 @@ func TestLoopFillStaysBoundByLocalRoomWithoutHosts(t *testing.T) {
 func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T) {
 	r, busy := hostFillRigRoom(t, 5)
 	r.a.cfg.Supervisor.HostsFirst = true
-	name := RepoName(sshTestRepository) + " 10"
+	name := loop.RepoName(sshTestRepository) + " 10"
 	original := r.answer
 	recovered := 0
 	r.answer = func(args []string) (string, int) {
@@ -733,7 +734,7 @@ func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T)
 			}
 			return "refused: execution reserved", ExitRefused
 		}
-		if args[0] == agentsName && args[1] == LoopRecover {
+		if args[0] == agentsName && args[1] == loop.LoopRecover {
 			recovered++
 			*busy++
 			return "recovered", 0
@@ -744,7 +745,7 @@ func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T)
 	if recovered != 1 {
 		t.Fatalf("the reserved execution was not recovered: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, LoopClaimEndVerb); len(evs) != 0 {
+	if evs := r.logged(t, loop.LoopClaimEndVerb); len(evs) != 0 {
 		t.Fatalf("the recovered start's claim was closed as failed: %+v", evs)
 	}
 	evs := r.logged(t, "supervisor.next")
@@ -760,13 +761,13 @@ const boardNothingFree = `{"pick":null,"skipped":[{"ref":"o/r#4","skip":"held"}]
 
 // nothingFreeRig is the refill rig whose board answers as board next does
 // with nothing free, counting the reads, with doneN agents done.
-func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *Loop, *int) {
+func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *loop.Loop, *int) {
 	t.Helper()
 	r, _ := fillRig(t)
 	original := r.answer
 	reads := 0
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			reads++
 			return boardNothingFree, ExitRefused
 		}
@@ -790,7 +791,7 @@ func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *Loop, *int) {
 	return r, l, &reads
 }
 
-func (r *loopRig) loopPass(t *testing.T, l *Loop) {
+func (r *loopRig) loopPass(t *testing.T, l *loop.Loop) {
 	t.Helper()
 	// A pass returns with its actions still running: they end before the
 	// test's state directory goes, or they recreate its lock file in it.
@@ -835,7 +836,7 @@ func TestLoopSettlesDoneEventsWhenNothingIsFree(t *testing.T) {
 	for range 8 {
 		r.loopPass(t, l)
 	}
-	if fs := r.logged(t, LoopFailureVerb); len(fs) != 0 {
+	if fs := r.logged(t, loop.LoopFailureVerb); len(fs) != 0 {
 		t.Fatalf("nothing free recorded as failures: %+v", fs)
 	}
 	if got := *reads - before; got != 1 {
@@ -882,7 +883,7 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 			if *reads != before {
 				t.Fatalf("read the board %d times under the floor", *reads-before)
 			}
-			if fs := r.logged(t, LoopFailureVerb); len(fs) != 0 {
+			if fs := r.logged(t, loop.LoopFailureVerb); len(fs) != 0 {
 				t.Fatalf("a held read recorded as failures: %+v", fs)
 			}
 			if got := len(r.logged(t, "supervisor.next")); got != 0 {
@@ -1005,7 +1006,7 @@ func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
 		switch args[0] {
 		case fillCapacityCommand:
 			return fmt.Sprintf(`{"floor":3,"ceiling":%d,"room":5,"busy":[]}`, ceiling), 0
-		case LoopBoard:
+		case loop.LoopBoard:
 			at = append(at, r.a.now.Sub(start))
 		}
 		return board(args)
@@ -1045,7 +1046,7 @@ func TestLoopBoardNextRefusalWithoutNothingFreeFails(t *testing.T) {
 	} {
 		r, _ := fillRig(t)
 		r.answer = func(args []string) (string, int) {
-			if args[0] == LoopBoard {
+			if args[0] == loop.LoopBoard {
 				return body, ExitRefused
 			}
 			return "", 0
@@ -1068,7 +1069,7 @@ func TestLoopFillSkipsRefusedItemAndRetriesWithBackoff(t *testing.T) {
 	original := r.answer
 	refused := 0
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			if !slices.Contains(args, "o/r#9") {
 				return `{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9"}}`, 0
 			}
@@ -1091,7 +1092,7 @@ func TestLoopFillSkipsRefusedItemAndRetriesWithBackoff(t *testing.T) {
 	if !strings.Contains(r.out.String(), "worktree already exists") {
 		t.Fatalf("refusal output missing: %s", r.out)
 	}
-	closed := r.logged(t, LoopClaimEndVerb)
+	closed := r.logged(t, loop.LoopClaimEndVerb)
 	if len(closed) != 1 || !strings.Contains(closed[0].Detail, "worktree already exists") {
 		t.Fatalf("refusal not retained: %+v", closed)
 	}

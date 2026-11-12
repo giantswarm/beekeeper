@@ -14,6 +14,7 @@ import (
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -49,7 +50,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	ref := fmt.Sprintf("%s#%d", repo, number)
-	p, err := ReadLoopPull(ctx, ref)
+	p, err := loop.ReadLoopPull(ctx, ref)
 	if err != nil {
 		doc.ExitCode = github.SquashTooling
 		doc.Reason = err.Error()
@@ -57,7 +58,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	if p.State == superloop.Merged && p.Head == head {
 		st, _ := a.store.Read()
-		if _, err := CloseMergedPullIssues(ctx, st, p); err != nil {
+		if _, err := loop.CloseMergedPullIssues(ctx, st, p); err != nil {
 			doc.ExitCode = github.SquashTooling
 			doc.Reason = err.Error()
 			return doc
@@ -71,12 +72,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = reasonMergeHeadChanged
 		return doc
 	}
-	if LatestReviewRequestsChanges(p) {
+	if loop.LatestReviewRequestsChanges(p) {
 		doc.ExitCode = github.SquashRefused
 		doc.Reason = "a review requested changes; new supervisor approval required"
 		return doc
 	}
-	if p.Draft || p.Mergeable == MergeableConflicting {
+	if p.Draft || p.Mergeable == loop.MergeableConflicting {
 		doc.Reason = "branch is draft or conflicts with its base"
 		return doc
 	}
@@ -86,7 +87,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = err.Error()
 		return doc
 	}
-	evs, logErr := a.store.Events(0, func(e state.Event) bool { return e.By == LoopParty && e.Subject == ref })
+	evs, logErr := a.store.Events(0, func(e state.Event) bool { return e.By == loop.LoopParty && e.Subject == ref })
 	if logErr != nil {
 		doc.ExitCode = github.SquashTooling
 		doc.Reason = "merge authority unreadable"
@@ -95,7 +96,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	claimed := false
 	claimAgent := ""
 	for _, e := range evs {
-		key, rest, ok := Keyed(e.Detail)
+		key, rest, ok := loop.Keyed(e.Detail)
 		if !ok {
 			continue
 		}
@@ -103,15 +104,15 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		// The sweep's go again for a head whose go was never carried out
 		// is the same authority, keyed by its stretch without an owner.
 		if key == "go "+ref+"@"+head || superloop.IsSweep(key) && strings.HasPrefix(key, "go "+ref+"@"+head+" ") {
-			if e.Verb == LoopClaimVerb {
+			if e.Verb == loop.LoopClaimVerb {
 				claimed = true
 				claimAgent = rest
 			}
-			if e.Verb == LoopMergeVerb || e.Verb == LoopGoVerb {
+			if e.Verb == loop.LoopMergeVerb || e.Verb == loop.LoopGoVerb {
 				claimed = false
 			}
 		}
-		if e.Verb == LoopEndVerb && key == "end "+ref {
+		if e.Verb == loop.LoopEndVerb && key == "end "+ref {
 			claimed = false
 		}
 	}
@@ -155,11 +156,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		}
 	}
 	if claimAgent != "" {
-		doc.RequestedBy = fmt.Sprintf("%s (for %s)", LoopParty.Name, claimAgent)
+		doc.RequestedBy = fmt.Sprintf("%s (for %s)", loop.LoopParty.Name, claimAgent)
 	} else if a.as != "" {
 		doc.RequestedBy = a.as
 	} else {
-		doc.RequestedBy = LoopParty.Name
+		doc.RequestedBy = loop.LoopParty.Name
 	}
 	if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, p, head); authErr != nil {
 		doc.ExitCode = github.SquashTooling
@@ -175,7 +176,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = reasonDeskStopped
 		return doc
 	}
-	if _, held := merge.BlockingFor(st, clk.Now(), LoopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+	if _, held := merge.BlockingFor(st, clk.Now(), loop.LoopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
 		doc.ExitCode = github.SquashRefused
 		doc.Reason = reasonMergeHeld
 		return doc
@@ -195,7 +196,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	// Validation waits can outlive the review that admitted
 	// this run. Refresh authority after all checks, immediately before the
 	// mutation; --match-head-commit alone cannot detect a withdrawn approval.
-	p, err = ReadLoopPull(ctx, ref)
+	p, err = loop.ReadLoopPull(ctx, ref)
 	if err != nil {
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
@@ -204,7 +205,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeadChanged
 		return doc
 	}
-	if p.Draft || p.Mergeable == MergeableConflicting {
+	if p.Draft || p.Mergeable == loop.MergeableConflicting {
 		doc.ExitCode, doc.Reason = github.SquashRefused, "branch became draft or conflicts with its base"
 		return doc
 	}
@@ -224,11 +225,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashRefused, reasonDeskStopped
 		return doc
 	}
-	if _, held := merge.BlockingFor(st, clk.Now(), LoopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+	if _, held := merge.BlockingFor(st, clk.Now(), loop.LoopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
 		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeld
 		return doc
 	}
-	if err := EnsureCombinedPullCloses(ctx, st, &p); err != nil {
+	if err := loop.EnsureCombinedPullCloses(ctx, st, &p); err != nil {
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
 	}
@@ -241,7 +242,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if admin {
 		// The admin exception belongs to the desk's gh login, not the
 		// devctl App identity. Record its exact-head use before mutation.
-		if err := a.store.Record(about(event(LoopParty, "merge.admin", "https://github.com/%s/pull/%d at %s: admin review bypass using the desk gh login", repo, number, merging), ref)); err != nil {
+		if err := a.store.Record(about(event(loop.LoopParty, "merge.admin", "https://github.com/%s/pull/%d at %s: admin review bypass using the desk gh login", repo, number, merging), ref)); err != nil {
 			doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 			return doc
 		}
@@ -256,7 +257,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if a.cfg != nil {
 		github.SetDevctlSkipVersionCheck(!a.cfg.Hooks.GuardsEnabled())
 	}
-	out, stderr, code, runErr := LoopCommand(ctx, "", argv)
+	out, stderr, code, runErr := loop.LoopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
 	if runErr != nil {
 		doc.Reason = runErr.Error()
@@ -264,7 +265,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if note != "" {
 		doc.Reason = strings.TrimSuffix(note+"; "+doc.Reason, "; ")
 	}
-	p, err = ReadLoopPull(ctx, ref)
+	p, err = loop.ReadLoopPull(ctx, ref)
 	if err != nil {
 		doc.ExitCode = github.SquashTooling
 		doc.Reason = err.Error()
@@ -272,7 +273,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	switch {
 	case p.State == superloop.Merged && p.Head == merging:
-		if _, err := CloseMergedPullIssues(ctx, st, p); err != nil {
+		if _, err := loop.CloseMergedPullIssues(ctx, st, p); err != nil {
 			doc.ExitCode = github.SquashTooling
 			doc.Reason = err.Error()
 			return doc
@@ -281,17 +282,17 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"
 	case runErr == nil && code == 0 && p.State == superloop.Open && p.Head == merging:
-		doc.ExitCode, doc.Verdict = 0, ReviewedMergeQueued
+		doc.ExitCode, doc.Verdict = 0, loop.ReviewedMergeQueued
 		doc.Reason = "merge queued; awaiting server-side merge-result checks"
 	case p.State != superloop.Open || p.Head != merging || !p.Green:
 		doc.ExitCode = github.SquashRefused
 		if doc.Reason == "" {
 			doc.Reason = reasonMergeHeadChanged
 		}
-	case GhMergePolicyRefused(doc.Reason):
+	case loop.GhMergePolicyRefused(doc.Reason):
 		doc.ExitCode = github.SquashRefused
 		doc.Reason = fmt.Sprintf("repository merge policy refused; branch updates are disabled; the repository owner must resolve any up-to-date requirement (reviewDecision=%s): %s", p.ReviewDecision, doc.Reason)
-	case PullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
+	case loop.PullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
 		doc.ExitCode = github.SquashNotApplicable
 		if doc.Reason == "" {
 			doc.Reason = "branch is draft or conflicts with its base"
@@ -339,7 +340,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	if head == "" {
 		return "pull request has no head commit", false, nil
 	}
-	if p.Head != "" && targetHead != "" && !SameCommit(p.Head, targetHead) {
+	if p.Head != "" && targetHead != "" && !loop.SameCommit(p.Head, targetHead) {
 		return fmt.Sprintf("pull request head is %s, not %s", shortSHA(p.Head), shortSHA(targetHead)), false, nil
 	}
 	reviews, err := a.trustedReviews(ctx, p)
@@ -365,7 +366,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	approvedHead := ""
 	if latest != nil && latest.Verdict == superloop.Approved {
 		approvedHead = cmp.Or(latest.Head, latest.Commit)
-		if SameCommit(approvedHead, head) || st.ReviewNitsChecked(p.Ref, head, approvedHead) {
+		if loop.SameCommit(approvedHead, head) || st.ReviewNitsChecked(p.Ref, head, approvedHead) {
 			return "", false, nil
 		}
 	}
@@ -373,7 +374,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	// A base-only update preserves the reviewed change even when review is
 	// mandatory. Check it before refusing an approval on an older head.
 	if approvedHead != "" && a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
-		ok, err := ReadBaseMerge(ctx, p, approvedHead)
+		ok, err := loop.ReadBaseMerge(ctx, p, approvedHead)
 		if err != nil {
 			return "", false, err
 		}
@@ -412,18 +413,18 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		}
 		activeGo := map[string]goRecord{}
 		for _, e := range evs {
-			if e.By == LoopParty && strings.EqualFold(e.Subject, p.Ref) {
-				if key, _, ok := Keyed(e.Detail); ok {
+			if e.By == loop.LoopParty && strings.EqualFold(e.Subject, p.Ref) {
+				if key, _, ok := loop.Keyed(e.Detail); ok {
 					key = superloop.BaseActionKey(key)
 					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
 						switch e.Verb {
-						case LoopGoVerb:
+						case loop.LoopGoVerb:
 							activeGo[after] = goRecord{head: after, at: e.At}
-						case LoopMergeVerb, LoopClaimEndVerb:
+						case loop.LoopMergeVerb, loop.LoopClaimEndVerb:
 							delete(activeGo, after)
 						}
 					}
-					if e.Verb == LoopEndVerb && strings.EqualFold(key, "end "+p.Ref) {
+					if e.Verb == loop.LoopEndVerb && strings.EqualFold(key, "end "+p.Ref) {
 						clear(activeGo)
 					}
 				}
@@ -444,16 +445,16 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 				return false
 			}
 			revHead := cmp.Or(r.Head, r.Commit)
-			return SameCommit(revHead, head) || (!g.at.IsZero() && !r.At.Before(g.at))
+			return loop.SameCommit(revHead, head) || (!g.at.IsZero() && !r.At.Before(g.at))
 		})
 	})
 	// An exact head first: only then are base merges read, one GitHub
 	// compare each.
-	if slices.ContainsFunc(goes, func(g goRecord) bool { return SameCommit(g.head, head) }) {
+	if slices.ContainsFunc(goes, func(g goRecord) bool { return loop.SameCommit(g.head, head) }) {
 		return "", true, nil
 	}
 	if approvedHead != "" {
-		ok, err := ReadBaseMerge(ctx, p, approvedHead)
+		ok, err := loop.ReadBaseMerge(ctx, p, approvedHead)
 		if err != nil {
 			return "", false, err
 		}
@@ -462,7 +463,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		}
 	}
 	for _, g := range goes {
-		ok, err := ReadBaseMerge(ctx, p, g.head)
+		ok, err := loop.ReadBaseMerge(ctx, p, g.head)
 		if err != nil {
 			return "", false, err
 		}
@@ -481,7 +482,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 }
 
 // trustedReviews are p's reviews with a verdict the desk trusts
-// (deskVerdicts): the authors are supervisor.ownership.authors, else the
+// (loop.DeskVerdicts): the authors are supervisor.ownership.authors, else the
 // login gh acts as, read only when a verdict comes from a non-member.
 func (a *app) trustedReviews(ctx context.Context, p superloop.Pull) ([]superloop.Review, error) {
 	var authors []string
@@ -489,14 +490,14 @@ func (a *app) trustedReviews(ctx context.Context, p superloop.Pull) ([]superloop
 		authors = a.cfg.Supervisor.Ownership.Authors
 	}
 	if len(authors) == 0 && slices.ContainsFunc(p.Reviews, func(r superloop.Review) bool { return r.Verdict != "" && !r.Member }) {
-		login, err := ReadDeskLogin(ctx)
+		login, err := loop.ReadDeskLogin(ctx)
 		if err != nil {
 			return nil, err
 		}
 		authors = []string{login}
 	}
 	var out []superloop.Review
-	for _, r := range DeskVerdicts(p.Reviews, authors) {
+	for _, r := range loop.DeskVerdicts(p.Reviews, authors) {
 		if r.Verdict != "" {
 			out = append(out, r)
 		}
@@ -511,7 +512,7 @@ func gateMergeHeadAuthority(ctx context.Context, a *app, repo string, pr int, ta
 		return "", false, nil
 	}
 	ref := fmt.Sprintf("%s#%d", repo, pr)
-	p, err := ReadLoopPull(ctx, ref)
+	p, err := loop.ReadLoopPull(ctx, ref)
 	if err != nil {
 		return "", false, err
 	}

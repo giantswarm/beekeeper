@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -37,7 +38,7 @@ func TestFatalMainBoardStartsInBothRepositories(t *testing.T) {
 			saveMainOutage(t, r.a)
 			old := r.answer
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					return fmt.Sprintf(`{"pick":{"ref":"%s#%d","url":"https://github.com/%s/issues/%d"}}`, repo, *busy+10, repo, *busy+10), 0
 				}
 				return old(args)
@@ -132,12 +133,12 @@ func TestFatalMainLoopWaitsBeforeMergeGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubFatalBranches(t, fatalScopeBase, nil)
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	act := superloop.Action{Ref: loopPR, URL: loopURL, Head: loopHead, Key: "fatal merge"}
-	if _, err := l.MergePull(t.Context(), &state.State{}, act); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.MergePull(t.Context(), &state.State{}, act); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("merge not held: %v", err)
 	}
-	if len(r.logged(t, LoopGoVerb)) != 0 || r.called(gateCmdName) != nil {
+	if len(r.logged(t, loop.LoopGoVerb)) != 0 || r.called(gateCmdName) != nil {
 		t.Fatal("red main issued merge go or entered gate")
 	}
 }

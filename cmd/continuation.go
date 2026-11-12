@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -102,7 +103,7 @@ func continuationName(ag state.Agent) string {
 	return fmt.Sprintf("%s next-%x", truncate(ag.Name, 60), id[:8])
 }
 
-func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
+func loopFinishContinuation(l *loop.Loop, old state.Agent, name string) error {
 	finished := false
 	err := asApp(l.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(cur state.Agent) bool { return cur.Name == name })
@@ -170,7 +171,7 @@ func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
 		if _, err := handClaims(st, lease.Dir(asApp(l.Host).cfg.LeaseDir), prev.Party, next.Party); err != nil {
 			return nil, err
 		}
-		e := event(LoopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
+		e := event(loop.LoopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
 		successor := next.Party
 		removeAgent(st, j)
 		for k := range st.Starts {

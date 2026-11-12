@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -50,10 +51,10 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 		if d.Agent != "" && strings.EqualFold(ag.Name, d.Agent) {
 			return true
 		}
-		serves := LoopServes(st, ag)
+		serves := loop.LoopServes(st, ag)
 		if serves != "" && (strings.EqualFold(serves, d.Ref) ||
 			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) })) ||
-			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(LoopParkOn(ag.Park), ref) }) {
+			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loop.LoopParkOn(ag.Park), ref) }) {
 			return true
 		}
 	}
@@ -124,7 +125,7 @@ func (a *app) deliveryExemptIntake(st *state.State) bool {
 
 // Only new issue starts use this check. The frozen references travel with
 // their worker stream, never in a field another pass could overwrite.
-func loopDeliveryPriority(l *Loop, ctx context.Context, reserved ...[]string) error {
+func loopDeliveryPriority(l *loop.Loop, ctx context.Context, reserved ...[]string) error {
 	st, err := asApp(l.Host).store.Read()
 	if err != nil {
 		return err
@@ -134,7 +135,7 @@ func loopDeliveryPriority(l *Loop, ctx context.Context, reserved ...[]string) er
 		return nil
 	}
 	if l.DeliveryRoom(loopFillRoom(l, loopFillCapacity(l, ctx)), st, refs) <= 0 {
-		return ErrLoopLater
+		return loop.ErrLoopLater
 	}
 	return nil
 }

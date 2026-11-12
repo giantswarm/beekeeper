@@ -4,21 +4,22 @@ import (
 	"context"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // The workflow rig supplies deterministic observations while exercising planner
 // and action semantics. Watcher integration tests restore the production reader.
-func fixtureLoopObservation(l *Loop, ctx context.Context, ref string, changed time.Time, step string) (LoopPullObservation, error) {
+func fixtureLoopObservation(l *loop.Loop, ctx context.Context, ref string, changed time.Time, step string) (loop.LoopPullObservation, error) {
 	if step == "" {
-		p, err := ReadLoopPull(ctx, ref)
-		return LoopPullObservation{Pull: p, At: asApp(l.Host).timeNow()}, err
+		p, err := loop.ReadLoopPull(ctx, ref)
+		return loop.LoopPullObservation{Pull: p, At: asApp(l.Host).timeNow()}, err
 	}
 	p, err := fixtureObservePull(l, ctx, ref, changed, step)
-	return LoopPullObservation{Pull: p, At: l.Pulls[ref].At, Changed: changed}, err
+	return loop.LoopPullObservation{Pull: p, At: l.Pulls[ref].At, Changed: changed}, err
 }
 
-func fixtureObservePull(l *Loop, ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
+func fixtureObservePull(l *loop.Loop, ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
 	// Bound the entire observation, including shared admission-lock waits
 	// and budget probes, rather than only the eventual gh pr view.
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -31,14 +32,14 @@ func fixtureObservePull(l *Loop, ctx context.Context, ref string, changed time.T
 	}
 	var p superloop.Pull
 	err := asApp(l.Host).loopGitHub(ctx, step, func() (err error) {
-		p, err = ReadLoopPull(ctx, ref)
+		p, err = loop.ReadLoopPull(ctx, ref)
 		return err
 	})
 	if err != nil {
 		return p, err
 	}
 	if l.Pulls == nil {
-		l.Pulls = map[string]LoopPullObservation{}
+		l.Pulls = map[string]loop.LoopPullObservation{}
 	}
 	at := asApp(l.Host).timeNow()
 	// A running loop's clock stays at the start of its pass: this read may be
@@ -46,21 +47,21 @@ func fixtureObservePull(l *Loop, ctx context.Context, ref string, changed time.T
 	if asApp(l.Host).loopNow != nil {
 		at = time.Now()
 	}
-	l.Pulls[ref] = LoopPullObservation{Pull: p, At: at, Changed: changed}
+	l.Pulls[ref] = loop.LoopPullObservation{Pull: p, At: at, Changed: changed}
 	return p, nil
 }
 
-func fixtureLoopSweep(l *Loop, ctx context.Context, in superloop.Input) {
+func fixtureLoopSweep(l *loop.Loop, ctx context.Context, in superloop.Input) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	now := asApp(l.Host).timeNow()
-	if l.OpenPullsAt.IsZero() || now.Sub(l.OpenPullsAt) >= SweepListEvery {
+	if l.OpenPullsAt.IsZero() || now.Sub(l.OpenPullsAt) >= loop.SweepListEvery {
 		authors := func() ([]string, error) {
 			if len(in.Desk.Authors) > 0 {
 				return in.Desk.Authors, nil
 			}
 			if l.Login == "" {
-				login, err := ReadDeskLogin(ctx)
+				login, err := loop.ReadDeskLogin(ctx)
 				if err != nil {
 					return nil, err
 				}
@@ -73,10 +74,10 @@ func fixtureLoopSweep(l *Loop, ctx context.Context, in superloop.Input) {
 		// listing interval still bounds searches; shared floors still apply.
 		var open []string
 		err := asApp(l.Host).loopGitHub(ctx, "pull discovery", func() (err error) {
-			open, err = ReadOpenPulls(ctx, authors, asApp(l.Host).cfg.GitHub.AllowedOrgs)
+			open, err = loop.ReadOpenPulls(ctx, authors, asApp(l.Host).cfg.GitHub.AllowedOrgs)
 			return err
 		})
-		l.SweepIncomplete = err != nil || len(open) >= SweepListLimit
+		l.SweepIncomplete = err != nil || len(open) >= loop.SweepListLimit
 		if err != nil {
 			// The last list stands. Retry next pass so a reset does not
 			// leave discovery waiting another full listing interval.

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -177,7 +178,7 @@ func TestRelayInstructionQueuesPayloadSeparately(t *testing.T) {
 	a.cfg.StateDir = t.TempDir()
 	sent := fakeRelay(t, false)
 	status, err := a.relayInstruction(context.Background(), "waiting", "recipient", "Click the OAuth consent")
-	if err != nil || status != ReviewedMergeQueued {
+	if err != nil || status != loop.ReviewedMergeQueued {
 		t.Fatalf("relay: %s, %v", status, err)
 	}
 	if got := relayed(t, sent); len(got) != 1 || got[0] != "recipient" {

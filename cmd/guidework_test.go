@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -106,7 +107,7 @@ func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.GuideReportsSince = w.now.Add(-time.Minute)
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: w.now.Add(-time.Hour)}}
-		return []state.Event{{At: w.now, Verb: LoopFileVerb, Detail: "[fixture-report] issue to file" + FileReportSeparator + "the full problem"}}, nil
+		return []state.Event{{At: w.now, Verb: loop.LoopFileVerb, Detail: "[fixture-report] issue to file" + loop.FileReportSeparator + "the full problem"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T
 		fail = false
 	}
 	st, _ := w.store.Read()
-	if len(st.GuideWork) != 1 || st.GuideWork[0].Text != "issue to file"+FileReportSeparator+"the full problem" {
+	if len(st.GuideWork) != 1 || st.GuideWork[0].Text != "issue to file"+loop.FileReportSeparator+"the full problem" {
 		t.Fatalf("lost report: %+v", st.GuideWork)
 	}
 	if len(sent) != 2 || !strings.Contains(sent[1], "GUIDE WATCH LAPSED") || !strings.Contains(sent[1], "the full problem") {
@@ -139,7 +140,7 @@ func TestIndependentGuideMonitorRetainsAndDeliversWithoutGuideWatch(t *testing.T
 
 func TestGuideFeedRetainsWorkBeforeSayingAProblem(t *testing.T) {
 	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: continuityGuideSession}}}}
-	ev := state.Event{At: relayNow, Verb: LoopFileVerb, Detail: "[new-problem] a finding" + FileReportSeparator + "file this"}
+	ev := state.Event{At: relayNow, Verb: loop.LoopFileVerb, Detail: "[new-problem] a finding" + loop.FileReportSeparator + "file this"}
 	lines, changed := guideProblemLines(st, []state.Event{ev})
 	if !changed || len(lines) != 1 || len(st.GuideWork) != 1 || len(st.GuideReports) != 1 {
 		t.Fatalf("problem not retained: %q %+v", lines, st.GuideWork)
@@ -237,7 +238,7 @@ func TestGuidePeerTurnInvalidatesWorkCheck(t *testing.T) {
 func TestGuideReportsStartNowAndRetainBoundaryAcrossFeeds(t *testing.T) {
 	now := relayNow
 	problem := func(at time.Time, key string) state.Event {
-		return state.Event{At: at, Verb: LoopFileVerb, Detail: "[" + key + "] finding" + FileReportSeparator + "details"}
+		return state.Event{At: at, Verb: loop.LoopFileVerb, Detail: "[" + key + "] finding" + loop.FileReportSeparator + "details"}
 	}
 	st := &state.State{}
 	old := problem(now.Add(-time.Hour), "old")

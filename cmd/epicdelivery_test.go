@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -97,7 +98,7 @@ func TestEpicOwnerWakesOnceAcrossLoopRestarts(t *testing.T) {
 	}
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: epicTestOwner}, Task: epicOwnerTask + reserveIssue, Park: &state.Park{On: reserveIssue}}}}
 	for range 2 {
-		l := &Loop{Host: r.a}
+		l := &loop.Loop{Host: r.a}
 		if err := l.WakeEpicOwners(context.Background(), st); err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +113,7 @@ func TestEpicOwnerWakesOnceAcrossLoopRestarts(t *testing.T) {
 		t.Fatalf("wakes: %d, calls: %v", n, r.calls)
 	}
 	st.Deliveries = []state.Delivery{{Ref: idleRef, Step: state.DeliveryDone, Since: r.a.timeNow()}}
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	if err := l.WakeEpicOwners(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +124,11 @@ func TestEpicOwnerWakesOnceAcrossLoopRestarts(t *testing.T) {
 
 func TestEpicCompletionRequiresProofAndNoOpenChildren(t *testing.T) {
 	r := newLoopRig(t)
-	previous := EpicGitHub
-	t.Cleanup(func() { EpicGitHub = previous })
+	previous := loop.EpicGitHub
+	t.Cleanup(func() { loop.EpicGitHub = previous })
 	open := true
 	closed := 0
-	EpicGitHub = func(_ context.Context, args ...string) ([]byte, error) {
+	loop.EpicGitHub = func(_ context.Context, args ...string) ([]byte, error) {
 		if args[0] == "api" {
 			if open {
 				return []byte("1"), nil
@@ -138,14 +139,14 @@ func TestEpicCompletionRequiresProofAndNoOpenChildren(t *testing.T) {
 		return nil, nil
 	}
 	st := &state.State{WorkerReports: []state.WorkerReport{{Task: epicOwnerTask + reserveIssue, Finished: true, Text: "children merged"}}}
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	if err := l.CompleteEpics(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	if closed != 0 {
 		t.Fatal("closed without proof")
 	}
-	st.WorkerReports[0].Text = EpicAcceptanceProven + "end-to-end evidence recorded"
+	st.WorkerReports[0].Text = loop.EpicAcceptanceProven + "end-to-end evidence recorded"
 	if err := l.CompleteEpics(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +162,7 @@ func TestEpicCompletionRequiresProofAndNoOpenChildren(t *testing.T) {
 	if closed != 1 {
 		t.Fatalf("close attempts: %d", closed)
 	}
-	if len(r.calls) != 1 || r.calls[0][0] != LoopBoard {
+	if len(r.calls) != 1 || r.calls[0][0] != loop.LoopBoard {
 		t.Fatalf("Done move: %v", r.calls)
 	}
 }

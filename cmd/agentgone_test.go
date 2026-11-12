@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -331,7 +332,7 @@ func TestGoneLoopRetiresOnlyInactiveTask(t *testing.T) {
 		st.Agents = []state.Agent{gone, fresh}
 		st.Records = []state.Record{{Session: gone.Party, At: old}}
 	})
-	l := &Loop{Host: a}
+	l := &loop.Loop{Host: a}
 	if err := l.Roster(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}

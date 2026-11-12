@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -20,7 +21,7 @@ func (a *app) readSnapshot() (*state.State, error) {
 	// desk's state is old while the loop runs: the loop's cache, written after
 	// every pass, dates the last look.
 	var at time.Time
-	for _, name := range []string{"state.json", LoopCacheFile} {
+	for _, name := range []string{"state.json", loop.LoopCacheFile} {
 		if info, err := os.Stat(filepath.Join(a.store.Dir(), name)); err == nil && info.ModTime().After(at) {
 			at = info.ModTime()
 		}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -61,5 +62,5 @@ func recordDeliveryRelease(st *state.State, repo string, pr int, out merge.Outco
 			applyDeliveryVerdict(d, verdict, out.Release, now)
 		}
 	}
-	return state.DeliveryEvents(prev, st.Deliveries, LoopParty)
+	return state.DeliveryEvents(prev, st.Deliveries, loop.LoopParty)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -18,7 +19,7 @@ func endedParkCandidate(ag state.Agent) bool {
 
 // Persistent inbox harnesses do not run the Claude stop-post hook. Resume
 // only a positively observed ended turn, once per observed turn timestamp.
-func loopRecoverUnfinishedTurns(l *Loop, ctx context.Context, st *state.State) error {
+func loopRecoverUnfinishedTurns(l *loop.Loop, ctx context.Context, st *state.State) error {
 	if l.DryRun || st.Stop != nil || l.HoldingStarts() {
 		return nil
 	}

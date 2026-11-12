@@ -10,20 +10,21 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // loopBroker puts the sandbox's broker onto the binary installed at the
-// loop's path and says so: errLoopLater while it serves calls a restart
+// loop's path and says so: loop.ErrLoopLater while it serves calls a restart
 // would end (as self-update leaves it, its restart due).
 var loopBroker = func(ctx context.Context) (string, error) {
 	pid, bin, err := brokerProcess()
 	if err != nil {
 		return "no broker runs", nil //nolint:nilerr // no broker unit: nothing to put on the new binary
 	}
-	exe, err := ExecutablePath()
+	exe, err := loop.ExecutablePath()
 	if err != nil {
 		return "", err
 	}
@@ -37,7 +38,7 @@ var loopBroker = func(ctx context.Context) (string, error) {
 	}
 	switch step, calls := brokerDue(pid, bin, exe, fi.ModTime(), t); step {
 	case brokerBusy:
-		return fmt.Sprintf("the broker serves %d call(s)", calls), ErrLoopLater
+		return fmt.Sprintf("the broker serves %d call(s)", calls), loop.ErrLoopLater
 	case brokerRestart:
 		if err := restartBroker(ctx); err != nil {
 			return "", fmt.Errorf("restarting the broker: %w", err)
@@ -109,7 +110,7 @@ var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
 // sleeping waits, takes off the roster any finished agent (done, relieved or
 // stale with no CLI) that superloop.Plan is not still handling in planned, and
 // archives or stops owed desktop and background sessions once their turns end.
-func loopRoster(l *Loop, ctx context.Context, planned map[string]bool) error {
+func loopRoster(l *loop.Loop, ctx context.Context, planned map[string]bool) error {
 	if l.PauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
@@ -132,7 +133,7 @@ func loopRoster(l *Loop, ctx context.Context, planned map[string]bool) error {
 		stopProcesses(w.pids())
 		line := "stopped " + w.String()
 		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
-			return []state.Event{event(LoopParty, "agents.stop", "%s", line)}, nil
+			return []state.Event{event(loop.LoopParty, "agents.stop", "%s", line)}, nil
 		})
 	}
 	if l.PauseForReexec() || ctx.Err() != nil {
@@ -148,7 +149,7 @@ func loopRoster(l *Loop, ctx context.Context, planned map[string]bool) error {
 	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.timeNow(), a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
-	_, err = a.finishRoster(ctx, chores, sessions, record, busy, LoopParty, "beekeeper supervisor loop")
+	_, err = a.finishRoster(ctx, chores, sessions, record, busy, loop.LoopParty, "beekeeper supervisor loop")
 	return err
 }
 
@@ -161,7 +162,7 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 // loopFiledIssues reads the issues created by sessions active since the loop
 // started (Work.Created), with the item or pull request each session was
 // working on when it filed the issue.
-func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
+func loopFiledIssues(l *loop.Loop, st *state.State) []superloop.FiledIssue {
 	sessions, _, err := loopSessions(asApp(l.Host))
 	if err != nil || len(sessions) == 0 {
 		return nil
@@ -180,7 +181,7 @@ func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
 		from := ""
 		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
 			agent = st.Agents[i].Name
-			from = AgentRef(st, agent)
+			from = loop.AgentRef(st, agent)
 		} else if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(p) {
 			agent = guideName
 		}
@@ -221,7 +222,7 @@ func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
 // reminders and their desktop notifications. Checks run outside the state
 // lock; settling inside Update lets a concurrent watch take a timer first
 // without either firing it twice. Side effects follow the successful save.
-func loopFireTimers(l *Loop, ctx context.Context, st *state.State) error {
+func loopFireTimers(l *loop.Loop, ctx context.Context, st *state.State) error {
 	a := asApp(l.Host)
 	var acting []state.Timer
 	for _, t := range st.Timers {
@@ -229,8 +230,8 @@ func loopFireTimers(l *Loop, ctx context.Context, st *state.State) error {
 			acting = append(acting, t)
 		}
 	}
-	githubHeld := BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) ||
-		a.cfg.GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow())
+	githubHeld := loop.BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) ||
+		a.cfg.GitHub.Floor > 0 && loop.LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow())
 	found := a.loopTimerChecks(ctx, acting, a.timeNow(), githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
 	_, _, _, changed := settleTimersMatching(st, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -42,12 +43,12 @@ func TestLoopGraphQLAllowancePersistsAndProtectsFloor(t *testing.T) {
 		// Every attempt uses a new app, as parent/child commands and a
 		// restarted loop do. The allowance is shared through the store.
 		a := *r.a
-		err := a.loopGitHub(context.Background(), LoopBoard, func() error { runs++; remaining -= 39; return nil })
-		if err != nil && !errors.Is(err, ErrLoopLater) {
+		err := a.loopGitHub(context.Background(), loop.LoopBoard, func() error { runs++; remaining -= 39; return nil })
+		if err != nil && !errors.Is(err, loop.ErrLoopLater) {
 			t.Fatal(err)
 		}
 		if attempt%5 == 0 {
-			if err := a.loopGitHub(context.Background(), LoopPullStep, func() error { pullRuns++; return nil }); err != nil {
+			if err := a.loopGitHub(context.Background(), loop.LoopPullStep, func() error { pullRuns++; return nil }); err != nil {
 				t.Fatalf("interleaved pull step held at attempt %d: %v", attempt, err)
 			}
 		}
@@ -59,19 +60,19 @@ func TestLoopGraphQLAllowancePersistsAndProtectsFloor(t *testing.T) {
 	if _, err := r.a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
 		t.Fatal(err)
 	}
-	if spend.Steps[LoopBoard] <= loopGraphQLLimit-loopGraphQLProbeReserve-LoopGraphQLReserve {
+	if spend.Steps[loop.LoopBoard] <= loopGraphQLLimit-loopGraphQLProbeReserve-loop.LoopGraphQLReserve {
 		t.Fatalf("board spend was wiped mid-window: %+v", spend)
 	}
 	before := runs
 	remaining = 2550
-	if err := r.a.loopGitHub(context.Background(), LoopPullStep, func() error { runs++; return nil }); !errors.Is(err, ErrLoopLater) || runs != before {
+	if err := r.a.loopGitHub(context.Background(), loop.LoopPullStep, func() error { runs++; return nil }); !errors.Is(err, loop.ErrLoopLater) || runs != before {
 		t.Fatalf("admitted work without room above floor: %v", err)
 	}
 	// Only a new GitHub window releases the durable allowance.
 	remaining = 5000
 	reset = reset.Add(time.Hour)
 	r.a.now = r.a.now.Add(time.Hour)
-	if err := r.a.loopGitHub(context.Background(), LoopPullStep, func() error { runs++; return nil }); err != nil || runs != before+1 {
+	if err := r.a.loopGitHub(context.Background(), loop.LoopPullStep, func() error { runs++; return nil }); err != nil || runs != before+1 {
 		t.Fatalf("new window did not release allowance: %v", err)
 	}
 }
@@ -120,7 +121,7 @@ func TestLoopAllowanceHoldReleasesWhenLiveBudgetAboveFloor(t *testing.T) {
 		HeldAt:    start.Add(-5 * time.Minute),
 		Remaining: 2400,
 		Spent:     loopGraphQLLimit,
-		Steps:     map[string]int{LoopBoard: loopGraphQLLimit},
+		Steps:     map[string]int{loop.LoopBoard: loopGraphQLLimit},
 		Accounts:  map[string]loopGraphQLAccount{"gh": {Reset: start.Add(time.Hour), Remaining: 2400}},
 	}); err != nil {
 		t.Fatal(err)
@@ -153,7 +154,7 @@ func TestLoopAllowanceHoldReleasesWhenLiveBudgetAboveFloor(t *testing.T) {
 		}
 		return github.LowestBudget(profiles, r.a.now), nil
 	}
-	for _, step := range []string{LoopPullStep, "park-refs", LoopBoard} {
+	for _, step := range []string{loop.LoopPullStep, "park-refs", loop.LoopBoard} {
 		ran := false
 		if err := r.a.loopGitHub(context.Background(), step, func() error {
 			ran = true
@@ -222,7 +223,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 		HeldAt:    r.a.now,
 		Remaining: 2400,
 		Spent:     loopGraphQLLimit,
-		Steps:     map[string]int{LoopBoard: loopGraphQLLimit},
+		Steps:     map[string]int{loop.LoopBoard: loopGraphQLLimit},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 	if r.called(agentsName, agentStartName) != nil || r.called(gateCmdName) != nil {
 		t.Fatalf("held loop started review or gave merge go: %v", r.calls)
 	}
-	if failures := r.logged(t, LoopFailureVerb); len(failures) != 0 {
+	if failures := r.logged(t, loop.LoopFailureVerb); len(failures) != 0 {
 		t.Fatalf("held loop logged failures: %+v", failures)
 	}
 
@@ -277,7 +278,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 	if evs := r.logged(t, "supervisor.merge"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[go "+loopPR+"@"+loopHead+"]") {
 		t.Fatalf("merge go not recorded: %+v", evs)
 	}
-	if failures := r.logged(t, LoopFailureVerb); len(failures) != 0 {
+	if failures := r.logged(t, loop.LoopFailureVerb); len(failures) != 0 {
 		t.Fatalf("unexpected supervisor.failure events: %+v", failures)
 	}
 	var spend loopGraphQLSpend
@@ -288,12 +289,12 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 		t.Fatalf("allowance hold was not released to live reset %s: %+v", liveReset, spend)
 	}
 	r.answer = func(args []string) (string, int) {
-		if slices.Contains(args, LoopBoard) {
+		if slices.Contains(args, loop.LoopBoard) {
 			return "Error: loop GitHub allowance held until 2026-11-02T22:30:00Z: later", 1
 		}
 		return "", 0
 	}
-	if _, err := l.Run(context.Background(), LoopBoard, "o/r#9", "backlog", "--intake"); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.Run(context.Background(), loop.LoopBoard, "o/r#9", "backlog", "--intake"); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("held child board command did not map to errLoopLater: %v", err)
 	}
 }
@@ -303,14 +304,14 @@ func TestLoopPullInvalidationIsSpecificToItsThread(t *testing.T) {
 	in := superloop.Input{Workers: []superloop.Worker{{ParkedOn: loopPR, ParkedAt: now}}, Events: []superloop.Event{
 		{Agent: superloop.ReviewerName("other/repo#2", 1), At: now.Add(time.Minute)},
 	}}
-	if got := LoopPullChanged(in, loopPR); !got.Equal(now) {
+	if got := loop.LoopPullChanged(in, loopPR); !got.Equal(now) {
 		t.Fatalf("unrelated PR invalidated cache: %s", got)
 	}
 	for round := 1; round <= 4; round++ {
 		in.Taken = append(in.Taken, superloop.Taken{Ref: loopPR, Kind: superloop.KindReview})
 		at := now.Add(time.Duration(round+1) * time.Minute)
 		in.Events = append(in.Events, superloop.Event{Agent: superloop.ReviewerName(loopPR, round), At: at})
-		if got := LoopPullChanged(in, loopPR); !got.Equal(at) {
+		if got := loop.LoopPullChanged(in, loopPR); !got.Equal(at) {
 			t.Fatalf("reviewer round %d completion missed: %s", round, got)
 		}
 	}
@@ -328,14 +329,14 @@ func TestLoopRetainsReservationWhenSpendCannotBeRead(t *testing.T) {
 		}
 		return github.Budget{Remaining: 4900, GraphQL: &github.GraphQL{Remaining: 4900, Limit: 5000, Reset: r.a.now.Add(time.Hour)}}, nil
 	}
-	if err := r.a.loopGitHub(context.Background(), "board", func() error { return nil }); !errors.Is(err, ErrLoopLater) {
+	if err := r.a.loopGitHub(context.Background(), "board", func() error { return nil }); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("unknown spend was not held: %v", err)
 	}
 	var spend loopGraphQLSpend
 	if _, err := r.a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
 		t.Fatal(err)
 	}
-	if spend.Spent != LoopGraphQLReserve || spend.Steps["board"] != LoopGraphQLReserve {
+	if spend.Spent != loop.LoopGraphQLReserve || spend.Steps["board"] != loop.LoopGraphQLReserve {
 		t.Fatalf("lost interrupted request's reservation: %+v", spend)
 	}
 }
@@ -362,12 +363,12 @@ func TestLoopGraphQLFloorHoldsAllGitHubObservations(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Fatal("read PR under GraphQL floor")
 		return superloop.Pull{}, nil
 	}
 	r.pass(t)
-	if r.teamReads != 0 || r.called(LoopBoard) != nil || r.called(agentsName, agentStartName) != nil {
+	if r.teamReads != 0 || r.called(loop.LoopBoard) != nil || r.called(agentsName, agentStartName) != nil {
 		t.Fatalf("GitHub work under floor: teams=%d, commands=%v", r.teamReads, r.calls)
 	}
 }
@@ -406,7 +407,7 @@ func TestLoopRequiresFreshGraphQLRecovery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &state.Budget{Remaining: 4900, At: now, Reset: now.Add(time.Hour), GraphQL: tc.g}
-			if got := LoopBudgetUnknownOrLow(b, 2500, now); got != tc.held {
+			if got := loop.LoopBudgetUnknownOrLow(b, 2500, now); got != tc.held {
 				t.Fatalf("held=%t, want %t", got, tc.held)
 			}
 		})

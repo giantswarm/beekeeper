@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/issuemonitor"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -32,7 +33,7 @@ func TestReview3366KindNextTakesLastSlotUnderHalfRoomCap(t *testing.T) {
 			r, busy := fillRig(t)
 			old := r.answer
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopCapacity {
+				if args[0] == loop.LoopCapacity {
 					return deliveryControlCapacity, 0
 				}
 				return old(args)
@@ -66,7 +67,7 @@ func TestReview3366FullWIPAllowsExemptLoopItem(t *testing.T) {
 			})
 			old := r.answer
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					return deliveryIntakePick(epicTen, true), 0
 				}
 				return old(args)
@@ -156,7 +157,7 @@ func TestReview3366ScopedIntakeRoutesCountAndRejectOrdinary(t *testing.T) {
 				old := r.answer
 				boardReads := 0
 				r.answer = func(args []string) (string, int) {
-					if args[0] == LoopBoard {
+					if args[0] == loop.LoopBoard {
 						boardReads++
 						if !slices.Contains(args, deliveryExemptOnlyFlag) {
 							t.Error("full/stale intake used an ordinary board walk")
@@ -189,7 +190,7 @@ func TestReview3366ScopedIntakeRoutesCountAndRejectOrdinary(t *testing.T) {
 				} else {
 					_, err = l.StartNext(t.Context(), superloop.Action{Key: "scoped next"})
 				}
-				if err != nil && !errors.Is(err, ErrLoopLater) {
+				if err != nil && !errors.Is(err, loop.ErrLoopLater) {
 					t.Fatal(err)
 				}
 				if (*busy > 0) != tc.allowed {
@@ -259,10 +260,10 @@ func TestReview3366DoneEventDoesNotRaceExistingWork(t *testing.T) {
 			r.a.cfg.Supervisor.WorkerBrief = brief
 			var existingStarts atomic.Int32
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopCapacity {
+				if args[0] == loop.LoopCapacity {
 					return deliveryControlCapacity, 0
 				}
-				if args[0] == LoopBoard {
+				if args[0] == loop.LoopBoard {
 					return deliveryIntakePick(epicTen, false), 0
 				}
 				if len(args) > 2 && args[0] == agentsName && args[1] == agentStartName {
@@ -335,7 +336,7 @@ func TestReview3366FreshPrioritySeesNewPendingWork(t *testing.T) {
 				r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Model: litTestModel}}
 			}
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopCapacity {
+				if args[0] == loop.LoopCapacity {
 					if late {
 						pending()
 					}
@@ -350,7 +351,7 @@ func TestReview3366FreshPrioritySeesNewPendingWork(t *testing.T) {
 			// The plan's empty reservation list predates a committed pending
 			// delivery: the fresh check names it, and at room 1 the half-room
 			// cap leaves the slot to the new start.
-			_, err = l.StartItem(t.Context(), superloop.Action{Key: "fresh reservation"}, LoopBoardItem{Ref: epicTen}, []string{})
+			_, err = l.StartItem(t.Context(), superloop.Action{Key: "fresh reservation"}, loop.LoopBoardItem{Ref: epicTen}, []string{})
 			if err != nil || !strings.Contains(r.out.String(), deliveryURL(deliveryControlPendingRef, false)) {
 				t.Fatalf("fresh priority missed pending work: busy=%d err=%v %s", *busy, err, r.out)
 			}
@@ -388,7 +389,7 @@ func TestReview3366ExemptionPreservesMonitoredAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = l.StartItem(t.Context(), superloop.Action{Key: "external exempt candidate"}, LoopBoardItem{Ref: externalRef, WIPExempt: true})
+	_, err = l.StartItem(t.Context(), superloop.Action{Key: "external exempt candidate"}, loop.LoopBoardItem{Ref: externalRef, WIPExempt: true})
 	if !errors.Is(err, issuemonitor.ErrExternal) || *busy != 0 || reads == 0 {
 		t.Fatalf("WIP exemption bypassed trust: busy=%d reads=%d err=%v", *busy, reads, err)
 	}
@@ -405,10 +406,10 @@ func TestReview3366PreviewUsesScopedIntake(t *testing.T) {
 	})
 	old := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopCapacity {
+		if args[0] == loop.LoopCapacity {
 			return deliveryControlCapacity, 0
 		}
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			if !slices.Contains(args, deliveryExemptOnlyFlag) {
 				t.Error("preview used ordinary discovery")
 			}
@@ -451,7 +452,7 @@ func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
 			now := r.a.timeNow()
 			old := r.answer
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopCapacity {
+				if args[0] == loop.LoopCapacity {
 					return deliveryControlCapacity, 0
 				}
 				return old(args)
@@ -476,7 +477,7 @@ func TestDeliveryAdmissionClearsRefillStallBeforeBoardRead(t *testing.T) {
 			if err := l.Fill(t.Context(), st, nil, nil); err != nil {
 				t.Fatal(err)
 			}
-			if *busy != 0 || r.called(LoopBoard) != nil {
+			if *busy != 0 || r.called(loop.LoopBoard) != nil {
 				t.Fatalf("held admission read the board or started work: busy=%d calls=%v", *busy, r.calls)
 			}
 			if !l.Stall.Since.IsZero() || !l.FillPause.Until.IsZero() {

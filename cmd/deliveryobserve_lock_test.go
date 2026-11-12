@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -31,7 +32,7 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 	done := make(chan error, 1)
 	calls := 0
 	go func() {
-		done <- CommitDeliveryObservation(context.Background(), a.store, now, true, func(prev []state.Delivery) []state.Delivery {
+		done <- loop.CommitDeliveryObservation(context.Background(), a.store, now, true, func(prev []state.Delivery) []state.Delivery {
 			calls++
 			if calls == 1 {
 				close(entered)
@@ -86,7 +87,7 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 func TestDeliveryObservationBoundsConflicts(t *testing.T) {
 	a, _ := supervisorApp(t)
 	calls := 0
-	err := CommitDeliveryObservation(context.Background(), a.store, a.timeNow(), true, func(prev []state.Delivery) []state.Delivery {
+	err := loop.CommitDeliveryObservation(context.Background(), a.store, a.timeNow(), true, func(prev []state.Delivery) []state.Delivery {
 		calls++
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: fmt.Sprintf("o/r#%d", calls)})
@@ -96,7 +97,7 @@ func TestDeliveryObservationBoundsConflicts(t *testing.T) {
 		}
 		return prev
 	})
-	if !errors.Is(err, ErrDeliveryObservationChanged) || calls != 3 {
+	if !errors.Is(err, loop.ErrDeliveryObservationChanged) || calls != 3 {
 		t.Fatalf("conflicts: calls=%d err=%v", calls, err)
 	}
 	st, err := a.store.Read()
@@ -112,7 +113,7 @@ func TestDeliveryObservationCancellationDoesNotCommit(t *testing.T) {
 	a, _ := supervisorApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := CommitDeliveryObservation(ctx, a.store, a.timeNow(), true, func([]state.Delivery) []state.Delivery {
+	err := loop.CommitDeliveryObservation(ctx, a.store, a.timeNow(), true, func([]state.Delivery) []state.Delivery {
 		t.Fatal("cancelled observation ran derivation")
 		return nil
 	})

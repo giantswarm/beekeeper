@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -31,7 +32,7 @@ func deliveryMatches(d state.Delivery, ref string) bool {
 }
 
 func deliveryAgent(st *state.State, d state.Delivery, ag state.Agent) bool {
-	return !ag.Done && ag.Task != "" && (d.Agent != "" && strings.EqualFold(d.Agent, ag.Name) || deliveryMatches(d, LoopServes(st, ag)) || ag.Park != nil && deliveryMatches(d, LoopParkOn(ag.Park)))
+	return !ag.Done && ag.Task != "" && (d.Agent != "" && strings.EqualFold(d.Agent, ag.Name) || deliveryMatches(d, loop.LoopServes(st, ag)) || ag.Park != nil && deliveryMatches(d, loop.LoopParkOn(ag.Park)))
 }
 
 func classifyDelivery(st *state.State, d state.Delivery, now time.Time, p deliveryPolicy) deliveryFlow {
@@ -91,7 +92,7 @@ func deliveryFlowSeen(st *state.State, d state.Delivery, now time.Time, p delive
 		if externalDeliveryWait.MatchString(park.Waits) {
 			return deliveryFlow{Class: deliveryBlocked, Reason: park.Waits}
 		}
-		on := LoopParkOn(park)
+		on := loop.LoopParkOn(park)
 		if !deliveryMatches(d, on) {
 			for _, other := range st.Deliveries {
 				if deliveryMatches(other, on) && other.Active() && (!deliveryOwned(st, other, now, p) || deliveryFlowSeen(st, other, now, p, seen).Class != deliveryFlowing) {

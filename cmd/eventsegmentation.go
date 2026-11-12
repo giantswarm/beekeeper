@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -31,7 +32,7 @@ func (a *app) recordEventReaders(j *update.Journal) error {
 	if policy.Readers == nil {
 		policy.Readers = map[string]bool{}
 	}
-	if j.Candidate.Digest != "" && NormalizeLoopVersion(j.Candidate.Version) == NormalizeLoopVersion(LoopRunningVersion()) {
+	if j.Candidate.Digest != "" && loop.NormalizeLoopVersion(j.Candidate.Version) == loop.NormalizeLoopVersion(loop.LoopRunningVersion()) {
 		policy.Readers[j.Candidate.Digest] = true
 	}
 	policy.Enabled = j.Previous != nil && policy.Readers[j.Previous.Digest]

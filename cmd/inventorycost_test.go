@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -31,7 +32,7 @@ func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
 				return github.Budget{Remaining: 4900, Reset: reset,
 					GraphQL: &github.GraphQL{Limit: 5000, Remaining: 4900 - calls, Reset: reset}}, nil
 			}
-			ReadRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
+			loop.ReadRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
 				revisions++
 				if failure == "revision" {
 					return "", false, errors.New("repository unavailable")
@@ -78,13 +79,13 @@ func TestInventoryFailureNeverServesStalePullsAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := r.a.now
-	l.Unmerged = map[string]LoopUnmergedObservation{repo: {
+	l.Unmerged = map[string]loop.LoopUnmergedObservation{repo: {
 		Pulls: []unmergedPull{{Number: 1, CreatedAt: now}}, Etag: "inventory-cost-etag",
-		At: now.Add(-UnmergedCacheTTL), FullAt: now,
+		At: now.Add(-loop.UnmergedCacheTTL), FullAt: now,
 	}}
 	failure := errors.New("revision unavailable")
 	reads := 0
-	ReadRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
+	loop.ReadRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
 		reads++
 		if etag != "inventory-cost-etag" {
 			t.Fatalf("lost last successful validator: %q", etag)
@@ -116,7 +117,7 @@ func TestInventoryFailureNeverServesStalePullsAndRecovers(t *testing.T) {
 		t.Fatalf("restart lost cached failure: %v, %v; %d reads", pulls, err, reads)
 	}
 	failure = nil
-	r.a.now = now.Add(UnmergedCacheTTL)
+	r.a.now = now.Add(loop.UnmergedCacheTTL)
 	pulls, _, err = l.RepoRecentUnmerged(t.Context(), repo)
 	if err != nil || len(pulls) != 1 || reads != 2 {
 		t.Fatalf("recovery: %v, %v; %d reads", pulls, err, reads)
@@ -124,7 +125,7 @@ func TestInventoryFailureNeverServesStalePullsAndRecovers(t *testing.T) {
 }
 
 func TestInventoryDoesNotCacheAdmissionOrCancellation(t *testing.T) {
-	for _, failure := range []error{ErrLoopLater, context.Canceled} {
+	for _, failure := range []error{loop.ErrLoopLater, context.Canceled} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			r := newLoopRig(t)
 			l, err := r.a.newSupervisorLoop(false)
@@ -133,7 +134,7 @@ func TestInventoryDoesNotCacheAdmissionOrCancellation(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			ReadRepoPullRevision = func(context.Context, string, string) (string, bool, error) {
+			loop.ReadRepoPullRevision = func(context.Context, string, string) (string, bool, error) {
 				if errors.Is(failure, context.Canceled) {
 					cancel()
 				}

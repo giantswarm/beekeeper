@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -39,7 +40,7 @@ func fillRepositoryHoldsKey(st *state.State, now time.Time) string {
 // host; with supervisor.hosts, a hold across all providers (no choice picked
 // and no local machine headroom block) also yields 0 so the pass does not
 // query the board while every provider is held by pace, usage or its ceiling.
-func loopFillRoom(l *Loop, cap *capacityView) int {
+func loopFillRoom(l *loop.Loop, cap *capacityView) int {
 	if cap == nil || cap.Stopped != "" || cap.Ceiling <= len(cap.Busy) {
 		return 0
 	}
@@ -65,13 +66,13 @@ func fillLive(st *state.State) []string {
 	return live
 }
 
-func loopFillCapacity(l *Loop, ctx context.Context) *capacityView {
+func loopFillCapacity(l *loop.Loop, ctx context.Context) *capacityView {
 	cap, _ := loopReadFillCapacity(l, ctx)
 	return cap
 }
 
-func loopReadFillCapacity(l *Loop, ctx context.Context) (*capacityView, error) {
-	out, code, err := BeekeeperRun(ctx, l.As("capacity", "--json")...)
+func loopReadFillCapacity(l *loop.Loop, ctx context.Context) (*capacityView, error) {
+	out, code, err := loop.BeekeeperRun(ctx, l.As("capacity", "--json")...)
 	if err != nil || code != 0 {
 		return nil, fmt.Errorf("capacity --json: exit %d: %v: %s", code, err, oneLine(out))
 	}
@@ -82,7 +83,7 @@ func loopReadFillCapacity(l *Loop, ctx context.Context) (*capacityView, error) {
 	return &cap, nil
 }
 
-func loopPreviewFill(l *Loop, ctx context.Context) error {
+func loopPreviewFill(l *loop.Loop, ctx context.Context) error {
 	st, err := asApp(l.Host).store.Read()
 	if err != nil {
 		return err
@@ -102,7 +103,7 @@ func loopPreviewFill(l *Loop, ctx context.Context) error {
 		return nil
 	}
 	next, err := l.NextItem(ctx)
-	if errors.Is(err, ErrLoopLater) {
+	if errors.Is(err, loop.ErrLoopLater) {
 		_, err = fmt.Fprintln(asApp(l.Host).out, "SUPERVISOR WOULD NEXT wait: admission or GitHub budget holds new work")
 		return err
 	}
@@ -125,7 +126,7 @@ func loopPreviewFill(l *Loop, ctx context.Context) error {
 // the local machine and every host itself, so a full coordinator still
 // fills onto hosts. Claims are per board item, so an interrupted start is
 // reconciled before another start.
-func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]LoopClaim, taken []superloop.Taken, reserved ...[]string) (result error) {
+func loopFill(l *loop.Loop, ctx context.Context, st *state.State, claims map[string]loop.LoopClaim, taken []superloop.Taken, reserved ...[]string) (result error) {
 	startedCount := 0
 	why := "no worker brief configured"
 	defer func() {
@@ -133,7 +134,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 			if result != nil {
 				why = oneLine(result.Error())
 			}
-			_, _ = fmt.Fprintf(asApp(l.Host).out, RefillZeroFormat, why)
+			_, _ = fmt.Fprintf(asApp(l.Host).out, loop.RefillZeroFormat, why)
 		}
 	}()
 	if asApp(l.Host).cfg.Supervisor.WorkerBrief == "" {
@@ -148,7 +149,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 	}
 	attempts := map[string]int{}
 	for _, t := range taken {
-		if ref, ok := strings.CutPrefix(t.Key, LoopFillKey); ok {
+		if ref, ok := strings.CutPrefix(t.Key, loop.LoopFillKey); ok {
 			ref, _, _ = strings.Cut(ref, " ")
 			attempts[ref]++
 		}
@@ -162,7 +163,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 		if l.PauseForReexec() || ctx.Err() != nil {
 			return nil
 		}
-		if !strings.HasPrefix(key, LoopFillKey) {
+		if !strings.HasPrefix(key, loop.LoopFillKey) {
 			continue
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: key}
@@ -175,7 +176,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 			if err := l.Record(act, what); err != nil {
 				return err
 			}
-			ref, _, _ := strings.Cut(strings.TrimPrefix(key, LoopFillKey), " ")
+			ref, _, _ := strings.Cut(strings.TrimPrefix(key, loop.LoopFillKey), " ")
 			attempts[ref]++
 			startedHere[ref] = true
 			startedCount++
@@ -230,7 +231,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 			if !l.FillPause.Until.IsZero() && l.FillPause.Changed(capacity, alive) {
 				l.FillEmpty = 0 // a change may make room: the backoff starts over
 			}
-			l.FillPause = FillPause{}
+			l.FillPause = loop.FillPause{}
 		}
 		paused := !l.FillPause.Until.IsZero()
 		pauseUntil := l.FillPause.Until
@@ -252,7 +253,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 		}
 		l.SetFillPhase("board next")
 		next, err := l.NextItem(ctx)
-		if errors.Is(err, ErrLoopLater) {
+		if errors.Is(err, loop.ErrLoopLater) {
 			why = oneLine(err.Error())
 			l.StallWait("", why)
 			return nil // the budget recovers on its own: no pause, no failure
@@ -279,14 +280,14 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 			return nil // a stale board answer must not dispatch the same item twice
 		}
 		r, _ := parseRef(next.Ref)
-		name := fmt.Sprintf("%s %d", RepoName(r.Repo), r.N)
+		name := fmt.Sprintf("%s %d", loop.RepoName(r.Repo), r.N)
 		if slices.ContainsFunc(live.Agents, func(ag state.Agent) bool { return ag.Name == name }) {
 			why = fmt.Sprintf("board next offers %s, but the roster already has an agent named %q", next.URL, name)
 			l.StallWait(next.URL, why)
 			pause()
 			return nil // the board may lag the worker's registration
 		}
-		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", LoopFillKey, next.Ref, attempts[next.Ref]+1)}
+		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loop.LoopFillKey, next.Ref, attempts[next.Ref]+1)}
 		attemptedHere[next.Ref] = true
 		l.SetFillPhase("start " + next.URL)
 		what, err := l.StartItem(ctx, act, *next, reserved...)
@@ -294,7 +295,7 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 			startedCount++ // a later recording failure must not report zero starts
 		}
 		if err != nil {
-			var failed *RefillStartError
+			var failed *loop.RefillStartError
 			if errors.As(err, &failed) {
 				l.DeferFill(next.Ref)
 				why = next.URL + ": its start failed: " + oneLine(err.Error())
@@ -308,14 +309,14 @@ func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]L
 				continue
 			}
 			why = next.URL + ": its start failed: " + oneLine(err.Error())
-			if errors.Is(err, ErrLoopLater) {
+			if errors.Is(err, loop.ErrLoopLater) {
 				why = next.URL + ": " + oneLine(err.Error())
 			}
 			l.StallWait(next.URL, why)
-			if !errors.Is(err, ErrLoopLater) {
+			if !errors.Is(err, loop.ErrLoopLater) {
 				pause()
 			}
-			if !errors.Is(err, ErrLoopLater) {
+			if !errors.Is(err, loop.ErrLoopLater) {
 				l.SayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", act.Key, err)
 			}
 			return nil

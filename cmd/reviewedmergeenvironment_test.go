@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -101,7 +102,7 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 				}
 			}
 			events, err := r.a.store.Events(0, func(e state.Event) bool {
-				return e.Verb == LoopFileVerb && strings.Contains(e.Detail, "merge environment")
+				return e.Verb == loop.LoopFileVerb && strings.Contains(e.Detail, "merge environment")
 			})
 			if err != nil {
 				t.Fatal(err)

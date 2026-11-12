@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/issuemonitor"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -123,21 +124,21 @@ func TestDeliveryFullLoopReadsNothingAndReleaseHasNoPause(t *testing.T) {
 	r.a.cfg.Delivery.WIPLimit = 1
 	now := r.a.timeNow()
 	seed(t, r.a, func(st *state.State) { st.DeliveriesAt = now; st.StartDelivery("o/r#99", "worker", "", now) })
-	l := &Loop{Host: r.a, Said: map[string]bool{}, FillPause: FillPause{Capacity: "3", Until: now.Add(time.Hour)}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}, FillPause: loop.FillPause{Capacity: "3", Until: now.Add(time.Hour)}}
 	st, _ := r.a.store.Read()
 	if err := l.Fill(t.Context(), st, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if r.called(LoopBoard) != nil || *busy != 0 || !l.FillPause.Until.IsZero() {
+	if r.called(loop.LoopBoard) != nil || *busy != 0 || !l.FillPause.Until.IsZero() {
 		t.Fatalf("full walked or paused: %v %+v", r.calls, l.FillPause)
 	}
-	if _, err := l.StartNext(t.Context(), superloop.Action{}); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.StartNext(t.Context(), superloop.Action{}); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatal(err)
 	}
-	if _, err := l.StartItem(t.Context(), superloop.Action{}, LoopBoardItem{Ref: epicTen}); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.StartItem(t.Context(), superloop.Action{}, loop.LoopBoardItem{Ref: epicTen}); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatal(err)
 	}
-	if r.called(LoopBoard) != nil || r.called(agentsName) != nil {
+	if r.called(loop.LoopBoard) != nil || r.called(agentsName) != nil {
 		t.Fatal(r.calls)
 	}
 	seed(t, r.a, func(st *state.State) { st.Deliveries[0].Step = state.DeliveryDone })
@@ -173,7 +174,7 @@ func TestDeliveryReservationsRealPreviewAndEpisode(t *testing.T) {
 				}
 				return old(args)
 			}
-			l := &Loop{Host: r.a, Said: map[string]bool{}}
+			l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 			st, _ := r.a.store.Read()
 			if err := l.Fill(t.Context(), st, nil, nil); err != nil {
 				t.Fatal(err)
@@ -206,7 +207,7 @@ func TestDeliveryReservationsFrozenBeforeConcurrentStarts(t *testing.T) {
 		st.Deliveries = []state.Delivery{{Ref: deliveryControlPendingRef, Step: state.DeliveryFixing, Since: now, Agent: reserveFixer}}
 	})
 	st, _ := r.a.store.Read()
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	reservations, _ := l.DeliveryReservations(st)
 	r.started(t, reserveFixer, "fixer-session")
 	// The capacity result was read just before the other stream registered.
@@ -237,7 +238,7 @@ func TestDeliveryStallsRestartTwoWatchesRecoveryAndFull(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(evs) != 2 {
 		t.Fatalf("%+v %v", evs, err)
 	}
@@ -310,10 +311,10 @@ func TestDeliveryDropReasonActorHeadAndReplay(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
 	a.as = guideName
-	oldRead := ReadLoopPull
-	t.Cleanup(func() { ReadLoopPull = oldRead })
+	oldRead := loop.ReadLoopPull
+	t.Cleanup(func() { loop.ReadLoopPull = oldRead })
 	head := deliveryControlActualHead
-	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{Head: head}, nil }
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{Head: head}, nil }
 	seed(t, a, func(st *state.State) {
 		st.StartDelivery(epicTen, "worker", "", now)
 		st.Deliveries[0].Pulls = []string{blockerRef}
@@ -388,10 +389,10 @@ func TestDeliveryPriorityAcrossConcurrentStreams(t *testing.T) {
 	r.started(t, loopWorker, "initial-worker")
 	seed(t, r.a, func(st *state.State) { work := ""; st.Agents[0].Park.PostMerge = &work })
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopCapacity {
+		if args[0] == loop.LoopCapacity {
 			return deliveryControlCapacity, 0
 		}
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			return `{"pick":{"ref":"o/r#99","url":"https://github.com/o/r/issues/99"}}`, 0
 		}
 		return "", 0
@@ -432,11 +433,11 @@ func TestDeliveryFullMonitoredQueueCostsNoRead(t *testing.T) {
 		t.Error("WIP full read monitored queue")
 		return nil, errors.New("unexpected queue read")
 	}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
-	if _, err := l.NextItem(t.Context()); !errors.Is(err, ErrLoopLater) {
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
+	if _, err := l.NextItem(t.Context()); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatal(err)
 	}
-	if r.called(LoopBoard) != nil {
+	if r.called(loop.LoopBoard) != nil {
 		t.Fatal(r.calls)
 	}
 }
@@ -449,7 +450,7 @@ func TestDeliveryFreshGateAfterPlacement(t *testing.T) {
 	seed(t, r.a, func(st *state.State) { st.DeliveriesAt = now })
 	old := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopCapacity {
+		if args[0] == loop.LoopCapacity {
 			seed(t, r.a, func(st *state.State) { st.StartDelivery(deliveryControlPendingRef, "other", "", now) })
 		}
 		return old(args)
@@ -458,7 +459,7 @@ func TestDeliveryFreshGateAfterPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.StartItem(t.Context(), superloop.Action{Key: "fresh gate"}, LoopBoardItem{Ref: "o/r#99"}); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.StartItem(t.Context(), superloop.Action{Key: "fresh gate"}, loop.LoopBoardItem{Ref: "o/r#99"}); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatal(err)
 	}
 	if r.called(agentsName, agentStartName) != nil {
@@ -514,7 +515,7 @@ func TestDeliveryRoomMinAfterReservation(t *testing.T) {
 	r.a.cfg.Delivery.WIPLimit = 2
 	now := r.a.timeNow()
 	st := &state.State{DeliveriesAt: now, Deliveries: []state.Delivery{{Ref: refOne, Step: state.DeliveryReviewQueued, Since: now}}}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	if room := l.DeliveryFillRoom(3, st); room != 1 {
 		t.Fatalf("reservation incorrectly consumed WIP room: %d", room)
 	}

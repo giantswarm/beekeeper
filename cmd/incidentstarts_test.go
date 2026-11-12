@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -85,15 +86,15 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 			t.Fatalf("%s blocked: %s", ref, why)
 		}
 	}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	act := superloop.Action{Ref: other}
-	if _, err := l.StartReviewer(context.Background(), act); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.StartReviewer(context.Background(), act); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("review: %v", err)
 	}
-	if err := l.StartFixer(context.Background(), st, act); !errors.Is(err, ErrLoopLater) {
+	if err := l.StartFixer(context.Background(), st, act); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("fixer: %v", err)
 	}
-	if _, err := l.StartItem(context.Background(), act, LoopBoardItem{Ref: other}); !errors.Is(err, ErrLoopLater) {
+	if _, err := l.StartItem(context.Background(), act, loop.LoopBoardItem{Ref: other}); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("worker: %v", err)
 	}
 	for _, c := range r.calls {
@@ -104,7 +105,7 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 	// A repair merging does not remove the hold. Only the release/proof's
 	// explicit lift (or successful configured probe) restores dispatch.
 	r.pull.State = superloop.Merged
-	if err := l.RepositoryStart(other); !errors.Is(err, ErrLoopLater) {
+	if err := l.RepositoryStart(other); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("merged prematurely resumed starts: %v", err)
 	}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Holds = nil; return nil, nil }); err != nil {
@@ -144,7 +145,7 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 						}
 					}
 					r.answer = func(args []string) (string, int) {
-						if args[0] == LoopCapacity {
+						if args[0] == loop.LoopCapacity {
 							if kind != incidentFixerKind {
 								setHold()
 							}
@@ -153,17 +154,17 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 						return "", 0
 					}
 					if kind == incidentFixerKind {
-						ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 							setHold()
 							return r.pull, nil
 						}
 					}
-					l := &Loop{Host: r.a, Said: map[string]bool{}}
+					l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 					act := superloop.Action{Ref: loopPR, URL: loopURL, Key: "incident preparation", Head: loopHead, Round: 1}
 					var err error
 					switch kind {
 					case workerRole:
-						_, err = l.StartItem(context.Background(), act, LoopBoardItem{Ref: loopPR, URL: loopURL})
+						_, err = l.StartItem(context.Background(), act, loop.LoopBoardItem{Ref: loopPR, URL: loopURL})
 					case litReviewer:
 						_, err = l.StartReviewer(context.Background(), act)
 					case incidentFixerKind:
@@ -173,15 +174,15 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 						t.Fatal("test did not reach the preparation read")
 					}
 					if repair {
-						if err != nil || len(r.logged(t, LoopClaimVerb)) != 1 || r.called(agentsName, agentStartName) == nil {
+						if err != nil || len(r.logged(t, loop.LoopClaimVerb)) != 1 || r.called(agentsName, agentStartName) == nil {
 							t.Fatalf("repair should start: %v; calls %v", err, r.calls)
 						}
 						return
 					}
-					if !errors.Is(err, ErrLoopLater) {
+					if !errors.Is(err, loop.ErrLoopLater) {
 						t.Fatalf("held start returned %v, want errLoopLater", err)
 					}
-					if len(r.logged(t, LoopClaimVerb)) != 0 {
+					if len(r.logged(t, loop.LoopClaimVerb)) != 0 {
 						t.Fatal("held start claimed the action")
 					}
 					for _, args := range r.calls {
@@ -230,7 +231,7 @@ func TestRepositoryHoldBoardSkipLoggedOnceAndResetAfterLift(t *testing.T) {
 	r, _ := fillRig(t)
 	held := true
 	r.answer = func(args []string) (string, int) {
-		if args[0] != LoopBoard {
+		if args[0] != loop.LoopBoard {
 			return "", 0
 		}
 		if held {
@@ -238,7 +239,7 @@ func TestRepositoryHoldBoardSkipLoggedOnceAndResetAfterLift(t *testing.T) {
 		}
 		return `{"pick":{"ref":"o/r#1"}}`, 0
 	}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	for range 2 {
 		if next, err := l.ReadNextItem(t.Context()); next != nil || err != nil {
 			t.Fatalf("held board: %v, %v", next, err)

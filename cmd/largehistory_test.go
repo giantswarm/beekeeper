@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -74,9 +75,9 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 	if _, err := restarted.FollowSnapshot("large-history-projection", "v1", keep); err != nil || decoded != 0 {
 		t.Fatalf("restart replayed %d historical events: %v", decoded, err)
 	}
-	oldList := ReadOpenPulls
-	t.Cleanup(func() { ReadOpenPulls = oldList })
-	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return nil, nil }
+	oldList := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = oldList })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return nil, nil }
 	for _, label := range []string{"cold migration", "checkpoint restart"} {
 		reopened, err := state.Open(store.Dir())
 		if err != nil {
@@ -93,7 +94,7 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 			t.Fatalf("%s startup %s exceeds probation grace %s", label, startup, update.HeartbeatGrace)
 		}
 		l.Once = true
-		l.Lifecycle = &LoopLifecycle{Version: NormalizeLoopVersion(LoopRunningVersion()), Started: started}
+		l.Lifecycle = &loop.LoopLifecycle{Version: loop.NormalizeLoopVersion(loop.LoopRunningVersion()), Started: started}
 		started = time.Now()
 		err = l.Pass(t.Context())
 		l.PassActions.Wait()
@@ -106,8 +107,8 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 		if elapsed >= 10*time.Minute {
 			t.Fatalf("%s pass %s exceeds WIP freshness bound", label, elapsed)
 		}
-		var life LoopLifecycle
-		if found, err := reopened.ReadFile(LoopLifecycleFile, &life); err != nil || !found || life.At.IsZero() {
+		var life loop.LoopLifecycle
+		if found, err := reopened.ReadFile(loop.LoopLifecycleFile, &life); err != nil || !found || life.At.IsZero() {
 			t.Fatalf("no first-pass health evidence: %+v %v", life, err)
 		}
 		t.Logf("%s: %d events, %d bytes; startup=%s pass=%s", label, count, bytesWritten, startup, elapsed)

@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 // fatalHarnessConfig runs in a timeout-bounded child of the sentinel. It uses
@@ -125,7 +126,7 @@ func fatalHarness(ctx context.Context, path, harness string) fatal.Observation {
 	code, err := fatalProbe(ctx, harness, "--version")
 	if err == nil && code == 0 {
 		var bin string
-		bin, err = ExecutablePath()
+		bin, err = loop.ExecutablePath()
 		if err == nil {
 			code, err = fatalProbe(ctx, bin, workerGitHubConfigOption, path, "fatal", "preflight", harness)
 		}

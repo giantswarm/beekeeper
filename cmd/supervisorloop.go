@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 func (a *app) supervisorLoopCmd() *cobra.Command {
@@ -317,7 +319,7 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // runSupervisorLoop runs the loop on this command's state.
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
-	return RunLoop(ctx, a, once)
+	return loop.RunLoop(ctx, a, once)
 }
 
 // loopUnit is the user service that runs the loop, which beekeeper install
@@ -326,10 +328,10 @@ const loopUnit = "beekeeper-supervisor-loop.service"
 
 // dryRunSupervisorLoop is the loop's dry run on this command's state.
 func (a *app) dryRunSupervisorLoop(ctx context.Context, recordDirs ...string) error {
-	return DryRunLoop(ctx, a, recordDirs...)
+	return loop.DryRunLoop(ctx, a, recordDirs...)
 }
 
 // newSupervisorLoop is a loop on this command's state.
-func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*Loop, error) {
-	return NewLoop(a, dryRun, progress...)
+func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*loop.Loop, error) {
+	return loop.NewLoop(a, dryRun, progress...)
 }

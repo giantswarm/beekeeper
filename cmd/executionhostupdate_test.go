@@ -18,6 +18,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -494,7 +495,7 @@ func TestSupervisorLoopReportsAHostBehindForMoreThanOneRelease(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	pass := func() {
 		t.Helper()
 		st, err := r.a.store.Read()
@@ -592,7 +593,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 		}
 		return selector + " runs " + hostNewRelease, 0
 	}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -615,7 +616,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || !strings.Contains(findings[0].Detail, FileReportSeparator) || !strings.Contains(findings[0].Detail, "unreachable") {
+	if len(findings) != 1 || !strings.Contains(findings[0].Detail, loop.FileReportSeparator) || !strings.Contains(findings[0].Detail, "unreachable") {
 		t.Fatalf("host hold findings %+v", findings)
 	}
 	// A later pass within the retry interval updates nothing again and
@@ -634,7 +635,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	}
 	// An hour on, the held host is tried again.
 	r.calls = nil
-	r.a.now = r.a.now.Add(HostUpdateRetry)
+	r.a.now = r.a.now.Add(loop.HostUpdateRetry)
 	st, _ = r.a.store.Read()
 	l.UpdateHosts(context.Background(), st)
 	if len(r.calls) == 0 || r.calls[0][3] != sshTestSelector {
@@ -807,7 +808,7 @@ func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	r.a.now = resetAt.Add(-time.Minute)
 	st, _ := r.a.store.Read()
 	l.UpdateHosts(context.Background(), st)
@@ -881,7 +882,7 @@ func TestSupervisorDefersHostsUntilCoordinatorProbationPasses(t *testing.T) {
 	previous := coordinatorJournal
 	coordinatorJournal = func() (*update.Journal, error) { return j, nil }
 	t.Cleanup(func() { coordinatorJournal = previous })
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -915,7 +916,7 @@ func TestHostsProbationRefusalDoesNotHoldHost(t *testing.T) {
 	if pin := st.HostPin(sshTestSelector); pin != nil {
 		t.Fatalf("probation created pin or hold: %+v", pin)
 	}
-	if HostHoldWait(state.HostPin{Held: update.ErrProbationWatched.Error(), Tried: a.now}, nil, a.now) {
+	if loop.HostHoldWait(state.HostPin{Held: update.ErrProbationWatched.Error(), Tried: a.now}, nil, a.now) {
 		t.Fatal("legacy probation hold delays retry")
 	}
 }

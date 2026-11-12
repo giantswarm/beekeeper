@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -93,7 +94,7 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	if err := l.FinishContinuation(old, next.Name); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		if args[0] == agentsName && args[1] == agentStartName {
 			starts++
-			if slices.Contains(args, "--"+LoopHostFlag) {
+			if slices.Contains(args, "--"+loop.LoopHostFlag) {
 				t.Fatal("continuation changed its managed publish branch")
 			}
 			brief, err := readStateFixture(r.a.store.Dir(), args[3])
@@ -221,11 +222,11 @@ func TestLoopReconcilesQueuedContinuationAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.a.store.Record(event(LoopParty, continuationQueuedEvent, "%s: findings retained", loopWorker)); err != nil {
+	if err := r.a.store.Record(event(loop.LoopParty, continuationQueuedEvent, "%s: findings retained", loopWorker)); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
-	_, done, err := l.Reconcile(context.Background(), st, superloop.Action{Kind: superloop.KindRed}, LoopClaim{Target: loopWorker, At: r.a.now.Add(-time.Minute)})
+	_, done, err := l.Reconcile(context.Background(), st, superloop.Action{Kind: superloop.KindRed}, loop.LoopClaim{Target: loopWorker, At: r.a.now.Add(-time.Minute)})
 	if err != nil || !done {
 		t.Fatalf("queued delivery replayed after restart: %v, %v", done, err)
 	}
@@ -284,7 +285,7 @@ func TestAlertWakeAndEndedParkCandidatePreserveQueuedContinuation(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.SettleAlertWake(superloop.Action{Kind: LoopAlertKind, Key: "alert wake fp " + loopWorker, Agent: loopWorker}, ag); err != nil {
+	if err := l.SettleAlertWake(superloop.Action{Kind: loop.LoopAlertKind, Key: "alert wake fp " + loopWorker, Agent: loopWorker}, ag); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
@@ -314,7 +315,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 			if fromTimer {
 				w := &watcher{app: r.a}
 				w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, reason: paramDue})
-			} else if err := r.a.queueContinuation(LoopParty, old, message); err != nil {
+			} else if err := r.a.queueContinuation(loop.LoopParty, old, message); err != nil {
 				t.Fatal(err)
 			}
 			previousRead := readRepoOpenPulls
@@ -345,7 +346,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 				if err := r.a.openPullStartGate(t.Context(), args[2], string(brief), issues, false, false, false); err == nil {
 					t.Fatal("non-loop caller inherited continuation exemption")
 				}
-				r.a.as = LoopParty.Name
+				r.a.as = loop.LoopParty.Name
 				if err := r.a.openPullStartGate(t.Context(), "wrong successor", string(brief), issues, false, false, false); err == nil {
 					t.Fatal("wrong successor inherited continuation exemption")
 				}

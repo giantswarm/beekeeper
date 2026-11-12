@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -52,7 +53,7 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
-	if err := r.a.store.WriteFile(LoopPIDFile, os.Getpid()); err != nil {
+	if err := r.a.store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
 	if !w.checkLoop(context.Background(), &state.State{}) {
@@ -92,7 +93,7 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	w := r.a.newWatcher(false, false)
 	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
-	if r.called(LoopDiskKind, "prune", "--apply") == nil {
+	if r.called(loop.LoopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("low disk not pruned")
 	}
 	// The prune's pressure run recorded what still holds the space.
@@ -101,19 +102,19 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	}
 	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
-	if r.called(LoopDiskKind, "prune", "--apply") != nil {
+	if r.called(loop.LoopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("same disk episode pruned twice")
 	}
 	st, _ := r.a.store.Read()
 	if len(st.Notes) != 0 {
 		t.Fatalf("low disk filed a note for the person: %+v", st.Notes)
 	}
-	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("persistent low disk findings: %+v %v", evs, err)
 	}
 	if !strings.Contains(evs[0].Detail, "test-writer") || !strings.Contains(evs[0].Detail, "Holding the space: caches app 9 GiB") ||
-		!strings.Contains(evs[0].Detail, FileReportSeparator) {
+		!strings.Contains(evs[0].Detail, loop.FileReportSeparator) {
 		t.Fatalf("persistent low disk finding: %q", evs[0].Detail)
 	}
 	lines, changed := guideProblemLines(&state.State{}, evs)
@@ -122,7 +123,7 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	}
 
 	r.pass(t)
-	evs, err = r.a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	evs, err = r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("duplicate disk finding across restart: %+v %v", evs, err)
 	}
@@ -196,7 +197,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	prunes := 0
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == LoopDiskKind && args[1] == litPrune {
+		if len(args) > 1 && args[0] == loop.LoopDiskKind && args[1] == litPrune {
 			prunes++
 			return "partial prune failed", 1
 		}
@@ -242,7 +243,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	r := newLoopRig(t)
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == LoopDiskKind && args[1] == litPrune {
+		if len(args) > 1 && args[0] == loop.LoopDiskKind && args[1] == litPrune {
 			return "cleanup unavailable", 1
 		}
 		return "", 0
@@ -250,12 +251,12 @@ func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	w := r.a.newWatcher(false, false)
 	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 	r.pass(t)
-	if findings := r.logged(t, LoopFileVerb); len(findings) != 0 {
+	if findings := r.logged(t, loop.LoopFileVerb); len(findings) != 0 {
 		t.Fatalf("alarm before a post-cleanup sample: %+v", findings)
 	}
 	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 2, MinMiB: 100})
 	r.pass(t) // Each rig pass creates a fresh supervisor loop.
-	findings := r.logged(t, LoopFileVerb)
+	findings := r.logged(t, loop.LoopFileVerb)
 	if len(findings) != 1 {
 		t.Fatalf("disk findings: %+v", findings)
 	}
@@ -269,7 +270,7 @@ func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 		t.Fatalf("cleanup failure did not reach guide: %v", lines)
 	}
 	r.pass(t)
-	if findings := r.logged(t, LoopFileVerb); len(findings) != 1 {
+	if findings := r.logged(t, loop.LoopFileVerb); len(findings) != 1 {
 		t.Fatalf("duplicate failure alarm: %+v", findings)
 	}
 	w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
@@ -314,7 +315,7 @@ func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	w.publishDisk(watchDiskReading{Low: true})
 	r.pass(t)
 	w.publishDisk(watchDiskReading{Low: true})
-	r.failRecord = func(e state.Event) bool { return e.Verb == LoopFileVerb }
+	r.failRecord = func(e state.Event) bool { return e.Verb == loop.LoopFileVerb }
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +333,7 @@ func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("finding retry: %+v %v", evs, err)
 	}
@@ -347,12 +348,12 @@ func TestLoopWatchDiskRecoveryAfterPruneDoesNotAlarm(t *testing.T) {
 	w := r.a.newWatcher(false, false)
 	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 	r.pass(t)
-	if r.called(LoopDiskKind, "prune", "--apply") == nil {
+	if r.called(loop.LoopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("disk floor did not trigger cleanup")
 	}
 	w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 	r.pass(t)
-	events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(events) != 0 {
 		t.Fatalf("recovered disk raised an alarm: %+v %v", events, err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -320,12 +321,12 @@ supervisor:
 }
 
 // loop is a supervisor loop over f whose beekeeper runs answer with run.
-func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *Loop {
+func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *loop.Loop {
 	t.Helper()
 	a := &app{cfg: f.cfg, store: f.store, out: out, now: f.t0.Add(time.Minute)}
-	origRun := BeekeeperRun
-	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
-	t.Cleanup(func() { BeekeeperRun = origRun })
+	origRun := loop.BeekeeperRun
+	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
+	t.Cleanup(func() { loop.BeekeeperRun = origRun })
 	origRefs := refStates
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 		states := map[github.PR]github.RefState{}
@@ -335,7 +336,7 @@ func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []stri
 		return states, nil
 	}
 	t.Cleanup(func() { refStates = origRefs })
-	return &Loop{Host: a, Said: map[string]bool{}}
+	return &loop.Loop{Host: a, Said: map[string]bool{}}
 }
 
 func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
@@ -477,7 +478,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 	name := superloop.ReviewerName(ref, 2)
 	f := newQuotaFixture(t, name, "Review https://github.com/giantswarm/beekeeper/pull/2153 at head abc", ref)
 	key := "review " + ref + "@abc"
-	if err := f.store.Record(about(event(LoopParty, LoopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
+	if err := f.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -486,7 +487,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 		runCalls = append(runCalls, args)
 		return `{"room":1}` + "\n", 0, nil
 	})
-	brief, err := l.Brief("", "Review {{.URL}} at {{.Head}}\n", key, BriefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
+	brief, err := l.Brief("", "Review {{.URL}} at {{.Head}}\n", key, loop.BriefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
 	if err != nil {
 		t.Fatal(err)
 	}

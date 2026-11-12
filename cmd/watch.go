@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/notify"
@@ -2161,7 +2162,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	githubHeld := BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	githubHeld := loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
 	var found map[int]checkResult
 	if w.loopOwned {
 		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)

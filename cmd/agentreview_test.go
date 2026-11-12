@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -149,7 +150,7 @@ func TestAgentsReviewStartsInCheckoutWithFilledBrief(t *testing.T) {
 func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.RequireReview = true
-	if err := r.a.store.Record(about(event(LoopParty, "supervisor.go", "[go %s@%s] %s: merge go", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+	if err := r.a.store.Record(about(event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: merge go", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
@@ -173,7 +174,7 @@ func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *te
 
 func TestSupervisorNitAttestationKeepsApprovalWithoutSecondRound(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.as = LoopParty.Name
+	r.a.as = loop.LoopParty.Name
 	r.a.cfg.Merge.RequireReview = true
 	r.park(t, loopPR, r.a.timeNow())
 	r.pass(t)
@@ -295,7 +296,7 @@ func TestReviewReservationRecoversOrphan(t *testing.T) {
 				t.Fatalf("concurrent start allowed: %v", err)
 			}
 			// A historical start event must not keep this failed attempt reserved.
-			if err := r.a.store.Record(event(LoopParty, verbStart, "%s: old failed start", superloop.ReviewerName(loopPR, 1))); err != nil {
+			if err := r.a.store.Record(event(loop.LoopParty, verbStart, "%s: old failed start", superloop.ReviewerName(loopPR, 1))); err != nil {
 				t.Fatal(err)
 			}
 			r.a.finishReviewRequest(act, false)

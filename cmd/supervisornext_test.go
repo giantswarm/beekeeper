@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -19,11 +20,11 @@ func TestLoopStaleNextSettlesBeforeClaimReconciliation(t *testing.T) {
 	l.Once = true
 	l.StartedAt = r.a.now.Add(-30 * time.Minute)
 	acts := []superloop.Action{}
-	claims := map[string]LoopClaim{}
+	claims := map[string]loop.LoopClaim{}
 	for i, age := range []time.Duration{6 * 24 * time.Hour, 2 * time.Hour, 61 * time.Minute} {
 		key := fmt.Sprintf("stale next %d", i)
 		acts = append(acts, superloop.Action{Key: key, Kind: superloop.KindNext, Event: &superloop.Event{At: r.a.now.Add(-age), Verb: superloop.VerbDone}})
-		claims[key] = LoopClaim{Target: "interrupted worker", At: r.a.now.Add(-age)}
+		claims[key] = loop.LoopClaim{Target: "interrupted worker", At: r.a.now.Add(-age)}
 	}
 	st, err := r.a.store.Read()
 	if err != nil {
@@ -104,7 +105,7 @@ func TestLoopRefillSurvivesNextFailureAndInflightIntake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_ = l.RunPassActions(t.Context(), st, nil, map[string]LoopFailure{}, nil, acts)
+			_ = l.RunPassActions(t.Context(), st, nil, map[string]loop.LoopFailure{}, nil, acts)
 			if *busy != 3 {
 				t.Fatalf("busy=%d: %s", *busy, r.out)
 			}
@@ -130,7 +131,7 @@ func TestLoopNextWithOpenPullSettles(t *testing.T) {
 		t.Fatal(err)
 	}
 	act := superloop.Action{Kind: superloop.KindNext, Key: "next refused"}
-	if err := l.ExecAction(t.Context(), st, nil, map[string]LoopFailure{}, act); err != nil {
+	if err := l.ExecAction(t.Context(), st, nil, map[string]loop.LoopFailure{}, act); err != nil {
 		t.Fatal(err)
 	}
 	if !l.IsCompleted(act.Key) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -47,14 +48,14 @@ func (a *app) recordMergeEnvironment(p superloop.Pull, head, reason string) erro
 	}
 	key := "merge environment " + p.Ref + "@" + head
 	events, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == LoopFileVerb && strings.HasPrefix(e.Detail, "["+key+"] ")
+		return e.Verb == loop.LoopFileVerb && strings.HasPrefix(e.Detail, "["+key+"] ")
 	})
 	if err != nil || len(events) > 0 {
 		return err
 	}
 	ref, _ := parseRef(p.Ref)
 	finding := fmt.Sprintf("Merge-result check environment failed for https://github.com/%s/pull/%d at head %s: %s. This is a checker environment finding, not a branch repair; retrying once in a clean environment, or accepting CI on the exact merge result.", ref.Repo, ref.N, head, reason)
-	return a.store.Record(about(event(LoopParty, LoopFileVerb, "[%s] %s%s%s", key, LoopParty.Name, FileReportSeparator, finding), p.Ref))
+	return a.store.Record(about(event(loop.LoopParty, loop.LoopFileVerb, "[%s] %s%s%s", key, loop.LoopParty.Name, loop.FileReportSeparator, finding), p.Ref))
 }
 
 func (a *app) runReviewedMergeChecks(ctx context.Context, dir, baseSHA, base, head string) (string, int) {

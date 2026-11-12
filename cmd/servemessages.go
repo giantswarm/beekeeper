@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -99,7 +100,7 @@ func toolSendMessage(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	var msg a2aMessage
-	if err := json.Unmarshal(raw, &msg); err != nil || string(raw) == JsonNullLiteral {
+	if err := json.Unmarshal(raw, &msg); err != nil || string(raw) == loop.JsonNullLiteral {
 		return nil, usageErr("message is required: an A2A Message object")
 	}
 	if strings.TrimSpace(msg.MessageID) == "" || len(msg.Parts) == 0 {

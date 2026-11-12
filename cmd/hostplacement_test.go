@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -28,7 +29,7 @@ func TestHostCapacityReasons(t *testing.T) {
 		{"policy mismatch", 3, nil, "policy mismatch"},
 		{"", 0, errors.New("host unreachable"), "host unreachable"},
 	} {
-		got := HostCapacityReason(tc.out, tc.code, tc.err)
+		got := loop.HostCapacityReason(tc.out, tc.code, tc.err)
 		if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
 			t.Errorf("capacity %q: %q, want %q", tc.out, got, tc.want)
 		}
@@ -94,7 +95,7 @@ func TestLookupFailurePreservesExistingInstallationHold(t *testing.T) {
 func TestHostPlacementDiagnosticsSurviveLoopRestart(t *testing.T) {
 	r := newLoopRig(t)
 	r.sshLoopHost(t, true)
-	l := &Loop{Host: r.a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 	l.RecordHostPlacement(sshTestSelector, sshTestRepository, "repository is not mapped")
 	st, err := r.a.store.Read()
 	if err != nil {
@@ -133,7 +134,7 @@ func TestHostStarvationSurvivesRestartsAndClearsOnRemoteStart(t *testing.T) {
 			t.Fatal(err)
 		}
 		// New loop object on every observation proves the alarm is durable.
-		if err := (&Loop{Host: r.a}).CheckHostUtilization(st); err != nil {
+		if err := (&loop.Loop{Host: r.a}).CheckHostUtilization(st); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,7 +179,7 @@ func TestHostStarvationSurvivesRestartsAndClearsOnRemoteStart(t *testing.T) {
 func TestIdleDeskAndUnsentRemoteReservationDoNotHideStarvation(t *testing.T) {
 	r := newLoopRig(t)
 	r.sshLoopHost(t, true)
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	if err := l.CheckHostUtilization(&state.State{}); err != nil {
 		t.Fatal(err)
 	}

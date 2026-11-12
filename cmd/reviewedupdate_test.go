@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -47,7 +48,7 @@ func newBehindRig(t *testing.T) *behindRig {
 // claim records the loop's exact-head merge claim of loopHead.
 func (b *behindRig) claim(t *testing.T) {
 	t.Helper()
-	if err := b.a.store.Record(about(event(LoopParty, LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+	if err := b.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 }

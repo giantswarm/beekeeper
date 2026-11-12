@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 const workerGitHubTokenVerb = "token"
@@ -85,7 +86,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	t.Setenv(execution.EnvID, string(r.Ref.Execution))
 	t.Setenv("GH_TOKEN", "unrelated-ambient-fixture")
 	var output bytes.Buffer
-	for _, args := range [][]string{{workerGitHubIssueGroup, "view", "1", LoopRepoFlag, workerGitHubPrivateRepo}, {"pr", "view", "2", LoopRepoFlag, workerGitHubPrivateRepo}, {"pr", "checks", "2", LoopRepoFlag, workerGitHubPrivateRepo}} {
+	for _, args := range [][]string{{workerGitHubIssueGroup, "view", "1", loop.LoopRepoFlag, workerGitHubPrivateRepo}, {"pr", "view", "2", loop.LoopRepoFlag, workerGitHubPrivateRepo}, {"pr", "checks", "2", loop.LoopRepoFlag, workerGitHubPrivateRepo}} {
 		c := a.executionGitHubCommands()[0]
 		c.SetOut(&output)
 		c.SetErr(&output)
@@ -104,7 +105,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	if c.ExecuteContext(context.Background()) == nil || calls != 3 {
 		t.Fatal("merge reached token issuer")
 	}
-	for _, args := range [][]string{{LoopRepoFlag, workerGitHubPrivateRepo, "auth", workerGitHubTokenVerb}, {"unknown-alias"}} {
+	for _, args := range [][]string{{loop.LoopRepoFlag, workerGitHubPrivateRepo, "auth", workerGitHubTokenVerb}, {"unknown-alias"}} {
 		denied := a.executionGitHubCommands()[0]
 		denied.SetArgs(args)
 		denied.SilenceErrors, denied.SilenceUsage = true, true
@@ -137,7 +138,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 
 	// Only a PR takes the execution branch: gh issue create has no --head.
 	wantWrite = true
-	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate, LoopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {"pr", workerGitHubCreate, LoopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {workerGitHubIssueGroup, workerGitHubClose, "1", LoopRepoFlag, workerGitHubPrivateRepo}} {
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate, loop.LoopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {"pr", workerGitHubCreate, loop.LoopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {workerGitHubIssueGroup, workerGitHubClose, "1", loop.LoopRepoFlag, workerGitHubPrivateRepo}} {
 		c := a.executionGitHubCommands()[0]
 		c.SetOut(&output)
 		c.SetErr(&output)
@@ -168,7 +169,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	// A mutation of an outside repository asks for a write, never a read
 	// credential, so the issuer's github.allowedOrgs check applies to it.
 	wantRepo, wantWrite, refuseIssue = "outside/project", true, true
-	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubClose, workerGitHubIssueNumber, LoopRepoFlag, wantRepo}, {workerGitHubIssueGroup, "reopen", "https://github.com/outside/project/issues/123"}} {
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubClose, workerGitHubIssueNumber, loop.LoopRepoFlag, wantRepo}, {workerGitHubIssueGroup, "reopen", "https://github.com/outside/project/issues/123"}} {
 		c := a.executionGitHubCommands()[0]
 		c.SetArgs(args)
 		c.SilenceErrors, c.SilenceUsage = true, true
@@ -178,14 +179,14 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	}
 	issued := calls
 	for _, args := range [][]string{
-		{workerGitHubIssueGroup, workerGitHubDelete, workerGitHubIssueNumber, LoopRepoFlag, wantRepo},
-		{"pr", workerGitHubClose, workerGitHubIssueNumber, LoopRepoFlag, wantRepo},
-		{workerGitHubReleaseGroup, workerGitHubDelete, "v1.0.0", LoopRepoFlag, wantRepo},
-		{workerGitHubWorkflowGroup, testRunWord, remoteMCPFixture, LoopRepoFlag, wantRepo},
-		{workerGitHubRunGroup, "rerun", workerGitHubIssueNumber, LoopRepoFlag, wantRepo},
+		{workerGitHubIssueGroup, workerGitHubDelete, workerGitHubIssueNumber, loop.LoopRepoFlag, wantRepo},
+		{"pr", workerGitHubClose, workerGitHubIssueNumber, loop.LoopRepoFlag, wantRepo},
+		{workerGitHubReleaseGroup, workerGitHubDelete, "v1.0.0", loop.LoopRepoFlag, wantRepo},
+		{workerGitHubWorkflowGroup, testRunWord, remoteMCPFixture, loop.LoopRepoFlag, wantRepo},
+		{workerGitHubRunGroup, "rerun", workerGitHubIssueNumber, loop.LoopRepoFlag, wantRepo},
 		{workerGitHubRepoGroup, workerGitHubDelete, wantRepo, "--yes"},
 		{workerGitHubIssueGroup, workerGitHubClose, workerGitHubIssueNumber, "-Routside/project"},
-		{workerGitHubIssueGroup, workerGitHubClose, "https://github.com/outside/project/issues/123", LoopRepoFlag, workerGitHubPrivateRepo},
+		{workerGitHubIssueGroup, workerGitHubClose, "https://github.com/outside/project/issues/123", loop.LoopRepoFlag, workerGitHubPrivateRepo},
 		{workerGitHubAPIGroup, "--method=PATCH", "repos/outside/project/issues/123"},
 		{workerGitHubAPIGroup, "-XPATCH", "repos/outside/project/issues/123"},
 		{workerGitHubAPIGroup, "repos/outside/project/issues", "-f", "title=fixture"},

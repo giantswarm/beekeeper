@@ -19,6 +19,7 @@ import (
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -76,7 +77,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 	defer func() { cancel(); <-monitorDone }()
 	tick := clk.NewTicker(timerTick)
 	defer tick.Stop()
-	binary := LoopBinary()
+	binary := loop.LoopBinary()
 	for {
 		if ctx.Err() != nil {
 			return nil

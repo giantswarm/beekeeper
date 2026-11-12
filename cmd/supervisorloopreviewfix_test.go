@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -53,7 +54,7 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				if tc.unread {
 					return superloop.Pull{}, errors.New("GitHub unavailable")
 				}
@@ -64,7 +65,7 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 				return superloop.Pull{State: status}, nil
 			}
 			r.answer = func(args []string) (string, int) {
-				if args[1] == LoopRecover && tc.recoveryFails {
+				if args[1] == loop.LoopRecover && tc.recoveryFails {
 					return "execution host deadline exceeded", 1
 				}
 				return "", 0
@@ -80,11 +81,11 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 			act := superloop.Action{Kind: superloop.KindRework, Agent: loopWorker, Ref: loopPR, URL: loopURL, Key: "retry rework", Message: "current findings"}
 			err = l.WakeOrStartFixer(t.Context(), st, act)
 			waiting := tc.recoveryFails || tc.closed || tc.unread
-			if waiting && !errors.Is(err, ErrLoopLater) || !waiting && err != nil {
+			if waiting && !errors.Is(err, loop.ErrLoopLater) || !waiting && err != nil {
 				t.Fatalf("rework result: %v", err)
 			}
 			wantRecover := tc.phase != execution.Running && !tc.closed && !tc.unread
-			if got := r.called(agentsName, LoopRecover, loopWorker) != nil; got != wantRecover {
+			if got := r.called(agentsName, loop.LoopRecover, loopWorker) != nil; got != wantRecover {
 				t.Fatalf("recover = %t, want %t: %v", got, wantRecover, r.calls)
 			}
 			if got := r.called(agentsName, agentWakeName, loopWorker, act.Message) != nil; got == waiting {
@@ -93,7 +94,7 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 			if r.called(agentsName, agentStartName) != nil {
 				t.Fatalf("started a replacement: %v", r.calls)
 			}
-			if wantRecover && !waiting && (len(r.calls) != 2 || r.calls[0][1] != LoopRecover || r.calls[1][1] != agentWakeName) {
+			if wantRecover && !waiting && (len(r.calls) != 2 || r.calls[0][1] != loop.LoopRecover || r.calls[1][1] != agentWakeName) {
 				t.Fatalf("must recover before delivering current findings: %v", r.calls)
 			}
 		})
@@ -205,7 +206,7 @@ func TestReviewFixEndDoesNotFinishAPlainWaiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	_, err = l.EndMerged(t.Context(), st, superloop.Action{Kind: superloop.KindEnd, Key: "end " + loopPR, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)})
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +234,7 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 				}
 				submissions++
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.Merges = append(st.Merges, state.Merge{Repo: loopMergeRepo, PR: 7, By: LoopParty, Phase: phase, PID: os.Getpid(), Run: "queued fixture", Seen: time.Now()})
+					st.Merges = append(st.Merges, state.Merge{Repo: loopMergeRepo, PR: 7, By: loop.LoopParty, Phase: phase, PID: os.Getpid(), Run: "queued fixture", Seen: time.Now()})
 					return nil, nil
 				}); err != nil {
 					t.Fatal(err)
@@ -247,8 +248,8 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 					t.Fatalf("live gate submitted again: %v", call)
 				}
 			}
-			if submissions != 1 || len(r.logged(t, LoopFailureVerb)) != 0 {
-				t.Fatalf("queue failed or resubmitted: %d %v", submissions, r.logged(t, LoopFailureVerb))
+			if submissions != 1 || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
+				t.Fatalf("queue failed or resubmitted: %d %v", submissions, r.logged(t, loop.LoopFailureVerb))
 			}
 			r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
 			r.pass(t)
@@ -286,7 +287,7 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 				t.Fatalf("gate wait/refusal woke worker for repair: %v", call)
 			}
 			if tc.code == ExitGateQueued || tc.code == ExitGateDuplicate {
-				if len(r.logged(t, LoopFailureVerb)) != 0 {
+				if len(r.logged(t, loop.LoopFailureVerb)) != 0 {
 					t.Fatal("queue wait recorded as failure")
 				}
 			}
@@ -343,7 +344,7 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 			// Pass 1: the review-parked worker ends (removed from st.Agents, saved in st.ReviewParks)
 			// and the reviewer starts in the freed slot.
 			r.pass(t)
-			if r.called(agentsName, LoopRemove, loopWorker) == nil {
+			if r.called(agentsName, loop.LoopRemove, loopWorker) == nil {
 				t.Fatalf("review-parked worker was not ended: %v\n%s", r.calls, r.out)
 			}
 			if start := r.called(agentsName, agentStartName, loopReviewer); start == nil {
@@ -378,13 +379,13 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				party := state.Party{Name: loopWorker, Session: "worker-session-2"}
 				st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Park: &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: deskReviewWait, ReviewHead: loopFixed, PostMerge: &work}})
-				st.Starts = append(st.Starts, state.Start{Party: party, By: LoopParty, At: time.Now().Add(time.Minute)})
+				st.Starts = append(st.Starts, state.Start{Party: party, By: loop.LoopParty, At: time.Now().Add(time.Minute)})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			if r.called(agentsName, LoopRemove, loopWorker) == nil {
+			if r.called(agentsName, loop.LoopRemove, loopWorker) == nil {
 				t.Fatalf("fixer worker was not ended on review park: %v\n%s", r.calls, r.out)
 			}
 			reviewer2 := superloop.ReviewerName(loopPR, 2)
@@ -409,9 +410,9 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 	host := r.a.cfg.Agents.Hosts[sshTestSelector]
 	host.Repositories[loopMergeRepo] = "/srv/repo"
 	r.a.cfg.Agents.Hosts[sshTestSelector] = host
-	wasDefaultBranch := GhDefaultBranch
-	t.Cleanup(func() { GhDefaultBranch = wasDefaultBranch })
-	GhDefaultBranch = func(_ context.Context, _ string) (string, error) {
+	wasDefaultBranch := loop.GhDefaultBranch
+	t.Cleanup(func() { loop.GhDefaultBranch = wasDefaultBranch })
+	loop.GhDefaultBranch = func(_ context.Context, _ string) (string, error) {
 		return mainBranch, nil
 	}
 	r.pull.Branch = "fix-2079-deleted-after-merge"
@@ -440,7 +441,7 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 	// Pass 2: R1 requests changes; fixer starts on the PR branch with original task and post-merge metadata.
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "fix handler.go:42")
 	r.answer = func(args []string) (string, int) {
-		if len(args) >= 1 && args[0] == LoopCapacity {
+		if len(args) >= 1 && args[0] == loop.LoopCapacity {
 			if slices.Contains(args, "--host") {
 				return `{"room":1}`, 0
 			}
@@ -470,7 +471,7 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 	fixerParty := state.Party{Name: loopWorker, Session: "worker-session-2"}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: fixerParty, Task: "fix " + loopURL})
-		st.Starts = append(st.Starts, state.Start{Party: fixerParty, By: LoopParty, At: time.Now().Add(time.Minute), Dir: t.TempDir()})
+		st.Starts = append(st.Starts, state.Start{Party: fixerParty, By: loop.LoopParty, At: time.Now().Add(time.Minute), Dir: t.TempDir()})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -499,8 +500,8 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 		t.Fatalf("full coordinator started continuation: %v", start)
 	}
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopCapacity {
-			if slices.Contains(args, LoopHostFlag) {
+		if args[0] == loop.LoopCapacity {
+			if slices.Contains(args, loop.LoopHostFlag) {
 				t.Fatal("continuation probed an execution host")
 			}
 			return loopRoomJSON, 0
@@ -513,7 +514,7 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 	if contStart == nil {
 		t.Fatalf("expected post-merge continuation start, got calls=%v\n%s", r.calls, r.out)
 	}
-	for _, flag := range []string{LoopHostFlag, LoopRepoFlag, LoopRefFlag, "--" + excludeFlag} {
+	for _, flag := range []string{loop.LoopHostFlag, loop.LoopRepoFlag, loop.LoopRefFlag, "--" + excludeFlag} {
 		if slices.Contains(contStart, flag) {
 			t.Errorf("local continuation has placement flag %s: %v", flag, contStart)
 		}
@@ -542,7 +543,7 @@ func TestEndReviewWorkersPersistsReviewParkBeforeRosterRemoval(t *testing.T) {
 	// Simulate `agents remove` durably removing the roster entry on disk and then failing/interrupting before endReviewWorkers finishes.
 	failedOnce := false
 	r.answer = func(args []string) (string, int) {
-		if len(args) >= 2 && args[0] == agentsName && args[1] == LoopRemove && !failedOnce {
+		if len(args) >= 2 && args[0] == agentsName && args[1] == loop.LoopRemove && !failedOnce {
 			failedOnce = true
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = nil
@@ -582,7 +583,7 @@ func TestReviewFixEndedWorkerNeedsRepair(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			if r.called(agentsName, LoopRemove, loopWorker) == nil {
+			if r.called(agentsName, loop.LoopRemove, loopWorker) == nil {
 				t.Fatal("worker did not end")
 			}
 			r.pull.Green = false
@@ -643,7 +644,7 @@ func TestLoopKeepsBackgroundReviewWorkerAfterMemoryStop(t *testing.T) {
 			if i < 0 || st.Agents[i].Park == nil || st.Agents[i].Park.ReviewHead != loopHead {
 				t.Fatalf("memory-stopped worker lost its park: %+v", st.Agents)
 			}
-			if r.called(agentsName, LoopRemove, loopWorker) != nil {
+			if r.called(agentsName, loop.LoopRemove, loopWorker) != nil {
 				t.Fatal("parked worker removed")
 			}
 			if r.called(agentsName, agentStartName, loopReviewer) == nil {
@@ -666,7 +667,7 @@ func TestLoopReviewsParkWhileWorkerTurnStillRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if r.called(agentsName, LoopRemove, loopWorker) != nil {
+	if r.called(agentsName, loop.LoopRemove, loopWorker) != nil {
 		t.Fatal("active worker removed")
 	}
 	if r.called(agentsName, agentStartName, loopReviewer) == nil {
@@ -692,8 +693,8 @@ func TestContinuationWaitsWhenCoordinatorCapacityCannotBeRead(t *testing.T) {
 			r.sshLoopHost(t, true)
 			r.a.cfg.Supervisor.HostsFirst = true
 			r.answer = func(args []string) (string, int) {
-				if args[0] == LoopCapacity {
-					if slices.Contains(args, LoopHostFlag) {
+				if args[0] == loop.LoopCapacity {
+					if slices.Contains(args, loop.LoopHostFlag) {
 						t.Fatal("continuation probed an execution host")
 					}
 					return tc.out, tc.code
@@ -704,9 +705,9 @@ func TestContinuationWaitsWhenCoordinatorCapacityCannotBeRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			l := &Loop{Host: r.a, Said: map[string]bool{}}
+			l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
 			err = l.StartFixer(t.Context(), st, superloop.Action{Kind: superloop.KindEnd, Ref: loopPR, Agent: loopWorker, Key: "continuation"})
-			if !errors.Is(err, ErrLoopLater) {
+			if !errors.Is(err, loop.ErrLoopLater) {
 				t.Fatalf("unreadable coordinator capacity: %v", err)
 			}
 			if start := r.called(agentsName, agentStartName); start != nil {
@@ -736,18 +737,18 @@ func TestLoopPrunesEndedReviewParksAndStartsActiveReviewUnderAllowanceHold(t *te
 			Park:  &state.Park{On: otherPR, At: now.Add(-10 * time.Second), Waits: "overlap: waiting for o/r#9"},
 		})
 		return []state.Event{
-			{At: now.Add(-35 * time.Second), By: LoopParty, Verb: "supervisor.end", Subject: endedPR, Detail: "[end " + endedPR + "] https://github.com/o/r/pull/2 merged: tracking ends"},
+			{At: now.Add(-35 * time.Second), By: loop.LoopParty, Verb: "supervisor.end", Subject: endedPR, Detail: "[end " + endedPR + "] https://github.com/o/r/pull/2 merged: tracking ends"},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	r.park(t, loopPR, now)
 	var readOrder []string
-	prevRead := ReadLoopPull
-	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	prevRead := loop.ReadLoopPull
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		readOrder = append(readOrder, ref)
 		if ref == otherPR {
-			return superloop.Pull{}, ErrLoopLater
+			return superloop.Pull{}, loop.ErrLoopLater
 		}
 		return prevRead(ctx, ref)
 	}
@@ -794,10 +795,10 @@ func TestLoopSkipsClosedPullFixerAndSettlesClosedServedTask(t *testing.T) {
 	// Now R1 requests changes, and before startFixer runs, live PR read fails transiently:
 	// neither startFixer nor wakeOrStartFixer may dispatch work on a failed live read.
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "needs work")
-	prevRead := ReadLoopPull
+	prevRead := loop.ReadLoopPull
 	observeCalls := 0
 	failLiveRead := true
-	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		observeCalls++
 		p, err := prevRead(ctx, ref)
 		if err != nil {
@@ -920,7 +921,7 @@ func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
 		origPR     = "o/r#41"
 		combinedPR = "o/r#42"
 	)
-	p, err := ParseLoopPull(combinedPR, []byte(`{"state":"MERGED","url":"https://github.com/o/r/pull/42","headRefOid":"`+loopFixed+`","title":"fix: combine PRs","body":"Combines https://github.com/o/r/pull/41 into one batch."}`))
+	p, err := loop.ParseLoopPull(combinedPR, []byte(`{"state":"MERGED","url":"https://github.com/o/r/pull/42","headRefOid":"`+loopFixed+`","title":"fix: combine PRs","body":"Combines https://github.com/o/r/pull/41 into one batch."}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +943,7 @@ func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
 		})
 		st.Starts = append(st.Starts, state.Start{
 			Party: rescueParty,
-			By:    LoopParty,
+			By:    loop.LoopParty,
 			At:    time.Now(),
 		})
 		st.ReviewParks = append(st.ReviewParks,
@@ -960,7 +961,7 @@ func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if r.called(agentsName, LoopRemove, rescueName) == nil {
+	if r.called(agentsName, loop.LoopRemove, rescueName) == nil {
 		t.Fatalf("absorbed PR's rescue worker was not retired: %v\n%s", r.calls, r.out)
 	}
 	if wake := r.called(agentsName, agentWakeName, rescueName); wake != nil {
@@ -1005,11 +1006,11 @@ func TestReviewWorkerWithPendingWakeTimerStaysOnRoster(t *testing.T) {
 			Reason: "pr-checks",
 		}},
 	}
-	if ShouldEndReviewWorker(st, ag) {
+	if loop.ShouldEndReviewWorker(st, ag) {
 		t.Fatal("shouldEndReviewWorker = true while an unfired timer is set to wake the worker")
 	}
 	st.Timers[0].Fired = time.Now()
-	if !ShouldEndReviewWorker(st, ag) {
+	if !loop.ShouldEndReviewWorker(st, ag) {
 		t.Fatal("shouldEndReviewWorker = false after the wake timer has fired")
 	}
 }

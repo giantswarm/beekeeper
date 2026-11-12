@@ -9,6 +9,7 @@ import (
 	"time"
 
 	clk "github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -40,7 +41,7 @@ func publicPullURL(raw string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) != 4 || parts[2] != LoopPullStep || parts[3] == "" {
+	if len(parts) != 4 || parts[2] != loop.LoopPullStep || parts[3] == "" {
 		return ""
 	}
 	for _, c := range parts[3] {
@@ -52,12 +53,12 @@ func publicPullURL(raw string) string {
 }
 
 func (a *app) operationOutcome(operation, reason, rawURL string, success bool) error {
-	o := throughputOutcome{At: a.timeNow(), Operation: operation, Reason: reason, Candidate: NormalizeLoopVersion(LoopRunningVersion()), URL: publicPullURL(rawURL), Success: success}
+	o := throughputOutcome{At: a.timeNow(), Operation: operation, Reason: reason, Candidate: loop.NormalizeLoopVersion(loop.LoopRunningVersion()), URL: publicPullURL(rawURL), Success: success}
 	b, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
-	return a.store.Record(event(LoopParty, throughputOutcomeVerb, "%s", b))
+	return a.store.Record(event(loop.LoopParty, throughputOutcomeVerb, "%s", b))
 }
 
 // evaluateThroughput is deterministic and reconstructs operation streaks from
@@ -145,7 +146,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 	}
 	keepHistory := func(e state.Event) bool { return e.Verb == throughputOutcomeVerb || e.Verb == throughputHealthVerb }
 	if len(progress) > 0 {
-		keepHistory = EventProgressFilter(keepHistory, progress[0], clk.Now)
+		keepHistory = loop.EventProgressFilter(keepHistory, progress[0], clk.Now)
 	}
 	// Warm a cold reader before taking the state lock. Refresh it inside
 	// the transaction as well to include concurrent health transitions.
@@ -210,7 +211,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 		if after <= 0 {
 			after = 2 * time.Hour
 		}
-		status, detail := evaluateThroughput(now, after, obs, outcomes, held || st.Stop != nil || a.cfg.GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, now))
+		status, detail := evaluateThroughput(now, after, obs, outcomes, held || st.Stop != nil || a.cfg.GitHub.Floor > 0 && loop.LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, now))
 		if status == prev.Status || prev.Status == "" && status == throughputHealthy {
 			if commit {
 				return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: status})
@@ -237,8 +238,8 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 		events := []state.Event{event(watchParty, throughputHealthVerb, "%s", saved)}
 		if report {
 			key := "throughput " + now.UTC().Format(time.RFC3339Nano)
-			report := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, detail)
-			events = append(events, event(LoopParty, LoopFileVerb, "[%s] %s", key, report))
+			report := fmt.Sprintf("%s reported at %s%s%s", loop.LoopParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, detail)
+			events = append(events, event(loop.LoopParty, loop.LoopFileVerb, "[%s] %s", key, report))
 		}
 		return events, nil
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -255,7 +256,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		switch {
 		case strings.HasPrefix(arg, "--host="):
 			f.host = strings.TrimPrefix(arg, "--host=")
-		case arg == LoopHostFlag && i+1 < len(args):
+		case arg == loop.LoopHostFlag && i+1 < len(args):
 			i++
 			f.host = args[i]
 		case strings.HasPrefix(arg, "--name="):
@@ -301,7 +302,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		case arg == workerGitHubConfigOption && i+1 < len(args):
 			i++
 			f.scratchCfg = args[i]
-		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == LoopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
+		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loop.LoopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
 			i++
 		case !strings.HasPrefix(arg, "-"):
 			pos = append(pos, arg)

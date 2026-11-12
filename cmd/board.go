@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -33,7 +34,7 @@ var boardGH github.GH = github.RunGH
 // boardClient is the client of the configured board and plans repositories.
 func (a *app) boardClient() *board.Client {
 	gh := boardGH
-	if a.as == LoopParty.Name {
+	if a.as == loop.LoopParty.Name {
 		gh = func(ctx context.Context, args ...string) (out []byte, err error) {
 			err = a.loopGitHub(ctx, "board", func() error {
 				out, err = boardGH(ctx, args...)

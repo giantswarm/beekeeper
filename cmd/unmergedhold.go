@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -258,7 +259,7 @@ func servedIssuesForPull(st *state.State, prRef string) []string {
 	}
 	for _, ag := range st.Agents {
 		if ag.Park != nil && strings.EqualFold(ag.Park.On, prRef) {
-			if s := cmp.Or(LoopServes(st, ag), LoopTaskServes(ag, prRef)); s != "" {
+			if s := cmp.Or(loop.LoopServes(st, ag), loop.LoopTaskServes(ag, prRef)); s != "" {
 				add(s)
 			}
 		}
@@ -311,7 +312,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 
 	// Only the loop's in-flight replacement of a recorded park inherits
 	// that worker's PR. A name or a PR URL in an arbitrary brief is no grant.
-	if a.as == LoopParty.Name && st != nil {
+	if a.as == loop.LoopParty.Name && st != nil {
 		for _, ag := range st.Agents {
 			if !freshPark(st, ag) || !ag.Park.Continuing || len(ag.Park.Continuation) == 0 || continuationName(ag) != name {
 				continue
@@ -329,16 +330,16 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 
 	if a.store != nil {
 		if evs, err := state.FollowSnapshot(a.store, "start-gate-loop-claims", "v1", func(e state.Event) bool {
-			return e.By.Name == LoopParty.Name && (e.Verb == LoopClaimVerb || e.Verb == LoopClaimEndVerb)
+			return e.By.Name == loop.LoopParty.Name && (e.Verb == loop.LoopClaimVerb || e.Verb == loop.LoopClaimEndVerb)
 		}); err == nil {
 			settled := map[string]bool{}
 			for i := len(evs) - 1; i >= 0; i-- {
 				e := evs[i]
-				key, agent, ok := Keyed(e.Detail)
+				key, agent, ok := loop.Keyed(e.Detail)
 				if !ok {
 					continue
 				}
-				if e.Verb == LoopClaimEndVerb {
+				if e.Verb == loop.LoopClaimEndVerb {
 					settled[key] = true
 					continue
 				}

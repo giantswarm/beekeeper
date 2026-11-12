@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -4168,7 +4169,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 		n := 0
 		last := ""
 		for _, ev := range evs {
-			if ev.Verb == LoopFileVerb && strings.Contains(ev.Detail, "P1 subscription budget underused") {
+			if ev.Verb == loop.LoopFileVerb && strings.Contains(ev.Detail, "P1 subscription budget underused") {
 				n++
 				last = ev.Detail
 			}

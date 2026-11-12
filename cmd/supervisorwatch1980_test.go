@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -38,14 +39,14 @@ func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 			t.Fatal("a fill forecast over the floor held starts")
 		}
 	}
-	if r.called(LoopDiskKind, "prune", "--apply") != nil {
+	if r.called(loop.LoopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("a fill forecast over the floor pruned")
 	}
 	st, _ := r.a.store.Read()
 	if len(st.Notes) != 0 {
 		t.Fatalf("a fill forecast noted the person: %+v", st.Notes)
 	}
-	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil || len(evs) != 0 {
 		t.Fatalf("a fill forecast filed a finding: %+v %v", evs, err)
 	}

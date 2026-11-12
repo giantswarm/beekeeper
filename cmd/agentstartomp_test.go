@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -507,10 +508,10 @@ func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
 			{Harness: omp.Harness, Model: id, Provider: rackB},
 		},
 	}
-	if !SelfHostedModel(k, recorded) {
+	if !loop.SelfHostedModel(k, recorded) {
 		t.Errorf("selfHostedModel(%q) with the self-hosted choice %q = false", recorded, id)
 	}
-	if SelfHostedModel(k, "vllm/unlisted-id") || SelfHostedModel(k, "vllm/x"+id) {
+	if loop.SelfHostedModel(k, "vllm/unlisted-id") || loop.SelfHostedModel(k, "vllm/x"+id) {
 		t.Error("selfHostedModel matched a model no choice names")
 	}
 	if p, _ := resolveAgentProviderBucket(k, omp.Harness, recorded); p != rackB {

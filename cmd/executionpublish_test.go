@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -128,7 +129,7 @@ func (rig *publicationRig) commit(t *testing.T, file, text string) string {
 	if err := os.WriteFile(filepath.Join(rig.workspace, file), []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{LoopAdd, file}, {"commit", "-m", "fixture change"}} {
+	for _, args := range [][]string{{loop.LoopAdd, file}, {"commit", "-m", "fixture change"}} {
 		if _, err := executionPublishGit(context.Background(), rig.workspace, args...); err != nil {
 			t.Fatal(err)
 		}
@@ -1307,9 +1308,9 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 			p := rig.publication(t, head)
 			p.Title, p.Body = "", ""
 			rig.created = true
-			originalRead := ReadLoopPull
-			t.Cleanup(func() { ReadLoopPull = originalRead })
-			ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+			originalRead := loop.ReadLoopPull
+			t.Cleanup(func() { loop.ReadLoopPull = originalRead })
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				return superloop.Pull{Ref: "giantswarm/beekeeper#42", State: superloop.Open, Branch: authorBranch, Head: rig.base}, nil
 			}
 			if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -1379,9 +1380,9 @@ func TestReviewerWriteGrantRefusedBeforeAnyBranchRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalRead := ReadLoopPull
-	t.Cleanup(func() { ReadLoopPull = originalRead })
-	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	originalRead := loop.ReadLoopPull
+	t.Cleanup(func() { loop.ReadLoopPull = originalRead })
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Fatal("review branch lookup must not grant writes")
 		return superloop.Pull{}, nil
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -204,7 +205,7 @@ func (a *app) epicStatus(st *state.State) (string, error) {
 	return b.String(), nil
 }
 
-func loopEpicStart(l *Loop, next LoopBoardItem) error {
+func loopEpicStart(l *loop.Loop, next loop.LoopBoardItem) error {
 	if !next.EpicOwner && next.Epic == "" {
 		return nil
 	}
@@ -217,12 +218,12 @@ func loopEpicStart(l *Loop, next LoopBoardItem) error {
 		return err
 	}
 	if next.EpicOwner && epicOwner(st, next.Ref) != nil {
-		return ErrLoopLater
+		return loop.ErrLoopLater
 	}
 	c := board.Candidate{Item: board.Item{Ref: next.Ref}, Epic: next.Epic, EpicOwner: next.EpicOwner}
 	sc := pickScope{epics: view, epicLimit: asApp(l.Host).cfg.Delivery.EpicLimit, epicParallel: asApp(l.Host).cfg.Delivery.EpicParallel, listed: asApp(l.Host).timeNow(), wipPolicy: asApp(l.Host).deliveryPolicy()}
 	if why := epicAdmission(st, c, sc); why != "" {
-		return fmt.Errorf("%s: %s: %w", next.URL, why, ErrLoopLater)
+		return fmt.Errorf("%s: %s: %w", next.URL, why, loop.ErrLoopLater)
 	}
 	return nil
 }

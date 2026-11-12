@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -24,17 +25,17 @@ func TestRecoveryAcceptsProgressingPullBatchAndRejectsBlockedRead(t *testing.T) 
 	}
 	c.store, c.a.store = store, store
 	j := journal(t, c)
-	oldClock, oldVersion, oldList := LoopLifecycleNow, LoopRunningVersion, ReadOpenPulls
+	oldClock, oldVersion, oldList := loop.LoopLifecycleNow, loop.LoopRunningVersion, loop.ReadOpenPulls
 	t.Cleanup(func() {
-		LoopLifecycleNow, LoopRunningVersion, ReadOpenPulls = oldClock, oldVersion, oldList
+		loop.LoopLifecycleNow, loop.LoopRunningVersion, loop.ReadOpenPulls = oldClock, oldVersion, oldList
 	})
-	LoopLifecycleNow = func() time.Time { return *now }
-	LoopRunningVersion = func() string { return recoveryBadVersion }
+	loop.LoopLifecycleNow = func() time.Time { return *now }
+	loop.LoopRunningVersion = func() string { return recoveryBadVersion }
 	refs := make([]string, 12)
 	for i := range refs {
 		refs[i] = fmt.Sprintf("o/r#%d", i+100)
 	}
-	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
 		return refs, nil
 	}
 	l, err := r.a.newSupervisorLoop(false)
@@ -42,9 +43,9 @@ func TestRecoveryAcceptsProgressingPullBatchAndRejectsBlockedRead(t *testing.T) 
 		t.Fatal(err)
 	}
 	l.Once = true
-	l.Lifecycle = &LoopLifecycle{Version: recoveryBadVersion, Started: *now}
+	l.Lifecycle = &loop.LoopLifecycle{Version: recoveryBadVersion, Started: *now}
 	reads := 0
-	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > time.Minute {
 			t.Fatal("PR observation has no bounded deadline")
 		}
@@ -81,16 +82,16 @@ func TestRecoveryAcceptsProgressingPullBatchAndRejectsBlockedRead(t *testing.T) 
 	}
 }
 
-// Admission can block before readLoopPull's own timeout starts. A caller's
+// Admission can block before loop.ReadLoopPull's own timeout starts. A caller's
 // cancellation must release that wait without issuing a GitHub observation.
 func TestPullObservationCancellationBeforeRead(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500
 	healthyLoopBudget(t, r)
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Fatal("canceled observation reached GitHub")
 		return superloop.Pull{}, nil
 	}

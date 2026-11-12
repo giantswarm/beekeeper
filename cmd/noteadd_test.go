@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 func TestNoteAddMissingQuestion(t *testing.T) {
@@ -13,7 +15,7 @@ func TestNoteAddMissingQuestion(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := New()
-			c.SetArgs(append([]string{"note", LoopAdd}, flags...))
+			c.SetArgs(append([]string{"note", loop.LoopAdd}, flags...))
 			err := c.Execute()
 			if err == nil || Code(err) != ExitUsage {
 				t.Fatalf("missing question must fail with usage exit code: %v", err)

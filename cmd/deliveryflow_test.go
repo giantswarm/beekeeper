@@ -7,6 +7,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -130,7 +131,7 @@ func TestDeliveryExternalHoldRestoresBoardAfterRestart(t *testing.T) {
 		st.StartDelivery(heldRef, workerRole, "", a.timeNow())
 		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{Waits: deliveryFlowTestVisit}}}
 	})
-	l := &Loop{Host: a}
+	l := &loop.Loop{Host: a}
 	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestDeliveryExternalHoldRestoresBoardAfterRestart(t *testing.T) {
 		t.Fatalf("hold %+v", st.DeliveryHolds)
 	}
 	seed(t, a, func(st *state.State) { st.Agents[0].Park = nil })
-	l = &Loop{Host: a}
+	l = &loop.Loop{Host: a}
 	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +194,7 @@ func TestDeliveryHoldCoexistsWithDecisionHold(t *testing.T) {
 		st.StartDelivery(heldRef, workerRole, "", a.timeNow())
 		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{External: true, Waits: "equipment delivery"}}}
 	})
-	l := &Loop{Host: a}
+	l := &loop.Loop{Host: a}
 	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}

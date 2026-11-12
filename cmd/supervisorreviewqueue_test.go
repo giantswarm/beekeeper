@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -26,20 +27,20 @@ const (
 // turn, its stretch runs on while it waits, and the pile is counted.
 func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 	r := newLoopRig(t)
-	total := SweepReadsPerPass + 10
+	total := loop.SweepReadsPerPass + 10
 	var open []string
 	for n := range total {
 		ref := sweepRef(100 + n)
 		open = append(open, ref)
 		r.pulls[ref] = superloop.Pull{Ref: ref, URL: fmt.Sprintf("https://github.com/o/r/pull/%d", 100+n), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk, Branch: "bulk"}
 	}
-	listed := ReadOpenPulls
-	t.Cleanup(func() { ReadOpenPulls = listed })
-	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
+	listed := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = listed })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
 	var reads atomic.Int32
-	read := ReadLoopPull
-	t.Cleanup(func() { ReadLoopPull = read })
-	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	read := loop.ReadLoopPull
+	t.Cleanup(func() { loop.ReadLoopPull = read })
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		if slices.Contains(open, ref) {
 			reads.Add(1)
 		}
@@ -59,8 +60,8 @@ func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 	if n := reads.Load(); n != int32(total) {
 		t.Fatalf("first pass read %d, want %d", n, total)
 	}
-	var count LoopSweepCount
-	if found, err := r.a.store.ReadFile(LoopSweepFile, &count); err != nil || !found {
+	var count loop.LoopSweepCount
+	if found, err := r.a.store.ReadFile(loop.LoopSweepFile, &count); err != nil || !found {
 		t.Fatalf("no count: %v", err)
 	}
 	if count.Listed != total || count.Ownerless != total || count.Unread != 0 || count.Oldest.IsZero() {
@@ -82,8 +83,8 @@ func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 	if n := reads.Load(); n != 0 {
 		t.Fatalf("second pass read %d, want none", n)
 	}
-	count = LoopSweepCount{}
-	if _, err := r.a.store.ReadFile(LoopSweepFile, &count); err != nil {
+	count = loop.LoopSweepCount{}
+	if _, err := r.a.store.ReadFile(loop.LoopSweepFile, &count); err != nil {
 		t.Fatal(err)
 	}
 	if count.Ownerless != total || count.Unread != 0 {
@@ -93,10 +94,10 @@ func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 
 func TestSweepCountSaysAListAtGitHubsLimit(t *testing.T) {
 	r := newLoopRig(t)
-	if got := (LoopSweepCount{}).Line(r.a); got != "" {
+	if got := (loop.LoopSweepCount{}).Line(r.a); got != "" {
 		t.Fatalf("nothing to say, said %q", got)
 	}
-	if got := (LoopSweepCount{Listed: SweepListLimit, AtLimit: true}).Line(r.a); !strings.Contains(got, "there may be more") {
+	if got := (loop.LoopSweepCount{Listed: loop.SweepListLimit, AtLimit: true}).Line(r.a); !strings.Contains(got, "there may be more") {
 		t.Fatalf("line %q", got)
 	}
 }
@@ -130,7 +131,7 @@ func TestGraphQLLimitIsConfigurableAndItsHoldVisible(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 100
 	now := r.a.timeNow()
-	spend := loopGraphQLSpend{Reset: now.Add(time.Hour), Spent: 1535, Remaining: 4000, Steps: map[string]int{LoopPullStep: 1535}}
+	spend := loopGraphQLSpend{Reset: now.Add(time.Hour), Spent: 1535, Remaining: 4000, Steps: map[string]int{loop.LoopPullStep: 1535}}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		g := &state.GraphQL{Remaining: 3000, Limit: 5000, Reset: spend.Reset, At: now}
 		st.Budget = &state.Budget{Remaining: 4000, Limit: 5000, Reset: spend.Reset, At: now, GraphQL: g}
@@ -156,7 +157,7 @@ func TestGraphQLLimitIsConfigurableAndItsHoldVisible(t *testing.T) {
 
 // removeRig has a loop whose agents remove answers code with out, the
 // agent gone from the roster or not.
-func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *Loop) {
+func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *loop.Loop) {
 	t.Helper()
 	r := newLoopRig(t)
 	if onRoster {
@@ -168,7 +169,7 @@ func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *Lo
 		}
 	}
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[1] == LoopRemove {
+		if len(args) > 1 && args[1] == loop.LoopRemove {
 			return out, code
 		}
 		return "", 0
@@ -187,7 +188,7 @@ func TestLoopRemoveOfAnAgentOffTheRosterIsDone(t *testing.T) {
 	if err := l.Remove(context.Background(), "worker-x", "task done"); err != nil {
 		t.Fatal(err)
 	}
-	if c := r.called(agentsName, LoopRemove); !slices.Contains(c, "--"+reasonFlagName) || !slices.Contains(c, "task done") {
+	if c := r.called(agentsName, loop.LoopRemove); !slices.Contains(c, "--"+reasonFlagName) || !slices.Contains(c, "task done") {
 		t.Fatalf("no reason passed: %v", c)
 	}
 }
@@ -209,7 +210,7 @@ func TestRemovedDetailKeepsTheNameReadable(t *testing.T) {
 		t.Fatal("no reason, no suffix")
 	}
 	for detail, want := range map[string]bool{"w": true, "w: why": true, "w2: why": false, "w2": false} {
-		if RemovedAgent(detail, "w") != want {
+		if loop.RemovedAgent(detail, "w") != want {
 			t.Errorf("removedAgent(%q) != %v", detail, want)
 		}
 	}
@@ -227,9 +228,9 @@ func TestReviewStarterGetsTheVerdict(t *testing.T) {
 		report string
 		want   state.Party
 	}{
-		{"by agents review", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1, By: guide}}, Starts: []state.Start{{Party: reviewer, By: LoopParty}}}, queueVerdict, guide},
+		{"by agents review", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1, By: guide}}, Starts: []state.Start{{Party: reviewer, By: loop.LoopParty}}}, queueVerdict, guide},
 		{"by agents start", state.State{Starts: []state.Start{{Party: reviewer, By: guide}}}, queueVerdict, guide},
-		{"by the loop", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1}}, Starts: []state.Start{{Party: reviewer, By: LoopParty}}}, queueVerdict, state.Party{}},
+		{"by the loop", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1}}, Starts: []state.Start{{Party: reviewer, By: loop.LoopParty}}}, queueVerdict, state.Party{}},
 		{"no verdict", state.State{Starts: []state.Start{{Party: reviewer, By: guide}}}, "shipped it", state.Party{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

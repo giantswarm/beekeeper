@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -50,7 +51,7 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 	if request.Diff && request.Body != "" || len(request.Body) > 64<<10 {
 		return "", usageErr("review accepts a diff read or a review body up to 64 KiB")
 	}
-	pull, err := ReadLoopPull(ctx, round.Ref)
+	pull, err := loop.ReadLoopPull(ctx, round.Ref)
 	if err != nil {
 		return "", err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 const testBranchFlag = "--branch"
@@ -116,7 +117,7 @@ func TestLoopStartKeepsAgentsDir(t *testing.T) {
 	if _, err := start(""); err == nil || !strings.Contains(err.Error(), "exactly one repository checkout") {
 		t.Fatalf("hand start: %v", err)
 	}
-	out, err := start(LoopParty.Name)
+	out, err := start(loop.LoopParty.Name)
 	if err != nil {
 		t.Fatalf("loop start: %v", err)
 	}

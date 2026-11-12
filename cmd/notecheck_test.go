@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -40,7 +41,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 
 func addNote(a *app, args ...string) error {
 	c := a.noteCmd()
-	c.SetArgs(append([]string{LoopAdd}, args...))
+	c.SetArgs(append([]string{loop.LoopAdd}, args...))
 	c.SetOut(a.out)
 	c.SetErr(a.out)
 	c.SilenceUsage, c.SilenceErrors = true, true

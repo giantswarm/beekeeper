@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 var taskRepositoryReference = regexp.MustCompile(`(?:^|[\s(])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+`)
@@ -180,9 +182,9 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 			}
 		}
 	}
-	args := []string{"worktree", LoopAdd, branchFlag, branch, target, ref}
+	args := []string{"worktree", loop.LoopAdd, branchFlag, branch, target, ref}
 	if review {
-		args = []string{"worktree", LoopAdd, "--detach", target, ref}
+		args = []string{"worktree", loop.LoopAdd, "--detach", target, ref}
 	}
 	if _, err := runGit(ctx, checkout, args...); err != nil {
 		return "", err

@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -184,7 +185,7 @@ func TestSSHAgentStartKindAdmission(t *testing.T) {
 						t.Fatal("kind refusal or dry run reached SSH transport")
 						return nil
 					}
-					args := []string{agentStartName, filerTwo, brief, LoopHostFlag, sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch, modelFlag, bgModel}
+					args := []string{agentStartName, filerTwo, brief, loop.LoopHostFlag, sshTestSelector, loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch, modelFlag, bgModel}
 					if dry {
 						args = append(args, testDryRunFlag)
 					}

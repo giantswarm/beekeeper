@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -384,7 +385,7 @@ func (a *app) tellFilerWithWake(ctx context.Context, by state.Party, n *state.No
 	}
 	// The supervisor loop is no session: it reads the answer from the log
 	// at its next pass.
-	if n.By.Name == LoopParty.Name && n.By.Session == "" {
+	if n.By.Name == loop.LoopParty.Name && n.By.Session == "" {
 		delivery.Status = noteDeliveryWaiting
 		return fmt.Sprintf("note #%d: the supervisor loop acts on the answer at its next pass", n.ID)
 	}

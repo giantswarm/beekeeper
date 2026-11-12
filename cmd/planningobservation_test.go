@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -23,18 +24,18 @@ func TestDeliveryPlanningBoundsReleaseObservations(t *testing.T) {
 	seed(t, a, func(st *state.State) {
 		st.Deliveries = []state.Delivery{{Ref: reserveIssue, Pulls: []string{planningPull}, Step: state.DeliveryReleasing, Started: now.Add(-time.Hour), Since: now.Add(-time.Minute)}}
 	})
-	old := ReadDeliveryRelease
-	t.Cleanup(func() { ReadDeliveryRelease = old })
+	old := loop.ReadDeliveryRelease
+	t.Cleanup(func() { loop.ReadDeliveryRelease = old })
 	called := false
-	ReadDeliveryRelease = func(ctx context.Context, _ superloop.Pull) (string, string, error) {
+	loop.ReadDeliveryRelease = func(ctx context.Context, _ superloop.Pull) (string, string, error) {
 		called = true
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > LoopPlanningObservationTimeout {
+		if !ok || time.Until(deadline) > loop.LoopPlanningObservationTimeout {
 			t.Fatal("release observation has no planning deadline")
 		}
 		return "", "", context.DeadlineExceeded
 	}
-	l := &Loop{Host: a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}
 	if err := l.ObserveDeliveries(context.Background(), in, nil); err != nil {
 		t.Fatal(err)
@@ -61,17 +62,17 @@ func TestBacklogPlanningBoundsAdmissionAndRotates(t *testing.T) {
 	t.Cleanup(func() { readLoopGraphQLBudget = oldBudget })
 	readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > LoopPlanningObservationTimeout {
+		if !ok || time.Until(deadline) > loop.LoopPlanningObservationTimeout {
 			t.Fatal("shared admission has no planning deadline")
 		}
 		return oldBudget(a, ctx)
 	}
 	var order []string
-	old := ReadRepoPullRevision
-	t.Cleanup(func() { ReadRepoPullRevision = old })
-	ReadRepoPullRevision = func(ctx context.Context, repo, _ string) (string, bool, error) {
+	old := loop.ReadRepoPullRevision
+	t.Cleanup(func() { loop.ReadRepoPullRevision = old })
+	loop.ReadRepoPullRevision = func(ctx context.Context, repo, _ string) (string, bool, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > LoopPlanningObservationTimeout {
+		if !ok || time.Until(deadline) > loop.LoopPlanningObservationTimeout {
 			t.Fatal("inventory observation has no planning deadline")
 		}
 		order = append(order, repo)
@@ -103,8 +104,8 @@ func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 		st.StartDelivery(epicTen, "issue worker", "", now)
 		st.Deliveries = append(st.Deliveries, state.Delivery{Ref: reserveIssue, Pulls: []string{planningPull}, Step: state.DeliveryReleasing, Started: now, Since: now})
 	})
-	oldRefs, oldRelease := refStates, ReadDeliveryRelease
-	t.Cleanup(func() { refStates, ReadDeliveryRelease = oldRefs, oldRelease })
+	oldRefs, oldRelease := refStates, loop.ReadDeliveryRelease
+	t.Cleanup(func() { refStates, loop.ReadDeliveryRelease = oldRefs, oldRelease })
 	var issueDeadline time.Time
 	refStates = func(ctx context.Context, _ []github.PR) (map[github.PR]github.RefState, error) {
 		var ok bool
@@ -115,15 +116,15 @@ func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 	releaseRead := false
-	ReadDeliveryRelease = func(ctx context.Context, _ superloop.Pull) (string, string, error) {
+	loop.ReadDeliveryRelease = func(ctx context.Context, _ superloop.Pull) (string, string, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || issueDeadline.IsZero() || deadline.Sub(issueDeadline) < LoopPlanningObservationTimeout/3 {
+		if !ok || issueDeadline.IsZero() || deadline.Sub(issueDeadline) < loop.LoopPlanningObservationTimeout/3 {
 			t.Fatal("issue reads left no release observation allowance")
 		}
 		releaseRead = true
 		return verdictAvailable, deliveryAvailableTag, nil
 	}
-	l := &Loop{Host: a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}
 	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)

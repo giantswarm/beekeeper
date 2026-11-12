@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -110,7 +111,7 @@ func journal(t *testing.T, c *recoveryController) *update.Journal {
 func (c *recoveryController) failMerges(t *testing.T, n int, at time.Time) {
 	t.Helper()
 	for range n {
-		raw, _ := json.Marshal(throughputOutcome{At: at, Operation: runMerge, Reason: recoveryMergeFailed, Candidate: NormalizeLoopVersion(recoveryBadVersion)})
+		raw, _ := json.Marshal(throughputOutcome{At: at, Operation: runMerge, Reason: recoveryMergeFailed, Candidate: loop.NormalizeLoopVersion(recoveryBadVersion)})
 		if err := c.store.Record(state.Event{At: at, Verb: throughputOutcomeVerb, Detail: string(raw)}); err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +120,7 @@ func (c *recoveryController) failMerges(t *testing.T, n int, at time.Time) {
 
 func (c *recoveryController) filedReports(t *testing.T) []string {
 	t.Helper()
-	evs, err := c.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
+	evs, err := c.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +213,7 @@ func TestRecoveryBlamesNoCandidateItsControlFailsToo(t *testing.T) {
 func TestRecoveryRollsBackAMissingHeartbeat(t *testing.T) {
 	c, now := recoveryRig(t)
 	// The old release's loop ran here, the candidate's never showed up.
-	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: NormalizeLoopVersion(recoveryGoodVersion)}); err != nil {
+	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: loop.NormalizeLoopVersion(recoveryGoodVersion)}); err != nil {
 		t.Fatal(err)
 	}
 	ticks := 0
@@ -602,11 +603,11 @@ func TestRecoveryRefreshesHeartbeatBeforeRollingBack(t *testing.T) {
 	c, now := recoveryRig(t)
 	started := now.Add(10 * time.Second)
 	staleAt := started.Add(10 * time.Second)
-	if err := c.store.WriteFile(LoopLifecycleFile, LoopLifecycle{
-		Version: NormalizeLoopVersion(recoveryBadVersion),
+	if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{
+		Version: loop.NormalizeLoopVersion(recoveryBadVersion),
 		Started: started,
 		At:      staleAt,
-		Phase:   LoopPhaseRecover,
+		Phase:   loop.LoopPhaseRecover,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -633,8 +634,8 @@ func TestRecoveryRefreshesHeartbeatBeforeRollingBack(t *testing.T) {
 		// controller evaluates the tick after the initial stale read.
 		if reads == 2 {
 			freshAt := now.Add(-3 * time.Second)
-			_ = c.store.WriteFile(LoopLifecycleFile, LoopLifecycle{
-				Version: NormalizeLoopVersion(recoveryBadVersion),
+			_ = c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{
+				Version: loop.NormalizeLoopVersion(recoveryBadVersion),
 				Started: started,
 				At:      freshAt,
 				Phase:   "observe repository backlogs",

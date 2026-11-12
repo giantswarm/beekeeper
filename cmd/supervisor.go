@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -35,23 +36,23 @@ var loopVersionOf = func(ctx context.Context, path string) string {
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) >= 2 && fields[0] == project.Name {
-		return NormalizeLoopVersion(fields[1])
+		return loop.NormalizeLoopVersion(fields[1])
 	}
 	if len(fields) > 0 {
-		return NormalizeLoopVersion(fields[0])
+		return loop.NormalizeLoopVersion(fields[0])
 	}
 	return ""
 }
 
 func (a *app) writeLoopVersion() error {
-	return a.store.WriteFile(LoopVersionFile, LoopVersionRecord{
+	return a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{
 		PID:     os.Getpid(),
-		Version: NormalizeLoopVersion(LoopRunningVersion()),
+		Version: loop.NormalizeLoopVersion(loop.LoopRunningVersion()),
 	})
 }
 
 func (a *app) clearLoopVersion() {
-	_ = a.store.WriteFile(LoopVersionFile, LoopVersionRecord{})
+	_ = a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{})
 }
 
 func (a *app) supervisorCmd() *cobra.Command {
@@ -82,7 +83,7 @@ Without a subcommand, shows whether the loop runs. A stopped loop is a valid sta
 // loopPID is the PID of the running supervisor loop, 0 when none runs.
 func (a *app) loopPID() int {
 	var pid int
-	found, err := a.store.ReadFile(LoopPIDFile, &pid)
+	found, err := a.store.ReadFile(loop.LoopPIDFile, &pid)
 	if err != nil || !found || pid <= 0 || !proc.Alive(pid) {
 		return 0
 	}
@@ -122,7 +123,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		c = ctx[0]
 	}
 	var pid int
-	if _, err := a.store.ReadFile(LoopPIDFile, &pid); err != nil {
+	if _, err := a.store.ReadFile(loop.LoopPIDFile, &pid); err != nil {
 		return fmt.Errorf("reading supervisor loop PID: %w", err)
 	}
 	if pid <= 0 || !proc.Alive(pid) {
@@ -180,12 +181,12 @@ func (a *app) loopWaitLines() (held, pulls string) {
 	if found, err := a.store.ReadFile(loopGraphQLFile, &spend); err == nil && found {
 		held = a.heldLine(spend)
 	}
-	var count LoopSweepCount
-	if found, err := a.store.ReadFile(LoopSweepFile, &count); err == nil && found {
+	var count loop.LoopSweepCount
+	if found, err := a.store.ReadFile(loop.LoopSweepFile, &count); err == nil && found {
 		pulls = count.Line(a)
 	}
-	var snapshot LoopPullSnapshot
-	if found, err := a.store.ReadFile(LoopPullWatchFile, &snapshot); found && err == nil {
+	var snapshot loop.LoopPullSnapshot
+	if found, err := a.store.ReadFile(loop.LoopPullWatchFile, &snapshot); found && err == nil {
 		if line := snapshot.AgeLine(a.timeNow()); line != "" {
 			pulls = strings.TrimSpace(pulls + "\n" + line)
 		}
@@ -198,12 +199,12 @@ func (a *app) loopVersion(ctx context.Context, pid int) string {
 	if pid <= 0 {
 		return ""
 	}
-	var rec LoopVersionRecord
-	if found, err := a.store.ReadFile(LoopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
-		return NormalizeLoopVersion(rec.Version)
+	var rec loop.LoopVersionRecord
+	if found, err := a.store.ReadFile(loop.LoopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
+		return loop.NormalizeLoopVersion(rec.Version)
 	}
 	if pid == os.Getpid() {
-		return NormalizeLoopVersion(LoopRunningVersion())
+		return loop.NormalizeLoopVersion(loop.LoopRunningVersion())
 	}
 	for _, path := range []string{
 		fmt.Sprintf("/proc/%d/exe", pid),
@@ -218,7 +219,7 @@ func (a *app) loopVersion(ctx context.Context, pid int) string {
 	}
 	if path, replaced := processBinary(pid); path != "" && !replaced {
 		if installed, err := installedLoopBinary(); err == nil && sameBinaryFile(path, installed) {
-			return NormalizeLoopVersion(LoopRunningVersion())
+			return loop.NormalizeLoopVersion(loop.LoopRunningVersion())
 		}
 	}
 	return ""
@@ -256,7 +257,7 @@ func (a *app) staleLoopLine(ctx context.Context) string {
 	if pid <= 0 {
 		return ""
 	}
-	installedVer := NormalizeLoopVersion(LoopRunningVersion())
+	installedVer := loop.NormalizeLoopVersion(loop.LoopRunningVersion())
 	if installed, err := installedLoopBinary(); err == nil && installed != "" {
 		_, selfReplaced := replacedBinary(os.Getpid())
 		if self, selfErr := os.Executable(); selfErr != nil || !sameBinaryFile(installed, self) || selfReplaced {

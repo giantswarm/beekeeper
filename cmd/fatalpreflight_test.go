@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 func TestFatalCodexStartupFailureExcludesHarnessUntilVerified(t *testing.T) {
@@ -47,9 +48,9 @@ func TestFatalCodexStartupFailureExcludesHarnessUntilVerified(t *testing.T) {
 		}
 		return "version succeeds", 0
 	})
-	old := BeekeeperRun
+	old := loop.BeekeeperRun
 	starts := 0
-	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		starts++
 		i := slices.Index(args, fatalExcludeOption)
 		if i < 0 || args[i+1] != config.CodexHarness {
@@ -57,7 +58,7 @@ func TestFatalCodexStartupFailureExcludesHarnessUntilVerified(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	t.Cleanup(func() { BeekeeperRun = old })
+	t.Cleanup(func() { loop.BeekeeperRun = old })
 	if err := a.fatalScan(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestFatalHarnessTimeoutIsUnknownNotFailed(t *testing.T) {
 	t.Cleanup(func() { fatalRun, fatalProbeTimeout = oldRun, oldTimeout })
 	fatalProbeTimeout = 50 * time.Millisecond
 	fatalRun = func(ctx context.Context, stdin string, _ []string) (string, string, int, error) {
-		return RunArgv(ctx, stdin, []string{"sleep", "5"})
+		return loop.RunArgv(ctx, stdin, []string{"sleep", "5"})
 	}
 	o := fatalHarness(t.Context(), filepath.Join(t.TempDir(), "config.yaml"), config.AgyHarness)
 	if o.Failed || !o.Unknown {

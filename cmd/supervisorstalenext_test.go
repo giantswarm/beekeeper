@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -18,7 +19,7 @@ const (
 
 // staleNextLoop is a loop on the fill rig (ceiling 3) that runs each pass
 // to its end.
-func staleNextLoop(t *testing.T, r *loopRig) *Loop {
+func staleNextLoop(t *testing.T, r *loopRig) *loop.Loop {
 	t.Helper()
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -55,7 +56,7 @@ func TestLoopStaleNextBacklogSettlesAndFillsInTheSamePass(t *testing.T) {
 	reads := 0
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			reads++
 		}
 		return original(args)
@@ -75,7 +76,7 @@ func TestLoopStaleNextBacklogSettlesAndFillsInTheSamePass(t *testing.T) {
 	r.loopPass(t, l)
 
 	*busy = 0
-	r.a.now = r.a.now.Add(2 * StaleNextAfter)
+	r.a.now = r.a.now.Add(2 * loop.StaleNextAfter)
 	before := reads
 	r.loopPass(t, l)
 	if *busy != 3 {
@@ -89,7 +90,7 @@ func TestLoopStaleNextBacklogSettlesAndFillsInTheSamePass(t *testing.T) {
 		t.Fatalf("%d of %d stale next actions settled:\n%s", len(settled), n, r.out)
 	}
 	for _, e := range settled {
-		if !strings.Contains(e.Detail, StaleNextWhat) {
+		if !strings.Contains(e.Detail, loop.StaleNextWhat) {
 			t.Fatalf("a stale next action started instead of settling: %s", e.Detail)
 		}
 	}
@@ -117,7 +118,7 @@ func TestLoopFailingNextDoesNotStopTheFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failures := map[string]LoopFailure{}
+	failures := map[string]loop.LoopFailure{}
 	if err := l.RunPassActions(t.Context(), st, nil, failures, nil, []superloop.Action{freshNext(r)}); err != nil {
 		t.Fatalf("a next action's failure left the stream: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestLoopIntakeInFlightDoesNotStopNextOrFill(t *testing.T) {
 		{Kind: superloop.KindIntake, Key: "intake o/r#98", Ref: "o/r#98", URL: "https://github.com/o/r/issues/98"},
 		freshNext(r),
 	}
-	if err := l.RunPassActions(t.Context(), st, nil, map[string]LoopFailure{}, nil, acts); err != nil {
+	if err := l.RunPassActions(t.Context(), st, nil, map[string]loop.LoopFailure{}, nil, acts); err != nil {
 		t.Fatal(err)
 	}
 	if !l.IsCompleted(staleNextFresh) {
@@ -168,7 +169,7 @@ func TestLoopNextSettlesOnAnOpenPullRequestRefusal(t *testing.T) {
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 2 && args[0] == agentsName && args[1] == agentStartName && args[2] == "r 10" {
-			return "beekeeper: o/r#10 " + OpenPullRefusal + " https://github.com/o/r/pull/11; update it instead", ExitRefused
+			return "beekeeper: o/r#10 " + loop.OpenPullRefusal + " https://github.com/o/r/pull/11; update it instead", ExitRefused
 		}
 		return original(args)
 	}
@@ -177,7 +178,7 @@ func TestLoopNextSettlesOnAnOpenPullRequestRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failures := map[string]LoopFailure{}
+	failures := map[string]loop.LoopFailure{}
 	if err := l.RunPassActions(t.Context(), st, nil, failures, nil, []superloop.Action{freshNext(r)}); err != nil {
 		t.Fatal(err)
 	}

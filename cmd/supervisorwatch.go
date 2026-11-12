@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -44,7 +45,7 @@ func (w *watcher) loopRunning() bool {
 		return true
 	}
 	var pid int
-	found, err := w.store.ReadFile(LoopPIDFile, &pid)
+	found, err := w.store.ReadFile(loop.LoopPIDFile, &pid)
 	return err == nil && found && pid > 0 && proc.Alive(pid)
 }
 
@@ -109,7 +110,7 @@ func (w *watcher) publishMachine() {
 	// diskfill is absent on purpose: DISK FILLING is a forecast from the
 	// write rate, and a forecast never holds starts; only the disk-state
 	// reading's Low (free space under watch.diskMinMiB) does.
-	for _, key := range []string{LoopDiskKind, "diskfull", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
+	for _, key := range []string{loop.LoopDiskKind, "diskfull", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
 		if c, ok := w.active[key]; ok {
 			active[key] = c.Label
 		}
@@ -128,7 +129,7 @@ func (a *app) watchDisk() *watchDiskReading {
 	if at, err := a.readWatchLevel("disk-state", &current); err == nil && !at.IsZero() {
 		return &current
 	}
-	evs, err := state.FollowLast(a.store, "watch-disk-state", 1, func(e state.Event) bool { return e.Verb == WatchDiskStateVerb })
+	evs, err := state.FollowLast(a.store, "watch-disk-state", 1, func(e state.Event) bool { return e.Verb == loop.WatchDiskStateVerb })
 	if err != nil || len(evs) == 0 {
 		return nil
 	}

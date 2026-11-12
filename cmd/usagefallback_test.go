@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -82,8 +83,8 @@ func TestCodexUnreadableFallback(t *testing.T) {
 							t.Fatalf("failure replaced last observation: found=%t reading=%+v err=%v", found, persisted, err)
 						}
 						if chores {
-							events, err := store.Follow("test-guide-usage", func(e state.Event) bool { return e.Verb == LoopFileVerb })
-							if err != nil || len(events) != 1 || !strings.Contains(events[0].Detail, FileReportSeparator) {
+							events, err := store.Follow("test-guide-usage", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
+							if err != nil || len(events) != 1 || !strings.Contains(events[0].Detail, loop.FileReportSeparator) {
 								t.Fatalf("missing durable guide report: %+v, %v", events, err)
 							}
 							if err := store.Update(func(st *state.State) ([]state.Event, error) {

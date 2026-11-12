@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -80,7 +81,7 @@ func TestEndMergedKeepsSameNameOtherSessionRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			l := &Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+			l := &loop.Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
 			if _, err := l.EndMerged(t.Context(), st, superloop.Action{Key: "end " + loopPR, Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)}); err != nil {
 				t.Fatal(err)
 			}
@@ -133,8 +134,8 @@ func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 func TestObservePullAfterLongPassStaysCached(t *testing.T) {
 	r := newLoopRig(t)
 	reads := 0
-	prev := ReadLoopPull
-	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	prev := loop.ReadLoopPull
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		reads++
 		return prev(ctx, ref)
 	}
@@ -161,7 +162,7 @@ func TestObservePullAfterLongPassStaysCached(t *testing.T) {
 
 // endRig has two merged pull requests with saved parks, each serving a closed
 // issue, for ends that reach the board.
-func endRig(t *testing.T) (*loopRig, *Loop, *state.State) {
+func endRig(t *testing.T) (*loopRig, *loop.Loop, *state.State) {
 	t.Helper()
 	r := newLoopRig(t)
 	r.a.cfg.Board.Owner = "o"
@@ -213,7 +214,7 @@ func TestStalledEndDoesNotHoldAnotherEnd(t *testing.T) {
 	}()
 	var stalled atomic.Int32
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == LoopBoard && args[1] == "move" {
+		if len(args) > 1 && args[0] == loop.LoopBoard && args[1] == "move" {
 			both.Done()
 			select {
 			case <-met:
@@ -224,7 +225,7 @@ func TestStalledEndDoesNotHoldAnotherEnd(t *testing.T) {
 		return "", 0
 	}
 	actions := []superloop.Action{endAction(endTestPullA), endAction(endTestPullB)}
-	if err := l.RunPassActions(t.Context(), st, map[string]LoopClaim{}, map[string]LoopFailure{}, nil, actions); err != nil {
+	if err := l.RunPassActions(t.Context(), st, map[string]loop.LoopClaim{}, map[string]loop.LoopFailure{}, nil, actions); err != nil {
 		t.Fatal(err)
 	}
 	if stalled.Load() != 0 {
@@ -249,7 +250,7 @@ func TestEndMergedToleratesServedPullRequest(t *testing.T) {
 			t.Run(tc.name+"/live="+strconv.FormatBool(live), func(t *testing.T) {
 				r, l, st := endRig(t)
 				r.answer = func(args []string) (string, int) {
-					if len(args) > 1 && args[0] == LoopBoard && args[1] == "move" {
+					if len(args) > 1 && args[0] == loop.LoopBoard && args[1] == "move" {
 						return tc.refusal, ExitRefused
 					}
 					return "", 0
@@ -274,7 +275,7 @@ func TestEndMergedToleratesServedPullRequest(t *testing.T) {
 				if (err != nil) != tc.fails {
 					t.Fatalf("endMerged: %v, want failure %t", err, tc.fails)
 				}
-				if r.called(LoopBoard, "move", endTestServed, "Done") == nil {
+				if r.called(loop.LoopBoard, "move", endTestServed, "Done") == nil {
 					t.Fatalf("no board move: %v", r.calls)
 				}
 				if st, err = r.a.store.Read(); err != nil {
@@ -298,18 +299,18 @@ func TestServesIgnoresPullRequestInTask(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ag := state.Agent{Party: state.Party{Name: loopWorker}, Task: tc.task}
-			if got := LoopTaskServes(ag, ""); got != tc.want {
+			if got := loop.LoopTaskServes(ag, ""); got != tc.want {
 				t.Errorf("loopTaskServes = %q, want %q", got, tc.want)
 			}
 			st := &state.State{Agents: []state.Agent{ag}}
-			if got := ReviewParkServes(st, ag, loopPR); got != tc.want {
+			if got := loop.ReviewParkServes(st, ag, loopPR); got != tc.want {
 				t.Errorf("reviewParkServes = %q, want %q", got, tc.want)
 			}
 		})
 	}
 	// The park's own reference is no task of it.
 	ag := state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix https://github.com/o/r/issues/15"}
-	if got := ReviewParkServes(&state.State{Agents: []state.Agent{ag}}, ag, endTestServed); got != "" {
+	if got := loop.ReviewParkServes(&state.State{Agents: []state.Agent{ag}}, ag, endTestServed); got != "" {
 		t.Errorf("reviewParkServes of its own reference = %q", got)
 	}
 }
@@ -317,42 +318,42 @@ func TestServesIgnoresPullRequestInTask(t *testing.T) {
 // Unavailable watcher observations say nothing about ownership. Keep each
 // ownerless stretch while continuing to plan from the other fresh observations.
 func TestUnavailableObservationsKeepOwnerlessStretch(t *testing.T) {
-	observe, sweep := ReadObservedLoopPull, ReadLoopSweep
+	observe, sweep := loop.ReadObservedLoopPull, loop.ReadLoopSweep
 	r := newLoopRig(t)
 	orphans := []string{sweepRef(31), sweepRef(32)}
 	for _, orphan := range orphans {
 		r.pulls[orphan] = superloop.Pull{Ref: orphan, URL: "https://github.com/" + strings.Replace(orphan, "#", "/pull/", 1), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	}
-	listed := ReadOpenPulls
-	t.Cleanup(func() { ReadOpenPulls = listed })
-	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return orphans, nil }
+	listed := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = listed })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return orphans, nil }
 	r.pass(t)
-	if evs := r.logged(t, LoopOwnerlessVerb); len(evs) != len(orphans) {
+	if evs := r.logged(t, loop.LoopOwnerlessVerb); len(evs) != len(orphans) {
 		t.Fatalf("stretches did not start: %+v", evs)
 	}
 	r.park(t, loopPR, r.a.now)
-	ReadObservedLoopPull, ReadLoopSweep = observe, sweep
-	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	loop.ReadObservedLoopPull, loop.ReadLoopSweep = observe, sweep
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Error("pass read a pull request from GitHub")
-		return superloop.Pull{}, ErrLoopLater
+		return superloop.Pull{}, loop.ErrLoopLater
 	}
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	l.Once = true
-	l.PullWatcher().Snapshot = LoopPullSnapshot{
-		Pulls: map[string]WatchedLoopPull{
+	l.PullWatcher().Snapshot = loop.LoopPullSnapshot{
+		Pulls: map[string]loop.WatchedLoopPull{
 			loopPR:     {Pull: r.pull, At: r.a.now},
 			orphans[0]: {Pull: r.pulls[orphans[0]], At: r.a.now, Error: "GitHub allowance held"},
-			orphans[1]: {Pull: r.pulls[orphans[1]], At: r.a.now.Add(-LoopPullMaxAge - time.Second)},
+			orphans[1]: {Pull: r.pulls[orphans[1]], At: r.a.now.Add(-loop.LoopPullMaxAge - time.Second)},
 		},
 		Open: orphans, ListedAt: r.a.now,
 	}
 	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if evs := r.logged(t, LoopOwnerlessVerb); len(evs) != len(orphans) {
+	if evs := r.logged(t, loop.LoopOwnerlessVerb); len(evs) != len(orphans) {
 		t.Fatalf("an unavailable observation ended an ownerless stretch: %+v", evs)
 	}
 	for _, orphan := range orphans {
@@ -368,9 +369,9 @@ func TestUnavailableObservationsKeepOwnerlessStretch(t *testing.T) {
 // Missing watcher observations block actions on those pull requests, but local
 // cleanup still proceeds. A later observation lets their review start.
 func TestUnavailableObservationsAllowLocalCleanup(t *testing.T) {
-	observe, sweep := ReadObservedLoopPull, ReadLoopSweep
+	observe, sweep := loop.ReadObservedLoopPull, loop.ReadLoopSweep
 	r := newLoopRig(t)
-	ReadObservedLoopPull, ReadLoopSweep = observe, sweep
+	loop.ReadObservedLoopPull, loop.ReadLoopSweep = observe, sweep
 	const finished = "finished worker"
 	party := state.Party{Name: finished}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -380,9 +381,9 @@ func TestUnavailableObservationsAllowLocalCleanup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Error("pass read a pull request from GitHub")
-		return superloop.Pull{}, ErrLoopLater
+		return superloop.Pull{}, loop.ErrLoopLater
 	}
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -392,7 +393,7 @@ func TestUnavailableObservationsAllowLocalCleanup(t *testing.T) {
 	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if r.called(agentsName, LoopRemove, finished) == nil {
+	if r.called(agentsName, loop.LoopRemove, finished) == nil {
 		t.Fatalf("missing observation blocked local cleanup: %v\n%s", r.calls, r.out)
 	}
 	if c := r.called(agentsName, agentStartName); c != nil {
@@ -405,7 +406,7 @@ func TestUnavailableObservationsAllowLocalCleanup(t *testing.T) {
 	if _, ok := st.ReviewParkFor(multiParkSecondPR); !ok {
 		t.Fatal("missing observation discarded the review request")
 	}
-	l.PullWatcher().Snapshot.Pulls[multiParkSecondPR] = WatchedLoopPull{
+	l.PullWatcher().Snapshot.Pulls[multiParkSecondPR] = loop.WatchedLoopPull{
 		Pull: superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk},
 		At:   r.a.now,
 	}
@@ -432,7 +433,7 @@ func TestReviewParkEndedOnlyByLaterEndOfItsPull(t *testing.T) {
 		{"other pull request", state.ReviewPark{On: multiParkSecondPR, At: at.Add(-time.Second)}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ReviewParkEnded(taken, tc.rp); got != tc.want {
+			if got := loop.ReviewParkEnded(taken, tc.rp); got != tc.want {
 				t.Errorf("reviewParkEnded = %t, want %t", got, tc.want)
 			}
 		})
@@ -453,7 +454,7 @@ func TestSortTrackedPullsOrdersActiveRequestsFirst(t *testing.T) {
 		Taken: []superloop.Taken{{Kind: superloop.KindReview, Ref: sweepRef(5), At: now.Add(-6 * time.Hour)}},
 	}
 	tracked := []string{sweepRef(1), sweepRef(2), sweepRef(3), sweepRef(4), sweepRef(5)}
-	SortTrackedPulls(in, tracked)
+	loop.SortTrackedPulls(in, tracked)
 	if want := []string{sweepRef(4), sweepRef(3), sweepRef(2), sweepRef(5), sweepRef(1)}; !slices.Equal(tracked, want) {
 		t.Fatalf("order = %v, want %v", tracked, want)
 	}

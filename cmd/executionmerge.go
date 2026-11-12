@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -105,7 +106,7 @@ func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, u
 			}
 		}
 	}
-	pull, err := ReadLoopPull(ctx, fmt.Sprintf("%s#%d", use.Repository, use.PR))
+	pull, err := loop.ReadLoopPull(ctx, fmt.Sprintf("%s#%d", use.Repository, use.PR))
 	if err != nil {
 		return err
 	}
@@ -282,7 +283,7 @@ func (a *app) reconcileExecutionMerge(ctx context.Context, use execution.MergeUs
 	if grant.ID != use.ID || grant.Ref != use.Ref || grant.Repository != use.Repository || grant.PR != use.PR || grant.Head != use.Head || !grant.Consumed {
 		return result, refused("merge reconciliation tuple mismatch")
 	}
-	pull, err := ReadLoopPull(ctx, fmt.Sprintf("%s#%d", grant.Repository, grant.PR))
+	pull, err := loop.ReadLoopPull(ctx, fmt.Sprintf("%s#%d", grant.Repository, grant.PR))
 	if err != nil {
 		return result, err
 	}

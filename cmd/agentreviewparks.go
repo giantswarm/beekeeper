@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -11,12 +12,12 @@ import (
 // on another PR. Agent.Park remains its current wait; ReviewParks is per PR.
 func recordAgentReviewPark(st *state.State, ag state.Agent) {
 	p := ag.Park
-	if p == nil || p.ReviewHead == "" || LoopParkOn(p) == "" {
+	if p == nil || p.ReviewHead == "" || loop.LoopParkOn(p) == "" {
 		return
 	}
-	rp := state.ReviewPark{On: LoopParkOn(p), At: p.At, ReviewHead: p.ReviewHead,
+	rp := state.ReviewPark{On: loop.LoopParkOn(p), At: p.At, ReviewHead: p.ReviewHead,
 		Agent: ag.Name, Party: ag.Party, Execution: ag.Execution, Model: ag.Model,
-		Serves: ReviewParkServes(st, ag, p.On), PostMerge: p.PostMerge, Worktree: p.Worktree}
+		Serves: loop.ReviewParkServes(st, ag, p.On), PostMerge: p.PostMerge, Worktree: p.Worktree}
 	if k := st.StartIndex(ag.Party); k >= 0 {
 		start := st.Starts[k]
 		rp.Model = cmp.Or(rp.Model, start.Model)

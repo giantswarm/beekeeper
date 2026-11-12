@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -130,7 +131,7 @@ func deliveryURL(ref string, pull bool) string {
 	}
 	kind := "issues"
 	if pull {
-		kind = LoopPullStep
+		kind = loop.LoopPullStep
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/%d", r.Repo, kind, r.N)
 }
@@ -249,7 +250,7 @@ func (a *app) deliveryDropCmd() *cobra.Command {
 		// Bind to the actual GitHub head, which may have moved since the last
 		// supervisor observation. A failed read cannot produce an unbound drop.
 		for _, ref := range observed.Pulls {
-			p, err := ReadLoopPull(c.Context(), ref)
+			p, err := loop.ReadLoopPull(c.Context(), ref)
 			if err != nil {
 				return err
 			}

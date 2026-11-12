@@ -4,13 +4,15 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 // boardAddRef is the issue the board add and show commands act on.
 const boardAddRef = "o/r#5"
 
 func TestBoardAddShowCommands(t *testing.T) {
-	for _, name := range []string{LoopAdd, noteShowName} {
+	for _, name := range []string{loop.LoopAdd, noteShowName} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := stubApp(t)
 			a.cfg.Board.Owner, a.cfg.Board.Project = "o", 7
@@ -38,7 +40,7 @@ func TestBoardAddShowCommands(t *testing.T) {
 			}
 			c := a.boardCmd()
 			args := []string{name, boardAddRef}
-			if name == LoopAdd {
+			if name == loop.LoopAdd {
 				args = append(args, "--kind", "bug")
 			}
 			c.SetArgs(args)
@@ -48,7 +50,7 @@ func TestBoardAddShowCommands(t *testing.T) {
 			if !strings.Contains(out.String(), "Status Backlog; Kind Bug") {
 				t.Fatalf("output: %s", out.String())
 			}
-			if name == noteShowName && writes != 0 || name == LoopAdd && writes != 2 {
+			if name == noteShowName && writes != 0 || name == loop.LoopAdd && writes != 2 {
 				t.Fatalf("writes: %d", writes)
 			}
 		})

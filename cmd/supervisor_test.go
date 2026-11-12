@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -32,8 +33,8 @@ func handOverState() *state.State {
 	return &state.State{
 		Guide: &state.Role{Holder: &state.Supervisor{Party: supA, Since: relayNow.Add(-8 * time.Hour)}},
 		Grants: []state.Grant{
-			{Resource: browser, To: four, By: LoopParty, At: relayNow.Add(-time.Minute)},
-			{Resource: browser, To: agentD, By: LoopParty, At: relayNow},
+			{Resource: browser, To: four, By: loop.LoopParty, At: relayNow.Add(-time.Minute)},
+			{Resource: browser, To: agentD, By: loop.LoopParty, At: relayNow},
 		},
 	}
 }
@@ -64,7 +65,7 @@ func TestRelayMovesTheRole(t *testing.T) {
 		t.Fatalf("guide is %q", st.Guide.Holder.Name)
 	}
 	for _, g := range st.Grants {
-		if g.By != LoopParty {
+		if g.By != loop.LoopParty {
 			t.Errorf("the guide's relay moved the grant of %s to %q", g.Resource, g.To.Name)
 		}
 	}
@@ -279,13 +280,13 @@ func TestSupervisorStatusReadsTheLoop(t *testing.T) {
 	if err := a.supervisorStatus(); err != nil || !strings.Contains(out.String(), "the supervisor loop does not run") {
 		t.Fatalf("no loop: %v", err)
 	}
-	if err := a.store.WriteFile(LoopPIDFile, os.Getpid()); err != nil {
+	if err := a.store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.supervisorStatus(); err != nil || !strings.Contains(out.String(), "the supervisor loop runs (PID ") {
 		t.Fatalf("a running loop: %v, %q", err, out)
 	}
-	if err := a.store.WriteFile(LoopPIDFile, 0); err != nil {
+	if err := a.store.WriteFile(loop.LoopPIDFile, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.supervisorStatus(); err != nil {
@@ -369,7 +370,7 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		t.Fatalf("the standby started %d supervisor sessions", successors)
 	}
 	// The loop runs again: one BACK line.
-	if err := w.store.WriteFile(LoopPIDFile, os.Getpid()); err != nil {
+	if err := w.store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
 	poll(4 * time.Minute)
@@ -378,7 +379,7 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		t.Fatalf("back:\n%s", out)
 	}
 	// A stop holds the loop: nothing restarts it.
-	if err := w.store.WriteFile(LoopPIDFile, 0); err != nil {
+	if err := w.store.WriteFile(loop.LoopPIDFile, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -416,12 +417,12 @@ const (
 // in --json.
 func TestSupervisorStatusPrintsLoopVersion(t *testing.T) {
 	a, out := supervisorApp(t)
-	oldVer := LoopRunningVersion
-	t.Cleanup(func() { LoopRunningVersion = oldVer })
-	LoopRunningVersion = func() string { return "0.175.0-rc.25" }
+	oldVer := loop.LoopRunningVersion
+	t.Cleanup(func() { loop.LoopRunningVersion = oldVer })
+	loop.LoopRunningVersion = func() string { return "0.175.0-rc.25" }
 
 	pid := os.Getpid()
-	if err := a.store.WriteFile(LoopPIDFile, pid); err != nil {
+	if err := a.store.WriteFile(loop.LoopPIDFile, pid); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.writeLoopVersion(); err != nil {

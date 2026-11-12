@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -63,7 +64,7 @@ func TestDeliveryReservationsReserveOnlyStartsTheLoopMakes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out.Reset()
-			l := &Loop{Host: a, Said: map[string]bool{}}
+			l := &loop.Loop{Host: a, Said: map[string]bool{}}
 			if got := l.DeliveryRoom(tc.room, &tc.st); got != tc.want {
 				t.Fatalf("room %d, want %d: %s", got, tc.want, out)
 			}
@@ -86,7 +87,7 @@ func TestDeliveryReservationsSayOncePerSet(t *testing.T) {
 		{Ref: reserveIssue, Step: state.DeliveryFixing, Since: now},
 		{Ref: reservePull, Step: state.DeliveryFixing, Since: now.Add(-2 * time.Hour)},
 	}}
-	l := &Loop{Host: a, Said: map[string]bool{}}
+	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	_ = l.DeliveryRoom(2, st)
 	_ = l.DeliveryRoom(2, st)
 	if strings.Count(out.String(), "NEXT RESERVES") != 1 || !strings.Contains(out.String(), "not reserved: 1 older than 1h") {

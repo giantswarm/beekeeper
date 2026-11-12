@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -23,9 +24,9 @@ func TestRefillCadenceWhileObservationIsBlocked(t *testing.T) {
 	l.IndependentFill = true
 	r.park(t, loopPR, r.a.timeNow())
 	entered, release := make(chan struct{}), make(chan struct{})
-	original := ReadLoopPull
+	original := loop.ReadLoopPull
 	var first sync.Once
-	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		first.Do(func() { close(entered); <-release })
 		return original(ctx, ref)
 	}
@@ -98,7 +99,7 @@ func TestRefillStallNamesActiveAction(t *testing.T) {
 	}
 	l.FillRan()
 	l.SetFillPhase("board next")
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	if err := l.CheckStall(); err != nil {
 		t.Fatal(err)
 	}
@@ -118,9 +119,9 @@ func TestRefillCadenceCancelsActiveTick(t *testing.T) {
 	}
 	l.BackgroundContext(t.Context())
 	defer l.CancelBackgroundActions()
-	original := BeekeeperRun
+	original := loop.BeekeeperRun
 	entered := make(chan struct{})
-	BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+	loop.BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
 		if strings.Contains(strings.Join(args, " "), "capacity --json") {
 			close(entered)
 			<-ctx.Done()
@@ -156,8 +157,8 @@ func TestRefillCadenceDoesNotOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.BeginInFlight(LoopFillStream)
-	defer l.EndInFlight(LoopFillStream)
+	l.BeginInFlight(loop.LoopFillStream)
+	defer l.EndInFlight(loop.LoopFillStream)
 	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		out, code := original(args)
 		if args[0] == agentsName && args[1] == agentStartName {
-			if err := r.a.store.Record(event(LoopParty, verbStart, "%s: started", args[2])); err != nil {
+			if err := r.a.store.Record(event(loop.LoopParty, verbStart, "%s: started", args[2])); err != nil {
 				t.Error(err)
 			}
 		}
@@ -183,7 +184,7 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.Lifecycle = &LoopLifecycle{Phase: "blocked observation", At: r.a.timeNow()}
+	l.Lifecycle = &loop.LoopLifecycle{Phase: "blocked observation", At: r.a.timeNow()}
 	before := *l.Lifecycle
 	for range 3 {
 		if err := l.RefillTick(t.Context()); err != nil {
@@ -199,7 +200,7 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 }
 
 func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
-	for _, condition := range []string{fatalBudgetCommand, secLoad, LoopDiskKind, kindStale} {
+	for _, condition := range []string{fatalBudgetCommand, secLoad, loop.LoopDiskKind, kindStale} {
 		t.Run(condition, func(t *testing.T) {
 			r, busy := fillRig(t)
 			l, err := r.a.newSupervisorLoop(false)
@@ -213,7 +214,7 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 				w.publishBudget(true)
 			case secLoad:
 				w.check(secLoad, true, "HIGH LOAD")
-			case LoopDiskKind:
+			case loop.LoopDiskKind:
 				w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 			case kindStale:
 				r.a.now = r.a.now.Add(time.Hour)
@@ -229,7 +230,7 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 				w.publishBudget(false)
 			case secLoad:
 				w.clear(secLoad)
-			case LoopDiskKind:
+			case loop.LoopDiskKind:
 				w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 			case kindStale:
 				e := event(watchParty, "watch.budget-state", "false")

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -22,13 +23,13 @@ const (
 
 // failingStartRig is the refill rig whose board always offers an item and
 // whose agents start fails while fail is set, counting the board reads.
-func failingStartRig(t *testing.T, doneN int) (*loopRig, *Loop, *int, *bool) {
+func failingStartRig(t *testing.T, doneN int) (*loopRig, *loop.Loop, *int, *bool) {
 	t.Helper()
 	r, _ := fillRig(t)
 	original := r.answer
 	reads, fail := 0, true
 	r.answer = func(args []string) (string, int) {
-		if args[0] == LoopBoard {
+		if args[0] == loop.LoopBoard {
 			reads++
 		}
 		if fail && args[0] == agentsName && args[1] == agentStartName {
@@ -75,39 +76,39 @@ func TestLoopNextBacklogStopsAtTheFirstUnsettledStart(t *testing.T) {
 }
 
 // Starts that do not move raise the alarm through the file channel after
-// loopStallAfter, repeat it, and say its end once a worker starts.
+// loop.LoopStallAfter, repeat it, and say its end once a worker starts.
 func TestLoopAlarmsWhenWorkerStartsStall(t *testing.T) {
 	r, l, _, fail := failingStartRig(t, 0)
 	stalls := func() []state.Event {
 		var out []state.Event
 		for _, e := range r.logged(t, "supervisor.file") {
-			if strings.Contains(e.Detail, LoopStallKey) {
+			if strings.Contains(e.Detail, loop.LoopStallKey) {
 				out = append(out, e)
 			}
 		}
 		return out
 	}
-	for range int(LoopStallAfter/(30*time.Second)) - 2 {
+	for range int(loop.LoopStallAfter/(30*time.Second)) - 2 {
 		r.loopPass(t, l)
 	}
 	if got := stalls(); len(got) != 0 {
-		t.Fatalf("alarm before %s: %+v", LoopStallAfter, got)
+		t.Fatalf("alarm before %s: %+v", loop.LoopStallAfter, got)
 	}
 	for range 4 {
 		r.loopPass(t, l)
 	}
 	got := stalls()
 	if len(got) != 1 {
-		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), LoopStallAfter, r.out)
+		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), loop.LoopStallAfter, r.out)
 	}
 	if d := got[0].Detail; !strings.Contains(d, "Worker starts are stalled") || !strings.Contains(d, "https://github.com/o/r/issues/10") || !strings.Contains(d, "start failed") {
 		t.Errorf("the alarm does not name the item and its cause: %s", d)
 	}
-	for range int(LoopStallAfter / (30 * time.Second)) {
+	for range int(loop.LoopStallAfter / (30 * time.Second)) {
 		r.loopPass(t, l)
 	}
 	if got := stalls(); len(got) != 1 {
-		t.Fatalf("%d alarms after 2×%s, want only the original alarm", len(got), LoopStallAfter)
+		t.Fatalf("%d alarms after 2×%s, want only the original alarm", len(got), loop.LoopStallAfter)
 	}
 	*fail = false
 	// The refill's pause after the failed reads ends within its backoff.
@@ -128,7 +129,7 @@ func TestLoopAlarmsWhenTheRefillDoesNotRun(t *testing.T) {
 	if err := l.CheckStall(); err != nil {
 		t.Fatal(err)
 	}
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	if err := l.CheckStall(); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func TestLoopAlarmsWhenTheRefillDoesNotRun(t *testing.T) {
 }
 
 // A review request whose start keeps waiting raises the alarm after
-// loopStallAfter, names the pull request, repeats, and says its end once
+// loop.LoopStallAfter, names the pull request, repeats, and says its end once
 // the request is no longer planned (https://github.com/giantswarm/beekeeper/issues/3388).
 func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
 	r := newLoopRig(t)
@@ -168,7 +169,7 @@ func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
 	stalls := func() []state.Event {
 		var out []state.Event
 		for _, e := range r.logged(t, "supervisor.file") {
-			if strings.Contains(e.Detail, LoopReviewStallKey) {
+			if strings.Contains(e.Detail, loop.LoopReviewStallKey) {
 				out = append(out, e)
 			}
 		}
@@ -185,25 +186,25 @@ func TestLoopAlarmsWhenReviewStartsWait(t *testing.T) {
 		}
 		r.a.now = r.a.now.Add(time.Minute)
 	}
-	for range int(LoopStallAfter / time.Minute) {
+	for range int(loop.LoopStallAfter / time.Minute) {
 		pass(acts)
 	}
 	if got := stalls(); len(got) != 0 {
-		t.Fatalf("alarm before %s: %+v", LoopStallAfter, got)
+		t.Fatalf("alarm before %s: %+v", loop.LoopStallAfter, got)
 	}
 	pass(acts)
 	got := stalls()
 	if len(got) != 1 {
-		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), LoopStallAfter, r.out)
+		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), loop.LoopStallAfter, r.out)
 	}
 	if d := got[0].Detail; !strings.Contains(d, "Reviews are stalled") || !strings.Contains(d, loopURL) || !strings.Contains(d, "its start waits") {
 		t.Errorf("the alarm does not name the pull request and its cause: %s", d)
 	}
-	for range int(LoopStallAfter / time.Minute) {
+	for range int(loop.LoopStallAfter / time.Minute) {
 		pass(acts)
 	}
 	if got := stalls(); len(got) != 1 {
-		t.Fatalf("%d alarms after 2×%s, want only the original alarm", len(got), LoopStallAfter)
+		t.Fatalf("%d alarms after 2×%s, want only the original alarm", len(got), loop.LoopStallAfter)
 	}
 	pass(nil)
 	if !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED: no review request waits") {
@@ -224,7 +225,7 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 			}
 			act := superloop.Action{Kind: kind, Key: kind + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: stallURL, Head: stallHead}
 			in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
-			failures := map[string]LoopFailure{act.Key: {Message: "specific command failure"}}
+			failures := map[string]loop.LoopFailure{act.Key: {Message: "specific command failure"}}
 			check := func(input superloop.Input, actions []superloop.Action) {
 				t.Helper()
 				if err := l.CheckFlowWaits(input, actions, failures); err != nil {
@@ -232,7 +233,7 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 				}
 			}
 			check(in, []superloop.Action{act})
-			r.a.now = r.a.now.Add(LoopStallAfter - time.Second)
+			r.a.now = r.a.now.Add(loop.LoopStallAfter - time.Second)
 			check(in, []superloop.Action{act})
 			if got := r.logged(t, "supervisor.file"); len(got) != 0 {
 				t.Fatalf("early alarm: %+v", got)
@@ -246,7 +247,7 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 				t.Fatalf("want one alarm with URL and observed cause: %+v", got)
 			}
 			check(superloop.Input{}, nil)
-			r.a.now = r.a.now.Add(LoopStallAfter)
+			r.a.now = r.a.now.Add(loop.LoopStallAfter)
 			check(in, []superloop.Action{act})
 			if got := r.logged(t, "supervisor.file"); len(got) != 1 {
 				t.Fatalf("unread observation must retain the original alarm: %+v", got)
@@ -279,7 +280,7 @@ func TestLoopSettlesOvertakenMergeDecisionsBeforeAlarm(t *testing.T) {
 			if err := l.CheckFlowWaits(in, []superloop.Action{act}, nil); err != nil {
 				t.Fatal(err)
 			}
-			r.a.now = r.a.now.Add(LoopStallAfter)
+			r.a.now = r.a.now.Add(loop.LoopStallAfter)
 			in.Pulls[epicTen] = tc.pull
 			// A stale action from an earlier observation must not keep the
 			// episode alive or file an alarm at the deadline.
@@ -307,7 +308,7 @@ func stallAlarms(t *testing.T, r *loopRig) []string {
 
 // The alarm names what holds a pending merge decision, and names it again
 // when the hold changes: once per pending head and class of hold, no sooner
-// than loopStallAfter after the head's last alarm
+// than loop.LoopStallAfter after the head's last alarm
 // (https://github.com/giantswarm/beekeeper/issues/3820).
 func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
 	r, _ := fillRig(t)
@@ -320,7 +321,7 @@ func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
 	act := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: stallURL, Head: stallHead}
 	other := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + planningPull + "@" + stallHead, Ref: planningPull, URL: otherURL, Head: stallHead}
 	in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
-	failures := map[string]LoopFailure{}
+	failures := map[string]loop.LoopFailure{}
 	check := func(input superloop.Input, actions ...superloop.Action) {
 		t.Helper()
 		if err := l.CheckFlowWaits(input, actions, failures); err != nil {
@@ -340,13 +341,13 @@ func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
 		}
 	}
 	check(in, act)
-	l.MergeWaited(act, MergeHeld(WaitHold, "%s", stallHold))
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	l.MergeWaited(act, loop.MergeHeld(loop.WaitHold, "%s", stallHold))
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	check(in, act)
 	want(1, act.URL, act.Head, stallHold)
 
 	// Its command starts: a changed hold is named, but not before
-	// loopStallAfter passed since the head's last alarm.
+	// loop.LoopStallAfter passed since the head's last alarm.
 	if !l.BeginInFlight(act.Key) {
 		t.Fatal("the decision was in flight already")
 	}
@@ -354,31 +355,31 @@ func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
 	r.a.now = r.a.now.Add(time.Minute)
 	check(in, act)
 	want(1)
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	check(in, act)
 	want(2, "its merge command has been in flight since")
 
 	// Another pull request's command runs ahead of it in its lane's stream.
 	l.MergeStarted([]superloop.Action{other, act}, 0)
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	check(in, act)
 	want(3, "behind "+otherURL)
 	l.MergeStreamEnded([]superloop.Action{other, act})
 	l.EndInFlight(act.Key)
 
 	// The first hold again: its class was named for this head.
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	check(in, act)
 	want(3)
 
 	// No observation of the pull request: nothing plans the decision.
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	check(superloop.Input{})
 	want(4, "no current observation of "+act.Ref)
 
 	// A failure newer than the wait is the cause.
-	failures[act.Key] = LoopFailure{Message: laneClosed, At: r.a.now}
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	failures[act.Key] = loop.LoopFailure{Message: laneClosed, At: r.a.now}
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	check(in, act)
 	want(5, "its last run failed: "+laneClosed)
 
@@ -415,7 +416,7 @@ func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := superloop.Input{Pulls: map[string]superloop.Pull{loopPR: r.pull}}
-	failures := map[string]LoopFailure{}
+	failures := map[string]loop.LoopFailure{}
 	pass := func() {
 		t.Helper()
 		if err := l.CheckFlowWaits(in, []superloop.Action{act}, failures); err != nil {
@@ -427,16 +428,16 @@ func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 	}
 	pass()
 	if got := stallAlarms(t, r); len(got) != 0 {
-		t.Fatalf("alarm before %s: %v", LoopStallAfter, got)
+		t.Fatalf("alarm before %s: %v", loop.LoopStallAfter, got)
 	}
-	if len(r.logged(t, "supervisor.merge")) != 0 || len(r.logged(t, LoopFailureVerb)) != 0 {
+	if len(r.logged(t, "supervisor.merge")) != 0 || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
 		t.Fatalf("a repair waiting for its worker completed or failed the decision:\n%s", r.out)
 	}
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	pass()
 	got := stallAlarms(t, r)
 	if len(got) != 1 {
-		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), LoopStallAfter, r.out)
+		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), loop.LoopStallAfter, r.out)
 	}
 	for _, name := range []string{loopURL, loopHead, "merge result (main + ", "the branch repair it requested waits for a worker", "no choice has room"} {
 		if !strings.Contains(got[0], name) {
@@ -446,7 +447,7 @@ func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 	if strings.Contains(got[0], "no successful completion recorded") {
 		t.Errorf("the alarm names no hold: %s", got[0])
 	}
-	r.a.now = r.a.now.Add(LoopStallAfter)
+	r.a.now = r.a.now.Add(loop.LoopStallAfter)
 	pass()
 	if got := stallAlarms(t, r); len(got) != 1 {
 		t.Fatalf("the same hold was alarmed again: %v", got)
@@ -481,7 +482,7 @@ func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 
 // A restart keeps the wait: its clock, the holds already named and the hold
 // its last run read. A new release must not silence a pending decision for
-// another loopStallAfter, nor repeat its alarm.
+// another loop.LoopStallAfter, nor repeat its alarm.
 func TestLoopKeepsMergeDecisionWaitsAcrossARestart(t *testing.T) {
 	r, _ := fillRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -494,8 +495,8 @@ func TestLoopKeepsMergeDecisionWaitsAcrossARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	since := l.FlowWaits[act.Key].Since
-	l.MergeWaited(act, MergeHeld(WaitHold, "%s", stallHold))
-	r.a.now = r.a.now.Add(LoopStallAfter - time.Minute)
+	l.MergeWaited(act, loop.MergeHeld(loop.WaitHold, "%s", stallHold))
+	r.a.now = r.a.now.Add(loop.LoopStallAfter - time.Minute)
 	l.SaveCache()
 
 	restarted, err := r.a.newSupervisorLoop(false)
@@ -520,7 +521,7 @@ func TestLoopKeepsMergeDecisionWaitsAcrossARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	again.LoadCache()
-	r.a.now = r.a.now.Add(2 * LoopStallAfter)
+	r.a.now = r.a.now.Add(2 * loop.LoopStallAfter)
 	if err := again.CheckFlowWaits(in, []superloop.Action{act}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -542,21 +543,21 @@ func TestLoopClaimedMergeWithAnUnreadPullWaitsNamed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ReadObservedLoopPull = func(*Loop, context.Context, string, time.Time, string) (LoopPullObservation, error) {
-		return LoopPullObservation{}, fmt.Errorf("%s observation is 19m43s old (limit 5m0s): %w", loopPR, ErrLoopLater)
+	loop.ReadObservedLoopPull = func(*loop.Loop, context.Context, string, time.Time, string) (loop.LoopPullObservation, error) {
+		return loop.LoopPullObservation{}, fmt.Errorf("%s observation is 19m43s old (limit 5m0s): %w", loopPR, loop.ErrLoopLater)
 	}
 	act := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + loopPR + "@" + loopHead, Ref: loopPR, URL: loopURL, Head: loopHead, Agent: loopWorker}
-	claims := map[string]LoopClaim{act.Key: {At: r.a.now, Target: loopWorker}}
-	if err := l.ExecAction(t.Context(), st, claims, map[string]LoopFailure{}, act); err != nil {
+	claims := map[string]loop.LoopClaim{act.Key: {At: r.a.now, Target: loopWorker}}
+	if err := l.ExecAction(t.Context(), st, claims, map[string]loop.LoopFailure{}, act); err != nil {
 		t.Fatalf("an unread pull request failed the pass: %v", err)
 	}
 	l.Mu.Lock()
 	note := l.MergeNotes[act.Key]
 	l.Mu.Unlock()
-	if note.Class != WaitUnread || !strings.Contains(note.Cause, "observation is 19m43s old") {
+	if note.Class != loop.WaitUnread || !strings.Contains(note.Cause, "observation is 19m43s old") {
 		t.Fatalf("the wait is not named: %+v", note)
 	}
-	if r.called(gateCmdName) != nil || len(r.logged(t, LoopFailureVerb)) != 0 {
+	if r.called(gateCmdName) != nil || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
 		t.Fatalf("an unread claim ran the gate or recorded a failure: %v\n%s", r.calls, r.out)
 	}
 }

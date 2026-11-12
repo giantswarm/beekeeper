@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -365,7 +366,7 @@ func TestTimerProbeWaitRejected(t *testing.T) {
 
 func TestTimerProbeHelpDocumentsBudget(t *testing.T) {
 	c := (&app{}).timerCmd()
-	add, _, err := c.Find([]string{LoopAdd})
+	add, _, err := c.Find([]string{loop.LoopAdd})
 	if err != nil {
 		t.Fatal(err)
 	}

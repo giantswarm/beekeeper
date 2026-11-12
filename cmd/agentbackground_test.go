@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -580,7 +581,7 @@ func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
 	remove := func(name string) {
 		t.Helper()
 		c := a.agentsCmd()
-		c.SetArgs([]string{LoopRemove, name})
+		c.SetArgs([]string{loop.LoopRemove, name})
 		c.SetContext(t.Context())
 		if err := c.Execute(); err != nil {
 			t.Fatal(err)

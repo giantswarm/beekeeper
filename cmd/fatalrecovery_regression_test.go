@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 func TestFatalHarnessHealthPrecedesSlowOptionalProbes(t *testing.T) {
@@ -24,9 +25,9 @@ func TestFatalHarnessHealthPrecedesSlowOptionalProbes(t *testing.T) {
 	if err := os.WriteFile(source, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	oldTimeout, oldRun, oldStart := fatalObservationTimeout, fatalRun, BeekeeperRun
+	oldTimeout, oldRun, oldStart := fatalObservationTimeout, fatalRun, loop.BeekeeperRun
 	fatalObservationTimeout = 20 * time.Millisecond
-	defer func() { fatalObservationTimeout, fatalRun, BeekeeperRun = oldTimeout, oldRun, oldStart }()
+	defer func() { fatalObservationTimeout, fatalRun, loop.BeekeeperRun = oldTimeout, oldRun, oldStart }()
 	verified := false
 	fatalRun = func(ctx context.Context, _ string, args []string) (string, string, int, error) {
 		if slices.Contains(args, "is-enabled") {
@@ -48,7 +49,7 @@ func TestFatalHarnessHealthPrecedesSlowOptionalProbes(t *testing.T) {
 		return "", "", 0, nil
 	}
 	starts := 0
-	BeekeeperRun = func(context.Context, ...string) (string, int, error) {
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) {
 		starts++
 		if !verified {
 			t.Error("repair launched without completing harness health probe")
@@ -108,10 +109,10 @@ func testMissingEnvConfiguration(t *testing.T, defaultState bool) {
 		}
 		return "", 0
 	})
-	old := BeekeeperRun
-	defer func() { BeekeeperRun = old }()
+	old := loop.BeekeeperRun
+	defer func() { loop.BeekeeperRun = old }()
 	starts := 0
-	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		starts++
 		brief, err := readStateFixture(dir, filepath.Join(dir, fatalRepairBriefFile))
 		if err != nil {
@@ -181,9 +182,9 @@ func testFatalConfiguredHarnessAdmission(t *testing.T, unknown bool, healthyAlte
 	if err := q.Save(dir); err != nil {
 		t.Fatal(err)
 	}
-	oldTimeout, oldRun, oldStart := fatalObservationTimeout, fatalRun, BeekeeperRun
+	oldTimeout, oldRun, oldStart := fatalObservationTimeout, fatalRun, loop.BeekeeperRun
 	fatalObservationTimeout = 20 * time.Millisecond
-	defer func() { fatalObservationTimeout, fatalRun, BeekeeperRun = oldTimeout, oldRun, oldStart }()
+	defer func() { fatalObservationTimeout, fatalRun, loop.BeekeeperRun = oldTimeout, oldRun, oldStart }()
 	fatalRun = func(ctx context.Context, _ string, args []string) (string, string, int, error) {
 		if slices.Contains(args, "is-enabled") {
 			return fatalDisabledState, "", 1, nil
@@ -198,7 +199,7 @@ func testFatalConfiguredHarnessAdmission(t *testing.T, unknown bool, healthyAlte
 		return "", "", -1, ctx.Err()
 	}
 	starts := 0
-	BeekeeperRun = func(context.Context, ...string) (string, int, error) { starts++; return "", 1, nil }
+	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) { starts++; return "", 1, nil }
 	if err := a.fatalScan(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}

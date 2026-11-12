@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -60,10 +61,10 @@ func graphQLAccounts(b github.Budget) map[string]loopGraphQLAccount {
 
 func (s loopGraphQLSpend) floorHeld(now time.Time, floor int) bool {
 	if len(s.Accounts) == 0 {
-		return now.Before(s.Reset) && s.Remaining < floor+LoopGraphQLReserve
+		return now.Before(s.Reset) && s.Remaining < floor+loop.LoopGraphQLReserve
 	}
 	for _, account := range s.Accounts {
-		if now.Before(account.Reset) && account.Remaining < floor+LoopGraphQLReserve {
+		if now.Before(account.Reset) && account.Remaining < floor+loop.LoopGraphQLReserve {
 			return true
 		}
 	}
@@ -93,7 +94,7 @@ func (a *app) loopGraphQLCap() int {
 // overAllowance reports whether the spend leaves the board no room under
 // limit.
 func (s loopGraphQLSpend) overAllowance(limit int) bool {
-	return s.Spent+LoopGraphQLReserve > limit-loopGraphQLProbeReserve
+	return s.Spent+loop.LoopGraphQLReserve > limit-loopGraphQLProbeReserve
 }
 
 // heldLine says what the loop holds on s, "" when nothing: what whoever
@@ -113,19 +114,19 @@ func (a *app) heldLine(s loopGraphQLSpend) string {
 		return fmt.Sprintf("loop GitHub held: GraphQL under github.floor %d, no loop read until it recovers", a.cfg.GitHub.Floor)
 	case restErr == nil && now.Before(rest.Reset) && rest.held(a.cfg.GitHub.Floor):
 		return fmt.Sprintf("loop background scans held: REST %d of %d spent until %s; pull reads, reviews and merges go on", rest.Spent, rest.allowance(a.cfg.GitHub.Floor), clock(a.now, rest.Reset))
-	case s.boardHeld(st.Budget, LoopBoard, a.cfg.GitHub.Floor, now, a.loopGraphQLCap()):
+	case s.boardHeld(st.Budget, loop.LoopBoard, a.cfg.GitHub.Floor, now, a.loopGraphQLCap()):
 		return fmt.Sprintf("loop GitHub held: board reads wait until %s (%d of %d spent, supervisor.graphQLLimit); pull reads, reviews and merges go on", clock(a.now, s.Reset), s.Spent, a.loopGraphQLCap())
 	}
 	return ""
 }
 
 func (s loopGraphQLSpend) boardHeld(st *state.Budget, step string, floor int, now time.Time, limit int) bool {
-	if step != LoopBoard || !now.Before(s.Reset) || !s.overAllowance(limit) {
+	if step != loop.LoopBoard || !now.Before(s.Reset) || !s.overAllowance(limit) {
 		return false
 	}
 	if st != nil && st.GraphQL != nil {
 		g := st.GraphQL
-		if st.Remaining > floor && g.Remaining >= floor+LoopGraphQLReserve &&
+		if st.Remaining > floor && g.Remaining >= floor+loop.LoopGraphQLReserve &&
 			(s.floorHeld(now, floor) || g.Limit > 0 && g.Limit-g.Remaining < s.Spent || g.Remaining > s.Remaining || (!g.Reset.IsZero() && !sameGraphQLWindow(s.Reset, g.Reset))) {
 			return false
 		}
@@ -146,7 +147,7 @@ var readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, er
 // renewing a blind hourly hold.
 func (a *app) loopGitHub(ctx context.Context, step string, run func() error) error {
 	if a.cfg.GitHub.Floor <= 0 {
-		if step == "inventory" || step == LoopSweepStep {
+		if step == "inventory" || step == loop.LoopSweepStep {
 			return a.loopScanREST(ctx, step, run)
 		}
 		return run()
@@ -155,8 +156,8 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if err != nil {
 		return err
 	}
-	if st.Budget == nil || st.Budget.GraphQL == nil || BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
-		return fmt.Errorf("loop GitHub budget unknown or low: %w", ErrLoopLater)
+	if st.Budget == nil || st.Budget.GraphQL == nil || loop.BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		return fmt.Errorf("loop GitHub budget unknown or low: %w", loop.ErrLoopLater)
 	}
 	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
 	held, err := lock.TryLockContext(ctx, 100*time.Millisecond)
@@ -164,7 +165,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		return err
 	}
 	if !held {
-		return ErrLoopLater
+		return loop.ErrLoopLater
 	}
 	defer func() { _ = lock.Unlock() }()
 	var spend loopGraphQLSpend
@@ -173,9 +174,9 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	limit := a.loopGraphQLCap()
 	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.timeNow(), limit) {
-		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, ErrLoopLater)
+		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, loop.ErrLoopLater)
 	}
-	scan := step == "inventory" || step == LoopSweepStep
+	scan := step == "inventory" || step == loop.LoopSweepStep
 	if scan {
 		if err := a.loopRESTHeld(a.timeNow()); err != nil {
 			return err
@@ -184,14 +185,14 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
-		return fmt.Errorf("loop GitHub budget unavailable: %w", ErrLoopLater)
+		return fmt.Errorf("loop GitHub budget unavailable: %w", loop.ErrLoopLater)
 	}
 	g := b.GraphQL
 	reset := g.Reset
 	if reset.IsZero() || !a.timeNow().Before(reset) {
 		reset = a.timeNow().Add(time.Hour)
 	}
-	liveHealthy := b.Remaining > a.cfg.GitHub.Floor && g.Remaining >= a.cfg.GitHub.Floor+LoopGraphQLReserve
+	liveHealthy := b.Remaining > a.cfg.GitHub.Floor && g.Remaining >= a.cfg.GitHub.Floor+loop.LoopGraphQLReserve
 	wasHeld := spend.overAllowance(limit) || spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor)
 	releaseHold := liveHealthy && wasHeld && (spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor) ||
 		(!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) ||
@@ -203,12 +204,12 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	accounts := graphQLAccounts(b)
 	spend.Remaining = g.Remaining
 	spend.Accounts = accounts
-	if !liveHealthy || (step == LoopBoard && spend.overAllowance(limit)) {
+	if !liveHealthy || (step == loop.LoopBoard && spend.overAllowance(limit)) {
 		spend.HeldAt = a.timeNow()
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
 		}
-		return fmt.Errorf("loop GitHub held: %d points spent, %d remaining (floor %d): %w", spend.Spent, g.Remaining, a.cfg.GitHub.Floor, ErrLoopLater)
+		return fmt.Errorf("loop GitHub held: %d points spent, %d remaining (floor %d): %w", spend.Spent, g.Remaining, a.cfg.GitHub.Floor, loop.ErrLoopLater)
 	}
 	var restSpend loopRESTSpend
 	if scan {
@@ -218,15 +219,15 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		}
 	}
 	spend.HeldAt = time.Time{}
-	spend.Spent += LoopGraphQLReserve
-	spend.Steps[step] += LoopGraphQLReserve
+	spend.Spent += loop.LoopGraphQLReserve
+	spend.Steps[step] += loop.LoopGraphQLReserve
 	if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 		return err
 	}
 	runErr := run()
 	after, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
-		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", ErrLoopLater)
+		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", loop.ErrLoopLater)
 	}
 	if scan {
 		if err := a.settleLoopREST(b, after, restSpend, step); err != nil {
@@ -261,8 +262,8 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 			Accounts:  afterAccounts,
 		}
 	} else {
-		spend.Spent += cost - LoopGraphQLReserve
-		spend.Steps[step] += cost - LoopGraphQLReserve
+		spend.Spent += cost - loop.LoopGraphQLReserve
+		spend.Steps[step] += cost - loop.LoopGraphQLReserve
 		spend.Remaining = after.GraphQL.Remaining
 		spend.Accounts = afterAccounts
 	}

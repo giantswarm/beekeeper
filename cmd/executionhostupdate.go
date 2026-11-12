@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -30,7 +31,7 @@ import (
 var (
 	coordinatorVersion = project.Version
 	coordinatorJournal = func() (*update.Journal, error) {
-		exe, err := ExecutablePath()
+		exe, err := loop.ExecutablePath()
 		if err != nil {
 			return nil, err
 		}
@@ -561,7 +562,7 @@ func (a *app) admitExecution(selector string, h execution.Host) error {
 	if pin != nil && pin.Identity != h.Identity {
 		pin = nil
 	}
-	if pin != nil && HostHoldBlocks(*pin) {
+	if pin != nil && loop.HostHoldBlocks(*pin) {
 		return refused("execution host %s is held since %s, it takes no start: %s (beekeeper agents hosts update %s lifts it)", selector, pin.HeldAt.Format(time.RFC3339), pin.Held, selector)
 	}
 	return nil

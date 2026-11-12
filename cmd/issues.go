@@ -20,6 +20,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/issuemonitor"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 // issuesQueueName is the subcommand listing queued issue pointers.
@@ -160,12 +161,12 @@ func postIssueTriage(ctx context.Context, webhook, message string) error {
 
 // nextMonitoredIssue rechecks both open state and live membership at dispatch.
 // It returns only a pointer, so no external issue text enters the worker brief.
-func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoardItem, error) {
+func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*loop.LoopBoardItem, error) {
 	// Avoid creating monitor state for installations that have not enabled it.
 	if _, err := os.Stat(a.issueMonitorDir()); errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	var next *LoopBoardItem
+	var next *loop.LoopBoardItem
 	err := issuemonitor.WithState(ctx, a.issueMonitorDir(), func(s *issuemonitor.State, save func(*issuemonitor.State) error) error {
 		for index := 0; index < len(s.Queue); {
 			p := s.Queue[index]
@@ -192,7 +193,7 @@ func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoar
 				}
 				continue
 			}
-			next = &LoopBoardItem{Ref: p.Ref, URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)}
+			next = &loop.LoopBoardItem{Ref: p.Ref, URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)}
 			break
 		}
 		return nil

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/transcripts"
 )
@@ -254,7 +255,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 
 	// Worker cannot grant access to itself.
 	cmd := a.transcriptsCmd()
-	cmd.SetArgs([]string{transcriptTestGrantCommand, transcriptTestWorker, LoopRepoFlag, devctlRepo})
+	cmd.SetArgs([]string{transcriptTestGrantCommand, transcriptTestWorker, loop.LoopRepoFlag, devctlRepo})
 	if err := cmd.Execute(); Code(err) != ExitRefused {
 		t.Fatalf("worker self-grant: got %v, want ExitRefused", err)
 	}
@@ -262,7 +263,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	// Worker requests access to giantswarm/devctl.
 	out.Reset()
 	cmd = a.transcriptsCmd()
-	cmd.SetArgs([]string{"request", LoopRepoFlag, devctlRepo, "--reason", "check release promote flag"})
+	cmd.SetArgs([]string{"request", loop.LoopRepoFlag, devctlRepo, "--reason", "check release promote flag"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("worker request: %v", err)
 	}

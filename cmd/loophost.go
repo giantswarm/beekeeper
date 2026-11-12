@@ -14,20 +14,21 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // asApp is the app behind a loop's host; nil for none.
-func asApp(h Host) *app {
+func asApp(h loop.Host) *app {
 	a, _ := h.(*app)
 	return a
 }
 
 // The loop calls the command through Cmd and reaches the app as its Host.
 func init() {
-	Cmd = Command{
+	loop.Cmd = loop.Command{
 		About:                about,
 		AgentHarnessModel:    agentHarnessModel,
 		AgyAgentStartID:      agyAgentStartID,
@@ -60,7 +61,7 @@ func init() {
 		Event:                      event,
 		ExecutionRecord:            executionRecord,
 		FreshPark:                  freshPark,
-		FreshSessions:              func(p0 Host) ([]*claude.Session, *proc.Table, error) { return freshSessions(asApp(p0)) },
+		FreshSessions:              func(p0 loop.Host) ([]*claude.Session, *proc.Table, error) { return freshSessions(asApp(p0)) },
 		HeldBy:                     heldBy,
 		HostExecutions:             hostExecutions,
 		IncidentExempt:             incidentExempt,
@@ -74,15 +75,15 @@ func init() {
 		LoopFill:                   loopFill,
 		LoopFinishContinuation:     loopFinishContinuation,
 		LoopFireTimers:             loopFireTimers,
-		LoopInTurn:                 func(a Host, p state.Party) bool { return loopInTurn(asApp(a), p) },
+		LoopInTurn:                 func(a loop.Host, p state.Party) bool { return loopInTurn(asApp(a), p) },
 		LoopPreviewFill:            loopPreviewFill,
 		LoopRecoverUnfinishedTurns: loopRecoverUnfinishedTurns,
-		LoopResumable:              func(a Host, st *state.State, ag state.Agent) bool { return loopResumable(asApp(a), st, ag) },
-		LoopResumePark: func(a Host, ctx context.Context, by state.Party, q string) error {
+		LoopResumable:              func(a loop.Host, st *state.State, ag state.Agent) bool { return loopResumable(asApp(a), st, ag) },
+		LoopResumePark: func(a loop.Host, ctx context.Context, by state.Party, q string) error {
 			return loopResumePark(asApp(a), ctx, by, q)
 		},
 		LoopRoster:                loopRoster,
-		LoopSessions:              func(a Host) ([]*claude.Session, *proc.Table, error) { return loopSessions(asApp(a)) },
+		LoopSessions:              func(a loop.Host) ([]*claude.Session, *proc.Table, error) { return loopSessions(asApp(a)) },
 		LoopSettleOverrides:       loopSettleOverrides,
 		LowBudget:                 lowBudget,
 		NamedRefs:                 namedRefs,
@@ -103,10 +104,10 @@ func init() {
 			}
 			return readDeliveryWIP(st, limit, interval, now, own...)
 		},
-		ReadIntakeAnchor: func(ctx context.Context, a Host, ref string, from string) (string, error) {
+		ReadIntakeAnchor: func(ctx context.Context, a loop.Host, ref string, from string) (string, error) {
 			return readIntakeAnchor(ctx, asApp(a), ref, from)
 		},
-		ReadLoopAlerts:        func(p0 context.Context, a Host) ([]alerts.Firing, error) { return readLoopAlerts(p0, asApp(a)) },
+		ReadLoopAlerts:        func(p0 context.Context, a loop.Host) ([]alerts.Firing, error) { return readLoopAlerts(p0, asApp(a)) },
 		ReadRepoOpenPulls:     func(ctx context.Context, repo string) ([]unmergedPull, error) { return readRepoOpenPulls(ctx, repo) },
 		RecentUnmergedPulls:   recentUnmergedPulls,
 		RecordAgentReviewPark: recordAgentReviewPark,
@@ -115,7 +116,7 @@ func init() {
 			return refStates(ctx, refs)
 		},
 		RefURL:                func() *regexp.Regexp { return refURL },
-		RefreshLoopBudget:     func(a Host, ctx context.Context) error { return refreshLoopBudget(asApp(a), ctx) },
+		RefreshLoopBudget:     func(a loop.Host, ctx context.Context) error { return refreshLoopBudget(asApp(a), ctx) },
 		Refused:               refused,
 		ReleaseVersion:        releaseVersion,
 		RemoveAgent:           removeAgent,
@@ -214,7 +215,7 @@ func (a *app) MonitoredIssueStarted(ctx context.Context, ref string) error {
 	return a.monitoredIssueStarted(ctx, ref)
 }
 
-func (a *app) NextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoardItem, error) {
+func (a *app) NextMonitoredIssue(ctx context.Context, skip ...string) (*loop.LoopBoardItem, error) {
 	return a.nextMonitoredIssue(ctx, skip...)
 }
 
@@ -262,7 +263,7 @@ func (a *app) SetNow(v time.Time) { a.now = v }
 
 func (a *app) SetOut(v io.Writer) { a.out = v }
 
-func (a *app) SnapshotAtNow() Host { return a.snapshotAtNow() }
+func (a *app) SnapshotAtNow() loop.Host { return a.snapshotAtNow() }
 
 func (a *app) StartLoopWatch(ctx context.Context) func() { return a.startLoopWatch(ctx) }
 

@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -19,7 +20,7 @@ func (a *app) hostPlacementViews(st *state.State) []hostPlacementView {
 		}
 		if pin := st.HostPin(selector); pin != nil && pin.Identity == a.cfg.Agents.Hosts[selector].Identity {
 			v.Update = pin.UpdateError
-			if HostHoldBlocks(*pin) {
+			if loop.HostHoldBlocks(*pin) {
 				v.Reason = "held: " + pin.Held
 			} else if pin.Held != "" {
 				v.Update = pin.Held

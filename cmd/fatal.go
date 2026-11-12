@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/install"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -42,7 +43,7 @@ const (
 	fatalRepairBriefFile   = "fatal-repair-brief.txt"
 )
 
-var fatalRun = RunArgv
+var fatalRun = loop.RunArgv
 
 // Observation cannot spend the time reserved for admission and recovery.
 var fatalObservationTimeout = time.Minute
@@ -387,7 +388,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if len(deadOwners) > 0 {
 		if err := store.Update(func(current *state.State) ([]state.Event, error) {
 			if a.noStart(current) != "" {
-				return nil, ErrLoopLater
+				return nil, loop.ErrLoopLater
 			}
 			var events []state.Event
 			for _, dead := range deadOwners {
@@ -400,7 +401,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 						continue
 					}
 					if !ag.Is(dead.Party) || !ag.ActivityAt.Equal(dead.ActivityAt) || !ag.AssignedAt.Equal(dead.AssignedAt) || ag.Park != nil || ag.Import.Pending(now) || ag.Execution != nil {
-						return nil, ErrLoopLater
+						return nil, loop.ErrLoopLater
 					}
 					ag.LastTask, ag.Task, ag.Done, ag.IdleSince = ag.Task, "", true, now
 					events = append(events, state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.owner-ended", Detail: dead.Name + ": repair process ended before verified recovery"})
@@ -497,7 +498,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	args := []string{workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, agentsName, agentStartName, fatalNameOption, x.Owner}
 	checkout := cfg.Fatal.Checkouts[repo]
 	if checkout == "" {
-		checkout = filepath.Join(cfg.Projects.Dir, RepoName(repo))
+		checkout = filepath.Join(cfg.Projects.Dir, loop.RepoName(repo))
 	}
 	args = append(args, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
 	if len(cfg.Capacity.Choices) > 0 {
@@ -509,7 +510,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	args = append(args, briefPath)
 	launchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	_, code, runErr := BeekeeperRun(launchCtx, args...)
+	_, code, runErr := loop.BeekeeperRun(launchCtx, args...)
 	x.Outcome = fmt.Sprintf("repair start exited %d; awaiting probe verification", code)
 	if runErr == nil && (code == ExitRefused || code == 75) {
 		// Admission refusals created no worker and consume no repair attempt.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -298,7 +299,7 @@ func TestSelfUpdateCanaryWithStoppedSupervisor(t *testing.T) {
 				err := a.supervisorStatus(ctx)
 				return out.String(), err
 			}
-			if slices.Equal(args, []string{LoopCapacity}) {
+			if slices.Equal(args, []string{loop.LoopCapacity}) {
 				capacityRan = true
 			}
 			return "ok", nil
@@ -314,7 +315,7 @@ func TestSelfUpdateCanaryWithStoppedSupervisor(t *testing.T) {
 			t.Fatalf("status output = %q, want %q", out.String(), want)
 		}
 	}
-	if err := a.store.WriteFile(LoopPIDFile, "invalid PID"); err != nil {
+	if err := a.store.WriteFile(loop.LoopPIDFile, "invalid PID"); err != nil {
 		t.Fatal(err)
 	}
 	if why := canaryFailure(context.Background(), "", "candidate"); !strings.Contains(why, "canary supervisor status failed") {

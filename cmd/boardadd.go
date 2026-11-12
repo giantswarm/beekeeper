@@ -7,12 +7,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 func (a *app) boardFieldsCmd(add bool) *cobra.Command {
 	name, short := "show", "Show an issue's board fields without reading the whole board"
 	if add {
-		name, short = LoopAdd, "Add an issue to the board and set Team, Status and optional Kind"
+		name, short = loop.LoopAdd, "Add an issue to the board and set Team, Status and optional Kind"
 	}
 	var status, kind string
 	c := &cobra.Command{Use: name + " <owner/repo#n|URL>", Short: short, Args: cobra.ExactArgs(1),

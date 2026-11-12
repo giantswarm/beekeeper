@@ -15,12 +15,13 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-// deskPullJSON is gh pr view's answer to the loop's read (readLoopPull) of
+// deskPullJSON is gh pr view's answer to the loop's read (loop.ReadLoopPull) of
 // an open, approved, green pull request, as GitHub gave it on 2026-11-03 for
 // the pull requests the merge-result check refused, with o/r#8 for the
 // repository and head.
@@ -67,7 +68,7 @@ func TestMergeResultCheckFindsTheCheckoutUnderTheDesksHomeRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo.dir = checkout
-	p, err := ParseLoopPull(secondPR, []byte(deskPullJSON(repo.head2)))
+	p, err := loop.ParseLoopPull(secondPR, []byte(deskPullJSON(repo.head2)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestMergeResultCheckFindsTheCheckoutUnderTheDesksHomeRoots(t *testing.T) {
 func TestMergeResultCheckWithoutACheckoutSaysSoAndDoesNotBlock(t *testing.T) {
 	r := newLoopRig(t)
 	home := useDeskRoots(t, r)
-	p, err := ParseLoopPull(secondPR, []byte(deskPullJSON("67abfd7cdf165a0c4ff9988278c63cba0c1c057f")))
+	p, err := loop.ParseLoopPull(secondPR, []byte(deskPullJSON("67abfd7cdf165a0c4ff9988278c63cba0c1c057f")))
 	if err != nil {
 		t.Fatal(err)
 	}

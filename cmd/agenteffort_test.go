@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -87,7 +88,7 @@ func TestEffortDryRunAndWake(t *testing.T) {
 func TestEffortLoopStartDefault(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief"); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestEffortLoopYieldsToRule(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
 	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: taskKindReview, Effort: testEffortLow}}
-	l := &Loop{Host: r.a}
+	l := &loop.Loop{Host: r.a}
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
 		t.Fatal(err)
 	}

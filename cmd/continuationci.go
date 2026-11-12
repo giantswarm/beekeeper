@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -39,7 +40,7 @@ func (w *watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag s
 	if err != nil {
 		return false, err
 	}
-	p, err := ParseLoopPull(ref, out)
+	p, err := loop.ParseLoopPull(ref, out)
 	if err != nil {
 		return false, err
 	}

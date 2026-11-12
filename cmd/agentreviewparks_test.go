@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -103,7 +104,7 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			st, _ := r.a.store.Read()
-			l := &Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+			l := &loop.Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
 			_, err := l.EndMerged(t.Context(), st, superloop.Action{Key: "test-end", Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)})
 			if err != nil {
 				t.Fatal(err)
@@ -159,7 +160,7 @@ func TestLastMergedPullPreservesEarlierPostMergeWork(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+	l := &loop.Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -207,10 +208,10 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.GitHub.AllowedOrgs = []string{"o"}
-			old := RecoverParkReviewHead
-			t.Cleanup(func() { RecoverParkReviewHead = old })
+			old := loop.RecoverParkReviewHead
+			t.Cleanup(func() { loop.RecoverParkReviewHead = old })
 			readable := false
-			RecoverParkReviewHead = func(_ context.Context, on, dir string) string {
+			loop.RecoverParkReviewHead = func(_ context.Context, on, dir string) string {
 				if on != loopPR || dir != pendingReviewWorktree {
 					t.Fatalf("verification %s in %s", on, dir)
 				}
@@ -232,7 +233,7 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			l := &Loop{Host: r.a}
+			l := &loop.Loop{Host: r.a}
 			recover := func() *state.State {
 				st, err := r.a.store.Read()
 				if err != nil {
@@ -254,20 +255,20 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 			readable = true
 			// A request that did not verify waits for its backoff, not the
 			// next pass: each look starts git and reads GitHub.
-			verify := RecoverParkReviewHead
-			RecoverParkReviewHead = func(context.Context, string, string) string {
+			verify := loop.RecoverParkReviewHead
+			loop.RecoverParkReviewHead = func(context.Context, string, string) string {
 				t.Fatal("unverified request retried before its backoff")
 				return ""
 			}
 			recover()
-			RecoverParkReviewHead = verify
-			r.a.now = r.a.now.Add(ReviewRecoveryFirst)
+			loop.RecoverParkReviewHead = verify
+			r.a.now = r.a.now.Add(loop.ReviewRecoveryFirst)
 			st = recover()
 			rp, ok := st.ReviewParkFor(loopPR)
 			if !ok || rp.ReviewHead != loopHead || rp.PostMerge == nil || *rp.PostMerge != remaining {
 				t.Fatalf("recovered request: %+v", rp)
 			}
-			RecoverParkReviewHead = func(context.Context, string, string) string { t.Fatal("verified request retried"); return "" }
+			loop.RecoverParkReviewHead = func(context.Context, string, string) string { t.Fatal("verified request retried"); return "" }
 			recover()
 		})
 	}

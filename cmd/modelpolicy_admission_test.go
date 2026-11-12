@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -38,7 +39,7 @@ func TestModelPolicyReviewPlacementUsesAuthorCapacity(t *testing.T) {
 	}
 	checked := false
 	r.answer = func(args []string) (string, int) {
-		if len(args) == 0 || args[0] != LoopCapacity {
+		if len(args) == 0 || args[0] != loop.LoopCapacity {
 			return "", 0
 		}
 		checked = true
@@ -135,7 +136,7 @@ func TestModelPolicyForcedSSHAdmissionCannotBypass(t *testing.T) {
 				a.cfg.Capacity.Choices[0].Cost = 5
 				a.cfg.Capacity.Choices[0].Family = "writer-family"
 				a.cfg.Capacity.TaskPolicies = map[string]config.TaskPolicy{kind: tc.policy}
-				args := []string{agentStartName, workerRole, brief, LoopHostFlag, sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch, testHarnessFlag, claudeComm, modelFlag, bgModel, taskKindArg, kind, usageForceFlag}
+				args := []string{agentStartName, workerRole, brief, loop.LoopHostFlag, sshTestSelector, loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch, testHarnessFlag, claudeComm, modelFlag, bgModel, taskKindArg, kind, usageForceFlag}
 				if tc.review {
 					args = append(args, "--review", "--"+authorModelFlag, bgModel)
 				}
@@ -179,8 +180,8 @@ func TestModelPolicySSHRequiresMetadataWithoutProviders(t *testing.T) {
 	a, brief := sshStartTestApp(t)
 	a.cfg.Capacity.Providers, a.cfg.Capacity.Choices = nil, nil
 	a.cfg.Capacity.TaskPolicies = map[string]config.TaskPolicy{testTaskAudit: {MinClass: 3}}
-	_, err := runAgents(a, agentStartName, workerRole, brief, LoopHostFlag, sshTestSelector,
-		LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch, testHarnessFlag, claudeComm,
+	_, err := runAgents(a, agentStartName, workerRole, brief, loop.LoopHostFlag, sshTestSelector,
+		loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch, testHarnessFlag, claudeComm,
 		modelFlag, bgModel, taskKindArg, testTaskAudit, usageForceFlag, testDryRunFlag)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
 		t.Fatalf("missing provider metadata hid target policy: %v", err)
@@ -198,7 +199,7 @@ func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
 	r.park(t, loopPR, r.a.now)
 	var capArgs []string
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == LoopCapacity {
+		if len(args) > 0 && args[0] == loop.LoopCapacity {
 			capArgs = append([]string(nil), args...)
 			return loopRoomJSON, 0
 		}
@@ -222,15 +223,15 @@ func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
 	r2.pull.State = superloop.Merged
 	r2.pass(t)
 	loopNextDone(t, r2)
-	branch := GhDefaultBranch
-	t.Cleanup(func() { GhDefaultBranch = branch })
-	GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	branch := loop.GhDefaultBranch
+	t.Cleanup(func() { loop.GhDefaultBranch = branch })
+	loop.GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
 	var workerCapCalls [][]string
 	r2.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == LoopCapacity {
+		if len(args) > 0 && args[0] == loop.LoopCapacity {
 			workerCapCalls = append(workerCapCalls, append([]string(nil), args...))
 			// Local has no room for bgModel, SSH host has room.
-			if slices.Contains(args, LoopHostFlag) {
+			if slices.Contains(args, loop.LoopHostFlag) {
 				if !slices.Contains(args, modelFlag) || !slices.Contains(args, bgModel) {
 					t.Fatalf("worker host placement omitted --model %s: %v", bgModel, args)
 				}
@@ -238,19 +239,19 @@ func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
 			}
 			return loopNoRoomJSON, 0
 		}
-		if len(args) > 0 && args[0] == LoopBoard {
+		if len(args) > 0 && args[0] == loop.LoopBoard {
 			return loopNextPickJSON, 0
 		}
 		return "", 0
 	}
 	r2.pass(t)
 	if !slices.ContainsFunc(workerCapCalls, func(c []string) bool {
-		return !slices.Contains(c, LoopHostFlag) && slices.Contains(c, modelFlag) && slices.Contains(c, bgModel)
+		return !slices.Contains(c, loop.LoopHostFlag) && slices.Contains(c, modelFlag) && slices.Contains(c, bgModel)
 	}) {
 		t.Fatalf("worker local placement omitted --model %s: %v", bgModel, workerCapCalls)
 	}
-	start := r2.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
-	if start == nil || !slices.Contains(start, LoopHostFlag) {
+	start := r2.called(agentsName, agentStartName, loop.RepoName(sshTestRepository)+" 9")
+	if start == nil || !slices.Contains(start, loop.LoopHostFlag) {
 		t.Fatalf("rule-selected Claude worker did not place onto SSH host: %v", start)
 	}
 }
