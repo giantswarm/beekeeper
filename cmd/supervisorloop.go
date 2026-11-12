@@ -246,9 +246,11 @@ its key first in the detail):
             to park again on a wait the loop watches (a pull request, a
             timer that wakes it, a note for a person) or to report done.
             An unclassified report goes to the guide unclassified
-  file      a problem found (agents.problem) that cites no issue URL:
-            the full report is logged in supervisor.file and delivered once
-            by guide watch as GUIDE PROBLEM, to file in its owning repository.
+  file      a finding with an owner, stable title and complete description:
+            match its issue URL or unique title against the open issues;
+            known findings add nothing, new facts replace the description,
+            and new findings create one issue and enter the board's Backlog.
+            Unplaceable reports reach GUIDE PROBLEM; no comment trails.
             A step failing the same way for 30 minutes or on more than one
             item is filed the same way, once per episode, naming the step,
             the items it blocks and the error.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	findingreport "github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -51,7 +52,7 @@ delivers it once per worker assignment.`,
 }
 
 func (a *app) recordWorkerProblem(st *state.State, ag *state.Agent, me state.Party, finding string) ([]state.Event, error) {
-	finding = oneLine(finding)
+	finding = normalizeFinding(finding)
 	if finding == "" || strings.EqualFold(finding, noProblems) {
 		return nil, refused("problem requires a finding with evidence and owning repository")
 	}
@@ -83,7 +84,7 @@ func freshWorkerProblems(ag *state.Agent, findings []string) []string {
 	}
 	var fresh []string
 	for _, finding := range findings {
-		finding = oneLine(finding)
+		finding = normalizeFinding(finding)
 		if !slices.Contains(previous.Findings, finding) {
 			previous.Findings = append(previous.Findings, finding)
 			fresh = append(fresh, finding)
@@ -93,4 +94,13 @@ func freshWorkerProblems(ag *state.Agent, findings []string) []string {
 		ag.ReportedProblems = previous
 	}
 	return fresh
+}
+
+// A placeable report carries a complete Markdown description. Ordinary
+// progress messages retain their historical single-line representation.
+func normalizeFinding(text string) string {
+	if _, ok := findingreport.Parse(text); ok {
+		return strings.TrimSpace(text)
+	}
+	return oneLine(text)
 }

@@ -87,7 +87,7 @@ guide: heavy underuse of any provider's subscription budget is a P1.
 - **beekeeper** (its `--help` the reference) holds the role and the queue. `beekeeper guide start`
   takes the role in a run beekeeper started (`guide start --new` starts one); `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
-  the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
+  the person (`GUIDE WAITING`), each finding the loop could not place (`GUIDE PROBLEM`, the full report
   to file in its owning repository, put on the board in `Backlog` with `beekeeper board add <issue> --kind <kind>` (inspect fields with `beekeeper board show <issue>`) and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
   each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
@@ -192,3 +192,7 @@ The rest of the role is in this skill's `references/` folder, read when its mome
 ### Recorded decisions survive sessions
 
 Record the person’s decisions verbatim with `beekeeper answer <ref> --via cli|slack "<words>"`. Read `beekeeper answer history` at start, after a relay and before asking again. The handover includes the complete recorded history, including its source and time. Apply decisions within their original scope until completed or changed; do not reinterpret a recorded decision as an unsupported peer claim. If authorization is missing, name the missing record and scope in a note. Never ask for repeated words already recorded. Keep core behavior in beekeeper, not desk rule files.
+
+Match findings against the owning repository's open issues first. A known finding adds nothing;
+new facts rewrite its description in place, never a comment trail. Only a new finding gets a new
+issue. Keep the description current and concise, rather than appending observations.

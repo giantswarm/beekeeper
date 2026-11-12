@@ -13,7 +13,7 @@ Stricter wins.
 - Desk (`supervisor status`): `agents park`/`note add`; no guide status; inbox wakes; register.
 - Review. Push; park in worktree at once; loop owns CI/merge. Use `--post-merge` unless merge ends task.
 - Promote. One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.
-- Problems: `agents problem "<finding>"`: evidence/repo/issue URL. Gate/CI: report first; no bypass. Fix core; desk: personal choices.
+- Problems: `agents problem "<finding>"`: evidence/repo/issue URL. Known finding: name its full issue URL; new facts rewrite its description, never comments. For loop filing, report `<owner/repo or full issue URL>: <stable title>\n\n<complete current description>`. Gate/CI: report first; no bypass. Fix core; desk: personal choices.
 - Person: no approval waits. `note add`, `agents park --on '#<note>'`. Orders persist across turns/relays until done/changed. Ask limits/cost/accounts unless ordered/answered; default setup.
 - Apps: settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
 - Post-merge. `Part of <full issue URL>`, no auto-close; close with proof.

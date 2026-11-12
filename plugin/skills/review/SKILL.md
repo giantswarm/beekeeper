@@ -28,3 +28,7 @@ Desk review (opus): changes requested
 Its second line is `Head reviewed: <sha>` (put the SHA in backticks: the assigned head only). Each finding is `<file>:<line>: <what is wrong> → <what would be right>`. Report that same verdict and the review URL to the supervisor with `beekeeper agents idle --done --report "<verdict, newline, review URL>" --problem none`, or report each encountered problem with evidence and owning repository.
 
 Never merge. The supervisor relays findings to the worker; it gives the merge go only after approval. An unchanged approved head gets no second review. For a push fixing only approval nits, the supervisor checks the delta against the approved head, then runs `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>` to attest that check before the loop gives an exact-head go; it must not silently carry an approval across arbitrary code changes.
+
+For out-of-scope findings, check the owning repository's open issues first. A known finding adds
+nothing. New facts rewrite the existing issue's description, never comments. Only a new finding
+gets a new issue; include its full URL in the problem report.

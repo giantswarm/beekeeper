@@ -633,7 +633,7 @@ func problemsFound(lines []string, finished bool) ([]string, error) {
 	var found []string
 	none := false
 	for _, l := range lines {
-		l = oneLine(l)
+		l = normalizeFinding(l)
 		switch {
 		case l == "":
 			return nil, refused("an empty --problem: one line per finding, or --problem none")

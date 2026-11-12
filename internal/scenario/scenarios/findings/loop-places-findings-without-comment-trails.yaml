@@ -1,0 +1,84 @@
+name: loop-places-findings-without-comment-trails
+description: >
+  The loop leaves a repeated finding alone, rewrites the description when
+  the reporter has learned a new fact, and creates one issue for a new
+  finding. A second reporter and a restarted loop create no duplicates
+  and do not replay the old description over the new facts.
+issue: https://github.com/giantswarm/beekeeper/issues/3870
+flow: findings
+tags: [findings, loop, issues]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {workerBrief: ''}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - number: 1
+            title: Queue stalls
+            body: The queue stalls.
+            board: Backlog
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ''}
+
+when:
+  - run: {args: [watch, --once]}
+    expect: [{exit: 0}]
+  - run: {args: [supervisor, loop, --once]}
+    expect: [{exit: 0}]
+  - run: {args: [--as, reporter, agents, register, reporter]}
+    expect: [{exit: 0}]
+  - run: {args: [--as, supervisor loop, agents, assign, reporter, Investigate queue findings]}
+    expect: [{exit: 0}]
+  - advance: 1s
+  - run:
+      args: [--as, reporter, agents, problem, "example/app: Queue stalls\n\nThe queue stalls."]
+    expect: [{exit: 0}]
+  - name: known
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ['finding placed: https://github.com/example/app/issues/1']}
+      - github: {calls: {method: PATCH, path: 'repos/example/app/issues/1', max: 0}}
+      - github: {calls: {method: POST, path: 'repos/example/app/issues', max: 0}}
+  - advance: 1s
+  - run:
+      args: [--as, reporter, agents, problem, "https://github.com/example/app/issues/1: Queue stalls\n\nThe queue stalls when a lease expires. Preserve the queued work on expiry."]
+    expect: [{exit: 0}]
+  - run: {args: [supervisor, loop, --once]}
+    expect: [{exit: 0}]
+  - advance: 1s
+  - run:
+      args: [--as, reporter, agents, problem, "example/app: Lost heartbeat\n\nA disconnected host drops its heartbeat. Retain its last reading until reconnect."]
+    expect: [{exit: 0}]
+  - run: {args: [supervisor, loop, --once]}
+    expect: [{exit: 0}]
+  # A different assignment repeats both reports after each loop process exited.
+  - run: {args: [--as, observer, agents, register, observer]}
+    expect: [{exit: 0}]
+  - run: {args: [--as, supervisor loop, agents, assign, observer, Check reported findings]}
+    expect: [{exit: 0}]
+  - advance: 1s
+  - run:
+      args: [--as, observer, agents, problem, "example/app: Queue stalls\n\nThe queue stalls."]
+    expect: [{exit: 0}]
+  - run:
+      args: [--as, observer, agents, problem, "example/app: Lost heartbeat\n\nA disconnected host drops its heartbeat. Retain its last reading until reconnect."]
+    expect: [{exit: 0}]
+  - run: {args: [supervisor, loop, --once]}
+    expect: [{exit: 0}]
+
+then:
+  - github: {calls: {method: PATCH, path: 'repos/example/app/issues/1', min: 1, max: 1}}
+  - github: {calls: {method: POST, path: 'repos/example/app/issues', min: 1, max: 1}}
+  - github: {calls: {method: POST, path: 'repos/example/app/issues/\d+/comments', max: 0}}
+  - github: {issue: {repo: example/app, number: 1, body: 'The queue stalls when a lease expires. Preserve the queued work on expiry.', comments: {max: 0}}}
+  - github: {issue: {repo: example/app, number: 2, state: open, board: Backlog, comments: {max: 0}}}

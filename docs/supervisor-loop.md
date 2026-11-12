@@ -215,3 +215,38 @@ A pass that ends before it plans (held GitHub observations, a restart, an error)
 the pending decisions and names what ended it. The waits, the causes already named and the last
 cause read survive a restart of the loop, so a new release neither restarts the 15 minutes nor
 repeats an alarm. `SUPERVISOR STALL ENDED` says when an alarmed decision is no longer pending.
+
+## Filing findings
+
+The loop places a finding itself when the report names its owner and supplies a stable title and
+complete current description. Use an existing issue's full URL when known:
+
+```text
+https://github.com/example/app/issues/12: Queue stalls
+
+## Problem
+The queue stalls when a lease expires.
+
+## Proposed solution
+Keep queued work when the lease expires.
+
+## Acceptance criteria
+The next free worker receives the queued work.
+```
+
+For a new finding, the first line is `example/app: Queue stalls`. Send the multiline text as one
+argument to `agents problem` or `agents idle --problem`. The loop reads every page of the owner's
+open issues and matches the explicit issue number or a unique title (ignoring case and whitespace).
+An identical description causes no issue write. New facts replace the description in place; the
+report must retain relevant existing facts and acceptance criteria. There are no issue comments.
+A title absent from the inventory creates one issue. The ordinary intake step puts it in Backlog
+and ranks it by its originating item and the board rules.
+
+Findings use one serialized stream. Durable receipts remember reports already placed across loop
+restarts and reporter assignments, so an old repeated report cannot overwrite newer facts. Board
+intake is retried after placement without creating another issue. Failed GitHub reads and writes
+remain pending; an unread inventory is never treated as empty.
+
+Free prose, ambiguous titles, a closed explicit target, an owner outside the configured scope, or
+an unconfigured board leave the full finding for `GUIDE PROBLEM`. The guide follows the same rule:
+known findings add nothing, new facts rewrite descriptions, and only new findings create issues.
