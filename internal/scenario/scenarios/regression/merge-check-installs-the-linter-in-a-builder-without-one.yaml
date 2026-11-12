@@ -99,6 +99,11 @@ when:
       expect:
         - worker: {name: app 1, turns: 1, outcome: finish}
         - github: {pull: {repo: example/app, number: 2, state: open}}
+  # The base moves on while the pull request waits: its head no longer
+  # contains the base, and the two together have to be checked before the
+  # merge.
+  - name: base-moves
+    github: {push: {repo: example/app, branch: main, file: a.go, content: "package app\n\nvar A = 2\n"}}
   - name: ci-green
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
   # The head is green: the loop starts its reviewer, who approves it.
@@ -109,10 +114,8 @@ when:
       timeout: 60s
       expect:
         - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
-  # The base moves on after the approval: the reviewed head no longer
-  # contains it, and the two together have to be checked.
-  - name: base-moves
-    github: {push: {repo: example/app, branch: main, file: a.go, content: "package app\n\nvar A = 2\n"}}
+  # Approved and green, the head goes through the gate: the merge result is
+  # checked in the builder first.
   - name: go
     advance: {by: 4m, step: 1m, quiet: 1s}
   - name: merged
