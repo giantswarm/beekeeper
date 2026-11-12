@@ -44,6 +44,12 @@ Where the base branch has a GitHub merge queue (required CI on `merge_group` eve
 merge is submitted to the queue, which retests the combination if the base advances, and
 never with `--admin`. Without a queue the lane's own check is the validation and the
 desk's admin merge (`merge.admin`) applies; an unreadable queue answer refuses the merge.
+That admin mutation uses the desk's `gh` login rather than the devctl App identity,
+and records a `merge.admin` event naming the approved head before sending
+`--admin --match-head-commit`. The review exception includes
+`require_extra_approval_for_unattributed_changes`. Emergency admin merges accept
+that review requirement too, with the exact-head authority and grant audit intact;
+required checks and unsupported non-review requirements still hold.
 
 A merge to `main` cuts a release candidate, `vX.Y.Z-rc.N` (a GitHub pre-release with signed assets);
 `devctl release promote giantswarm/beekeeper` makes the stable release, and `self-update` installs

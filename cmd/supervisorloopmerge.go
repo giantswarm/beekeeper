@@ -1160,13 +1160,20 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	// would bypass it. Without a queue the lane's own merge-result check
 	// above is the validation, and the desk's admin merge passes the base's
 	// review requirement as before the check.
-	if !queue && a.cfg.Merge.AdminMerge(repo) {
+	admin := !queue && a.cfg.Merge.AdminMerge(repo)
+	if admin {
+		// The admin exception belongs to the desk's gh login, not the
+		// devctl App identity. Record its exact-head use before mutation.
+		if err := a.store.Record(about(event(loopParty, "merge.admin", "https://github.com/%s/pull/%d at %s: admin review bypass using the desk gh login", repo, number, merging), ref)); err != nil {
+			doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+			return doc
+		}
 		argv = append(argv, "--admin")
 	}
 	// Use the configured owner's devctl identity without letting pr merge
 	// follow a new head during its wait. All gates above still govern this
 	// exact-head mutation; no extra admin or auto flag is granted.
-	if a.cfg.Merge.DevctlServes(repo) {
+	if !admin && a.cfg.Merge.DevctlServes(repo) {
 		argv = append([]string{devctlBinary, "auth", "exec", "--"}, argv...)
 	}
 	if a.cfg != nil {
