@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -55,7 +56,7 @@ func (a *app) pruneFinishedState(r *diskRun, m *diskMachine) {
 // need not keep its database open. Unknown conversations retain the age grace.
 func (a *app) protectHarnessStores(st *state.State, refs []string) []string {
 	for _, start := range st.Starts {
-		if start.Harness != harnessAgy || start.Conversation == "" {
+		if start.Harness != capacity.HarnessAgy || start.Conversation == "" {
 			continue
 		}
 		ended := false

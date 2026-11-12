@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -163,12 +164,12 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		if err != nil {
 			return execution.Resources{}, err
 		}
-		blocks := h.blocks(false)
+		blocks := h.Blocks(false)
 		buildBlocks := []string{}
-		if h.slotBusy() {
-			buildBlocks = append(buildBlocks, noFreeSlot)
+		if h.SlotBusy() {
+			buildBlocks = append(buildBlocks, capacity.NoFreeSlot)
 		}
-		return execution.Resources{AvailableMiB: h.AvailableMiB, Load1: h.Load1, DiskFreeGiB: float64(disk.FreeMiB) / 1024, BuildBusy: h.slotBusy(), Blocks: blocks, BuildBlocks: buildBlocks, ObservedAt: time.Now().UTC()}, nil
+		return execution.Resources{AvailableMiB: h.AvailableMiB, Load1: h.Load1, DiskFreeGiB: float64(disk.FreeMiB) / 1024, BuildBusy: h.SlotBusy(), Blocks: blocks, BuildBlocks: buildBlocks, ObservedAt: time.Now().UTC()}, nil
 	}
 	return s, nil
 }

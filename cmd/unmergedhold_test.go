@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -599,11 +600,11 @@ const review3325ShortMissingTimestamp = "short missing timestamp"
 
 func TestReview3325RepairSessionOwnership(t *testing.T) {
 	owner := state.Party{Name: "retained owner", Session: "original-session", Host: "host-a"}
-	for _, kind := range []string{taskKindReview, "retained park", a2aRoleAgent} {
+	for _, kind := range []string{capacity.TaskKindReview, "retained park", a2aRoleAgent} {
 		t.Run(kind, func(t *testing.T) {
 			st := &state.State{}
 			switch kind {
-			case taskKindReview:
+			case capacity.TaskKindReview:
 				st.ReviewParks = []state.ReviewPark{{On: loopPR, Agent: owner.Name, Party: owner}}
 			case "retained park":
 				st.Parks = []state.Park{{On: loopPR, By: owner}}

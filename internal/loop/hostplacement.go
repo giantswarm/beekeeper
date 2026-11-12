@@ -52,25 +52,6 @@ func (l *Loop) RecordHostPlacement(selector, repo, reason string) {
 	}
 }
 
-type HostPlacementView struct {
-	Selector   string    `json:"selector"`
-	At         time.Time `json:"at,omitzero"`
-	Repository string    `json:"repository,omitempty"`
-	Reason     string    `json:"reason"`
-	Update     string    `json:"update,omitempty"`
-}
-
-func (v HostPlacementView) Line() string {
-	line := fmt.Sprintf("host %s: %s", v.Selector, v.Reason)
-	if !v.At.IsZero() {
-		line += fmt.Sprintf(" (last placement %s, repository %s)", v.At.UTC().Format(time.RFC3339), v.Repository)
-	}
-	if v.Update != "" {
-		line += "; update waits: " + v.Update
-	}
-	return line
-}
-
 // CheckHostUtilization retains one starvation episode across loop restarts and
 // coordinator releases. Successful remote starts end it; an idle desk without
 // local worker starts never opens one. No audit-history replay is needed.

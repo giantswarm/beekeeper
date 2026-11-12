@@ -22,6 +22,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/brieflint"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -326,7 +327,7 @@ work, which takes no choice on a self-hosted provider.`,
 				return usageErr("an agent needs a name")
 			}
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
-			if a.selectionKind == taskKindReview {
+			if a.selectionKind == capacity.TaskKindReview {
 				review = true
 			}
 			if a.selectionAuthor != "" && !review && !ofSelfHosted {
@@ -334,7 +335,7 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			if a.selectionKind == "" {
 				if review || ofSelfHosted {
-					a.selectionKind = taskKindReview
+					a.selectionKind = capacity.TaskKindReview
 				} else {
 					a.selectionKind = workerRole
 				}
@@ -347,21 +348,21 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			harness = a.defaultStartHarness(harness, model)
-			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
+			if harness == capacity.HarnessAuto && len(a.liveCapacity().Choices) == 0 {
 				if err := a.requireStartModel(name, ""); err != nil {
 					return err
 				}
 			}
-			if harness != harnessAuto {
+			if harness != capacity.HarnessAuto {
 				model = a.effectiveStartModel(harness, model)
 				if err := a.requireStartModel(name, model); err != nil {
 					return err
 				}
 			}
-			kind := startKind(review, ofSelfHosted)
+			kind := capacity.StartKind(review, ofSelfHosted)
 			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
-				if harness == harnessAuto {
+				if harness == capacity.HarnessAuto {
 					base, ok = claudeHarness{}, true
 				}
 				if !ok {
@@ -383,12 +384,12 @@ work, which takes no choice on a self-hosted provider.`,
 			if repository != "" || gitRef != "" {
 				return usageErr("--repo and --ref require an SSH --host")
 			}
-			if harness == harnessAuto {
+			if harness == capacity.HarnessAuto {
 				choices := a.liveCapacity().Choices
 				if len(choices) == 0 {
 					return usageErr("--harness auto: no capacity.choices configured")
 				}
-				if m := strings.TrimSpace(model); m != "" && !choicesHaveModel(choices, m) {
+				if m := strings.TrimSpace(model); m != "" && !capacity.ChoicesHaveModel(choices, m) {
 					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
 				}
 			}
@@ -399,11 +400,11 @@ work, which takes no choice on a self-hosted provider.`,
 			if resolvedMode == config.ModeBackground && desktop {
 				return usageErr("--mode background and --desktop: a background session has no desktop turn")
 			}
-			if harness != harnessAuto {
+			if harness != capacity.HarnessAuto {
 				if err := validateStartHarness(harness, mode); err != nil {
 					return err
 				}
-				if harness == harnessAgy && strings.TrimSpace(model) == "" && !dryRun {
+				if harness == capacity.HarnessAgy && strings.TrimSpace(model) == "" && !dryRun {
 					return usageErr("an agy agent needs its model: --model (agy models lists them)")
 				}
 			}
@@ -503,12 +504,12 @@ work, which takes no choice on a self-hosted provider.`,
 					return err
 				}
 				if over == "" && v != nil && v.Room > 0 {
-					if _, err := fmt.Fprintf(a.out, "%s\n", v.verdict()); err != nil {
+					if _, err := fmt.Fprintf(a.out, "%s\n", v.Verdict()); err != nil {
 						return err
 					}
 				}
 				choiceEffort := ""
-				if harness == harnessAuto {
+				if harness == capacity.HarnessAuto {
 					ch, err := pickAutoChoice(v, force)
 					if err != nil {
 						return err
@@ -516,7 +517,7 @@ work, which takes no choice on a self-hosted provider.`,
 					if err := validateStartHarness(ch.Harness, mode); err != nil {
 						return err
 					}
-					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
+					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.Line()); err != nil {
 						return err
 					}
 					if ch.Decision != "" {
@@ -552,7 +553,7 @@ work, which takes no choice on a self-hosted provider.`,
 			// before anything is recorded; --force goes through on record.
 			// A timer's start says what the gate did to it in the log.
 			origHarness, origModel := harness, model
-			autoPick := origHarness == harnessAuto
+			autoPick := origHarness == capacity.HarnessAuto
 			baseBrief := a.workerPrompt(taskPrompt(brief), gaps...)
 			worktreeRules := ""
 			var timerLine string
@@ -592,7 +593,7 @@ work, which takes no choice on a self-hosted provider.`,
 						if err := cmd.Flags().Set("effort", level); err != nil {
 							return err
 						}
-						if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
+						if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.Line()); err != nil {
 							return err
 						}
 						return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
@@ -600,7 +601,7 @@ work, which takes no choice on a self-hosted provider.`,
 					harness = ch.Harness
 					model = ch.Model
 					choiceEffort = ch.Effort
-					choiceLine = ch.line()
+					choiceLine = ch.Line()
 				} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
 					return err
 				}
@@ -712,10 +713,10 @@ func (a *app) defaultStartHarness(harness, model string) string {
 		return harness
 	}
 	choices := a.liveCapacity().Choices
-	if m := strings.TrimSpace(model); len(choices) == 0 || m != "" && !choicesHaveModel(choices, m) {
+	if m := strings.TrimSpace(model); len(choices) == 0 || m != "" && !capacity.ChoicesHaveModel(choices, m) {
 		return claudeComm
 	}
-	return harnessAuto
+	return capacity.HarnessAuto
 }
 
 func validateStartHarness(harness, mode string) error {
@@ -723,7 +724,7 @@ func validateStartHarness(harness, mode string) error {
 		return usageErr("--harness %q: claude, omp, agy, codex, or auto", harness)
 	}
 	switch harness {
-	case omp.Harness, harnessAgy:
+	case omp.Harness, capacity.HarnessAgy:
 		if strings.TrimSpace(mode) == config.ModeBackground {
 			return usageErr("--mode background and --harness %s: an %s agent is no Claude Code background session", harness, harness)
 		}
@@ -750,7 +751,7 @@ func forwardBrokeredChoice(cmd *cobra.Command, harness, model string, choiceLine
 
 func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {
 	switch harness {
-	case harnessAgy:
+	case capacity.HarnessAgy:
 		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
@@ -809,9 +810,9 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 	}
 }
 
-func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
+func pickAutoChoice(v *capacity.View, force bool) (*capacity.ChoiceView, error) {
 	if v != nil && v.Stopped != "" {
-		return nil, refused("%s", v.verdict())
+		return nil, refused("%s", v.Verdict())
 	}
 	if v != nil && v.Choice != nil && v.Choice.Harness != "" && v.Choice.Model != "" {
 		return v.Choice, nil
@@ -820,8 +821,8 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 		for _, cand := range v.Choice.Candidates {
 			// --force overrides capacity, never an exclusion or the one
 			// restriction on the review of a self-hosted model's work.
-			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer && !strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
-				return &choiceView{
+			if cand.Reason != "excluded" && cand.Reason != capacity.SelfHostedReviewer && !strings.HasPrefix(cand.Reason, capacity.ModelPolicyPrefix) {
+				return &capacity.ChoiceView{
 					Harness:  cand.Harness,
 					Effort:   cand.Effort,
 					Model:    cand.Model,

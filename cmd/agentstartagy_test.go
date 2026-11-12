@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -316,12 +317,12 @@ func TestStartAgyAgentRefusesUnguardedHooks(t *testing.T) {
 	if st, err := store.Read(); err != nil || len(st.Agents) != 0 || len(st.Starts) != 0 {
 		t.Errorf("state after refusal: agents %+v starts %+v (%v)", st.Agents, st.Starts, err)
 	}
-	if err := a.preflightStartTarget(context.Background(), harnessAgy, model, dir); !refusedUnguarded(err) {
+	if err := a.preflightStartTarget(context.Background(), capacity.HarnessAgy, model, dir); !refusedUnguarded(err) {
 		t.Fatalf("preflightStartTarget = %v, want refused for the unguarded hooks", err)
 	}
 
 	agyUnguarded = func() string { return "" }
-	if err := a.preflightStartTarget(context.Background(), harnessAgy, model, dir); err != nil {
+	if err := a.preflightStartTarget(context.Background(), capacity.HarnessAgy, model, dir); err != nil {
 		t.Fatalf("preflightStartTarget with guarded hooks: %v", err)
 	}
 }
