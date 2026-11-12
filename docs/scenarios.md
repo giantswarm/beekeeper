@@ -27,6 +27,43 @@ suite's wall time), `junit/scenarios.xml` (one case per step) and each
 scenario's own artifacts under `<flow>/<name>/`: the world's call log
 (`calls.jsonl`), every step's output, background logs and the driver's log.
 
+## The control: fails without the change
+
+A pull request that fixes or changes behavior of beekeeper's core adds or extends a scenario that
+fails without the change (the rule in [AGENTS.md](../AGENTS.md)). The `scenario-control` step of
+the `test-scenarios` job (`.circleci/scenario-control.sh`) checks the "fails without": it builds
+the candidate from the pull request's merge base with `main` and runs against it, with the pull
+request's harness, only the scenarios the pull request adds or changes. Each must fail there on
+an assertion: an expectation, an unanswered call or its timeout. The step fails for a scenario
+that passes on the base, since it shows nothing the change does, for one whose run on the base
+fails in the harness (the sandbox, the world, the desk's setup), which is no evidence, and when
+the merge base does not build.
+
+- **Added** is a scenario whose name and file the base does not have. **Changed** is one whose
+  `given`, `when`, `then` or `timeout` differ from the base's, found by name or else by file.
+- A change of only `name`, `description`, `issue`, `flow`, `tags`, `pending`, `control`, comments
+  or layout is **metadata only** and does not run. Removing `pending` with a fix is one: the
+  base's own suite showed the scenario failing. A new `pending` scenario fails on the base as on
+  the branch, so it passes.
+- A scenario that cannot fail on the base, such as one that states behavior main already has,
+  opts out with the reason, which the review checks:
+
+  ```yaml
+  control:
+    none: states the refill behavior main already has; this change only adds the scenario
+  ```
+
+  The opt-out holds for the change that writes it. When a later pull request changes the
+  scenario's `given`, `when`, `then` or `timeout` and leaves `control` as it is, the scenario runs
+  against that pull request's base again; a reason written for one change does not cover the
+  next.
+
+The step passes at once, without a build, on a branch that adds or changes no scenario, on `main`
+and on tags. The job's artifacts hold its log (`control.log`), its report (`control/report.txt`
+and `control/report.json`: every scenario with its change, verdict, first failures on the base
+and opt-out reason) and each run's artifacts under `control/<flow>/<name>/`. To run it on a
+branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
+
 ## How a scenario runs
 
 1. The suite builds the candidate once with `-tags scenario`.
@@ -270,6 +307,14 @@ over a model, so a scenario can override any call.
   `/work/origins/<owner>/<name>.git`. Beekeeper names a repository by that
   URL wherever it fetches or pushes itself, so every transport of a scenario
   ends in the same origins.
+
+The fakes pass [the world's clock](#the-clock) on. An execution's runner
+starts its harness with a cleaned environment, without
+`BEEKEEPER_SCENARIO_CLOCK`; the fake names the clock again, so the
+`beekeeper` a worker script calls reads the world's time on every machine.
+What the fakes write themselves carries the system's time: a session's
+record and transcript, and the reset times a usage probe reports.
+`given.clock.start` and `advance` do not move those yet.
 
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
 live background session), the desktop app, and `gh`, which the fake GitHub

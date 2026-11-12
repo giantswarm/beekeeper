@@ -30,7 +30,10 @@
 # namespaces, which the Docker executor's seccomp profile refuses, so the job
 # runs on a machine executor with the Go toolchain go.mod pins. The suite
 # fails above 10 minutes of wall time and warns from 8; its report, JUnit
-# results and every scenario's artifacts are kept.
+# results and every scenario's artifacts are kept. Its scenario-control step
+# (.circleci/scenario-control.sh) builds the pull request's merge base and
+# runs only the scenarios the pull request adds or changes against it: each
+# must fail there on an assertion, or opt out with control: {none: <reason>}.
 version: 2.1
 
 jobs:
@@ -103,6 +106,15 @@ jobs:
           set -o pipefail
           mkdir -p /tmp/scenarios
           timeout 14m make test-scenarios 2>&1 | tee /tmp/scenarios/go-test.log
+    - run:
+        name: scenario-control (the pull request's new and changed scenarios fail on its merge base)
+        # Also after a red suite, so one round reports both.
+        when: always
+        no_output_timeout: 12m
+        command: |
+          set -o pipefail
+          mkdir -p /tmp/scenarios
+          timeout 14m bash .circleci/scenario-control.sh 2>&1 | tee /tmp/scenarios/control.log
     - store_test_results:
         path: /tmp/scenarios/junit
     - store_artifacts:

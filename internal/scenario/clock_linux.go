@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 )
 
 // clockSocket is the world's clock, named to every process by clock.Env.
-const clockSocket = workDir + "/clock.sock"
+// The fakes know the path too: they name the clock again to a harness
+// whose starter cleaned its environment.
+const clockSocket = harness.ClockSocket
 
 // startClock serves the world's clock at the scenario's start time.
 func (d *driver) startClock() error {

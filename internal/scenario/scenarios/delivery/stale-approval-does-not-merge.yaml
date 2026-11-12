@@ -9,6 +9,8 @@ issue: https://github.com/giantswarm/beekeeper/issues/3793
 flow: delivery
 tags: [delivery, loop, review, merge]
 timeout: 150s
+control:
+  none: states the delivery behavior main already has; this change only adds the scenario
 
 given:
   desk:

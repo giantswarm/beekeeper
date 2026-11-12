@@ -10,6 +10,8 @@ issue: https://github.com/giantswarm/beekeeper/issues/3793
 flow: duplicate-pr
 tags: [duplicate-pr, refill, loop, start]
 timeout: 120s
+control:
+  none: states the duplicate pull request prevention main already has; this change only adds the scenario
 
 given:
   desk:

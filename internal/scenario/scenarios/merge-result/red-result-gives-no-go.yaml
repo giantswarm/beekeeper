@@ -9,6 +9,8 @@ issue: https://github.com/giantswarm/beekeeper/issues/3793
 flow: merge-result
 tags: [merge-result, loop, merge, gate]
 timeout: 150s
+control:
+  none: states the merge-result check main already has; this change only adds the scenario
 
 given:
   desk:

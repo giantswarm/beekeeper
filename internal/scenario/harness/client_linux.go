@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 // spawnedEnv marks a process the world or one of its fakes started as part
@@ -64,6 +66,7 @@ func Main() (code int, served bool) {
 	if socket == "" {
 		return 0, false
 	}
+	nameClock(ClockSocket)
 	c := &client{name: name, args: os.Args[1:], socket: socket, exe: invokedPath(), spawned: os.Getenv(spawnedEnv) != ""}
 	_ = os.Unsetenv(spawnedEnv)
 	if name == "gh" {
@@ -74,6 +77,21 @@ func Main() (code int, served bool) {
 		}
 	}
 	return c.run(), true
+}
+
+// nameClock names the world's clock at path to this process and to what
+// it starts, unless its environment names one already or path is no
+// socket. An execution's runner starts its harness with a cleaned
+// environment, without clock.Env: the beekeeper a worker script calls
+// there would read the system's time while the rest of the scenario reads
+// the world's.
+func nameClock(path string) {
+	if os.Getenv(clock.Env) != "" {
+		return
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
+		_ = os.Setenv(clock.Env, path)
+	}
 }
 
 // invokedPath is the path this process was started under, the fake's

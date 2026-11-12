@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,6 +14,10 @@ import (
 const (
 	stallNoRoom = "no room for the review"
 	stallHead   = "0123abcd"
+	// stallURL is the pull request of epicTen, stallHold a hold a merge
+	// decision's run read.
+	stallURL  = "https://github.com/o/r/pull/10"
+	stallHold = "it is held by hold:o/r"
 )
 
 // failingStartRig is the refill rig whose board always offers an item and
@@ -217,7 +222,7 @@ func TestLoopAlarmsOnPendingMergeDecisions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			act := superloop.Action{Kind: kind, Key: kind + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: "https://github.com/o/r/pull/10", Head: stallHead}
+			act := superloop.Action{Kind: kind, Key: kind + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: stallURL, Head: stallHead}
 			in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
 			failures := map[string]loopFailure{act.Key: {Message: "specific command failure"}}
 			check := func(input superloop.Input, actions []superloop.Action) {
@@ -285,5 +290,273 @@ func TestLoopSettlesOvertakenMergeDecisionsBeforeAlarm(t *testing.T) {
 				t.Fatalf("overtaken merge decision remains pending: %+v", l.flowWaits)
 			}
 		})
+	}
+}
+
+// stallAlarms are the merge decision alarms filed so far, oldest first.
+func stallAlarms(t *testing.T, r *loopRig) []string {
+	t.Helper()
+	var out []string
+	for _, e := range r.logged(t, "supervisor.file") {
+		if strings.Contains(e.Detail, "stall decision ") {
+			out = append(out, e.Detail)
+		}
+	}
+	return out
+}
+
+// The alarm names what holds a pending merge decision, and names it again
+// when the hold changes: once per pending head and class of hold, no sooner
+// than loopStallAfter after the head's last alarm
+// (https://github.com/giantswarm/beekeeper/issues/3820).
+func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
+	r, _ := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherURL = "https://github.com/o/r/pull/11"
+	const laneClosed = "merge gate refused: the lane is closed"
+	act := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: stallURL, Head: stallHead}
+	other := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + planningPull + "@" + stallHead, Ref: planningPull, URL: otherURL, Head: stallHead}
+	in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
+	failures := map[string]loopFailure{}
+	check := func(input superloop.Input, actions ...superloop.Action) {
+		t.Helper()
+		if err := l.checkFlowWaits(input, actions, failures); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := func(n int, names ...string) {
+		t.Helper()
+		got := stallAlarms(t, r)
+		if len(got) != n {
+			t.Fatalf("%d alarms, want %d:\n%s", len(got), n, strings.Join(got, "\n"))
+		}
+		for _, name := range names {
+			if !strings.Contains(got[n-1], name) {
+				t.Fatalf("the alarm does not name %q: %s", name, got[n-1])
+			}
+		}
+	}
+	check(in, act)
+	l.mergeWaited(act, mergeHeld(waitHold, "%s", stallHold))
+	r.a.now = r.a.now.Add(loopStallAfter)
+	check(in, act)
+	want(1, act.URL, act.Head, stallHold)
+
+	// Its command starts: a changed hold is named, but not before
+	// loopStallAfter passed since the head's last alarm.
+	if !l.beginInFlight(act.Key) {
+		t.Fatal("the decision was in flight already")
+	}
+	l.mergeStarted([]superloop.Action{act}, 0)
+	r.a.now = r.a.now.Add(time.Minute)
+	check(in, act)
+	want(1)
+	r.a.now = r.a.now.Add(loopStallAfter)
+	check(in, act)
+	want(2, "its merge command has been in flight since")
+
+	// Another pull request's command runs ahead of it in its lane's stream.
+	l.mergeStarted([]superloop.Action{other, act}, 0)
+	r.a.now = r.a.now.Add(loopStallAfter)
+	check(in, act)
+	want(3, "behind "+otherURL)
+	l.mergeStreamEnded([]superloop.Action{other, act})
+	l.endInFlight(act.Key)
+
+	// The first hold again: its class was named for this head.
+	r.a.now = r.a.now.Add(loopStallAfter)
+	check(in, act)
+	want(3)
+
+	// No observation of the pull request: nothing plans the decision.
+	r.a.now = r.a.now.Add(loopStallAfter)
+	check(superloop.Input{})
+	want(4, "no current observation of "+act.Ref)
+
+	// A failure newer than the wait is the cause.
+	failures[act.Key] = loopFailure{Message: laneClosed, At: r.a.now}
+	r.a.now = r.a.now.Add(loopStallAfter)
+	check(in, act)
+	want(5, "its last run failed: "+laneClosed)
+
+	check(in)
+	if len(l.flowWaits) != 0 || len(l.mergeNotes) != 0 || !strings.Contains(r.out.String(), "SUPERVISOR STALL ENDED") {
+		t.Fatalf("the settled decision did not clear: %+v %+v\n%s", l.flowWaits, l.mergeNotes, r.out)
+	}
+}
+
+// The stall of 2026-11-12: the merge gate failed, the decision waited in its
+// repair stage for a worker that capacity did not start, and held GitHub
+// observations ended the passes before planning. Neither wait completes the
+// decision or records a failure, so each must be named by the alarm instead
+// of "no successful completion recorded"
+// (https://github.com/giantswarm/beekeeper/issues/3820).
+func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
+	r, l, _ := emptyBoardFill(t)
+	fill := r.answer
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			return "beekeeper: no start: no choice has room", ExitRefused
+		}
+		return fill(args)
+	}
+	act := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + loopPR + "@" + loopHead, Ref: loopPR, URL: loopURL, Head: loopHead, Agent: loopWorker}
+	// The gate's merge-result check failed on an earlier pass: the repair
+	// stage stands, and the worker left the roster with its review park.
+	l.mu.Lock()
+	l.stages = map[string]bool{act.Key + " repair": true}
+	l.stageDetail = map[string]string{act.Key + " repair": "(exit 1): merge result (main + " + shortSHA(loopHead) + ") failed go test: --- FAIL: TestOfTheHost"}
+	l.mu.Unlock()
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := superloop.Input{Pulls: map[string]superloop.Pull{loopPR: r.pull}}
+	failures := map[string]loopFailure{}
+	pass := func() {
+		t.Helper()
+		if err := l.checkFlowWaits(in, []superloop.Action{act}, failures); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.execAction(t.Context(), st, nil, failures, act); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pass()
+	if got := stallAlarms(t, r); len(got) != 0 {
+		t.Fatalf("alarm before %s: %v", loopStallAfter, got)
+	}
+	if len(r.logged(t, "supervisor.merge")) != 0 || len(r.logged(t, loopFailureVerb)) != 0 {
+		t.Fatalf("a repair waiting for its worker completed or failed the decision:\n%s", r.out)
+	}
+	r.a.now = r.a.now.Add(loopStallAfter)
+	pass()
+	got := stallAlarms(t, r)
+	if len(got) != 1 {
+		t.Fatalf("%d alarms after %s, want 1:\n%s", len(got), loopStallAfter, r.out)
+	}
+	for _, name := range []string{loopURL, loopHead, "merge result (main + ", "the branch repair it requested waits for a worker", "no choice has room"} {
+		if !strings.Contains(got[0], name) {
+			t.Errorf("the alarm does not name %q: %s", name, got[0])
+		}
+	}
+	if strings.Contains(got[0], "no successful completion recorded") {
+		t.Errorf("the alarm names no hold: %s", got[0])
+	}
+	r.a.now = r.a.now.Add(loopStallAfter)
+	pass()
+	if got := stallAlarms(t, r); len(got) != 1 {
+		t.Fatalf("the same hold was alarmed again: %v", got)
+	}
+
+	// GitHub observations are held: every pass ends before it plans, and
+	// the pending decision is still measured, with the hold as its cause.
+	r.a.cfg.GitHub.Floor = 2500
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		now := r.a.now
+		st.Budget = &state.Budget{Remaining: 4000, Limit: 5000, Reset: now.Add(2 * time.Hour), At: now,
+			GraphQL: &state.GraphQL{Remaining: 100, Limit: 5000, Reset: now.Add(2 * time.Hour), At: now}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.loopPass(t, l)
+	if !strings.Contains(r.out.String(), "SUPERVISOR GITHUB HELD") {
+		t.Fatalf("the pass was not held:\n%s", r.out)
+	}
+	got = stallAlarms(t, r)
+	if len(got) != 2 || !strings.Contains(got[1], loopURL) || !strings.Contains(got[1], "github.floor") {
+		t.Fatalf("a held pass did not alarm the pending decision with its hold: %v\n%s", got, r.out)
+	}
+	for range 3 {
+		r.loopPass(t, l)
+	}
+	if got := stallAlarms(t, r); len(got) != 2 {
+		t.Fatalf("the held passes repeated the alarm: %v", got)
+	}
+}
+
+// A restart keeps the wait: its clock, the holds already named and the hold
+// its last run read. A new release must not silence a pending decision for
+// another loopStallAfter, nor repeat its alarm.
+func TestLoopKeepsMergeDecisionWaitsAcrossARestart(t *testing.T) {
+	r, _ := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + epicTen + "@" + stallHead, Ref: epicTen, URL: stallURL, Head: stallHead}
+	in := superloop.Input{Pulls: map[string]superloop.Pull{act.Ref: {Head: act.Head, Green: true, State: superloop.Open}}}
+	if err := l.checkFlowWaits(in, []superloop.Action{act}, nil); err != nil {
+		t.Fatal(err)
+	}
+	since := l.flowWaits[act.Key].since
+	l.mergeWaited(act, mergeHeld(waitHold, "%s", stallHold))
+	r.a.now = r.a.now.Add(loopStallAfter - time.Minute)
+	l.saveCache()
+
+	restarted, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.loadCache()
+	if got := restarted.flowWaits[act.Key]; !got.since.Equal(since) || got.act.URL != act.URL || got.act.Head != act.Head {
+		t.Fatalf("the restart lost the wait: %+v, want since %s", got, since)
+	}
+	r.a.now = r.a.now.Add(time.Minute)
+	if err := restarted.checkFlowWaits(in, []superloop.Action{act}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := stallAlarms(t, r)
+	if len(got) != 1 || !strings.Contains(got[0], stallHold) || !strings.Contains(got[0], since.UTC().Format(time.RFC3339)) {
+		t.Fatalf("the restarted loop did not alarm on the kept wait and its hold: %v", got)
+	}
+	restarted.saveCache()
+	again, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again.loadCache()
+	r.a.now = r.a.now.Add(2 * loopStallAfter)
+	if err := again.checkFlowWaits(in, []superloop.Action{act}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := stallAlarms(t, r); len(got) != 1 {
+		t.Fatalf("a restart repeated the alarm of a named hold: %v", got)
+	}
+}
+
+// A claimed merge whose pull request cannot be read yet waits for the next
+// pass with that cause: it neither fails the pass (which ends the loop) nor
+// waits unnamed.
+func TestLoopClaimedMergeWithAnUnreadPullWaitsNamed(t *testing.T) {
+	r, _ := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readObservedLoopPull = func(*supervisorLoop, context.Context, string, time.Time, string) (loopPullObservation, error) {
+		return loopPullObservation{}, fmt.Errorf("%s observation is 19m43s old (limit 5m0s): %w", loopPR, errLoopLater)
+	}
+	act := superloop.Action{Kind: superloop.KindGo, Key: superloop.KindGo + " " + loopPR + "@" + loopHead, Ref: loopPR, URL: loopURL, Head: loopHead, Agent: loopWorker}
+	claims := map[string]loopClaim{act.Key: {at: r.a.now, target: loopWorker}}
+	if err := l.execAction(t.Context(), st, claims, map[string]loopFailure{}, act); err != nil {
+		t.Fatalf("an unread pull request failed the pass: %v", err)
+	}
+	l.mu.Lock()
+	note := l.mergeNotes[act.Key]
+	l.mu.Unlock()
+	if note.class != waitUnread || !strings.Contains(note.cause, "observation is 19m43s old") {
+		t.Fatalf("the wait is not named: %+v", note)
+	}
+	if r.called(gateCmdName) != nil || len(r.logged(t, loopFailureVerb)) != 0 {
+		t.Fatalf("an unread claim ran the gate or recorded a failure: %v\n%s", r.calls, r.out)
 	}
 }
