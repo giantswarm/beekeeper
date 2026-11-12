@@ -1,4 +1,4 @@
-package cmd
+package capacity
 
 import (
 	"cmp"
@@ -19,7 +19,7 @@ import (
 // View is what capacity shows: the roster's busy, parked and idle
 // agents against the target, the headroom a new start needs and the verdict.
 type View struct {
-	Hosts              []hostPlacementView          `json:"hosts,omitempty"`
+	Hosts              []HostPlacementView          `json:"hosts,omitempty"`
 	Activity           map[string]*ProviderActivity `json:"activity24h,omitempty"`
 	WorkerCeiling      int                          `json:"workerCeiling"`
 	ReviewHeadroom     int                          `json:"reviewHeadroom"`
@@ -562,7 +562,7 @@ func (c AgentCount) Line(k config.Capacity) string {
 // cap, and for a start that builds the free build slots.
 type Headroom struct {
 	// Disk is the watch's latest reading, sharing its thresholds and source.
-	Disk         *watchDiskReading `json:"disk,omitempty"`
+	Disk         *WatchDiskReading `json:"disk,omitempty"`
 	AvailableMiB int               `json:"availableMiB"`
 	AvailMinMiB  int               `json:"availMinMiB"`
 	MemErr       string            `json:"memError,omitempty"`
@@ -608,7 +608,7 @@ type SwapReading struct {
 	Rated               bool `json:"rated"`
 }
 
-// noFreeSlot is the build slot's guard: a block for a start that builds, a
+// NoFreeSlot is the build slot's guard: a block for a start that builds, a
 // note for one that does not. ceilingZero is the block when capacity.ceiling
 // is configured as 0.
 const (

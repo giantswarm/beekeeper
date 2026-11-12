@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
@@ -17,7 +18,7 @@ func TestCapacityLowDiskReadingHoldsStarts(t *testing.T) {
 	}
 	k := config.Capacity{Ceiling: 3}
 	for _, builds := range []bool{false, true} {
-		v := NewCapacity(AgentCount{}, k, h, builds)
+		v := capacity.NewCapacity(capacity.AgentCount{}, k, h, builds)
 		if v.Room != 0 || !strings.Contains(v.Verdict(), "disk pressure") {
 			t.Fatalf("low disk allowed a start: %s", v.Verdict())
 		}
@@ -28,7 +29,7 @@ func TestCapacityLowDiskReadingHoldsStarts(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"disk":{"Low":false,"FreeMiB":200,"MinMiB":100}}`), h); err != nil {
 		t.Fatal(err)
 	}
-	if v := NewCapacity(AgentCount{}, k, h, false); v.Room == 0 {
+	if v := capacity.NewCapacity(capacity.AgentCount{}, k, h, false); v.Room == 0 {
 		t.Fatalf("disk recovery did not release starts: %s", v.Verdict())
 	}
 }

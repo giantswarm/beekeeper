@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -221,7 +222,7 @@ func TestLogRequestNamingAReviewerIsNoReviewAsk(t *testing.T) {
 		"Can you get a desk review for it?":                              true,
 	} {
 		c, ok := operational(noteDraft{Question: q}, config.Plans{})
-		if got := ok && c.name == TaskKindReview; got != want {
+		if got := ok && c.name == capacity.TaskKindReview; got != want {
 			t.Errorf("%q: review ask = %v (class %q), want %v", q, got, c.name, want)
 		}
 	}

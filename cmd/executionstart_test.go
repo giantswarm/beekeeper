@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -122,7 +123,7 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 			if err != nil || len(st.Starts) != 1 || len(st.Agents) != 1 || activations != 1 || starts > 3 || !st.Starts[0].Execution.Observation.Ready {
 				t.Fatal("recovery duplicated registration/activation or lost acceptance")
 			}
-			if busy := LocalBusy(st, []string{st.Agents[0].Name}); len(busy) != 0 {
+			if busy := capacity.LocalBusy(st, []string{st.Agents[0].Name}); len(busy) != 0 {
 				t.Fatalf("remote probation start used coordinator capacity: %v", busy)
 			}
 		})
@@ -177,13 +178,13 @@ func TestExecutionAdmissionKeepsTargetGuardsAndUnknownReservations(t *testing.T)
 	a, _ := sshStartTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	resources := execution.Resources{ObservedAt: time.Now(), Blocks: []string{"fixture target memory pressure"}}
-	v := a.executionCapacity(&state.State{}, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, ForWorker, claudeComm, bgModel)
+	v := a.executionCapacity(&state.State{}, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, capacity.ForWorker, claudeComm, bgModel)
 	if v.Room != 0 || !strings.Contains(strings.Join(v.Blocks, ";"), "target memory pressure") {
 		t.Fatal("provider narrowing removed the target machine guard")
 	}
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "unconfirmed-worker"}, Execution: &execution.Ref{Host: host.Identity, Execution: workerGitHubMissingRef, Generation: 1}}}}
 	resources.Blocks = nil
-	v = a.executionCapacity(st, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, ForWorker, claudeComm, bgModel)
+	v = a.executionCapacity(st, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, capacity.ForWorker, claudeComm, bgModel)
 	if v.Room != 0 || len(v.Providers[claudeComm].Busy) != 1 || executionHostBusy(st, host.Identity) != 1 {
 		t.Fatal("missing execution record became free capacity")
 	}
@@ -239,7 +240,7 @@ func TestExecutionAutoModelValidationDryRunAndLocalSelection(t *testing.T) {
 		t.Fatal("dry-run started a remote process")
 		return nil
 	}
-	args := []string{agentStartName, workerRole, brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", HarnessAuto, testDryRunFlag}
+	args := []string{agentStartName, workerRole, brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", capacity.HarnessAuto, testDryRunFlag}
 	if _, err := runAgents(a, append(args, "--model", "unconfigured-model")...); Code(err) != ExitUsage || probes != 0 {
 		t.Fatalf("unknown auto model touched transport: %v, probes %d", err, probes)
 	}
@@ -306,8 +307,8 @@ func TestExecutionAdmissionServeModeCeiling(t *testing.T) {
 	}
 	a.cfgPath = cfgPath
 	a.cfg.Capacity = cfg2.Capacity
-	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
-		return UsageReading{FiveHour: &UsageWindow{}, SevenDay: &UsageWindow{}}, nil
+	a.readUsage = func(context.Context, []string, time.Duration) (capacity.UsageReading, error) {
+		return capacity.UsageReading{FiveHour: &capacity.UsageWindow{}, SevenDay: &capacity.UsageWindow{}}, nil
 	}
 	modeReads := 0
 	a.readServeMode = func(context.Context, []string, time.Duration) (config.ServeModeReading, error) {
@@ -359,16 +360,16 @@ func TestExecutionCapacityWeighsOnlyTheHostsHarnesses(t *testing.T) {
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	// A self-hosted omp choice with room of its own: locally it would start.
 	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{"local": {Kind: config.KindSelfHosted, Ceiling: 2}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "local/fixture", Provider: "local", Kinds: []string{workerRole}}}}
-	if v := BuildProvidersCapacity(AgentCount{}, nil, k, nil, roomy(), false, nil, ForWorker, a.now); v.Room == 0 {
+	if v := capacity.BuildProvidersCapacity(capacity.AgentCount{}, nil, k, nil, roomy(), false, nil, capacity.ForWorker, a.now); v.Room == 0 {
 		t.Fatalf("fixture: the omp choice has no room locally either: %v", v.Blocks)
 	}
 	resources := execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}
-	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, ForWorker, HarnessAuto, ""); v.Room != 0 || (v.Choice != nil && v.Choice.Harness != "") {
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, capacity.ForWorker, capacity.HarnessAuto, ""); v.Room != 0 || (v.Choice != nil && v.Choice.Harness != "") {
 		t.Fatalf("a Claude-only host offers an omp choice: room %d, choice %+v", v.Room, v.Choice)
 	}
 	k = a.cfg.Capacity
 	k.Choices = append([]config.Choice{{Harness: codex.Harness, Model: "gpt-fixture"}}, k.Choices...)
-	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, ForWorker, HarnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != claudeComm {
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, capacity.ForWorker, capacity.HarnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != claudeComm {
 		t.Fatalf("the host's Claude choice: room %d, choice %+v, blocks %v", v.Room, v.Choice, v.Blocks)
 	}
 }

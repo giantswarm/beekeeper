@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -52,7 +53,7 @@ func TestStartsHoldRefusesNewWorkAndKeepsRunningWork(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []StartFor{ForWorker, ForReview, ForReviewOfSelfHosted} {
+	for _, kind := range []capacity.StartFor{capacity.ForWorker, capacity.ForReview, capacity.ForReviewOfSelfHosted} {
 		v, err := a.startCapacityWithOptions(ctx, false, nil, kind)
 		if err != nil || v.Room != 0 || !strings.Contains(v.Verdict(), "no start: starts are held by "+agentOne) || !strings.Contains(v.Verdict(), "the person sorts priorities") {
 			t.Errorf("capacity of a start (%d) while starts are held: %v %+v", kind, err, v)
@@ -60,7 +61,7 @@ func TestStartsHoldRefusesNewWorkAndKeepsRunningWork(t *testing.T) {
 		if _, err := gateStart(v, true); !refusedStarts(err) || strings.Contains(err.Error(), "--force") {
 			t.Errorf("a forced start's gate (%d) while starts are held: %v", kind, err)
 		}
-		if p := NewPick(v); p.Pick != PickNone || !strings.Contains(p.Reason, "starts are held") {
+		if p := capacity.NewPick(v); p.Pick != capacity.PickNone || !strings.Contains(p.Reason, "starts are held") {
 			t.Errorf("capacity pick (%d) while starts are held: %+v", kind, p)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -43,7 +44,7 @@ func notifyingWatch(t *testing.T, dir string, standby bool) (*watcher, *desktop,
 	var out bytes.Buffer
 	d := &desktop{}
 	w := (&app{cfg: cfg, store: store, out: &out, now: relayNow}).newWatcher(standby, false)
-	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return tight() }
+	w.readHeadroom = func(context.Context, *capacity.SwapReading) *capacity.Headroom { return tight() }
 	w.notifier = notify.New(cfg.Notify.Policy(), dir, d, func(l string) { w.emitNow("notify", "%s", l) })
 	w.doctoring.Store(true) // background maintenance is not under test in this output fixture
 	t.Cleanup(func() {
@@ -234,7 +235,7 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 	if line := swapLine(at(10000, 3700, 50300), nil, tr); !strings.Contains(line, "disk +0 MiB/h, zswap writeback 3000 MiB/h") {
 		t.Errorf("the line does not say the two apart: %s", line)
 	}
-	h := &Headroom{SwapGrowthMaxMiB: 256, Swap: &SwapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB, WritebackPerHourMiB: tr.WritebackPerHourMiB}}
+	h := &capacity.Headroom{SwapGrowthMaxMiB: 256, Swap: &capacity.SwapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB, WritebackPerHourMiB: tr.WritebackPerHourMiB}}
 	if line, blocks := h.SwapGuard(); line != "" || blocks {
 		t.Errorf("the guard reacts to writeback: %q %v", line, blocks)
 	}
@@ -245,7 +246,7 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 	if tr.DiskPerHourMiB != 1000 || tr.WritebackPerHourMiB != 3000 {
 		t.Fatalf("new swap-outs beside writeback: %+v", tr)
 	}
-	h.Swap = &SwapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB}
+	h.Swap = &capacity.SwapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB}
 	if line, _ := h.SwapGuard(); !strings.Contains(line, "disk swap growing +1000 MiB/h over 256") {
 		t.Errorf("the guard misses new swap-outs: %q", line)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
@@ -147,7 +148,7 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 			rev, _ := cmd.Flags().GetBool(reviewFlag)
 			ofSH, _ := cmd.Flags().GetBool(reviewOfSelfHostedFlag)
 			if rev || ofSH {
-				kind = TaskKindReview
+				kind = capacity.TaskKindReview
 			} else {
 				kind = workerRole
 			}

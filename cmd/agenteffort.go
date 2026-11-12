@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 )
@@ -82,7 +83,7 @@ func (a *app) selectedEffort(name, kind, harness, model, explicit, choice string
 	if !config.ValidEffort(level) {
 		return "", usageErr("invalid effort %q", level)
 	}
-	if harness == HarnessAgy {
+	if harness == capacity.HarnessAgy {
 		if err := refuseAgyEffort(level); err != nil {
 			return "", err
 		}

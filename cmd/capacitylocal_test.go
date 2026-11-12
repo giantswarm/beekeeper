@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -39,12 +40,12 @@ func TestLocalCeilingCountsOnlyThisMachine(t *testing.T) {
 	}
 
 	unset := config.Capacity{Ceiling: 14}
-	if v := NewCapacity(c, unset, roomy(), false).WithLocal(st, unset); v.Local != nil || v.Room != 9 {
+	if v := capacity.NewCapacity(c, unset, roomy(), false).WithLocal(st, unset); v.Local != nil || v.Room != 9 {
 		t.Errorf("unset local ceiling: local %+v, room %d, want none and 9", v.Local, v.Room)
 	}
 
 	k := localCap(14, 5)
-	v := NewCapacity(c, k, roomy(), false).WithLocal(st, k)
+	v := capacity.NewCapacity(c, k, roomy(), false).WithLocal(st, k)
 	if v.Local == nil || len(v.Local.Busy) != 3 || v.Local.Room != 2 || v.Room != 2 {
 		t.Fatalf("local ceiling 5: local %+v, room %d, want 3 busy and room 2", v.Local, v.Room)
 	}
@@ -56,7 +57,7 @@ func TestLocalCeilingCountsOnlyThisMachine(t *testing.T) {
 	}
 
 	full := localCap(14, 3)
-	v = NewCapacity(c, full, roomy(), false).WithLocal(st, full)
+	v = capacity.NewCapacity(c, full, roomy(), false).WithLocal(st, full)
 	if want := "no start: 3 busy locally at capacity.local.ceiling 3"; v.Room != 0 || v.Verdict() != want {
 		t.Errorf("at the local ceiling: room %d, %q, want %q", v.Room, v.Verdict(), want)
 	}
@@ -65,13 +66,13 @@ func TestLocalCeilingCountsOnlyThisMachine(t *testing.T) {
 	}
 
 	zero := localCap(14, 0)
-	if v = NewCapacity(c, zero, roomy(), false).WithLocal(st, zero); v.Room != 0 || v.Verdict() != "no start: capacity.local.ceiling 0" {
+	if v = capacity.NewCapacity(c, zero, roomy(), false).WithLocal(st, zero); v.Room != 0 || v.Verdict() != "no start: capacity.local.ceiling 0" {
 		t.Errorf("local ceiling 0: room %d, %q", v.Room, v.Verdict())
 	}
 
 	// The global ceiling still binds below the local one.
 	tight := localCap(6, 5)
-	if v = NewCapacity(c, tight, roomy(), false).WithLocal(st, tight); v.Room != 1 {
+	if v = capacity.NewCapacity(c, tight, roomy(), false).WithLocal(st, tight); v.Room != 1 {
 		t.Errorf("capacity.ceiling 6 under local room 2: room %d, want 1", v.Room)
 	}
 }
@@ -86,13 +87,13 @@ func TestLocalCeilingLeavesAReviewItsHeadroom(t *testing.T) {
 	k := localCap(14, 3)
 	k.ReviewHeadroom = 2
 
-	worker := NewStartCapacity(c, k, roomy(), false, ForWorker).WithLocal(st, k)
+	worker := capacity.NewStartCapacity(c, k, roomy(), false, capacity.ForWorker).WithLocal(st, k)
 	if want := "no start: 5 busy locally at capacity.local.ceiling 3"; worker.Room != 0 || worker.Verdict() != want {
 		t.Errorf("worker over the local ceiling: room %d, %q, want %q", worker.Room, worker.Verdict(), want)
 	}
 
 	k.ReviewHeadroom = 3
-	review := NewStartCapacity(c, k, roomy(), false, ForReview).WithLocal(st, k)
+	review := capacity.NewStartCapacity(c, k, roomy(), false, capacity.ForReview).WithLocal(st, k)
 	if review.Local == nil || review.Local.Room != 1 || review.Room != 1 {
 		t.Fatalf("review within the local headroom: local %+v, room %d (%v), want room 1", review.Local, review.Room, review.Blocks)
 	}
@@ -104,21 +105,21 @@ func TestLocalCeilingLeavesAReviewItsHeadroom(t *testing.T) {
 	}
 
 	k.ReviewHeadroom = 2
-	used := NewStartCapacity(c, k, roomy(), false, ForReviewOfSelfHosted).WithLocal(st, k)
+	used := capacity.NewStartCapacity(c, k, roomy(), false, capacity.ForReviewOfSelfHosted).WithLocal(st, k)
 	if want := "no start: 5 busy locally at capacity.local.ceiling 3 plus review headroom 2"; used.Room != 0 || used.Verdict() != want {
 		t.Errorf("review headroom used up locally: room %d, %q, want %q", used.Room, used.Verdict(), want)
 	}
 
 	zero := localCap(14, 0)
 	zero.ReviewHeadroom = 2
-	if v := NewStartCapacity(c, zero, roomy(), false, ForReview).WithLocal(st, zero); v.Room != 0 || v.Verdict() != "no start: capacity.local.ceiling 0" {
+	if v := capacity.NewStartCapacity(c, zero, roomy(), false, capacity.ForReview).WithLocal(st, zero); v.Room != 0 || v.Verdict() != "no start: capacity.local.ceiling 0" {
 		t.Errorf("review at local ceiling 0: room %d, %q", v.Room, v.Verdict())
 	}
 
 	k.ReviewHeadroom = 3
 	busyMachine := roomy()
 	busyMachine.Load1 = busyMachine.LoadMax + 1
-	if v := NewStartCapacity(c, k, busyMachine, false, ForReview).WithLocal(st, k); v.Room != 0 {
+	if v := capacity.NewStartCapacity(c, k, busyMachine, false, capacity.ForReview).WithLocal(st, k); v.Room != 0 {
 		t.Errorf("review under high load within the local headroom: room %d, want 0 (%v)", v.Room, v.Blocks)
 	}
 }
@@ -131,7 +132,7 @@ func TestLocalCeilingHoldsForAnExplicitHarness(t *testing.T) {
 	for _, tc := range []struct {
 		local, want int
 	}{{0, 0}, {1, 1}, {4, 3}} {
-		v := &View{Providers: map[string]*ProviderView{claudeComm: {Name: claudeComm, Room: 3}}, Headroom: roomy(), Local: &LocalView{Busy: []string{"BK 0"}, Ceiling: tc.local + 1, Room: tc.local}}
+		v := &capacity.View{Providers: map[string]*capacity.ProviderView{claudeComm: {Name: claudeComm, Room: 3}}, Headroom: roomy(), Local: &capacity.LocalView{Busy: []string{"BK 0"}, Ceiling: tc.local + 1, Room: tc.local}}
 		v = v.ForTarget(k, claudeComm, bgModel)
 		if v.Room != tc.want {
 			t.Errorf("local room %d: room %d, want %d (%v)", tc.local, v.Room, tc.want, v.Blocks)

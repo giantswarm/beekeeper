@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/capacity"
 )
 
 const (
@@ -27,7 +29,7 @@ func (a *app) requireStartModel(name, model string) error {
 	return nil
 }
 
-func startDecision(v *View) string {
+func startDecision(v *capacity.View) string {
 	if v == nil || v.Choice == nil {
 		return ""
 	}

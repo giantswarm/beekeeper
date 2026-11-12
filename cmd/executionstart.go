@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -51,7 +52,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
 		return usageErr("remote starts require --repo and --ref, use headless mode and do not accept --dir or --desktop")
 	}
-	if o.Harness != HarnessAuto && (!execution.SupportedHarness(o.Harness) || !host.Supports(o.Harness)) {
+	if o.Harness != capacity.HarnessAuto && (!execution.SupportedHarness(o.Harness) || !host.Supports(o.Harness)) {
 		return refused("execution host %s does not list harness %s; it lists %s", host.Identity, o.Harness, strings.Join(host.Harnesses, ", "))
 	}
 	if !host.AdmitsRepository(o.Repository) {
@@ -80,14 +81,14 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		return err
 	}
 	k := a.liveCapacity()
-	if o.Harness == HarnessAuto {
+	if o.Harness == capacity.HarnessAuto {
 		if len(k.Choices) == 0 {
 			return usageErr("--harness auto: no capacity.choices configured")
 		}
-		if m := strings.TrimSpace(o.Model); m != "" && !ChoicesHaveModel(k.Choices, m) {
+		if m := strings.TrimSpace(o.Model); m != "" && !capacity.ChoicesHaveModel(k.Choices, m) {
 			return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
 		}
-		k = FilterChoiceModel(k, o.Model)
+		k = capacity.FilterChoiceModel(k, o.Model)
 	}
 	by, err := a.caller()
 	if err != nil {
@@ -112,9 +113,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 
 	readings := a.executionReadings(ctx, k)
-	var legacy *UsageView
+	var legacy *capacity.UsageView
 	if len(k.Providers) == 0 {
-		k, legacy = a.resolveUsageForStart(ctx, k, StartKind(o.Review, o.ReviewOfSelfHosted))
+		k, legacy = a.resolveUsageForStart(ctx, k, capacity.StartKind(o.Review, o.ReviewOfSelfHosted))
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {
@@ -124,13 +125,13 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
-	if o.Harness != HarnessAuto && caps.Harnesses[o.Harness] == "" {
+	if o.Harness != capacity.HarnessAuto && caps.Harnesses[o.Harness] == "" {
 		return refused("execution host %s does not offer harness %s: %s", host.Identity, o.Harness, caps.Unavailable[o.Harness])
 	}
 	exclude := append(slices.Clone(o.Exclude), hostUnoffered(caps)...)
-	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, StartKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
+	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, capacity.StartKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
 	choiceEffort := ""
-	if o.Harness == HarnessAuto {
+	if o.Harness == capacity.HarnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
 		if err != nil {
 			return err
@@ -187,7 +188,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		_, err := fmt.Fprintf(a.out, "dry run: %s, host %s, %s at %s, harness %s on %s; no reservation, workspace or process created\n", name, host.Identity, o.Repository, o.GitRef, o.Harness, o.Model+effortText(o.Effort))
 		return err
 	}
-	provider, bucket := ResolveAgentProviderBucket(k, r.Harness, r.Model)
+	provider, bucket := capacity.ResolveAgentProviderBucket(k, r.Harness, r.Model)
 	err = a.store.Update(func(current *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(current.Deliveries)
 		if err := a.refuseStopped(current, "starting an SSH execution"); err != nil {
@@ -203,7 +204,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
 			return nil, refused("provider configuration changed during admission; retry")
 		}
-		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, StartKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
+		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, capacity.StartKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
 		over, err := gateStart(v, o.Force)
 		if err != nil {
 			return nil, err
@@ -221,7 +222,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
 		s.Kind = a.selectionKind
 		if o.Review {
-			s.Kind = TaskKindReview
+			s.Kind = capacity.TaskKindReview
 		}
 		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
@@ -243,8 +244,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	return a.activateExecution(ctx, r.Ref)
 }
 
-func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[string]ProviderReadingResult {
-	readings := map[string]ProviderReadingResult{}
+func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[string]capacity.ProviderReadingResult {
+	readings := map[string]capacity.ProviderReadingResult{}
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if p.SelfHosted() {
@@ -259,39 +260,39 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 			continue
 		}
 		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
-		readings[name] = ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
+		readings[name] = capacity.ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 	}
 	return readings
 }
 
-func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]ProviderReadingResult, legacy *UsageView, builds bool, exclude []string, kind StartFor, harness, model string) *View {
+func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]capacity.ProviderReadingResult, legacy *capacity.UsageView, builds bool, exclude []string, kind capacity.StartFor, harness, model string) *capacity.View {
 	// A host runs only the harnesses it has an adapter for: its verdict
 	// weighs those choices alone, so a choice it cannot run never shows as
 	// its room.
 	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
-	for _, name := range []string{claudeComm, codex.Harness, HarnessAgy, omp.Harness} {
+	for _, name := range []string{claudeComm, codex.Harness, capacity.HarnessAgy, omp.Harness} {
 		if !host.Supports(name) {
 			exclude = append(exclude, name)
 		}
 	}
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
-	h := &Headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
+	h := &capacity.Headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
 	counts := countAgents(st, sessions, a.now, a.cfg)
-	var v *View
+	var v *capacity.View
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		choicesCap := k
-		if harness == HarnessAuto {
-			choicesCap = FilterChoiceModel(k, model)
+		if harness == capacity.HarnessAuto {
+			choicesCap = capacity.FilterChoiceModel(k, model)
 		}
-		v = BuildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), choicesCap, readings, h, false, exclude, kind, a.now)
+		v = capacity.BuildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), choicesCap, readings, h, false, exclude, kind, a.now)
 		if len(k.Choices) > 0 && len(choicesCap.Choices) == 0 {
 			reason := fmt.Sprintf("model %q is not in capacity.choices", strings.TrimSpace(model))
-			v.Choice = &ChoiceView{Review: kind != ForWorker, ReviewOfSelfHosted: kind == ForReviewOfSelfHosted, Reason: reason}
+			v.Choice = &capacity.ChoiceView{Review: kind != capacity.ForWorker, ReviewOfSelfHosted: kind == capacity.ForReviewOfSelfHosted, Reason: reason}
 			v.Room, v.Blocks = 0, []string{"no choice has room: " + reason}
 		}
 	} else {
-		v = NewStartCapacity(counts, k, h, false, kind).WithUsage(legacy, a.now)
+		v = capacity.NewStartCapacity(counts, k, h, false, kind).WithUsage(legacy, a.now)
 	}
 	v = v.ForTarget(k, harness, model)
 	v.Builds = builds
@@ -324,7 +325,7 @@ var hostUnsupportedHarnesses = []string{}
 // harness whose version, login or guard failed there is no choice on it.
 func hostUnoffered(caps execution.Capabilities) []string {
 	var out []string
-	for _, name := range []string{claudeComm, codex.Harness, HarnessAgy, omp.Harness} {
+	for _, name := range []string{claudeComm, codex.Harness, capacity.HarnessAgy, omp.Harness} {
 		if caps.Harnesses[name] == "" {
 			out = append(out, name)
 		}

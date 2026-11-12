@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/loop"
 )
@@ -208,7 +209,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	review := a.executionGitHubCommands()[0]
 	review.SetOut(&output)
 	review.SetErr(&output)
-	review.SetArgs([]string{"pr", TaskKindReview, "2", "--comment", "--body", "Review: approved"})
+	review.SetArgs([]string{"pr", capacity.TaskKindReview, "2", "--comment", "--body", "Review: approved"})
 	if err := review.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}

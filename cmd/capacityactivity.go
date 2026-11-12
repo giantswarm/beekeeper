@@ -6,18 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const transcriptResumeEvent = "agents.transcript-resume"
 
-func activityCounts(st *state.State, events []state.Event, k config.Capacity, now time.Time) map[string]*ProviderActivity {
-	out := map[string]*ProviderActivity{}
+func activityCounts(st *state.State, events []state.Event, k config.Capacity, now time.Time) map[string]*capacity.ProviderActivity {
+	out := map[string]*capacity.ProviderActivity{}
 	seen := map[string]bool{}
-	get := func(provider string) *ProviderActivity {
+	get := func(provider string) *capacity.ProviderActivity {
 		if out[provider] == nil {
-			out[provider] = &ProviderActivity{}
+			out[provider] = &capacity.ProviderActivity{}
 		}
 		return out[provider]
 	}
@@ -31,7 +32,7 @@ func activityCounts(st *state.State, events []state.Event, k config.Capacity, no
 	byName := map[string][]startedProvider{}
 	starts := slices.Concat(st.Starts, st.EndedWorkers)
 	for _, s := range starts {
-		provider, _ := ResolveAgentProviderBucket(k, s.Harness, s.Model)
+		provider, _ := capacity.ResolveAgentProviderBucket(k, s.Harness, s.Model)
 		provider = cmp.Or(provider, s.Harness, claudeComm)
 		byName[s.Name] = append(byName[s.Name], startedProvider{at: s.At, provider: provider})
 		key := s.Session + "/" + s.HostSession

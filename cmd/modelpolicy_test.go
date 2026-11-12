@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -26,9 +27,9 @@ func TestModelPolicyPickAndStart(t *testing.T) {
 	r.want("codex "+pickGPT, "--review", taskKindArg, testTaskAudit, "--author-model", pickOpus)
 	// Model filtering must preserve the author's family.
 	k := r.cfg.Capacity
-	k.TaskKind, k.AuthorModel = TaskKindReview, pickOpus
-	k = FilterChoiceModel(k, pickGPT)
-	if why := ModelPolicyReason(k, k.Choices[0], nil, "", ForReview); why != "" {
+	k.TaskKind, k.AuthorModel = capacity.TaskKindReview, pickOpus
+	k = capacity.FilterChoiceModel(k, pickGPT)
+	if why := capacity.ModelPolicyReason(k, k.Choices[0], nil, "", capacity.ForReview); why != "" {
 		t.Fatal(why)
 	}
 	r.configure("  taskPolicies:\n    audit: {minClass: 3}\n")
@@ -120,7 +121,7 @@ func TestModelPolicyConstraints(t *testing.T) {
 	// A forced pick cannot override capability/cost/family policy.
 	a, _ := r.app(false)
 	a.selectionKind = testTaskAudit
-	v, err := a.startCapacityForAuto(t.Context(), false, nil, ForWorker, "")
+	v, err := a.startCapacityForAuto(t.Context(), false, nil, capacity.ForWorker, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestModelPolicyConstraints(t *testing.T) {
 	c.SilenceErrors, c.SilenceUsage = true, true
 	c.SetArgs(testCheckoutArgs(t, r.dir, []string{"audit", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag, testHarnessFlag, claudeComm, modelFlag, pickOpus, taskKindArg, testTaskAudit}))
 	err = c.Execute()
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), ModelPolicyPrefix) {
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), capacity.ModelPolicyPrefix) {
 		t.Fatalf("explicit forced target bypassed policy: %v", err)
 	}
 	c = a.agentStartCmd()
@@ -148,7 +149,7 @@ func TestModelPolicyConstraints(t *testing.T) {
 
 func TestModelPolicyLoopSuppliesAuthorModel(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Capacity.TaskPolicies = map[string]config.TaskPolicy{TaskKindReview: {DifferentFamily: true}}
+	r.a.cfg.Capacity.TaskPolicies = map[string]config.TaskPolicy{capacity.TaskKindReview: {DifferentFamily: true}}
 	r.a.cfg.Capacity.Choices = []config.Choice{
 		{Harness: config.OmpHarness, Model: loopQwen, Family: "writer"},
 		{Harness: claudeComm, Model: pickOpus, Family: "independent-family"},
@@ -168,8 +169,8 @@ func TestModelPolicyLoopSuppliesAuthorModel(t *testing.T) {
 }
 
 func TestModelPolicyVaultFlags(t *testing.T) {
-	f := parseStartArgsForVault([]string{agentStartName, workerRole, "brief.md", taskKindArg, TaskKindReview, "--" + authorModelFlag, pickOpus})
-	if f.taskKind != TaskKindReview || f.authorModel != pickOpus {
+	f := parseStartArgsForVault([]string{agentStartName, workerRole, "brief.md", taskKindArg, capacity.TaskKindReview, "--" + authorModelFlag, pickOpus})
+	if f.taskKind != capacity.TaskKindReview || f.authorModel != pickOpus {
 		t.Fatalf("broker selection flags: %+v", f)
 	}
 }

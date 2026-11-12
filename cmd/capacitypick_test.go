@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -43,7 +44,7 @@ type pickRig struct {
 	// claudeExtra is more of the claude provider's configuration.
 	claudeExtra    string
 	providersExtra string
-	read           func(cmd []string) UsageReading
+	read           func(cmd []string) capacity.UsageReading
 }
 
 func newPickRig(t *testing.T, choices string) *pickRig {
@@ -94,10 +95,10 @@ func (r *pickRig) configure(extra string) {
 
 func (r *pickRig) app(jsonOut bool) (*app, *bytes.Buffer) {
 	var out bytes.Buffer
-	for _, name := range []string{claudeComm, HarnessAgy, codex.Harness} {
+	for _, name := range []string{claudeComm, capacity.HarnessAgy, codex.Harness} {
 		_ = os.Remove(filepath.Join(r.cfg.StateDir, usageProviderFile(name)))
 	}
-	read := func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
+	read := func(_ context.Context, cmd []string, _ time.Duration) (capacity.UsageReading, error) {
 		if r.read != nil {
 			return r.read(cmd), nil
 		}
@@ -105,9 +106,9 @@ func (r *pickRig) app(jsonOut bool) (*app, *bytes.Buffer) {
 		if cmd[0] == testReadClaude {
 			w = r.claude
 		}
-		return UsageReading{
-			FiveHour: &UsageWindow{UsedPercent: w[0], ResetsAt: r.reset5h},
-			SevenDay: &UsageWindow{UsedPercent: w[1], ResetsAt: r.reset7d},
+		return capacity.UsageReading{
+			FiveHour: &capacity.UsageWindow{UsedPercent: w[0], ResetsAt: r.reset5h},
+			SevenDay: &capacity.UsageWindow{UsedPercent: w[1], ResetsAt: r.reset7d},
 		}, nil
 	}
 	return &app{cfgPath: r.cfgPath, cfg: r.cfg, store: r.store, now: r.t0, out: &out, as: agentOne, json: jsonOut, readUsage: read}, &out
@@ -149,7 +150,7 @@ func TestCapacityPickTakesTheSubscriptionNotAheadOfItsPace(t *testing.T) {
 	var p struct {
 		Pick, Harness, Model, Provider string
 		Capacity                       struct {
-			Choice struct{ Candidates []ChoiceCandidate }
+			Choice struct{ Candidates []capacity.ChoiceCandidate }
 		}
 	}
 	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
@@ -226,7 +227,7 @@ func TestCapacityReviewIsDecidedLikeAWorkersStart(t *testing.T) {
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var v View
+	var v capacity.View
 	if err := json.Unmarshal(out.Bytes(), &v); err != nil {
 		t.Fatal(err)
 	}
@@ -273,17 +274,17 @@ func TestCapacityPickKeepsWorkersOffASelfHostedChoiceWithoutKinds(t *testing.T) 
 	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(p.Reason, SelfHostedWorker) {
-		t.Errorf("capacity pick --json reason = %q, want %q", p.Reason, SelfHostedWorker)
+	if !strings.Contains(p.Reason, capacity.SelfHostedWorker) {
+		t.Errorf("capacity pick --json reason = %q, want %q", p.Reason, capacity.SelfHostedWorker)
 	}
 	r.want("omp "+pickQwen, "--kind", "triage")
-	var v View
+	var v capacity.View
 	if err := json.Unmarshal([]byte(r.pick(true, "--kind", "triage")), &struct {
-		Capacity *View `json:"capacity"`
+		Capacity *capacity.View `json:"capacity"`
 	}{&v}); err != nil {
 		t.Fatal(err)
 	}
-	if v.Choice == nil || v.Choice.Decision != "task triage: "+ChoiceRule {
+	if v.Choice == nil || v.Choice.Decision != "task triage: "+capacity.ChoiceRule {
 		t.Errorf("capacity pick --kind triage decision = %+v", v.Choice)
 	}
 }
@@ -329,7 +330,7 @@ func TestCapacityPickKeepsTheProvidersTighterPaceMargin(t *testing.T) {
 	r.want(codex.Harness + " " + pickGPT)
 	var p struct {
 		Capacity struct {
-			Choice struct{ Candidates []ChoiceCandidate }
+			Choice struct{ Candidates []capacity.ChoiceCandidate }
 		}
 	}
 	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
@@ -423,14 +424,14 @@ func TestCapacityPickUsesChoicesBucketPace(t *testing.T) {
 		{Harness: claudeComm, Model: pickOpus},
 		{Harness: codex.Harness, Model: pickGPT, Bucket: "model"},
 	}}
-	providers := map[string]*ProviderView{
-		claudeComm: {Room: 1, SevenDay: &UsageWindow{UsedPercent: 40, Pace: &pace}},
-		codex.Harness: {Room: 1, SevenDay: &UsageWindow{UsedPercent: 49, Pace: &pace}, Buckets: map[string]*BucketView{
-			"model":         {Room: 1, SevenDay: &UsageWindow{UsedPercent: 20, Pace: &pace}},
-			"unused-bucket": {Room: 1, SevenDay: &UsageWindow{UsedPercent: 50, Pace: &pace}},
+	providers := map[string]*capacity.ProviderView{
+		claudeComm: {Room: 1, SevenDay: &capacity.UsageWindow{UsedPercent: 40, Pace: &pace}},
+		codex.Harness: {Room: 1, SevenDay: &capacity.UsageWindow{UsedPercent: 49, Pace: &pace}, Buckets: map[string]*capacity.BucketView{
+			"model":         {Room: 1, SevenDay: &capacity.UsageWindow{UsedPercent: 20, Pace: &pace}},
+			"unused-bucket": {Room: 1, SevenDay: &capacity.UsageWindow{UsedPercent: 50, Pace: &pace}},
 		}},
 	}
-	got := EvaluateChoices(k, providers, nil, "", nil, ForWorker, time.Now())
+	got := capacity.EvaluateChoices(k, providers, nil, "", nil, capacity.ForWorker, time.Now())
 	if got.Provider != codex.Harness {
 		t.Fatalf("bucket pick = %+v; candidates = %+v", got, got.Candidates)
 	}
@@ -454,33 +455,33 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 	agyReset7d := r.t0.Add(112 * time.Hour)
 	codex7d := 50.0
 	codexReset7d := r.t0.Add(48 * time.Hour)
-	r.read = func(cmd []string) UsageReading {
+	r.read = func(cmd []string) capacity.UsageReading {
 		switch cmd[0] {
 		case testReadClaude:
-			return UsageReading{
-				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
-				SevenDay: &UsageWindow{UsedPercent: 10, ResetsAt: r.t0.Add(134 * time.Hour)},
+			return capacity.UsageReading{
+				FiveHour: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
+				SevenDay: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: r.t0.Add(134 * time.Hour)},
 			}
 		case testReadAgy:
-			return UsageReading{
-				Buckets: map[string]UsageBucket{
+			return capacity.UsageReading{
+				Buckets: map[string]capacity.UsageBucket{
 					config.DefaultAgyGeminiBucket: {
-						FiveHour: &UsageWindow{UsedPercent: agy5h, ResetsAt: r.reset5h},
-						SevenDay: &UsageWindow{UsedPercent: agy7d, ResetsAt: agyReset7d},
+						FiveHour: &capacity.UsageWindow{UsedPercent: agy5h, ResetsAt: r.reset5h},
+						SevenDay: &capacity.UsageWindow{UsedPercent: agy7d, ResetsAt: agyReset7d},
 					},
 				},
 				BucketOrder: []string{config.DefaultAgyGeminiBucket},
 			}
 		default:
-			return UsageReading{
-				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
-				SevenDay: &UsageWindow{UsedPercent: codex7d, ResetsAt: codexReset7d},
+			return capacity.UsageReading{
+				FiveHour: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
+				SevenDay: &capacity.UsageWindow{UsedPercent: codex7d, ResetsAt: codexReset7d},
 			}
 		}
 	}
 	// Furthest behind pace wins (agy 23.3 behind pace vs codex 21.4 behind pace,
 	// even though codex has 1.0%/h remaining vs agy's 0.8%/h).
-	r.want(HarnessAgy + " " + pickGemini)
+	r.want(capacity.HarnessAgy + " " + pickGemini)
 	var p struct {
 		Capacity struct {
 			Providers map[string]struct {
@@ -500,7 +501,7 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
 		t.Fatal(err)
 	}
-	if !p.Capacity.Providers[HarnessAgy].Underused || !p.Capacity.Providers[HarnessAgy].Buckets[config.DefaultAgyGeminiBucket].Underused ||
+	if !p.Capacity.Providers[capacity.HarnessAgy].Underused || !p.Capacity.Providers[capacity.HarnessAgy].Buckets[config.DefaultAgyGeminiBucket].Underused ||
 		p.Capacity.Providers[codex.Harness].Underused {
 		t.Errorf("underused flags = %+v", p.Capacity.Providers)
 	}
@@ -525,7 +526,7 @@ func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
 	r.configure("")
 	agy7d, agyReset7d = 68, r.t0.Add(15*time.Hour)
 	codex7d, codexReset7d = 54.9, r.t0.Add(37*time.Hour)
-	r.want(HarnessAgy + " " + pickGemini)
+	r.want(capacity.HarnessAgy + " " + pickGemini)
 	agy5h = 90
 	r.want(codex.Harness + " " + pickGPT)
 }
@@ -536,16 +537,16 @@ func TestCapacityPickPrioritizesBelowHalfPace(t *testing.T) {
 		{Harness: claudeComm, Model: pickOpus},
 		{Harness: codex.Harness, Model: pickGPT},
 	}}
-	providers := map[string]*ProviderView{
-		claudeComm:    {Room: 1, SevenDay: &UsageWindow{UsedPercent: 50, Pace: &highPace}},
-		codex.Harness: {Room: 1, SevenDay: &UsageWindow{UsedPercent: 12, Pace: &lowPace}},
+	providers := map[string]*capacity.ProviderView{
+		claudeComm:    {Room: 1, SevenDay: &capacity.UsageWindow{UsedPercent: 50, Pace: &highPace}},
+		codex.Harness: {Room: 1, SevenDay: &capacity.UsageWindow{UsedPercent: 12, Pace: &lowPace}},
 	}
-	got := EvaluateChoices(k, providers, nil, "", nil, ForWorker, time.Now())
+	got := capacity.EvaluateChoices(k, providers, nil, "", nil, capacity.ForWorker, time.Now())
 	if got.Provider != codex.Harness {
 		t.Fatalf("below-half-pace provider lost to greater absolute lag: %+v", got)
 	}
 	providers[codex.Harness].Room = 0
-	got = EvaluateChoices(k, providers, nil, "", nil, ForWorker, time.Now())
+	got = capacity.EvaluateChoices(k, providers, nil, "", nil, capacity.ForWorker, time.Now())
 	if got.Provider != claudeComm {
 		t.Fatalf("underuse bypassed admission: %+v", got)
 	}
@@ -570,14 +571,14 @@ func TestAutoStartChoiceEffortDoesNotReachAgy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(catalogDir, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-x","supported_reasoning_levels":[{"effort":"high"}]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, excluded := range []string{HarnessAgy, codex.Harness} {
+	for _, excluded := range []string{capacity.HarnessAgy, codex.Harness} {
 		a, out := r.app(false)
 		c := a.agentStartCmd()
 		c.SetArgs([]string{"EffortChoice", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag, "--exclude", excluded})
 		if err := c.Execute(); err != nil {
 			t.Fatalf("excluding %s: %v", excluded, err)
 		}
-		if excluded == HarnessAgy {
+		if excluded == capacity.HarnessAgy {
 			if !strings.Contains(out.String(), `model_reasoning_effort="high"`) {
 				t.Fatalf("Codex effort missing: %s", out)
 			}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -25,21 +26,21 @@ func TestReviewHeadroomLegacyGuards(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		busy   int
-		kind   StartFor
+		kind   capacity.StartFor
 		builds bool
 		guard  int
 		room   int
 	}{
-		{"worker ceiling", 2, ForWorker, false, reviewNoGuard, 0},
-		{"review ceiling", 2, ForReview, false, reviewNoGuard, 2},
-		{"review last slot", 3, ForReview, false, reviewNoGuard, 1},
-		{"review exhausted", 4, ForReview, false, reviewNoGuard, 0},
-		{"memory availability", 2, ForReview, false, reviewMemory, 0},
-		{"machine load", 2, ForReview, false, reviewLoad, 0},
-		{"swap pressure", 2, ForReview, false, reviewSwap, 0},
-		{"lab count", 2, ForReview, false, reviewLabs, 0},
-		{"build slot", 2, ForReview, true, reviewSlot, 0},
-		{"read only review", 2, ForReview, false, reviewSlot, 2},
+		{"worker ceiling", 2, capacity.ForWorker, false, reviewNoGuard, 0},
+		{"review ceiling", 2, capacity.ForReview, false, reviewNoGuard, 2},
+		{"review last slot", 3, capacity.ForReview, false, reviewNoGuard, 1},
+		{"review exhausted", 4, capacity.ForReview, false, reviewNoGuard, 0},
+		{"memory availability", 2, capacity.ForReview, false, reviewMemory, 0},
+		{"machine load", 2, capacity.ForReview, false, reviewLoad, 0},
+		{"swap pressure", 2, capacity.ForReview, false, reviewSwap, 0},
+		{"lab count", 2, capacity.ForReview, false, reviewLabs, 0},
+		{"build slot", 2, capacity.ForReview, true, reviewSlot, 0},
+		{"read only review", 2, capacity.ForReview, false, reviewSlot, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := roomy()
@@ -55,7 +56,7 @@ func TestReviewHeadroomLegacyGuards(t *testing.T) {
 			case reviewSlot:
 				h.Slots, h.SlotsFree = 1, 0
 			}
-			v := NewStartCapacity(AgentCount{Busy: make([]string, tc.busy)}, k, h, tc.builds, tc.kind)
+			v := capacity.NewStartCapacity(capacity.AgentCount{Busy: make([]string, tc.busy)}, k, h, tc.builds, tc.kind)
 			if v.Room != tc.room {
 				t.Fatalf("room %d, want %d: %s", v.Room, tc.room, v.Verdict())
 			}
@@ -65,11 +66,11 @@ func TestReviewHeadroomLegacyGuards(t *testing.T) {
 		})
 	}
 	k.Ceiling = 0
-	if v := NewStartCapacity(AgentCount{}, k, roomy(), false, ForReview); v.Room != 0 {
+	if v := capacity.NewStartCapacity(capacity.AgentCount{}, k, roomy(), false, capacity.ForReview); v.Room != 0 {
 		t.Fatal("opened a stopped pool")
 	}
 	k.Ceiling, k.ReviewHeadroom = 2, 0
-	if v := NewStartCapacity(AgentCount{Busy: []string{busyOne, busyTwo}}, k, roomy(), false, ForReview); v.Room != 0 {
+	if v := capacity.NewStartCapacity(capacity.AgentCount{Busy: []string{busyOne, busyTwo}}, k, roomy(), false, capacity.ForReview); v.Room != 0 {
 		t.Fatal("zero reserve ignored")
 	}
 }
@@ -92,11 +93,11 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 	}
 	a, _ := r.app(false)
 	a.cfgPath = ""
-	v, err := a.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
+	v, err := a.startCapacityWithOptions(context.Background(), false, nil, capacity.ForWorker)
 	if err != nil || v.Room != 0 {
 		t.Fatalf("worker admission: %+v, %v", v, err)
 	}
-	v, err = a.startCapacityWithOptions(context.Background(), false, nil, ForReview)
+	v, err = a.startCapacityWithOptions(context.Background(), false, nil, capacity.ForReview)
 	if err != nil || v.Room != 2 {
 		t.Fatalf("review admission: %+v, %v", v, err)
 	}
@@ -116,7 +117,7 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 	}
 	a, _ = r.app(false)
 	a.cfgPath = ""
-	v, err = a.startCapacityWithOptions(context.Background(), false, nil, ForReview)
+	v, err = a.startCapacityWithOptions(context.Background(), false, nil, capacity.ForReview)
 	if err != nil || v.Room != 0 || !strings.Contains(v.Verdict(), "review headroom exhausted") {
 		t.Fatalf("exhausted reserve: %+v, %v", v, err)
 	}
@@ -132,7 +133,7 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 	r.claude[0], r.codex[0] = 91, 91
 	a, _ = r.app(false)
 	a.cfgPath = ""
-	v, err = a.startCapacityWithOptions(context.Background(), false, nil, ForReview)
+	v, err = a.startCapacityWithOptions(context.Background(), false, nil, capacity.ForReview)
 	if err != nil || v.Room != 0 {
 		t.Fatalf("window admission: %+v, %v", v, err)
 	}
@@ -143,7 +144,7 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 	r.claude[1], r.codex[1] = 95, 95
 	a, _ = r.app(false)
 	a.cfgPath = ""
-	v, err = a.startCapacityWithOptions(context.Background(), false, nil, ForReview)
+	v, err = a.startCapacityWithOptions(context.Background(), false, nil, capacity.ForReview)
 	if err != nil || v.Room != 0 {
 		t.Fatalf("7d window stop admission: %+v, %v", v, err)
 	}
@@ -157,7 +158,7 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 	r.cfg.Capacity.Providers["codex"] = codexProv
 	a, _ = r.app(false)
 	a.cfgPath = ""
-	v, err = a.startCapacityWithOptions(context.Background(), false, nil, ForReview)
+	v, err = a.startCapacityWithOptions(context.Background(), false, nil, capacity.ForReview)
 	if err != nil || v.Room != 2 || v.Choice == nil || v.Choice.Harness == "" {
 		t.Fatalf("review ahead of post-reset pace: %+v, %v", v, err)
 	}
@@ -173,11 +174,11 @@ func TestReviewHeadroomUnassignedTarget(t *testing.T) {
 		loopLocal: {Kind: config.KindSelfHosted, Ceiling: 1},
 	}}
 	for _, busy := range []int{2, 4} {
-		c := AgentCount{}
+		c := capacity.AgentCount{}
 		for i := range busy {
 			c.Busy = append(c.Busy, fmt.Sprintf("worker-%d", i))
 		}
-		v := BuildProvidersCapacity(c, nil, k, nil, roomy(), false, nil, ForReview, keepNow).ForTarget(k, claudeComm, pickOpus)
+		v := capacity.BuildProvidersCapacity(c, nil, k, nil, roomy(), false, nil, capacity.ForReview, keepNow).ForTarget(k, claudeComm, pickOpus)
 		if busy == 2 && v.Room != 2 {
 			t.Fatalf("no reserve for unassigned target: %s", v.Verdict())
 		}
@@ -205,11 +206,11 @@ func TestLoopStartsReviewAtWorkerCeilingInOnePass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			kind := ForWorker
+			kind := capacity.ForWorker
 			if slices.Contains(args, "--review") {
-				kind = ForReview
+				kind = capacity.ForReview
 			}
-			v := NewStartCapacity(countAgents(st, nil, r.a.now, r.a.cfg), r.a.cfg.Capacity, roomy(), false, kind)
+			v := capacity.NewStartCapacity(countAgents(st, nil, r.a.now, r.a.cfg), r.a.cfg.Capacity, roomy(), false, kind)
 			if _, err := gateStart(v, false); err != nil {
 				return err.Error(), ExitRefused
 			}
@@ -224,7 +225,7 @@ func TestLoopStartsReviewAtWorkerCeilingInOnePass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewStartCapacity(countAgents(st, nil, r.a.now, r.a.cfg), r.a.cfg.Capacity, roomy(), false, ForWorker)
+	v := capacity.NewStartCapacity(countAgents(st, nil, r.a.now, r.a.cfg), r.a.cfg.Capacity, roomy(), false, capacity.ForWorker)
 	if _, err := gateStart(v, false); err == nil {
 		t.Fatal("ordinary worker passed the ceiling")
 	}

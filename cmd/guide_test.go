@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -376,37 +377,37 @@ func TestGuideHandoverAndStartReportAllProviderSubscriptions(t *testing.T) {
 	a.cfg.Capacity = config.Capacity{
 		Ceiling: 6,
 		Providers: map[string]config.Provider{
-			claudeComm:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadClaude}}},
-			HarnessAgy:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadAgy}}},
-			codex.Harness: {Ceiling: 2, Usage: config.Usage{Command: []string{testReadCodex}}},
+			claudeComm:          {Ceiling: 2, Usage: config.Usage{Command: []string{testReadClaude}}},
+			capacity.HarnessAgy: {Ceiling: 2, Usage: config.Usage{Command: []string{testReadAgy}}},
+			codex.Harness:       {Ceiling: 2, Usage: config.Usage{Command: []string{testReadCodex}}},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: pickOpus},
-			{Harness: HarnessAgy, Model: pickGemini},
+			{Harness: capacity.HarnessAgy, Model: pickGemini},
 			{Harness: codex.Harness, Model: pickGPT},
 		},
 	}
-	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
+	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (capacity.UsageReading, error) {
 		switch cmd[0] {
 		case testReadClaude:
-			return UsageReading{
-				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
-				SevenDay: &UsageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
+			return capacity.UsageReading{
+				FiveHour: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &capacity.UsageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
 			}, nil
 		case testReadAgy:
-			return UsageReading{
-				Buckets: map[string]UsageBucket{
+			return capacity.UsageReading{
+				Buckets: map[string]capacity.UsageBucket{
 					config.DefaultAgyGeminiBucket: {
-						FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
-						SevenDay: &UsageWindow{UsedPercent: 10, ResetsAt: t0.Add(112 * time.Hour).UTC()},
+						FiveHour: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+						SevenDay: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: t0.Add(112 * time.Hour).UTC()},
 					},
 				},
 				BucketOrder: []string{config.DefaultAgyGeminiBucket},
 			}, nil
 		default:
-			return UsageReading{
-				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
-				SevenDay: &UsageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
+			return capacity.UsageReading{
+				FiveHour: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &capacity.UsageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
 			}, nil
 		}
 	}

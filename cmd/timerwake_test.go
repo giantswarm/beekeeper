@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -66,7 +67,7 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 		if err := w.quietWake(t.Context(), watchParty, agentOne, "an unrelated note defaulted"); err != nil {
 			t.Fatal(err)
 		}
-		w.tellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &UsageView{High: true}, "park-usage.json", nil)
+		w.tellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &capacity.UsageView{High: true}, "park-usage.json", nil)
 		if len(*woke) != 0 || st.Agents[0].Park == nil || !st.Agents[0].Park.Resumable.IsZero() {
 			t.Fatalf("after %s: turns=%v, park=%+v", elapsed, *woke, st.Agents[0].Park)
 		}

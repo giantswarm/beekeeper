@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -129,7 +130,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 				t.Fatalf("foreign board pick not dispatched: busy %d, briefs %v, %s", *busy, dispatched, r.out)
 			}
 			calls := r.called(agentsName, agentStartName)
-			if len(calls) == 0 || !slices.Contains(calls, HarnessAuto) {
+			if len(calls) == 0 || !slices.Contains(calls, capacity.HarnessAuto) {
 				t.Fatalf("lost capacity model choice: %v", calls)
 			}
 		})

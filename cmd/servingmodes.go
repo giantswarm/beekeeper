@@ -23,6 +23,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -191,9 +192,9 @@ func modeIsHeld(p config.Provider, mode string, heldBy func(string) []string) bo
 // lowers the model's ceiling to the mode the machine runs with — a
 // constraint lowers and never raises — and a drain holds the provider at
 // the ceiling of the mode it drains to.
-func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provider) ProviderReadingResult {
+func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provider) capacity.ProviderReadingResult {
 	r := a.serveMode(ctx, name, p)
-	res := ProviderReadingResult{ServeMode: r.Mode, ServeModeErr: r.Err}
+	res := capacity.ProviderReadingResult{ServeMode: r.Mode, ServeModeErr: r.Err}
 	dir := lease.Dir(a.cfg.LeaseDir)
 	heldBy := func(mode string) []string { return a.serveModeNodesHeld(p, mode, dir) }
 	// The ceiling the constraints stand the provider under: a mode the

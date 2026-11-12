@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -123,7 +124,7 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 					t.Fatal(err)
 				}
 				if held == loop.LoopCapacity {
-					_, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, ForWorker)
+					_, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, capacity.ForWorker)
 					if Code(err) != ExitRefused {
 						t.Fatalf("capacity not enforced: %v", err)
 					}
@@ -405,7 +406,7 @@ func TestFatalAdmissionBlocksWorkersButAllowsRepairAndReview(t *testing.T) {
 	if err := a.withKindAdmission(t.Context(), x.Owner, start); err != nil || !called {
 		t.Fatal("repair denied", err)
 	}
-	a.selectionKind = TaskKindReview
+	a.selectionKind = capacity.TaskKindReview
 	if err := a.withKindAdmission(t.Context(), "review existing fix", start); err != nil {
 		t.Fatal("review denied", err)
 	}

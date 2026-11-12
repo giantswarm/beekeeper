@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -737,7 +738,7 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 			sessions, _, _ = a.sessions()
 		}
 		a.syncAgyQuotaFromState(st, a.now)
-		readings := make(map[string]ProviderReadingResult, len(k.Providers))
+		readings := make(map[string]capacity.ProviderReadingResult, len(k.Providers))
 		anySubscription := false
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
@@ -749,21 +750,21 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 				continue
 			}
 			r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
-			readings[name] = ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
+			readings[name] = capacity.ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 		}
 		if !anySubscription {
 			return nil
 		}
 		pa := countProviderAgents(st, sessions, k, a.now, a.cfg)
-		providers := make(map[string]*ProviderView, len(k.Providers))
+		providers := make(map[string]*capacity.ProviderView, len(k.Providers))
 		var lines []string
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
 			if p.SelfHosted() {
-				providers[name] = BuildSelfHostedProviderView(name, p, pa[name], ProviderReadingResult{}, a.now)
+				providers[name] = capacity.BuildSelfHostedProviderView(name, p, pa[name], capacity.ProviderReadingResult{}, a.now)
 				continue
 			}
-			pv := BuildSingleProviderView(name, p, pa[name], readings[name], a.now)
+			pv := capacity.BuildSingleProviderView(name, p, pa[name], readings[name], a.now)
 			providers[name] = pv
 			line := name + ": " + pv.Line(a.now)
 			if pv.Underused {
@@ -771,20 +772,20 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 					var uParts []string
 					for _, bName := range pv.BucketOrder {
 						if bv := pv.Buckets[bName]; bv != nil && bv.Underused {
-							uParts = append(uParts, bName+": "+UnderusedFigureText(bv.SevenDay, p.Usage, a.now))
+							uParts = append(uParts, bName+": "+capacity.UnderusedFigureText(bv.SevenDay, p.Usage, a.now))
 						}
 					}
 					if len(uParts) > 0 {
 						line += "; UNDERUSED (" + strings.Join(uParts, "; ") + ")"
 					}
-				} else if fig := UnderusedFigureText(pv.SevenDay, p.Usage, a.now); fig != "" {
+				} else if fig := capacity.UnderusedFigureText(pv.SevenDay, p.Usage, a.now); fig != "" {
 					line += "; UNDERUSED (" + fig + ")"
 				}
 			}
 			lines = append(lines, line)
 		}
 		if len(k.Choices) > 0 {
-			cv := EvaluateChoices(k, providers, nil, a.noStart(st), nil, ForWorker, a.now)
+			cv := capacity.EvaluateChoices(k, providers, nil, a.noStart(st), nil, capacity.ForWorker, a.now)
 			lines = append(lines, "choice: "+cv.Line())
 		}
 		return lines
@@ -798,7 +799,7 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 	}
 	line := u.SnapshotLine(a.now)
 	if u.Underused {
-		if fig := UnderusedFigureText(u.SevenDay, k.Usage, a.now); fig != "" {
+		if fig := capacity.UnderusedFigureText(u.SevenDay, k.Usage, a.now); fig != "" {
 			line += "; UNDERUSED (" + fig + ")"
 		}
 	}

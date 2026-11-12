@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
@@ -71,11 +72,11 @@ type snapshot struct {
 	Teleport *teleportView `json:"teleport,omitempty"`
 	// Usage is the subscription usage windows and derived capacity target,
 	// nil when capacity.usage.command is not configured.
-	Usage *UsageView `json:"usage,omitempty"`
+	Usage *capacity.UsageView `json:"usage,omitempty"`
 	// Providers and Choice are the per-provider usage windows, verdicts and
 	// selected choice when capacity.providers is configured.
-	Providers map[string]*ProviderView `json:"providers,omitempty"`
-	Choice    *ChoiceView              `json:"choice,omitempty"`
+	Providers map[string]*capacity.ProviderView `json:"providers,omitempty"`
+	Choice    *capacity.ChoiceView              `json:"choice,omitempty"`
 	// Unavailable are the sections whose platform part this build does not
 	// have: each prints one "not available" line instead.
 	Unavailable []string `json:"unavailable,omitempty"`
@@ -310,7 +311,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
 	capCfg := a.liveCapacity()
 	if len(capCfg.Providers) > 0 {
-		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, ForWorker)
+		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, capacity.ForWorker)
 		s.Providers = cv.Providers
 		s.Choice = cv.Choice
 	} else {
@@ -753,7 +754,7 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	return out
 }
 
-func snapshotProvidersLine(k config.Capacity, providers map[string]*ProviderView, choice *ChoiceView, now time.Time) string {
+func snapshotProvidersLine(k config.Capacity, providers map[string]*capacity.ProviderView, choice *capacity.ChoiceView, now time.Time) string {
 	names := k.ProviderNames()
 	if len(names) == 0 {
 		for n := range providers {
@@ -773,7 +774,7 @@ func snapshotProvidersLine(k config.Capacity, providers map[string]*ProviderView
 	return "usage: " + strings.Join(parts, "; ")
 }
 
-func providersChanged(prev, cur map[string]*ProviderView, prevChoice, curChoice *ChoiceView) bool {
+func providersChanged(prev, cur map[string]*capacity.ProviderView, prevChoice, curChoice *capacity.ChoiceView) bool {
 	if len(prev) != len(cur) {
 		return true
 	}

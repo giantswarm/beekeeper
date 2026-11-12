@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -21,10 +22,10 @@ func TestReviewWriteUsesRecordedIdentity(t *testing.T) {
 		assigned bool
 		want     bool
 	}{
-		{"reviewwrite-kind", state.Start{Kind: TaskKindReview, Party: state.Party{Session: reviewerID}}, false, true},
+		{"reviewwrite-kind", state.Start{Kind: capacity.TaskKindReview, Party: state.Party{Session: reviewerID}}, false, true},
 		{"reviewwrite-assignment", state.Start{Party: state.Party{Session: reviewerID}}, true, true},
 		{"reviewwrite-worker", state.Start{Party: state.Party{Session: reviewerID}}, false, false},
-		{"reviewwrite-forged-name", state.Start{Kind: TaskKindReview, Party: state.Party{Name: TaskKindReview, Session: "reviewwrite-other-session"}}, false, false},
+		{"reviewwrite-forged-name", state.Start{Kind: capacity.TaskKindReview, Party: state.Party{Name: capacity.TaskKindReview, Session: "reviewwrite-other-session"}}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &state.State{Starts: []state.Start{tc.start}}
@@ -45,7 +46,7 @@ func TestReviewWriteHookAndHostIdentity(t *testing.T) {
 	t.Setenv(agy.EnvAgent, "")
 	a, _ := executionTestApp(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = []state.Start{{Kind: TaskKindReview, Party: state.Party{Session: "reviewwrite-original", HostSession: hostID}}}
+		st.Starts = []state.Start{{Kind: capacity.TaskKindReview, Party: state.Party{Session: "reviewwrite-original", HostSession: hostID}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -75,11 +76,11 @@ func TestReviewWriteHookUsesHarnessIdentity(t *testing.T) {
 			t.Setenv(harness.variable, agentID)
 			t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "reviewwrite-launcher")
 			a, _ := executionTestApp(t)
-			for _, kind := range []string{TaskKindReview, workerRole} {
+			for _, kind := range []string{capacity.TaskKindReview, workerRole} {
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 					st.Starts = []state.Start{
 						{Kind: kind, Party: state.Party{HostSession: harness.prefix + agentID}},
-						{Kind: TaskKindReview, Party: state.Party{HostSession: "reviewwrite-launcher"}},
+						{Kind: capacity.TaskKindReview, Party: state.Party{HostSession: "reviewwrite-launcher"}},
 					}
 					return nil, nil
 				}); err != nil {
@@ -87,7 +88,7 @@ func TestReviewWriteHookUsesHarnessIdentity(t *testing.T) {
 				}
 				for _, session := range []string{"reviewwrite-conversation", ""} {
 					got := a.hookReviewWrite(session)
-					if kind == TaskKindReview && got != reviewWriteRefusal {
+					if kind == capacity.TaskKindReview && got != reviewWriteRefusal {
 						t.Fatalf("reviewer identity was missed: %q", got)
 					}
 					if kind == workerRole && got != "" {

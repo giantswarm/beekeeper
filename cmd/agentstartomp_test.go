@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -393,10 +394,10 @@ func TestAutoStartNeedsVaultZeroNowPace(t *testing.T) {
 	now := time.Now().UTC()
 	reset5h := now.Add(2 * time.Hour)
 	reset7d := now.Add(84 * time.Hour) // 50% of 7d elapsed -> pace is 50% at time.Now(), 0% at 0001-01-01.
-	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
-		return UsageReading{
-			FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
-			SevenDay: &UsageWindow{UsedPercent: 25, ResetsAt: reset7d},
+	a.readUsage = func(context.Context, []string, time.Duration) (capacity.UsageReading, error) {
+		return capacity.UsageReading{
+			FiveHour: &capacity.UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+			SevenDay: &capacity.UsageWindow{UsedPercent: 25, ResetsAt: reset7d},
 		}, nil
 	}
 	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
@@ -514,17 +515,17 @@ func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
 	if loop.SelfHostedModel(k, "vllm/unlisted-id") || loop.SelfHostedModel(k, "vllm/x"+id) {
 		t.Error("selfHostedModel matched a model no choice names")
 	}
-	if p, _ := ResolveAgentProviderBucket(k, omp.Harness, recorded); p != rackB {
+	if p, _ := capacity.ResolveAgentProviderBucket(k, omp.Harness, recorded); p != rackB {
 		t.Errorf("resolveAgentProviderBucket(omp, %q) = %q, want %s", recorded, p, rackB)
 	}
-	if !ChoicesHaveModel(k.Choices, recorded) {
+	if !capacity.ChoicesHaveModel(k.Choices, recorded) {
 		t.Errorf("choicesHaveModel(%q) = false", recorded)
 	}
-	if f := FilterChoiceModel(k, recorded); len(f.Choices) != 1 || f.Choices[0].Model != id {
+	if f := capacity.FilterChoiceModel(k, recorded); len(f.Choices) != 1 || f.Choices[0].Model != id {
 		t.Errorf("filterChoiceModel(%q) = %+v, want the %q choice", recorded, f.Choices, id)
 	}
 	// a subscription choice is never matched by an id after a slash
-	if OmpChoiceModel(config.Choice{Harness: claudeComm, Model: bgModel}, "x/"+bgModel) {
+	if capacity.OmpChoiceModel(config.Choice{Harness: claudeComm, Model: bgModel}, "x/"+bgModel) {
 		t.Error("a claude choice matched its id after a slash")
 	}
 }

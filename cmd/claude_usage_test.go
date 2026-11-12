@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -108,7 +109,7 @@ func TestClaudeWindowRecentlyPassedReset(t *testing.T) {
 			if got := w.ResetsAt.Format(time.RFC3339); got != tc.want {
 				t.Fatalf("reset = %s, want %s", got, tc.want)
 			}
-			if UsageFresh(UsageReading{At: now.Add(-5 * time.Minute), FiveHour: w}, config.Usage{}, now) {
+			if capacity.UsageFresh(capacity.UsageReading{At: now.Add(-5 * time.Minute), FiveHour: w}, config.Usage{}, now) {
 				t.Fatal("an elapsed reset must trigger a fresh probe")
 			}
 		})
@@ -157,10 +158,10 @@ func TestClaudeUsageAggregateAndNoPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.At = now
-	if err := ValidateReadingAt(r, p.Usage, now); err != nil {
+	if err := capacity.ValidateReadingAt(r, p.Usage, now); err != nil {
 		t.Fatal(err)
 	}
-	pv := BuildSingleProviderView(claudeComm, p, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
+	pv := capacity.BuildSingleProviderView(claudeComm, p, capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, now)
 	if pv.FiveHour == nil || pv.FiveHour.UsedPercent != 18 || pv.SevenDay == nil || pv.SevenDay.UsedPercent != 19 || pv.Buckets["Fable"].SevenDay.UsedPercent != 1 || pv.Room == 0 || pv.Error != "" {
 		t.Fatalf("aggregate: %+v", pv)
 	}
@@ -170,11 +171,11 @@ func TestClaudeUsageAggregateAndNoPlan(t *testing.T) {
 			t.Fatalf("no plan: %+v %v", r, err)
 		}
 		r.At = now
-		if !UsageFresh(r, p.Usage, now.Add(time.Minute)) || UsageFresh(r, p.Usage, now.Add(6*time.Minute)) {
+		if !capacity.UsageFresh(r, p.Usage, now.Add(time.Minute)) || capacity.UsageFresh(r, p.Usage, now.Add(6*time.Minute)) {
 			t.Fatal("no-plan result did not use provider every")
 		}
-		pv := BuildSingleProviderView(claudeComm, p, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
-		if pv.Error != "" || pv.Room != 0 || !pv.NoPlanWindows || !strings.Contains(pv.WindowsSummary(now), ClaudeNoPlanWindows) {
+		pv := capacity.BuildSingleProviderView(claudeComm, p, capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, now)
+		if pv.Error != "" || pv.Room != 0 || !pv.NoPlanWindows || !strings.Contains(pv.WindowsSummary(now), capacity.ClaudeNoPlanWindows) {
 			t.Fatalf("no plan view: %+v", pv)
 		}
 	}
@@ -267,14 +268,16 @@ func TestClaudeUsageCapacityPickKeepsAggregateWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) { return reading, nil }
+	a.readUsage = func(context.Context, []string, time.Duration) (capacity.UsageReading, error) { return reading, nil }
 	c := a.capacityPickCmd()
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	var result struct {
 		Pick     string
-		Capacity struct{ Providers map[string]*ProviderView }
+		Capacity struct {
+			Providers map[string]*capacity.ProviderView
+		}
 	}
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -301,8 +304,8 @@ func TestClaudeUsageTargetKeepsAggregateRoom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pv := BuildSingleProviderView(claudeComm, cfg.Capacity.Providers[claudeComm], ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
-	v := &View{Room: pv.Room, Providers: map[string]*ProviderView{claudeComm: pv}}
+	pv := capacity.BuildSingleProviderView(claudeComm, cfg.Capacity.Providers[claudeComm], capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, now)
+	v := &capacity.View{Room: pv.Room, Providers: map[string]*capacity.ProviderView{claudeComm: pv}}
 	got := v.ForTarget(cfg.Capacity, claudeComm, "claude-fable-5-1")
 	if got.Room != 2 || len(got.Blocks) != 0 {
 		t.Fatalf("supplemental model week blocks aggregate room: room=%d blocks=%v", got.Room, got.Blocks)
@@ -338,10 +341,10 @@ Current week (Fable): 6% used · resets Nov 1, 3pm (Europe/Berlin)`
 	}
 	p := cfg.Capacity.Providers[claudeComm]
 	r.At = now
-	if err := ValidateReadingAt(r, p.Usage, now); err != nil {
+	if err := capacity.ValidateReadingAt(r, p.Usage, now); err != nil {
 		t.Fatal(err)
 	}
-	pv := BuildSingleProviderView(claudeComm, p, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
+	pv := capacity.BuildSingleProviderView(claudeComm, p, capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, now)
 	if pv.Error != "" || pv.Room == 0 || len(pv.Blocks) != 0 || pv.FiveHour == nil || pv.FiveHour.UsedPercent != 0 {
 		t.Fatalf("idle session view: %+v", pv)
 	}
