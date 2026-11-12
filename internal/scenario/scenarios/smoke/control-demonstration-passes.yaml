@@ -1,0 +1,16 @@
+name: control-demonstration-passes
+description: >
+  Demonstration for https://github.com/giantswarm/beekeeper/issues/3796, never
+  merged: version exits 0 on the merge base as on the branch, so this added
+  scenario shows no change and the scenario-control step must reject it.
+flow: smoke
+tags: [smoke]
+timeout: 20s
+
+when:
+  - name: version
+    run: {args: [version]}
+
+then:
+  - exit: 0
+  - output: {matches: '^beekeeper \S+'}

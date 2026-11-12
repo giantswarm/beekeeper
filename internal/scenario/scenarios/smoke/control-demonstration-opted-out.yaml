@@ -1,0 +1,17 @@
+name: control-demonstration-opted-out
+description: >
+  Demonstration for https://github.com/giantswarm/beekeeper/issues/3796, never
+  merged: the same pass on the merge base, opted out with a reason, which the
+  scenario-control step lists for the review and does not run.
+flow: smoke
+tags: [smoke]
+timeout: 20s
+control:
+  none: states behavior main already has; the demonstration of an opt-out
+
+when:
+  - name: version
+    run: {args: [version]}
+
+then:
+  - exit: 0
