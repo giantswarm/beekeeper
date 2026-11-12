@@ -57,7 +57,10 @@ type Scenario struct {
 	Timeout Duration `yaml:"timeout"`
 	// Pending names the open issue of a bug the scenario shows: the run
 	// expects it to fail and fails once it passes.
-	Pending string   `yaml:"pending"`
+	Pending string `yaml:"pending"`
+	// Control opts the scenario out of the control (control.go) with the
+	// reason it cannot fail without its pull request's change.
+	Control *Control `yaml:"control"`
 	Given   Given    `yaml:"given"`
 	When    []Step   `yaml:"when"`
 	Then    []Expect `yaml:"then"`
@@ -305,6 +308,9 @@ func (s *Scenario) Validate() error {
 	}
 	if s.Issue != "" && !issueRE.MatchString(s.Issue) {
 		bad("issue %q: a full issue URL", s.Issue)
+	}
+	if err := s.Control.Validate(); err != nil {
+		bad("%v", err)
 	}
 	if s.Pending != "" && !issueRE.MatchString(s.Pending) {
 		bad("pending %q: the full URL of the open issue", s.Pending)

@@ -10,6 +10,7 @@ Read the filled brief, PR, issue comments and parent epic. Check:
 - Every acceptance line of the issue and parent is met in full; no minimum-CI interpretation.
 - No narrowing or deferral without a linked follow-up the issue allows.
 - Tests cover the requested behaviour, including failures, rather than just the happy path.
+- In giantswarm/beekeeper, a fix or behaviour change of the core (Go code under `cmd/`, `internal/`, `pkg/`) adds or extends a scenario under `internal/scenario/scenarios/` that fails without it, a bug's naming its issue; CI's `scenario-control` step proves the failure on the merge base. Reject a core fix without one, unless the PR says why it cannot be a scenario and links the harness follow-up. Each `control: {none: <reason>}` the PR writes must name why that scenario cannot fail on the merge base; never accept one on a fix's own scenario.
 - No dead paths, unsupported claims in the PR or docs, or work a later epic sub-issue must undo.
 - Behaviour the PR adds or changes is documented in its `docs/` topic page, not appended to README.md.
 
