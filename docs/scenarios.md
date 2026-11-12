@@ -225,7 +225,9 @@ count only the calls since that step. With `quiet`, each step first waits
 until the desk has been quiet that long: no process armed a timer on the
 clock and no fake was called. The work the last step woke is then done and
 waits on the clock again, so the step reaches it; without `quiet`, a timer
-armed a moment after a step would wait for the next one. Each step goes to
+armed a moment after a step would wait for the next one. `quiet` is at most
+5 s; a desk that does not rest that long within 30 s fails the step, which
+names how long ago it was last busy. Each step goes to
 the scenario's `clock.jsonl` artifact: the world's time, the processes that
 acknowledged it, how many timers fired, how long it took and how long it
 waited for quiet.

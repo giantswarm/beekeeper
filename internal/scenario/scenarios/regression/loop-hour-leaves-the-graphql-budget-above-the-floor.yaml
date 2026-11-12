@@ -14,7 +14,7 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3769
 flow: regression
 tags: [regression, loop, github, budget, clock]
-timeout: 180s
+timeout: 300s
 
 # The bug's fix is on main already, so the scenario passes on this change's
 # base. Its control is a run on the code before the fix, linked on the pull
@@ -143,6 +143,10 @@ when:
   - stop: loop
 
 then:
-  - {step: hour, duration: {max: 150s}}
+  # The hour's real time: some 100 passes of the loop, each waited for
+  # until the desk rests. A pass makes the same calls on every run; its real
+  # time is the CI machine's: a median of 0.7 to 1.4 s on a medium machine,
+  # by what the scenario that runs beside it does.
+  - {step: hour, duration: {max: 240s}}
   - worker: {name: app 1, turns: 1}
   - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
