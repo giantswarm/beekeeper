@@ -15,6 +15,15 @@ flow: regression
 tags: [regression, loop, github, budget, clock]
 timeout: 180s
 
+# The bug's fix is on main already, so the scenario passes on this change's
+# base. Its control is a run on the code before the fix, linked on the pull
+# request that added the scenario.
+control:
+  none: >-
+    the fix https://github.com/giantswarm/beekeeper/pull/3782 is on main
+    already; the run that fails on the code before it is linked on the pull
+    request that adds this scenario
+
 given:
   clock:
     start: "2026-11-12T09:00:00Z"

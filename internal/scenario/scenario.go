@@ -60,7 +60,10 @@ type Scenario struct {
 	Timeout Duration `yaml:"timeout"`
 	// Pending names the open issue of a bug the scenario shows: the run
 	// expects it to fail and fails once it passes.
-	Pending string   `yaml:"pending"`
+	Pending string `yaml:"pending"`
+	// Control opts the scenario out of the control (control.go) with the
+	// reason it cannot fail without its pull request's change.
+	Control *Control `yaml:"control"`
 	Given   Given    `yaml:"given"`
 	When    []Step   `yaml:"when"`
 	Then    []Expect `yaml:"then"`
@@ -124,7 +127,7 @@ type Response struct {
 }
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// github, fault, host and advance, with optional expectations of its own
+// advance, host, github and fault, with optional expectations of its own
 // response.
 type Step struct {
 	Name string `yaml:"name"`
@@ -385,6 +388,9 @@ func (s *Scenario) Validate() error {
 	if s.Issue != "" && !issueRE.MatchString(s.Issue) {
 		bad("issue %q: a full issue URL", s.Issue)
 	}
+	if err := s.Control.Validate(); err != nil {
+		bad("%v", err)
+	}
 	if s.Pending != "" && !issueRE.MatchString(s.Pending) {
 		bad("pending %q: the full URL of the open issue", s.Pending)
 	}
@@ -446,7 +452,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, github, fault, host and advance", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, host, github and fault", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {

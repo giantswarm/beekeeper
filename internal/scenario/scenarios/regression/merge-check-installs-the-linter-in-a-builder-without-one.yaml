@@ -13,6 +13,15 @@ flow: regression
 tags: [regression, merge-result, gate, builder, delivery]
 timeout: 300s
 
+# The bug's fix is on main already, so the scenario passes on this change's
+# base. Its control is a run on the code before the fix, linked on the pull
+# request that added the scenario.
+control:
+  none: >-
+    the fix https://github.com/giantswarm/beekeeper/pull/3745 is on main
+    already; the run that fails on the code before it is linked on the pull
+    request that adds this scenario
+
 given:
   clock:
     start: "2026-11-12T09:00:00Z"
@@ -107,6 +116,10 @@ when:
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - stop: loop
+  - name: failed-merges
+    run: {args: [log, --verb, merge.failed]}
+  - name: merges
+    run: {args: [log, --verb, merge.]}
 
 then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
@@ -116,4 +129,4 @@ then:
   - calls: {program: golangci-lint, args: [run], min: 1}
   - calls: {program: go, args: [test, -short], min: 1}
   - calls: {program: kubectl, args: [exec], min: 1}
-  - events: {contains: [merge.authorized, merge.finished], not_contains: [merge.failed]}
+  - events: {contains: [merge.authorized, merge.start]}

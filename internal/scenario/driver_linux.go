@@ -298,6 +298,21 @@ func (d *driver) setup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(d.s.Given.Hosts) > 0 {
+		// The hosts are provisioned against this first configuration, and
+		// their agents.hosts entries come with that: until then it names
+		// none, so supervisor.hosts of the scenario's desk waits as well.
+		var first map[string]any
+		if err := yaml.Unmarshal(raw, &first); err != nil {
+			return err
+		}
+		if sup, ok := first["supervisor"].(map[string]any); ok {
+			delete(sup, "hosts")
+		}
+		if raw, err = yaml.Marshal(first); err != nil {
+			return err
+		}
+	}
 	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
 		return err
 	}
