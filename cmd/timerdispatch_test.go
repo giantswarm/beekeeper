@@ -409,7 +409,7 @@ func TestTimerDispatcherBusyLockKeepsServiceAlive(t *testing.T) {
 			a, _ := stubApp(t)
 			a.loadedCfg = filepath.Join(a.store.Dir(), "config.yaml")
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Run: "true"}}
+				st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Run: probeHolds}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -447,12 +447,12 @@ func TestTimerDispatcherChecksWhileWriterHoldsStateLock(t *testing.T) {
 	}
 	probed := make(chan struct{})
 	var once sync.Once
-	old := runProbe
-	runProbe = func(context.Context, string) bool {
+	old := readProbe
+	readProbe = func(context.Context, string) ([]byte, error) {
 		once.Do(func() { close(probed) })
-		return false
+		return nil, errors.New("exit status 1")
 	}
-	t.Cleanup(func() { runProbe = old })
+	t.Cleanup(func() { readProbe = old })
 	locked := make(chan struct{})
 	held := make(chan error, 1)
 	go func() {
