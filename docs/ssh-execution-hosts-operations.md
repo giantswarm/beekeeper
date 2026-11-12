@@ -881,8 +881,15 @@ beekeeper agents publish --title "fix: resolve the defect" --body-file /srv/beek
 
 The coordinator receives a Git bundle over the authenticated callback, verifies
 its HEAD and ancestry from the pinned execution commit, and pushes with its own
-GitHub login. The remote branch is always
-`beekeeper-execution/<execution-id>/<generation>` in the execution's repository;
+GitHub login. New work uses
+`beekeeper-execution/<execution-id>/<generation>` in the execution's repository.
+An authorized continuation of a recorded park or loop repair claim starts at the
+existing PR's head and keeps its branch and PR, even with a new execution ID.
+The coordinator pins that assignment separately from the source ref: naming a
+branch or mentioning a PR in a brief does not grant write access. Closed PRs,
+fork branches and ambiguous repair assignments are refused. A continuation uses
+`beekeeper agents publish` without title/body flags and cannot create another PR;
+
 a worker cannot select a repository, remote, destination ref, default branch,
 force option or arbitrary GitHub API operation. The coordinator resolves the
 repository's default branch and creates the PR against it. Both PR text and
@@ -893,7 +900,8 @@ for patch deletions. PR text cannot ping accounts.
 The first publication requires a title and body file. Once a PR exists, review
 fixes need only `beekeeper agents publish`: the same branch advances by a normal
 fast-forward push and the existing PR is returned without changing its text or
-discussion. Closed PRs cannot be reused. For a lost push, create or callback reply,
+discussion. After merge, the loop closes older open execution PRs recorded for
+the exact same task and repository as superseded. Closed PRs cannot be reused. For a lost push, create or callback reply,
 repeat the publication: Git rejects history rewrites, and the coordinator looks
 up the exact owned branch before creating a PR. A create attempt is never retried
 blindly. PR editing and commenting continue to use coordinating workflows;

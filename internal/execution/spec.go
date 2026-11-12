@@ -89,6 +89,10 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	// PublicationBranch and PublicationPR are a coordinator-authorized continuation,
+	// independent of the source ref (which alone grants no write authority).
+	PublicationBranch string `json:"publicationBranch,omitempty"`
+	PublicationPR     string `json:"publicationPR,omitempty"`
 	// BundleDigest is the coordinator policy bundle this execution runs under
 	// for its whole life; empty, it runs on the host's prepared policy alone.
 	BundleDigest   string `json:"bundleDigest,omitempty"`

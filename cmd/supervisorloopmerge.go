@@ -453,6 +453,9 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		mp.Ref = cmp.Or(mp.Ref, act.Ref)
 		mp.URL = cmp.Or(mp.URL, act.URL)
+		if err := closeDuplicateExecutionPulls(ctx, st, mp.URL); err != nil {
+			return "", err
+		}
 		closed, closeErr := closeMergedPullIssues(ctx, st, mp)
 		l.recordClosedPullIssues(closed)
 		if closeErr != nil {

@@ -164,6 +164,17 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 			return err
 		}
 	}
+	var publication *state.ExecutionPublication
+	if !o.Review && !o.ReviewOfSelfHosted {
+		_, repairPulls, _ := a.startGateExemptions(name, brief, issues, a.timeNow())
+		publication, err = continuationPublication(ctx, o.Repository, repairPulls)
+		if err != nil {
+			return err
+		}
+		if publication != nil {
+			o.GitRef = publication.Head
+		}
+	}
 	id := execution.ExecutionID(uuid.NewString())
 	control, err := execution.NewControlKey()
 	if err != nil {
@@ -173,6 +184,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
 	if o.Review {
 		prompt += "\n\nExecution review access: use `beekeeper agents review` to read the assigned pull request and linked issues, and `beekeeper agents review --diff` to read its diff through the coordinator. If you fix your own review findings on the pull request branch, commit in this workspace, push the fast-forward fix with `beekeeper agents publish` (without `--title` or `--body-file`), and post your review of that published head immediately. Do not run local tests or lints or wait for CI; the loop owns CI and merges only on green. Post the required review with `beekeeper agents review --body-file <file>`; it returns the exact review URL for your completion report. If the assignment is not available yet, retry after the supervisor finishes recording the start. Do not create a new pull request or park as an author.\n"
+	} else if publication != nil {
+		prompt += "\n\nContinue the existing pull request " + publication.URL + ". The workspace starts at its head. Commit fixes and run `beekeeper agents publish` without title/body flags; it advances the assigned branch " + publication.Branch + " and returns the same PR. Do not create a new PR. Park on that PR for desk review.\n"
 	} else if a.cfg.GitHub.WorkerApp != nil {
 		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks across repositories you can reach. Cross-repository calls name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
 	} else {
@@ -180,6 +193,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 
 	r := execution.StartRequest{BundleDigest: bundleDigest, GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Effort: o.Effort, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	if publication != nil {
+		r.PublicationBranch, r.PublicationPR = publication.Branch, publication.URL
+	}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -218,6 +234,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		endpoint := host.Endpoint
 		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		rec.Published = publication
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
 		s.Kind = a.selectionKind
 		if o.Review {

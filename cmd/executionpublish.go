@@ -78,8 +78,8 @@ func executionBranch(ref execution.Ref) string {
 
 func executionOwnedBranch(r *state.ExecutionRecord) string {
 	if r != nil {
-		if r.Request.GitHub {
-			return execution.GitHubBranch(r.Handle.Ref)
+		if r.Request.PublicationBranch != "" {
+			return r.Request.PublicationBranch
 		}
 		return executionBranch(r.Handle.Ref)
 	}
@@ -603,6 +603,9 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
 		if listErr != nil {
 			return result, listErr
+		}
+		if r.Request.PublicationPR != "" && (len(pulls) != 1 || pulls[0].URL != r.Request.PublicationPR) {
+			return result, refused("assigned continuation pull request is unavailable; no new PR will be created")
 		}
 		if len(pulls) == 1 && pulls[0].State != github.Open {
 			return result, refused("owned pull request is already closed; a new execution is required")
