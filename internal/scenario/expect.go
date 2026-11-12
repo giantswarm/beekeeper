@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
+	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 )
 
 // View is one step's response as every expectation reads it: one view for
@@ -34,6 +35,10 @@ type View struct {
 	Process func(name string) (running bool, exit int, ok bool)
 	// GitHub checks an expectation of the scenario's GitHub.
 	GitHub func(e *fakegithub.Expect) error
+	// Worker checks what a scripted worker did.
+	Worker func(harness.WorkerExpect) error
+	// Origin reads a branch of a repository's origin.
+	Origin func(repository, branch string) (exists bool, ahead int, err error)
 }
 
 // Check checks one expectation against a view.
@@ -129,6 +134,26 @@ func Check(e Expect, v View) error {
 			if exit != *p.Exit {
 				return fmt.Errorf("process %s exited %d, want %d", p.Name, exit, *p.Exit)
 			}
+		}
+	case "worker":
+		if v.Worker == nil {
+			return missing("worker")
+		}
+		return v.Worker(*e.Worker)
+	case "origin":
+		if v.Origin == nil {
+			return missing("origin")
+		}
+		o := e.Origin
+		exists, ahead, err := v.Origin(o.Repository, o.Branch)
+		if err != nil {
+			return fmt.Errorf("origin %s %s: %w", o.Repository, o.Branch, err)
+		}
+		if want := o.Exists == nil || *o.Exists; exists != want {
+			return fmt.Errorf("origin %s: branch %s there %t, want %t", o.Repository, o.Branch, exists, want)
+		}
+		if o.Ahead != nil && ahead != *o.Ahead {
+			return fmt.Errorf("origin %s: branch %s is %d commit(s) ahead of main, want %d", o.Repository, o.Branch, ahead, *o.Ahead)
 		}
 	default:
 		return fmt.Errorf("expectation without exactly one kind: %v", e.kinds())
