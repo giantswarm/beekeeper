@@ -221,7 +221,7 @@ func TestLogRequestNamingAReviewerIsNoReviewAsk(t *testing.T) {
 		"Can you get a desk review for it?":                              true,
 	} {
 		c, ok := operational(noteDraft{Question: q}, config.Plans{})
-		if got := ok && c.name == taskKindReview; got != want {
+		if got := ok && c.name == TaskKindReview; got != want {
 			t.Errorf("%q: review ask = %v (class %q), want %v", q, got, c.name, want)
 		}
 	}

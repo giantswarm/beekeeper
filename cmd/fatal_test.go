@@ -123,7 +123,7 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 					t.Fatal(err)
 				}
 				if held == loop.LoopCapacity {
-					_, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, forWorker)
+					_, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, ForWorker)
 					if Code(err) != ExitRefused {
 						t.Fatalf("capacity not enforced: %v", err)
 					}
@@ -405,7 +405,7 @@ func TestFatalAdmissionBlocksWorkersButAllowsRepairAndReview(t *testing.T) {
 	if err := a.withKindAdmission(t.Context(), x.Owner, start); err != nil || !called {
 		t.Fatal("repair denied", err)
 	}
-	a.selectionKind = taskKindReview
+	a.selectionKind = TaskKindReview
 	if err := a.withKindAdmission(t.Context(), "review existing fix", start); err != nil {
 		t.Fatal("review denied", err)
 	}

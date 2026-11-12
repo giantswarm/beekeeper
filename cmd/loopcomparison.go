@@ -99,7 +99,7 @@ func compareLoopPasses(ctx context.Context, current, candidate, config string) (
 	case !after.complete():
 		return "", fmt.Errorf("candidate dry-run unavailable (retryable): %s; the running release's completed", after.why)
 	}
-	for _, kind := range []string{labStart, loopContinuationTransition, taskKindReview, gitMerge} {
+	for _, kind := range []string{labStart, loopContinuationTransition, TaskKindReview, gitMerge} {
 		if before.counts[kind] > 0 && after.counts[kind] == 0 {
 			return "", fmt.Errorf("candidate dry-run lost %s transitions (running release: %d); retry or use --allow-loop-regression for an intentional change", kind, before.counts[kind])
 		}
@@ -119,7 +119,7 @@ func loopTransitionCounts(output string) (map[string]int, error) {
 		}
 		switch fields[2] {
 		case "REVIEW":
-			counts[taskKindReview]++
+			counts[TaskKindReview]++
 		case "GO", "MERGE":
 			counts[gitMerge]++
 		case "CONTINUE", "RESUME":

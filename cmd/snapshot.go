@@ -71,11 +71,11 @@ type snapshot struct {
 	Teleport *teleportView `json:"teleport,omitempty"`
 	// Usage is the subscription usage windows and derived capacity target,
 	// nil when capacity.usage.command is not configured.
-	Usage *usageView `json:"usage,omitempty"`
+	Usage *UsageView `json:"usage,omitempty"`
 	// Providers and Choice are the per-provider usage windows, verdicts and
 	// selected choice when capacity.providers is configured.
-	Providers map[string]*providerView `json:"providers,omitempty"`
-	Choice    *choiceView              `json:"choice,omitempty"`
+	Providers map[string]*ProviderView `json:"providers,omitempty"`
+	Choice    *ChoiceView              `json:"choice,omitempty"`
 	// Unavailable are the sections whose platform part this build does not
 	// have: each prints one "not available" line instead.
 	Unavailable []string `json:"unavailable,omitempty"`
@@ -310,7 +310,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
 	capCfg := a.liveCapacity()
 	if len(capCfg.Providers) > 0 {
-		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, forWorker)
+		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, ForWorker)
 		s.Providers = cv.Providers
 		s.Choice = cv.Choice
 	} else {
@@ -560,7 +560,7 @@ func (a *app) printSnapshot(s *snapshot) {
 	if len(s.Providers) > 0 {
 		p("%s", snapshotProvidersLine(a.liveCapacity(), s.Providers, s.Choice, a.now))
 	} else if s.Usage != nil {
-		p("%s", s.Usage.snapshotLine(a.now))
+		p("%s", s.Usage.SnapshotLine(a.now))
 	}
 	switch {
 	case s.Budget != nil:
@@ -748,12 +748,12 @@ func diffSnapshots(prev, cur *snapshot) []string {
 		out = append(out, snapshotProvidersLine(config.Capacity{}, cur.Providers, cur.Choice, cur.At.Local()))
 	} else if cur.Usage != nil && (prev.Usage == nil ||
 		cur.Usage.Ceiling != prev.Usage.Ceiling || cur.Usage.High != prev.Usage.High || cur.Usage.Error != prev.Usage.Error) {
-		out = append(out, cur.Usage.snapshotLine(cur.At.Local()))
+		out = append(out, cur.Usage.SnapshotLine(cur.At.Local()))
 	}
 	return out
 }
 
-func snapshotProvidersLine(k config.Capacity, providers map[string]*providerView, choice *choiceView, now time.Time) string {
+func snapshotProvidersLine(k config.Capacity, providers map[string]*ProviderView, choice *ChoiceView, now time.Time) string {
 	names := k.ProviderNames()
 	if len(names) == 0 {
 		for n := range providers {
@@ -764,16 +764,16 @@ func snapshotProvidersLine(k config.Capacity, providers map[string]*providerView
 	var parts []string
 	for _, name := range names {
 		if pv := providers[name]; pv != nil {
-			parts = append(parts, name+": "+pv.watchSummary(now))
+			parts = append(parts, name+": "+pv.WatchSummary(now))
 		}
 	}
 	if choice != nil {
-		parts = append(parts, "choice: "+choice.summary())
+		parts = append(parts, "choice: "+choice.Summary())
 	}
 	return "usage: " + strings.Join(parts, "; ")
 }
 
-func providersChanged(prev, cur map[string]*providerView, prevChoice, curChoice *choiceView) bool {
+func providersChanged(prev, cur map[string]*ProviderView, prevChoice, curChoice *ChoiceView) bool {
 	if len(prev) != len(cur) {
 		return true
 	}
@@ -785,10 +785,10 @@ func providersChanged(prev, cur map[string]*providerView, prevChoice, curChoice 
 	}
 	pSum, cSum := "", ""
 	if prevChoice != nil {
-		pSum = prevChoice.summary()
+		pSum = prevChoice.Summary()
 	}
 	if curChoice != nil {
-		cSum = curChoice.summary()
+		cSum = curChoice.Summary()
 	}
 	return pSum != cSum
 }

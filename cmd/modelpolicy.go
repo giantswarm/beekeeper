@@ -27,12 +27,12 @@ func (a *app) requireStartModel(name, model string) error {
 	return nil
 }
 
-func startDecision(v *capacityView) string {
+func startDecision(v *View) string {
 	if v == nil || v.Choice == nil {
 		return ""
 	}
 	if v.Choice.Harness == "" {
 		return ""
 	}
-	return v.Choice.line() + "; " + v.Choice.Decision
+	return v.Choice.Line() + "; " + v.Choice.Decision
 }

@@ -246,11 +246,11 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 	t0 := keepNow
 	reset5h := t0.Add(90 * time.Minute).UTC()
 	reset7d := t0.Add(96 * time.Hour).UTC()
-	cur := usageReading{
-		FiveHour: &usageWindow{UsedPercent: 60, ResetsAt: reset5h},
-		SevenDay: &usageWindow{UsedPercent: 75, ResetsAt: reset7d},
+	cur := UsageReading{
+		FiveHour: &UsageWindow{UsedPercent: 60, ResetsAt: reset5h},
+		SevenDay: &UsageWindow{UsedPercent: 75, ResetsAt: reset7d},
 	}
-	reader := func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
+	reader := func(_ context.Context, _ []string, _ time.Duration) (UsageReading, error) {
 		return cur, nil
 	}
 
@@ -288,7 +288,7 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 		Ceiling int        `json:"ceiling"`
 		Room    int        `json:"room"`
 		Verdict string     `json:"verdict"`
-		Usage   *usageView `json:"usage"`
+		Usage   *UsageView `json:"usage"`
 	}
 	if err := json.Unmarshal(outJSON.Bytes(), &parsed); err != nil {
 		t.Fatalf("unmarshal capacity --json: %v\n%s", err, outJSON.String())
@@ -314,14 +314,14 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 	// Queued agents start --builds re-checks usage when its build slot turn arrives.
 	tHigh := t0.Add(10 * time.Minute)
 	aQueue, _ := openApp(t0, false)
-	vBusySlot := newCapacity(agentCount{}, config.Capacity{Ceiling: 2}, &headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, Slots: 1, SlotsFree: 0, MaxLabs: 2}, true)
+	vBusySlot := NewCapacity(AgentCount{}, config.Capacity{Ceiling: 2}, &Headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, Slots: 1, SlotsFree: 0, MaxLabs: 2}, true)
 	_, qErr := queueStart(vBusySlot, true, false, "8m",
 		func() (bool, int, error) {
-			cur.FiveHour = &usageWindow{UsedPercent: 96, ResetsAt: reset5h}
+			cur.FiveHour = &UsageWindow{UsedPercent: 96, ResetsAt: reset5h}
 			aQueue.now = tHigh
 			return true, 0, nil
 		},
-		func() (*capacityView, error) { return aQueue.startCapacity(context.Background(), false) })
+		func() (*View, error) { return aQueue.startCapacity(context.Background(), false) })
 	if Code(qErr) != ExitRefused || !strings.Contains(qErr.Error(), "no start: usage high: 5h 96% at or past 95%") {
 		t.Fatalf("queued --builds after USAGE HIGH = exit %d (%v)", Code(qErr), qErr)
 	}
@@ -428,11 +428,11 @@ capacity:
 
 	reset5h := t0.Add(2 * time.Hour).UTC()
 	var readErr error
-	cur := usageReading{
-		FiveHour: &usageWindow{UsedPercent: 40, ResetsAt: reset5h},
-		SevenDay: &usageWindow{UsedPercent: 52, ResetsAt: t0.Add(96 * time.Hour).UTC()},
+	cur := UsageReading{
+		FiveHour: &UsageWindow{UsedPercent: 40, ResetsAt: reset5h},
+		SevenDay: &UsageWindow{UsedPercent: 52, ResetsAt: t0.Add(96 * time.Hour).UTC()},
 	}
-	reader := func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
+	reader := func(_ context.Context, _ []string, _ time.Duration) (UsageReading, error) {
 		return cur, readErr
 	}
 
@@ -485,7 +485,7 @@ capacity:
 		w.now = now
 		w.clock = &fakeClock{now: now}
 		w.doctoring.Store(true) // the doctor is not under test
-		w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+		w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 		drainWatch(w)
 		return w, &out
 	}
@@ -511,7 +511,7 @@ capacity:
 	//    - live busyOne is told once to finish its step and park (busyTwo with no CLI is NOT woken);
 	//    - ParkedAuto becomes AGENT RESUMABLE, and autoResume holds off while USAGE HIGH stands.
 	t31 := t0.Add(31 * time.Minute)
-	cur.FiveHour = &usageWindow{UsedPercent: 96, ResetsAt: reset5h}
+	cur.FiveHour = &UsageWindow{UsedPercent: 96, ResetsAt: reset5h}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Notes = nil
 		return []state.Event{event(state.Party{Name: holderPerson}, answerRecorded, "#1 answered: go ahead")}, nil
@@ -539,7 +539,7 @@ capacity:
 	//    NOT re-emit USAGE HIGH, does NOT re-tell busyOne, DOES tell Waiter once
 	//    it turns busy, and still holds autoResume.
 	t37 := t0.Add(37 * time.Minute)
-	cur.FiveHour = &usageWindow{UsedPercent: 97, ResetsAt: reset5h.Add(3 * time.Second)}
+	cur.FiveHour = &UsageWindow{UsedPercent: 97, ResetsAt: reset5h.Add(3 * time.Second)}
 	woke = nil
 	w3, out3 := newWatch(t37)
 	w3.pending(context.Background(), sessionsAt(t37, true))
@@ -578,7 +578,7 @@ capacity:
 	// 6. Once fiveHour.resetsAt passes, watch re-reads immediately, emits ENDED
 	//    USAGE HIGH, and autoResume wakes ParkedAuto in the same poll!
 	tAfterReset := reset5h.Add(10 * time.Second)
-	cur.FiveHour = &usageWindow{UsedPercent: 3, ResetsAt: reset5h.Add(5 * time.Hour)}
+	cur.FiveHour = &UsageWindow{UsedPercent: 3, ResetsAt: reset5h.Add(5 * time.Hour)}
 	woke = nil
 	w3.now = tAfterReset
 	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
@@ -601,7 +601,7 @@ capacity:
 
 	// 7. Live-reloading config.yaml without capacity.usage clears an active USAGE HIGH.
 	tSecondHigh := tAfterReset.Add(10 * time.Minute)
-	cur.FiveHour = &usageWindow{UsedPercent: 98, ResetsAt: reset5h.Add(5 * time.Hour)}
+	cur.FiveHour = &UsageWindow{UsedPercent: 98, ResetsAt: reset5h.Add(5 * time.Hour)}
 	w3.now = tSecondHigh
 	w3.clock.(*fakeClock).advance(w3.now.Sub(w3.clk().Now()))
 	out3.Reset()
@@ -655,8 +655,8 @@ func TestSnapshotUsageAndDiff(t *testing.T) {
 		store:   store,
 		now:     t0,
 		out:     &bytes.Buffer{},
-		readUsage: func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
-			return usageReading{FiveHour: &usageWindow{UsedPercent: pct5h, ResetsAt: reset5h}}, nil
+		readUsage: func(_ context.Context, _ []string, _ time.Duration) (UsageReading, error) {
+			return UsageReading{FiveHour: &UsageWindow{UsedPercent: pct5h, ResetsAt: reset5h}}, nil
 		},
 	}
 
@@ -782,17 +782,17 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}}
-	v, err := a.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	v, err := a.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cp := v.Providers[claudeComm]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
 		t.Fatalf("stale ageMinutes claude provider = %+v, want ceiling 0, room 0, stale=true", cp)
 	}
-	if ap := v.Providers[harnessAgy]; ap == nil || ap.Ceiling != 2 || ap.Room != 2 {
+	if ap := v.Providers[HarnessAgy]; ap == nil || ap.Ceiling != 2 || ap.Room != 2 {
 		t.Fatalf("agy provider = %+v, want ceiling 2, room 2", ap)
 	}
-	if v.Choice == nil || v.Choice.Harness != harnessAgy || v.Choice.Model != testModelGemini {
+	if v.Choice == nil || v.Choice.Harness != HarnessAgy || v.Choice.Model != testModelGemini {
 		t.Fatalf("choice on stale claude = %+v, want agy/gemini-3-1-pro-medium", v.Choice)
 	}
 
@@ -801,7 +801,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err := os.WriteFile(claudeFile, []byte(fmt.Sprintf(`{"at":%q,"fiveHour":{"usedPercent":10},"sevenDay":{"usedPercent":20}}`, staleAt)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v2, err := a.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	v2, err := a.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -813,7 +813,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err := os.WriteFile(claudeExit, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v3, err := a.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	v3, err := a.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -901,22 +901,22 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	agyClaude5h, agyClaude7d := 15.0, 48.0
 	agyGemini5h, agyGemini7d := 10.0, 72.0
 
-	reader := func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+	reader := func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
 		if len(cmd) > 0 && cmd[0] == testReadClaude {
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: claude7d, ResetsAt: reset7d},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: claude7d, ResetsAt: reset7d},
 			}, nil
 		}
-		return usageReading{
-			Buckets: map[string]usageBucket{
+		return UsageReading{
+			Buckets: map[string]UsageBucket{
 				config.DefaultAgyClaudeBucket: {
-					FiveHour: &usageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
-					SevenDay: &usageWindow{UsedPercent: agyClaude7d, ResetsAt: reset7d},
+					FiveHour: &UsageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
+					SevenDay: &UsageWindow{UsedPercent: agyClaude7d, ResetsAt: reset7d},
 				},
 				config.DefaultAgyGeminiBucket: {
-					FiveHour: &usageWindow{UsedPercent: agyGemini5h, ResetsAt: reset5h},
-					SevenDay: &usageWindow{UsedPercent: agyGemini7d, ResetsAt: reset7d},
+					FiveHour: &UsageWindow{UsedPercent: agyGemini5h, ResetsAt: reset5h},
+					SevenDay: &UsageWindow{UsedPercent: agyGemini7d, ResetsAt: reset7d},
 				},
 			},
 			BucketOrder: []string{config.DefaultAgyGeminiBucket, config.DefaultAgyClaudeBucket},
@@ -927,7 +927,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		var out bytes.Buffer
 		// Clear cached provider usage files so each step sees the updated test numbers.
 		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(claudeComm)))
-		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(harnessAgy)))
+		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(HarnessAgy)))
 		return &app{
 			cfgPath:   cfgPath,
 			cfg:       cfg,
@@ -961,11 +961,11 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err := capEx.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var parsedEx capacityView
+	var parsedEx View
 	if err := json.Unmarshal(outEx.Bytes(), &parsedEx); err != nil {
 		t.Fatal(err)
 	}
-	if parsedEx.Choice == nil || parsedEx.Choice.Harness != harnessAgy || parsedEx.Choice.Model != testModelOpus46 ||
+	if parsedEx.Choice == nil || parsedEx.Choice.Harness != HarnessAgy || parsedEx.Choice.Model != testModelOpus46 ||
 		parsedEx.Choice.Bucket != config.DefaultAgyClaudeBucket {
 		t.Fatalf("excluded choice = %+v", parsedEx.Choice)
 	}
@@ -974,11 +974,11 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	//    of 5 no longer excuses, so agy/claude-opus-4-6-thinking wins.
 	claude7d = 54.0
 	a2, _ := newApp(t0, false)
-	v2, err := a2.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	v2, err := a2.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v2.Choice == nil || v2.Choice.Harness != harnessAgy || v2.Choice.Model != testModelOpus46 {
+	if v2.Choice == nil || v2.Choice.Harness != HarnessAgy || v2.Choice.Model != testModelOpus46 {
 		t.Fatalf("step 3 choice = %+v, want agy/claude-opus-4-6-thinking", v2.Choice)
 	}
 
@@ -987,7 +987,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	//    no longer waives: no choice, room 0.
 	agyClaude7d = 52.0
 	a3, _ := newApp(t0, false)
-	v3, err := a3.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	v3, err := a3.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -999,11 +999,11 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	//    weekly cap: with all choices ahead of pace, it still gets room and
 	//    picks the choice least ahead of pace (agy/claude-opus-4-6-thinking).
 	a4Rev, _ := newApp(t0, false)
-	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, nil, forReview)
+	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, nil, ForReview)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vReview.Room != 5 || vReview.Choice == nil || vReview.Choice.Harness != harnessAgy || vReview.Choice.Model != testModelOpus46 || !vReview.Choice.Review {
+	if vReview.Room != 5 || vReview.Choice == nil || vReview.Choice.Harness != HarnessAgy || vReview.Choice.Model != testModelOpus46 || !vReview.Choice.Review {
 		t.Fatalf("review ahead of pace = room %d, choice %+v; want room 5 and agy/claude-opus-4-6-thinking", vReview.Room, vReview.Choice)
 	}
 
@@ -1017,7 +1017,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		w2 := tasked("ClaudeWorker2")
 		w2.Harness, w2.Model = claudeComm, testModelOpus47
 		w3 := tasked("AgyWorker1")
-		w3.Harness, w3.Model = harnessAgy, testModelGemini
+		w3.Harness, w3.Model = HarnessAgy, testModelGemini
 		st.Agents = []state.Agent{w1, w2, w3}
 		return nil, nil
 	}); err != nil {
@@ -1026,13 +1026,13 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	// 2 busy on claude (at its ceiling of 2 -> room 0) + 1 busy on agy (ceiling 2 -> room 1),
 	// BUT total busy is 3, which is at top-level capacity.ceiling of 3 -> machineRoomCap caps agy to 0!
 	a5, _ := newApp(t0, false)
-	vCap, err := a5.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	vCap, err := a5.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vCap.Room != 0 || vCap.Providers[claudeComm].Room != 0 || vCap.Providers[harnessAgy].Room != 0 {
+	if vCap.Room != 0 || vCap.Providers[claudeComm].Room != 0 || vCap.Providers[HarnessAgy].Room != 0 {
 		t.Fatalf("at top-level ceiling 3: total room=%d, claude=%d, agy=%d; want all 0",
-			vCap.Room, vCap.Providers[claudeComm].Room, vCap.Providers[harnessAgy].Room)
+			vCap.Room, vCap.Providers[claudeComm].Room, vCap.Providers[HarnessAgy].Room)
 	}
 
 	// Free one claude worker so 1 busy on claude (room 1) + 1 busy on agy (room 1), total busy 2 < 3 => room 1.
@@ -1043,7 +1043,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	a6, _ := newApp(t0, false)
-	vOpen, err := a6.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	vOpen, err := a6.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,14 +1055,14 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	origMachine := plat.Machine
 	plat.Machine = tightMachine{Machine: origMachine}
 	aTight, _ := newApp(t0, false)
-	vTight, err := aTight.startCapacityWithOptions(context.Background(), false, nil, forWorker)
+	vTight, err := aTight.startCapacityWithOptions(context.Background(), false, nil, ForWorker)
 	plat.Machine = origMachine
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vTight.Room != 0 || vTight.Providers[claudeComm].Room != 0 || vTight.Providers[harnessAgy].Room != 0 {
+	if vTight.Room != 0 || vTight.Providers[claudeComm].Room != 0 || vTight.Providers[HarnessAgy].Room != 0 {
 		t.Fatalf("under low MemAvailable: total=%d, claude=%d, agy=%d; want all 0",
-			vTight.Room, vTight.Providers[claudeComm].Room, vTight.Providers[harnessAgy].Room)
+			vTight.Room, vTight.Providers[claudeComm].Room, vTight.Providers[HarnessAgy].Room)
 	}
 
 	// 7. watch emits the per-provider USAGE line with choice once per tick, and
@@ -1074,7 +1074,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	w.now = t0
 	w.clock = &fakeClock{now: t0}
 	w.doctoring.Store(true)
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 	t.Cleanup(func() { w.bg.Wait() })
 	w.pending(context.Background(), nil)
 	if got := watchOut.String(); !strings.Contains(got, "USAGE: claude: ") ||
@@ -1092,7 +1092,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	startCmd := aAuto.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto}))
+	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, HarnessAuto}))
 	if err := startCmd.Execute(); err != nil {
 		t.Fatalf("agents start --harness auto: %v", err)
 	}
@@ -1119,7 +1119,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	refuseCmd := aRefuse.agentStartCmd()
 	refuseCmd.SilenceErrors = true
 	refuseCmd.SilenceUsage = true
-	refuseCmd.SetArgs(testCheckoutArgs(t, dir, []string{"BlockedWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
+	refuseCmd.SetArgs(testCheckoutArgs(t, dir, []string{"BlockedWorker", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto}))
 	err = refuseCmd.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: no choice has room:") ||
 		!strings.Contains(err.Error(), "7d 82% at or past worker cap 80%") || outRefuse.String() != "" {
@@ -1127,7 +1127,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	}
 
 	binDir := t.TempDir()
-	fakeAgy := filepath.Join(binDir, harnessAgy)
+	fakeAgy := filepath.Join(binDir, HarnessAgy)
 	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  gemini-3-1-pro-medium'\n"), 0o755); err != nil { //nolint:gosec // test script
 		t.Fatal(err)
 	}
@@ -1163,7 +1163,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 			}()
 		},
 	}
-	reviewArgs := testCheckoutArgs(t, dir, []string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, "--" + reviewFlag, testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46})
+	reviewArgs := testCheckoutArgs(t, dir, []string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, "--" + reviewFlag, testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46})
 	aRevRefuse, outRevRefuse := newApp(t0, false)
 	revRefuseCmd := aRevRefuse.agentStartCmd()
 	revRefuseCmd.SilenceErrors = true
@@ -1248,25 +1248,25 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	claude5h := 20.0
 	agyClaude5h := 15.0
 
-	reader := func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+	reader := func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
 		if len(cmd) > 0 && cmd[0] == testReadClaude {
 			if claudeErr != nil {
-				return usageReading{}, claudeErr
+				return UsageReading{}, claudeErr
 			}
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: 30, ResetsAt: reset7d},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: 30, ResetsAt: reset7d},
 			}, nil
 		}
-		return usageReading{
-			Buckets: map[string]usageBucket{
+		return UsageReading{
+			Buckets: map[string]UsageBucket{
 				config.DefaultAgyClaudeBucket: {
-					FiveHour: &usageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
-					SevenDay: &usageWindow{UsedPercent: 30, ResetsAt: reset7d},
+					FiveHour: &UsageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
+					SevenDay: &UsageWindow{UsedPercent: 30, ResetsAt: reset7d},
 				},
 				config.DefaultAgyGeminiBucket: {
-					FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-					SevenDay: &usageWindow{UsedPercent: 20, ResetsAt: reset7d},
+					FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+					SevenDay: &UsageWindow{UsedPercent: 20, ResetsAt: reset7d},
 				},
 			},
 			BucketOrder: []string{config.DefaultAgyGeminiBucket, config.DefaultAgyClaudeBucket},
@@ -1276,7 +1276,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	newApp := func() (*app, *bytes.Buffer) {
 		var out bytes.Buffer
 		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(claudeComm)))
-		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(harnessAgy)))
+		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(HarnessAgy)))
 		return &app{
 			cfgPath:   cfgPath,
 			cfg:       cfg,
@@ -1356,14 +1356,14 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	//     startGateWithOptions for agy + claude-opus-4-6-thinking refuses with exit 3 naming the bucket.
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		w := tasked("BusyAgyClaude")
-		w.Harness, w.Model = harnessAgy, testModelOpus46
+		w.Harness, w.Model = HarnessAgy, testModelOpus46
 		st.Agents = []state.Agent{w}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	aBucket, _ := newApp()
-	_, _, err = aBucket.startGateWithOptions(context.Background(), "AgyClaudeTry", harnessAgy, testModelOpus46, false, false, nil, forWorker)
+	_, _, err = aBucket.startGateWithOptions(context.Background(), "AgyClaudeTry", HarnessAgy, testModelOpus46, false, false, nil, ForWorker)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider agy (Claude and GPT models): 1 busy at the ceiling of 1") {
 		t.Fatalf("bucket gate: code=%d, err=%v", Code(err), err)
 	}
@@ -1380,7 +1380,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryAgy := aDryAgy.agentStartCmd()
 	cmdDryAgy.SilenceErrors = true
 	cmdDryAgy.SilenceUsage = true
-	cmdDryAgy.SetArgs(testCheckoutArgs(t, dir, []string{"DryAgy", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto}))
+	cmdDryAgy.SetArgs(testCheckoutArgs(t, dir, []string{"DryAgy", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, HarnessAuto}))
 	if err := cmdDryAgy.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking agy: %v", err)
 	}
@@ -1395,14 +1395,14 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBgAgy := aBgAgy.agentStartCmd()
 	cmdBgAgy.SilenceErrors = true
 	cmdBgAgy.SilenceUsage = true
-	cmdBgAgy.SetArgs(testCheckoutArgs(t, dir, []string{"BgAgy", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto}))
+	cmdBgAgy.SetArgs(testCheckoutArgs(t, dir, []string{"BgAgy", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, HarnessAuto}))
 	err = cmdBgAgy.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--mode background and --harness agy") {
 		t.Fatalf("--mode background --harness auto picking agy: code=%d, err=%v", Code(err), err)
 	}
 
 	binDir := t.TempDir()
-	fakeAgy := filepath.Join(binDir, harnessAgy)
+	fakeAgy := filepath.Join(binDir, HarnessAgy)
 	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  claude-opus-4-6-thinking'\n"), 0o755); err != nil { //nolint:gosec // test script
 		t.Fatal(err)
 	}
@@ -1415,7 +1415,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdAutoAgyBadModel := aAutoAgyBadModel.agentStartCmd()
 	cmdAutoAgyBadModel.SilenceErrors = true
 	cmdAutoAgyBadModel.SilenceUsage = true
-	cmdAutoAgyBadModel.SetArgs(testCheckoutArgs(t, dir, []string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, usageForceFlag}))
+	cmdAutoAgyBadModel.SetArgs(testCheckoutArgs(t, dir, []string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, usageForceFlag}))
 	err = cmdAutoAgyBadModel.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), `agy lists no model "gemini-3-1-pro-medium"`) {
 		t.Fatalf("--harness auto picking agy unlisted model: code=%d, err=%v", Code(err), err)
@@ -1486,7 +1486,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdAutoAgy := aAutoAgy.agentStartCmd()
 	cmdAutoAgy.SilenceErrors = true
 	cmdAutoAgy.SilenceUsage = true
-	cmdAutoAgy.SetArgs(testCheckoutArgs(t, dir, []string{"AutoAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
+	cmdAutoAgy.SetArgs(testCheckoutArgs(t, dir, []string{"AutoAgy", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto}))
 	if err := cmdAutoAgy.Execute(); err != nil {
 		t.Fatalf("--harness auto picking agy: %v", err)
 	}
@@ -1500,7 +1500,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(stAfterAgy.Agents) != 1 || stAfterAgy.Agents[0].Name != "AutoAgy" ||
-		stAfterAgy.Agents[0].Harness != harnessAgy || stAfterAgy.Agents[0].Model != testModelGemini ||
+		stAfterAgy.Agents[0].Harness != HarnessAgy || stAfterAgy.Agents[0].Model != testModelGemini ||
 		!strings.HasPrefix(stAfterAgy.Agents[0].HostSession, agy.HostPrefix) {
 		t.Fatalf("roster after --harness auto agy start = %+v", stAfterAgy.Agents)
 	}
@@ -1520,7 +1520,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryOmp := aDryOmp.agentStartCmd()
 	cmdDryOmp.SilenceErrors = true
 	cmdDryOmp.SilenceUsage = true
-	cmdDryOmp.SetArgs(testCheckoutArgs(t, dir, []string{"DryOmp", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
+	cmdDryOmp.SetArgs(testCheckoutArgs(t, dir, []string{"DryOmp", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, HarnessAuto, testExcludeFlag, HarnessAgy}))
 	if err := cmdDryOmp.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking omp: %v", err)
 	}
@@ -1534,7 +1534,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBgOmp := aBgOmp.agentStartCmd()
 	cmdBgOmp.SilenceErrors = true
 	cmdBgOmp.SilenceUsage = true
-	cmdBgOmp.SetArgs(testCheckoutArgs(t, dir, []string{"BgOmp", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
+	cmdBgOmp.SetArgs(testCheckoutArgs(t, dir, []string{"BgOmp", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, HarnessAuto, testExcludeFlag, HarnessAgy}))
 	err = cmdBgOmp.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--mode background and --harness omp") {
 		t.Fatalf("--mode background --harness auto picking omp: code=%d, err=%v", Code(err), err)
@@ -1548,7 +1548,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdAutoOmp := aAutoOmp.agentStartCmd()
 	cmdAutoOmp.SilenceErrors = true
 	cmdAutoOmp.SilenceUsage = true
-	cmdAutoOmp.SetArgs(testCheckoutArgs(t, dir, []string{"AutoOmp", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
+	cmdAutoOmp.SetArgs(testCheckoutArgs(t, dir, []string{"AutoOmp", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, testExcludeFlag, HarnessAgy}))
 	if err := cmdAutoOmp.Execute(); err != nil {
 		t.Fatalf("--harness auto picking omp: %v", err)
 	}
@@ -1569,7 +1569,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdNone := aNone.agentStartCmd()
 	cmdNone.SilenceErrors = true
 	cmdNone.SilenceUsage = true
-	cmdNone.SetArgs(testCheckoutArgs(t, dir, []string{"NoChoiceWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy, testExcludeFlag, omp.Harness}))
+	cmdNone.SetArgs(testCheckoutArgs(t, dir, []string{"NoChoiceWorker", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, testExcludeFlag, HarnessAgy, testExcludeFlag, omp.Harness}))
 	err = cmdNone.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: no choice has room: claude/claude-opus-4-7: usage high: 5h 96% at or past 95%") ||
 		!strings.Contains(err.Error(), "agy/gemini-3-1-pro-medium: excluded") ||
@@ -1585,7 +1585,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdExpAgy := aExpAgy.agentStartCmd()
 	cmdExpAgy.SilenceErrors = true
 	cmdExpAgy.SilenceUsage = true
-	cmdExpAgy.SetArgs(testCheckoutArgs(t, dir, []string{"ExplicitAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAgy, modelFlag, testModelOpus46}))
+	cmdExpAgy.SetArgs(testCheckoutArgs(t, dir, []string{"ExplicitAgy", brief, usageDirFlag, dir, testHarnessFlag, HarnessAgy, modelFlag, testModelOpus46}))
 	if err := cmdExpAgy.Execute(); err != nil {
 		t.Fatalf("explicit --harness agy: %v", err)
 	}
@@ -1601,8 +1601,8 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	//     - brokered OMP validates preflight before delegating and does not print choice: when preflight or the broker fails.
 	cfg.Capacity.Choices = []config.Choice{
 		{Harness: claudeComm, Model: testModelOpus47},
-		{Harness: harnessAgy, Model: testModelOpus46, SkipPace: true},
-		{Harness: harnessAgy, Model: testModelGemini, SkipPace: true},
+		{Harness: HarnessAgy, Model: testModelOpus46, SkipPace: true},
+		{Harness: HarnessAgy, Model: testModelGemini, SkipPace: true},
 		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true, Kinds: []string{workerRole}},
 	}
 	rawCfgWithOpus46 := strings.Replace(rawCfg,
@@ -1624,7 +1624,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdUnknownModel := aUnknownModel.agentStartCmd()
 	cmdUnknownModel.SilenceErrors = true
 	cmdUnknownModel.SilenceUsage = true
-	cmdUnknownModel.SetArgs(testCheckoutArgs(t, dir, []string{"AutoUnknownModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, "not-in-choices"}))
+	cmdUnknownModel.SetArgs(testCheckoutArgs(t, dir, []string{"AutoUnknownModel", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, modelFlag, "not-in-choices"}))
 	err = cmdUnknownModel.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "not in capacity.choices") || outUnknownModel.String() != "" {
 		t.Fatalf("--harness auto with unknown --model: code=%d, err=%v, out=%q", Code(err), err, outUnknownModel.String())
@@ -1636,7 +1636,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		cmdExModel := aExModel.agentStartCmd()
 		cmdExModel.SilenceErrors = true
 		cmdExModel.SilenceUsage = true
-		args := testCheckoutArgs(t, dir, []string{"AutoExModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, testModelOpus46, modelFlag, testModelOpus46})
+		args := testCheckoutArgs(t, dir, []string{"AutoExModel", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, testExcludeFlag, testModelOpus46, modelFlag, testModelOpus46})
 		if isDry {
 			args = append(args, testDryRunFlag)
 		}
@@ -1653,7 +1653,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		cmdHighModel := aHighModel.agentStartCmd()
 		cmdHighModel.SilenceErrors = true
 		cmdHighModel.SilenceUsage = true
-		args := testCheckoutArgs(t, dir, []string{"AutoHighModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46})
+		args := testCheckoutArgs(t, dir, []string{"AutoHighModel", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, modelFlag, testModelOpus46})
 		if isDry {
 			args = append(args, testDryRunFlag)
 		}
@@ -1669,7 +1669,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdForceModelDry := aForceModelDry.agentStartCmd()
 	cmdForceModelDry.SilenceErrors = true
 	cmdForceModelDry.SilenceUsage = true
-	cmdForceModelDry.SetArgs(testCheckoutArgs(t, dir, []string{"AutoForceModelDry", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, usageForceFlag}))
+	cmdForceModelDry.SetArgs(testCheckoutArgs(t, dir, []string{"AutoForceModelDry", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, HarnessAuto, modelFlag, testModelOpus46, usageForceFlag}))
 	if err := cmdForceModelDry.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto --model --force: %v", err)
 	}
@@ -1688,7 +1688,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdNoClaude := aNoClaude.agentStartCmd()
 	cmdNoClaude.SilenceErrors = true
 	cmdNoClaude.SilenceUsage = true
-	cmdNoClaude.SetArgs(testCheckoutArgs(t, dir, []string{"AutoNoClaude", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, modelFlag, testModelOpus47, usageForceFlag}))
+	cmdNoClaude.SetArgs(testCheckoutArgs(t, dir, []string{"AutoNoClaude", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, HarnessAuto, modelFlag, testModelOpus47, usageForceFlag}))
 	if err := cmdNoClaude.Execute(); err == nil {
 		t.Fatal("expected error when claude is absent from PATH")
 	}
@@ -1714,7 +1714,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBrokerBadDir := aBrokerBadDir.agentStartCmd()
 	cmdBrokerBadDir.SilenceErrors = true
 	cmdBrokerBadDir.SilenceUsage = true
-	cmdBrokerBadDir.SetArgs([]string{"AutoBrokerBadDir", brief, usageDirFlag, filepath.Join(dir, "nonexistent"), testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdBrokerBadDir.SetArgs([]string{"AutoBrokerBadDir", brief, usageDirFlag, filepath.Join(dir, "nonexistent"), testHarnessFlag, HarnessAuto, testExcludeFlag, HarnessAgy})
 	err = cmdBrokerBadDir.Execute()
 	if Code(err) != ExitUsage || outBrokerBadDir.String() != "" {
 		t.Fatalf("brokered omp invalid dir: code=%d, err=%v, out=%q", Code(err), err, outBrokerBadDir.String())
@@ -1724,7 +1724,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBrokerUnavail := aBrokerUnavail.agentStartCmd()
 	cmdBrokerUnavail.SilenceErrors = true
 	cmdBrokerUnavail.SilenceUsage = true
-	cmdBrokerUnavail.SetArgs(testCheckoutArgs(t, dir, []string{"AutoBrokerUnavail", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
+	cmdBrokerUnavail.SetArgs(testCheckoutArgs(t, dir, []string{"AutoBrokerUnavail", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto, testExcludeFlag, HarnessAgy}))
 	err = cmdBrokerUnavail.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no sandbox broker answers") || outBrokerUnavail.String() != "" {
 		t.Fatalf("brokered omp unavailable broker: code=%d, err=%v, out=%q", Code(err), err, outBrokerUnavail.String())
@@ -1783,18 +1783,18 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 
 	// 2. Write fresh reading for agy (ceiling 2) and stale reading for claude:
 	//    claude contributes 0, agy contributes 2, and u.Error names claude.
-	staleReading := usageReading{
+	staleReading := UsageReading{
 		At:       t0.Add(-20 * time.Minute),
-		FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
+		FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
 	}
-	freshAgy := usageReading{
+	freshAgy := UsageReading{
 		At:       t0.Add(-1 * time.Minute),
-		FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
+		FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
 	}
 	if err := store.WriteFile(usageProviderFile(claudeComm), staleReading); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile(usageProviderFile(harnessAgy), freshAgy); err != nil {
+	if err := store.WriteFile(usageProviderFile(HarnessAgy), freshAgy); err != nil {
 		t.Fatal(err)
 	}
 	derived1, u1 := a.cachedUsageCapacity(cfg.Capacity)
@@ -1804,9 +1804,9 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 
 	// 3. Keep a valid claude reading that is due for refresh. A failed refresh
 	//    retains its capacity and reports the last good reading's age.
-	freshClaude := usageReading{
+	freshClaude := UsageReading{
 		At:       t0.Add(-1 * time.Minute),
-		FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
+		FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
 	}
 	refreshDueClaude := freshClaude
 	refreshDueClaude.At = t0.Add(-6 * time.Minute)
@@ -1816,13 +1816,13 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 	var watchOut bytes.Buffer
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut}
 	var probeCalls int
-	aWatch.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+	aWatch.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
 		probeCalls++
-		return usageReading{}, errors.New("endpoint timeout")
+		return UsageReading{}, errors.New("endpoint timeout")
 	}
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 	w.providerUsageErr = map[string]string{claudeComm: "endpoint timeout"}
 
 	kw, uw := w.currentUsage(cfg.Capacity, t0)
@@ -1853,13 +1853,13 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		store:   nil,
 		now:     t0,
 		out:     &storelessOut,
-		readUsage: func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
+		readUsage: func(_ context.Context, _ []string, _ time.Duration) (UsageReading, error) {
 			return freshClaude, nil
 		},
 	}
 	wOnce := aStoreless.newWatcher(false, false)
 	wOnce.now = t0
-	wOnce.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	wOnce.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 	wOnce.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
 	if !strings.Contains(storelessOut.String(), "USAGE: claude: ") ||
 		!strings.Contains(storelessOut.String(), "usage 5h 10%") ||
@@ -1926,21 +1926,21 @@ capacity:
 	busyClaude := tasked("BusyClaude")
 	busyClaude.Harness, busyClaude.Model = claudeComm, testModelOpus47
 	busyAgyClaude := tasked("BusyAgyClaude")
-	busyAgyClaude.Harness, busyAgyClaude.Model = harnessAgy, testModelOpus46
+	busyAgyClaude.Harness, busyAgyClaude.Model = HarnessAgy, testModelOpus46
 	busyAgyGemini := tasked("BusyAgyGemini")
-	busyAgyGemini.Harness, busyAgyGemini.Model = harnessAgy, testModelGemini
+	busyAgyGemini.Harness, busyAgyGemini.Model = HarnessAgy, testModelGemini
 
 	parkedClaude := tasked("ParkedClaude")
 	parkedClaude.Harness, parkedClaude.Model = claudeComm, testModelOpus47
 	parkedClaude.Park = &state.Park{By: parkedClaude.Party, At: t0.UTC(), On: "#1", Waits: "note 1", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
 	parkedAgyClaude := tasked("ParkedAgyClaude")
-	parkedAgyClaude.Harness, parkedAgyClaude.Model = harnessAgy, testModelOpus46
+	parkedAgyClaude.Harness, parkedAgyClaude.Model = HarnessAgy, testModelOpus46
 	parkedAgyClaude.HostSession = agy.HostPrefix + "parked-agy-claude" // an agy start's, which its wake routes to
 	parkedAgyClaude.Park = &state.Park{By: parkedAgyClaude.Party, At: t0.UTC(), On: "#2", Waits: "note 2", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
 	parkedAgyGemini := tasked("ParkedAgyGemini")
-	parkedAgyGemini.Harness, parkedAgyGemini.Model = harnessAgy, testModelGemini
+	parkedAgyGemini.Harness, parkedAgyGemini.Model = HarnessAgy, testModelGemini
 	parkedAgyGemini.HostSession = agy.HostPrefix + "parked-agy-gemini"
 	parkedAgyGemini.Park = &state.Park{By: parkedAgyGemini.Party, At: t0.UTC(), On: "#3", Waits: "note 3", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
@@ -1964,22 +1964,22 @@ capacity:
 	agyClaude5h := 96.0 // HIGH on agy's Claude bucket!
 	agyGemini5h := 10.0 // Not high on agy's Gemini bucket
 
-	reader := func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+	reader := func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
 		if len(cmd) > 0 && cmd[0] == testReadClaude {
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: 30, ResetsAt: reset7d},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: 30, ResetsAt: reset7d},
 			}, nil
 		}
-		return usageReading{
-			Buckets: map[string]usageBucket{
+		return UsageReading{
+			Buckets: map[string]UsageBucket{
 				config.DefaultAgyClaudeBucket: {
-					FiveHour: &usageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
-					SevenDay: &usageWindow{UsedPercent: 30, ResetsAt: reset7d},
+					FiveHour: &UsageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
+					SevenDay: &UsageWindow{UsedPercent: 30, ResetsAt: reset7d},
 				},
 				config.DefaultAgyGeminiBucket: {
-					FiveHour: &usageWindow{UsedPercent: agyGemini5h, ResetsAt: reset5h},
-					SevenDay: &usageWindow{UsedPercent: 20, ResetsAt: reset7d},
+					FiveHour: &UsageWindow{UsedPercent: agyGemini5h, ResetsAt: reset5h},
+					SevenDay: &UsageWindow{UsedPercent: 20, ResetsAt: reset7d},
 				},
 			},
 			BucketOrder: []string{config.DefaultAgyGeminiBucket, config.DefaultAgyClaudeBucket},
@@ -2015,7 +2015,7 @@ capacity:
 	w.now = t0
 	w.clock = &fakeClock{now: t0}
 	w.doctoring.Store(true)
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 	t.Cleanup(func() { w.bg.Wait() })
 	w.pending(context.Background(), sessions)
 
@@ -2052,7 +2052,7 @@ capacity:
 	claude5h = 97.0
 	agyClaude5h = 10.0
 	_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(claudeComm)))
-	_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(harnessAgy)))
+	_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(HarnessAgy)))
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Agents {
 			if st.Agents[i].Name == "ParkedClaude" {
@@ -2113,21 +2113,21 @@ func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
 	// Both providers read with their built-in commands: agy's buckets have room.
-	a.readUsage = func(_ context.Context, command []string, _ time.Duration) (usageReading, error) {
+	a.readUsage = func(_ context.Context, command []string, _ time.Duration) (UsageReading, error) {
 		if slices.Equal(command, config.DefaultAgyUsageCommand) {
-			w := func() *usageWindow { return &usageWindow{ResetsAt: t0.Add(2 * time.Hour)} }
-			return usageReading{
-				Buckets:     map[string]usageBucket{config.DefaultAgyGeminiBucket: {FiveHour: w(), SevenDay: w()}},
+			w := func() *UsageWindow { return &UsageWindow{ResetsAt: t0.Add(2 * time.Hour)} }
+			return UsageReading{
+				Buckets:     map[string]UsageBucket{config.DefaultAgyGeminiBucket: {FiveHour: w(), SevenDay: w()}},
 				BucketOrder: []string{config.DefaultAgyGeminiBucket},
 			}, nil
 		}
-		return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+		return UsageReading{FiveHour: &UsageWindow{}, SevenDay: &UsageWindow{}}, nil
 	}
 
 	// 1. scratchArgv serializes --exclude without square brackets so a brokered child
 	//    agentStartCmd excludes claude and dispatches agy.
 	parentCmd := a.agentStartCmd()
-	if err := parentCmd.ParseFlags([]string{testHarnessFlag, harnessAuto, "--exclude", claudeComm, "--dry-run"}); err != nil {
+	if err := parentCmd.ParseFlags([]string{testHarnessFlag, HarnessAuto, "--exclude", claudeComm, "--dry-run"}); err != nil {
 		t.Fatal(err)
 	}
 	argv, err := a.scratchArgv(parentCmd, []string{"SandboxedAuto1", brief})
@@ -2159,7 +2159,7 @@ func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
 	bracketCmd := a.agentStartCmd()
 	bracketCmd.SilenceErrors = true
 	bracketCmd.SilenceUsage = true
-	bracketCmd.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{testHarnessFlag, harnessAuto, "--exclude=[claude]", "--dry-run", "SandboxedAuto2", brief, usageDirFlag, filepath.Dir(brief)}))
+	bracketCmd.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{testHarnessFlag, HarnessAuto, "--exclude=[claude]", "--dry-run", "SandboxedAuto2", brief, usageDirFlag, filepath.Dir(brief)}))
 	if err := bracketCmd.Execute(); err != nil {
 		t.Fatalf("bracketed --exclude failed: %v", err)
 	}
@@ -2200,7 +2200,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	sup := tasked("Supervisor run 1")
 	busyGemini := tasked("BusyGemini")
-	busyGemini.Harness, busyGemini.Model = harnessAgy, testModelGemini
+	busyGemini.Harness, busyGemini.Model = HarnessAgy, testModelGemini
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, busyGemini}
@@ -2222,7 +2222,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	cmd := a.agentStartCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-	cmd.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, "BlockedWorker", brief, usageDirFlag, filepath.Dir(brief)}))
+	cmd.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{testHarnessFlag, HarnessAuto, modelFlag, testModelOpus46, "BlockedWorker", brief, usageDirFlag, filepath.Dir(brief)}))
 	err = cmd.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "1 busy at the ceiling of 1") {
 		t.Fatalf("expected refusal when shared provider ceiling 1 is held by another choice's model: code=%d, err=%v", Code(err), err)
@@ -2287,10 +2287,10 @@ capacity:
 	// 84h remaining of 168h => 50% elapsed weekly pace.
 	reset7d := t0.Add(84 * time.Hour).UTC()
 
-	if err := store.WriteFile(usageProviderFile(claudeComm), usageReading{
+	if err := store.WriteFile(usageProviderFile(claudeComm), UsageReading{
 		At:       t0,
-		FiveHour: &usageWindow{UsedPercent: 96, ResetsAt: reset5h},
-		SevenDay: &usageWindow{UsedPercent: 40, ResetsAt: reset7d},
+		FiveHour: &UsageWindow{UsedPercent: 96, ResetsAt: reset5h},
+		SevenDay: &UsageWindow{UsedPercent: 40, ResetsAt: reset7d},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2393,7 +2393,7 @@ capacity:
 	dryCmd := aDry.agentStartCmd()
 	dryCmd.SilenceErrors = true
 	dryCmd.SilenceUsage = true
-	dryCmd.SetArgs(testCheckoutArgs(t, dir, []string{"DryCodexAuto", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto}))
+	dryCmd.SetArgs(testCheckoutArgs(t, dir, []string{"DryCodexAuto", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, HarnessAuto}))
 	if err := dryCmd.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking codex: %v", err)
 	}
@@ -2434,7 +2434,7 @@ capacity:
 	startCmd := aStart.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{"AutoCodexWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
+	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{"AutoCodexWorker", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto}))
 	if err := startCmd.Execute(); err != nil {
 		t.Fatalf("--harness auto picking codex: %v", err)
 	}
@@ -2528,8 +2528,8 @@ func newSelfHostedApp(cfgPath string, cfg *config.Config, store state.Store, out
 		now:     now,
 		out:     out,
 		as:      usageCaller,
-		readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
-			return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+		readUsage: func(context.Context, []string, time.Duration) (UsageReading, error) {
+			return UsageReading{FiveHour: &UsageWindow{}, SevenDay: &UsageWindow{}}, nil
 		},
 	}
 }
@@ -2604,7 +2604,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	if err := aJSON.capacityCmd().Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var parsed capacityView
+	var parsed View
 	if err := json.Unmarshal(jsonOut.Bytes(), &parsed); err != nil {
 		t.Fatalf("capacity --json: %v\n%s", err, jsonOut.String())
 	}
@@ -2680,7 +2680,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	cmdAuto := aAuto.agentStartCmd()
 	cmdAuto.SilenceErrors = true
 	cmdAuto.SilenceUsage = true
-	cmdAuto.SetArgs(testCheckoutArgs(t, dir, []string{"OmpByAuto", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
+	cmdAuto.SetArgs(testCheckoutArgs(t, dir, []string{"OmpByAuto", brief, usageDirFlag, dir, testHarnessFlag, HarnessAuto}))
 	if err := cmdAuto.Execute(); err != nil {
 		t.Fatalf("agents start --harness auto at subscription ceiling 0: %v\n%s", err, autoOut.String())
 	}
@@ -2705,7 +2705,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	if err := aFullJSON.capacityCmd().Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var fullParsed capacityView
+	var fullParsed View
 	if err := json.Unmarshal(capOut.Bytes(), &fullParsed); err != nil {
 		t.Fatalf("capacity --json at the ceiling: %v\n%s", err, capOut.String())
 	}
@@ -3045,23 +3045,23 @@ omp:
 	// A claude harness keeps its own provider; agy and codex, unconfigured,
 	// fall back to the claude subscription provider — never to the
 	// self-hosted provider listed first.
-	if p, _ := resolveAgentProviderBucket(k, claudeComm, "claude-opus-4-7"); p != claudeComm {
+	if p, _ := ResolveAgentProviderBucket(k, claudeComm, "claude-opus-4-7"); p != claudeComm {
 		t.Fatalf("claude harness resolved to %q, want claude", p)
 	}
-	if p, _ := resolveAgentProviderBucket(k, harnessAgy, "gemini-3-1-pro-medium"); p != claudeComm {
+	if p, _ := ResolveAgentProviderBucket(k, HarnessAgy, "gemini-3-1-pro-medium"); p != claudeComm {
 		t.Fatalf("agy harness resolved to %q, want claude", p)
 	}
-	if p, _ := resolveAgentProviderBucket(k, codex.Harness, "gpt-5.4"); p != claudeComm {
+	if p, _ := ResolveAgentProviderBucket(k, codex.Harness, "gpt-5.4"); p != claudeComm {
 		t.Fatalf("codex harness resolved to %q, want claude", p)
 	}
 	// An omp model resolves by its <provider>/ prefix, without choices.
-	if p, _ := resolveAgentProviderBucket(k, omp.Harness, provLocal+"/worker-model"); p != provLocal {
+	if p, _ := ResolveAgentProviderBucket(k, omp.Harness, provLocal+"/worker-model"); p != provLocal {
 		t.Fatalf("omp model resolved to %q, want %s", p, provLocal)
 	}
 	// With only a self-hosted provider in the pool, even the omp harness's
 	// fallback leaves the provider unresolved rather than borrowing it.
 	ompOnly := config.Capacity{Providers: map[string]config.Provider{provLocal: {Kind: config.KindSelfHosted, Ceiling: 2}}}
-	if p, _ := resolveAgentProviderBucket(ompOnly, harnessAgy, "gemini-3-1-pro-medium"); p != harnessAgy {
+	if p, _ := ResolveAgentProviderBucket(ompOnly, HarnessAgy, "gemini-3-1-pro-medium"); p != HarnessAgy {
 		t.Fatalf("agy harness with only a self-hosted provider resolved to %q, want none", p)
 	}
 	// A claude, agy or codex start refuses on the held subscription at
@@ -3081,7 +3081,7 @@ omp:
 		model   string
 	}{
 		{"ClaudeAtCeilingZero", "", ""},
-		{"AgyAtCeilingZero", harnessAgy, "gemini-3-1-pro-medium"},
+		{"AgyAtCeilingZero", HarnessAgy, "gemini-3-1-pro-medium"},
 		{"CodexAtCeilingZero", codex.Harness, "gpt-5.4"},
 	} {
 		var out bytes.Buffer
@@ -3171,7 +3171,7 @@ func TestSelfHostedWatchSilentAtCeilingZero(t *testing.T) {
 	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut}
 	w := aWatch.newWatcher(false, true)
 	w.now = t0
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 	// The derived ceiling is the self-hosted one (2); busy is 2, so a naive
 	// check against the derived total would raise CAPACITY FULL.
 	if k, u := w.currentUsage(w.liveCapacity(), t0); k.Ceiling == 0 {
@@ -3216,8 +3216,8 @@ omp:
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	var out bytes.Buffer
 	a := newSelfHostedApp(cfgPath, cfg, store, &out, t0)
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
-		return usageReading{}, errors.New("endpoint timeout")
+	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
+		return UsageReading{}, errors.New("endpoint timeout")
 	}
 	if err := a.capacityCmd().Execute(); err != nil {
 		t.Fatal(err)
@@ -3264,8 +3264,8 @@ omp:
 	selfHostedAgents(t, store, "OmpBusyOne", "OmpBusyTwo")
 	out.Reset()
 	a = newSelfHostedApp(cfgPath, cfg, store, &out, t0)
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
-		return usageReading{}, errors.New("endpoint timeout")
+	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
+		return UsageReading{}, errors.New("endpoint timeout")
 	}
 	if err := a.capacityCmd().Execute(); err != nil {
 		t.Fatal(err)
@@ -3288,10 +3288,10 @@ omp:
 // takes the agent.
 func TestSelfHostedNoChoicesFallback(t *testing.T) {
 	k := config.Capacity{Providers: map[string]config.Provider{selfHostedProv: {Kind: config.KindSelfHosted, Ceiling: 2}}}
-	if p, _ := resolveAgentProviderBucket(k, omp.Harness, "local/worker-model"); p != selfHostedProv {
+	if p, _ := ResolveAgentProviderBucket(k, omp.Harness, "local/worker-model"); p != selfHostedProv {
 		t.Fatalf("omp model with an unknown prefix resolved to %q, want the sole self-hosted provider", p)
 	}
-	if p, _ := resolveAgentProviderBucket(k, omp.Harness, selfHostedTestModel); p != selfHostedProv {
+	if p, _ := ResolveAgentProviderBucket(k, omp.Harness, selfHostedTestModel); p != selfHostedProv {
 		t.Fatalf("omp model with its own prefix resolved to %q, want %s", p, selfHostedProv)
 	}
 	// Two self-hosted providers and no prefix match: unresolved, not guessed.
@@ -3299,10 +3299,10 @@ func TestSelfHostedNoChoicesFallback(t *testing.T) {
 		"a-local": {Kind: config.KindSelfHosted, Ceiling: 2},
 		"b-local": {Kind: config.KindSelfHosted, Ceiling: 2},
 	}}
-	if p, _ := resolveAgentProviderBucket(two, omp.Harness, "other/worker-model"); p != omp.Harness {
+	if p, _ := ResolveAgentProviderBucket(two, omp.Harness, "other/worker-model"); p != omp.Harness {
 		t.Fatalf("ambiguous omp model resolved to %q, want no provider", p)
 	}
-	if p, _ := resolveAgentProviderBucket(two, omp.Harness, "b-local/x"); p != "b-local" {
+	if p, _ := ResolveAgentProviderBucket(two, omp.Harness, "b-local/x"); p != "b-local" {
 		t.Fatalf("omp model by prefix resolved to %q, want b-local", p)
 	}
 	// A self-hosted provider named omp never shadows the model selector: the
@@ -3312,10 +3312,10 @@ func TestSelfHostedNoChoicesFallback(t *testing.T) {
 		omp.Harness:    {Kind: config.KindSelfHosted, Ceiling: 2},
 		selfHostedProv: {Kind: config.KindSelfHosted, Ceiling: 2},
 	}}
-	if p, _ := resolveAgentProviderBucket(named, omp.Harness, selfHostedTestModel); p != selfHostedProv {
+	if p, _ := ResolveAgentProviderBucket(named, omp.Harness, selfHostedTestModel); p != selfHostedProv {
 		t.Fatalf("omp model shadowed by a provider named omp: resolved to %q, want %s", p, selfHostedProv)
 	}
-	if p, _ := resolveAgentProviderBucket(named, omp.Harness, omp.Harness+"/worker-model"); p != omp.Harness {
+	if p, _ := ResolveAgentProviderBucket(named, omp.Harness, omp.Harness+"/worker-model"); p != omp.Harness {
 		t.Fatalf("omp model naming the omp provider resolved to %q, want %s", p, omp.Harness)
 	}
 	// A subscription harness never resolves to a self-hosted provider named
@@ -3325,13 +3325,13 @@ func TestSelfHostedNoChoicesFallback(t *testing.T) {
 		claudeComm:     {Ceiling: 4, Usage: config.Usage{Command: []string{"read-claude"}}},
 		selfHostedProv: {Kind: config.KindSelfHosted, Ceiling: 2},
 	}}
-	if p, _ := resolveAgentProviderBucket(subOnly, claudeComm, "opus"); p != claudeComm {
+	if p, _ := ResolveAgentProviderBucket(subOnly, claudeComm, "opus"); p != claudeComm {
 		t.Fatalf("claude harness resolved to %q, want claude", p)
 	}
 	sh := config.Capacity{Providers: map[string]config.Provider{
 		claudeComm: {Kind: config.KindSelfHosted, Ceiling: 2},
 	}}
-	if p, _ := resolveAgentProviderBucket(sh, claudeComm, "opus"); p != claudeComm {
+	if p, _ := ResolveAgentProviderBucket(sh, claudeComm, "opus"); p != claudeComm {
 		t.Fatalf("claude harness against a self-hosted provider named claude resolved to %q, want claude (no room, held)", p)
 	}
 }
@@ -3425,7 +3425,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	}
 	for _, tc := range []struct{ name, harness, model string }{
 		{"ClaudeCeilingZero", "", "claude-opus-4-7"},
-		{"AgyCeilingZero", harnessAgy, "gemini-3-1-pro-medium"},
+		{"AgyCeilingZero", HarnessAgy, "gemini-3-1-pro-medium"},
 		{"CodexCeilingZero", codex.Harness, "gpt-5.4"},
 	} {
 		var startOut bytes.Buffer
@@ -3520,7 +3520,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	var claudeRoom bytes.Buffer
 	aClaude := newSelfHostedApp(cfgPath, cfg5, store5, &claudeRoom, t0)
 	aClaude.json = true
-	_, v, err := aClaude.startGateWithOptions(context.Background(), "ClaudeAtFive", claudeComm, "claude-opus-4-7", false, true, nil, forWorker)
+	_, v, err := aClaude.startGateWithOptions(context.Background(), "ClaudeAtFive", claudeComm, "claude-opus-4-7", false, true, nil, ForWorker)
 	if err != nil {
 		t.Fatalf("claude gate at ceiling 5 with the self-hosted provider full: %v", err)
 	}
@@ -3537,7 +3537,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	}
 	aClaude2 := newSelfHostedApp(cfgPath, cfg5, store5, &claudeRoom, t0)
 	aClaude2.json = true
-	_, v2, err := aClaude2.startGateWithOptions(context.Background(), "ClaudeAtFiveBusy", claudeComm, "claude-opus-4-7", false, true, nil, forWorker)
+	_, v2, err := aClaude2.startGateWithOptions(context.Background(), "ClaudeAtFiveBusy", claudeComm, "claude-opus-4-7", false, true, nil, ForWorker)
 	if err != nil {
 		t.Fatalf("claude gate at ceiling 5 with its own session busy: %v", err)
 	}
@@ -3563,7 +3563,7 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 	// same words the real start refuses with.
 	var agyOut bytes.Buffer
 	aAgy := newSelfHostedApp(cfgPath, cfg, store, &agyOut, t0)
-	err := startHarness(t, aAgy, "DryAgyHeld", brief, dir, harnessAgy, "gemini-3-1-pro-medium", true)
+	err := startHarness(t, aAgy, "DryAgyHeld", brief, dir, HarnessAgy, "gemini-3-1-pro-medium", true)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
 		t.Fatalf("--dry-run agy at ceiling 0: code=%d err=%v", Code(err), err)
 	}
@@ -3621,7 +3621,7 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 	// gate's verdict with it.
 	var autoOut bytes.Buffer
 	aAuto := newSelfHostedApp(cfgPath, cfg, store, &autoOut, t0)
-	if err := startHarness(t, aAuto, "DryOmpAuto", brief, dir, harnessAuto, "", true); err != nil {
+	if err := startHarness(t, aAuto, "DryOmpAuto", brief, dir, HarnessAuto, "", true); err != nil {
 		t.Fatalf("--dry-run auto at ceiling 0: %v\n%s", err, autoOut.String())
 	}
 	if !strings.Contains(autoOut.String(), "room for 3 starts") {
@@ -3679,7 +3679,7 @@ func TestIdleFiveHourProviderCapacity(t *testing.T) {
 			t.Fatal(err)
 		}
 		provider := config.Provider{Ceiling: 2, Usage: config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Ceiling: 0}}}}
-		view := buildSingleProviderView("claude", provider, providerAgents{}, providerReadingResult{reading: r, ok: true}, keepNow)
+		view := BuildSingleProviderView("claude", provider, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, keepNow)
 		want := 2
 		if weekly > 80 {
 			want = 0
@@ -3699,27 +3699,27 @@ func TestUsageLastGoodFallback(t *testing.T) {
 			}
 			now := keepNow
 			u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Ceiling: 0}}}
-			original := usageReading{At: now.Add(-6 * time.Minute), SevenDay: &usageWindow{UsedPercent: 80, ResetsAt: now.Add(6 * 24 * time.Hour)}}
+			original := UsageReading{At: now.Add(-6 * time.Minute), SevenDay: &UsageWindow{UsedPercent: 80, ResetsAt: now.Add(6 * 24 * time.Hour)}}
 			if err := store.WriteFile(usageProviderFile("claude"), original); err != nil {
 				t.Fatal(err)
 			}
-			a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
-				return usageReading{}, errors.New(cause)
+			a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (UsageReading, error) {
+				return UsageReading{}, errors.New(cause)
 			}}
 			r, err := a.resolveReading(context.Background(), usageProviderFile("claude"), u)
 			if err != nil || r.Fallback != cause || !r.At.Equal(original.At) {
 				t.Fatalf("fallback: %+v %v", r, err)
 			}
 			p := config.Provider{Usage: u, Ceiling: 3}
-			pv := buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+			pv := BuildSingleProviderView("claude", p, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
 			if pv.Ceiling != 0 {
 				t.Fatalf("fallback bypassed pace: %+v", pv)
 			}
-			if !strings.Contains(pv.watchSummary(now), "last good read 6m") || !strings.Contains(pv.line(now), cause) {
-				t.Fatalf("fallback missing from output: %s", pv.line(now))
+			if !strings.Contains(pv.WatchSummary(now), "last good read 6m") || !strings.Contains(pv.Line(now), cause) {
+				t.Fatalf("fallback missing from output: %s", pv.Line(now))
 			}
-			r.SevenDay = &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}
-			pv = buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+			r.SevenDay = &UsageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}
+			pv = BuildSingleProviderView("claude", p, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
 			if pv.Ceiling != 3 {
 				t.Fatalf("below-pace fallback blocked: %+v", pv)
 			}
@@ -3727,8 +3727,8 @@ func TestUsageLastGoodFallback(t *testing.T) {
 			if _, err := a.resolveReading(context.Background(), usageProviderFile("claude"), u); err == nil {
 				t.Fatal("expired reading accepted")
 			}
-			a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
-				return usageReading{SevenDay: &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
+			a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
+				return UsageReading{SevenDay: &UsageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
 			}
 			r, err = a.resolveReading(context.Background(), usageProviderFile("claude"), u)
 			if err != nil || r.Fallback != "" || !r.At.Equal(a.now) {
@@ -3759,22 +3759,22 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	now := keepNow
 	age := 14.0
 	u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0}}}
-	a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
-		return usageReading{AgeMinutes: &age, SevenDay: &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
+	a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (UsageReading, error) {
+		return UsageReading{AgeMinutes: &age, SevenDay: &UsageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
 	}}
 	file := usageProviderFile(claudeComm)
 	r, err := a.resolveReading(context.Background(), file, u)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateReadingAt(r, u, now.Add(30*time.Second)); err != nil {
+	if err := ValidateReadingAt(r, u, now.Add(30*time.Second)); err != nil {
 		t.Fatalf("valid source rejected: %v", err)
 	}
 	// resolveReading stamps the cache at fetch completion, after now.
 	// Advance from that timestamp so the reported age is exactly 20 minutes.
 	a.now = r.At.Add(6 * time.Minute)
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
-		return usageReading{}, errors.New(readFailure)
+	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
+		return UsageReading{}, errors.New(readFailure)
 	}
 	if _, err := a.resolveReading(context.Background(), file, u); err == nil {
 		t.Fatal("accepted 20-minute source as fallback")
@@ -3877,20 +3877,20 @@ read -r keepalive
 
 func TestCodexStaleSourceValidation(t *testing.T) {
 	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
-	r := usageReading{At: now, SourceAt: now.Add(-8 * time.Hour), SingleWindow: true, SevenDay: &usageWindow{UsedPercent: 20, ResetsAt: now.Add(24 * time.Hour)}}
+	r := UsageReading{At: now, SourceAt: now.Add(-8 * time.Hour), SingleWindow: true, SevenDay: &UsageWindow{UsedPercent: 20, ResetsAt: now.Add(24 * time.Hour)}}
 	builtin := config.Usage{Command: config.DefaultCodexUsageCommand}
-	if err := validateReadingAt(r, builtin, now); err != nil {
+	if err := ValidateReadingAt(r, builtin, now); err != nil {
 		t.Fatalf("old valid Codex source blocks recovery: %v", err)
 	}
-	if err := validateReadingAt(r, config.Usage{Command: []string{"custom"}}, now); err == nil {
+	if err := ValidateReadingAt(r, config.Usage{Command: []string{"custom"}}, now); err == nil {
 		t.Fatal("custom reader must still enforce source freshness")
 	}
 	r.SourceAt = now.Add(30 * time.Second)
-	if err := validateReadingAt(r, builtin, now); err != nil {
+	if err := ValidateReadingAt(r, builtin, now); err != nil {
 		t.Fatalf("clock skew: %v", err)
 	}
 	r.SourceAt = now.Add(2 * time.Minute)
-	if err := validateReadingAt(r, builtin, now); err == nil {
+	if err := ValidateReadingAt(r, builtin, now); err == nil {
 		t.Fatal("large future timestamp must fail")
 	}
 }
@@ -3986,23 +3986,23 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 			cfg.Capacity = k
 			var out bytes.Buffer
 			a := &app{cfg: cfg, store: store, now: start, out: &out}
-			a.readUsage = func(_ context.Context, _ []string, _ time.Duration) (usageReading, error) {
+			a.readUsage = func(_ context.Context, _ []string, _ time.Duration) (UsageReading, error) {
 				// Earlier providers and the current command both take time.
 				clk.advance(2 * time.Minute)
-				return usageReading{SourceAt: clk.Now().Add(-4 * time.Second), SingleWindow: true,
-					SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
+				return UsageReading{SourceAt: clk.Now().Add(-4 * time.Second), SingleWindow: true,
+					SevenDay: &UsageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}, nil
 			}
 			w := a.newWatcher(false, true)
 			w.now = start
 			w.clock = clk
-			w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+			w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 			view := w.watchUsage(context.Background(), &state.State{}, nil)
 			if view == nil || view.Error != "" || view.Ceiling == 0 || strings.Contains(out.String(), "unreadable") ||
 				w.usageErr != "" || w.providerUsageErr[codex.Harness] != "" {
 				t.Fatalf("fresh reading refused: view=%+v, out=%s, usageErr=%q, providerErr=%v",
 					view, out.String(), w.usageErr, w.providerUsageErr)
 			}
-			var r usageReading
+			var r UsageReading
 			if found, err := store.ReadFile(file, &r); err != nil || !found {
 				t.Fatalf("reading not persisted: found=%v, err=%v", found, err)
 			}
@@ -4058,9 +4058,9 @@ func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 					file, codexCeiling = usageProviderFile(codex.Harness), 2
 				}
 				cfg.Capacity = k
-				good := func(at time.Time) usageReading {
-					return usageReading{At: at, SourceAt: at, SingleWindow: true,
-						SevenDay: &usageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}
+				good := func(at time.Time) UsageReading {
+					return UsageReading{At: at, SourceAt: at, SingleWindow: true,
+						SevenDay: &UsageWindow{UsedPercent: 24, ResetsAt: start.Add(24 * time.Hour)}}
 				}
 				if tc.saved {
 					if err := store.WriteFile(file, good(start.Add(-5*time.Minute))); err != nil {
@@ -4069,16 +4069,16 @@ func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 				}
 				var out bytes.Buffer
 				a := &app{cfg: cfg, store: store, now: start, out: &out}
-				a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+				a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
 					if slices.Equal(cmd, config.DefaultCodexUsageCommand) {
-						return usageReading{}, tc.err
+						return UsageReading{}, tc.err
 					}
 					return good(clk.Now()), nil
 				}
 				w := a.newWatcher(false, true)
 				w.now = start
 				w.clock = clk
-				w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+				w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 				view := w.watchUsage(context.Background(), &state.State{}, nil)
 				if view == nil || !strings.Contains(out.String(), tc.wantLine) {
 					t.Fatalf("want watch line %q, view=%+v, out=%s", tc.wantLine, view, out.String())
@@ -4132,34 +4132,34 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 
 	var out bytes.Buffer
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &out}
-	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
 		switch cmd[0] {
 		case testReadClaude:
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
 			}, nil
 		case testReadAgy:
-			return usageReading{
-				Buckets: map[string]usageBucket{
+			return UsageReading{
+				Buckets: map[string]UsageBucket{
 					config.DefaultAgyGeminiBucket: {
-						FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-						SevenDay: &usageWindow{UsedPercent: agy7d, ResetsAt: agyReset7d},
+						FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+						SevenDay: &UsageWindow{UsedPercent: agy7d, ResetsAt: agyReset7d},
 					},
 				},
 				BucketOrder: []string{config.DefaultAgyGeminiBucket},
 			}, nil
 		default:
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
 			}, nil
 		}
 	}
 	w := a.newWatcher(false, true)
 	w.now = t0
 	w.clock = clk
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 
 	countFiled := func() (int, string) {
 		evs, rerr := store.Events(0, nil)
@@ -4195,7 +4195,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	// 2. Second tick within the same 7-day window (with slight reset jitter): not emitted or filed again.
 	out.Reset()
 	agyReset7d = agyReset7d.Add(2 * time.Minute)
-	clk.advance(a.cfg.Capacity.Providers[harnessAgy].EffectiveEvery())
+	clk.advance(a.cfg.Capacity.Providers[HarnessAgy].EffectiveEvery())
 	w.watchUsage(context.Background(), &state.State{}, nil)
 	if strings.Contains(out.String(), "USAGE UNDERUSED") {
 		t.Fatalf("repeat tick in same window emitted again:\n%s", out.String())
@@ -4207,7 +4207,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	// 3. Usage catches up to 20% (>= 16.6%): ends the underuse condition.
 	out.Reset()
 	agy7d = 20
-	clk.advance(a.cfg.Capacity.Providers[harnessAgy].EffectiveEvery())
+	clk.advance(a.cfg.Capacity.Providers[HarnessAgy].EffectiveEvery())
 	view = w.watchUsage(context.Background(), &state.State{}, nil)
 	if view == nil || view.Underused {
 		t.Fatalf("caught-up view = %+v, want Underused=false", view)

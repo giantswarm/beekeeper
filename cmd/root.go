@@ -197,7 +197,7 @@ type app struct {
 	// omp models.
 	ompModelList func(ctx context.Context) ([]string, error)
 	// readUsage runs capacity.usage.command; nil is runUsageCommand.
-	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
+	readUsage func(ctx context.Context, command []string, timeout time.Duration) (UsageReading, error)
 	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
 	// the command itself.
 	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)

@@ -129,7 +129,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 				t.Fatalf("foreign board pick not dispatched: busy %d, briefs %v, %s", *busy, dispatched, r.out)
 			}
 			calls := r.called(agentsName, agentStartName)
-			if len(calls) == 0 || !slices.Contains(calls, harnessAuto) {
+			if len(calls) == 0 || !slices.Contains(calls, HarnessAuto) {
 				t.Fatalf("lost capacity model choice: %v", calls)
 			}
 		})

@@ -377,36 +377,36 @@ func TestGuideHandoverAndStartReportAllProviderSubscriptions(t *testing.T) {
 		Ceiling: 6,
 		Providers: map[string]config.Provider{
 			claudeComm:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadClaude}}},
-			harnessAgy:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadAgy}}},
+			HarnessAgy:    {Ceiling: 2, Usage: config.Usage{Command: []string{testReadAgy}}},
 			codex.Harness: {Ceiling: 2, Usage: config.Usage{Command: []string{testReadCodex}}},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: pickOpus},
-			{Harness: harnessAgy, Model: pickGemini},
+			{Harness: HarnessAgy, Model: pickGemini},
 			{Harness: codex.Harness, Model: pickGPT},
 		},
 	}
-	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+	a.readUsage = func(_ context.Context, cmd []string, _ time.Duration) (UsageReading, error) {
 		switch cmd[0] {
 		case testReadClaude:
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: 9, ResetsAt: t0.Add(150 * time.Hour).UTC()},
 			}, nil
 		case testReadAgy:
-			return usageReading{
-				Buckets: map[string]usageBucket{
+			return UsageReading{
+				Buckets: map[string]UsageBucket{
 					config.DefaultAgyGeminiBucket: {
-						FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-						SevenDay: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(112 * time.Hour).UTC()},
+						FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+						SevenDay: &UsageWindow{UsedPercent: 10, ResetsAt: t0.Add(112 * time.Hour).UTC()},
 					},
 				},
 				BucketOrder: []string{config.DefaultAgyGeminiBucket},
 			}, nil
 		default:
-			return usageReading{
-				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
-				SevenDay: &usageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
+			return UsageReading{
+				FiveHour: &UsageWindow{UsedPercent: 10, ResetsAt: reset5h},
+				SevenDay: &UsageWindow{UsedPercent: 50, ResetsAt: t0.Add(48 * time.Hour).UTC()},
 			}, nil
 		}
 	}

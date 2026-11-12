@@ -402,9 +402,9 @@ type watcher struct {
 	swapSamples []swapSample
 	// swap is the machine sample's latest swap reading, under mu: the
 	// poll's CAPACITY lines weigh a start against it.
-	swap *swapReading
+	swap *SwapReading
 	// readHeadroom reads the headroom of a start; nil is app.readHeadroom.
-	readHeadroom func(context.Context, *swapReading) *headroom
+	readHeadroom func(context.Context, *SwapReading) *Headroom
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
 	// guideRecovery owns crash recovery on its own clock in a continuous watch.
@@ -1266,7 +1266,7 @@ func (w *watcher) sample(ctx context.Context) {
 		if m.SwapTotalMiB > 0 {
 			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
 		}
-		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
+		w.keepSwap(&SwapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
 			PerHourMiB: t.DiskPerHourMiB, WritebackPerHourMiB: t.WritebackPerHourMiB, Rated: t.Rated})
 	}
 	w.sampleCPU(now, table)

@@ -147,7 +147,7 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 			rev, _ := cmd.Flags().GetBool(reviewFlag)
 			ofSH, _ := cmd.Flags().GetBool(reviewOfSelfHostedFlag)
 			if rev || ofSH {
-				kind = taskKindReview
+				kind = TaskKindReview
 			} else {
 				kind = workerRole
 			}

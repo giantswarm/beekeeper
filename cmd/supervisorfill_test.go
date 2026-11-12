@@ -40,7 +40,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
 		case fillCapacityCommand:
-			out, err := json.Marshal(capacityView{Ceiling: 3, Room: 3 - busy, agentCount: agentCount{Busy: make([]string, busy)}})
+			out, err := json.Marshal(View{Ceiling: 3, Room: 3 - busy, AgentCount: AgentCount{Busy: make([]string, busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +65,7 @@ func TestLoopFillOnStartupAndAfterRosterLoss(t *testing.T) {
 		t.Fatalf("startup: busy %d, %s", *busy, r.out)
 	}
 	for _, c := range r.calls {
-		if c[0] == agentsName && c[1] == agentStartName && !slices.Contains(c, harnessAuto) {
+		if c[0] == agentsName && c[1] == agentStartName && !slices.Contains(c, HarnessAuto) {
 			t.Fatalf("lost capacity pick: %v", c)
 		}
 	}
@@ -161,7 +161,7 @@ func TestLoopFillFillsEveryFreeSlotToCeiling(t *testing.T) {
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		if args[0] == fillCapacityCommand {
-			out, err := json.Marshal(capacityView{Ceiling: 5, Room: 5 - *busy, agentCount: agentCount{Busy: make([]string, *busy)}})
+			out, err := json.Marshal(View{Ceiling: 5, Room: 5 - *busy, AgentCount: AgentCount{Busy: make([]string, *busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -185,10 +185,10 @@ func TestLoopFillSkipsBoardWhenAllProvidersHeldByPaceEvenWithHosts(t *testing.T)
 			if slices.Contains(args, loop.LoopHostFlag) {
 				return loopRoomJSON, 0
 			}
-			out, err := json.Marshal(capacityView{
+			out, err := json.Marshal(View{
 				Ceiling: 5,
 				Room:    0,
-				Choice:  &choiceView{Reason: "claude/claude-opus-4-7: 7d 60% ahead of pace 50% (+10%)"},
+				Choice:  &ChoiceView{Reason: "claude/claude-opus-4-7: 7d 60% ahead of pace 50% (+10%)"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -494,7 +494,7 @@ func TestLoopFillPauseHoldsThroughRosterChurn(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := countAgents(st, nil, r.a.now, r.a.cfg)
-		out, err := json.Marshal(capacityView{Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
+		out, err := json.Marshal(View{Ceiling: 5, Room: 5 - len(c.Busy), AgentCount: c})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -659,7 +659,7 @@ func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
 			if slices.Contains(args, loop.LoopHostFlag) {
 				return loopRoomJSON, 0
 			}
-			out, err := json.Marshal(capacityView{Ceiling: 3, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
+			out, err := json.Marshal(View{Ceiling: 3, Room: localRoom, AgentCount: AgentCount{Busy: make([]string, *busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}

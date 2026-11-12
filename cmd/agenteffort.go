@@ -82,7 +82,7 @@ func (a *app) selectedEffort(name, kind, harness, model, explicit, choice string
 	if !config.ValidEffort(level) {
 		return "", usageErr("invalid effort %q", level)
 	}
-	if harness == harnessAgy {
+	if harness == HarnessAgy {
 		if err := refuseAgyEffort(level); err != nil {
 			return "", err
 		}

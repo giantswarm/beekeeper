@@ -125,7 +125,7 @@ func TestAgyUsageProbeCwdEnvAndCache(t *testing.T) {
 	t0 := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	a := &app{cfg: cfg, store: store, now: t0}
 	u := cfg.Capacity.Providers[config.AgyHarness].Usage
-	read := func() usageReading {
+	read := func() UsageReading {
 		t.Helper()
 		r, err := a.resolveReading(context.Background(), usageProviderFile(config.AgyHarness), u)
 		if err != nil {
@@ -190,14 +190,14 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		"Gemini Models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n" +
 		"Claude and GPT models\tWeekly Limit Remaining\t0%\t2026-11-03T09:58:13Z\n" +
 		"Claude and GPT models\tFive Hour Limit Remaining\t95%\t2026-10-28T05:00:00Z\n"
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
 		return parseAgyBuiltinUsage([]byte(exhaustedTSV))
 	}
 	st, err := store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v := a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, ForWorker)
 	if v.Choice == nil || v.Choice.Model != "gemini-3.1-pro-high" {
 		t.Fatalf("choice with 0%% remaining Claude bucket = %+v, want gemini-3.1-pro-high", v.Choice)
 	}
@@ -212,10 +212,10 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		"Claude and GPT models\tWeekly Limit Remaining\t98%\t2026-11-03T09:58:13Z\n" +
 		"Claude and GPT models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n"
 	_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(config.AgyHarness)))
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+	a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
 		return parseAgyBuiltinUsage([]byte(laggingTSV))
 	}
-	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, ForWorker)
 	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
 		t.Fatalf("choice before 429 = %+v, want %s", v.Choice, testModelOpus46)
 	}
@@ -230,7 +230,7 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		Model:      testModelOpus46,
 	}, t0)
 
-	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, ForWorker)
 	if v.Choice == nil || v.Choice.Model != "gemini-3.1-pro-high" {
 		t.Fatalf("choice after 429 = %+v, want gemini-3.1-pro-high", v.Choice)
 	}
@@ -241,7 +241,7 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 	// After the reset time passes, the quota lock lifts.
 	_ = dir
 	a.now = t0.Add(resetDur + time.Minute)
-	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, ForWorker)
 	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
 		t.Fatalf("choice after reset = %+v, want %s", v.Choice, testModelOpus46)
 	}

@@ -18,7 +18,7 @@ import (
 
 func TestPreToolUseGuardsOff(t *testing.T) {
 	t.Cleanup(func() { github.SetDevctlSkipVersionCheck(false) })
-	for _, format := range []string{claudeComm, harnessAgy, transcriptTestCodex} {
+	for _, format := range []string{claudeComm, HarnessAgy, transcriptTestCodex} {
 		t.Run(format, func(t *testing.T) {
 			var out bytes.Buffer
 			a, dir := scopeApp(t, &out)

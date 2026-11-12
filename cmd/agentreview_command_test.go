@@ -28,7 +28,7 @@ func reviewCommandTree(t *testing.T, a *app) *cobra.Command {
 	}
 	count := 0
 	for _, child := range agents.Commands() {
-		if child.Name() == taskKindReview {
+		if child.Name() == TaskKindReview {
 			count++
 		}
 	}
@@ -85,7 +85,7 @@ func TestAgentsReviewCommandTreeRelaysAndCompletes(t *testing.T) {
 		root := reviewCommandTree(t, a)
 		var out bytes.Buffer
 		root.SetOut(&out)
-		root.SetArgs(append([]string{agentsName, taskKindReview}, tt.args...))
+		root.SetArgs(append([]string{agentsName, TaskKindReview}, tt.args...))
 		if err := root.ExecuteContext(t.Context()); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +120,7 @@ func TestAgentsReviewCommandTreePreservesCoordinatorAndRejectsMixedForms(t *test
 	r := newLoopRig(t)
 	r.pull.Green = false
 	root := reviewCommandTree(t, r.a)
-	root.SetArgs([]string{agentsName, taskKindReview, loopPR})
+	root.SetArgs([]string{agentsName, TaskKindReview, loopPR})
 	if err := root.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), "CI must be green") {
 		t.Fatalf("coordinator review did not enforce green CI: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestAgentsReviewCommandTreePreservesCoordinatorAndRejectsMixedForms(t *test
 	} {
 		args := strings.Fields(line)
 		root = reviewCommandTree(t, r.a)
-		root.SetArgs(append([]string{agentsName, taskKindReview}, args...))
+		root.SetArgs(append([]string{agentsName, TaskKindReview}, args...))
 		if err := root.ExecuteContext(t.Context()); err == nil {
 			t.Fatalf("mixed or invalid review form accepted: %v", args)
 		}

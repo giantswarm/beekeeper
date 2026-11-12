@@ -10,7 +10,7 @@ const reviewWriteRefusal = "Refused: review sessions cannot commit or push fixes
 
 func reviewerSession(st *state.State, by state.Party) bool {
 	for _, start := range st.Starts {
-		if start.Kind == taskKindReview && start.Is(by) {
+		if start.Kind == TaskKindReview && start.Is(by) {
 			return true
 		}
 	}

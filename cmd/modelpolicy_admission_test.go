@@ -79,8 +79,8 @@ func TestModelPolicyQualifiedOmpTargetCannotBypass(t *testing.T) {
 			p.configure(tc.extra)
 			a, _ := p.app(false)
 			a.selectionKind = tc.kind
-			_, _, err := a.startGateWithOptions(t.Context(), workerRole, config.OmpHarness, policyOmpSelector, false, true, nil, forWorker)
-			if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
+			_, _, err := a.startGateWithOptions(t.Context(), workerRole, config.OmpHarness, policyOmpSelector, false, true, nil, ForWorker)
+			if Code(err) != ExitRefused || !strings.Contains(err.Error(), ModelPolicyPrefix) {
 				t.Fatalf("qualified selector bypassed %s: %v", tc.name, err)
 			}
 		})
@@ -96,9 +96,9 @@ func TestModelPolicyQualifiedOmpAuthorAndFilteredFamily(t *testing.T) {
 	p.want("claude "+pickOpus, "--review", "--"+authorModelFlag, policyOmpSelector)
 	for _, model := range []string{pickOpus, pickGPT} {
 		k := p.cfg.Capacity
-		k.AuthorModel, k.TaskKind = policyOmpSelector, taskKindReview
-		k = filterChoiceModel(k, model)
-		why := modelPolicyReason(k, k.Choices[0], nil, "", forReview)
+		k.AuthorModel, k.TaskKind = policyOmpSelector, TaskKindReview
+		k = FilterChoiceModel(k, model)
+		why := ModelPolicyReason(k, k.Choices[0], nil, "", ForReview)
 		if model == pickOpus && why != "" {
 			t.Fatalf("independent filtered choice rejected: %s", why)
 		}
@@ -131,7 +131,7 @@ func TestModelPolicyForcedSSHAdmissionCannotBypass(t *testing.T) {
 				}
 				kind := testTaskAudit
 				if tc.review {
-					kind = taskKindReview
+					kind = TaskKindReview
 				}
 				a.cfg.Capacity.Choices[0].Cost = 5
 				a.cfg.Capacity.Choices[0].Family = "writer-family"
@@ -144,7 +144,7 @@ func TestModelPolicyForcedSSHAdmissionCannotBypass(t *testing.T) {
 					args = append(args, testDryRunFlag)
 				}
 				_, err := runAgents(a, args...)
-				if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
+				if Code(err) != ExitRefused || !strings.Contains(err.Error(), ModelPolicyPrefix) {
 					t.Fatalf("SSH forced policy bypass: %v", err)
 				}
 				st, err := a.store.Read()
@@ -163,15 +163,15 @@ func TestModelPolicyCheckedBeforeReviewCapacityShortcut(t *testing.T) {
 	p := newPickRig(t, subscriptionChoices)
 	p.configure("  taskPolicies:\n    review: {minClass: 3}\n")
 	a, _ := p.app(false)
-	a.selectionKind = taskKindReview
-	v, err := a.startCapacityForAuto(t.Context(), false, nil, forReview, "")
+	a.selectionKind = TaskKindReview
+	v, err := a.startCapacityForAuto(t.Context(), false, nil, ForReview, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A competing start exhausts the review allowance before target admission.
-	v.withReviewHeadroom(0, 1, 1, forReview)
-	v = v.forTarget(a.liveCapacity(), claudeComm, pickOpus)
-	if _, err := gateStart(v, true); Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
+	v.WithReviewHeadroom(0, 1, 1, ForReview)
+	v = v.ForTarget(a.liveCapacity(), claudeComm, pickOpus)
+	if _, err := gateStart(v, true); Code(err) != ExitRefused || !strings.Contains(err.Error(), ModelPolicyPrefix) {
 		t.Fatalf("exhausted review room hid target policy: %v", err)
 	}
 }
@@ -183,7 +183,7 @@ func TestModelPolicySSHRequiresMetadataWithoutProviders(t *testing.T) {
 	_, err := runAgents(a, agentStartName, workerRole, brief, loop.LoopHostFlag, sshTestSelector,
 		loop.LoopRepoFlag, sshTestRepository, loop.LoopRefFlag, mainBranch, testHarnessFlag, claudeComm,
 		modelFlag, bgModel, taskKindArg, testTaskAudit, usageForceFlag, testDryRunFlag)
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), ModelPolicyPrefix) {
 		t.Fatalf("missing provider metadata hid target policy: %v", err)
 	}
 }
@@ -191,7 +191,7 @@ func TestModelPolicySSHRequiresMetadataWithoutProviders(t *testing.T) {
 func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
 	// Reviewer placement passes --model when agents.models resolves a model for kind: review.
 	r := newLoopRig(t)
-	r.a.cfg.Agents.Models = []config.AgentModelRule{{Kind: taskKindReview, Model: pickOpus}}
+	r.a.cfg.Agents.Models = []config.AgentModelRule{{Kind: TaskKindReview, Model: pickOpus}}
 	r.a.cfg.Capacity.Choices = []config.Choice{
 		{Harness: claudeComm, Model: pickOpus},
 		{Harness: config.OmpHarness, Model: loopQwen},
@@ -277,7 +277,7 @@ func TestModelPolicyOmpVaultAndScratchArgvHonorAgentsModels(t *testing.T) {
 	if !a.ompStartNeedsVault([]string{agentStartName, testHarnessFlag + "=" + config.OmpHarness, "--", workerRole, briefMD}) {
 		t.Fatal("ompStartNeedsVault ignored agents.models after --")
 	}
-	if !a.ompStartNeedsVault([]string{agentStartName, workerRole, briefMD, testHarnessFlag, harnessAuto}) {
+	if !a.ompStartNeedsVault([]string{agentStartName, workerRole, briefMD, testHarnessFlag, HarnessAuto}) {
 		t.Fatal("ompStartNeedsVault ignored agents.models for --harness auto when non-vault choice ranked first")
 	}
 	c := a.agentStartCmd()

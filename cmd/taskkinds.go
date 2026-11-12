@@ -22,12 +22,12 @@ import (
 // kindBlocks are the kinds of ks at a cap now: maxBusy against the busy
 // agents capacity counts, minInterval against the kind's last recorded
 // start. A kind at both says both.
-func kindBlocks(cfg *config.Config, st *state.State, sessions []*claude.Session, ks []config.AgentKind, now time.Time) []kindBlock {
+func kindBlocks(cfg *config.Config, st *state.State, sessions []*claude.Session, ks []config.AgentKind, now time.Time) []KindBlock {
 	if len(ks) == 0 {
 		return nil
 	}
 	busy := countAgents(st, sessions, now, cfg).Busy
-	var out []kindBlock
+	var out []KindBlock
 	for _, k := range ks {
 		var reasons []string
 		if k.MaxBusy > 0 {
@@ -48,7 +48,7 @@ func kindBlocks(cfg *config.Config, st *state.State, sessions []*claude.Session,
 			}
 		}
 		if len(reasons) > 0 {
-			out = append(out, kindBlock{Kind: k.Name, Reason: strings.Join(reasons, "; ")})
+			out = append(out, KindBlock{Kind: k.Name, Reason: strings.Join(reasons, "; ")})
 		}
 	}
 	return out
@@ -87,7 +87,7 @@ func (a *app) kindGate(name string) error {
 	}
 	lines := make([]string, len(blocks))
 	for i, b := range blocks {
-		lines[i] = b.line()
+		lines[i] = b.Line()
 	}
 	return refused("%s: %s", name, strings.Join(lines, "; "))
 }
@@ -119,7 +119,7 @@ func (a *app) fatalAdmission(name string, review bool) error {
 // withKindAdmission runs start under the kind lock once kindGate admits
 // name; a name of no kind starts without that lock.
 func (a *app) withKindAdmission(ctx context.Context, name string, start func() error) error {
-	if err := a.fatalAdmission(name, a.selectionKind == taskKindReview); err != nil {
+	if err := a.fatalAdmission(name, a.selectionKind == TaskKindReview); err != nil {
 		return err
 	}
 	if len(a.cfg.Agents.KindsOf(name)) == 0 {
@@ -140,7 +140,7 @@ func (a *app) withKindAdmission(ctx context.Context, name string, start func() e
 		return err
 	}
 	// An outage may have opened while this start waited for its kind lock.
-	if err := a.fatalAdmission(name, a.selectionKind == taskKindReview); err != nil {
+	if err := a.fatalAdmission(name, a.selectionKind == TaskKindReview); err != nil {
 		return err
 	}
 	return start()

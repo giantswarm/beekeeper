@@ -66,7 +66,7 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 		if err := w.quietWake(t.Context(), watchParty, agentOne, "an unrelated note defaulted"); err != nil {
 			t.Fatal(err)
 		}
-		w.tellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &usageView{High: true}, "park-usage.json", nil)
+		w.tellBusyWorkersUsageHigh(t.Context(), st, []*claude.Session{{Name: agentOne}}, &UsageView{High: true}, "park-usage.json", nil)
 		if len(*woke) != 0 || st.Agents[0].Park == nil || !st.Agents[0].Park.Resumable.IsZero() {
 			t.Fatalf("after %s: turns=%v, park=%+v", elapsed, *woke, st.Agents[0].Park)
 		}

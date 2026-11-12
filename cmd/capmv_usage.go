@@ -16,23 +16,23 @@ import (
 // sevenDaySpan is the duration of a 7-day subscription usage window.
 const sevenDaySpan = 7 * 24 * time.Hour
 
-// usageWindow is one subscription usage window (5-hour or 7-day).
-type usageWindow struct {
+// UsageWindow is one subscription usage window (5-hour or 7-day).
+type UsageWindow struct {
 	UsedPercent float64   `json:"usedPercent"`
 	ResetsAt    time.Time `json:"resetsAt,omitzero"`
 	Pace        *float64  `json:"pace,omitempty"`
 }
 
-// usageBucket is one named bucket (such as "Gemini Models" or
+// UsageBucket is one named bucket (such as "Gemini Models" or
 // "Claude and GPT models") in a multi-bucket usage reading.
-type usageBucket struct {
-	FiveHour *usageWindow `json:"fiveHour,omitempty"`
-	SevenDay *usageWindow `json:"sevenDay,omitempty"`
+type UsageBucket struct {
+	FiveHour *UsageWindow `json:"fiveHour,omitempty"`
+	SevenDay *UsageWindow `json:"sevenDay,omitempty"`
 }
 
-// usageReading is the timestamped output of a usage command stored in
+// UsageReading is the timestamped output of a usage command stored in
 // usageFile or usageProviderFile.
-type usageReading struct {
+type UsageReading struct {
 	At            time.Time              `json:"at"`
 	Fallback      string                 `json:"fallback,omitempty"`
 	Stop          string                 `json:"stop,omitempty"`
@@ -41,19 +41,19 @@ type usageReading struct {
 	Stale         bool                   `json:"stale,omitempty"`
 	NoPlanWindows bool                   `json:"noPlanWindows,omitempty"`
 	SingleWindow  bool                   `json:"singleWindow,omitempty"`
-	FiveHour      *usageWindow           `json:"fiveHour,omitempty"`
-	SevenDay      *usageWindow           `json:"sevenDay,omitempty"`
-	Buckets       map[string]usageBucket `json:"buckets,omitempty"`
+	FiveHour      *UsageWindow           `json:"fiveHour,omitempty"`
+	SevenDay      *UsageWindow           `json:"sevenDay,omitempty"`
+	Buckets       map[string]UsageBucket `json:"buckets,omitempty"`
 	BucketOrder   []string               `json:"bucketOrder,omitempty"`
 }
 
-// usageView is how capacity, watch and snapshot present subscription usage and
+// UsageView is how capacity, watch and snapshot present subscription usage and
 // the target derived from it.
-type usageView struct {
+type UsageView struct {
 	Fallback    string       `json:"fallback,omitempty"`
 	At          time.Time    `json:"at,omitzero"`
-	FiveHour    *usageWindow `json:"fiveHour,omitempty"`
-	SevenDay    *usageWindow `json:"sevenDay,omitempty"`
+	FiveHour    *UsageWindow `json:"fiveHour,omitempty"`
+	SevenDay    *UsageWindow `json:"sevenDay,omitempty"`
 	Ceiling     int          `json:"ceiling"`
 	High        bool         `json:"high,omitempty"`
 	HighPercent float64      `json:"highPercent,omitempty"`
@@ -61,7 +61,7 @@ type usageView struct {
 	Error       string       `json:"error,omitempty"`
 }
 
-func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
+func ValidateReadingAt(r UsageReading, u config.Usage, now time.Time) error {
 	if r.Stop != "" {
 		return codex.UsageStoppedError(r.Stop)
 	}
@@ -131,7 +131,7 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	return nil
 }
 
-func bucketNames(r usageReading) []string {
+func bucketNames(r UsageReading) []string {
 	if len(r.Buckets) == 0 {
 		return nil
 	}
@@ -152,16 +152,16 @@ func bucketNames(r usageReading) []string {
 	return out
 }
 
-// usageFresh reports whether r is fresh at now: within u.EffectiveEvery(), not
+// UsageFresh reports whether r is fresh at now: within u.EffectiveEvery(), not
 // stale, and no window crossed its ResetsAt since r.At.
-func usageFresh(r usageReading, u config.Usage, now time.Time) bool {
+func UsageFresh(r UsageReading, u config.Usage, now time.Time) bool {
 	if r.At.IsZero() || now.Sub(r.At) > u.EffectiveEvery() || r.At.After(now.Add(time.Minute)) {
 		return false
 	}
-	if validateReadingAt(r, u, now) != nil {
+	if ValidateReadingAt(r, u, now) != nil {
 		return false
 	}
-	crossed := func(w *usageWindow) bool {
+	crossed := func(w *UsageWindow) bool {
 		return w != nil && !w.ResetsAt.IsZero() && r.At.Before(w.ResetsAt) && !now.Before(w.ResetsAt)
 	}
 	if crossed(r.FiveHour) || crossed(r.SevenDay) {
@@ -177,19 +177,19 @@ func usageFresh(r usageReading, u config.Usage, now time.Time) bool {
 
 // effectiveWindow returns w at now: a window whose ResetsAt has passed has
 // reset to 0% in the new window.
-func effectiveWindow(w *usageWindow, now time.Time) *usageWindow {
+func effectiveWindow(w *UsageWindow, now time.Time) *UsageWindow {
 	if w == nil {
 		return nil
 	}
 	if !w.ResetsAt.IsZero() && !now.Before(w.ResetsAt) {
-		return &usageWindow{UsedPercent: 0}
+		return &UsageWindow{UsedPercent: 0}
 	}
-	return &usageWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, Pace: w.Pace}
+	return &UsageWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, Pace: w.Pace}
 }
 
 // effectiveSevenDayWindow returns the 7-day window at now with its elapsed
 // weekly pace share in percent attached.
-func effectiveSevenDayWindow(w *usageWindow, now time.Time) *usageWindow {
+func effectiveSevenDayWindow(w *UsageWindow, now time.Time) *UsageWindow {
 	ew := effectiveWindow(w, now)
 	if ew == nil {
 		return nil
@@ -200,7 +200,7 @@ func effectiveSevenDayWindow(w *usageWindow, now time.Time) *usageWindow {
 
 // windowPace returns the 7-day window's elapsed share in percent [0, 100] at now,
 // or w.Pace when explicitly supplied in JSON, or nil when resetsAt is unset.
-func windowPace(w *usageWindow, now time.Time) *float64 {
+func windowPace(w *UsageWindow, now time.Time) *float64 {
 	if w == nil {
 		return nil
 	}
@@ -218,14 +218,14 @@ func windowPace(w *usageWindow, now time.Time) *float64 {
 	return &v
 }
 
-func sdPace(w *usageWindow) *float64 {
+func sdPace(w *UsageWindow) *float64 {
 	if w == nil {
 		return nil
 	}
 	return w.Pace
 }
 
-func pctPtr(w *usageWindow) *float64 {
+func pctPtr(w *UsageWindow) *float64 {
 	if w == nil {
 		return nil
 	}
@@ -233,19 +233,19 @@ func pctPtr(w *usageWindow) *float64 {
 	return &v
 }
 
-func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.Capacity, *usageView) {
-	return deriveUsageViewForStart(r, k, forWorker, now)
+func DeriveUsageView(r UsageReading, k config.Capacity, now time.Time) (config.Capacity, *UsageView) {
+	return DeriveUsageViewForStart(r, k, ForWorker, now)
 }
 
-func deriveUsageViewForStart(r usageReading, k config.Capacity, kind startFor, now time.Time) (config.Capacity, *usageView) {
+func DeriveUsageViewForStart(r UsageReading, k config.Capacity, kind StartFor, now time.Time) (config.Capacity, *UsageView) {
 	fh := effectiveWindow(r.FiveHour, now)
 	sd := effectiveSevenDayWindow(r.SevenDay, now)
 	var pace *float64
-	if kind == forWorker {
+	if kind == ForWorker {
 		pace = sdPace(sd)
 	}
 	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
-	return derived, &usageView{
+	return derived, &UsageView{
 		At:          r.At,
 		Fallback:    r.Fallback,
 		FiveHour:    fh,
@@ -253,26 +253,26 @@ func deriveUsageViewForStart(r usageReading, k config.Capacity, kind startFor, n
 		Ceiling:     derived.Ceiling,
 		High:        high,
 		HighPercent: k.Usage.EffectiveHighPercent(),
-		Underused:   windowUnderused(sd, k.Usage, now),
+		Underused:   WindowUnderused(sd, k.Usage, now),
 	}
 }
 
-func errorUsageView(k config.Capacity, err error) (config.Capacity, *usageView) {
+func ErrorUsageView(k config.Capacity, err error) (config.Capacity, *UsageView) {
 	derived := k
 	derived.Ceiling = 0
-	return derived, &usageView{
+	return derived, &UsageView{
 		Ceiling:     0,
 		HighPercent: k.Usage.EffectiveHighPercent(),
 		Error:       err.Error(),
 	}
 }
 
-// usageUnreadable labels Codex failures that retain windows or the ceiling.
-const usageUnreadable = "usage unreadable; "
+// UsageUnreadable labels Codex failures that retain windows or the ceiling.
+const UsageUnreadable = "usage unreadable; "
 
-const claudeNoPlanWindows = "no plan windows"
+const ClaudeNoPlanWindows = "no plan windows"
 
-func windowFigure(label string, w *usageWindow, now time.Time) string {
+func windowFigure(label string, w *UsageWindow, now time.Time) string {
 	s := fmt.Sprintf("%s %s", label, pct(w.UsedPercent))
 	if !w.ResetsAt.IsZero() && now.Before(w.ResetsAt) {
 		if w.Pace != nil {
@@ -286,7 +286,7 @@ func windowFigure(label string, w *usageWindow, now time.Time) string {
 	return s
 }
 
-func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
+func windowsPairLine(fh, sd *UsageWindow, now time.Time) string {
 	var parts []string
 	if fh != nil {
 		parts = append(parts, windowFigure("5h", fh, now))
@@ -297,7 +297,7 @@ func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
 	return strings.Join(parts, ", ")
 }
 
-func (u *usageView) windowsLine(now time.Time) string {
+func (u *UsageView) windowsLine(now time.Time) string {
 	return withFallback(windowsPairLine(u.FiveHour, u.SevenDay, now), u.Fallback, u.At, now)
 }
 
@@ -313,18 +313,18 @@ func withFallback(s, fallback string, at, now time.Time) string {
 	return s + fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(at)), truncate(fallback, 120))
 }
 
-func (u *usageView) capacitySuffix(now time.Time) string {
+func (u *UsageView) CapacitySuffix(now time.Time) string {
 	if u.Error != "" {
 		return "usage unknown (" + truncate(u.Error, 120) + ")"
 	}
 	line := u.windowsLine(now)
-	if strings.HasPrefix(line, usageUnreadable) {
+	if strings.HasPrefix(line, UsageUnreadable) {
 		return line
 	}
 	return "usage " + line
 }
 
-func (u *usageView) watchLine(now time.Time) string {
+func (u *UsageView) WatchLine(now time.Time) string {
 	s := fmt.Sprintf("%s; target ceiling %d", u.windowsLine(now), u.Ceiling)
 	if u.High {
 		s += " (USAGE HIGH)"
@@ -332,14 +332,14 @@ func (u *usageView) watchLine(now time.Time) string {
 	return s
 }
 
-func (u *usageView) snapshotLine(now time.Time) string {
+func (u *UsageView) SnapshotLine(now time.Time) string {
 	if u.Error != "" {
 		return "usage: unknown (" + truncate(u.Error, 120) + ")"
 	}
-	return "usage: " + u.watchLine(now)
+	return "usage: " + u.WatchLine(now)
 }
 
-func highFigureText(fh *usageWindow, highPct float64, now time.Time) string {
+func HighFigureText(fh *UsageWindow, highPct float64, now time.Time) string {
 	used := highPct
 	var reset time.Time
 	if fh != nil {
@@ -352,23 +352,23 @@ func highFigureText(fh *usageWindow, highPct float64, now time.Time) string {
 	return s
 }
 
-func highBlockText(fh *usageWindow, highPct float64, now time.Time) string {
-	return "usage high: " + highFigureText(fh, highPct, now)
+func HighBlockText(fh *UsageWindow, highPct float64, now time.Time) string {
+	return "usage high: " + HighFigureText(fh, highPct, now)
 }
 
-func (u *usageView) highFigure(now time.Time) string {
-	return highFigureText(u.FiveHour, u.HighPercent, now)
+func (u *UsageView) HighFigure(now time.Time) string {
+	return HighFigureText(u.FiveHour, u.HighPercent, now)
 }
 
-func (u *usageView) highBlock(now time.Time) string {
-	return "usage high: " + u.highFigure(now)
+func (u *UsageView) HighBlock(now time.Time) string {
+	return "usage high: " + u.HighFigure(now)
 }
 
-func (u *usageView) highWatchLine(now time.Time) string {
-	return "USAGE HIGH: " + u.highFigure(now) + "; new starts and resumes wait until reset, telling busy workers to finish their step and park"
+func (u *UsageView) HighWatchLine(now time.Time) string {
+	return "USAGE HIGH: " + u.HighFigure(now) + "; new starts and resumes wait until reset, telling busy workers to finish their step and park"
 }
 
-func underusedFigureText(sd *usageWindow, u config.Usage, now time.Time) string {
+func UnderusedFigureText(sd *UsageWindow, u config.Usage, now time.Time) string {
 	if sd == nil || sd.Pace == nil {
 		return ""
 	}

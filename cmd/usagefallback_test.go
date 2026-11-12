@@ -45,8 +45,8 @@ func TestCodexUnreadableFallback(t *testing.T) {
 							}}
 							file = usageProviderFile(codex.Harness)
 						}
-						original := usageReading{At: now.Add(-6 * time.Minute), SourceAt: now.Add(-6 * time.Minute),
-							SingleWindow: true, SevenDay: &usageWindow{UsedPercent: 10, ResetsAt: now.Add(24 * time.Hour)}}
+						original := UsageReading{At: now.Add(-6 * time.Minute), SourceAt: now.Add(-6 * time.Minute),
+							SingleWindow: true, SevenDay: &UsageWindow{UsedPercent: 10, ResetsAt: now.Add(24 * time.Hour)}}
 						if strings.Contains(saved, "high") {
 							original.SevenDay.UsedPercent = 100
 						}
@@ -60,15 +60,15 @@ func TestCodexUnreadableFallback(t *testing.T) {
 						}
 						var out bytes.Buffer
 						a := &app{cfg: cfg, store: store, now: now, out: &out}
-						a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+						a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
 							if failure == "validation" {
-								return usageReading{SourceAt: now.Add(10 * time.Minute)}, nil
+								return UsageReading{SourceAt: now.Add(10 * time.Minute)}, nil
 							}
-							return usageReading{}, errors.New("reader offline")
+							return UsageReading{}, errors.New("reader offline")
 						}
 						w := a.newWatcher(false, chores)
 						w.clock, w.now = clk, now
-						w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+						w.readHeadroom = func(context.Context, *SwapReading) *Headroom { return roomy() }
 						view := w.watchUsage(t.Context(), &state.State{}, nil)
 						want := 3
 						if strings.Contains(saved, "high") {
@@ -77,7 +77,7 @@ func TestCodexUnreadableFallback(t *testing.T) {
 						if view == nil || view.Ceiling != want || !strings.Contains(out.String(), "unreadable") {
 							t.Fatalf("view=%+v, want ceiling %d and warning; output=%s", view, want, out.String())
 						}
-						var persisted usageReading
+						var persisted UsageReading
 						found, err := store.ReadFile(file, &persisted)
 						if err != nil || found != (saved != ghNone) || found && (!persisted.At.Equal(original.At) || persisted.Fallback != "") {
 							t.Fatalf("failure replaced last observation: found=%t reading=%+v err=%v", found, persisted, err)
@@ -119,25 +119,25 @@ func TestCodexStopSurvivesUnreadableRefresh(t *testing.T) {
 			}
 			now := keepNow
 			u := config.Usage{Command: config.DefaultCodexUsageCommand}
-			healthy := usageReading{At: now.Add(-6 * time.Minute), SingleWindow: true,
-				SevenDay: &usageWindow{UsedPercent: 10, ResetsAt: now.Add(24 * time.Hour)}}
+			healthy := UsageReading{At: now.Add(-6 * time.Minute), SingleWindow: true,
+				SevenDay: &UsageWindow{UsedPercent: 10, ResetsAt: now.Add(24 * time.Hour)}}
 			if err := store.WriteFile(file, healthy); err != nil {
 				t.Fatal(err)
 			}
 			a := &app{store: store, now: now}
-			a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
-				return usageReading{}, codex.ErrUsageStopped
+			a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
+				return UsageReading{}, codex.ErrUsageStopped
 			}
 			if _, err := a.resolveReading(t.Context(), file, u); !errors.Is(err, codex.ErrUsageStopped) {
 				t.Fatalf("stop masked: %v", err)
 			}
-			a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
-				return usageReading{}, errors.New("transport offline")
+			a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) {
+				return UsageReading{}, errors.New("transport offline")
 			}
 			if _, err := a.resolveReading(t.Context(), file, u); err == nil {
 				t.Fatal("ordinary failure cleared explicit stop")
 			}
-			a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) { return healthy, nil }
+			a.readUsage = func(context.Context, []string, time.Duration) (UsageReading, error) { return healthy, nil }
 			if _, err := a.resolveReading(t.Context(), file, u); err != nil {
 				t.Fatalf("successful read did not clear stop: %v", err)
 			}
@@ -162,7 +162,7 @@ func TestCodexConfiguredFallbackHonorsQuotaLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pv := buildSingleProviderView(codex.Harness, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+	pv := BuildSingleProviderView(codex.Harness, p, ProviderAgents{}, ProviderReadingResult{Reading: r, OK: true}, now)
 	if pv.Ceiling != 0 || pv.Room != 0 || r.Fallback == "" {
 		t.Fatalf("configured fallback bypassed quota ledger: %+v", pv)
 	}

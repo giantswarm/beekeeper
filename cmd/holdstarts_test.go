@@ -52,15 +52,15 @@ func TestStartsHoldRefusesNewWorkAndKeepsRunningWork(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []startFor{forWorker, forReview, forReviewOfSelfHosted} {
+	for _, kind := range []StartFor{ForWorker, ForReview, ForReviewOfSelfHosted} {
 		v, err := a.startCapacityWithOptions(ctx, false, nil, kind)
-		if err != nil || v.Room != 0 || !strings.Contains(v.verdict(), "no start: starts are held by "+agentOne) || !strings.Contains(v.verdict(), "the person sorts priorities") {
+		if err != nil || v.Room != 0 || !strings.Contains(v.Verdict(), "no start: starts are held by "+agentOne) || !strings.Contains(v.Verdict(), "the person sorts priorities") {
 			t.Errorf("capacity of a start (%d) while starts are held: %v %+v", kind, err, v)
 		}
 		if _, err := gateStart(v, true); !refusedStarts(err) || strings.Contains(err.Error(), "--force") {
 			t.Errorf("a forced start's gate (%d) while starts are held: %v", kind, err)
 		}
-		if p := newPick(v); p.Pick != pickNone || !strings.Contains(p.Reason, "starts are held") {
+		if p := NewPick(v); p.Pick != PickNone || !strings.Contains(p.Reason, "starts are held") {
 			t.Errorf("capacity pick (%d) while starts are held: %+v", kind, p)
 		}
 	}
@@ -93,7 +93,7 @@ func TestStartsHoldRefusesNewWorkAndKeepsRunningWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := a.startCapacity(ctx, false)
-	if err != nil || v.Stopped != "" || strings.Contains(v.verdict(), "starts are held") {
+	if err != nil || v.Stopped != "" || strings.Contains(v.Verdict(), "starts are held") {
 		t.Errorf("capacity after the lift: %v %+v", err, v)
 	}
 	if s, err := a.status(); err != nil || s.StartsHeld != "" || strings.Contains(s.line(), "STARTS HELD") {

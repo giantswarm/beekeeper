@@ -110,12 +110,12 @@ func TestEffortLoopStartDefault(t *testing.T) {
 func TestEffortRulePrecedence(t *testing.T) {
 	a, _ := stubApp(t)
 	a.cfg.Agents.Models = []config.AgentModelRule{
-		{Match: testScanRule, Kind: taskKindReview, Effort: testEffortX},
+		{Match: testScanRule, Kind: TaskKindReview, Effort: testEffortX},
 		{Match: testScanRule, Effort: testEffortHigh},
 	}
 	for _, tc := range []struct{ name, kind, flag, want string }{
 		{testScanName, workerRole, "", testEffortHigh},
-		{testScanName, taskKindReview, "", testEffortX},
+		{testScanName, TaskKindReview, "", testEffortX},
 		{testScanName, workerRole, testEffortLow, testEffortLow},
 		{testFixWord, workerRole, "", ""},
 	} {
@@ -139,7 +139,7 @@ func TestEffortRulePrecedence(t *testing.T) {
 func TestEffortLoopYieldsToRule(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
-	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: taskKindReview, Effort: testEffortLow}}
+	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: TaskKindReview, Effort: testEffortLow}}
 	l := &loop.Loop{Host: r.a}
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
 		t.Fatal(err)
@@ -164,17 +164,17 @@ func TestCapacityEffortAfterHarnessSelection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(`{"models":[{"slug":"test-model","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Harness: codex.Harness, Kind: taskKindReview, Effort: testEffortLow}}
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Harness: codex.Harness, Kind: TaskKindReview, Effort: testEffortLow}}
 	for _, tc := range []struct {
 		name, kind, harness, explicit, choice, want string
 		invalid                                     bool
 	}{
 		{"worker choice", workerRole, codex.Harness, "", testEffortHigh, testEffortHigh, false},
-		{"review rule", taskKindReview, codex.Harness, "", testEffortHigh, testEffortLow, false},
-		{"explicit override", taskKindReview, codex.Harness, testEffortHigh, testEffortLow, testEffortHigh, false},
-		{"agy after codex", taskKindReview, harnessAgy, "", "", "", false},
+		{"review rule", TaskKindReview, codex.Harness, "", testEffortHigh, testEffortLow, false},
+		{"explicit override", TaskKindReview, codex.Harness, testEffortHigh, testEffortLow, testEffortHigh, false},
+		{"agy after codex", TaskKindReview, HarnessAgy, "", "", "", false},
 		{"unsupported model effort", workerRole, codex.Harness, "", testEffortMax, "", true},
-		{"explicit agy refusal", workerRole, harnessAgy, testEffortHigh, "", "", true},
+		{"explicit agy refusal", workerRole, HarnessAgy, testEffortHigh, "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := a.selectedEffort("worker", tc.kind, tc.harness, "test-model", tc.explicit, tc.choice)
@@ -186,7 +186,7 @@ func TestCapacityEffortAfterHarnessSelection(t *testing.T) {
 }
 
 func TestForcedChoiceRetainsEffort(t *testing.T) {
-	v := &capacityView{Choice: &choiceView{Candidates: []choiceCandidate{{Harness: codex.Harness, Model: "test-model", Effort: testEffortHigh}}}}
+	v := &View{Choice: &ChoiceView{Candidates: []ChoiceCandidate{{Harness: codex.Harness, Model: "test-model", Effort: testEffortHigh}}}}
 	ch, err := pickAutoChoice(v, true)
 	if err != nil || ch.Effort != testEffortHigh {
 		t.Fatalf("choice=%+v err=%v", ch, err)

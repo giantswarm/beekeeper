@@ -51,7 +51,7 @@ func TestWatchOnceSaysAFailedNotesReadAndExitsNonZero(t *testing.T) {
 func TestWatchOnceWithoutChangeIsSilent(t *testing.T) {
 	w, out := onceWatch(t, openRefs)
 	reads := 0
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { reads++; return tight() }
+	w.readHeadroom = func(context.Context, *SwapReading) *Headroom { reads++; return tight() }
 	w.pending(context.Background(), nil)
 	if said := out.String(); said != "" {
 		t.Errorf("watch --once without a change said %q", said)

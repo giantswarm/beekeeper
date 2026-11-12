@@ -89,7 +89,7 @@ func TestExecutionRefusesCodexTheHostDoesNotOffer(t *testing.T) {
 		t.Fatalf("a host whose codex check failed started it: %v", err)
 	}
 	// Auto never picks the harness the host does not offer.
-	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != claudeComm {
@@ -99,7 +99,7 @@ func TestExecutionRefusesCodexTheHostDoesNotOffer(t *testing.T) {
 
 func TestExecutionAutoPicksRemoteCodex(t *testing.T) {
 	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: codexSSHFixtureVersion})
-	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != codex.Harness || (*requests)[1].Model != codexTestModel {
@@ -121,7 +121,7 @@ func TestExecutionPublicationAndMergeAcceptRemoteCodex(t *testing.T) {
 	owner, _, _ := strings.Cut(sshTestRepository, "/")
 	a.cfg.GitHub.AllowedOrgs = []string{owner}
 	ref := execution.Ref{Host: sshTestSelector, Execution: "3aa27721-fb1e-4f07-b0aa-bdf100e0fdd9", Generation: 1}
-	for _, harness := range []string{codex.Harness, omp.Harness, harnessAgy} {
+	for _, harness := range []string{codex.Harness, omp.Harness, HarnessAgy} {
 		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Commit: strings.Repeat("a", 40)}, Request: execution.StartRequest{Ref: ref, Repository: sshTestRepository, Harness: harness, LeaseRequired: true}, Lease: &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}}
 		st := &state.State{Starts: []state.Start{{Party: state.Party{Name: "remote-codex-worker"}, Execution: rec}}}
 		if _, err := a.executionPublicationLive(st, ref); err != nil {
@@ -170,15 +170,15 @@ func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{codex.Harness: {Ceiling: 1, Usage: config.Usage{Command: config.DefaultCodexUsageCommand}}}, Choices: []config.Choice{{Harness: codex.Harness, Model: codexTestModel}}}
 	resources := execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}
-	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room != 0 {
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, ForWorker, HarnessAuto, ""); v.Room != 0 {
 		t.Fatalf("a Claude-only host offers the codex choice: %+v", v.Choice)
 	}
 	host.Harnesses = []string{claudeComm, codex.Harness}
-	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != codex.Harness {
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, ForWorker, HarnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != codex.Harness {
 		t.Fatalf("a codex host does not offer the codex choice: room %d, %+v, %v", v.Room, v.Choice, v.Blocks)
 	}
 	// The check's verdict narrows the catalogue: a codex, agy or omp the host failed is no choice.
-	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 3 || got[0] != codex.Harness || got[1] != harnessAgy || got[2] != omp.Harness {
+	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 3 || got[0] != codex.Harness || got[1] != HarnessAgy || got[2] != omp.Harness {
 		t.Fatalf("unoffered harnesses: %v", got)
 	}
 

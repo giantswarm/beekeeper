@@ -31,9 +31,9 @@ const waitQuiet = 5 * time.Minute
 
 // countAgents sorts st's roster at now; sessions say which agents wait on
 // their person or in a wait of their own (none known without them).
-func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg *config.Config) agentCount {
+func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg *config.Config) AgentCount {
 	cfg, staleAfter := rosterConfig(cfg)
-	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}, Gone: []string{}}
+	c := AgentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}, Gone: []string{}}
 	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
@@ -78,11 +78,11 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg
 	return c
 }
 
-func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time, cfg *config.Config) map[string]providerAgents {
+func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time, cfg *config.Config) map[string]ProviderAgents {
 	cfg, staleAfter := rosterConfig(cfg)
-	out := make(map[string]providerAgents, len(k.Providers))
+	out := make(map[string]ProviderAgents, len(k.Providers))
 	for _, name := range k.ProviderNames() {
-		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
+		out[name] = ProviderAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
 	}
 	guide := st.GuideRole()
 	for _, ag := range st.Agents {
@@ -130,8 +130,8 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 		if _, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone {
 			continue
 		}
-		harness, model := agentHarnessModel(st, sessions, ag)
-		prov, bucket := resolveAgentProviderBucket(k, harness, model)
+		harness, model := AgentHarnessModel(st, sessions, ag)
+		prov, bucket := ResolveAgentProviderBucket(k, harness, model)
 		pa := out[prov]
 		if pa.BucketBusy == nil {
 			pa.BucketBusy = map[string][]string{}
@@ -152,11 +152,11 @@ const (
 	swapFresh = 5 * time.Minute
 )
 
-func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind startFor) *capacityView {
+func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind StartFor) *View {
 	return a.resolveProvidersCapacityForModel(ctx, st, sessions, k, builds, exclude, kind, "")
 }
 
-func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind startFor, wantModel string) *capacityView {
+func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind StartFor, wantModel string) *View {
 	now := a.now
 	if now.IsZero() {
 		now = clk.Now()
@@ -164,7 +164,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 	a.syncAgyQuotaFromState(st, now)
 	c := countAgents(st, sessions, now, a.cfg)
 	pa := countProviderAgents(st, sessions, k, now, a.cfg)
-	readings := make(map[string]providerReadingResult, len(k.Providers))
+	readings := make(map[string]ProviderReadingResult, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.Enabled() {
@@ -174,7 +174,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		if !a.now.IsZero() {
 			now = a.now
 		}
-		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+		readings[name] = ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 	}
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
@@ -186,11 +186,11 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
-	choicesCap := filterChoiceModel(k, wantModel)
-	v := buildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
+	choicesCap := FilterChoiceModel(k, wantModel)
+	v := BuildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
 	if len(k.Choices) > 0 && len(choicesCap.Choices) == 0 {
 		reason := fmt.Sprintf("model %q is not in capacity.choices", strings.TrimSpace(wantModel))
-		v.Choice = &choiceView{Review: kind != forWorker, ReviewOfSelfHosted: kind == forReviewOfSelfHosted, Reason: reason}
+		v.Choice = &ChoiceView{Review: kind != ForWorker, ReviewOfSelfHosted: kind == ForReviewOfSelfHosted, Reason: reason}
 		v.Room, v.Blocks = 0, []string{"no choice has room: " + reason}
 	}
 	return v
@@ -198,14 +198,14 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 
 // capacityStopped makes the verdict "no start" while st's stop or "starts" hold
 // stands (noStart).
-func capacityStopped(v *capacityView, a *app, st *state.State) *capacityView {
+func capacityStopped(v *View, a *app, st *state.State) *View {
 	if why := a.noStart(st); why != "" {
 		v.Stopped = why
 		v.Blocks, v.Room = append([]string{v.Stopped}, v.Blocks...), 0
 		for _, pv := range v.Providers {
 			pv.Room = 0
 			pv.Blocks = append([]string{v.Stopped}, pv.Blocks...)
-			pv.Verdict = providerVerdict(0, pv.Blocks)
+			pv.Verdict = ProviderVerdict(0, pv.Blocks)
 		}
 		if v.Choice != nil && v.Choice.Harness != "" {
 			v.Choice.Harness, v.Choice.Model, v.Choice.Provider, v.Choice.Bucket = "", "", "", ""
@@ -233,9 +233,9 @@ func (a *app) liveCapacity() config.Capacity {
 
 // readHeadroom reads the machine's headroom now against k; swap is the
 // watch's latest reading, nil without a fresh one.
-func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapReading) *headroom {
+func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *SwapReading) *Headroom {
 	slotDir, slots := a.slotView()
-	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
+	h := &Headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
 	h.Disk = a.watchDisk()
 	m, err := plat.Machine.Mem()
 	if err != nil {
@@ -269,11 +269,11 @@ func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapRea
 }
 
 // watchSwap is the watch's latest swap reading, nil when none is fresh.
-func (a *app) watchSwap() *swapReading {
+func (a *app) watchSwap() *SwapReading {
 	if a.store == nil {
 		return nil
 	}
-	var r swapReading
+	var r SwapReading
 	if found, err := a.store.ReadFile(swapFile, &r); err != nil || !found || a.now.Sub(r.At) > swapFresh {
 		return nil
 	}
@@ -410,7 +410,7 @@ nothing; it makes no GitHub call.`,
 				defer unlock()
 			}
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
-			if a.selectionKind == taskKindReview {
+			if a.selectionKind == TaskKindReview {
 				review = true
 			}
 			if a.selectionAuthor != "" && !review && !ofSelfHosted {
@@ -425,7 +425,7 @@ nothing; it makes no GitHub call.`,
 				return err
 			}
 			liveCap := a.liveCapacity()
-			var v *capacityView
+			var v *View
 			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
@@ -439,17 +439,17 @@ nothing; it makes no GitHub call.`,
 					return err
 				}
 				k := liveCap
-				var legacy *usageView
+				var legacy *UsageView
 				if len(k.Providers) == 0 {
-					k, legacy = a.resolveUsageForStart(cmd.Context(), k, startKind(review, ofSelfHosted))
+					k, legacy = a.resolveUsageForStart(cmd.Context(), k, StartKind(review, ofSelfHosted))
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, model)
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), StartKind(review, ofSelfHosted), HarnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = capacityStopped(a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap), a, st)
+				v = capacityStopped(a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, StartKind(review, ofSelfHosted), model).WithLocal(st, liveCap), a, st)
 			} else {
 				c := countAgents(st, sessions, a.now, a.cfg)
-				k, u := a.resolveUsageForStart(cmd.Context(), liveCap, startKind(review, ofSelfHosted))
-				v = capacityStopped(newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap), a, st)
+				k, u := a.resolveUsageForStart(cmd.Context(), liveCap, StartKind(review, ofSelfHosted))
+				v = capacityStopped(NewStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, StartKind(review, ofSelfHosted)).WithUsage(u, a.now).WithLocal(st, liveCap), a, st)
 			}
 			events, err := state.FollowSnapshot(a.store, "capacity-activity", "v1", func(e state.Event) bool {
 				return e.Verb == agentWakeEvent || e.Verb == resumedEvent || e.Verb == transcriptResumeEvent
@@ -462,15 +462,15 @@ nothing; it makes no GitHub call.`,
 			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
-					*capacityView
+					*View
 					Verdict string `json:"verdict"`
 					Guards  bool   `json:"guards"`
-				}{v, v.verdict(), a.cfg.Hooks.GuardsEnabled()})
+				}{v, v.Verdict(), a.cfg.Hooks.GuardsEnabled()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-			capLine := v.line(config.Capacity{Ceiling: v.Ceiling})
+			capLine := v.Line(config.Capacity{Ceiling: v.Ceiling})
 			if v.Usage != nil {
-				capLine += "; " + v.Usage.capacitySuffix(a.now)
+				capLine += "; " + v.Usage.CapacitySuffix(a.now)
 			}
 			p("capacity: %s", capLine)
 			if !a.cfg.Hooks.GuardsEnabled() {
@@ -478,14 +478,14 @@ nothing; it makes no GitHub call.`,
 			}
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
 			if v.Local != nil {
-				p("local: %s", v.Local.line())
+				p("local: %s", v.Local.Line())
 			}
 			for _, host := range v.Hosts {
 				p("%s", host.Line())
 			}
 			for _, name := range liveCap.ProviderNames() {
 				if pv := v.Providers[name]; pv != nil {
-					p("provider %s: %s", name, pv.line(a.now))
+					p("provider %s: %s", name, pv.Line(a.now))
 				}
 			}
 			for _, provider := range slices.Sorted(maps.Keys(v.Activity)) {
@@ -493,7 +493,7 @@ nothing; it makes no GitHub call.`,
 				p("activity 24h %s: %d wakes, %d resumes, %d fresh starts", provider, activity.Wakes, activity.Resumes, activity.FreshStarts)
 			}
 			if v.Choice != nil {
-				p("choice: %s", v.Choice.line())
+				p("choice: %s", v.Choice.Line())
 				if v.Choice.Decision != "" {
 					p("decision: %s", v.Choice.Decision)
 				}
@@ -507,10 +507,10 @@ nothing; it makes no GitHub call.`,
 			if len(v.Idle) > 0 {
 				p("idle: %s", strings.Join(v.Idle, ", "))
 			}
-			p("%s", v.Headroom.line())
-			p("%s", v.verdict())
+			p("%s", v.Headroom.Line())
+			p("%s", v.Verdict())
 			for _, b := range v.KindBlocks {
-				p("%s", b.line())
+				p("%s", b.Line())
 			}
 			return nil
 		},
@@ -532,7 +532,7 @@ nothing; it makes no GitHub call.`,
 // of a self-hosted model's work, excludeFlag excludes choices.
 const (
 	buildsFlag             = "builds"
-	reviewFlag             = taskKindReview
+	reviewFlag             = TaskKindReview
 	reviewOfSelfHostedFlag = "review-of-self-hosted"
 	excludeFlag            = "exclude"
 )
@@ -565,18 +565,18 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
-			if a.selectionKind == taskKindReview {
+			if a.selectionKind == TaskKindReview {
 				review = true
 			}
 			if a.selectionAuthor != "" && !review && !ofSelfHosted {
 				return usageErr(authorNeedsReview)
 			}
-			kind := startKind(review, ofSelfHosted)
+			kind := StartKind(review, ofSelfHosted)
 			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, model)
 			if err != nil {
 				return err
 			}
-			p := newPick(v)
+			p := NewPick(v)
 			if a.json {
 				return a.printJSON(p)
 			}
@@ -596,30 +596,30 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 // (nothing to say), none refuses it (exit 3, the verdict's guards named)
 // unless force, which overrides capacity for the event log. Model policy
 // and the desk's stop remain refusals, including SSH reservation rechecks.
-func gateStart(v *capacityView, force bool) (string, error) {
+func gateStart(v *View, force bool) (string, error) {
 	for _, b := range v.Blocks {
-		if strings.HasPrefix(b, modelPolicyPrefix) {
+		if strings.HasPrefix(b, ModelPolicyPrefix) {
 			return "", refused("%s", b)
 		}
 	}
 	switch {
 	case v.Stopped != "":
-		return "", refused("%s", v.verdict())
+		return "", refused("%s", v.Verdict())
 	case v.Room > 0:
 		return "", nil
 	case force:
-		return v.verdict(), nil
+		return v.Verdict(), nil
 	}
-	return "", refused("%s (beekeeper capacity; --force starts anyway)", v.verdict())
+	return "", refused("%s (beekeeper capacity; --force starts anyway)", v.Verdict())
 }
 
 // startGateWithOptions reads the capacity verdict for a start that builds or not,
 // as beekeeper capacity reads it, narrowed to the target harness/model when
 // explicit, and judges it (queueStart).
-func (a *app) startGateWithOptions(ctx context.Context, name, harness, model string, builds, force bool, exclude []string, kind startFor) (string, *capacityView, error) {
+func (a *app) startGateWithOptions(ctx context.Context, name, harness, model string, builds, force bool, exclude []string, kind StartFor) (string, *View, error) {
 	effModel := a.effectiveStartModel(harness, model)
-	readCap := func(b bool) (*capacityView, error) {
-		if harness == harnessAuto {
+	readCap := func(b bool) (*View, error) {
+		if harness == HarnessAuto {
 			return a.startCapacityForAuto(ctx, b, exclude, kind, model)
 		}
 		return a.startCapacityWithOptions(ctx, b, exclude, kind)
@@ -628,7 +628,7 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 	if err != nil {
 		return "", nil, err
 	}
-	v = v.forTarget(a.liveCapacity(), harness, effModel)
+	v = v.ForTarget(a.liveCapacity(), harness, effModel)
 	o, wait, err := a.startSlot()
 	if err != nil {
 		return "", nil, err
@@ -636,10 +636,10 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 	latest := v
 	over, err := queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
-		func() (*capacityView, error) {
+		func() (*View, error) {
 			next, err := readCap(false)
 			if err == nil {
-				next = next.forTarget(a.liveCapacity(), harness, effModel)
+				next = next.ForTarget(a.liveCapacity(), harness, effModel)
 				latest = next
 			}
 			return next, err
@@ -706,8 +706,8 @@ func (a *app) dryRunSlot() error {
 // come, the start is judged again (again) as one the slot no longer stops;
 // a turn that does not come within the wait refuses it, the waiters still
 // ahead named.
-func queueStart(v *capacityView, builds, force bool, wait string, await func() (bool, int, error), again func() (*capacityView, error)) (string, error) {
-	if !builds || force || !v.onlySlot() {
+func queueStart(v *View, builds, force bool, wait string, await func() (bool, int, error), again func() (*View, error)) (string, error) {
+	if !builds || force || !v.OnlySlot() {
 		return gateStart(v, force)
 	}
 	turn, ahead, err := await()
@@ -715,7 +715,7 @@ func queueStart(v *capacityView, builds, force bool, wait string, await func() (
 		return "", err
 	}
 	if !turn {
-		return "", refused("%s, %d ahead in the build slot queue after %s (beekeeper capacity; --force starts anyway)", v.verdict(), ahead, wait)
+		return "", refused("%s, %d ahead in the build slot queue after %s (beekeeper capacity; --force starts anyway)", v.Verdict(), ahead, wait)
 	}
 	if v, err = again(); err != nil {
 		return "", err
@@ -724,15 +724,15 @@ func queueStart(v *capacityView, builds, force bool, wait string, await func() (
 }
 
 // startCapacity is capacity's verdict for a start now.
-func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, error) {
-	return a.startCapacityWithOptions(ctx, builds, nil, forWorker)
+func (a *app) startCapacity(ctx context.Context, builds bool) (*View, error) {
+	return a.startCapacityWithOptions(ctx, builds, nil, ForWorker)
 }
 
-func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude []string, kind startFor) (*capacityView, error) {
+func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude []string, kind StartFor) (*View, error) {
 	return a.startCapacityForAuto(ctx, builds, exclude, kind, "")
 }
 
-func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, kind startFor, wantModel string) (*capacityView, error) {
+func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, kind StartFor, wantModel string) (*View, error) {
 	st, err := a.readSnapshot()
 	if err != nil {
 		return nil, err
@@ -743,16 +743,16 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	}
 	liveCap := a.liveCapacity()
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-		return capacityStopped(a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap), a, st), nil
+		return capacityStopped(a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).WithLocal(st, liveCap), a, st), nil
 	}
 	c := countAgents(st, sessions, a.now, a.cfg)
 	k, u := a.resolveUsageForStart(ctx, liveCap, kind)
-	return capacityStopped(newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap), a, st), nil
+	return capacityStopped(NewStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).WithUsage(u, a.now).WithLocal(st, liveCap), a, st), nil
 }
 
 // keepSwap keeps the machine sample's swap reading for the poll and, in the
 // state's side file, for capacity.
-func (w *watcher) keepSwap(r *swapReading) {
+func (w *watcher) keepSwap(r *SwapReading) {
 	w.mu.Lock()
 	w.swap = r
 	w.mu.Unlock()
@@ -778,13 +778,13 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 	w.mu.Lock()
 	swap := w.swap
 	w.mu.Unlock()
-	var h *headroom
+	var h *Headroom
 	if w.readHeadroom != nil {
 		h = w.readHeadroom(ctx, swap)
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
 	// The watch weighs a start that does not build: a busy slot is a note.
-	v := newCapacity(c, k, h, false).withUsage(u, w.now)
-	w.check("capacity-full", busy >= k.Ceiling, "CAPACITY FULL %d of %d: %s", busy, k.Ceiling, v.Headroom.line())
+	v := NewCapacity(c, k, h, false).WithUsage(u, w.now)
+	w.check("capacity-full", busy >= k.Ceiling, "CAPACITY FULL %d of %d: %s", busy, k.Ceiling, v.Headroom.Line())
 }

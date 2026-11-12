@@ -56,7 +56,7 @@ func TestHarnessCapKeepsIdleActiveConversation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "disk-conversation"}, Harness: harnessAgy, Conversation: "disk-conversation"}}}
+	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "disk-conversation"}, Harness: HarnessAgy, Conversation: "disk-conversation"}}}
 	refs := a.protectHarnessStores(st, nil)
 	r := diskprune.Cache(diskprune.Policy{Root: a.cfg.Agy.ConversationsDir, MaxBytes: 1}, a.now, true, refs, nil, false)
 	if len(r.Errors) != 0 || !exists(filepath.Join(a.cfg.Agy.ConversationsDir, "disk-conversation.pb")) || exists(filepath.Join(a.cfg.Agy.ConversationsDir, "ended.pb")) {

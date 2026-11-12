@@ -30,7 +30,7 @@ func asApp(h loop.Host) *app {
 func init() {
 	loop.Cmd = loop.Command{
 		About:                about,
-		AgentHarnessModel:    agentHarnessModel,
+		AgentHarnessModel:    AgentHarnessModel,
 		AgyAgentStartID:      agyAgentStartID,
 		AgyQuotaError:        agyQuotaError,
 		AlertOwnerKey:        alertOwnerKey,
@@ -88,7 +88,7 @@ func init() {
 		LowBudget:                 lowBudget,
 		NamedRefs:                 namedRefs,
 		NewExitError:              newExitError,
-		OmpChoiceModel:            ompChoiceModel,
+		OmpChoiceModel:            OmpChoiceModel,
 		OneLine:                   oneLine,
 		ParkMessage:               parkMessage,
 		ParkedBetweenTurns:        parkedBetweenTurns,

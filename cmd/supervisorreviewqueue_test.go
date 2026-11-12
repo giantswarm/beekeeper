@@ -106,22 +106,22 @@ func TestSweepCountSaysAListAtGitHubsLimit(t *testing.T) {
 // well under it, a review waits too, and says the floor that held it.
 func TestReviewStartHasALowerDiskFloor(t *testing.T) {
 	k := config.Capacity{Ceiling: 2, ReviewHeadroom: 2}
-	disk := func(free int) *headroom {
+	disk := func(free int) *Headroom {
 		h := roomy()
 		h.Disk = &watchDiskReading{Low: true, FreeMiB: free, MinMiB: 102400}
 		return h
 	}
-	if v := newStartCapacity(agentCount{}, k, disk(98783), false, forWorker); v.Room != 0 || !strings.Contains(v.verdict(), "floor 102400 MiB") {
-		t.Fatalf("worker: %s", v.verdict())
+	if v := NewStartCapacity(AgentCount{}, k, disk(98783), false, ForWorker); v.Room != 0 || !strings.Contains(v.Verdict(), "floor 102400 MiB") {
+		t.Fatalf("worker: %s", v.Verdict())
 	}
-	if v := newStartCapacity(agentCount{}, k, disk(98783), false, forReview); v.Room == 0 {
-		t.Fatalf("review held just under the floor: %s", v.verdict())
+	if v := NewStartCapacity(AgentCount{}, k, disk(98783), false, ForReview); v.Room == 0 {
+		t.Fatalf("review held just under the floor: %s", v.Verdict())
 	}
-	if v := newStartCapacity(agentCount{}, k, disk(1024), false, forReview); v.Room != 0 || !strings.Contains(v.verdict(), "floor 51200 MiB") {
-		t.Fatalf("review on a nearly full disk: %s", v.verdict())
+	if v := NewStartCapacity(AgentCount{}, k, disk(1024), false, ForReview); v.Room != 0 || !strings.Contains(v.Verdict(), "floor 51200 MiB") {
+		t.Fatalf("review on a nearly full disk: %s", v.Verdict())
 	}
 	h := disk(98783)
-	if h.forStart(forReview); !h.Disk.Low {
+	if h.ForStart(ForReview); !h.Disk.Low {
 		t.Fatal("a review's floor changed the shared reading")
 	}
 }

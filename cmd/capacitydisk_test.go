@@ -17,18 +17,18 @@ func TestCapacityLowDiskReadingHoldsStarts(t *testing.T) {
 	}
 	k := config.Capacity{Ceiling: 3}
 	for _, builds := range []bool{false, true} {
-		v := newCapacity(agentCount{}, k, h, builds)
-		if v.Room != 0 || !strings.Contains(v.verdict(), "disk pressure") {
-			t.Fatalf("low disk allowed a start: %s", v.verdict())
+		v := NewCapacity(AgentCount{}, k, h, builds)
+		if v.Room != 0 || !strings.Contains(v.Verdict(), "disk pressure") {
+			t.Fatalf("low disk allowed a start: %s", v.Verdict())
 		}
 	}
-	if !strings.Contains(h.line(), "free disk / 1 MiB (floor 100 MiB)") {
-		t.Fatalf("disk absent from headroom: %s", h.line())
+	if !strings.Contains(h.Line(), "free disk / 1 MiB (floor 100 MiB)") {
+		t.Fatalf("disk absent from headroom: %s", h.Line())
 	}
 	if err := json.Unmarshal([]byte(`{"disk":{"Low":false,"FreeMiB":200,"MinMiB":100}}`), h); err != nil {
 		t.Fatal(err)
 	}
-	if v := newCapacity(agentCount{}, k, h, false); v.Room == 0 {
-		t.Fatalf("disk recovery did not release starts: %s", v.verdict())
+	if v := NewCapacity(AgentCount{}, k, h, false); v.Room == 0 {
+		t.Fatalf("disk recovery did not release starts: %s", v.Verdict())
 	}
 }
