@@ -11,6 +11,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	continuationFixtureURLKey  = "html_url"
+	continuationFixtureRepoKey = "full_name"
+	continuationFixtureSHAKey  = "sha"
+)
+
 func TestExecutionContinuationPublishesExistingPull(t *testing.T) {
 	rig := newPublicationRig(t)
 	ctx := context.Background()
@@ -22,10 +28,10 @@ func TestExecutionContinuationPublishesExistingPull(t *testing.T) {
 	rig.created = true
 	originalGH := executionPublishGH
 	executionPublishGH = func(ctx context.Context, args ...string) ([]byte, error) {
-		if len(args) == 2 && args[0] == "api" {
+		if len(args) == 2 && args[0] == workerGitHubAPIGroup {
 			return []byte(fmt.Sprintf(`{"state":"open","html_url":%q,"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}},"base":{"ref":"main"}}`, publicationFixturePRURL, branch, priorHead, rig.request.Repository)), nil
 		}
-		if args[0] == "pr" && args[1] == "list" && !strings.Contains(strings.Join(args, " "), "--head "+branch+" ") {
+		if args[0] == "pr" && args[1] == transcriptListCommand && !strings.Contains(strings.Join(args, " "), "--head "+branch+" ") {
 			return []byte(`[]`), nil
 		}
 		return originalGH(ctx, args...)
@@ -68,36 +74,45 @@ func TestExecutionContinuationPublishesExistingPull(t *testing.T) {
 			t.Fatalf("continuation duplicated or missed PR: %+v actual=%s creates=%d err=%v", result, actual, rig.creates, err)
 		}
 	}
+	// If the assigned PR disappears, even title/body flags cannot create a replacement.
+	rig.created = false
+	head := rig.commit(t, "change.txt", "another fix\n")
+	p := rig.publication(t, head)
+	var result executionPublicationResult
+	err = coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+	if err == nil || rig.creates != 0 {
+		t.Fatalf("missing assignment created a replacement PR: creates=%d err=%v", rig.creates, err)
+	}
 }
 
 func TestContinuationPublicationRejectsInvalidTargets(t *testing.T) {
 	old := executionPublishGH
 	t.Cleanup(func() { executionPublishGH = old })
-	for _, mode := range []string{"closed", "fork", "base", "ambiguous", "unreadable"} {
+	for _, mode := range []string{noteStatusClosed, "fork", "base", "multiple repairs", "read failure"} {
 		t.Run(mode, func(t *testing.T) {
-			pull := map[string]any{"state": "open", "html_url": publicationFixturePRURL,
-				"head": map[string]any{"ref": "fix/example", "sha": strings.Repeat("a", 40), "repo": map[string]string{"full_name": "giantswarm/beekeeper"}},
-				"base": map[string]string{"ref": "main"}}
+			pull := map[string]any{"state": noteStatusOpen, continuationFixtureURLKey: publicationFixturePRURL,
+				"head": map[string]any{fieldRef: "fix/example", continuationFixtureSHAKey: strings.Repeat("a", 40), "repo": map[string]string{continuationFixtureRepoKey: sshTestRepository}},
+				"base": map[string]string{fieldRef: mainBranch}}
 			head := pull["head"].(map[string]any)
 			switch mode {
-			case "closed":
-				pull["state"] = "closed"
+			case noteStatusClosed:
+				pull["state"] = noteStatusClosed
 			case "fork":
-				head["repo"] = map[string]string{"full_name": "other/beekeeper"}
+				head["repo"] = map[string]string{continuationFixtureRepoKey: "other/beekeeper"}
 			case "base":
-				head["ref"] = "main"
+				head[fieldRef] = mainBranch
 			}
 			executionPublishGH = func(context.Context, ...string) ([]byte, error) {
-				if mode == "unreadable" {
+				if mode == "read failure" {
 					return nil, fmt.Errorf("unavailable")
 				}
 				return json.Marshal(pull)
 			}
-			repairs := []string{"giantswarm/beekeeper#42"}
-			if mode == "ambiguous" {
+			repairs := []string{sshTestRepository + "#42"}
+			if mode == "multiple repairs" {
 				repairs = append(repairs, "giantswarm/beekeeper#43")
 			}
-			if _, err := continuationPublication(t.Context(), "giantswarm/beekeeper", repairs); err == nil {
+			if _, err := continuationPublication(t.Context(), sshTestRepository, repairs); err == nil {
 				t.Fatal("invalid continuation accepted")
 			}
 		})
@@ -108,7 +123,7 @@ func TestMergedContinuationClosesOnlyRecordedTaskDuplicates(t *testing.T) {
 	old := executionPublishGH
 	t.Cleanup(func() { executionPublishGH = old })
 	const merged = "https://github.com/giantswarm/beekeeper/pull/43"
-	const repo = "giantswarm/beekeeper"
+	const repo = sshTestRepository
 	const task = "same task"
 	makeStart := func(task, url, branch string) state.Start {
 		return state.Start{Execution: &state.ExecutionRecord{
@@ -124,11 +139,11 @@ func TestMergedContinuationClosesOnlyRecordedTaskDuplicates(t *testing.T) {
 	closed := 0
 	executionPublishGH = func(_ context.Context, args ...string) ([]byte, error) {
 		switch strings.Join(args[:2], " ") {
-		case "pr list":
+		case "pr " + transcriptListCommand:
 			if !strings.Contains(strings.Join(args, " "), "--head fix/old ") {
 				t.Fatalf("unrelated branch read: %v", args)
 			}
-			return json.Marshal([]publicationPull{{URL: publicationFixturePRURL, State: "OPEN"}})
+			return json.Marshal([]publicationPull{{URL: publicationFixturePRURL, State: emergencyOpenState}})
 		case "pr close":
 			if args[2] != publicationFixturePRURL || !strings.Contains(args[len(args)-1], merged) {
 				t.Fatalf("wrong supersession: %v", args)

@@ -41,7 +41,7 @@ func continuationPublication(ctx context.Context, repository string, repairs []s
 				Ref string `json:"ref"`
 			} `json:"base"`
 		}
-		if json.Unmarshal(data, &pull) != nil || pull.State != "open" ||
+		if json.Unmarshal(data, &pull) != nil || pull.State != noteStatusOpen ||
 			pull.URL != fmt.Sprintf("https://github.com/%s/pull/%d", repository, ref.N) ||
 			!strings.EqualFold(pull.Head.Repo.FullName, repository) ||
 			!publicationCommit(pull.Head.SHA) || pull.Head.Ref == "" || pull.Head.Ref == pull.Base.Ref ||
@@ -83,7 +83,7 @@ func closeDuplicateExecutionPulls(ctx context.Context, st *state.State, mergedUR
 		if err != nil {
 			return err
 		}
-		if len(pulls) != 1 || pulls[0].URL != url || pulls[0].State != "OPEN" {
+		if len(pulls) != 1 || pulls[0].URL != url || pulls[0].State != emergencyOpenState {
 			continue
 		}
 		if _, err := executionPublishGH(ctx, "pr", "close", url, "--repo", repository, "--comment", "Superseded by the merged continuation "+mergedURL+"."); err != nil {
