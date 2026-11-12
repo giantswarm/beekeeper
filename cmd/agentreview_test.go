@@ -346,7 +346,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 		held     func(*loopRig, *state.State)
 		released bool
 	}{
-		{name: "gone", released: true},
+		{name: "no roster entry, process or execution", released: true},
 		{name: "done on the roster", held: func(_ *loopRig, st *state.State) {
 			st.Agents = append(st.Agents, state.Agent{Party: reviewer, Done: true})
 		}, released: true},
@@ -372,7 +372,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newLoopRig(t)
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.DeskReviews = []state.DeskReview{{ID: "round-1", Ref: loopPR, Head: loopHead, Round: 1, Worker: state.Party{Session: "worker", Name: loopWorker}, Reviewer: reviewer, AssignedAt: r.a.timeNow().Add(-time.Hour)}}
+				st.DeskReviews = []state.DeskReview{{ID: "round-1", Ref: loopPR, Head: loopHead, Round: 1, Worker: state.Party{Session: workerRole, Name: loopWorker}, Reviewer: reviewer, AssignedAt: r.a.timeNow().Add(-time.Hour)}}
 				// The finished start of the gone reviewer left its request.
 				st.ReviewRequests = []state.ReviewRequest{{Ref: loopPR, Head: loopHead, Round: 1}}
 				if tt.held != nil {
