@@ -83,7 +83,6 @@ type Host interface {
 // moved to a package the loop can import.
 type Command struct {
 	About                      func(e state.Event, ref string) state.Event
-	AgentHarnessModel          func(st *state.State, sessions []*claude.Session, ag state.Agent) (string, string)
 	AgyAgentStartID            func(ag state.Agent) string
 	AgyQuotaError              func(cfg *config.Config, ag state.Agent) *agy.QuotaError
 	AlertOwnerKey              func(o state.AlertOwner) string
@@ -132,7 +131,6 @@ type Command struct {
 	LowBudget                  func(b *state.Budget, floor int, now time.Time) bool
 	NamedRefs                  func(text string, owner string) []string
 	NewExitError               func(code int, msg string, err error) error
-	OmpChoiceModel             func(ch config.Choice, model string) bool
 	OneLine                    func(s string) string
 	ParkMessage                func(p *state.Park, by string) string
 	ParkedBetweenTurns         func(st *state.State, x *state.ExecutionRecord) bool

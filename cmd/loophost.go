@@ -10,7 +10,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/board"
-	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -31,7 +30,6 @@ func asApp(h loop.Host) *app {
 func init() {
 	loop.Cmd = loop.Command{
 		About:                about,
-		AgentHarnessModel:    capacity.AgentHarnessModel,
 		AgyAgentStartID:      agyAgentStartID,
 		AgyQuotaError:        agyQuotaError,
 		AlertOwnerKey:        alertOwnerKey,
@@ -86,7 +84,6 @@ func init() {
 		LowBudget:                 lowBudget,
 		NamedRefs:                 namedRefs,
 		NewExitError:              newExitError,
-		OmpChoiceModel:            capacity.OmpChoiceModel,
 		OneLine:                   oneLine,
 		ParkMessage:               parkMessage,
 		ParkedBetweenTurns:        parkedBetweenTurns,
