@@ -16,10 +16,10 @@ given:
   github:
     repositories:
       - name: example/app
-  releases: {installed: v1.1.0-rc.1}
+  releases: {installed: v1.0.0-rc.1}
   install:
-    candidate: {version: v1.1.0-rc.2}
-    previous: v1.1.0-rc.1
+    candidate: {version: v1.0.0-rc.2}
+    previous: v1.0.0-rc.1
     rolled_back: isolated workflow probe failed 3 times
 
 when:
@@ -27,26 +27,26 @@ when:
     run: {args: [note, add, Is the work in flight kept?]}
     expect:
       - exit: 0
-      - install: {installed: v1.1.0-rc.1, probation: rolled-back, quarantined: v1.1.0-rc.2}
+      - install: {installed: v1.0.0-rc.1, probation: rolled-back, quarantined: v1.0.0-rc.2}
   - name: recover
     run:
-      release: v1.1.0-rc.2
+      release: v1.0.0-rc.2
       args: [self-update, --recover-outdated-judge, /work/install/beekeeper]
     expect:
       - exit: 0
   - name: notes
     run:
-      release: v1.1.0-rc.2
+      release: v1.0.0-rc.2
       args: [--json, note, list]
     expect:
       - exit: 0
       - json_path: {path: ., len: 1}
   - name: writes
     run:
-      release: v1.1.0-rc.2
+      release: v1.0.0-rc.2
       args: [note, add, Does the recovered release write?]
     expect:
       - exit: 0
 
 then:
-  - install: {installed: v1.1.0-rc.2, probation: passed, judge_recovered: true}
+  - install: {installed: v1.0.0-rc.2, probation: passed, judge_recovered: true}

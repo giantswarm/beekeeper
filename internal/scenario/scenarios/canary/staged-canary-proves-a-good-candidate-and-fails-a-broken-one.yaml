@@ -25,27 +25,27 @@ given:
   # /work/releases/<build>/ (this platform's asset; the suite runs on
   # linux/amd64).
   install:
-    candidate: {version: v1.1.0-rc.2, mutation: pull-parser-drops-the-base}
-    previous: v1.1.0-rc.1
+    candidate: {version: v1.0.0-rc.2, mutation: pull-parser-drops-the-base}
+    previous: v1.0.0-rc.1
 
 when:
   - name: good
     run:
-      args: [self-update, --stage-canary, /work/releases/v1.1.0-rc.1/beekeeper-linux-amd64, --canary-recorded, --canary-run, canary-good]
+      args: [self-update, --stage-canary, /work/releases/v1.0.0-rc.1/beekeeper-linux-amd64, --canary-recorded, --canary-run, canary-good]
     expect:
       - exit: 0
       - json_path: {path: status, equals: success}
-      - json_path: {path: version, equals: v1.1.0-rc.1}
+      - json_path: {path: version, equals: v1.0.0-rc.1}
       - json_path: {path: merge_commit, len: 40}
   - name: broken
     run:
-      args: [self-update, --stage-canary, /work/releases/v1.1.0-rc.2+pull-parser-drops-the-base/beekeeper-linux-amd64, --canary-recorded, --canary-run, canary-broken-parser]
+      args: [self-update, --stage-canary, /work/releases/v1.0.0-rc.2+pull-parser-drops-the-base/beekeeper-linux-amd64, --canary-recorded, --canary-run, canary-broken-parser]
     expect:
       - json_path: {path: status, equals: failed}
       - json_path: {path: merge_commit, equals: ""}
   - name: no-checkout
     run:
-      args: [self-update, --stage-canary, /work/releases/v1.1.0-rc.1/beekeeper-linux-amd64, --canary-recorded, --canary-run, canary-missing-merge-validation, --canary-scenario, no-checkout]
+      args: [self-update, --stage-canary, /work/releases/v1.0.0-rc.1/beekeeper-linux-amd64, --canary-recorded, --canary-run, canary-missing-merge-validation, --canary-scenario, no-checkout]
     expect:
       - json_path: {path: status, equals: failed}
       - json_path: {path: merge_commit, equals: ""}

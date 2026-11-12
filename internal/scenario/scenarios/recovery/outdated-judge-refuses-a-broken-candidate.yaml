@@ -15,19 +15,19 @@ given:
   github:
     repositories:
       - name: example/app
-  releases: {installed: v1.1.0-rc.1}
+  releases: {installed: v1.0.0-rc.1}
   install:
-    candidate: {version: v1.1.0-rc.2, mutation: pull-parser-drops-the-base}
-    previous: v1.1.0-rc.1
+    candidate: {version: v1.0.0-rc.2, mutation: pull-parser-drops-the-base}
+    previous: v1.0.0-rc.1
     rolled_back: isolated workflow probe failed 3 times
 
 when:
   - name: recover
     run:
-      release: v1.1.0-rc.2+pull-parser-drops-the-base
+      release: v1.0.0-rc.2+pull-parser-drops-the-base
       args: [self-update, --recover-outdated-judge, /work/install/beekeeper]
     expect:
       - exit: 1
 
 then:
-  - install: {installed: v1.1.0-rc.1, probation: rolled-back, quarantined: v1.1.0-rc.2+pull-parser-drops-the-base, judge_recovered: false}
+  - install: {installed: v1.0.0-rc.1, probation: rolled-back, quarantined: v1.0.0-rc.2+pull-parser-drops-the-base, judge_recovered: false}

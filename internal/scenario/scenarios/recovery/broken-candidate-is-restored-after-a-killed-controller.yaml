@@ -22,10 +22,10 @@ given:
   github:
     repositories:
       - name: example/app
-  releases: {installed: v1.1.0-rc.1}
+  releases: {installed: v1.0.0-rc.1}
   install:
-    candidate: {version: v1.1.0-rc.2, mutation: pull-parser-drops-the-base}
-    previous: v1.1.0-rc.1
+    candidate: {version: v1.0.0-rc.2, mutation: pull-parser-drops-the-base}
+    previous: v1.0.0-rc.1
 
 when:
   - name: work
@@ -43,13 +43,13 @@ when:
   - name: half-way
     run: {args: [note, list]}
     expect:
-      - install: {installed: v1.1.0-rc.2+pull-parser-drops-the-base, probation: pending}
+      - install: {installed: v1.0.0-rc.2+pull-parser-drops-the-base, probation: pending}
   - name: second
     run:
       args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
     expect:
       - exit: 0
-      - output: {contains: ["RELEASE ROLLED BACK: v1.1.0-rc.2 failed", "restored v1.1.0-rc.1"]}
+      - output: {contains: ["RELEASE ROLLED BACK: v1.0.0-rc.2 failed", "restored v1.0.0-rc.1"]}
   - name: notes
     run: {args: [--json, note, list]}
     expect:
@@ -58,7 +58,7 @@ when:
   # The failed version's processes cannot resume writing the state.
   - name: fenced
     run:
-      release: v1.1.0-rc.2+pull-parser-drops-the-base
+      release: v1.0.0-rc.2+pull-parser-drops-the-base
       args: [note, add, Does the failed version still write?]
     expect:
       - stderr: {contains: [state writes fenced after binary recovery]}
@@ -68,11 +68,11 @@ when:
       - exit: 0
   - name: broken-probe
     run:
-      release: v1.1.0-rc.2+pull-parser-drops-the-base
+      release: v1.0.0-rc.2+pull-parser-drops-the-base
       args: [self-update, --installation-probe]
     expect:
       - exit: 1
 
 then:
-  - install: {installed: v1.1.0-rc.1, probation: rolled-back, quarantined: v1.1.0-rc.2+pull-parser-drops-the-base, notified: true}
+  - install: {installed: v1.0.0-rc.1, probation: rolled-back, quarantined: v1.0.0-rc.2+pull-parser-drops-the-base, notified: true}
   - install: {probe_failures: {min: 1}}

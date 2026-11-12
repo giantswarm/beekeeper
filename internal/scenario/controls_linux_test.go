@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -51,7 +50,7 @@ func TestMutationControls(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mutant := buildMutant(t, c)
+			mutant := buildMutant(t, r, c)
 			artifacts := t.TempDir()
 			res := (&Runner{Candidate: mutant, Fake: r.Fake, Artifacts: artifacts}).Run(t.Context(), s, t.TempDir())
 			status, err := Outcome(res)
@@ -73,33 +72,24 @@ func TestMutationControls(t *testing.T) {
 	}
 }
 
-// buildMutant builds the candidate with c's defect through a build overlay,
-// leaving the source tree untouched.
-func buildMutant(t *testing.T, c mutationControl) string {
+// mutantVersion is the version a control's mutant is stamped with: the
+// recovery scenarios' candidate, whose mutated build the suite then builds
+// once for both.
+const mutantVersion = "v1.0.0-rc.2"
+
+// buildMutant builds the candidate with c's defect through the suite's
+// release builder, leaving the source tree untouched.
+func buildMutant(t *testing.T, r *Runner, c mutationControl) string {
 	t.Helper()
-	m, ok := Mutations[c.mutation]
-	if !ok {
+	if _, ok := Mutations[c.mutation]; !ok {
 		t.Fatalf("no mutation %q", c.mutation)
 	}
-	repo, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	overlay, err := m.Overlay(repo, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(dir, "beekeeper")
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "build", "-tags", "scenario", "-overlay", overlay, "-o", out, ".") //nolint:gosec // the repository's own build
-	cmd.Dir = repo
-	started := time.Now()
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build the mutant %s: %v\n%s", c.mutation, err, b)
+	out, err := r.Release(ctx, ReleaseBuild{Version: mutantVersion, Mutation: c.mutation})
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("mutant %s built in %s", c.mutation, time.Since(started).Round(time.Millisecond))
 	return out
 }
 

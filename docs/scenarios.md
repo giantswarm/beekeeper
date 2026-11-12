@@ -211,10 +211,10 @@ for the recovery controller:
 
 ```yaml
 given:
-  releases: {installed: v1.1.0-rc.1}      # the desk runs the previous release
+  releases: {installed: v1.0.0-rc.1}      # the desk runs the previous release
   install:
-    candidate: {version: v1.1.0-rc.2, mutation: pull-parser-drops-the-base}
-    previous: v1.1.0-rc.1
+    candidate: {version: v1.0.0-rc.2, mutation: pull-parser-drops-the-base}
+    previous: v1.0.0-rc.1
     rolled_back: probe failed 3 times     # optional: rolled back already
 ```
 
