@@ -199,7 +199,7 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 }
 
 func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
-	for _, condition := range []string{"budget", "load", "disk", "stale"} {
+	for _, condition := range []string{fatalBudgetCommand, secLoad, loopDiskKind, kindStale} {
 		t.Run(condition, func(t *testing.T) {
 			r, busy := fillRig(t)
 			l, err := r.a.newSupervisorLoop(false)
@@ -209,13 +209,13 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 			l.independentFill = true
 			w := r.a.newWatcher(false, false)
 			switch condition {
-			case "budget":
+			case fatalBudgetCommand:
 				w.publishBudget(true)
-			case "load":
-				w.check("load", true, "HIGH LOAD")
-			case "disk":
+			case secLoad:
+				w.check(secLoad, true, "HIGH LOAD")
+			case loopDiskKind:
 				w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
-			case "stale":
+			case kindStale:
 				r.a.now = r.a.now.Add(time.Hour)
 			}
 			if err := l.refillTick(t.Context()); err != nil {
@@ -225,13 +225,13 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 				t.Fatal("started through a newly published hold")
 			}
 			switch condition {
-			case "budget":
+			case fatalBudgetCommand:
 				w.publishBudget(false)
-			case "load":
-				w.clear("load")
-			case "disk":
+			case secLoad:
+				w.clear(secLoad)
+			case loopDiskKind:
 				w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
-			case "stale":
+			case kindStale:
 				e := event(watchParty, "watch.budget-state", "false")
 				e.At = r.a.timeNow()
 				if err := r.a.store.Record(e); err != nil {
