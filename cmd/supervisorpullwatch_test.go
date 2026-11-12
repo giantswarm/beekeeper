@@ -466,13 +466,16 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 // desk owns: until the team files are read, only the review list's.
 func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	const (
-		botTeam  = "team-a"
-		botName  = "renovate[bot]"
-		botTool  = "o/tool"
-		botOther = "o/other"
-		botPull  = "o/x-configs#4"
-		botLogin = "app/renovate"
-		badLogin = "app/renovat"
+		botTeam     = "team-a"
+		botName     = "renovate[bot]"
+		botTool     = "o/tool"
+		botOther    = "o/other"
+		botPull     = "o/x-configs#4"
+		botLogin    = "app/renovate"
+		badLogin    = "app/renovat"
+		orgWildcard = "o/*"
+		sharedRepo  = "shared/one"
+		sharedPull  = "shared/one#7"
 	)
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -574,20 +577,20 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		}
 		gotScopes = append(gotScopes, slices.Clone(scopes))
 		if slices.Equal(logins, []string{botLogin}) {
-			return []string{idleRef, "shared/one#7", "shared/other#8"}, nil
+			return []string{idleRef, sharedPull, "shared/other#8"}, nil
 		}
 		return []string{reserveIssue}, nil
 	}
-	w.set(nil, []string{"me"}, []string{"o", "shared"}, 0, nil)
-	scoped := superloop.Desk{Orgs: []string{"o", "shared"}, Review: []string{"o/*", "shared/one"}}
+	w.set(nil, []string{"me"}, []string{"o", litShared}, 0, nil)
+	scoped := superloop.Desk{Orgs: []string{"o", litShared}, Review: []string{orgWildcard, sharedRepo}}
 	w.setBots([]string{botName}, scoped, nil, false)
 	if _, err := w.poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if len(gotScopes) != 2 || !slices.Equal(gotScopes[0], []string{"o", "shared"}) || !slices.Equal(gotScopes[1], []string{"o", "shared/one"}) {
+	if len(gotScopes) != 2 || !slices.Equal(gotScopes[0], []string{"o", litShared}) || !slices.Equal(gotScopes[1], []string{"o", sharedRepo}) {
 		t.Errorf("scoped bot search scopes = %v", gotScopes)
 	}
-	if got, want := w.view().Open, []string{reserveIssue, idleRef, "shared/one#7"}; !slices.Equal(got, want) {
+	if got, want := w.view().Open, []string{reserveIssue, idleRef, sharedPull}; !slices.Equal(got, want) {
 		t.Errorf("scoped open = %v, want %v", got, want)
 	}
 }

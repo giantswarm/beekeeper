@@ -82,9 +82,12 @@ func (l *supervisorLoop) reportSweep(ownerless map[string]time.Time, unread map[
 	return l.a.store.WriteFile(loopSweepFile, c)
 }
 
-// sweepRepoBatch bounds the --repo flags in a single gh search prs call so a
-// desk with many team repositories stays within GitHub's search query limits.
-const sweepRepoBatch = 25
+const (
+	// sweepRepoBatch bounds the --repo flags in a single gh search prs call so a
+	// desk with many team repositories stays within GitHub's search query limits.
+	sweepRepoBatch = 25
+	sweepOwnerFlag = "--owner"
+)
 
 // sweepFlagBatches splits scopes (owners without a slash, owner/repo with
 // one) into gh search prs flag slices. Owners and repositories are searched in
@@ -102,14 +105,14 @@ func sweepFlagBatches(scopes []string) [][]string {
 	if len(owners) > 0 {
 		var flags []string
 		for _, o := range owners {
-			flags = append(flags, "--owner", o)
+			flags = append(flags, sweepOwnerFlag, o)
 		}
 		batches = append(batches, flags)
 	}
 	for start := 0; start < len(repos); start += sweepRepoBatch {
 		var flags []string
 		for _, r := range repos[start:min(start+sweepRepoBatch, len(repos))] {
-			flags = append(flags, "--repo", r)
+			flags = append(flags, loopRepoFlag, r)
 		}
 		batches = append(batches, flags)
 	}

@@ -146,22 +146,23 @@ func TestSweepDiscoverySurvivesDrainAndRetriesFailedListing(t *testing.T) {
 // Owners and repositories are searched in separate gh search prs calls so gh
 // does not AND --owner with --repo, and large repository lists are chunked.
 func TestSweepFlagBatchesSeparatesOwnersAndChunksRepos(t *testing.T) {
+	sharedRepo := func(i int) string { return fmt.Sprintf("shared/r-%d", i) }
 	var scopes []string
 	scopes = append(scopes, "o")
 	for i := 1; i <= sweepRepoBatch+2; i++ {
-		scopes = append(scopes, fmt.Sprintf("shared/r-%d", i))
+		scopes = append(scopes, sharedRepo(i))
 	}
 	batches := sweepFlagBatches(scopes)
 	if len(batches) != 3 {
 		t.Fatalf("batches = %d, want 3: %v", len(batches), batches)
 	}
-	if !slices.Equal(batches[0], []string{"--owner", "o"}) {
+	if !slices.Equal(batches[0], []string{sweepOwnerFlag, "o"}) {
 		t.Errorf("owner batch = %v", batches[0])
 	}
-	if len(batches[1]) != 2*sweepRepoBatch || batches[1][0] != "--repo" || batches[1][1] != "shared/r-1" {
+	if len(batches[1]) != 2*sweepRepoBatch || batches[1][0] != loopRepoFlag || batches[1][1] != sharedRepo(1) {
 		t.Errorf("first repo batch = %v", batches[1])
 	}
-	if !slices.Equal(batches[2], []string{"--repo", fmt.Sprintf("shared/r-%d", sweepRepoBatch+1), "--repo", fmt.Sprintf("shared/r-%d", sweepRepoBatch+2)}) {
+	if !slices.Equal(batches[2], []string{loopRepoFlag, sharedRepo(sweepRepoBatch + 1), loopRepoFlag, sharedRepo(sweepRepoBatch + 2)}) {
 		t.Errorf("second repo batch = %v", batches[2])
 	}
 }
