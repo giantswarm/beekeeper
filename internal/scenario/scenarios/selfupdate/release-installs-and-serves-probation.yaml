@@ -26,7 +26,8 @@ given:
       github: {probeRepo: example/app}
       # The candidate's loop passes, and sends its heartbeat, every second.
       supervisor: {loopInterval: 1s, releaseEvery: 24h}
-      watch: {interval: 30s}
+      # The watch names the loop's heartbeat at its second look.
+      watch: {interval: 2s}
   releases:
     installed: v1.0.0-rc.1
     published: [v1.0.0-rc.2, v1.0.0-rc.3]
