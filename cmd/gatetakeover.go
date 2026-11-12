@@ -11,6 +11,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -170,7 +171,7 @@ func (g *gateRun) recordTakenMerge(p github.Pull, handCut string) error {
 			return nil, fmt.Errorf("%s lost its takeover place before its outcome was recorded", g.key())
 		}
 		st.Merges[i].Releasing = false
-		return recordRun(st, i, g.lane, g.me, runOutcome{out: out, rc: rc}, time.Now().UTC(), ", recovered from GitHub"), nil
+		return recordRun(st, i, g.lane, g.me, runOutcome{out: out, rc: rc}, clk.Now().UTC(), ", recovered from GitHub"), nil
 	})
 	if err != nil {
 		return err

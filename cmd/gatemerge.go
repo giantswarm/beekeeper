@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -334,7 +335,7 @@ func recordLostMergeRunner(base string) {
 }
 
 func recordMergeTermination(base, reason string) {
-	line := time.Now().UTC().Format(time.RFC3339) + " " + reason + "\n"
+	line := clk.Now().UTC().Format(time.RFC3339) + " " + reason + "\n"
 	if err := os.WriteFile(base+terminationExt, []byte(line), 0o600); err != nil { //nolint:gosec // the gate's own state file
 		gateLine("cannot keep merge termination reason: %v", err)
 	}
@@ -537,7 +538,7 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 			if raw, err := os.ReadFile(base + ".kept"); err == nil { //nolint:gosec // the gate's own file
 				r.kept = string(raw)
 			} else {
-				r.kept = keepOutput(base, r.doc, time.Now())
+				r.kept = keepOutput(base, r.doc, clk.Now())
 			}
 			if r.held = hold != nil && hold(r.doc); r.held {
 				return r
@@ -547,7 +548,7 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 			}
 			return r
 		}
-		if !leave.IsZero() && !time.Now().Before(leave) {
+		if !leave.IsZero() && !clk.Now().Before(leave) {
 			r.left = true
 			return r
 		}
@@ -567,10 +568,10 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 					return r
 				}
 				if term.IsZero() && !said {
-					term = time.Now()
+					term = clk.Now()
 				}
 			}
-		case <-time.After(followPoll):
+		case <-clk.After(followPoll):
 		}
 		switch {
 		case term.IsZero():
@@ -579,7 +580,7 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 				return r
 			}
 			term = time.Time{}
-		case time.Since(term) >= stopGrace:
+		case clk.Since(term) >= stopGrace:
 			gateLine("SIGTERM with the caller still there: stopping devctl (pid %d); the run is recorded as one ended by a signal", pid)
 			signalPID(pid, syscall.SIGTERM)
 			term, said, r.stopped = time.Time{}, true, true
@@ -667,7 +668,7 @@ func startChild(base string) error {
 		return err
 	}
 	if userSystemd() {
-		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), time.Now().UnixNano())
+		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), clk.Now().UnixNano())
 		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}, TermIsSuccess: true})
 	}
 	c := exec.Command(self, mergeChildCmd, base) //nolint:gosec // as above
@@ -681,14 +682,14 @@ func startChild(base string) error {
 
 // awaitPID waits up to childStart for merge-child to record its pid.
 func awaitPID(base string) (int, error) {
-	deadline := time.Now().Add(childStart)
-	for time.Now().Before(deadline) {
+	deadline := clk.Now().Add(childStart)
+	for clk.Now().Before(deadline) {
 		if raw, err := os.ReadFile(base + ".pid"); err == nil { //nolint:gosec // the gate's own file
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
 				return pid, nil
 			}
 		}
-		time.Sleep(followPoll)
+		clk.Sleep(followPoll)
 	}
 	return 0, fmt.Errorf("no pid in %s.pid after %s", base, childStart)
 }
@@ -935,7 +936,7 @@ func mergeChild(base string) childResult {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
 	processStarted, _ := proc.Started(os.Getpid())
-	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: time.Now().UTC(), ProcessStarted: processStarted})
+	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: clk.Now().UTC(), ProcessStarted: processStarted})
 	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
 		return r
 	}
@@ -954,24 +955,24 @@ func mergeChild(base string) childResult {
 		}
 	}()
 	rc := runSpec(base, spec, out, errs, &current, &stop, &gone)
-	start := time.Now()
+	start := clk.Now()
 	for run := 1; stop.Load() == nil && !gone.Load(); run++ {
 		doc, _ := os.ReadFile(base + ".json") //nolint:gosec // as above
 		if rc != 3 || !merge.BusyBase(doc) {
 			break
 		}
-		pause, ok := merge.BusyNext(spec.BusyPauses, run, start, time.Now(), spec.BusyBudget)
+		pause, ok := merge.BusyNext(spec.BusyPauses, run, start, clk.Now(), spec.BusyBudget)
 		if !ok {
 			if spec.BusyBudget > 0 {
 				_, _ = fmt.Fprintf(errs, "%s%s: %d devctl runs in %s, merge.busyBudget %s; nothing merged\n",
-					GatePrefix, busySpent, run, time.Since(start).Round(time.Second), spec.BusyBudget)
+					GatePrefix, busySpent, run, clk.Since(start).Round(time.Second), spec.BusyBudget)
 			}
 			break
 		}
 		_, _ = fmt.Fprintf(errs, "%sthe base moved during every wait of devctl run %d (%s of the busy-base budget %s spent): the merge keeps its lane place, and devctl runs again in %s, updating the branch once its checks are green\n",
-			GatePrefix, run, time.Since(start).Round(time.Second), spec.BusyBudget, pause)
+			GatePrefix, run, clk.Since(start).Round(time.Second), spec.BusyBudget, pause)
 		select {
-		case <-time.After(pause):
+		case <-clk.After(pause):
 		case <-stopCh:
 		}
 		if stop.Load() != nil {
@@ -982,7 +983,7 @@ func mergeChild(base string) childResult {
 		}
 		if rc = runSpec(base, spec, out, errs, &current, &stop, &gone); rc == 0 {
 			_, _ = fmt.Fprintf(errs, "%sdevctl run %d landed the merge on the busy base, %s of the busy-base budget %s spent\n",
-				GatePrefix, run+1, time.Since(start).Round(time.Second), spec.BusyBudget)
+				GatePrefix, run+1, clk.Since(start).Round(time.Second), spec.BusyBudget)
 		}
 	}
 	if rc == 128+int(syscall.SIGKILL) {
@@ -999,7 +1000,7 @@ func mergeChild(base string) childResult {
 	r.callerGone = gone.Load() || spec.WithCaller && spec.Gate > 0 && !proc.Alive(spec.Gate) && !leftToRunOn(base)
 	r.doc, _ = os.ReadFile(base + ".json") //nolint:gosec // as above
 	r.last = lastLine(base + ".log")
-	if r.kept = keepOutput(base, r.doc, time.Now()); r.kept != "" {
+	if r.kept = keepOutput(base, r.doc, clk.Now()); r.kept != "" {
 		_ = os.WriteFile(base+".kept", []byte(r.kept), 0o600) //nolint:gosec // as above
 	}
 	// Written whole or not at all: the gate reads it while it appears.
@@ -1024,14 +1025,14 @@ const busySpent = "busy-base budget spent"
 // and no other run follows it (followerGlob), the command is sent SIGTERM
 // and gone set.
 func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
-	started := time.Now()
+	started := clk.Now()
 	skip := slices.Contains(spec.Env, github.DevctlSkipVersionCheckEnv+"=true")
 	if spec.Config != "" || os.Getenv(beekeeperConfigEnv) != "" {
 		skip = !guardsEnabledForConfig(spec.Config)
 	}
 	github.SetDevctlSkipVersionCheck(skip)
 	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
-	progress := newMergeProgress(base, spec.Argv, time.Now().UTC())
+	progress := newMergeProgress(base, spec.Argv, clk.Now().UTC())
 	c.Stdout, c.Stderr, c.Env, c.Dir = out, io.MultiWriter(errs, progress), github.DevctlEnv(spec.Env, skip), spec.Dir
 	if err := c.Start(); err != nil {
 		_, _ = fmt.Fprintln(errs, err)
@@ -1049,7 +1050,7 @@ func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Po
 				select {
 				case <-ended:
 					return
-				case <-time.After(followPoll):
+				case <-clk.After(followPoll):
 				}
 				if callerGone(base, spec.Gate) {
 					gone.Store(true)

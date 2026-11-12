@@ -24,6 +24,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
+	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -2059,7 +2060,7 @@ func (e *LockBusyError) Error() string {
 		return fmt.Sprintf("the state lock is busy: still held after %s by a process without a holder record (a reader, or a beekeeper before the record)", e.Waited.Round(time.Millisecond))
 	}
 	return fmt.Sprintf("the state lock is busy: held by pid %d (%s) for %s, waited %s; a stopped or frozen holder releases it when it resumes or ends",
-		e.PID, e.Command, time.Since(e.Since).Round(time.Second), e.Waited.Round(time.Millisecond))
+		e.PID, e.Command, clock.Since(e.Since).Round(time.Second), e.Waited.Round(time.Millisecond))
 }
 
 // lockHolder is the exclusive holder's record beside the lock, removed
@@ -2145,7 +2146,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err != nil {
 		return err
 	}
-	if err := s.checkWriter(st, time.Now()); err != nil {
+	if err := s.checkWriter(st, clock.Now()); err != nil {
 		return err
 	}
 	leasesBefore := make(map[execution.Ref]execution.LeaseGrant)
@@ -2158,7 +2159,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err != nil {
 		return err
 	}
-	if err := s.stamp(st, time.Now()); err != nil {
+	if err := s.stamp(st, clock.Now()); err != nil {
 		return err
 	}
 	return s.commitEvents(st, events, leasesBefore)

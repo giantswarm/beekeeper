@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -75,7 +76,7 @@ func (w *watcher) publishLevel(kind string, value any) {
 	if err != nil {
 		return
 	}
-	next := watchLevel{At: time.Now(), Value: raw}
+	next := watchLevel{At: clk.Now(), Value: raw}
 	if err := w.store.WriteFile(name, next); err != nil {
 		return
 	}
@@ -102,7 +103,7 @@ func (a *app) readWatchLevel(kind string, value any) (time.Time, error) {
 
 func (w *watcher) publishAlerts(firing []alerts.Firing) {
 	rules := w.alertRules()
-	rules.InPlay = w.inPlay(time.Now())
+	rules.InPlay = w.inPlay(clk.Now())
 	firing = slices.DeleteFunc(slices.Clone(firing), func(f alerts.Firing) bool { return !rules.Wakes(f.Installation, f.Alert) })
 	w.publishLevel("alert-state", firing)
 }

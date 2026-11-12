@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 // ReportMessage is a durable command from a session to the supervisor. The
@@ -37,7 +39,7 @@ const reportsDir = "session-reports"
 // QueueReport publishes a synced message without opening state.lock. The final
 // rename and directory sync precede acknowledgement to the session.
 func QueueReport(store Store, by Party, kind string, payload any) (ReportMessage, error) {
-	m := ReportMessage{ID: fmt.Sprintf("%020d-%s", time.Now().UnixNano(), uuid.NewString()), By: by, At: time.Now().UTC(), Kind: kind}
+	m := ReportMessage{ID: fmt.Sprintf("%020d-%s", clock.Now().UnixNano(), uuid.NewString()), By: by, At: clock.Now().UTC(), Kind: kind}
 	var err error
 	m.Payload, err = json.Marshal(payload)
 	if err != nil {

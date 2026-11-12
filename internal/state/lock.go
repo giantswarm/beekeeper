@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 const (
@@ -53,11 +55,11 @@ func (s *FileStore) lock(shared bool, wait time.Duration) (func(), error) {
 	if !ok {
 		return nil, s.busy(wait)
 	}
-	acquired := time.Now()
+	acquired := clock.Now()
 	if shared {
 		return func() {
 			_ = l.Unlock()
-			traceLockHold(acquired, time.Now(), true)
+			traceLockHold(acquired, clock.Now(), true)
 		}, nil
 	}
 	holder := s.path(holderFile)
@@ -65,7 +67,7 @@ func (s *FileStore) lock(shared bool, wait time.Duration) (func(), error) {
 	return func() {
 		_ = os.Remove(holder)
 		_ = l.Unlock()
-		traceLockHold(acquired, time.Now(), false)
+		traceLockHold(acquired, clock.Now(), false)
 	}, nil
 }
 
@@ -161,7 +163,7 @@ func (t *lockTicket) await(ctx context.Context, shared bool) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(lockPoll):
+		case <-clock.After(lockPoll):
 		}
 	}
 }

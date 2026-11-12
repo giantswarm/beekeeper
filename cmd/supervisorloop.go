@@ -30,6 +30,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -1014,12 +1015,12 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
-	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: time.Now().UTC(), Phase: loopPhaseStartup}
+	life := &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: clk.Now().UTC(), Phase: loopPhaseStartup}
 	life.At = life.Started
 	_ = a.store.WriteFile(loopLifecycleFile, life)
 	defer func() {
 		crash := recover()
-		life.At, life.Exited, life.Failure = time.Now().UTC(), true, loopFailureKind(runErr)
+		life.At, life.Exited, life.Failure = clk.Now().UTC(), true, loopFailureKind(runErr)
 		if runErr != nil {
 			life.Code = Code(runErr)
 		}
@@ -1101,7 +1102,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 		}()
 	}
 	for {
-		now := time.Now()
+		now := clk.Now()
 		if once {
 			a.now = now
 		}
@@ -1176,11 +1177,11 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 	}
 	changes, closeChanges := state.Changes(ctx, filepath.Join(l.a.store.Dir(), "state.json"), filepath.Join(l.a.store.Dir(), "events.jsonl"))
 	defer closeChanges()
-	ended := time.Now()
+	ended := clk.Now()
 	// A change wakes the next pass early, but not sooner than passChangeGap
 	// after this one ended, nor later than the interval.
-	changed := func() bool { return pauseChangeFor(ctx, min(passChangeGap, d)-time.Since(ended)) }
-	timer := time.NewTimer(d)
+	changed := func() bool { return pauseChangeFor(ctx, min(passChangeGap, d)-clk.Since(ended)) }
+	timer := clk.NewTimer(d)
 	defer timer.Stop()
 	const checkEvery = time.Second
 	if d <= checkEvery {
@@ -1195,7 +1196,7 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 			return true
 		}
 	}
-	ticker := time.NewTicker(checkEvery)
+	ticker := clk.NewTicker(checkEvery)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1244,7 +1245,7 @@ func (a *app) dryRunSupervisorLoop(ctx context.Context, recordDirs ...string) er
 	if len(recordDirs) > 0 {
 		l.recordDir = recordDirs[0]
 	}
-	a.now = time.Now()
+	a.now = clk.Now()
 	if err := l.pass(ctx); err != nil {
 		return err
 	}
@@ -1267,7 +1268,7 @@ func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*supervisorLoo
 	}
 	keepStart := func(e state.Event) bool { return e.Verb == loopStartVerb }
 	if len(progress) > 0 {
-		keepStart = eventProgressFilter(keepStart, progress[0], time.Now)
+		keepStart = eventProgressFilter(keepStart, progress[0], clk.Now)
 	}
 	starts, err := state.FollowSnapshot(a.store, "supervisor-loop-starts", "v1", keepStart)
 	if err != nil {
@@ -1905,7 +1906,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	}
 	l.lifecyclePhase("read event history")
 	if !l.dryRun {
-		if err := l.checkpointThroughput(time.Now().UTC()); err != nil {
+		if err := l.checkpointThroughput(clk.Now().UTC()); err != nil {
 			return err
 		}
 	}
@@ -2572,7 +2573,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		}()
 		select {
 		case <-done:
-		case <-time.After(20 * time.Millisecond):
+		case <-clk.After(20 * time.Millisecond):
 		}
 	}
 	l.mu.Lock()

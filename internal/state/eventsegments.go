@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 const eventSegmentBytes = 8 << 20
@@ -70,7 +72,7 @@ func (s *FileStore) rotateEventsAbove(limit int64) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	serial := time.Now().UTC().UnixNano()
+	serial := clock.Now().UTC().UnixNano()
 	paths, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	if err != nil {
 		return err

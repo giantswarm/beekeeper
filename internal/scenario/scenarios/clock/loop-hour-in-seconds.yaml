@@ -1,0 +1,92 @@
+name: loop-hour-in-seconds
+description: >
+  One simulated hour of supervisor loop passes takes seconds of real time.
+  The loop runs in the background on the world's clock with a 5-minute
+  pass interval; the world advances an hour in steps of 5 minutes, each
+  step wakes the loop's pass timer, and the next step waits until the pass
+  it woke has read GitHub.
+issue: https://github.com/giantswarm/beekeeper/issues/3792
+flow: clock
+tags: [clock, loop]
+timeout: 30s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      supervisor: {loopInterval: 5m}
+  repositories:
+    - name: example/app
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    - program: gh
+      args: [auth, status]
+      respond: {stdout: "github.com: logged in to github.com account scenario\n"}
+    - program: gh
+      args: [api, user, --jq, .login]
+      respond: {stdout: "scenario\n"}
+    - program: gh
+      args: [api, user]
+      respond: {stdout: '{"login":"scenario"}'}
+    # The board's fields and its open items: none.
+    - program: gh
+      args: [api, graphql, 'query=.*fields\(first:50\).*']
+      respond:
+        stdout: |
+          {"data":{"repositoryOwner":{"projectV2":{"id":"PVT_board","fields":{"nodes":[
+            {"id":"PVTSSF_status","name":"Status","options":[
+              {"id":"opt_ready","name":"Ready"},{"id":"opt_progress","name":"In Progress"},{"id":"opt_done","name":"Done"}]}]}}}}}
+    - program: gh
+      args: [api, graphql, 'query=.*items\(first:80.*']
+      respond:
+        stdout: |
+          {"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}
+    - program: gh
+      args: [api, graphql, 'query=.*pullRequests\(states:OPEN.*']
+      respond:
+        stdout: |
+          {"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+    - program: gh
+      args: [pr, list]
+      respond: {stdout: "[]\n"}
+    - program: claude
+      args: [agents, --json]
+      respond: {stdout: "[]\n"}
+    - program: claude
+      args: [plugin, list, --json]
+      respond: {stdout: "[]\n"}
+    - program: claude
+      args: ['-p', /usage, --output-format, json]
+      respond: {stderr: "Not logged in\n", exit: 1}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # The loop's first pass, at once on its start.
+  - wait_for:
+      timeout: 10s
+      interval: 20ms
+      expect:
+        - calls: {program: gh, min: 1}
+  - name: hour
+    advance:
+      by: 1h
+      step: 5m
+      settle:
+        timeout: 5s
+        interval: 20ms
+        expect:
+          - calls: {program: gh, min: 1}
+    expect:
+      - process: {name: loop, running: true}
+      - duration: {max: 25s}
+  - stop: loop
+
+then:
+  - calls: {program: gh, min: 13}
