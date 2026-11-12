@@ -23,7 +23,7 @@ var migrated = []string{
 	"cmd/supervisor*.go", "cmd/loop*.go", "cmd/changepause.go", "cmd/root.go", "cmd/throughputhealth.go",
 	"cmd/timer*.go", "internal/superloop",
 	// Capacity.
-	"cmd/capacity*.go",
+	"cmd/capacity*.go", "cmd/usage.go", "cmd/claude_usage.go",
 	// The GitHub budget.
 	"cmd/budget*.go", "cmd/backgroundrest.go", "cmd/githubcalls.go", "internal/github",
 	// The gate.
