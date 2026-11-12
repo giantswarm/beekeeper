@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -183,9 +184,10 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		}
 		ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
 	}
+	// A reading lost only to a busy state or lease commit stands (#3841).
 	b, err := readLoopGraphQLBudget(a, ctx)
-	if err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
-		return fmt.Errorf("loop GitHub budget unavailable: %w", loop.ErrLoopLater)
+	if err = unsavedBudget(err); err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
+		return fmt.Errorf("loop GitHub budget unavailable (%s): %w", loopBudgetUnavailable(a, b, err), loop.ErrLoopLater)
 	}
 	g := b.GraphQL
 	reset := g.Reset
@@ -226,7 +228,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	runErr := run()
 	after, err := readLoopGraphQLBudget(a, ctx)
-	if err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
+	if err = unsavedBudget(err); err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
 		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", loop.ErrLoopLater)
 	}
 	if scan {
@@ -279,9 +281,44 @@ const loopPullEvery = 5 * time.Minute
 
 // refreshLoopBudget takes and saves a fresh budget reading, the rate limit
 // reads alone: it spends no allowance and is not admitted under the floor.
-var refreshLoopBudget = func(a *app, ctx context.Context) error {
-	_, err := readLoopGraphQLBudget(a, ctx)
-	return err
+// It returns the reading as the state keeps it. A reading GitHub answered
+// stands when only saving it failed on a busy state or lease commit, as
+// for budget --gate (#3411): throwing it away left the loop on a stale
+// reading while the commit lock was contended (#3841).
+var refreshLoopBudget = readFreshLoopBudget
+
+func readFreshLoopBudget(a *app, ctx context.Context) (*state.Budget, error) {
+	at := clk.Now()
+	b, err := readLoopGraphQLBudget(a, ctx)
+	if err = unsavedBudget(err); err != nil {
+		return nil, err
+	}
+	return loopBudgetReading(b, at), nil
+}
+
+// loopBudgetUnavailable says why the loop's budget reading admits nothing:
+// the reading failed, GraphQL is unknown or refuses.
+func loopBudgetUnavailable(a *app, b github.Budget, err error) string {
+	switch {
+	case err != nil:
+		return "the reading failed: " + oneLine(err.Error())
+	case b.GraphQL == nil:
+		return "no GraphQL reading"
+	case b.GraphQL.Err != "":
+		return "GraphQL unknown: " + oneLine(b.GraphQL.Err)
+	}
+	return graphqlReadingText(a, b.GraphQL)
+}
+
+// loopBudgetReading is a budget reading taken at at, in the state's form:
+// the lowest identity's REST and GraphQL buckets, as probeIdentities saves
+// them.
+func loopBudgetReading(b github.Budget, at time.Time) *state.Budget {
+	r := &state.Budget{Identity: b.Identity, Login: b.Login, Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, At: at}
+	if b.GraphQL != nil {
+		r.GraphQL = storedGraphQL(b.GraphQL, at)
+	}
+	return r
 }
 
 // Shell probes and local conditions stay outside the GitHub lock. Only

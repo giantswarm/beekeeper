@@ -960,16 +960,17 @@ func TestLoopHeldOnAStaleReadingReadsTheBudgetItself(t *testing.T) {
 			old := refreshLoopBudget
 			t.Cleanup(func() { refreshLoopBudget = old })
 			refreshes := 0
-			refreshLoopBudget = func(a *app, _ context.Context) error {
+			refreshLoopBudget = func(a *app, _ context.Context) (*state.Budget, error) {
 				refreshes++
 				remaining := 4076
 				if low {
 					remaining = 400
 				}
-				return a.store.Update(func(st *state.State) ([]state.Event, error) {
-					now := a.timeNow()
-					st.Budget = &state.Budget{Remaining: 4800, Limit: 5000, Reset: now.Add(time.Hour), At: now,
-						GraphQL: &state.GraphQL{Remaining: remaining, Limit: 5000, Reset: now.Add(50 * time.Minute), At: now}}
+				now := a.timeNow()
+				b := &state.Budget{Remaining: 4800, Limit: 5000, Reset: now.Add(time.Hour), At: now,
+					GraphQL: &state.GraphQL{Remaining: remaining, Limit: 5000, Reset: now.Add(50 * time.Minute), At: now}}
+				return b, a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Budget = b
 					return nil, nil
 				})
 			}

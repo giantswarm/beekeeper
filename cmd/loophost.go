@@ -115,8 +115,10 @@ func init() {
 		RefStates: func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 			return refStates(ctx, refs)
 		},
-		RefURL:                func() *regexp.Regexp { return refURL },
-		RefreshLoopBudget:     func(a loop.Host, ctx context.Context) error { return refreshLoopBudget(asApp(a), ctx) },
+		RefURL: func() *regexp.Regexp { return refURL },
+		RefreshLoopBudget: func(a loop.Host, ctx context.Context) (*state.Budget, error) {
+			return refreshLoopBudget(asApp(a), ctx)
+		},
 		Refused:               refused,
 		ReleaseVersion:        releaseVersion,
 		RemoveAgent:           removeAgent,

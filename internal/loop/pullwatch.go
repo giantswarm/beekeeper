@@ -13,6 +13,7 @@ import (
 
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -308,12 +309,86 @@ func (s *LoopPullSchedule) After(l *Loop, next time.Duration, err error) time.Du
 		return next
 	}
 	s.Failures++
+	var hold *PullBudgetHold
+	if errors.As(err, &hold) {
+		retry := pullBudgetRetry(hold, s.Failures)
+		l.SayOnce(pullWatchKey, "SUPERVISOR PULL WATCH held: %v; next try in %s", err, retry)
+		return retry
+	}
 	l.SayOnce(pullWatchKey, "SUPERVISOR PULL WATCH held: %v; retrying with backoff up to %s", err, loopPullBackoff)
 	return PullWatchRetry(s.Failures)
 }
 
 func PullWatchRetry(failures int) time.Duration {
 	return min(loopPullBackoff, LoopPullShort*time.Duration(1<<min(failures, 5)))
+}
+
+// PullBudgetHold is the pull watch held by the GitHub budget: its cause,
+// and when the hold ends on its own (the reset of a low or refused window).
+// An unknown or stale reading has no end of its own: the next poll takes a
+// fresh reading.
+type PullBudgetHold struct {
+	Cause string
+	Until time.Time
+}
+
+func (h *PullBudgetHold) Error() string { return h.Cause + ": " + ErrLoopLater.Error() }
+
+func (h *PullBudgetHold) Unwrap() error { return ErrLoopLater }
+
+// pullBudgetRetry is when a budget hold is tried again: at the reset of a
+// low window, else soon, since a reading costs no allowance. Neither waits
+// out the exponential backoff GitHub's refusals of a batch get: a watch that
+// was held on a stale reading until well after the reading recovered kept
+// every observation stale (#3841).
+func pullBudgetRetry(h *PullBudgetHold, failures int) time.Duration {
+	if !h.Until.IsZero() {
+		return min(loopPullBackoff, max(LoopPullShort, clk.Until(h.Until)))
+	}
+	return min(LoopPullLong, PullWatchRetry(failures))
+}
+
+// pullBudgetReadTimeout bounds the pull watch's own budget reading, its
+// save included.
+const pullBudgetReadTimeout = 30 * time.Second
+
+// pullBudgetHeld is the pull watch's GitHub budget gate, nil when its batch
+// may read; the batch keeps LoopGraphQLReserve above github.floor. A saved
+// reading that is missing, failed, stale or of a window that has reset is
+// resolved by a reading of the watch's own, as the held pass resolves it
+// (#3724): the loop's watch and passes sample too rarely, or fail to, on a
+// loaded machine, and a pull watch that only waited for their reading left
+// every pull observation stale and held starts and merge decisions (#3841).
+func (l *Loop) pullBudgetHeld(ctx context.Context, floor int, now time.Time) error {
+	st, err := l.Host.Store().Peek()
+	if err != nil {
+		return err
+	}
+	cause, until, fresh := LoopBudgetHold(st.Budget, floor, LoopGraphQLReserve, now)
+	if cause == "" {
+		return nil
+	}
+	if fresh && !l.DryRun {
+		b, err := l.readPullBudget(ctx)
+		if err != nil {
+			return &PullBudgetHold{Cause: cause + "; the watch's own reading failed: " + Cmd.OneLine(err.Error())}
+		}
+		if cause, until, _ = LoopBudgetHold(b, floor, LoopGraphQLReserve, clk.Now()); cause == "" {
+			return nil
+		}
+	}
+	return &PullBudgetHold{Cause: cause, Until: until}
+}
+
+// readPullBudget takes the pull watch's own budget reading, the rate limit
+// reads alone, beside a pass: under the loop's configuration lock, as the
+// refill reads the configuration.
+func (l *Loop) readPullBudget(ctx context.Context) (*state.Budget, error) {
+	ctx, cancel := context.WithTimeout(ctx, pullBudgetReadTimeout)
+	defer cancel()
+	l.RefillConfigMu.RLock()
+	defer l.RefillConfigMu.RUnlock()
+	return Cmd.RefreshLoopBudget(l.Host, ctx)
 }
 
 func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, error) {
@@ -330,15 +405,11 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	before.Pulls, before.Open = maps.Clone(before.Pulls), slices.Clone(before.Open)
 	w.Mu.Unlock()
 	now := clk.Now()
-	// The beside-running budget watch owns probes. Polling PRs adds no budget
-	// probes and never holds the pass's GraphQL admission lock during network IO.
+	// Polling PRs never holds the pass's GraphQL admission lock during
+	// network IO.
 	if floor > 0 {
-		st, err := l.Host.Store().Peek()
-		if err != nil {
+		if err := l.pullBudgetHeld(ctx, floor, now); err != nil {
 			return 0, err
-		}
-		if BoardBudgetLow(st.Budget, floor, now) || LoopBudgetUnknownOrLow(st.Budget, floor, now) || st.Budget.GraphQL.Remaining < floor+LoopGraphQLReserve {
-			return 0, fmt.Errorf("GitHub budget unknown or below github.floor: %w", ErrLoopLater)
 		}
 	}
 	var discoveryErr error
