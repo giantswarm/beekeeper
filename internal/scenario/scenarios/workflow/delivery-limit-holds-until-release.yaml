@@ -5,8 +5,8 @@ description: >
   waits on CI, while the independent reviewer reviews, while the worker
   fixes the requested changes (a continuation of its task) and after the
   merge until the release that
-  carries the merge commit is out. The passes after the release start the
-  third issue and still hold the fourth. Every delivery step is recorded:
+  carries the merge commit is out. The pass after the release starts the
+  third issue and still holds the fourth. Every delivery step is recorded:
   implementing, ci, review-queued, fixing, releasing and done.
   Moved from internal/loopworkflow TestSupervisorWorkflowDeliveryLimit.
 issue: https://github.com/giantswarm/beekeeper/issues/3797
@@ -174,14 +174,9 @@ when:
     github: {release: {repo: example/app, tag: v1.0.1, target: main}}
   - name: later
     advance: 6m
-  # The pass after the release observes it: the first delivery is done.
+  # The pass after the release observes it: the first delivery is done and
+  # the limit admits the third issue.
   - name: released
-    run: {args: [supervisor, loop, --once]}
-    expect:
-      - exit: 0
-  # With a fresh complete observation the limit admits the third issue.
-  - advance: 1m
-  - name: third
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
