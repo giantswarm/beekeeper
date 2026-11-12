@@ -1,0 +1,41 @@
+name: conditional-read-304-costs-nothing
+description: >
+  With claims on, board next reads the picked issue's comments for other
+  desks' claims. The first read is paid from the core bucket and keeps the
+  answer's ETag; the second sends it back, GitHub answers 304 Not Modified
+  (gh: HTTP 304, exit 1), the cached comments stand, the pick is the same
+  and the read costs nothing.
+issue: https://github.com/giantswarm/beekeeper/issues/3790
+flow: github
+tags: [github, budget, etag]
+timeout: 30s
+
+given:
+  desk:
+    config:
+      board: {claims: {off: false, desk: scenario}}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Ready item, board: Ready}
+
+when:
+  - name: first
+    run: {args: [board, next, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: pick.ref, equals: example/app#1}
+  - name: second
+    run: {args: [board, next, --json]}
+
+then:
+  - exit: 0
+  - json_path: {path: pick.ref, equals: example/app#1}
+  - github:
+      calls: {path: repos/example/app/issues/1/comments, caller: first, conditional: false, status: 200, min: 1, max: 1}
+  - github:
+      calls: {path: repos/example/app/issues/1/comments, caller: second, conditional: true, status: 304, min: 1, max: 1}
+  - github: {budget: {bucket: core, caller: first, spent: 1}}
+  - github: {budget: {bucket: core, caller: second, spent: 0}}
+  - github: {budget: {bucket: core, remaining: 4999}}
