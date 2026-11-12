@@ -322,7 +322,7 @@ func TestKeepReportingMatchesTheAssignment(t *testing.T) {
 		"current assignment": {messages: queued(nil), kept: reportReferencePrefix + "m1"},
 		"earlier assignment": {messages: queued(func(p *sessionReport) { p.AssignedAt = keepNow.Add(-time.Hour) })},
 		"another task":       {messages: queued(func(p *sessionReport) { p.Task = "an earlier task" })},
-		"another session":    {messages: queued(func(p *sessionReport) { p.Assignee = tasked("report-other").Party })},
+		"another assignee":   {messages: queued(func(p *sessionReport) { p.Assignee = tasked("report-other").Party })},
 		"unregistered":       {messages: queued(func(p *sessionReport) { p.Registered = false })},
 		"empty inbox":        {},
 		"unreadable inbox":   {inboxErr: os.ErrPermission, kept: "inbox is unreadable"},
