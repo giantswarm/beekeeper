@@ -39,3 +39,9 @@ below. Where they differ from this block, they take precedence.
 <!-- END devctl-managed -->
 
 ## This repository
+
+- README.md is the front page: what beekeeper is, install, the first commands
+  and links into `docs/`. Behaviour goes on its `docs/` topic page, listed in
+  `docs/README.md`. `.github/check-markdown-budget.sh` (the `markdown-budget`
+  workflow) fails a README over 150 lines or any Markdown line over 200 bytes
+  in README.md or `docs/`; wrap prose at 100 columns.
