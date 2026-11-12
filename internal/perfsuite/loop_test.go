@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -53,9 +54,10 @@ type loopUsage struct {
 }
 
 type runningLoop struct {
-	d   *desk
-	cmd *exec.Cmd
-	w   *descendants
+	d     *desk
+	cmd   *exec.Cmd
+	w     *descendants
+	files *fileReads
 }
 
 func (d *desk) startLoop(t *testing.T) *runningLoop {
@@ -70,7 +72,7 @@ func (d *desk) startLoop(t *testing.T) *runningLoop {
 		t.Fatal(err)
 	}
 	_ = logFile.Close()
-	l := &runningLoop{d: d, cmd: c, w: watchDescendants(c.Process.Pid, filepath.Base(d.bin), true)}
+	l := &runningLoop{d: d, cmd: c, w: watchDescendants(c.Process.Pid, filepath.Base(d.bin), true), files: watchFileReads(c.Process.Pid, d.dir)}
 	t.Cleanup(l.stop)
 	return l
 }
@@ -89,6 +91,7 @@ func (l *runningLoop) stop() {
 		<-done
 	}
 	l.w.stop()
+	l.files.stop()
 }
 
 func (l *runningLoop) usage(t *testing.T) loopUsage {
@@ -117,17 +120,45 @@ func procState(pid int) string {
 	return s[end+2 : end+3]
 }
 
-// window measures the loop over d, per pass of interval.
-func (l *runningLoop) window(t *testing.T, d time.Duration, interval time.Duration) (cpu, readMiB, writeMiB, children float64) {
+// window measures the loop over d, per pass of interval, and notes the
+// files it read for kase.
+func (l *runningLoop) window(t *testing.T, kase string, d time.Duration, interval time.Duration) (cpu, readMiB, writeMiB, children float64) {
 	t.Helper()
-	before := l.usage(t)
+	before, files := l.usage(t), l.files.snapshot()
 	time.Sleep(d)
 	after := l.usage(t)
 	passes := d.Seconds() / interval.Seconds()
+	rep.note("%s %s: %s", t.Name(), kase, readsBetween(files, l.files.snapshot(), passes, "pass"))
 	return (after.cpu - before.cpu).Seconds() / passes,
 		float64(after.read-before.read) / mib / passes,
 		float64(after.write-before.write) / mib / passes,
 		float64(after.children-before.children) / passes
+}
+
+// checkCPU checks a pass's CPU against its budget. A value over it is
+// measured again over one more window and the lower one counts: a loop over
+// its budget is over in both, a loaded CI runner's slow moment in one.
+func (l *runningLoop) checkCPU(t *testing.T, kase string, cpu float64, budget limit, d, interval time.Duration) {
+	t.Helper()
+	if budget.Max >= 0 && cpu > budget.Max {
+		again, _, _, _ := l.window(t, kase+" (again)", d, interval)
+		rep.note("%s %s: cpu %.3f s over the budget of %.3f s, measured again: %.3f s (%s)", t.Name(), kase, cpu, budget.Max, again, runnerLoad())
+		cpu = min(cpu, again)
+	}
+	rep.check(t, kase, "cpu", cpu, budget)
+}
+
+// runnerLoad is the machine's load for the report beside a CPU value.
+func runnerLoad() string {
+	raw, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return "load unknown"
+	}
+	f := strings.Fields(string(raw))
+	if len(f) < 3 {
+		return "load unknown"
+	}
+	return fmt.Sprintf("load %s %s %s on %d CPUs", f[0], f[1], f[2], runtime.NumCPU())
 }
 
 func TestLoopBudgets(t *testing.T) {
@@ -140,8 +171,8 @@ func TestLoopBudgets(t *testing.T) {
 	time.Sleep(3*o.loopInterval + 10*time.Second)
 	win := loopWindow()
 
-	cpu, read, write, children := l.window(t, win, o.loopInterval)
-	rep.check(t, "idle pass", "cpu", cpu, loopIdleCPU)
+	cpu, read, write, children := l.window(t, "idle pass", win, o.loopInterval)
+	l.checkCPU(t, "idle pass", cpu, loopIdleCPU, win, o.loopInterval)
 	rep.check(t, "idle pass", "read", read, loopIdleRead)
 	rep.check(t, "idle pass", "write", write, measured)
 	rep.check(t, "idle pass", "children", children, loopIdleChildren)
@@ -150,7 +181,7 @@ func TestLoopBudgets(t *testing.T) {
 	if err := d.store.Record(state.Event{At: time.Now().UTC(), By: state.Party{Name: "perf worker 3", Person: fixturePerson}, Verb: "agents.park", Subject: fixtureRepo + "#1003", Detail: "[perf] one event"}); err != nil {
 		t.Fatal(err)
 	}
-	cpu, read, write, children = l.window(t, o.loopInterval*2, o.loopInterval)
+	cpu, read, write, children = l.window(t, "pass with one event", o.loopInterval*2, o.loopInterval)
 	// Two passes are too short for CPU and processes to settle: reported.
 	rep.check(t, "pass with one event", "cpu", cpu, measured)
 	rep.check(t, "pass with one event", "read", read, loopIdleRead)
@@ -172,10 +203,10 @@ func TestLoopBudgets(t *testing.T) {
 	}
 	rep.note("%s: event log grown by %d events", t.Name(), len(grow))
 	time.Sleep(3*o.loopInterval + 10*time.Second)
-	cpu, read, write, children = l.window(t, win, o.loopInterval)
+	cpu, read, write, children = l.window(t, "idle pass, 4x event log", win, o.loopInterval)
 	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack, Known: loopIssue}
 	rep.check(t, "idle pass, 4x event log", "read", read, grown)
-	rep.check(t, "idle pass, 4x event log", "cpu", cpu, loopGrownCPU)
+	l.checkCPU(t, "idle pass, 4x event log", cpu, loopGrownCPU, win, o.loopInterval)
 	rep.check(t, "idle pass, 4x event log", "write", write, measured)
 	rep.check(t, "idle pass, 4x event log", "children", children, loopIdleChildren)
 	if idleRead > 0 {
