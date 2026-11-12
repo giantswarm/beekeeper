@@ -120,6 +120,29 @@ func TestPullWatcherReadsTheBudgetItselfOnAStaleReading(t *testing.T) {
 	}
 }
 
+// The watch's own reading has its own bound, apart from the minute of the
+// listing and the batch: on a busy state commit it waits out most of its 30
+// seconds, and a batch left only the rest of a shared minute is killed
+// before GitHub answers it (#3841).
+func TestPullWatcherBatchKeepsItsMinuteAfterItsBudgetReading(t *testing.T) {
+	var read time.Time
+	r, l, reads, batches := pullBudgetRig(t, func() (github.Budget, error) {
+		read = time.Now()
+		return ampleReading(4076, 50*time.Minute), &state.LockBusyError{Waited: 30 * time.Second}
+	})
+	loop.ReadLoopPullBatch = func(ctx context.Context, _ []string, _ map[string]loop.WatchedLoopPull, _ int) (map[string]loop.WatchedLoopPull, error) {
+		*batches++
+		deadline, ok := ctx.Deadline()
+		if !ok || deadline.Sub(read) < time.Minute {
+			t.Errorf("the batch's deadline is %s after the budget reading (set %v), want its whole minute", deadline.Sub(read), ok)
+		}
+		return map[string]loop.WatchedLoopPull{loopPR: {Pull: r.pull, At: time.Now()}}, nil
+	}
+	if _, err := l.PullWatcher().Poll(t.Context(), l); err != nil || *reads != 1 || *batches != 1 {
+		t.Fatalf("an ample reading held the watch: %d readings, %d batches, %v", *reads, *batches, err)
+	}
+}
+
 // A hold names its cause, and a reading the watch could not take is tried
 // again within two minutes: on a loaded desk the watch held 30 minutes and more
 // on an unknown reading with GitHub's budget ample (#3841).

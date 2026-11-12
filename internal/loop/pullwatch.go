@@ -392,8 +392,6 @@ func (l *Loop) readPullBudget(ctx context.Context) (*state.Budget, error) {
 }
 
 func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
 	w.Mu.Lock()
 	authors, orgs, floor := slices.Clone(w.authors), slices.Clone(w.orgs), w.floor
 	desk := superloop.Desk{Orgs: orgs, Never: slices.Clone(w.never)}
@@ -406,12 +404,16 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	w.Mu.Unlock()
 	now := clk.Now()
 	// Polling PRs never holds the pass's GraphQL admission lock during
-	// network IO.
+	// network IO. The budget gate's own reading has its own bound: on a
+	// busy state commit it waits out most of it, and the listing and the
+	// batch still get their whole minute after it (#3841).
 	if floor > 0 {
 		if err := l.pullBudgetHeld(ctx, floor, now); err != nil {
 			return 0, err
 		}
 	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	var discoveryErr error
 	if before.ListedAt.IsZero() || now.Sub(before.ListedAt) >= SweepListEvery {
 		open, err := ReadOpenPulls(ctx, func() ([]string, error) {
