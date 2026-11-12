@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -90,6 +91,43 @@ func LoopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
 	}
 	g := b.GraphQL
 	return BoardBudgetLow(b, floor, now) || g.Remaining <= floor || loopReadingStale(b, now)
+}
+
+// LoopBudgetHold says why a GitHub budget reading holds the loop's GitHub
+// reads, "" when it admits them: LoopBudgetUnknownOrLow, or less GraphQL
+// budget than reserve above github.floor for a read that keeps one. until
+// is when the hold ends on its own, the reset of a low or refused window;
+// fresh says a fresh reading may end it now: the reading is missing,
+// failed, stale or of a window that has reset (#3841).
+func LoopBudgetHold(b *state.Budget, floor, reserve int, now time.Time) (cause string, until time.Time, fresh bool) {
+	if b == nil || b.GraphQL == nil {
+		return "GitHub budget unknown: no reading", time.Time{}, true
+	}
+	g := b.GraphQL
+	if !LoopBudgetUnknownOrLow(b, floor, now) && g.Remaining >= floor+reserve {
+		return "", time.Time{}, false
+	}
+	open := now.Before(g.Reset) || g.Reset.IsZero() && now.Sub(g.At) < time.Hour
+	switch {
+	case g.Err != "":
+		return "GitHub GraphQL budget unknown: " + g.Err, time.Time{}, true
+	case g.Blocks(now) && g.Reset.IsZero():
+		return "GitHub refuses GraphQL", time.Time{}, false
+	case g.Blocks(now):
+		return "GitHub refuses GraphQL until " + g.Reset.Local().Format("15:04"), g.Reset, false
+	case Cmd.LowBudget(b, floor, now):
+		return fmt.Sprintf("GitHub REST budget %d of %d under github.floor %d until %s",
+			b.Remaining, b.Limit, floor, b.Reset.Local().Format("15:04")), b.Reset, false
+	case open && g.Remaining <= floor:
+		return fmt.Sprintf("GitHub GraphQL budget %d of %d under github.floor %d until %s",
+			g.Remaining, g.Limit, floor, g.Reset.Local().Format("15:04")), g.Reset, false
+	case open && g.Remaining < floor+reserve:
+		return fmt.Sprintf("GitHub GraphQL budget %d of %d under github.floor %d and the %d kept above it until %s",
+			g.Remaining, g.Limit, floor, reserve, g.Reset.Local().Format("15:04")), g.Reset, false
+	case !g.Reset.IsZero() && !now.Before(g.Reset):
+		return "GitHub GraphQL budget reading of a window that reset at " + g.Reset.Local().Format("15:04:05"), time.Time{}, true
+	}
+	return "GitHub GraphQL budget reading of " + g.At.Local().Format("15:04:05") + " is stale", time.Time{}, true
 }
 
 // loopReadingStale: the saved GraphQL reading is missing, older than a
