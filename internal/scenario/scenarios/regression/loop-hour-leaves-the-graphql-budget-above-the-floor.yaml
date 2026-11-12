@@ -1,0 +1,125 @@
+name: loop-hour-leaves-the-graphql-budget-above-the-floor
+description: >
+  One hour of loop passes, 30 seconds apart, on a desk with open pull
+  requests in eight repositories. GitHub fails to list the pull requests of
+  each of them for the whole hour. The loop keeps a failed inventory for
+  five minutes like a successful one, so it asks again twelve times an
+  hour, not at every pass, and its own GraphQL spend (two budget readings
+  around each inventory) leaves the budget above github.floor. At the end
+  of the hour a board item that became free still gets its worker. Live,
+  every idle pass repeated the failed read and its budget readings, the
+  budget fell under the floor in most hours, and starts were held until
+  the hourly reset.
+issue: https://github.com/giantswarm/beekeeper/issues/3769
+flow: regression
+tags: [regression, loop, github, budget, clock]
+timeout: 180s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {floor: 1000, probeRepo: example/app}
+      watch: {interval: 1h}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The item that becomes free after the hour, board: Ready, blocked_by: [2]}
+          - {number: 2, title: What the item waits for}
+      - name: example/svc-01
+        issues:
+          - {number: 1, title: Work in svc-01}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-01", head: work-01, author: desk, body: "Closes #1"}
+      - name: example/svc-02
+        issues:
+          - {number: 1, title: Work in svc-02}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-02", head: work-02, author: desk, body: "Closes #1"}
+      - name: example/svc-03
+        issues:
+          - {number: 1, title: Work in svc-03}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-03", head: work-03, author: desk, body: "Closes #1"}
+      - name: example/svc-04
+        issues:
+          - {number: 1, title: Work in svc-04}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-04", head: work-04, author: desk, body: "Closes #1"}
+      - name: example/svc-05
+        issues:
+          - {number: 1, title: Work in svc-05}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-05", head: work-05, author: desk, body: "Closes #1"}
+      - name: example/svc-06
+        issues:
+          - {number: 1, title: Work in svc-06}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-06", head: work-06, author: desk, body: "Closes #1"}
+      - name: example/svc-07
+        issues:
+          - {number: 1, title: Work in svc-07}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-07", head: work-07, author: desk, body: "Closes #1"}
+      - name: example/svc-08
+        issues:
+          - {number: 1, title: Work in svc-08}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-08", head: work-08, author: desk, body: "Closes #1"}
+    budgets:
+      graphql: {remaining: 3000}
+    faults:
+      - name: unlisted
+        match: {path: 'repos/example/svc-[0-9]+/pulls'}
+        respond: {status: 502}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    # The desk's open pull requests, one in each of the eight repositories.
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: '[{"number":2,"repository":{"name":"svc-01","nameWithOwner":"example/svc-01"}},{"number":2,"repository":{"name":"svc-02","nameWithOwner":"example/svc-02"}},{"number":2,"repository":{"name":"svc-03","nameWithOwner":"example/svc-03"}},{"number":2,"repository":{"name":"svc-04","nameWithOwner":"example/svc-04"}},{"number":2,"repository":{"name":"svc-05","nameWithOwner":"example/svc-05"}},{"number":2,"repository":{"name":"svc-06","nameWithOwner":"example/svc-06"}},{"number":2,"repository":{"name":"svc-07","nameWithOwner":"example/svc-07"}},{"number":2,"repository":{"name":"svc-08","nameWithOwner":"example/svc-08"}}]'}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - name: observed
+    wait_for:
+      timeout: 30s
+      expect:
+        - github: {calls: {path: 'repos/example/svc-[0-9]+/pulls', caller: loop, fault: unlisted, min: 8}}
+  # 09:00 to 10:00 in steps of a pass interval; each step waits until the
+  # work the last one woke is done.
+  - name: hour
+    advance:
+      by: 1h
+      step: 30s
+      quiet: 50ms
+    expect:
+      - process: {name: loop, running: true}
+  - name: free
+    github: {close: {repo: example/app, issue: 2}}
+  - name: next-pass
+    advance:
+      by: 2m
+      step: 30s
+      quiet: 50ms
+  - name: started
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 1}
+  - stop: loop
+
+then:
+  - {step: hour, duration: {max: 90s}}
+  - worker: {name: app 1, turns: 1}
+  # Twelve refreshes of eight repositories, not 120 passes of them.
+  - github: {calls: {path: 'repos/example/svc-[0-9]+/pulls', caller: loop, fault: unlisted, max: 120}}
+  - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
+  - github: {budget: {bucket: graphql, caller: loop, spent: {max: 2000}}}

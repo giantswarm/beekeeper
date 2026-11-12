@@ -1,0 +1,106 @@
+name: refill-starts-while-an-observation-waits-on-github
+description: >
+  The loop's observation pass waits on a slow GitHub answer: eight seconds
+  for the pull requests of a repository whose backlog it checks. The refill
+  has its own cadence and does not wait for the pass: a board item that
+  became free gets its worker while the answer is still out. No process
+  holds the state lock across the slow call either: a command that writes
+  the state returns at once. Live, the refill ran only once a pass had
+  finished its observations, so a slow one left free slots unfilled for
+  hours.
+issue: https://github.com/giantswarm/beekeeper/issues/3636
+flow: regression
+tags: [regression, refill, github, fault]
+timeout: 120s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      watch: {interval: 1h}
+      supervisor: {loopInterval: 1m, fillRetryEvery: 1m}
+      capacity: {ceiling: 3, providers: {claude: {ceiling: 3}}}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready, blocked_by: [2]}
+          - {number: 2, title: What the first item waits for}
+          - {number: 3, title: Second item, board: Ready, blocked_by: [4]}
+          - {number: 4, title: What the second item waits for}
+      - name: example/slow
+        pulls:
+          - {number: 7, title: An open pull request of the desk, head: desk-work, author: desk}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    # The desk's one open pull request: the pass checks its repository's
+    # backlog.
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: '[{"number":7,"repository":{"name":"slow","nameWithOwner":"example/slow"}}]'}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # 09:00: the pass reads the backlog of the desk's open pull request's
+  # repository; both board items are blocked.
+  - name: observed
+    wait_for:
+      timeout: 30s
+      expect:
+        - github: {calls: {path: repos/example/slow/pulls, caller: loop, status: 200, min: 1}}
+  # 09:04: the first item is free and gets its worker, which leaves the
+  # refill a fresh inventory of example/app.
+  - name: free-first
+    github: {close: {repo: example/app, issue: 2}}
+  - name: four-minutes
+    advance: 4m
+  - name: first
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 1}
+  # From now on GitHub answers the pull requests of example/slow eight
+  # seconds late.
+  - name: slow
+    fault:
+      arm:
+        name: slow
+        match: {path: repos/example/slow/pulls}
+        respond: {delay: 8s}
+  - name: free-second
+    github: {close: {repo: example/app, issue: 4}}
+  # 09:06: the pass's inventory of example/slow is older than five minutes
+  # and it asks again; the refill's tick finds the second item free.
+  - name: two-minutes
+    advance: 2m
+  - name: second
+    wait_for:
+      timeout: 5s
+      interval: 50ms
+      expect:
+        - worker: {name: app 3, turns: 1}
+  # The slow answer is still out: a state write does not wait for it.
+  - name: write
+    run: {args: [--as, scenario, timer, add, 2h, a write while GitHub is slow]}
+    expect:
+      - exit: 0
+      - duration: {max: 3s}
+  - name: answered
+    wait_for:
+      timeout: 30s
+      expect:
+        - github: {calls: {path: repos/example/slow/pulls, caller: loop, fault: slow, min: 1}}
+  - stop: loop
+
+then:
+  - {step: second, duration: {max: 5s}}
+  - worker: {name: app 1, turns: 1}
+  - worker: {name: app 3, turns: 1}
+  - github: {calls: {path: repos/example/slow/pulls, caller: loop, fault: slow, min: 1}}

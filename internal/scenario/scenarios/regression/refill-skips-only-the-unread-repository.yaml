@@ -1,0 +1,65 @@
+name: refill-skips-only-the-unread-repository
+description: >
+  GitHub fails to list the pull requests of one repository (502). The
+  refill cannot tell whether that repository is backed up, so it starts
+  nothing there. That holds only this repository: the items of the other
+  repositories before and after it on the board get their workers in the
+  same refill. Live, one failed observation ended the refill and held every
+  start of the desk.
+issue: https://github.com/giantswarm/beekeeper/issues/3772
+flow: regression
+tags: [regression, refill, github, fault]
+timeout: 90s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/first}
+      watch: {interval: 1h}
+      supervisor: {loopInterval: 1m}
+      capacity: {ceiling: 3, providers: {claude: {ceiling: 3}}}
+  github:
+    repositories:
+      - name: example/first
+        issues:
+          - {number: 1, title: An item before the unread repository, board: Ready}
+      - name: example/unread
+        issues:
+          - {number: 1, title: An item of the repository GitHub fails to list, board: Ready}
+      - name: example/last
+        issues:
+          - {number: 1, title: An item after the unread repository, board: Ready}
+    faults:
+      - name: unlisted
+        match: {path: repos/example/unread/pulls}
+        respond: {status: 502}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - name: refill
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: first 1, turns: 1}
+        - worker: {name: last 1, turns: 1}
+        - github: {calls: {path: repos/example/unread/pulls, fault: unlisted, min: 1}}
+  - stop: loop
+
+then:
+  - worker: {name: first 1, turns: 1}
+  - worker: {name: last 1, turns: 1}
+  # Nothing starts on an observation the loop does not have.
+  - worker: {name: unread 1, turns: 0}
+  - github: {calls: {path: repos/example/unread/pulls, caller: loop, fault: unlisted, status: 502, min: 1}}
