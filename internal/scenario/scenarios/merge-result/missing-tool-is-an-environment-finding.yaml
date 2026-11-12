@@ -52,18 +52,28 @@ given:
                 save: head
               - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
               - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # The watch reads devctl's login, which this desk has none of.
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
 
 when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   - name: start
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - worker: {name: app 1, outcome: finish}
         - github: {pull: {repo: example/app, number: 2, state: open}}
-  - advance: 1m
+  - advance: 2s
   - name: ci-green
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
   # The park is the request for the review, the head is green: the reviewer
@@ -74,27 +84,27 @@ when:
       - exit: 0
       - events: {contains: [agents.park, supervisor.review], not_contains: [session.report-rejected]}
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - worker: {name: 'Review app 2 r1', outcome: finish}
-  - advance: 1m
+  - advance: 2s
   # The base moves on after the approval: the reviewed head no longer
   # contains it, and its own green checks say nothing about the two
   # together.
   - name: base-moves
     github: {push: {repo: example/app, branch: main, file: a.go, content: "package app\n\nvar A = 2\n"}}
-  - advance: 1m
+  - advance: 2s
   - name: go
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
   - name: finding
-    run: {args: [log, --verb, supervisor.file]}
+    run: {args: [log, --verb, supervisor.file, --json]}
     expect:
       - exit: 0
       - output: {contains: ["Merge-result check environment failed", "golangci-lint unavailable", "not a branch repair"]}
   - name: failed
-    run: {args: [log, --verb, merge.failed]}
+    run: {args: [log, --verb, merge.failed, --json]}
     expect:
       - exit: 0
       - output: {contains: ["merge-result validation unavailable"], not_contains: ["branch repair requested"]}

@@ -27,15 +27,25 @@ given:
       - name: 'app \d'
         turns:
           - outcome: hang
+  calls:
+    # The watch reads devctl's login, which this desk has none of.
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
 
 when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   - name: fill
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
       - events: {contains: [agents.start, supervisor.next]}
   - wait_for:
-      timeout: 30s
+      timeout: 15s
       expect:
         - worker: {name: 'app \d', turns: 2}
   - name: capacity
