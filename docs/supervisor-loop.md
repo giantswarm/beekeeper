@@ -5,10 +5,15 @@ the desk from the board, watches pull requests and outages, and routes alerts.
 
 ## Filling the desk
 
-With `supervisor.workerBrief` configured, each pass fills the desk to `capacity.ceiling` from the
+With `supervisor.workerBrief` configured, refill runs on its own `supervisor.loopInterval` cadence,
+independently of slow observations, retirement, intake and next bookkeeping. Each tick fills
+the desk to `capacity.ceiling` from the
 next free board items, including after a restart or roster loss without a done report. Each start
 rechecks capacity and stops when its gates refuse, the ceiling is reached, or the board offers
-nothing. The existing done-triggered next-item transition remains active. An empty or failed board
+nothing. Refills never overlap, and shutdown waits for cancellation of the active refill.
+Start holds and capacity, budget and delivery gates still apply. The stall alarm names the active
+refill action (for example, capacity, board next or a worker start). `--once` refills within its pass.
+Legacy done-triggered next actions settle as bookkeeping. An empty or failed board
 read waits `supervisor.fillRetryEvery` (5m by default) before retrying, doubled for each further
 empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
 one of the changes below, unless `capacity.ceiling` changes or an agent is done or leaves the roster

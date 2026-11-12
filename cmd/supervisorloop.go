@@ -817,8 +817,11 @@ type supervisorLoop struct {
 	// fillEmpty counts the refill's unproductive board reads since its last
 	// start or a change that ended its pause; each one doubles the next
 	// pause, up to fillBackoff times.
-	fillEmpty   int
-	fillRetries map[string]fillRetry
+	fillEmpty       int
+	fillRetries     map[string]fillRetry
+	refillFold      takenFold
+	independentFill bool
+	fillPhase       string
 	// takenFold is the loop's own history folded so far (looptakenfold.go).
 	takenFold takenFold
 	// reviewRecoveries are the desk-review parks whose published HEAD did
@@ -1084,6 +1087,12 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 				l.stopWatch()
 			}
 		}()
+	}
+	if !once {
+		l.independentFill = true
+		l.holdStarts(true) // the first watch observation must admit starts
+		stopRefill := l.startRefillCadence(ctx)
+		defer stopRefill()
 	}
 	for {
 		now := time.Now()
@@ -1615,7 +1624,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	ctx = context.WithValue(ctx, loopPullContextKey{}, l)
 	dispatched := false
 	defer func() {
-		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && !dispatched {
+		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && !dispatched && !l.independentFill {
 			why := "pass ended before refill dispatch (GitHub observation held or loop stopping)"
 			if result != nil {
 				why = "pass ended before refill dispatch: " + oneLine(result.Error())
@@ -2475,7 +2484,9 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	// are bookkeeping now: neither they nor intake may hold the start stream
 	// across passes, or compete with refill for the same capacity snapshot.
 	fillLaunched = true
-	if l.beginInFlight(loopFillStream) {
+	if l.independentFill {
+		// The cadence owns refill; observation never dispatches a second one.
+	} else if l.beginInFlight(loopFillStream) {
 		l.passActions.Go(func() {
 			defer l.endInFlight(loopFillStream)
 			setErr(l.fill(bgCtx, st, claims, taken, reservations))

@@ -185,7 +185,7 @@ func (l *supervisorLoop) checkStall() error {
 	switch {
 	case now.Sub(s.ran) >= loopStallAfter:
 		since, filed = s.ran, &l.stall.ranFiled
-		cause = fmt.Sprintf("the capacity refill has not run since %s: the worker stream is still busy with done, intake or next actions of an earlier pass, so no board item gets a worker", s.ran.UTC().Format(time.RFC3339))
+		cause = fmt.Sprintf("the capacity refill has not run since %s: %s", s.ran.UTC().Format(time.RFC3339), l.refillBlocker())
 	case !s.since.IsZero() && now.Sub(s.since) >= loopStallAfter:
 		since = s.since
 		item := "no board item read"
