@@ -542,6 +542,11 @@ timer from the running watches.
 - `internal/github`: The budget from rate-limit headers, the GraphQL limit and its refusal from a
   `rateLimit` query, the search limits from `/rate_limit` (`BEEKEEPER_GITHUB_API` points the probes
   at a test's server); a pull request's state from `gh pr view`.
+- `internal/config`: The machine configuration (`config.yaml`). `config.go` holds the document
+  (`Config`), its loading and the duration and token types; each section's types, constants and
+  helpers have a file of their own (`capacity.go`, `agents.go`, `watch.go`, …); `defaults.go` and
+  `validate.go` fill in and check the whole document, `check.go` checks a file without loading it
+  and `set.go` writes settings into it.
 - `internal/capacity`: What a start is judged by: the views `capacity` prints and writes as JSON,
   the usage data model they are derived from, and the math from the roster's counts, the usage
   readings and the machine's headroom to a verdict and a choice. `cmd` counts the roster, reads
