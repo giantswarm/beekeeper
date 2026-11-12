@@ -64,7 +64,9 @@ when:
     run: {args: [--as, supervisor loop, agents, handover, long-runner]}
     expect:
       - exit: 0
-      - output: {contains: ['started "long-runner"', 'handed over "long-runner"']}
+      # The old session wrote its note in a headless turn; the follow-up's
+      # prompt carries it.
+      - output: {contains: ["note: written after", "task, brief, note", 'started "long-runner"', "its turns run on opus", 'handed over "long-runner"']}
       - events: {contains: [agents.handover]}
   - name: after
     run: {args: [agents, --json]}
@@ -73,6 +75,7 @@ then:
   - {step: after, exit: 0}
   - {step: after, json_path: {path: ., len: 1}}
   - {step: after, json_path: {path: '[0].name', equals: long-runner}}
+  - events: {contains: [agents.note]}
   # Both sessions ran on opus; the desk's first choice was never taken.
   - calls: {program: claude, args: [--bg, --model, opus], min: 2, max: 2}
   - calls: {program: claude, args: [--bg, --model, sonnet], max: 0}

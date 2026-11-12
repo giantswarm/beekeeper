@@ -87,11 +87,12 @@ when:
       # shares is nowhere near the floor.
       - github: {budget: {bucket: graphql, caller: loop, spent: {max: 1000}}}
       - github: {budget: {bucket: graphql, remaining: {min: 3500}}}
-  # The next window: the share is new, the board is read again.
+  # The next window: the share is new, the board is read again. The steps
+  # stay under the age at which the watch's budget reading counts as stale.
   - name: next-window
     advance:
-      by: 55m
-      step: 5m
+      by: 56m
+      step: 2m
       quiet: 200ms
   - wait_for:
       timeout: 30s

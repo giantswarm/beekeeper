@@ -28,6 +28,9 @@ given:
   github:
     repositories:
       - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
   calls:
     - program: devctl
       args: [auth, status]
@@ -43,6 +46,13 @@ when:
     run: {args: [version]}
     expect:
       - output: {matches: '^beekeeper v1\.0\.0-rc\.1\b'}
+  # The canary compares a dry-run pass of the candidate with one of the
+  # running release: on this desk that pass is clean.
+  - name: dry-run
+    run: {args: [supervisor, loop, --once, --dry-run]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["FAILED", "UNREAD", "SUPERVISOR GITHUB HELD"]}
   - name: check
     run: {args: [self-update, --check, --version, v1.0.0-rc.2]}
     expect:

@@ -7,7 +7,8 @@ description: >
   the load is back under the guard, nothing has to lift the hold: the next
   reading releases it and the loop starts the item's worker. The load is
   the loop's own reading (BEEKEEPER_LOADAVG), so the scenario changes it by
-  running the loop again under the new load.
+  running the loop again under the new load: that loop starts out held by
+  the condition the first one recorded.
 issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: guards
 tags: [guards, load, loop, capacity]
@@ -74,16 +75,19 @@ when:
     expect:
       - events: {not_contains: [agents.start]}
       - worker: {name: app 1, turns: 0}
-      - log: {name: busy, contains: ["SUPERVISOR REFILL started 0"]}
+      - log: {name: busy, contains: ["no start: 1m load 50 over 8"], not_contains: ["ENDED HIGH LOAD"]}
       - process: {name: busy, running: true}
   - stop: busy
-  # The load is back under the guard: the scenario's own 0.10.
+  # The load is back under the guard: the scenario's own 0.10. The loop
+  # starts out held by the condition on record, until its watch has read
+  # the load.
   - name: calm
     background: {args: [supervisor, loop]}
   - wait_for:
       timeout: 30s
       expect:
-        - log: {name: calm, not_contains: ["HIGH LOAD"], contains: ["watching the machine numbers only"]}
+        - log: {name: calm, contains: ["machine conditions map[load:HIGH LOAD]", "watching the machine numbers only"]}
+        - events: {contains: [watch.machine-state]}
   - name: released
     advance:
       by: 3m
@@ -104,4 +108,5 @@ when:
 then:
   - worker: {name: app 1, harness: claude, turns: 1, running: true}
   - worker: {name: by-hand, turns: 0}
-  - log: {name: calm, not_contains: ["HIGH LOAD"]}
+  # The calm loop's watch never read a high load itself.
+  - log: {name: calm, not_contains: ["HIGH LOAD: 1m"]}

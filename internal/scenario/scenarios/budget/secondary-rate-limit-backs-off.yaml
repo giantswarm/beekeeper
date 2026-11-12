@@ -9,6 +9,8 @@ description: >
   When Retry-After has passed GitHub answers again, the loop reads the
   board and starts the worker of the Ready item.
 issue: https://github.com/giantswarm/beekeeper/issues/3794
+# The loop goes on probing GraphQL through Retry-After, about twice a minute.
+pending: https://github.com/giantswarm/beekeeper/issues/3828
 flow: budget
 tags: [budget, github, loop, fault]
 timeout: 120s
@@ -70,10 +72,11 @@ when:
       # The loop does not hammer a GitHub that asked it to wait.
       - github: {calls: {path: graphql, caller: loop, fault: secondary, max: 3}}
       - github: {budget: {bucket: graphql, spent: 0}}
-  # Retry-After has passed.
+  # Retry-After has passed; the pull watcher, held as well, retries within
+  # ten minutes.
   - name: after
     advance:
-      by: 6m
+      by: 15m
       step: 1m
       quiet: 200ms
   - wait_for:

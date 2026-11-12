@@ -75,9 +75,10 @@ when:
       - github: {calls: {path: graphql, operation: repositoryOwner, caller: loop, max: 0}}
       - github: {calls: {path: graphql, operation: repository, caller: loop, max: 0}}
   # Past the reset: the window is new, and a fresh reading lifts the hold.
+  # The pull watcher, held as well, retries within ten minutes.
   - name: reset
     advance:
-      by: 25m
+      by: 35m
       step: 1m
       quiet: 200ms
   - wait_for:

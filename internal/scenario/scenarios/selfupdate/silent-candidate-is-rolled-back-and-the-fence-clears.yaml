@@ -27,6 +27,15 @@ given:
   github:
     repositories:
       - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
+    # The scenario installs each release by hand: the first loop's own
+    # release lookup finds nothing, or it would install the newest itself.
+    faults:
+      - name: no-lookup
+        match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: good-loop}
+        respond: {status: 404}
   calls:
     - program: devctl
       args: [auth, status]
