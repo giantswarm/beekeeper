@@ -63,6 +63,8 @@ func TestParseRejects(t *testing.T) {
 		{"host with an unknown fault", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  hosts: [{name: builder, fault: on-fire}]\nwhen:", 1), `fault "on-fire"`},
 		{"host step of no host", strings.Replace(validScenario, "run: {args: [version]}", "host: {name: builder, clear: true}", 1), `host "builder" is none of given.hosts`},
 		{"worker expectation without a check", strings.Replace(validScenario, "exit: 0", "worker: {name: w}", 1), "one of turns, outcome and running"},
+		{"tool that is a fake already", strings.Replace(validScenario, "when:", "given:\n  tools: [gh]\nwhen:", 1), `"gh" is on the desk's PATH already`},
+		{"given call of a program that is no tool", strings.Replace(validScenario, "when:", "given:\n  calls: [{program: go, respond: {exit: 0}}]\nwhen:", 1), `program "go" is none of`},
 		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

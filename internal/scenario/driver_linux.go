@@ -357,6 +357,9 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
+		// GitHub's time is the world's: a review is dated on the clock the
+		// desk dates its parks and goes on.
+		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
 			logMu.Lock()
@@ -380,11 +383,15 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 }
 
 // stepEnv is the environment of a step's candidate: the allowlist, the
-// scenario's GitHub with the step as its caller, and the step's own.
+// scenario's GitHub with the step as its caller, the scenario's tools and
+// the step's own.
 func (d *driver) stepEnv(caller string, extra map[string]string) []string {
 	vars := map[string]string{}
 	if d.github != nil {
 		maps.Copy(vars, d.github.Env(caller))
+	}
+	if tools := d.s.Given.Tools; len(tools) > 0 {
+		vars[ToolsEnv] = strings.Join(tools, ",")
 	}
 	maps.Copy(vars, extra)
 	return env(vars)

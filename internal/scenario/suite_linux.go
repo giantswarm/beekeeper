@@ -108,7 +108,7 @@ func (r *Runner) run(ctx context.Context, s *Scenario, root string) *Result {
 	if err := linkOrCopy(r.Fake, filepath.Join(bin, fakeBinary)); err != nil {
 		return harness(err)
 	}
-	for _, name := range Fakes {
+	for _, name := range s.programs() {
 		if err := os.Symlink(fakeBinary, filepath.Join(bin, name)); err != nil {
 			return harness(err)
 		}
