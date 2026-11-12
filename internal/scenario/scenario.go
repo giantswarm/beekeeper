@@ -80,6 +80,8 @@ type Given struct {
 	// that answers gh and the API base variables (docs/scenarios-github.md).
 	// Its repositories get origins like Repositories.
 	GitHub *fakegithub.Given `yaml:"github"`
+	// Clock is the world's clock.
+	Clock Clock `yaml:"clock"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -112,7 +114,7 @@ type Response struct {
 }
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// github and fault, with optional expectations of its own response.
+// advance, github and fault, with optional expectations of its own response.
 type Step struct {
 	Name string `yaml:"name"`
 	// Run runs the candidate to its exit.
@@ -124,6 +126,8 @@ type Step struct {
 	Stop string `yaml:"stop"`
 	// WaitFor polls its expectations until they hold, bounded.
 	WaitFor *WaitFor `yaml:"wait_for"`
+	// Advance moves the world's clock forward.
+	Advance *Advance `yaml:"advance"`
 	// GitHub is something that happens on the scenario's GitHub; Fault
 	// arms or clears one of its faults.
 	GitHub *fakegithub.Step      `yaml:"github"`
@@ -152,6 +156,7 @@ const (
 	KindBackground = "background"
 	KindStop       = "stop"
 	KindWaitFor    = "wait_for"
+	KindAdvance    = "advance"
 	KindGitHub     = "github"
 	KindFault      = "fault"
 )
@@ -170,6 +175,9 @@ func (s Step) Kind() string {
 	}
 	if s.WaitFor != nil {
 		kinds = append(kinds, KindWaitFor)
+	}
+	if s.Advance != nil {
+		kinds = append(kinds, KindAdvance)
 	}
 	if s.GitHub != nil {
 		kinds = append(kinds, KindGitHub)
@@ -333,6 +341,9 @@ func (s *Scenario) Validate() error {
 	if s.Timeout.Duration == 0 {
 		s.Timeout.Duration = DefaultTimeout
 	}
+	if _, err := s.Given.Clock.StartTime(); err != nil {
+		bad("given.clock.start: %v", err)
+	}
 	for _, r := range s.Given.Repositories {
 		if !repoRE.MatchString(r.Name) {
 			bad("given.repositories: %q is not owner/name", r.Name)
@@ -376,7 +387,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, github and fault", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, github and fault", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {
@@ -418,6 +429,8 @@ func (s *Scenario) Validate() error {
 			for j, e := range st.WaitFor.Expect {
 				errs = append(errs, s.validateExpect(fmt.Sprintf("%s wait_for[%d]", where, j), e, kind, background, false)...)
 			}
+		case KindAdvance:
+			errs = append(errs, s.validateAdvance(where, st.Advance, background)...)
 		}
 		if st.Name != "" {
 			names[st.Name] = kind
@@ -451,6 +464,7 @@ var stepObserves = map[string][]string{
 	KindBackground: {"duration"},
 	KindStop:       {"duration"},
 	KindWaitFor:    {"duration"},
+	KindAdvance:    {"duration"},
 	KindGitHub:     {"duration"},
 	KindFault:      {"duration"},
 }

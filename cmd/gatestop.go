@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -184,8 +185,8 @@ func stopOutcome(s stopped) string {
 
 // waitGone says whether pid exits within d.
 func waitGone(pid int, d time.Duration) bool {
-	for end := time.Now().Add(d); proc.Alive(pid); time.Sleep(50 * time.Millisecond) {
-		if !time.Now().Before(end) {
+	for end := clk.Now().Add(d); proc.Alive(pid); clk.Sleep(50 * time.Millisecond) {
+		if !clk.Now().Before(end) {
 			return false
 		}
 	}

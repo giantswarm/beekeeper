@@ -20,6 +20,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -107,7 +108,7 @@ func applyQuotaForUsageFile(store state.Store, file string, r *usageReading, now
 		return
 	}
 	if now.IsZero() {
-		now = time.Now()
+		now = clk.Now()
 	}
 	var ledger usageQuotaLedger
 	found, err := store.ReadFile(qf, &ledger)
@@ -149,7 +150,7 @@ func (a *app) recordAgyQuotaExhaustedForID(id, model string, qerr *agy.QuotaErro
 		now = a.now
 	}
 	if now.IsZero() {
-		now = time.Now()
+		now = clk.Now()
 	}
 	m := cmp.Or(strings.TrimSpace(model), strings.TrimSpace(qerr.Model))
 	k := a.liveCapacity()
@@ -340,7 +341,7 @@ func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Du
 		return usageReading{}, err
 	}
 	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
-		return parseClaudeUsage(stdout.Bytes(), time.Now())
+		return parseClaudeUsage(stdout.Bytes(), clk.Now())
 	}
 	if slices.Equal(command, config.DefaultAgyUsageCommand) {
 		return parseAgyBuiltinUsage(stdout.Bytes())
@@ -873,7 +874,7 @@ func (a *app) serveMode(ctx context.Context, name string, p config.Provider) con
 	}
 	now := a.now
 	if now.IsZero() {
-		now = time.Now()
+		now = clk.Now()
 	}
 	fresh := func(r config.ServeModeReading) bool {
 		return !r.At.IsZero() && !r.At.After(now.Add(time.Minute)) && now.Sub(r.At) <= p.EffectiveServeModeStale()
@@ -951,7 +952,7 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	cr, err := codex.ReadUsage(stateDir, sessionsDir)
 	now := a.now
 	if now.IsZero() {
-		now = time.Now()
+		now = clk.Now()
 	}
 	// Fresh explicit local errors remain authoritative. Once old, probe the
 	// account so an idle desk can recover after its quota resets.
@@ -1160,7 +1161,7 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 	if err := ctx.Err(); err != nil {
 		return usageReading{}, err
 	}
-	started := time.Now()
+	started := clk.Now()
 	now := a.now
 	if now.IsZero() {
 		now = started
@@ -1180,7 +1181,7 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 	if err != nil {
 		now := a.timeNow()
 		if now.IsZero() {
-			now = time.Now()
+			now = clk.Now()
 		}
 		return a.cachedUsageReading(file, u, now, err)
 	}
@@ -1199,7 +1200,7 @@ func (a *app) resolveReadingAt(ctx context.Context, file string, u config.Usage,
 		}
 	}
 	r, err := a.execUsage(ctx, u)
-	now = now.Add(max(0, time.Since(started)))
+	now = now.Add(max(0, clk.Since(started)))
 	if completed != nil {
 		now = completed()
 	}

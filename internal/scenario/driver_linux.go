@@ -20,6 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -56,6 +57,7 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_CONFIG":    configFile,
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
+		clock.Env:             clockSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
 		"GIT_ALLOW_PROTOCOL":  "file",
@@ -110,6 +112,7 @@ func (p *proc) stop() {
 type driver struct {
 	s     *Scenario
 	world *World
+	clock *clock.Server
 	res   *Result
 	procs map[string]*proc
 	views map[string]View
@@ -162,6 +165,9 @@ func (d *driver) run() {
 		err = d.world.Serve(worldSocket)
 	}
 	if err == nil {
+		err = d.startClock()
+	}
+	if err == nil {
 		err = d.setup(ctx)
 	}
 	if err == nil {
@@ -176,6 +182,9 @@ func (d *driver) run() {
 			d.procs[name].stop()
 		}
 		_ = d.world.Close()
+		if d.clock != nil {
+			_ = d.clock.Close()
+		}
 		d.res.Calls = d.world.Calls()
 		for _, c := range d.world.Unanswered() {
 			if c.Reason != "" {
@@ -470,6 +479,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	}
 	dur := time.Since(started)
 	sr.Duration = dur

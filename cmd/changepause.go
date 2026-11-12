@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"time"
+
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 )
 
 // Coalesce atomic replacement and outbox events, and bound retries when many
@@ -20,7 +22,7 @@ var passChangeGap = 5 * time.Second
 // pauseChangeFor is pauseChange for at least d, never shorter than the
 // debounce.
 func pauseChangeFor(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(max(d, 100*time.Millisecond))
+	timer := clk.NewTimer(max(d, 100*time.Millisecond))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

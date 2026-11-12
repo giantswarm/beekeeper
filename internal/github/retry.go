@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 // readTries is how often a read is asked before its last error is returned;
@@ -113,7 +115,7 @@ func Retrying(gh GH, backoff time.Duration) GH {
 			if try == readTries {
 				return out, fmt.Errorf("%s: %s after %d tries: %w", callName(args), why, try, orNoBody(err))
 			}
-			t := time.NewTimer(wait)
+			t := clock.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				t.Stop()

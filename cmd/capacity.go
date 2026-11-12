@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -1760,7 +1761,7 @@ func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, ses
 func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind startFor, wantModel string) *capacityView {
 	now := a.now
 	if now.IsZero() {
-		now = time.Now()
+		now = clk.Now()
 	}
 	a.syncAgyQuotaFromState(st, now)
 	c := countAgents(st, sessions, now, a.cfg)

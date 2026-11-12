@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -18,7 +19,7 @@ func (l *supervisorLoop) startRefillCadence(ctx context.Context) func() {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	ticks := time.NewTicker(interval)
+	ticks := clk.NewTicker(interval)
 	go func() {
 		defer close(done)
 		defer ticks.Stop()
