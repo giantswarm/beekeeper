@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -62,7 +63,7 @@ func (g *gateRun) lanePending() string {
 	if err != nil {
 		return fmt.Sprintf("the state does not load (%v)", err)
 	}
-	return merge.Queue(st, g.lane.Name).Unsettled(time.Now(), g.cfg.Merge.Settle.Duration, false, proc.Alive)
+	return merge.Queue(st, g.lane.Name).Unsettled(clk.Now(), g.cfg.Merge.Settle.Duration, false, proc.Alive)
 }
 
 // awaitReleases runs before the merge's devctl in a lane without an
@@ -97,8 +98,8 @@ func (g *gateRun) awaitReleases() error {
 		<-warmed
 	}()
 	wait := releasesWait(g.cfg.Merge.Settle.Duration)
-	deadline := time.Now().Add(wait)
-	tick := time.NewTicker(releasesPoll)
+	deadline := clk.Now().Add(wait)
+	tick := clk.NewTicker(releasesPoll)
 	defer tick.Stop()
 	said := ""
 	for {
@@ -108,7 +109,7 @@ func (g *gateRun) awaitReleases() error {
 		if why = g.lanePending(); why == "" {
 			break
 		}
-		if time.Now().After(deadline) {
+		if clk.Now().After(deadline) {
 			return g.refuseRunning("lane %s still waits for a release's verdict past %s (%s): nothing merged, %s left the lane; run the same command again once beekeeper lanes shows the release known",
 				g.lane.Name, wait, why, g.key())
 		}
@@ -146,7 +147,7 @@ func (g *gateRun) stillRunning() error {
 	if i < 0 {
 		return gateRefused("%s was taken out of lane %s while it waited for the lane's release: nothing merged", g.key(), g.lane.Name)
 	}
-	if h, ok := merge.Preempts(st, time.Now(), st.Merges[i], g.lane); ok {
+	if h, ok := merge.Preempts(st, clk.Now(), st.Merges[i], g.lane); ok {
 		return g.toWaiting(h, "before its devctl started")
 	}
 	return nil
@@ -221,7 +222,7 @@ func (g *gateRun) confirmRelease(out *merge.Outcome, rc int) (string, int) {
 		out.Release, release = o.Release, o.Release
 		line = fmt.Sprintf("%s merged and released %s, its tag pipeline green; lane %s is free", g.key(), o.Release, g.lane.Name)
 	}
-	now := time.Now().UTC()
+	now := clk.Now().UTC()
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling && m.Releasing

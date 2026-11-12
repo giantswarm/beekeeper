@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -37,7 +38,7 @@ func (g *gateRun) watchPreempt() (stop func() (state.Hold, bool)) {
 				select {
 				case <-done:
 					return
-				case <-time.After(preemptPoll):
+				case <-clk.After(preemptPoll):
 				}
 				if h, ok := g.preemptChild(); ok {
 					mu.Lock()
@@ -70,7 +71,7 @@ func (g *gateRun) preemptChild() (state.Hold, bool) {
 		return state.Hold{}, false
 	}
 	m := st.Merges[i]
-	h, ok := merge.Preempts(st, time.Now(), m, g.lane)
+	h, ok := merge.Preempts(st, clk.Now(), m, g.lane)
 	if !ok || m.Child == 0 || readPID(mergeBase(g.store.Dir(), g.repo, g.pr)) != m.Child {
 		return state.Hold{}, false
 	}
@@ -105,7 +106,7 @@ func (g *gateRun) toWaiting(h state.Hold, when string) error {
 		}
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Child, m.HandCut = state.Waiting, time.Time{}, nil, 0, ""
-		m.Seen = time.Now().UTC()
+		m.Seen = clk.Now().UTC()
 		return []state.Event{event(g.me, "merge.preempted", "%s: %s, %s", g.key(), when, why)}, nil
 	})
 	g.requeued = true

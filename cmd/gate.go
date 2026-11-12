@@ -22,6 +22,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -402,9 +403,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		return err
 	}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
-	g.leaveAt = leaveAt(time.Now(), limit, queued)
+	g.leaveAt = leaveAt(clk.Now(), limit, queued)
 	if paired {
-		a.now = time.Now()
+		a.now = clk.Now()
 		if err := g.declarePair(pair); err != nil {
 			return err
 		}
@@ -454,7 +455,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 			return err
 		}
 	}
-	deadline := time.Now().Add(wait)
+	deadline := clk.Now().Add(wait)
 	if v, ok := os.LookupEnv(gateDeadlineEnv); ok {
 		_ = os.Unsetenv(gateDeadlineEnv) // devctl must not inherit it
 		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
@@ -467,7 +468,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	}
 	pause := time.Duration(0)
 	for {
-		a.now = time.Now()
+		a.now = clk.Now()
 		// Before the step saves: the new release may have written the
 		// state, which refuses this binary's save.
 		if g.bin.Replaced() {
@@ -489,7 +490,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		if g.requeued {
 			// A merge a hold took back out of its lane waits its turn anew.
 			g.requeued = false
-			if deadline = time.Now().Add(wait); !g.leaveAt.IsZero() && g.leaveAt.Before(deadline) {
+			if deadline = clk.Now().Add(wait); !g.leaveAt.IsZero() && g.leaveAt.Before(deadline) {
 				deadline = g.leaveAt
 			}
 		}
@@ -510,7 +511,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(min(time.Until(deadline), pause)):
+		case <-clk.After(min(clk.Until(deadline), pause)):
 		}
 	}
 }
@@ -598,7 +599,7 @@ func (g *gateRun) enqueue(why string) error {
 	// queue TTL must still cover the successor's registration.
 	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := g.mine(st, state.Waiting); i >= 0 && st.Merges[i].PID == g.pid {
-			st.Merges[i].Seen = time.Now().UTC()
+			st.Merges[i].Seen = clk.Now().UTC()
 		}
 		return nil, nil
 	}); err != nil {
@@ -1134,7 +1135,7 @@ func (g *gateRun) readRebase() (github.Rebase, error) {
 		select {
 		case <-g.ctx.Done():
 			return r, g.ctx.Err()
-		case <-time.After(rebaseRetry):
+		case <-clk.After(rebaseRetry):
 		}
 	}
 }
@@ -1480,7 +1481,7 @@ func (g *gateRun) awaitPluginTags(out *merge.Outcome, sha string) string {
 		select {
 		case <-ctx.Done():
 			return fmt.Sprintf("%s merged, and its Auto Release cut no %s within %s: %s", g.key(), strings.Join(missing, ", "), pluginTagWait, unconfirmed)
-		case <-time.After(pluginTagPoll):
+		case <-clk.After(pluginTagPoll):
 		}
 	}
 }
@@ -1979,7 +1980,7 @@ func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun
 		gateLine("GitHub answered %s's merge call with a server error (exit %d): sending it again in %s, retry %d of %d",
 			g.key(), run.rc, pause, try+1, len(serverRetries))
 		_ = g.store.Log(event(g.me, "merge.retry", "%s: a 5xx on the merge call, retry %d of %d", g.key(), try+1, len(serverRetries)))
-		time.Sleep(pause) // the held document goes: a retry's replaces it
+		clk.Sleep(pause) // the held document goes: a retry's replaces it
 		var rc int
 		if pid, rc = g.launch(base); rc != 0 {
 			return childRun{rc: rc}, pid
@@ -2237,7 +2238,7 @@ func (g *gateRun) record(base string, run childRun) error {
 		}
 		r.confirming = confirm
 		st.Merges[i].HandCut = g.handCut()
-		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
+		ev := recordRun(st, i, g.lane, g.me, r, clk.Now().UTC(), note)
 		j := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
 		})
@@ -2372,7 +2373,7 @@ func judgeRun(ctx context.Context, repo string, pr, tries int) (merge.Outcome, e
 	var err error
 	for try := range tries {
 		if try > 0 {
-			time.Sleep(judgeWait)
+			clk.Sleep(judgeWait)
 		}
 		var p github.Pull
 		if p, err = pullState(ctx, repo, pr); err == nil {
@@ -2524,7 +2525,7 @@ func (a *app) pollToolWindow(ctx context.Context, by state.Party) {
 	if err != nil || !toolWindowOpen(st) {
 		return
 	}
-	now := time.Now().UTC()
+	now := clk.Now().UTC()
 	due := func(h state.Hold) bool { return h.Tool != "" && now.Sub(h.ToolChecked) >= toolCheckEvery }
 	if !slices.ContainsFunc(st.Holds, due) {
 		return
@@ -2815,7 +2816,7 @@ const toolUpdateEvery = time.Minute
 // window (ToolFailed), which stays, a successful one clears it. It reports
 // whether it ran the update.
 func (a *app) updateTool(ctx context.Context, v string, by state.Party) bool {
-	now := time.Now().UTC()
+	now := clk.Now().UTC()
 	due := false
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, h := range st.Holds {
@@ -2963,7 +2964,7 @@ func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 // runChild runs the command with this process's stdin and stderr, its
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
-	started := time.Now()
+	started := clk.Now()
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
@@ -2992,7 +2993,7 @@ func runChild(argv []string, out io.Writer) int {
 // the command ran, including when a caller or the watch stopped it.
 func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
 	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), time.Since(started).Round(time.Millisecond))
+		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), clk.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())
 	}
 	return ps.ExitCode()

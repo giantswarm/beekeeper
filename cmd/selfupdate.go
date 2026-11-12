@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -245,7 +246,7 @@ reset. A development build (version dev) is refused.`,
 			if !check {
 				a.warnUpdateConfig(w)
 			}
-			started := time.Now()
+			started := clk.Now()
 			ctx := update.WithOptions(cmd.Context(), update.Options{
 				Version: version,
 				Canary: func(ctx context.Context, path, version string) error {

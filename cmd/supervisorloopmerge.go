@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -581,7 +582,7 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 					return nil, nil
 				}
 				worker := &current.Agents[i]
-				reportIdle(worker, time.Now())
+				reportIdle(worker, clk.Now())
 				worker.Done = true
 				endNotes(current, worker.Party, l.a.timeNow())
 				clearRecords(current, worker.Party)
@@ -627,7 +628,7 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		worker := &current.Agents[i]
 		report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
-		reportIdle(worker, time.Now())
+		reportIdle(worker, clk.Now())
 		worker.Done = true
 		endNotes(current, worker.Party, l.a.timeNow())
 		clearRecords(current, worker.Party)
@@ -1098,7 +1099,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = reasonDeskStopped
 		return doc
 	}
-	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+	if _, held := merge.BlockingFor(st, clk.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
 		doc.ExitCode = github.SquashRefused
 		doc.Reason = reasonMergeHeld
 		return doc
@@ -1147,7 +1148,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashRefused, reasonDeskStopped
 		return doc
 	}
-	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+	if _, held := merge.BlockingFor(st, clk.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
 		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeld
 		return doc
 	}

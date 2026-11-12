@@ -21,6 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -60,6 +61,7 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
 		harness.SocketEnv:     harness.DefaultSocket,
+		clock.Env:             clockSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
 		"GIT_ALLOW_PROTOCOL":  "file:https",
@@ -116,6 +118,7 @@ type driver struct {
 	world *World
 	// fakes is the world of the fake harnesses, units and hosts.
 	fakes *harness.World
+	clock *clock.Server
 	res   *Result
 	procs map[string]*proc
 	views map[string]View
@@ -172,6 +175,9 @@ func (d *driver) run() {
 		err = d.world.Serve(worldSocket)
 	}
 	if err == nil {
+		err = d.startClock()
+	}
+	if err == nil {
 		err = d.setup(ctx)
 	}
 	if err == nil {
@@ -211,6 +217,9 @@ func (d *driver) run() {
 			d.res.Fail("%s", f)
 		}
 		_ = d.world.Close()
+		if d.clock != nil {
+			_ = d.clock.Close()
+		}
 		d.res.Calls = d.world.Calls()
 		for _, c := range d.world.Unanswered() {
 			if c.Reason != "" {
@@ -350,7 +359,7 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 		return err
 	}
 	d.githubLog = log
-	srv, err := fakegithub.New(g, fakegithub.Options{
+	opts := fakegithub.Options{
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
 			logMu.Lock()
@@ -358,7 +367,12 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 			return log.Write(b)
 		}),
 		BoardOwner: d.boardOwner, BoardNumber: d.boardNumber, Repositories: d.repositories(),
-	})
+	}
+	if d.clock != nil {
+		// GitHub's times and budget windows are the world's, as the desk's.
+		opts.Clock = d.clock.Now
+	}
+	srv, err := fakegithub.New(g, opts)
 	if err != nil {
 		return fmt.Errorf("given.github: %w", err)
 	}
@@ -531,6 +545,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	}
 	dur := time.Since(started)
 	sr.Duration = dur
