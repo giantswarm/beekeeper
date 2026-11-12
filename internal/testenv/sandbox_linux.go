@@ -55,12 +55,15 @@ func EnterSandbox(root string) error {
 	if err := syscall.Mount("proc", filepath.Join(jail, "proc"), "proc", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
 		return err
 	}
-	null := filepath.Join(jail, "dev/null")
-	if err := os.WriteFile(null, nil, 0600); err != nil {
-		return err
-	}
-	if err := syscall.Mount("/dev/null", null, "", syscall.MS_BIND, ""); err != nil {
-		return err
+	// Git and other tools read /dev/urandom for temporary file names.
+	for _, dev := range []string{"null", "zero", "random", "urandom"} {
+		target := filepath.Join(jail, "dev", dev)
+		if err := os.WriteFile(target, nil, 0600); err != nil {
+			return err
+		}
+		if err := syscall.Mount("/dev/"+dev, target, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("mount /dev/%s: %w", dev, err)
+		}
 	}
 	if err := syscall.Chroot(jail); err != nil {
 		return err
