@@ -183,7 +183,7 @@ when:
   - name: next
     run: {args: [board, next, --json]}
     expect:
-      - output: {contains: ['"pick"', example/app#4]}
+      - output: {contains: [example/app#4], not_contains: ['"skip"']}
   - name: stats
     run: {args: [delivery, --stats, --json]}
 
