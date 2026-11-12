@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -60,7 +61,7 @@ func (a *app) readIdentityProfiles(ctx, parentCtx context.Context, publish bool)
 	if err != nil {
 		return github.Budget{}, err
 	}
-	now := time.Now().UTC()
+	now := clk.Now().UTC()
 	profiles := map[string]github.Budget{}
 	saved := map[string]state.Budget{}
 	var failures []error
@@ -144,7 +145,7 @@ func (a *app) readIdentityProfiles(ctx, parentCtx context.Context, publish bool)
 		wait = 100 * time.Millisecond
 	}
 	if deadline, ok := parentCtx.Deadline(); ok {
-		wait = min(wait, time.Until(deadline))
+		wait = min(wait, clk.Until(deadline))
 	}
 	if err := parentCtx.Err(); err != nil {
 		return b, errors.Join(append(failures, err)...)

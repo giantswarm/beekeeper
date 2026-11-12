@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -54,7 +55,7 @@ func (a *app) admitBackgroundREST(ctx context.Context, class string) error {
 	if err != nil {
 		return err
 	}
-	if err := spend.admit(time.Now(), st.Budget, a.cfg.GitHub.Floor, class); err != nil {
+	if err := spend.admit(clk.Now(), st.Budget, a.cfg.GitHub.Floor, class); err != nil {
 		return err
 	}
 	// Reserve before starting the request. A crash or failed call is counted,

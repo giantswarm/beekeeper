@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 const (
@@ -470,7 +472,7 @@ func (i *installation) replace(staged, version string) error {
 	if movingPast {
 		displacedVersion = j.Candidate.Version
 	}
-	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: time.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine, Watched: previous != nil && optionsFrom(i.ctx).Recovery != nil}
+	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: clock.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine, Watched: previous != nil && optionsFrom(i.ctx).Recovery != nil}
 	if err := i.write(j); err != nil {
 		return err
 	}
