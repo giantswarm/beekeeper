@@ -3,10 +3,10 @@ description: >
   A worker publishes its branch from a checkout of the repository under
   agents.dir, opens a pull request and parks on it for desk review. Once CI
   is green the loop starts the independent reviewer, which approves the
-  exact head. The next passes merge that head, once, through the merge API.
-  The checkout's base is already an ancestor of the head, so the
-  merge-result check runs no tools: go and golangci-lint are not on PATH. The
-  merged review park ends the worker's task.
+  exact head. The next passes merge that head, once. The checkout's base is
+  already an ancestor of the head, so the merge-result check runs no tools:
+  go and golangci-lint are not on the desk's PATH. The merged review park
+  ends the worker's task.
   Moved from internal/loopworkflow TestWorkflow, cases checkout and non-go.
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: merge
@@ -17,6 +17,8 @@ given:
   desk:
     config:
       supervisor: {reviewRounds: 1}
+      # One watch reading admits the passes' starts for the whole scenario.
+      watch: {interval: 1h}
   github:
     repositories:
       - name: example/app
@@ -31,9 +33,8 @@ given:
               - git: [clone, --quiet, https://github.com/example/app.git, app]
               - git: [checkout, --quiet, -b, app-1]
                 dir: app
-              - write: {path: app/go.mod, content: "module example.invalid/app\n\ngo 1.26\n"}
-              - write: {path: app/change.go, content: "package app\n\nvar Change = 1\n"}
-              - git: [add, go.mod, change.go]
+              - write: {path: app/change.txt, content: "the change\n"}
+              - git: [add, change.txt]
                 dir: app
               - git: [commit, --quiet, -m, "feat: the change"]
                 dir: app
@@ -60,6 +61,10 @@ given:
       respond: {stderr: "not logged in\n", exit: 1}
 
 when:
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   - name: start
     run:
       args: [--as, supervisor loop, agents, start, app-1, /work/worker.txt, --harness, claude, --model, sonnet]
@@ -71,6 +76,7 @@ when:
         - worker: {name: app-1, outcome: finish}
   - name: green
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - advance: 1m
   - name: review
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -80,10 +86,12 @@ when:
       timeout: 30s
       expect:
         - worker: {name: 'Review app 2 r1', outcome: finish}
+  - advance: 1m
   - name: merge
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
+  - advance: 1m
   - name: end
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -92,5 +100,5 @@ when:
 then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - github: {issue: {repo: example/app, number: 1, state: closed}}
-  - github: {calls: {method: PUT, path: repos/example/app/pulls/2/merge, min: 1, max: 1}}
+  - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
   - events: {contains: [agents.start, agents.park, supervisor.review, supervisor.merge, supervisor.end]}

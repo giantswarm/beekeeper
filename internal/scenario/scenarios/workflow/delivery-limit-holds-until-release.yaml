@@ -19,6 +19,8 @@ given:
       capacity: {ceiling: 4}
       delivery: {wipLimit: 2}
       supervisor: {reviewRounds: 1}
+      # One watch reading admits the passes' starts for the whole scenario.
+      watch: {interval: 1h}
   github:
     repositories:
       - name: example/app
@@ -90,6 +92,10 @@ when:
         branch: main
         file: .github/workflows/zz_generated.auto_release.yaml
         content: "on:\n  push:\n    branches: [main]\n"
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   - name: admit
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -101,6 +107,7 @@ when:
         - worker: {name: app 2, turns: 1, outcome: finish}
   - name: ci-pending
     github: {check: {repo: example/app, pull: 5, name: build, state: pending}}
+  - advance: 1m
   - name: waits-on-ci
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -108,6 +115,7 @@ when:
       - calls: {program: claude, args: [--bg, 'app [34]'], max: 0}
   - name: ci-green
     github: {check: {repo: example/app, pull: 5, name: build, state: green}}
+  - advance: 1m
   - name: review
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -117,6 +125,7 @@ when:
       timeout: 30s
       expect:
         - worker: {name: 'Review app 5 r1', outcome: finish}
+  - advance: 1m
   - name: forward
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -128,10 +137,12 @@ when:
         - worker: {name: app 1, turns: 2, outcome: finish}
   - name: ci-fixed
     github: {check: {repo: example/app, pull: 5, name: build, state: green}}
+  - advance: 1m
   - name: merge
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
+  - advance: 1m
   - name: merged
     run: {args: [supervisor, loop, --once]}
     expect:

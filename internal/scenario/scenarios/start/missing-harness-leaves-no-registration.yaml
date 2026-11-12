@@ -3,7 +3,7 @@ description: >
   A forced start of a codex worker on a machine where codex is not on PATH
   fails before anything is launched: it names the missing executable, and
   the desk holds neither a start nor an agent for it. With capacity.ceiling
-  0 the loop's pass then has no room for a start of the Ready issue either.
+  0 the loop's pass then has no room for a worker for the Ready issue either.
   Moved from internal/loopworkflow TestWorkflow, case failed-start.
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: start
@@ -14,6 +14,8 @@ given:
   desk:
     config:
       capacity: {ceiling: 0}
+      # One watch reading admits the pass's starts: only the room holds it.
+      watch: {interval: 1h}
   github:
     repositories:
       - name: example/app
@@ -40,11 +42,15 @@ when:
     expect:
       - exit: 0
       - json_path: {path: ., len: 0}
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
   - name: pass
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-      - output: {contains: [no room for a start]}
+      - output: {contains: ["SUPERVISOR REFILL started 0: no room for a worker"]}
 
 then:
   - events: {not_contains: [agents.start]}
