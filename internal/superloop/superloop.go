@@ -726,6 +726,13 @@ func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d"
 func endKey(ref string) string              { return "end " + ref }
 func intakeKey(ref string) string           { return "intake " + strings.ToLower(ref) }
 
+// retryKey is the key of round rd of ref's head after an earlier round's
+// reviewer left that head without a verdict: reviewKey names the head's
+// first round only.
+func retryKey(ref, head string, rd int) string {
+	return fmt.Sprintf("review %s@%s r%d", ref, head, rd)
+}
+
 // redKey is the key of the wake that tells the red checks names of ref's
 // head to the park of parked; a single check's redKey is its own mark.
 func redKey(ref, head string, parked time.Time, names ...string) string {
@@ -1357,15 +1364,30 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// The round runs until its reviewer reports done. One done
 		// without a verdict on the round's head or on the head now
 		// reviewed a head the worker pushed in between: the newest
-		// head gets its round.
+		// head gets its round. A reviewer that left the roster without
+		// a verdict (its start failed, or it ended without one) reviews
+		// nothing more: OrphanWait after the round opened, the head it
+		// left gets a new round too, and that round's reservation
+		// releases the gone reviewer's assignment of the head.
+		reviewer := ReviewerName(ref, len(rs))
 		done := slices.ContainsFunc(in.Events, func(e Event) bool {
-			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
+			return e.Verb == VerbDone && e.Agent == reviewer && e.At.After(last.at)
 		})
-		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
+		gone := !in.Now.IsZero() && !in.Now.Before(last.at.Add(OrphanWait)) && !slices.ContainsFunc(in.Workers, func(o Worker) bool {
+			return strings.EqualFold(o.Name, reviewer)
+		})
+		same := sameHead(p.Head, last.head)
+		if !gone && (!done || same) || !p.Green || !isParked || !requested {
 			return
 		}
 		if len(rs) < MaxReviews {
-			review()
+			if !same {
+				review()
+				return
+			}
+			a := base
+			a.Key, a.Kind, a.Round, a.SelfHosted = retryKey(ref, p.Head, len(rs)+1), KindReview, len(rs)+1, w.SelfHosted
+			add(a)
 			return
 		}
 		// The reviews are used: the loop merges after a verdict, never

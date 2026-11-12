@@ -1138,6 +1138,47 @@ func TestAnOldParkOfTheCurrentHeadGetsItsReview(t *testing.T) {
 	}
 }
 
+// A reviewer that left the roster without a verdict, and without a done (its
+// remote start failed), holds the parked head no longer: OrphanWait after its
+// round opened, the same head gets the next round under a key of its own,
+// once, and past MaxReviews the leave says no verdict came.
+// https://github.com/giantswarm/beekeeper/issues/3757
+func TestAGoneReviewersHeadGetsTheNextRound(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker, Head: head1, Round: 1})
+	in := Input{Workers: parkedOn(head1, t0.Add(-time.Minute)), Pulls: pull(head1, true), Rounds: 1, Taken: tk, Now: t0.Add(OrphanWait - time.Second)}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("before OrphanWait the loop took %+v", got)
+	}
+	in.Now = t0.Add(OrphanWait)
+	// A reviewer still on the roster runs its round, done or not.
+	for _, done := range []bool{false, true} {
+		in.Workers = append(parkedOn(head1, t0.Add(-time.Minute)), Worker{Name: ReviewerName(pr, 1), Done: done})
+		if got := Plan(in); len(got) != 0 {
+			t.Fatalf("a reviewer on the roster (done %v) got %+v", done, got)
+		}
+	}
+	in.Workers = parkedOn(head1, t0.Add(-time.Minute))
+	in.Pulls = pull(head1, false)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("a head not green got %+v", got)
+	}
+	in.Pulls = pull(head1, true)
+	r := only(t, Plan(in), KindReview)
+	if r.Key != retryKey(pr, head1, 2) || r.Head != head1 || r.Round != 2 || r.Agent != worker || KeyHead(r.Key) != head1 || IsSweep(r.Key) {
+		t.Fatalf("next round = %+v", r)
+	}
+	in.Taken = append(in.Taken, taken(t, in.Now, r)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("a second pass took %+v", got)
+	}
+	// Its reviewer gone without a verdict too: the reviews are used.
+	in.Now = in.Now.Add(OrphanWait)
+	l := only(t, Plan(in), KindLeave)
+	if l.Key != leaveKey(pr, leftNoVerdict(head1)) || !strings.Contains(l.Message, "none gave a verdict") {
+		t.Errorf("leave = %+v", l)
+	}
+}
+
 // TestAMultiPullWorkerStaysWhileItServesOpenWork: a merged pull request's
 // tracking ends, but its worker stays while it serves an open issue or is
 // parked on another open pull request; its done, the close of that work or
