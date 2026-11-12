@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 )
 
 // View is one step's response as every expectation reads it: one view for
@@ -30,6 +32,8 @@ type View struct {
 	Calls func(program string, args []string) (int, error)
 	// Process reads a background step's state.
 	Process func(name string) (running bool, exit int, ok bool)
+	// GitHub checks an expectation of the scenario's GitHub.
+	GitHub func(e *fakegithub.Expect) error
 }
 
 // Check checks one expectation against a view.
@@ -101,6 +105,11 @@ func Check(e Expect, v View) error {
 		if c.Max != nil && n > *c.Max {
 			return fmt.Errorf("calls of %s: %d, at most %d", what, n, *c.Max)
 		}
+	case "github":
+		if v.GitHub == nil {
+			return missing("github")
+		}
+		return v.GitHub(e.GitHub)
 	case "process":
 		if v.Process == nil {
 			return missing("process")

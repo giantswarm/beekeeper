@@ -47,6 +47,8 @@ scenario's own artifacts under `<flow>/<name>/`: the world's call log
    The world logs every call in order. A call that no `given.calls` entry
    answers gets exit 1 and **fails the scenario**. Beside it the world
    serves its clock (see [The clock](#the-clock)), which every process reads.
+   With `given.github`, `gh` and the GitHub API are answered by a model
+   instead: see [The scenario's GitHub](scenarios-github.md).
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -113,6 +115,8 @@ then:
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
 | `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
+| `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
+| `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
 
 ### Expectations
 
@@ -129,6 +133,7 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `events` | the desk's event log `contains` / `not_contains` verbs | every step |
 | `calls` | the world's calls of `program` matching `args` number at least `min`, at most `max` | every step |
 | `process` | a background step is `running`, or exited with `exit` | every step |
+| `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 

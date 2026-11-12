@@ -1,0 +1,353 @@
+//go:build scenario
+
+package fakegithub
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Origins are the repositories' bare Git origins under Root
+// (<owner>/<name>.git): the branches, heads, commits and files GitHub
+// serves are the origin's own, read and written with real git.
+type Origins struct {
+	// Git is the git executable, Root the directory of the origins and
+	// Env the environment git runs in.
+	Git  string
+	Root string
+	Env  []string
+}
+
+// Dir is the origin of a repository.
+func (o *Origins) Dir(r *Repo) string {
+	return filepath.Join(o.Root, r.Owner, r.Name+".git")
+}
+
+// Has says whether the repository has an origin; false for no origins.
+func (o *Origins) Has(r *Repo) bool {
+	if o == nil || r == nil {
+		return false
+	}
+	fi, err := os.Stat(o.Dir(r))
+	return err == nil && fi.IsDir()
+}
+
+func (o *Origins) run(r *Repo, env []string, stdin string, args ...string) (string, error) {
+	c := exec.Command(o.Git, append([]string{"--git-dir", o.Dir(r)}, args...)...) //nolint:gosec // real git on the scenario's own origin
+	c.Env = append(append([]string(nil), o.Env...), env...)
+	c.Stdin = strings.NewReader(stdin)
+	var out, errOut bytes.Buffer
+	c.Stdout, c.Stderr = &out, &errOut
+	if err := c.Run(); err != nil {
+		return out.String(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errOut.String()))
+	}
+	return out.String(), nil
+}
+
+func (o *Origins) git(r *Repo, args ...string) (string, error) {
+	out, err := o.run(r, nil, "", args...)
+	return strings.TrimSpace(out), err
+}
+
+// Resolve resolves a ref or a commit id to a commit id.
+func (o *Origins) Resolve(r *Repo, ref string) (string, bool) {
+	if ref == "" || strings.HasPrefix(ref, "-") {
+		return "", false
+	}
+	sha, err := o.git(r, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	return sha, err == nil && sha != ""
+}
+
+// Refs are the short names of the refs under prefix ("refs/heads/"),
+// sorted.
+func (o *Origins) Refs(r *Repo, prefix string) []string {
+	out, err := o.git(r, "for-each-ref", "--format=%(refname)", prefix)
+	if err != nil || out == "" {
+		return nil
+	}
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		names = append(names, strings.TrimPrefix(line, prefix))
+	}
+	return names
+}
+
+// CommitInfo is a commit as the API shows it.
+type CommitInfo struct {
+	SHA       string
+	Tree      string
+	Parents   []string
+	Author    string
+	Email     string
+	Authored  time.Time
+	Committer string
+	Committed time.Time
+	Subject   string
+	Body      string
+}
+
+// Message is the commit's whole message.
+func (c CommitInfo) Message() string {
+	if c.Body == "" {
+		return c.Subject
+	}
+	return c.Subject + "\n\n" + c.Body
+}
+
+// commitFormat separates a commit's fields with the unit separator, which
+// no commit message of a scenario holds.
+const commitFormat = "%H%x1f%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%cI%x1f%s%x1f%b"
+
+// CommitInfo reads a commit.
+func (o *Origins) CommitInfo(r *Repo, sha string) (CommitInfo, error) {
+	out, err := o.run(r, nil, "", "show", "--no-patch", "--format="+commitFormat, sha+"^{commit}")
+	if err != nil {
+		return CommitInfo{}, err
+	}
+	return parseCommit(out)
+}
+
+func parseCommit(raw string) (CommitInfo, error) {
+	f := strings.SplitN(strings.Trim(raw, "\n"), "\x1f", 10)
+	if len(f) != 10 {
+		return CommitInfo{}, fmt.Errorf("git show: unexpected commit record %q", raw)
+	}
+	c := CommitInfo{SHA: f[0], Tree: f[1], Author: f[3], Email: f[4], Committer: f[6], Subject: f[8], Body: strings.TrimSpace(f[9])}
+	if f[2] != "" {
+		c.Parents = strings.Fields(f[2])
+	}
+	c.Authored, _ = time.Parse(time.RFC3339, f[5])
+	c.Committed, _ = time.Parse(time.RFC3339, f[7])
+	return c, nil
+}
+
+// Log are the commits reachable from head and not from base, oldest
+// first, at most limit.
+func (o *Origins) Log(r *Repo, base, head string, limit int) ([]CommitInfo, error) {
+	spec := head
+	if base != "" {
+		spec = base + ".." + head
+	}
+	out, err := o.run(r, nil, "", "log", "--reverse", "--max-count="+strconv.Itoa(limit), "--format="+commitFormat+"%x1e", spec)
+	if err != nil {
+		return nil, err
+	}
+	var commits []CommitInfo
+	for _, rec := range strings.Split(out, "\x1e") {
+		if strings.Trim(rec, "\n") == "" {
+			continue
+		}
+		c, err := parseCommit(rec)
+		if err != nil {
+			return nil, err
+		}
+		commits = append(commits, c)
+	}
+	return commits, nil
+}
+
+// AheadBehind counts the commits head has beyond base, and base beyond
+// head.
+func (o *Origins) AheadBehind(r *Repo, base, head string) (ahead, behind int, err error) {
+	out, err := o.git(r, "rev-list", "--left-right", "--count", base+"..."+head)
+	if err != nil {
+		return 0, 0, err
+	}
+	f := strings.Fields(out)
+	if len(f) != 2 {
+		return 0, 0, fmt.Errorf("git rev-list --count: %q", out)
+	}
+	behind, _ = strconv.Atoi(f[0])
+	ahead, _ = strconv.Atoi(f[1])
+	return ahead, behind, nil
+}
+
+// MergeBase is the best common ancestor of two commits.
+func (o *Origins) MergeBase(r *Repo, a, b string) (string, error) {
+	return o.git(r, "merge-base", a, b)
+}
+
+// File reads a file at a commit.
+func (o *Origins) File(r *Repo, sha, path string) ([]byte, bool) {
+	out, err := o.run(r, nil, "", "show", sha+":"+path)
+	if err != nil {
+		return nil, false
+	}
+	return []byte(out), true
+}
+
+// BlobSHA is the object id of a file at a commit.
+func (o *Origins) BlobSHA(r *Repo, sha, path string) string {
+	out, _ := o.git(r, "rev-parse", "--verify", "--quiet", sha+":"+path)
+	return out
+}
+
+// Diff is the patch of head against its merge base with base.
+func (o *Origins) Diff(r *Repo, base, head string) (string, error) {
+	out, err := o.run(r, nil, "", "diff", base+"..."+head)
+	return out, err
+}
+
+// Changed are the files head changes against its merge base with base.
+func (o *Origins) Changed(r *Repo, base, head string) ([]PullFile, error) {
+	out, err := o.git(r, "diff", "--numstat", base+"..."+head)
+	if err != nil {
+		return nil, err
+	}
+	var files []PullFile
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.SplitN(line, "\t", 3)
+		if len(f) != 3 {
+			continue
+		}
+		add, _ := strconv.Atoi(f[0])
+		del, _ := strconv.Atoi(f[1])
+		files = append(files, PullFile{Path: f[2], Additions: add, Deletions: del})
+	}
+	return files, nil
+}
+
+// identity is who the origin's own commits are by.
+var identity = []string{
+	"GIT_AUTHOR_NAME=GitHub", "GIT_AUTHOR_EMAIL=noreply@github.com",
+	"GIT_COMMITTER_NAME=GitHub", "GIT_COMMITTER_EMAIL=noreply@github.com",
+}
+
+func (o *Origins) commitTree(r *Repo, tree, message string, parents ...string) (string, error) {
+	args := []string{"commit-tree", tree, "-m", message}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	out, err := o.run(r, identity, "", args...)
+	return strings.TrimSpace(out), err
+}
+
+// Merge merges head into the branch base as GitHub's merge button does:
+// a merge commit, one squashed commit, or head's commits replayed as one
+// (rebase is served as a squash onto the base, which is what a
+// single-commit branch gives). It returns the new head of base.
+func (o *Origins) Merge(r *Repo, base, head, method, title, body string) (string, error) {
+	baseSHA, ok := o.Resolve(r, "refs/heads/"+base)
+	if !ok {
+		return "", fmt.Errorf("base branch %s does not exist", base)
+	}
+	tree, err := o.git(r, "merge-tree", "--write-tree", baseSHA, head)
+	if err != nil {
+		return "", fmt.Errorf("%s does not merge into %s: %w", head, base, err)
+	}
+	tree, _, _ = strings.Cut(tree, "\n")
+	message := title
+	if body != "" {
+		message += "\n\n" + body
+	}
+	parents := []string{baseSHA}
+	if method == "merge" {
+		parents = append(parents, head)
+	}
+	sha, err := o.commitTree(r, tree, message, parents...)
+	if err != nil {
+		return "", err
+	}
+	if _, err := o.git(r, "update-ref", "refs/heads/"+base, sha, baseSHA); err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
+// UpdateBranch merges base into the branch head (a merge commit) and
+// returns head's new commit; with rebase the branch's changes become one
+// commit on top of base.
+func (o *Origins) UpdateBranch(r *Repo, base, head string, rebase bool) (string, error) {
+	baseSHA, ok := o.Resolve(r, "refs/heads/"+base)
+	if !ok {
+		return "", fmt.Errorf("base branch %s does not exist", base)
+	}
+	headSHA, ok := o.Resolve(r, "refs/heads/"+head)
+	if !ok {
+		return "", fmt.Errorf("head branch %s does not exist", head)
+	}
+	tree, err := o.git(r, "merge-tree", "--write-tree", headSHA, baseSHA)
+	if err != nil {
+		return "", fmt.Errorf("%s does not merge into %s: %w", base, head, err)
+	}
+	tree, _, _ = strings.Cut(tree, "\n")
+	var sha string
+	if rebase {
+		info, ierr := o.CommitInfo(r, headSHA)
+		if ierr != nil {
+			return "", ierr
+		}
+		sha, err = o.commitTree(r, tree, info.Message(), baseSHA)
+	} else {
+		sha, err = o.commitTree(r, tree, fmt.Sprintf("Merge branch '%s' into %s", base, head), headSHA, baseSHA)
+	}
+	if err != nil {
+		return "", err
+	}
+	if _, err := o.git(r, "update-ref", "refs/heads/"+head, sha, headSHA); err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
+// Push commits one file onto a branch and returns the new commit; a new
+// branch starts at from.
+func (o *Origins) Push(r *Repo, branch, from, path, content, message string) (string, error) {
+	parent, ok := o.Resolve(r, "refs/heads/"+branch)
+	if !ok {
+		if parent, ok = o.Resolve(r, "refs/heads/"+from); !ok {
+			return "", fmt.Errorf("branch %s does not exist to start %s from", from, branch)
+		}
+	}
+	index, err := os.CreateTemp("", "fakegithub-index-")
+	if err != nil {
+		return "", err
+	}
+	_ = index.Close()
+	_ = os.Remove(index.Name())
+	defer func() { _ = os.Remove(index.Name()) }()
+	env := []string{"GIT_INDEX_FILE=" + index.Name()}
+	if _, err := o.run(r, env, "", "read-tree", parent); err != nil {
+		return "", err
+	}
+	blob, err := o.run(r, nil, content, "hash-object", "-w", "--stdin")
+	if err != nil {
+		return "", err
+	}
+	if _, err := o.run(r, env, "", "update-index", "--add", "--cacheinfo", "100644,"+strings.TrimSpace(blob)+","+path); err != nil {
+		return "", err
+	}
+	tree, err := o.run(r, env, "", "write-tree")
+	if err != nil {
+		return "", err
+	}
+	sha, err := o.commitTree(r, strings.TrimSpace(tree), message, parent)
+	if err != nil {
+		return "", err
+	}
+	if _, err := o.git(r, "update-ref", "refs/heads/"+branch, sha); err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
+// SetRef points a ref at a commit.
+func (o *Origins) SetRef(r *Repo, ref, sha string) error {
+	_, err := o.git(r, "update-ref", ref, sha)
+	return err
+}
+
+// DeleteRef removes a ref.
+func (o *Origins) DeleteRef(r *Repo, ref string) error {
+	if _, ok := o.Resolve(r, ref); !ok {
+		return &apiError{Status: 422, Message: "Reference does not exist"}
+	}
+	_, err := o.git(r, "update-ref", "-d", ref)
+	return err
+}

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 )
 
 // DefaultTimeout is a scenario's real-time bound when it names none.
@@ -76,6 +78,10 @@ type Given struct {
 	Calls []Call `yaml:"calls"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
+	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
+	// that answers gh and the API base variables (docs/scenarios-github.md).
+	// Its repositories get origins like Repositories.
+	GitHub *fakegithub.Given `yaml:"github"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -107,8 +113,8 @@ type Response struct {
 	Exit   int    `yaml:"exit"`
 }
 
-// Step is one when step: exactly one of run, background, stop, wait_for
-// and advance, with optional expectations of its own response.
+// Step is one when step: exactly one of run, background, stop, wait_for,
+// advance, github and fault, with optional expectations of its own response.
 type Step struct {
 	Name string `yaml:"name"`
 	// Run runs the candidate to its exit.
@@ -122,7 +128,11 @@ type Step struct {
 	WaitFor *WaitFor `yaml:"wait_for"`
 	// Advance moves the world's clock forward.
 	Advance *Advance `yaml:"advance"`
-	Expect  []Expect `yaml:"expect"`
+	// GitHub is something that happens on the scenario's GitHub; Fault
+	// arms or clears one of its faults.
+	GitHub *fakegithub.Step      `yaml:"github"`
+	Fault  *fakegithub.FaultStep `yaml:"fault"`
+	Expect []Expect              `yaml:"expect"`
 }
 
 // Run is a call of the candidate binary.
@@ -147,6 +157,8 @@ const (
 	KindStop       = "stop"
 	KindWaitFor    = "wait_for"
 	KindAdvance    = "advance"
+	KindGitHub     = "github"
+	KindFault      = "fault"
 )
 
 // Kind is the step's kind, "" unless exactly one is set.
@@ -167,6 +179,12 @@ func (s Step) Kind() string {
 	if s.Advance != nil {
 		kinds = append(kinds, KindAdvance)
 	}
+	if s.GitHub != nil {
+		kinds = append(kinds, KindGitHub)
+	}
+	if s.Fault != nil {
+		kinds = append(kinds, KindFault)
+	}
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -185,6 +203,9 @@ type Expect struct {
 	Duration *DurationExpect `yaml:"duration"`
 	Process  *ProcessExpect  `yaml:"process"`
 	Calls    *CallsExpect    `yaml:"calls"`
+	// GitHub checks the scenario's GitHub: its calls, its budgets, a pull
+	// request or an issue.
+	GitHub *fakegithub.Expect `yaml:"github"`
 }
 
 // TextExpect checks a text: every Contains is in it, no NotContains is,
@@ -240,7 +261,7 @@ func (e Expect) kinds() []string {
 	for name, set := range map[string]bool{
 		"exit": e.Exit != nil, "output": e.Output != nil, "stderr": e.Stderr != nil,
 		"json_path": e.JSONPath != nil, "events": e.Events != nil, "duration": e.Duration != nil,
-		"process": e.Process != nil, "calls": e.Calls != nil,
+		"process": e.Process != nil, "calls": e.Calls != nil, "github": e.GitHub != nil,
 	} {
 		if set {
 			k = append(k, name)
@@ -328,6 +349,11 @@ func (s *Scenario) Validate() error {
 			bad("given.repositories: %q is not owner/name", r.Name)
 		}
 	}
+	if g := s.Given.GitHub; g != nil {
+		if err := g.Validate(); err != nil {
+			bad("given.github: %v", err)
+		}
+	}
 	for i, c := range s.Given.Calls {
 		if !slices.Contains(Fakes, c.Program) {
 			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(Fakes, ", "))
@@ -361,7 +387,20 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for and advance", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, github and fault", where)
+		case KindGitHub, KindFault:
+			var err error
+			if kind == KindGitHub {
+				err = st.GitHub.Validate()
+			} else {
+				err = st.Fault.Validate()
+			}
+			if err != nil {
+				bad("%s: %s: %v", where, kind, err)
+			}
+			if s.Given.GitHub == nil {
+				bad("%s: a %s step needs given.github", where, kind)
+			}
 		case KindRun, KindBackground:
 			r := st.Run
 			if kind == KindBackground {
@@ -426,6 +465,8 @@ var stepObserves = map[string][]string{
 	KindStop:       {"duration"},
 	KindWaitFor:    {"duration"},
 	KindAdvance:    {"duration"},
+	KindGitHub:     {"duration"},
+	KindFault:      {"duration"},
 }
 
 func (s *Scenario) validateExpect(where string, e Expect, stepKind string, background []string, inThen bool) []error {
@@ -436,11 +477,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	kind := e.Kind()
 	if kind == "" {
-		bad("exactly one of exit, output, stderr, json_path, events, duration, process and calls (has %v)", e.kinds())
+		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls and github (has %v)", e.kinds())
 		return errs
 	}
 	switch kind {
-	case "events", "calls", "process":
+	case "events", "calls", "process", "github":
 	default:
 		if stepKind != "" && !slices.Contains(stepObserves[stepKind], kind) {
 			bad("%s is not observed for a %s step", kind, stepKind)
@@ -489,6 +530,14 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 		if (p.Running == nil) == (p.Exit == nil) {
 			bad("process: exactly one of running and exit")
+		}
+	}
+	if g := e.GitHub; g != nil {
+		if err := g.Validate(); err != nil {
+			bad("github: %v", err)
+		}
+		if s.Given.GitHub == nil {
+			bad("a github expectation needs given.github")
 		}
 	}
 	if c := e.Calls; c != nil {

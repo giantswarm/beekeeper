@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 )
 
 // WorldEnv names the world's Unix socket to the fakes.
@@ -25,6 +27,8 @@ type CallRequest struct {
 	Args    []string `json:"args"`
 	Stdin   string   `json:"stdin,omitempty"`
 	Dir     string   `json:"dir,omitempty"`
+	// Env is the fake's environment as far as a handler reads it (FakeEnv).
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // CallResponse is what the fake prints and exits with.
@@ -45,6 +49,10 @@ type CallRecord struct {
 	Answer   int  `json:"answer"`
 	Answered bool `json:"answered"`
 	Exit     int  `json:"exit"`
+	// Handler says the program's handler answered it, not a given call;
+	// Reason why nothing answered it, when a handler said.
+	Handler bool   `json:"handler,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // Line is the call as a command line, shortened for reports.
@@ -69,16 +77,34 @@ type answer struct {
 	used int
 }
 
+// Handler answers a program's calls from a model (the fake GitHub for gh):
+// its answer, or false and why it has none.
+type Handler func(req CallRequest) (resp CallResponse, answered bool, reason string)
+
+// FakeEnv are the variables a fake hands the world with its call.
+var FakeEnv = []string{"GH_REPO", "GH_HOST", fakegithub.CallerEnv}
+
 // World holds every fake's state for one scenario and answers their calls
-// over a Unix socket. It logs every call in order; a call no given call
-// answers fails the scenario.
+// over a Unix socket. It logs every call in order; a call neither a given
+// call nor the program's handler answers fails the scenario.
 type World struct {
-	mu      sync.Mutex
-	answers []*answer
-	calls   []CallRecord
-	log     io.Writer
-	ln      net.Listener
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	answers  []*answer
+	handlers map[string]Handler
+	calls    []CallRecord
+	log      io.Writer
+	ln       net.Listener
+	wg       sync.WaitGroup
+}
+
+// Handle makes h answer the calls of program that no given call answers.
+func (w *World) Handle(program string, h Handler) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.handlers == nil {
+		w.handlers = map[string]Handler{}
+	}
+	w.handlers[program] = h
 }
 
 // NewWorld is a world answering with calls; log, when set, receives each
@@ -105,15 +131,12 @@ func matchArgs(pats []*regexp.Regexp, args []string) bool {
 	return true
 }
 
-// Answer answers one call and logs it.
+// Answer answers one call and logs it: with the first given call that
+// matches, else with the program's handler.
 func (w *World) Answer(req CallRequest) CallResponse {
+	rec := CallRecord{At: time.Now().UTC(), Program: req.Program, Args: req.Args, Dir: req.Dir, Answer: -1}
+	resp := CallResponse{Exit: 1}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	rec := CallRecord{Seq: len(w.calls) + 1, At: time.Now().UTC(), Program: req.Program, Args: req.Args, Dir: req.Dir, Answer: -1}
-	resp := CallResponse{
-		Stderr: fmt.Sprintf("scenario world: no given call answers %s\n", rec.Line()),
-		Exit:   1,
-	}
 	for i, a := range w.answers {
 		if a.call.Program != req.Program || (a.call.Times > 0 && a.used >= a.call.Times) || !matchArgs(a.args, req.Args) {
 			continue
@@ -123,6 +146,26 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit}
 		break
 	}
+	handler := w.handlers[req.Program]
+	w.mu.Unlock()
+	if !rec.Answered && handler != nil {
+		// A handler may hold its answer (a slow GitHub): the other fakes
+		// are answered meanwhile.
+		if got, answered, reason := handler(req); answered {
+			resp, rec.Answered, rec.Handler = got, true, true
+		} else {
+			rec.Reason = reason
+		}
+	}
+	if !rec.Answered {
+		resp.Stderr = fmt.Sprintf("scenario world: no given call answers %s\n", rec.Line())
+		if rec.Reason != "" {
+			resp.Stderr = fmt.Sprintf("scenario world: nothing answers %s: %s\n", rec.Line(), rec.Reason)
+		}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	rec.Seq = len(w.calls) + 1
 	rec.Exit = resp.Exit
 	w.calls = append(w.calls, rec)
 	if w.log != nil {
@@ -244,8 +287,13 @@ func ServeFake() (code int, served bool) {
 	if socket == "" || !slices.Contains(Fakes, name) {
 		return 0, false
 	}
-	req := CallRequest{Program: name, Args: os.Args[1:], Stdin: readStdin(2 * time.Second)}
+	req := CallRequest{Program: name, Args: os.Args[1:], Stdin: readStdin(2 * time.Second), Env: map[string]string{}}
 	req.Dir, _ = os.Getwd()
+	for _, k := range FakeEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			req.Env[k] = v
+		}
+	}
 	resp, err := Ask(socket, req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "scenario world unreachable for %s: %v\n", name, err)
