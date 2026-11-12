@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -144,7 +145,9 @@ func TestReviewedMergeUsesTheQueueOnlyWhereTheBaseHasOne(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newBehindRig(t)
-			b.pull.MergeState = mergeStateClean
+			b.pull.MergeState = emergencyBlocked
+			b.pull.ReviewDecision = reviewRequiredDecision
+			b.a.cfg.Merge.DevctlOwners = []string{"o"}
 			if tc.admin {
 				b.a.cfg.Merge.Admin = []string{loopMergeRepo}
 			}
@@ -158,11 +161,33 @@ func TestReviewedMergeUsesTheQueueOnlyWhereTheBaseHasOne(t *testing.T) {
 			if !strings.Contains(doc.Reason, skipped) {
 				t.Fatalf("the skipped check is not said: %q", doc.Reason)
 			}
-			m := b.merges()
+			m := b.cmds
 			if len(m) != 1 || slices.Contains(m[0], "--admin") != tc.wantAdmin {
 				t.Fatalf("merge command %v, want --admin %v", m, tc.wantAdmin)
 			}
+			if (m[0][0] == devctlBinary) == tc.wantAdmin || !slices.Contains(m[0], loopHead) {
+				t.Fatalf("wrong identity or missing exact head: %v", m[0])
+			}
+			events, err := b.a.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.admin" })
+			if err != nil || (len(events) == 1) != tc.wantAdmin {
+				t.Fatalf("admin audit: %v, %v", events, err)
+			}
+			if tc.wantAdmin && !strings.Contains(events[0].Detail, loopHead) {
+				t.Fatalf("admin audit omits approved head: %v", events)
+			}
 		})
+	}
+}
+
+func TestReviewedAdminMergeRequiresAuditBeforeMutation(t *testing.T) {
+	b := newBehindRig(t)
+	b.a.cfg.Merge.Admin = []string{loopMergeRepo}
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return false, nil }
+	b.claim(t)
+	b.failRecord = func(e state.Event) bool { return e.Verb == "merge.admin" }
+	doc := b.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+	if doc.ExitCode != github.SquashTooling || len(b.cmds) != 0 {
+		t.Fatalf("unaudited admin mutation: %+v, %v", doc, b.cmds)
 	}
 }
 

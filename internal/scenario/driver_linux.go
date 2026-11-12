@@ -1,0 +1,474 @@
+//go:build scenario && linux
+
+package scenario
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+// The desk inside a scenario's sandbox: everything lives under /work, the
+// only writable mount.
+const (
+	workDir      = "/work"
+	binDir       = workDir + "/bin"
+	homeDir      = workDir + "/home"
+	repoDir      = workDir + "/repo"
+	stateDir     = workDir + "/state"
+	originsDir   = workDir + "/origins"
+	artifactsDir = workDir + "/artifacts"
+	configFile   = workDir + "/config.yaml"
+	worldSocket  = workDir + "/world.sock"
+	scenarioFile = workDir + "/scenario.yaml"
+	resultFile   = workDir + "/result.json"
+	candidate    = binDir + "/beekeeper"
+	fakeBinary   = "scenario-fake"
+)
+
+// env is the allowlisted environment of every process the scenario starts:
+// nothing of the host's, PATH only the fakes, the candidate and real git.
+func env(extra map[string]string) []string {
+	vars := map[string]string{
+		"PATH":                "/work/bin",
+		"HOME":                homeDir,
+		"TMPDIR":              "/tmp",
+		"LANG":                "C.UTF-8",
+		"XDG_CONFIG_HOME":     homeDir + "/.config",
+		"XDG_STATE_HOME":      homeDir + "/.local/state",
+		"XDG_CACHE_HOME":      homeDir + "/.cache",
+		"BEEKEEPER_CONFIG":    configFile,
+		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
+		WorldEnv:              worldSocket,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_CONFIG_GLOBAL":   "/dev/null",
+		"GIT_ALLOW_PROTOCOL":  "file",
+		"GIT_TERMINAL_PROMPT": "0",
+		"GIT_AUTHOR_NAME":     "Scenario",
+		"GIT_AUTHOR_EMAIL":    "scenario@example.invalid",
+		"GIT_COMMITTER_NAME":  "Scenario",
+		"GIT_COMMITTER_EMAIL": "scenario@example.invalid",
+		"GOPROXY":             "off",
+		"GOSUMDB":             "off",
+	}
+	maps.Copy(vars, extra)
+	out := make([]string, 0, len(vars))
+	for _, k := range slices.Sorted(maps.Keys(vars)) {
+		out = append(out, k+"="+vars[k])
+	}
+	return out
+}
+
+// proc is a background step's process, stopped by PID.
+type proc struct {
+	cmd     *exec.Cmd
+	started time.Time
+	done    chan struct{}
+	mu      sync.Mutex
+	exited  bool
+	exit    int
+}
+
+func (p *proc) state() (running bool, exit int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.exited, p.exit
+}
+
+// stop ends the process group of p by PID: SIGTERM, then SIGKILL.
+func (p *proc) stop() {
+	if running, _ := p.state(); !running {
+		return
+	}
+	pid := p.cmd.Process.Pid
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	select {
+	case <-p.done:
+	case <-time.After(5 * time.Second):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-p.done
+	}
+}
+
+// driver runs one scenario's steps inside its sandbox.
+type driver struct {
+	s     *Scenario
+	world *World
+	res   *Result
+	procs map[string]*proc
+	views map[string]View
+	last  View
+}
+
+// Drive runs the scenario at /work/scenario.yaml inside the sandbox and
+// writes its result to /work/result.json.
+func Drive() error {
+	started := time.Now()
+	res := &Result{}
+	s, err := Load(scenarioFile)
+	if err != nil {
+		res.Harness = err.Error()
+	} else {
+		res.Name, res.Flow, res.Pending = s.Name, s.Flow, s.Pending
+		d := &driver{s: s, res: res, procs: map[string]*proc{}, views: map[string]View{}}
+		d.run()
+	}
+	res.Duration = time.Since(started)
+	raw, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(resultFile, raw, 0o600)
+}
+
+func (d *driver) run() {
+	ctx, cancel := context.WithTimeout(context.Background(), d.s.Timeout.Duration)
+	defer cancel()
+	callLog, err := os.Create(filepath.Join(artifactsDir, "calls.jsonl"))
+	if err != nil {
+		d.res.Harness = err.Error()
+		return
+	}
+	defer func() { _ = callLog.Close() }()
+	var logMu sync.Mutex
+	d.world, err = NewWorld(d.s.Given.Calls, writerFunc(func(b []byte) (int, error) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return callLog.Write(b)
+	}))
+	if err == nil {
+		err = d.world.Serve(worldSocket)
+	}
+	if err == nil {
+		err = d.setup(ctx)
+	}
+	if err != nil {
+		d.res.Harness = err.Error()
+		return
+	}
+	defer func() {
+		for _, name := range slices.Sorted(maps.Keys(d.procs)) {
+			d.procs[name].stop()
+		}
+		_ = d.world.Close()
+		d.res.Calls = d.world.Calls()
+		for _, c := range d.world.Unanswered() {
+			d.res.Fail("unanswered call #%d: %s", c.Seq, c.Line())
+		}
+	}()
+	for i, st := range d.s.When {
+		if err := ctx.Err(); err != nil {
+			d.res.Fail("scenario timed out after %s before when[%d]", d.s.Timeout, i)
+			return
+		}
+		sr := d.step(ctx, i, st)
+		d.res.Steps = append(d.res.Steps, sr)
+		for _, f := range sr.Failures {
+			d.res.Fail("when[%d] %s: %s", i, cmpOr(st.Name, sr.Kind), f)
+		}
+	}
+	then := StepResult{Index: len(d.s.When), Kind: "then"}
+	started := time.Now()
+	for i, e := range d.s.Then {
+		v := d.last
+		if e.Step != "" {
+			v = d.views[e.Step]
+		}
+		if err := Check(e, v); err != nil {
+			then.Failures = append(then.Failures, fmt.Sprintf("then[%d] %s: %v", i, e.Kind(), err))
+		}
+	}
+	then.Duration = time.Since(started)
+	d.res.Steps = append(d.res.Steps, then)
+	d.res.Failures = append(d.res.Failures, then.Failures...)
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
+
+// setup writes the desk: config.yaml from the scenario's desk over the
+// base, the worker brief, the home directories and a bare origin per
+// repository with one commit on main.
+func (d *driver) setup(ctx context.Context) error {
+	for _, dir := range []string{homeDir + "/.config", homeDir + "/.local/state", homeDir + "/.cache", stateDir, workDir + "/leases", originsDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	orgs := []string{"example"}
+	for _, r := range d.s.Given.Repositories {
+		owner, _, _ := strings.Cut(r.Name, "/")
+		if !slices.Contains(orgs, owner) {
+			orgs = append(orgs, owner)
+		}
+	}
+	cfg := baseConfig(orgs)
+	overlay(cfg, d.s.Given.Desk.Config)
+	raw, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "worker.txt"), []byte("Work {{.URL}}\n"), 0o600); err != nil {
+		return err
+	}
+	for _, r := range d.s.Given.Repositories {
+		if err := origin(ctx, r.Name); err != nil {
+			return fmt.Errorf("origin %s: %w", r.Name, err)
+		}
+	}
+	return nil
+}
+
+// baseConfig is the desk every scenario starts from: one person, a
+// two-slot local capacity, a board of example/1 and no claims, sync or
+// background guards that would reach outside the world.
+func baseConfig(orgs []string) map[string]any {
+	return map[string]any{
+		"stateDir": stateDir,
+		"leaseDir": workDir + "/leases",
+		"identity": map[string]any{"person": "scenario", "team": "scenario", "host": "scenario"},
+		"github":   map[string]any{"floor": -1, "allowedOrgs": orgs},
+		"guide":    map[string]any{"person": "scenario"},
+		"agents":   map[string]any{"mode": "background", "dir": repoDir, "staleAfter": "-1s"},
+		"capacity": map[string]any{
+			"ceiling": 2, "reviewHeadroom": 0, "availMinMiB": 1,
+			"providers": map[string]any{"claude": map[string]any{"ceiling": 2}},
+			"choices":   []any{map[string]any{"harness": "claude", "model": "sonnet"}},
+		},
+		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000},
+		"supervisor": map[string]any{
+			"effort": "low", "workerBrief": workDir + "/worker.txt",
+			"ownership": map[string]any{"authors": []any{"desk"}},
+		},
+		"board": map[string]any{
+			"owner": "example", "project": 1, "tidyEvery": "-1s", "escalateEvery": "-1s",
+			"order":  []any{map[string]any{"name": "ready", "status": []any{"Ready"}}},
+			"claims": map[string]any{"off": true},
+		},
+		"disk": map[string]any{"checkouts": []any{repoDir}},
+	}
+}
+
+// overlay lays src over dst, map by map; any other value replaces.
+func overlay(dst, src map[string]any) {
+	for k, v := range src {
+		if sm, ok := v.(map[string]any); ok {
+			if dm, ok := dst[k].(map[string]any); ok {
+				overlay(dm, sm)
+				continue
+			}
+		}
+		dst[k] = v
+	}
+}
+
+// origin creates the bare origin of owner/name with one commit on main.
+func origin(ctx context.Context, name string) error {
+	bare := filepath.Join(originsDir, name+".git")
+	seed, err := os.MkdirTemp(workDir, "seed-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(seed) }()
+	for _, args := range [][]string{
+		{"init", "--bare", "-b", "main", bare},
+		{"-C", seed, "init", "-b", "main"},
+		{"-C", seed, "commit", "--allow-empty", "-m", "initial commit"},
+		{"-C", seed, "push", bare, "main"},
+	} {
+		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // real git on the scenario's own paths
+		c.Env = env(nil)
+		if out, err := c.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return nil
+}
+
+// globals fills the parts of a view every step kind holds: the event log,
+// the world's calls and the background processes.
+func (d *driver) globals(v View) View {
+	v.Events = func() ([]string, error) {
+		if _, err := os.Stat(stateDir); err != nil {
+			return nil, err
+		}
+		st, err := state.Open(stateDir)
+		if err != nil {
+			return nil, err
+		}
+		evs, err := st.Events(0, nil)
+		if err != nil {
+			return nil, err
+		}
+		verbs := make([]string, 0, len(evs))
+		for _, e := range evs {
+			verbs = append(verbs, e.Verb)
+		}
+		return verbs, nil
+	}
+	v.Calls = d.world.Count
+	v.Process = func(name string) (bool, int, bool) {
+		p, ok := d.procs[name]
+		if !ok {
+			return false, 0, false
+		}
+		running, exit := p.state()
+		return running, exit, true
+	}
+	return v
+}
+
+func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
+	sr := StepResult{Index: i, Name: st.Name, Kind: st.Kind()}
+	started := time.Now()
+	v := View{Kind: sr.Kind}
+	switch sr.Kind {
+	case KindRun:
+		sr.Args = st.Run.Args
+		exit, stdout, stderr, err := d.runCandidate(ctx, i, st)
+		if err != nil {
+			sr.Failures = append(sr.Failures, err.Error())
+		}
+		v.Exit, v.Stdout, v.Stderr = &exit, &stdout, &stderr
+		sr.Exit = &exit
+	case KindBackground:
+		sr.Args = st.Background.Args
+		if err := d.start(st); err != nil {
+			sr.Failures = append(sr.Failures, err.Error())
+		}
+	case KindStop:
+		if p, ok := d.procs[st.Stop]; ok {
+			p.stop()
+		} else {
+			sr.Failures = append(sr.Failures, fmt.Sprintf("%s was never started", st.Stop))
+		}
+	case KindWaitFor:
+		sr.Failures = append(sr.Failures, d.waitFor(ctx, st.WaitFor)...)
+	}
+	dur := time.Since(started)
+	sr.Duration = dur
+	v.Duration = &dur
+	v = d.globals(v)
+	for j, e := range st.Expect {
+		if err := Check(e, v); err != nil {
+			sr.Failures = append(sr.Failures, fmt.Sprintf("expect[%d] %s: %v", j, e.Kind(), err))
+		}
+	}
+	d.last = v
+	if st.Name != "" {
+		d.views[st.Name] = v
+	}
+	return sr
+}
+
+func (d *driver) runCandidate(ctx context.Context, i int, st Step) (exit int, stdout, stderr string, err error) {
+	c := exec.CommandContext(ctx, candidate, st.Run.Args...) //nolint:gosec // the candidate with the scenario's arguments
+	c.Dir = repoDir
+	c.Env = env(st.Run.Env)
+	c.Stdin = strings.NewReader(st.Run.Stdin)
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+	c.WaitDelay = 5 * time.Second
+	var out, errOut bytes.Buffer
+	c.Stdout, c.Stderr = &out, &errOut
+	runErr := c.Run()
+	stdout, stderr = out.String(), errOut.String()
+	base := filepath.Join(artifactsDir, fmt.Sprintf("%02d-%s", i, cmpOr(st.Name, KindRun)))
+	_ = os.WriteFile(base+".stdout", out.Bytes(), 0o600)
+	_ = os.WriteFile(base+".stderr", errOut.Bytes(), 0o600)
+	var ee *exec.ExitError
+	switch {
+	case runErr == nil:
+		return 0, stdout, stderr, nil
+	case ctx.Err() != nil:
+		return -1, stdout, stderr, fmt.Errorf("beekeeper %s: killed at the scenario's timeout %s", strings.Join(st.Run.Args, " "), d.s.Timeout)
+	case errors.As(runErr, &ee):
+		return ee.ExitCode(), stdout, stderr, nil
+	default:
+		return -1, stdout, stderr, fmt.Errorf("beekeeper %s: %w", strings.Join(st.Run.Args, " "), runErr)
+	}
+}
+
+func (d *driver) start(st Step) error {
+	log, err := os.Create(filepath.Join(artifactsDir, st.Name+".log"))
+	if err != nil {
+		return err
+	}
+	c := exec.Command(candidate, st.Background.Args...) //nolint:gosec // the candidate with the scenario's arguments
+	c.Dir = repoDir
+	c.Env = env(st.Background.Env)
+	c.Stdin = strings.NewReader(st.Background.Stdin)
+	c.Stdout, c.Stderr = log, log
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		_ = log.Close()
+		return err
+	}
+	p := &proc{cmd: c, started: time.Now(), done: make(chan struct{})}
+	d.procs[st.Name] = p
+	go func() {
+		err := c.Wait()
+		_ = log.Close()
+		p.mu.Lock()
+		p.exited = true
+		var ee *exec.ExitError
+		switch {
+		case err == nil:
+		case errors.As(err, &ee):
+			p.exit = ee.ExitCode()
+		default:
+			p.exit = -1
+		}
+		p.mu.Unlock()
+		close(p.done)
+	}()
+	return nil
+}
+
+// waitFor polls the expectations until all hold, the wait's timeout or the
+// scenario's: the failures are the last poll's.
+func (d *driver) waitFor(ctx context.Context, w *WaitFor) []string {
+	interval := w.Interval.Duration
+	if interval == 0 {
+		interval = 100 * time.Millisecond
+	}
+	deadline := time.Now().Add(w.Timeout.Duration)
+	for {
+		v := d.globals(View{Kind: KindWaitFor})
+		var failures []string
+		for j, e := range w.Expect {
+			if err := Check(e, v); err != nil {
+				failures = append(failures, fmt.Sprintf("wait_for[%d] %s: %v", j, e.Kind(), err))
+			}
+		}
+		if len(failures) == 0 {
+			return nil
+		}
+		if time.Now().Add(interval).After(deadline) || ctx.Err() != nil {
+			return append(failures, fmt.Sprintf("still failing after %s", w.Timeout))
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(interval):
+		}
+	}
+}

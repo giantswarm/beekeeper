@@ -17,6 +17,8 @@ func TestReviewOnlyBypassRequirements(t *testing.T) {
 		wantError                                                  bool
 	}{
 		{name: "required check passes"},
+		{name: "unattributed changes approval", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"require_extra_approval_for_unattributed_changes":true`, 1)},
+		{name: "unattributed changes cannot waive checks", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"require_extra_approval_for_unattributed_changes":true`, 1), runs: strings.ReplaceAll(reviewRunsJSON, `"success"`, `"failure"`), wantError: true},
 		{name: "required reviewers", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"required_reviewers":[{"type":"Team","id":123,"minimum_approvals":1}]`, 1)},
 		{name: "required reviewers cannot waive checks", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"required_reviewers":[{"type":"Team","id":123,"minimum_approvals":1}]`, 1), runs: strings.ReplaceAll(reviewRunsJSON, `"success"`, `"failure"`), wantError: true},
 		{name: "dismissal restriction", rules: strings.Replace(reviewRulesJSON, `"required_approving_review_count":1`, `"required_approving_review_count":1,"dismissal_restriction":{"users":[],"teams":[]}`, 1)},

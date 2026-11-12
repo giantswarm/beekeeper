@@ -48,7 +48,7 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 	mergeLocalHeadroom = func(string) error { return nil }
 	// Model the configured lint command independently of the test runner image.
 	lintDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+	if err := os.WriteFile(filepath.Join(lintDir, mergeLintCommand), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -538,11 +538,11 @@ func TestMergeResultUsesRepositoryLintPolicy(t *testing.T) {
 				if lintFails {
 					script += "echo 'configured lint failure'\nexit 1\n"
 				}
-				if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in test-owned directory
+				if err := os.WriteFile(filepath.Join(lintDir, mergeLintCommand), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in test-owned directory
 					t.Fatal(err)
 				}
 				t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-				reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
+				reason, code := runReviewedMergeChecks(t.Context(), repo.dir, "", mainBranch, repo.head2)
 				wantArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
 				label := "no repository config"
 				if configName == "" {
@@ -671,7 +671,7 @@ func TestMergeCheckHostFailureDoesNotRequestBranchRepair(t *testing.T) {
 func TestMergeResultHostFailureIsTooling(t *testing.T) {
 	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
 	lintDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\necho 'write: no space left on device'\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+	if err := os.WriteFile(filepath.Join(lintDir, mergeLintCommand), []byte("#!/bin/sh\necho 'write: no space left on device'\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -704,7 +704,7 @@ func TestMergeResultIgnoresCommitSigning(t *testing.T) {
 	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
 	repo.advanceMain(t, repo.head1)
 	tools := t.TempDir()
-	for name, script := range map[string]string{"golangci-lint": "#!/bin/sh\nexit 0\n", "failing-signer": "#!/bin/sh\necho 'No secret key' >&2\nexit 1\n"} {
+	for name, script := range map[string]string{mergeLintCommand: "#!/bin/sh\nexit 0\n", "failing-signer": "#!/bin/sh\necho 'No secret key' >&2\nexit 1\n"} {
 		if err := os.WriteFile(filepath.Join(tools, name), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
 			t.Fatal(err)
 		}

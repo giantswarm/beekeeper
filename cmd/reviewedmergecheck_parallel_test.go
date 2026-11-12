@@ -42,7 +42,7 @@ fi
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-			reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
+			reason, code := runReviewedMergeChecks(t.Context(), repo.dir, "", mainBranch, repo.head2)
 			if lintFails {
 				if code != github.SquashRed || !strings.Contains(reason, "lint finding with another runner") {
 					t.Fatalf("lint finding did not refuse merge: %d: %s", code, reason)

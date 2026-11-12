@@ -430,7 +430,7 @@ func brokeredFlags(args []string) error {
 		if a == "--" {
 			return nil
 		}
-		for _, f := range []string{"--as", "--config"} {
+		for _, f := range []string{"--as", workerGitHubConfigOption} {
 			if a == f || strings.HasPrefix(a, f+"=") {
 				return fmt.Errorf("%s: a brokered call runs as its session, under the broker's config", f)
 			}

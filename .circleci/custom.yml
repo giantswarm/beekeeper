@@ -24,6 +24,13 @@
 # https://github.com/giantswarm/beekeeper/issues/3657. The session footprint
 # needs a systemd user manager and runs nightly in GitHub Actions
 # (.github/workflows/performance.yaml).
+#
+# test-scenarios runs the behavioral scenarios (docs/scenarios.md) on every
+# pull request. Each scenario runs in its own user, mount, PID and network
+# namespaces, which the Docker executor's seccomp profile refuses, so the job
+# runs on a machine executor with the Go toolchain go.mod pins. The suite
+# fails above 10 minutes of wall time and warns from 8; its report, JUnit
+# results and every scenario's artifacts are kept.
 version: 2.1
 
 jobs:
@@ -40,11 +47,11 @@ jobs:
     - architect/tools-info
     - architect/go-cache-restore
     - run:
-        name: Prove merge-result goconst honors ignore-tests with the real linter
+        name: Prove merge-result lint policy and baseline with the real linter
         command: |
           set -euo pipefail
           golangci-lint version
-          BEEKEEPER_TEST_REAL_LINT=1 go test ./cmd -run '^TestMergeResultRealLintIgnoreTests$' -count=1 -timeout=5m -v
+          BEEKEEPER_TEST_REAL_LINT=1 go test ./cmd -run '^TestMergeResultRealLint' -count=1 -timeout=5m -v
     - run:
         name: Exercise the real supervisor binary and historical parser control
         no_output_timeout: 15m
@@ -57,6 +64,55 @@ jobs:
         path: /tmp/loop-workflow-artifacts
         destination: loop-workflow
     - architect/go-cache-save
+
+  test-scenarios:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    environment:
+      BEEKEEPER_SCENARIO_REPORT: /tmp/scenarios
+    steps:
+    - checkout
+    - run:
+        name: Install the Go toolchain go.mod pins
+        command: |
+          set -euo pipefail
+          version="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
+          test -n "$version"
+          curl -fsSL "https://go.dev/dl/go${version}.linux-amd64.tar.gz" -o /tmp/go.tgz
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tgz
+          echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH GOTOOLCHAIN=local' >> "$BASH_ENV"
+    - run:
+        name: Allow unprivileged user namespaces
+        command: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          unshare -Urmpnf --kill-child true
+          go version
+          git --version
+    - restore_cache:
+        keys:
+        - scenarios-go-v1-{{ checksum "go.sum" }}
+        - scenarios-go-v1-
+    - run:
+        name: Run the behavioral scenarios
+        no_output_timeout: 12m
+        command: |
+          set -o pipefail
+          mkdir -p /tmp/scenarios
+          timeout 14m make test-scenarios 2>&1 | tee /tmp/scenarios/go-test.log
+    - store_test_results:
+        path: /tmp/scenarios/junit
+    - store_artifacts:
+        path: /tmp/scenarios
+        destination: scenarios
+    - save_cache:
+        key: scenarios-go-v1-{{ checksum "go.sum" }}
+        paths:
+        - ~/go/pkg/mod
+        - ~/.cache/go-build
 
   test-large-history:
     docker:
@@ -241,6 +297,10 @@ workflows:
           tags:
             only: /^v.*/
     - test-stable-version
+    - test-scenarios:
+        filters:
+          tags:
+            only: /^v.*/
     - chart-test:
         filters:
           tags:
