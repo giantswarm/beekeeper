@@ -101,7 +101,7 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 				}
 			}
 			events, err := r.a.store.Events(0, func(e state.Event) bool {
-				return e.Verb == loopFileVerb && strings.Contains(e.Detail, "merge environment")
+				return e.Verb == LoopFileVerb && strings.Contains(e.Detail, "merge environment")
 			})
 			if err != nil {
 				t.Fatal(err)

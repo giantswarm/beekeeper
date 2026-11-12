@@ -266,7 +266,7 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 		Reset:     reset,
 		Remaining: 4920,
 		Spent:     42,
-		Steps:     map[string]int{loopBoard: 39, loopPullStep: 3},
+		Steps:     map[string]int{LoopBoard: 39, LoopPullStep: 3},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
 		Reset:     reset,
 		Remaining: 4500,
 		Spent:     150,
-		Steps:     map[string]int{"inventory": 100, loopSweepStep: 50},
+		Steps:     map[string]int{"inventory": 100, LoopSweepStep: 50},
 	}); err != nil {
 		t.Fatal(err)
 	}

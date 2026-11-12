@@ -160,12 +160,12 @@ func postIssueTriage(ctx context.Context, webhook, message string) error {
 
 // nextMonitoredIssue rechecks both open state and live membership at dispatch.
 // It returns only a pointer, so no external issue text enters the worker brief.
-func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*loopBoardItem, error) {
+func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoardItem, error) {
 	// Avoid creating monitor state for installations that have not enabled it.
 	if _, err := os.Stat(a.issueMonitorDir()); errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	var next *loopBoardItem
+	var next *LoopBoardItem
 	err := issuemonitor.WithState(ctx, a.issueMonitorDir(), func(s *issuemonitor.State, save func(*issuemonitor.State) error) error {
 		for index := 0; index < len(s.Queue); {
 			p := s.Queue[index]
@@ -192,7 +192,7 @@ func (a *app) nextMonitoredIssue(ctx context.Context, skip ...string) (*loopBoar
 				}
 				continue
 			}
-			next = &loopBoardItem{Ref: p.Ref, URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)}
+			next = &LoopBoardItem{Ref: p.Ref, URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)}
 			break
 		}
 		return nil

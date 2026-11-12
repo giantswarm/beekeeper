@@ -111,7 +111,7 @@ func TestBehindProtectionRefusalDoesNotUpdateOrRepair(t *testing.T) {
 	if doc.ExitCode != github.SquashRefused || !strings.Contains(doc.Reason, "repository owner") {
 		t.Fatalf("protection refusal: %+v", doc)
 	}
-	if b.pull.Head != loopHead || len(b.updates) != 0 || pullNeedsBranchRepair(b.pull) || ghMergeNeedsBranchRepair(doc.Reason) {
+	if b.pull.Head != loopHead || len(b.updates) != 0 || PullNeedsBranchRepair(b.pull) || ghMergeNeedsBranchRepair(doc.Reason) {
 		t.Fatalf("protection refusal changed the branch or requested repair: %+v", doc)
 	}
 }

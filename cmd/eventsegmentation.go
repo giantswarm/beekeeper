@@ -31,7 +31,7 @@ func (a *app) recordEventReaders(j *update.Journal) error {
 	if policy.Readers == nil {
 		policy.Readers = map[string]bool{}
 	}
-	if j.Candidate.Digest != "" && normalizeLoopVersion(j.Candidate.Version) == normalizeLoopVersion(loopRunningVersion()) {
+	if j.Candidate.Digest != "" && NormalizeLoopVersion(j.Candidate.Version) == NormalizeLoopVersion(LoopRunningVersion()) {
 		policy.Readers[j.Candidate.Digest] = true
 	}
 	policy.Enabled = j.Previous != nil && policy.Readers[j.Previous.Digest]

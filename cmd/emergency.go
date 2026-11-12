@@ -189,11 +189,11 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 				// A same-account desk review is COMMENTED on GitHub. Read
 				// its trusted exact-head verdict instead of requiring a native
 				// approval. Branch protection still applies without --admin.
-				p, err := readLoopPull(cmd.Context(), fmt.Sprintf("%s#%d", args[0], n))
+				p, err := ReadLoopPull(cmd.Context(), fmt.Sprintf("%s#%d", args[0], n))
 				if err != nil {
 					return err
 				}
-				if p.State != superloop.Open || p.Draft || !p.Green || !sameCommit(p.Head, pr.HeadRefOid) {
+				if p.State != superloop.Open || p.Draft || !p.Green || !SameCommit(p.Head, pr.HeadRefOid) {
 					return refused("emergency merge requires a green, open, non-draft pull request at the reviewed head")
 				}
 				reviews, err := a.trustedReviews(cmd.Context(), p)
@@ -206,7 +206,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 						latest = &reviews[i]
 					}
 				}
-				if latest == nil || latest.Verdict != superloop.Approved || !sameCommit(cmp.Or(latest.Head, latest.Commit), pr.HeadRefOid) {
+				if latest == nil || latest.Verdict != superloop.Approved || !SameCommit(cmp.Or(latest.Head, latest.Commit), pr.HeadRefOid) {
 					return refused("emergency merge requires an approved desk review of the exact head")
 				}
 			}
@@ -328,7 +328,7 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	if err != nil {
 		return err
 	}
-	p, err := readLoopPull(ctx, ref)
+	p, err := ReadLoopPull(ctx, ref)
 	if err != nil {
 		return err
 	}

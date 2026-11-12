@@ -102,7 +102,7 @@ func TestIssueMonitorDispatchRechecksLiveMembership(t *testing.T) {
 			ctx := context.Background()
 			err := issuemonitor.WithState(ctx, a.issueMonitorDir(), func(s *issuemonitor.State, _ func(*issuemonitor.State) error) error {
 				s.Queue = []issuemonitor.Pointer{{Ref: "org/repo#1", Source: workerGitHubIssueGroup}}
-				s.Issues["org/repo#1"] = issuemonitor.Record{Class: issuemonitor.Employee, State: reviewedMergeQueued}
+				s.Issues["org/repo#1"] = issuemonitor.Record{Class: issuemonitor.Employee, State: ReviewedMergeQueued}
 				return nil
 			})
 			if err != nil {

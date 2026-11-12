@@ -50,10 +50,10 @@ func deliveryOwned(st *state.State, d state.Delivery, now time.Time, p deliveryP
 		if d.Agent != "" && strings.EqualFold(ag.Name, d.Agent) {
 			return true
 		}
-		serves := loopServes(st, ag)
+		serves := LoopServes(st, ag)
 		if serves != "" && (strings.EqualFold(serves, d.Ref) ||
 			slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(serves, ref) })) ||
-			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(loopParkOn(ag.Park), ref) }) {
+			ag.Park != nil && slices.ContainsFunc(d.Pulls, func(ref string) bool { return strings.EqualFold(LoopParkOn(ag.Park), ref) }) {
 			return true
 		}
 	}
@@ -124,17 +124,17 @@ func (a *app) deliveryExemptIntake(st *state.State) bool {
 
 // Only new issue starts use this check. The frozen references travel with
 // their worker stream, never in a field another pass could overwrite.
-func loopDeliveryPriority(l *supervisorLoop, ctx context.Context, reserved ...[]string) error {
-	st, err := l.a.store.Read()
+func loopDeliveryPriority(l *Loop, ctx context.Context, reserved ...[]string) error {
+	st, err := l.Host.store.Read()
 	if err != nil {
 		return err
 	}
-	refs, _ := l.deliveryReservedRefs(st, reserved...)
+	refs, _ := l.DeliveryReservedRefs(st, reserved...)
 	if len(refs) == 0 {
 		return nil
 	}
-	if l.deliveryRoom(loopFillRoom(l, loopFillCapacity(l, ctx)), st, refs) <= 0 {
-		return errLoopLater
+	if l.DeliveryRoom(loopFillRoom(l, loopFillCapacity(l, ctx)), st, refs) <= 0 {
+		return ErrLoopLater
 	}
 	return nil
 }

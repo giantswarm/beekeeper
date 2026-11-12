@@ -278,7 +278,7 @@ func (a *app) lastNoteContext(ctx context.Context, p state.Party, since time.Tim
 		return e.Verb == verbNote
 	}
 	if len(progress) > 0 && progress[0] != nil {
-		keep = eventProgressFilter(keep, progress[0], time.Now)
+		keep = EventProgressFilter(keep, progress[0], time.Now)
 	}
 	notes, err := state.FollowSnapshotContext(ctx, a.store, "agent-notes", "v1", keep)
 	if err == nil {

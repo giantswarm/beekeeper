@@ -2161,7 +2161,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	githubHeld := boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	githubHeld := BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
 	var found map[int]checkResult
 	if w.loopOwned {
 		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)

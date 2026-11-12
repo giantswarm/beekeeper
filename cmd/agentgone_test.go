@@ -331,8 +331,8 @@ func TestGoneLoopRetiresOnlyInactiveTask(t *testing.T) {
 		st.Agents = []state.Agent{gone, fresh}
 		st.Records = []state.Record{{Session: gone.Party, At: old}}
 	})
-	l := &supervisorLoop{a: a}
-	if err := l.roster(t.Context(), nil); err != nil {
+	l := &Loop{Host: a}
+	if err := l.Roster(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()

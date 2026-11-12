@@ -12,11 +12,11 @@ import (
 
 // A 304 reuses an authenticated response without spending REST core budget.
 // Read all states ordered by update so closing a pull invalidates the cache.
-var readRepoPullRevision = func(ctx context.Context, repo, etag string) (string, bool, error) {
-	return readRepoPullRevisionWithGH(ctx, github.RunGH, repo, etag)
+var ReadRepoPullRevision = func(ctx context.Context, repo, etag string) (string, bool, error) {
+	return ReadRepoPullRevisionWithGH(ctx, github.RunGH, repo, etag)
 }
 
-func readRepoPullRevisionWithGH(ctx context.Context, run github.GH, repo, etag string) (string, bool, error) {
+func ReadRepoPullRevisionWithGH(ctx context.Context, run github.GH, repo, etag string) (string, bool, error) {
 	args := []string{workerGitHubAPIGroup, "--include", "repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=1"}
 	if etag != "" {
 		args = append(args, "-H", "If-None-Match: "+etag)

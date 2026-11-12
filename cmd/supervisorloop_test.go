@@ -161,26 +161,26 @@ func logs(args []string) (state.Event, bool) {
 	}
 	switch {
 	case args[0] == agentsName && args[1] == agentStartName:
-		return event(loopParty, "agents.start", "%s: background session x", args[2]), true
+		return event(LoopParty, "agents.start", "%s: background session x", args[2]), true
 	case args[0] == agentsName && args[1] == agentWakeName:
-		return event(loopParty, "agents.wake", "%s: sent by name", args[2]), true
-	case args[0] == agentsName && args[1] == loopRemove:
-		return event(loopParty, "agents.remove", "%s", args[2]), true
-	case args[0] == paramNote && args[1] == loopAdd:
-		return event(loopParty, "note.add", "#1 %s", args[len(args)-1]), true
-	case args[0] == loopBoard && args[1] == loopBoardMove:
-		return event(loopParty, "board.move", "%s: → %s", args[2], args[3]), true
-	case args[0] == loopBoard && args[1] == "rank":
-		return event(loopParty, "board.rank", "%s: %s %s", args[2], args[3], args[len(args)-1]), true
+		return event(LoopParty, "agents.wake", "%s: sent by name", args[2]), true
+	case args[0] == agentsName && args[1] == LoopRemove:
+		return event(LoopParty, "agents.remove", "%s", args[2]), true
+	case args[0] == paramNote && args[1] == LoopAdd:
+		return event(LoopParty, "note.add", "#1 %s", args[len(args)-1]), true
+	case args[0] == LoopBoard && args[1] == loopBoardMove:
+		return event(LoopParty, "board.move", "%s: → %s", args[2], args[3]), true
+	case args[0] == LoopBoard && args[1] == "rank":
+		return event(LoopParty, "board.rank", "%s: %s %s", args[2], args[3], args[len(args)-1]), true
 	}
 	return state.Event{}, false
 }
 
 func newLoopRig(t *testing.T) *loopRig {
 	t.Helper()
-	oldDeliveryRelease := readDeliveryRelease
-	t.Cleanup(func() { readDeliveryRelease = oldDeliveryRelease })
-	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return "", "", nil }
+	oldDeliveryRelease := ReadDeliveryRelease
+	t.Cleanup(func() { ReadDeliveryRelease = oldDeliveryRelease })
+	ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return "", "", nil }
 	oldParents := reviewParents
 	t.Cleanup(func() { reviewParents = oldParents })
 	reviewParents = func(context.Context, []string) ([]string, error) { return nil, nil }
@@ -214,17 +214,17 @@ func newLoopRig(t *testing.T) *loopRig {
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
 	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
-	oldRevision := readRepoPullRevision
-	t.Cleanup(func() { readRepoPullRevision = oldRevision })
-	readRepoPullRevision = func(context.Context, string, string) (string, bool, error) { return "", false, nil }
-	oldCloseIssue, oldEditBody, oldOpenPulls := closePullIssue, editPullBody, readRepoOpenPulls
+	oldRevision := ReadRepoPullRevision
+	t.Cleanup(func() { ReadRepoPullRevision = oldRevision })
+	ReadRepoPullRevision = func(context.Context, string, string) (string, bool, error) { return "", false, nil }
+	oldCloseIssue, oldEditBody, oldOpenPulls := ClosePullIssue, EditPullBody, readRepoOpenPulls
 	t.Cleanup(func() {
 		readReviewedBehind = wasBehind
-		closePullIssue, editPullBody, readRepoOpenPulls = oldCloseIssue, oldEditBody, oldOpenPulls
+		ClosePullIssue, EditPullBody, readRepoOpenPulls = oldCloseIssue, oldEditBody, oldOpenPulls
 	})
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
-	closePullIssue = func(context.Context, github.PR, string) error { return nil }
-	editPullBody = func(context.Context, github.PR, string) error { return nil }
+	ClosePullIssue = func(context.Context, github.PR, string) error { return nil }
+	EditPullBody = func(context.Context, github.PR, string) error { return nil }
 	readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) { return nil, nil }
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
 	oldBudget := readLoopGraphQLBudget
@@ -244,7 +244,7 @@ func newLoopRig(t *testing.T) *loopRig {
 	}
 	// The loop first started a minute ago: the rig's parks are requests
 	// for its review, not parks from before it.
-	first := event(loopParty, loopStartVerb, "started")
+	first := event(LoopParty, LoopStartVerb, "started")
 	first.At = first.At.Add(-time.Minute)
 	if err := store.Record(first); err != nil {
 		t.Fatal(err)
@@ -279,26 +279,26 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
-	observation, sweep, watch, pollOnce := readObservedLoopPull, readLoopSweep, startLoopPullWatcher, pollOncePullWatcher
+	observation, sweep, watch, pollOnce := ReadObservedLoopPull, ReadLoopSweep, StartLoopPullWatcher, PollOncePullWatcher
 	t.Cleanup(func() {
-		readObservedLoopPull, readLoopSweep, startLoopPullWatcher, pollOncePullWatcher = observation, sweep, watch, pollOnce
+		ReadObservedLoopPull, ReadLoopSweep, StartLoopPullWatcher, PollOncePullWatcher = observation, sweep, watch, pollOnce
 	})
-	startLoopPullWatcher = func(context.Context, *supervisorLoop) func() { return func() {} }
-	pollOncePullWatcher = func(context.Context, *supervisorLoop) {}
-	readLoopSweep = fixtureLoopSweep
-	readObservedLoopPull = fixtureLoopObservation
-	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge
+	StartLoopPullWatcher = func(context.Context, *Loop) func() { return func() {} }
+	PollOncePullWatcher = func(context.Context, *Loop) {}
+	ReadLoopSweep = fixtureLoopSweep
+	ReadObservedLoopPull = fixtureLoopObservation
+	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := BeekeeperRun, ReadLoopPull, LoopCommand, LoopBinary, loopBroker, loopInTurn, loopSessions, ReadDeskLogin, ReadTeams, ReadBaseMerge
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
+		BeekeeperRun, ReadLoopPull, LoopCommand, LoopBinary, loopBroker, loopInTurn, loopSessions, ReadDeskLogin, ReadTeams, ReadBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
 	})
-	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+	ReadBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
 		r.mu.Lock()
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
 		r.mu.Unlock()
 		return r.baseMerge(p, approved)
 	}
-	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
-	readTeams = func(context.Context, config.Ownership) (map[string]string, error) {
+	ReadDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
+	ReadTeams = func(context.Context, config.Ownership) (map[string]string, error) {
 		r.mu.Lock()
 		r.teamReads++
 		r.mu.Unlock()
@@ -306,9 +306,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	}
 	loopInTurn = func(a *app, p state.Party) bool { return r.inTurn(p) || a.executionInTurn(p) }
 	loopSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return r.sessions, &proc.Table{}, nil }
-	loopBinary = func() replaceable { return loopFakeBinary{r} }
+	LoopBinary = func() Replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		if len(args) >= 2 && args[0] == "--as" {
 			args = args[2:]
 		}
@@ -340,7 +340,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		return o, code, nil
 	}
-	readLoopPull = func(_ context.Context, ref string) (superloop.Pull, error) {
+	ReadLoopPull = func(_ context.Context, ref string) (superloop.Pull, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if p, ok := r.pulls[ref]; ok {
@@ -351,7 +351,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		return r.pull, nil
 	}
-	loopCommand = func(_ context.Context, stdin string, argv []string) (string, string, int, error) {
+	LoopCommand = func(_ context.Context, stdin string, argv []string) (string, string, int, error) {
 		r.mu.Lock()
 		r.cmds = append(r.cmds, argv)
 		r.stdin = append(r.stdin, stdin)
@@ -503,7 +503,7 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	// The worker parks again without a new head: back to it to rework.
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if note := r.called("note", loopAdd); note != nil {
+	if note := r.called("note", LoopAdd); note != nil {
 		t.Fatalf("used-up review rounds reached the guide's person: %v", note)
 	}
 	wake = r.called(agentsName, agentWakeName, loopWorker)
@@ -534,7 +534,7 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 // no session is woken for it.
 func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 	r := newLoopRig(t)
-	got := r.a.tellFiler(context.Background(), state.Party{Name: loopPerson}, &state.Note{ID: 3, By: loopParty}, "NOTE ANSWERED #3 by pat: Merge")
+	got := r.a.tellFiler(context.Background(), state.Party{Name: loopPerson}, &state.Note{ID: 3, By: LoopParty}, "NOTE ANSWERED #3 by pat: Merge")
 	if !strings.Contains(got, "the supervisor loop acts on the answer") || strings.Contains(got, "failed") {
 		t.Errorf("tellFiler = %q", got)
 	}
@@ -557,7 +557,7 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if note := r.called("note", loopAdd); note != nil {
+	if note := r.called("note", LoopAdd); note != nil {
 		t.Fatalf("a new head after an approval escalated: %v", note)
 	}
 	start := r.called(agentsName, agentStartName)
@@ -583,7 +583,7 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 		t.Fatalf("the loop did not merge the reviewed, green head %s: %v\n%s", own, r.calls, r.out)
 	}
 	r.pass(t)
-	if note := r.called("note", loopAdd); note != nil {
+	if note := r.called("note", LoopAdd); note != nil {
 		t.Errorf("a note asked the person: %v", note)
 	}
 }
@@ -715,7 +715,7 @@ func TestLoopMergesFixesAfterExhaustedRounds(t *testing.T) {
 	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, fixedAgain) {
 		t.Fatalf("fixed head got no go: %v", r.calls)
 	}
-	if c := r.called("note", loopAdd); c != nil {
+	if c := r.called("note", LoopAdd); c != nil {
 		t.Fatalf("merge question reached the person: %v", c)
 	}
 }
@@ -759,7 +759,7 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 	}
 	started := false
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopCapacity {
+		if args[0] == LoopCapacity {
 			if started {
 				return loopNoRoomJSON, 0
 			}
@@ -768,16 +768,16 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
 			started = true
 		}
-		if args[0] == loopBoard {
+		if args[0] == LoopBoard {
 			return `{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9","title":"next"}}`, 0
 		}
 		return "", 0
 	}
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("not taken off the roster: %v\n%s", r.calls, r.out)
 	}
-	if c := r.called("note", loopAdd); c != nil {
+	if c := r.called("note", LoopAdd); c != nil {
 		t.Errorf("the final report went to the guide: %v", c)
 	}
 	start := r.called(agentsName, agentStartName, "r 9")
@@ -812,7 +812,7 @@ const (
 	loopRoomJSON   = `{"ceiling": 1, "room": 1}`
 	loopNoRoomJSON = `{"ceiling": 1, "room": 0}`
 	loopRoomJSON2  = `{"ceiling": 2, "room": 2}`
-	loopAsFlagArg  = "--" + asFlag
+	loopAsFlagArg  = "--" + AsFlag
 )
 
 // nextPickJSON is board next --json's answer naming the second item of the
@@ -862,24 +862,24 @@ func TestLoopStartsTheNextWorkerOnAnExecutionHost(t *testing.T) {
 	r.pull.State = superloop.Merged
 	r.pass(t)
 	loopNextDone(t, r)
-	run, branch := beekeeperRun, ghDefaultBranch
-	t.Cleanup(func() { beekeeperRun, ghDefaultBranch = run, branch })
+	run, branch := BeekeeperRun, GhDefaultBranch
+	t.Cleanup(func() { BeekeeperRun, GhDefaultBranch = run, branch })
 	branchReads := 0
-	ghDefaultBranch = func(context.Context, string) (string, error) {
+	GhDefaultBranch = func(context.Context, string) (string, error) {
 		branchReads++
 		return mainBranch, nil
 	}
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		args = splitAs(args)
 		r.calls = append(r.calls, args)
 		switch args[0] {
-		case loopCapacity:
+		case LoopCapacity:
 			// The coordinator's machine is full; the host has room.
-			if slices.Contains(args, loopHostFlag) {
+			if slices.Contains(args, LoopHostFlag) {
 				return loopRoomJSON, 0, nil
 			}
 			return loopNoRoomJSON, 0, nil
-		case loopBoard:
+		case LoopBoard:
 			return loopNextPickJSON, 0, nil
 		}
 		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
@@ -894,14 +894,14 @@ func TestLoopStartsTheNextWorkerOnAnExecutionHost(t *testing.T) {
 	}
 	// The done removes the worker; the next starts on the host.
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("not taken off the roster: %v\n%s", r.calls, r.out)
 	}
-	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	start := r.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
 	if start == nil {
 		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
 	}
-	for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch} {
+	for _, want := range []string{LoopHostFlag, sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch} {
 		if !slices.Contains(start, want) {
 			t.Errorf("the remote start names no %q: %v", want, start)
 		}
@@ -933,24 +933,24 @@ func TestLoopKeepsTheNextWorkerLocalWithRoom(t *testing.T) {
 	r.pull.State = superloop.Merged
 	r.pass(t)
 	loopNextDone(t, r)
-	branch := ghDefaultBranch
-	t.Cleanup(func() { ghDefaultBranch = branch })
-	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	branch := GhDefaultBranch
+	t.Cleanup(func() { GhDefaultBranch = branch })
+	GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopCapacity {
+		if args[0] == LoopCapacity {
 			return loopRoomJSON2, 0
 		}
-		if args[0] == loopBoard {
+		if args[0] == LoopBoard {
 			return loopNextPickJSON, 0
 		}
 		return "", 0
 	}
 	r.pass(t)
-	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	start := r.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
 	if start == nil {
 		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) {
+	if slices.Contains(start, LoopHostFlag) {
 		t.Errorf("a machine with room placed the start remotely: %v", start)
 	}
 }
@@ -968,10 +968,10 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	r.pass(t)
 	loopNextDone(t, r)
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopCapacity {
+		if args[0] == LoopCapacity {
 			return loopNoRoomJSON, 0
 		}
-		if args[0] == loopBoard {
+		if args[0] == LoopBoard {
 			return loopNextPickJSON, 0
 		}
 		return "", 0
@@ -997,8 +997,8 @@ func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 					r.a.cfg.Supervisor.Hosts = nil
 					r.a.cfg.Supervisor.HostsFirst = first
 					r.answer = func(args []string) (string, int) {
-						if args[0] == loopCapacity {
-							if slices.Contains(args, loopHostFlag) {
+						if args[0] == LoopCapacity {
+							if slices.Contains(args, LoopHostFlag) {
 								t.Fatal("review placement probed an execution host")
 							}
 							if !slices.Contains(args, "--review") {
@@ -1018,9 +1018,9 @@ func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 					p := r.pull
 					p.Ref, p.URL = act.Ref, act.URL
 					r.pulls[act.Ref] = p
-					_, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act)
+					_, err := (&Loop{Host: r.a, Said: map[string]bool{}}).StartReviewer(context.Background(), act)
 					if !room {
-						if !errors.Is(err, errLoopLater) {
+						if !errors.Is(err, ErrLoopLater) {
 							t.Fatalf("full coordinator: %v", err)
 						}
 						if start := r.called(agentsName, agentStartName); start != nil {
@@ -1035,7 +1035,7 @@ func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 					if start == nil {
 						t.Fatal("no local reviewer started")
 					}
-					for _, flag := range []string{loopHostFlag, loopRepoFlag, loopRefFlag, "--" + excludeFlag} {
+					for _, flag := range []string{LoopHostFlag, LoopRepoFlag, LoopRefFlag, "--" + excludeFlag} {
 						if slices.Contains(start, flag) {
 							t.Errorf("local review has placement flag %s: %v", flag, start)
 						}
@@ -1065,7 +1065,7 @@ func TestLoopStopsARemoteWorkerBeforeRemovingIt(t *testing.T) {
 				st.Agents[i].Execution = &ref
 			}
 		}
-		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: loopWorker}, By: loopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: loopWorker}, By: LoopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
 		return nil, nil
 	})
 	if err != nil {
@@ -1073,19 +1073,19 @@ func TestLoopStopsARemoteWorkerBeforeRemovingIt(t *testing.T) {
 	}
 	loopNextDone(t, r)
 	var order []string
-	run := beekeeperRun
-	t.Cleanup(func() { beekeeperRun = run })
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+	run := BeekeeperRun
+	t.Cleanup(func() { BeekeeperRun = run })
+	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		args = splitAs(args)
 		r.calls = append(r.calls, args)
 		switch {
-		case args[0] == loopBoard:
+		case args[0] == LoopBoard:
 			return `{}`, 0, nil
-		case len(args) >= 2 && args[0] == agentsName && args[1] == loopStop:
-			order = append(order, loopStop)
+		case len(args) >= 2 && args[0] == agentsName && args[1] == LoopStop:
+			order = append(order, LoopStop)
 			return "", 0, nil
-		case len(args) >= 2 && args[0] == agentsName && args[1] == loopRemove:
-			order = append(order, loopRemove)
+		case len(args) >= 2 && args[0] == agentsName && args[1] == LoopRemove:
+			order = append(order, LoopRemove)
 			if e, ok := logs(args); ok {
 				if err := r.a.store.Record(e); err != nil {
 					t.Fatal(err)
@@ -1096,7 +1096,7 @@ func TestLoopStopsARemoteWorkerBeforeRemovingIt(t *testing.T) {
 		return "", 0, nil
 	}
 	r.pass(t)
-	if !slices.Equal(order, []string{loopStop, loopRemove}) {
+	if !slices.Equal(order, []string{LoopStop, LoopRemove}) {
 		t.Errorf("the retirement ran %v, want stop then remove: %v\n%s", order, r.calls, r.out)
 	}
 }
@@ -1111,7 +1111,7 @@ func (r *loopRig) started(t *testing.T, name, session string) {
 		} else {
 			st.Agents = append(st.Agents, state.Agent{Party: p, Task: "review " + loopURL})
 		}
-		st.Starts = append(st.Starts, state.Start{Party: p, Mode: "background", By: loopParty, At: time.Now()})
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: "background", By: LoopParty, At: time.Now()})
 		return nil, nil
 	})
 	if err != nil {
@@ -1134,26 +1134,26 @@ func TestLoopRetiresTheReviewerAndRetainsTheMergedWorker(t *testing.T) {
 	// The reviewer still writes its report: the retirement waits.
 	r.inTurn = func(p state.Party) bool { return p.Session == "reviewer-session" }
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove); c != nil {
+	if c := r.called(agentsName, LoopRemove); c != nil {
 		t.Fatalf("removed in its turn: %v", c)
 	}
 	r.inTurn = func(state.Party) bool { return false }
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, reviewer); c == nil {
+	if c := r.called(agentsName, LoopRemove, reviewer); c == nil {
 		t.Fatalf("the reviewer stays: %v\n%s", r.calls, r.out)
 	}
-	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c != nil {
 		t.Errorf("the worker left before its merge: %v", c)
 	}
 	// The worker merges and stays reachable until its inactivity window.
 	r.pull.State = superloop.Merged
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c != nil {
 		t.Fatalf("removed at merge: %v", c)
 	}
 	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("the merged worker stays: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "no report after merge") {
@@ -1174,7 +1174,7 @@ func TestLoopNeverRetiresASessionItsPersonStarted(t *testing.T) {
 	r.pull.State = superloop.Merged
 	r.pass(t)
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove); c != nil || len(r.logged(t, "supervisor.done")) != 0 {
+	if c := r.called(agentsName, LoopRemove); c != nil || len(r.logged(t, "supervisor.done")) != 0 {
 		t.Errorf("a person's session was retired: %v", c)
 	}
 }
@@ -1184,7 +1184,7 @@ func TestLoopInstallsANewerRelease(t *testing.T) {
 	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
 	installed := false
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && !installed {
+		if slices.Equal(args, SelfUpdateCheck) && !installed {
 			return "v2.0.0 is newer than v1.0.0: beekeeper self-update installs it", ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
@@ -1206,7 +1206,7 @@ func TestLoopReportsFailedGateAfterInstallAndClosesSkippedClaim(t *testing.T) {
 	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
 	installed := false
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && !installed {
+		if slices.Equal(args, SelfUpdateCheck) && !installed {
 			return "v2.0.0 is newer than v1.0.0: beekeeper self-update installs it", ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
@@ -1248,7 +1248,7 @@ func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			note := r.called("note", loopAdd)
+			note := r.called("note", LoopAdd)
 			if note == nil || !strings.Contains(note[len(note)-1], c.want) || !slices.Contains(note, loopURL) {
 				t.Fatalf("the note = %v\n%s", note, r.out)
 			}
@@ -1283,7 +1283,7 @@ func TestLoopWakesAWorkerWhoseParkItCannotPlace(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			note, wake := r.called("note", loopAdd), r.called(agentsName, agentWakeName)
+			note, wake := r.called("note", LoopAdd), r.called(agentsName, agentWakeName)
 			if c.note != "" {
 				if note == nil || !strings.Contains(note[len(note)-1], c.note) || wake != nil {
 					t.Fatalf("note %v, wake %v\n%s", note, wake, r.out)
@@ -1317,7 +1317,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 			t.Run(fmt.Sprintf("done=%v/thread=%v", done, thread), func(t *testing.T) {
 				r := newLoopRig(t)
 				r.a.cfg.Supervisor.Classifier = []string{loopClassifier}
-				r.a.as = loopParty.Name // the real note command must not inherit a developer session
+				r.a.as = LoopParty.Name // the real note command must not inherit a developer session
 				r.park(t, "", time.Now())
 				if !thread {
 					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -1333,7 +1333,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 				}
 				// If the file path ever calls note add again, execute its real gate.
 				r.answer = func(args []string) (string, int) {
-					if len(args) > 1 && args[0] == loopNote && args[1] == loopAdd {
+					if len(args) > 1 && args[0] == LoopNote && args[1] == LoopAdd {
 						err := addNote(r.a, args[2:]...)
 						if err != nil {
 							return err.Error(), Code(err)
@@ -1364,28 +1364,28 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.pass(t)
-				if note := r.called(loopNote, loopAdd); note != nil {
+				if note := r.called(LoopNote, LoopAdd); note != nil {
 					t.Fatalf("finding sent as decision: %v", note)
 				}
-				files := r.logged(t, loopFileVerb)
+				files := r.logged(t, LoopFileVerb)
 				if len(files) != 1 || !strings.Contains(files[0].Detail, finding) {
 					t.Fatalf("file events: %+v", files)
 				}
-				if r.called(agentsName, loopRemove, loopWorker) != nil {
+				if r.called(agentsName, LoopRemove, loopWorker) != nil {
 					t.Fatal("worker removed before finding settled")
 				}
 				r.pass(t)
-				if len(r.logged(t, loopFileVerb)) != 1 {
+				if len(r.logged(t, LoopFileVerb)) != 1 {
 					t.Fatal("file repeated after loop restart")
 				}
-				if done && r.called(agentsName, loopRemove, loopWorker) == nil {
+				if done && r.called(agentsName, LoopRemove, loopWorker) == nil {
 					t.Fatal("done did not settle")
 				}
 				if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: already filed https://github.com/o/r/issues/9", loopWorker)); err != nil {
 					t.Fatal(err)
 				}
 				r.pass(t)
-				if len(r.logged(t, loopFileVerb)) != 1 || len(r.stdin) != 0 {
+				if len(r.logged(t, LoopFileVerb)) != 1 || len(r.stdin) != 0 {
 					t.Fatal("filed finding rerouted or classifier called")
 				}
 
@@ -1420,17 +1420,17 @@ func TestLoopAndGuidePrintAProblemOnOneLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true // These checks inspect completed pass effects.
+	l.Once = true // These checks inspect completed pass effects.
 	act := superloop.Action{Key: "file test", Kind: superloop.KindFile, Agent: loopWorker}
-	text := "worker reported at now" + fileReportSeparator + report
-	if err := l.record(act, text); err != nil {
+	text := "worker reported at now" + FileReportSeparator + report
+	if err := l.Record(act, text); err != nil {
 		t.Fatal(err)
 	}
 	// One terminating newline, with every byte of the report encoded inline.
 	if out := r.out.String(); strings.Count(out, "\n") != 1 || strings.Contains(out, "\r") || !strings.Contains(out, encoded) {
 		t.Fatalf("supervisor output is not one complete line: %q", out)
 	}
-	events := r.logged(t, loopFileVerb)
+	events := r.logged(t, LoopFileVerb)
 	if len(events) != 1 || !strings.HasSuffix(events[0].Detail, report) {
 		t.Fatalf("raw event: %+v", events)
 	}
@@ -1445,7 +1445,7 @@ func TestGuideProblemsSkipLegacyNotesAndPruneExpiredKeys(t *testing.T) {
 	const noteKey = "note#9"
 	st := &state.State{Guide: &state.Role{Fed: []string{noteKey, "problem:file expired"}}}
 	legacy := state.Event{Verb: "supervisor.file", Detail: "[file old] worker: worker's problem to the guide's queue to file"}
-	report := state.Event{Verb: "supervisor.file", Detail: "[file current] worker: worker reported at now" + fileReportSeparator + "the current finding"}
+	report := state.Event{Verb: "supervisor.file", Detail: "[file current] worker: worker reported at now" + FileReportSeparator + "the current finding"}
 	events := []state.Event{legacy, report}
 	lines, changed := guideProblemLines(st, events)
 	if !changed || len(lines) != 1 || strings.Contains(lines[0], "queue") || !strings.Contains(lines[0], "current finding") {
@@ -1477,11 +1477,11 @@ func TestLoopBacksOffIdenticalFailuresAcrossRestarts(t *testing.T) {
 	}
 	r.pass(t)
 	r.pass(t)
-	claims := len(r.logged(t, loopClaimVerb))
+	claims := len(r.logged(t, LoopClaimVerb))
 	for range 5 {
 		r.pass(t)
 	}
-	if got := len(r.logged(t, loopClaimVerb)); got != claims || claims != 2 {
+	if got := len(r.logged(t, LoopClaimVerb)); got != claims || claims != 2 {
 		t.Fatalf("claims %d -> %d", claims, got)
 	}
 	if got := strings.Count(r.out.String(), "SUPERVISOR REVIEW FAILED"); got != 1 {
@@ -1491,9 +1491,9 @@ func TestLoopBacksOffIdenticalFailuresAcrossRestarts(t *testing.T) {
 		t.Fatalf("backoff printed %d times", got)
 	}
 	// Advance the persisted deadline, without sleeping, then allow recovery.
-	failures := r.logged(t, loopFailureVerb)
-	key, detail, _ := keyed(failures[len(failures)-1].Detail)
-	var f loopFailure
+	failures := r.logged(t, LoopFailureVerb)
+	key, detail, _ := Keyed(failures[len(failures)-1].Detail)
+	var f LoopFailure
 	if err := json.Unmarshal([]byte(detail), &f); err != nil {
 		t.Fatal(err)
 	}
@@ -1502,7 +1502,7 @@ func TestLoopBacksOffIdenticalFailuresAcrossRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.a.store.Record(event(loopParty, loopFailureVerb, "[%s] %s", key, b)); err != nil {
+	if err := r.a.store.Record(event(LoopParty, LoopFailureVerb, "[%s] %s", key, b)); err != nil {
 		t.Fatal(err)
 	}
 	r.answer = func([]string) (string, int) { return "", 0 }
@@ -1525,29 +1525,29 @@ func TestLoopFilesAStepStuckOnOneItemOnce(t *testing.T) {
 	}
 	r.pass(t)
 	r.pass(t)
-	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+	if evs := r.logged(t, LoopFileVerb); len(evs) != 0 {
 		t.Fatalf("filed before the failure lasted: %+v", evs)
 	}
 	// Backdate the episode and the retry, as half an hour of backoffs would.
-	failures := r.logged(t, loopFailureVerb)
-	key, detail, _ := keyed(failures[len(failures)-1].Detail)
-	var f loopFailure
+	failures := r.logged(t, LoopFailureVerb)
+	key, detail, _ := Keyed(failures[len(failures)-1].Detail)
+	var f LoopFailure
 	if err := json.Unmarshal([]byte(detail), &f); err != nil {
 		t.Fatal(err)
 	}
-	f.Since = time.Now().Add(-loopStuckAfter - time.Minute)
+	f.Since = time.Now().Add(-LoopStuckAfter - time.Minute)
 	f.RetryAt = time.Now().Add(-time.Second)
 	b, err := json.Marshal(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.a.store.Record(event(loopParty, loopFailureVerb, "[%s] %s", key, b)); err != nil {
+	if err := r.a.store.Record(event(LoopParty, LoopFailureVerb, "[%s] %s", key, b)); err != nil {
 		t.Fatal(err)
 	}
 	for range 3 {
 		r.pass(t)
 	}
-	evs := r.logged(t, loopFileVerb)
+	evs := r.logged(t, LoopFileVerb)
 	if len(evs) != 1 {
 		t.Fatalf("filed %d times: %+v", len(evs), evs)
 	}
@@ -1568,35 +1568,35 @@ func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
 	}
 	t0 := time.Now()
 	r.a.now = t0
-	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	failures, filed := map[string]LoopFailure{}, map[string]time.Time{}
 	cause := errors.New("invalid merge authorization identity")
 	a := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#1 aaa", Ref: refOne}
 	b := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#2 bbb", Ref: idleRef}
 	other := superloop.Action{Kind: superloop.KindReview, Key: "review " + loopPR, Ref: loopPR}
 	for _, act := range []superloop.Action{a, other} {
-		if err := l.failed(act, failures, cause); err != nil {
+		if err := l.Failed(act, failures, cause); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := l.stuck(failures, filed); err != nil {
+	if err := l.Stuck(failures, filed); err != nil {
 		t.Fatal(err)
 	}
-	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+	if evs := r.logged(t, LoopFileVerb); len(evs) != 0 {
 		t.Fatalf("one item per step filed at once: %+v", evs)
 	}
 	r.a.now = t0.Add(time.Minute)
-	if err := l.failed(b, failures, cause); err != nil {
+	if err := l.Failed(b, failures, cause); err != nil {
 		t.Fatal(err)
 	}
 	if !failures[b.Key].Since.Equal(t0) {
 		t.Fatalf("the second item started its own episode: %v", failures[b.Key].Since)
 	}
 	for range 2 {
-		if err := l.stuck(failures, filed); err != nil {
+		if err := l.Stuck(failures, filed); err != nil {
 			t.Fatal(err)
 		}
 	}
-	evs := r.logged(t, loopFileVerb)
+	evs := r.logged(t, LoopFileVerb)
 	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, loopPR) {
 		t.Fatalf("filed: %+v", evs)
 	}
@@ -1608,28 +1608,28 @@ func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
 	// new episode, neither filed at once nor continuing the filed one, and
 	// filed once it lasts.
 	r.a.now = t0.Add(2 * time.Hour)
-	if err := l.failed(a, failures, cause); err != nil {
+	if err := l.Failed(a, failures, cause); err != nil {
 		t.Fatal(err)
 	}
 	if f := failures[a.Key]; !f.Since.Equal(r.a.now) || f.Count != 1 {
 		t.Fatalf("a quiet failure continued its episode: %+v", f)
 	}
-	if err := l.stuck(failures, filed); err != nil {
+	if err := l.Stuck(failures, filed); err != nil {
 		t.Fatal(err)
 	}
-	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+	if evs := r.logged(t, LoopFileVerb); len(evs) != 1 {
 		t.Fatalf("a new episode filed at once: %+v", evs)
 	}
 	for _, m := range []time.Duration{10, 20, 30} {
 		r.a.now = t0.Add(2*time.Hour + m*time.Minute)
-		if err := l.failed(a, failures, cause); err != nil {
+		if err := l.Failed(a, failures, cause); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := l.stuck(failures, filed); err != nil {
+	if err := l.Stuck(failures, filed); err != nil {
 		t.Fatal(err)
 	}
-	evs = r.logged(t, loopFileVerb)
+	evs = r.logged(t, LoopFileVerb)
 	if len(evs) != 2 {
 		t.Fatalf("a new episode filed %d times in all", len(evs))
 	}
@@ -1669,7 +1669,7 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 	r.pass(t)
 	r.pass(t)
 	// An idle pass probes the budget and looks for a release, silently.
-	if r.out.Len() != 0 || len(r.calls) != 1 || r.called(selfUpdateCheck...) == nil {
+	if r.out.Len() != 0 || len(r.calls) != 1 || r.called(SelfUpdateCheck...) == nil {
 		t.Errorf("an idle loop said %q and ran %v", r.out, r.calls)
 	}
 }
@@ -1680,7 +1680,7 @@ func TestParseLoopPull(t *testing.T) {
 	  "author":{"login":"` + loopDesk + `"},"title":"fix: x","headRefName":"fix/x","files":[{"path":"a.go"}],"changedFiles":2,
 	  "reviews":[{"id":"R2","state":"COMMENTED","author":{"login":"` + loopDesk + `"},"authorAssociation":"OWNER","body":"Review: approved\nHead reviewed: ` + "`1111111`" + `","submittedAt":"2026-10-30T10:00:00Z","commit":{"oid":"abc"}},
 	             {"id":"R1","state":"CHANGES_REQUESTED","author":{"login":"stranger"},"authorAssociation":"NONE","body":"no","submittedAt":"2026-10-30T09:00:00Z","commit":{"oid":"` + loopHead + `"}}]}`
-	p, err := parseLoopPull(loopPR, []byte(green))
+	p, err := ParseLoopPull(loopPR, []byte(green))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1696,7 +1696,7 @@ func TestParseLoopPull(t *testing.T) {
 		"pending":   `[{"status":"IN_PROGRESS","conclusion":""}]`,
 		"a failure": `[{"status":"COMPLETED","conclusion":"SUCCESS"},{"state":"FAILURE"}]`,
 	} {
-		p, err := parseLoopPull(loopPR, []byte(`{"state":"OPEN","headRefOid":"x","statusCheckRollup":`+rollup+`}`))
+		p, err := ParseLoopPull(loopPR, []byte(`{"state":"OPEN","headRefOid":"x","statusCheckRollup":`+rollup+`}`))
 		if err != nil || p.Green {
 			t.Errorf("%s: green %v, %v", name, p.Green, err)
 		}
@@ -1836,7 +1836,7 @@ func TestLoopWakesForAnUnclassifiedParkWhoseClaimedWakeNeverRan(t *testing.T) {
 	if r.called(agentsName, agentWakeName, loopWorker) == nil {
 		t.Fatalf("no wake tried: %v", r.calls)
 	}
-	if err := r.a.store.Record(event(loopParty, "note.add", "#5 for %s: %s escalated on %s", loopPerson, loopWorker, loopURL)); err != nil {
+	if err := r.a.store.Record(event(LoopParty, "note.add", "#5 for %s: %s escalated on %s", loopPerson, loopWorker, loopURL)); err != nil {
 		t.Fatal(err)
 	}
 	r.answer = answer
@@ -1854,7 +1854,7 @@ func TestLoopTakesAClaimedActionItNeverRan(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
-	if err := r.a.store.Record(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker)); err != nil {
+	if err := r.a.store.Record(event(LoopParty, LoopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker)); err != nil {
 		t.Fatal(err)
 	}
 	r.verdict("R1", loopHead, superloop.Approved, "")
@@ -1866,7 +1866,7 @@ func TestLoopTakesAClaimedActionItNeverRan(t *testing.T) {
 
 func TestLoopRefusesASecondLoopOnTheState(t *testing.T) {
 	r := newLoopRig(t)
-	other := flock.New(filepath.Join(r.a.store.Dir(), loopLockFile))
+	other := flock.New(filepath.Join(r.a.store.Dir(), LoopLockFile))
 	if ok, err := other.TryLock(); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
@@ -1883,7 +1883,7 @@ func TestLoopResumesAReleaseWhosePostInstallFailed(t *testing.T) {
 	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
 	installed := false
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && !installed {
+		if slices.Equal(args, SelfUpdateCheck) && !installed {
 			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
@@ -1915,7 +1915,7 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 	r := newLoopRig(t)
 	installed := false
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && !installed {
+		if slices.Equal(args, SelfUpdateCheck) && !installed {
 			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
@@ -1923,7 +1923,7 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 		}
 		return "", 0
 	}
-	r.broker = func() (string, error) { return "the broker serves 1 call(s)", errLoopLater }
+	r.broker = func() (string, error) { return "the broker serves 1 call(s)", ErrLoopLater }
 	r.pass(t)
 	r.pass(t)
 	if evs := r.logged(t, "supervisor.release"); len(evs) != 0 {
@@ -1942,10 +1942,10 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 // one loop round.
 func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	r := newLoopRig(t)
-	oldVer := loopRunningVersion
-	t.Cleanup(func() { loopRunningVersion = oldVer })
+	oldVer := LoopRunningVersion
+	t.Cleanup(func() { LoopRunningVersion = oldVer })
 	runningVer := "0.175.0-rc.23"
-	loopRunningVersion = func() string { return runningVer }
+	LoopRunningVersion = func() string { return runningVer }
 
 	r.pass(t)
 	if r.execs != 0 {
@@ -1975,7 +1975,7 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	installed := false
 	boardCallsBeforeReexec := 0
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && !installed {
+		if slices.Equal(args, SelfUpdateCheck) && !installed {
 			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
@@ -1986,7 +1986,7 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 			runningVer = testLoopNewVer
 			return "", 0
 		}
-		if len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext && (loopFakeBinary{r}).Replaced() {
+		if len(args) >= 2 && args[0] == LoopBoard && args[1] == superloop.KindNext && (loopFakeBinary{r}).Replaced() {
 			boardCallsBeforeReexec++
 		}
 		return "", 0
@@ -1997,22 +1997,22 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true // Observe settled streams before the caller's quiet-point check.
-	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+	l.Once = true // Observe settled streams before the caller's quiet-point check.
+	if err := r.a.store.WriteFile(LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.a.store.WriteFile(loopPIDFile, 0) })
+	t.Cleanup(func() { _ = r.a.store.WriteFile(LoopPIDFile, 0) })
 	if err := r.a.writeLoopVersion(); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.pass(context.Background()); err != nil {
+	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.reexec(context.Background()); err != nil {
+	if _, err := l.Reexec(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !installed || r.execs != 2 || !l.reexecuted {
-		t.Fatalf("installed=%v execs=%d reexecuted=%v", installed, r.execs, l.reexecuted)
+	if !installed || r.execs != 2 || !l.Reexecuted {
+		t.Fatalf("installed=%v execs=%d reexecuted=%v", installed, r.execs, l.Reexecuted)
 	}
 	if boardCallsBeforeReexec != 0 {
 		t.Fatalf("ran %d board next calls on the replaced binary before re-executing", boardCallsBeforeReexec)
@@ -2042,7 +2042,7 @@ func TestLoopStartsTheNextWorkerOnCapacitysChoice(t *testing.T) {
 	}
 	started := false
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopCapacity {
+		if args[0] == LoopCapacity {
 			if started {
 				return loopNoRoomJSON, 0
 			}
@@ -2051,7 +2051,7 @@ func TestLoopStartsTheNextWorkerOnCapacitysChoice(t *testing.T) {
 		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
 			started = true
 		}
-		if args[0] == loopBoard {
+		if args[0] == LoopBoard {
 			return `{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9"}}`, 0
 		}
 		return "", 0
@@ -2098,14 +2098,14 @@ func TestLoopReadsTheClassifiersStdoutAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if note := r.called("note", loopAdd); note == nil || !strings.Contains(note[len(note)-1], "(failed)") {
+	if note := r.called("note", LoopAdd); note == nil || !strings.Contains(note[len(note)-1], "(failed)") {
 		t.Errorf("the note = %v\n%s", note, r.out)
 	}
 }
 
 func TestTheDefaultReviewBriefReportsWithAProblemLine(t *testing.T) {
-	if !strings.Contains(defaultReviewBrief, "--problem none") {
-		t.Errorf("the brief's report lacks --problem: %s", defaultReviewBrief)
+	if !strings.Contains(DefaultReviewBrief, "--problem none") {
+		t.Errorf("the brief's report lacks --problem: %s", DefaultReviewBrief)
 	}
 }
 
@@ -2234,47 +2234,47 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	r.a.cfg.Board = config.Board{Owner: "o", Project: 7, TidyEvery: config.Duration{Duration: time.Hour}}
 	r.answer = func(args []string) (string, int) {
 		switch {
-		case slices.Equal(args, []string{loopBoard, boardTidyName}):
+		case slices.Equal(args, []string{LoopBoard, BoardTidyName}):
 			return "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done\n", 0
-		case slices.Equal(args, []string{loopBoard, boardEscalateName}):
+		case slices.Equal(args, []string{LoopBoard, boardEscalateName}):
 			return "escalated https://github.com/o/r/issues/2 (Status Blocked): re-checked in 24h0m0s\n", 0
 		}
 		return "", 0
 	}
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	l := &Loop{Host: r.a, Said: map[string]bool{}}
 	st := &state.State{}
-	l.tidy(context.Background(), st)
+	l.Tidy(context.Background(), st)
 	// Each tidy escalates the board's blocked items after it.
-	if len(r.calls) != 2 || !slices.Equal(r.calls[1], []string{loopBoard, boardEscalateName}) ||
+	if len(r.calls) != 2 || !slices.Equal(r.calls[1], []string{LoopBoard, boardEscalateName}) ||
 		!strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") ||
 		!strings.Contains(r.out.String(), "SUPERVISOR BOARD escalated https://github.com/o/r/issues/2") {
 		t.Fatalf("calls %v, out %q", r.calls, r.out)
 	}
 	// Within tidyEvery: no second run.
 	r.a.now = r.a.now.Add(30 * time.Minute)
-	l.tidy(context.Background(), st)
+	l.Tidy(context.Background(), st)
 	if len(r.calls) != 2 {
 		t.Fatalf("tidied again within tidyEvery: %v", r.calls)
 	}
 	// The GitHub budget under its floor: none.
 	r.a.now = r.a.now.Add(time.Hour)
 	r.a.cfg.GitHub.Floor = 100
-	l.tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
+	l.Tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
 	if len(r.calls) != 2 {
 		t.Fatalf("tidied on a low budget: %v", r.calls)
 	}
 	// A negative escalateEvery tidies and escalates nothing.
 	r.a.cfg.Board.EscalateEvery.Duration = -1
-	l.tidy(context.Background(), st)
-	if len(r.calls) != 3 || !slices.Equal(r.calls[2], []string{loopBoard, boardTidyName}) {
+	l.Tidy(context.Background(), st)
+	if len(r.calls) != 3 || !slices.Equal(r.calls[2], []string{LoopBoard, BoardTidyName}) {
 		t.Fatalf("no tidy past tidyEvery, or an escalation with escalating off: %v", r.calls)
 	}
 	// A negative tidyEvery, or no board: never.
 	r.a.now = r.a.now.Add(2 * time.Hour)
 	r.a.cfg.Board.TidyEvery.Duration = -1
-	l.tidy(context.Background(), st)
+	l.Tidy(context.Background(), st)
 	r.a.cfg.Board = config.Board{TidyEvery: config.Duration{Duration: time.Hour}}
-	l.tidy(context.Background(), st)
+	l.Tidy(context.Background(), st)
 	if len(r.calls) != 3 {
 		t.Fatalf("tidied without a board or with tidying off: %v", r.calls)
 	}
@@ -2390,17 +2390,17 @@ func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *t
 		t.Fatalf("leave logged as %+v\n%s", evs, r.out)
 	}
 	// No review of theirs since the park, ownerWait past: one decision.
-	note := r.called("note", loopAdd)
+	note := r.called("note", LoopAdd)
 	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.OwnershipQuestion(loopURL, loopTeamB) ||
 		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Override: ") }) {
 		t.Fatalf("no ownership decision: %v\n%s", r.calls, r.out)
 	}
 	r.pass(t)
-	if c := r.called("note", loopAdd); c != nil {
+	if c := r.called("note", LoopAdd); c != nil {
 		t.Errorf("asked twice: %v", c)
 	}
 	// The person overrides it: the loop reviews it as the desk's own.
-	n := &state.Note{ID: 1, By: loopParty, Text: note[len(note)-1]}
+	n := &state.Note{ID: 1, By: LoopParty, Text: note[len(note)-1]}
 	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "Override", Note: 1}, n)); err != nil {
 		t.Fatal(err)
 	}
@@ -2502,10 +2502,10 @@ func TestLoopWakesRetainedWorkerAfterInstalledReleaseAndRetiresOnReport(t *testi
 	r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
 	r.pass(t)
 	// A new loop instance reconstructs the retained worker from the log.
-	contains := loopReleaseContains
-	t.Cleanup(func() { loopReleaseContains = contains })
+	contains := LoopReleaseContains
+	t.Cleanup(func() { LoopReleaseContains = contains })
 	carried := false
-	loopReleaseContains = func(_ context.Context, ref, commit, version string) (bool, error) {
+	LoopReleaseContains = func(_ context.Context, ref, commit, version string) (bool, error) {
 		if ref != loopPR || commit != loopFixed || version != "v2.0.0" {
 			t.Fatalf("containment: %s %s %s", ref, commit, version)
 		}
@@ -2513,7 +2513,7 @@ func TestLoopWakesRetainedWorkerAfterInstalledReleaseAndRetiresOnReport(t *testi
 	}
 	installed := false
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && !installed {
+		if slices.Equal(args, SelfUpdateCheck) && !installed {
 			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
@@ -2529,12 +2529,12 @@ func TestLoopWakesRetainedWorkerAfterInstalledReleaseAndRetiresOnReport(t *testi
 		t.Fatalf("wake before ready: %v", c)
 	}
 	r.command = func([]string) (string, int) { return "", 0 }
-	loopReleaseContains = func(context.Context, string, string, string) (bool, error) { return false, errors.New("offline") }
+	LoopReleaseContains = func(context.Context, string, string, string) (bool, error) { return false, errors.New("offline") }
 	r.pass(t)
 	if len(r.logged(t, "supervisor.release")) != 0 {
 		t.Fatal("lost failed containment retry")
 	}
-	loopReleaseContains = func(context.Context, string, string, string) (bool, error) { return carried, nil }
+	LoopReleaseContains = func(context.Context, string, string, string) (bool, error) { return carried, nil }
 	carried = true
 	r.pass(t)
 	c := r.called(agentsName, agentWakeName, loopWorker)
@@ -2549,46 +2549,46 @@ func TestLoopWakesRetainedWorkerAfterInstalledReleaseAndRetiresOnReport(t *testi
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("reported worker retained: %v", r.calls)
 	}
 }
 
 func TestLoopReleaseWakeSkipsReleasesWithoutTheMergeAndSurvivesRestart(t *testing.T) {
 	r := newLoopRig(t)
-	old := loopReleaseContains
-	t.Cleanup(func() { loopReleaseContains = old })
+	old := LoopReleaseContains
+	t.Cleanup(func() { LoopReleaseContains = old })
 	checks := 0
-	loopReleaseContains = func(_ context.Context, _, _, version string) (bool, error) { checks++; return version == "v2.0.1", nil }
-	l := &supervisorLoop{a: r.a, stages: map[string]bool{}, postMerge: []superloop.Action{{Ref: loopPR, URL: loopURL, Agent: loopWorker, Head: loopFixed}}}
+	LoopReleaseContains = func(_ context.Context, _, _, version string) (bool, error) { checks++; return version == "v2.0.1", nil }
+	l := &Loop{Host: r.a, Stages: map[string]bool{}, PostMerge: []superloop.Action{{Ref: loopPR, URL: loopURL, Agent: loopWorker, Head: loopFixed}}}
 	ctx := context.Background()
 	v := superloop.Action{Key: "release v2.0.0", Version: "v2.0.0"}
-	if err := l.wakeReleased(ctx, v); err != nil {
+	if err := l.WakeReleased(ctx, v); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.wakeReleased(ctx, v); err != nil {
+	if err := l.WakeReleased(ctx, v); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 1 || r.called(agentsName, agentWakeName) != nil {
 		t.Fatalf("absent merge: %d %v", checks, r.calls)
 	}
 	v = superloop.Action{Key: "release v2.0.1", Version: "v2.0.1"}
-	if err := l.wakeReleased(ctx, v); err != nil {
+	if err := l.WakeReleased(ctx, v); err != nil {
 		t.Fatal(err)
 	}
 	if r.called(agentsName, agentWakeName, loopWorker) == nil {
 		t.Fatal("no wake for containing release")
 	}
 	// Stages are reconstructed from the durable event log after re-exec.
-	l.stages = map[string]bool{}
-	for _, e := range r.logged(t, loopStageVerb) {
-		key, _, ok := keyed(e.Detail)
+	l.Stages = map[string]bool{}
+	for _, e := range r.logged(t, LoopStageVerb) {
+		key, _, ok := Keyed(e.Detail)
 		if ok {
-			l.stages[key] = true
+			l.Stages[key] = true
 		}
 	}
 	r.calls = nil
-	if err := l.wakeReleased(ctx, superloop.Action{Key: "release v2.0.2", Version: "v2.0.2"}); err != nil {
+	if err := l.WakeReleased(ctx, superloop.Action{Key: "release v2.0.2", Version: "v2.0.2"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.called(agentsName, agentWakeName) != nil || checks != 2 {
@@ -2614,7 +2614,7 @@ func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
 	}
 	r.inTurn = func(p state.Party) bool { return p.Session == sess }
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove); c != nil {
+	if c := r.called(agentsName, LoopRemove); c != nil {
 		t.Fatalf("removed while its turn still ran: %v", c)
 	}
 	if evs := r.logged(t, "supervisor.done"); len(evs) != 0 {
@@ -2622,7 +2622,7 @@ func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
 	}
 	r.inTurn = func(state.Party) bool { return false }
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("not removed once its turn ended: %v\n%s", r.calls, r.out)
 	}
 }
@@ -2633,7 +2633,7 @@ func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
 func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 	const task = "fix the gate"
 	r := newLoopRig(t)
-	r.a.as = loopParty.Name
+	r.a.as = LoopParty.Name
 	r.park(t, loopPR, time.Now())
 	r.pull.State = superloop.Merged
 	r.pass(t)
@@ -2642,7 +2642,7 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Task, st.Agents[0].LastTask, st.Agents[0].Park, st.Agents[0].Done = "", task, nil, true
 		st.WorkerReports = []state.WorkerReport{{By: st.Agents[0].Party, At: time.Now(), Task: task, Text: "merged " + loopURL}}
-		if got := agentRef(st, loopWorker); got != loopURL {
+		if got := AgentRef(st, loopWorker); got != loopURL {
 			t.Fatalf("agentRef = %q, want %q", got, loopURL)
 		}
 		return nil, nil
@@ -2656,7 +2656,7 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.answer = func(args []string) (string, int) {
-		if len(args) >= 2 && args[0] == loopNote && args[1] == loopAdd {
+		if len(args) >= 2 && args[0] == LoopNote && args[1] == LoopAdd {
 			var out bytes.Buffer
 			cmd := r.a.noteCmd()
 			cmd.SetArgs(args[1:])
@@ -2670,11 +2670,11 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
-	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+	if evs := r.logged(t, LoopFileVerb); len(evs) != 1 {
 		t.Fatalf("KindFile was refused by note add: %+v\n%s", evs, r.out)
 	}
 	r.pass(t)
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("not taken off the roster after the file: %v\n%s", r.calls, r.out)
 	}
 }
@@ -2700,7 +2700,7 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for _, p := range []state.Party{doneWorker, reviewer, guide3, guide4, guide5, staleIdle} {
-			st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: t.TempDir(), By: loopParty, At: now.Add(-2 * time.Hour), Background: true})
+			st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: t.TempDir(), By: LoopParty, At: now.Add(-2 * time.Hour), Background: true})
 		}
 		st.Agents = []state.Agent{
 			{Party: doneWorker, Done: true, IdleSince: now.Add(-time.Hour)},
@@ -2807,7 +2807,7 @@ func TestSupervisorLoopPlainWaitReadsNoPullAndStartsNoReview(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Fatal("plain wait read for review")
 		return superloop.Pull{}, nil
 	}
@@ -2839,13 +2839,13 @@ func TestLoopOwnsPullRequestWaitsWithoutOn(t *testing.T) {
 						t.Fatal(err)
 					}
 					if !verified {
-						readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 							t.Fatal("unverified wait read for review")
 							return superloop.Pull{}, nil
 						}
 					}
 					r.pass(t)
-					if note := r.called("note", loopAdd); note != nil {
+					if note := r.called("note", LoopAdd); note != nil {
 						t.Fatalf("operational park got a note: %v", note)
 					}
 					if got := r.called(agentsName, "start"); (got != nil) != (green && verified) {
@@ -2867,7 +2867,7 @@ func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
 		{"", "CI pending " + loopURL + " https://github.com/o/r/pull/8", ""},
 		{"", "waiting for the person's rollout decision", ""},
 	} {
-		if got := loopParkOn(&state.Park{On: tc.on, Waits: tc.waits}); got != tc.want {
+		if got := LoopParkOn(&state.Park{On: tc.on, Waits: tc.waits}); got != tc.want {
 			t.Errorf("%+v: got %q", tc, got)
 		}
 	}
@@ -2888,20 +2888,20 @@ func hostsFirstRig(t *testing.T, choices []config.Choice, answer func(host bool,
 	r.pull.State = superloop.Merged
 	r.pass(t)
 	loopNextDone(t, r)
-	branch := ghDefaultBranch
-	t.Cleanup(func() { ghDefaultBranch = branch })
-	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	branch := GhDefaultBranch
+	t.Cleanup(func() { GhDefaultBranch = branch })
+	GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
-		case loopCapacity:
+		case LoopCapacity:
 			var exclude []string
 			for i, a := range args {
 				if a == "--"+excludeFlag && i+1 < len(args) {
 					exclude = append(exclude, args[i+1])
 				}
 			}
-			return answer(slices.Contains(args, loopHostFlag), exclude), 0
-		case loopBoard:
+			return answer(slices.Contains(args, LoopHostFlag), exclude), 0
+		case LoopBoard:
 			return loopNextPickJSON, 0
 		}
 		return "", 0
@@ -2922,11 +2922,11 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 		return loopRoomJSON
 	})
 	r.pass(t)
-	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	start := r.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
 	if start == nil {
 		t.Fatalf("the codex-eligible start waited for a Claude-only host: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) {
+	if slices.Contains(start, LoopHostFlag) {
 		t.Errorf("a full host took the start: %v", start)
 	}
 	if slices.Contains(start, "--"+excludeFlag) {
@@ -2960,14 +2960,14 @@ func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 		})
 		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
 		r.pass(t)
-		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		start := r.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
 		if start != nil && slices.Contains(start, "--"+excludeFlag) {
 			t.Errorf("fallback changed the subscription pick: %v", start)
 		}
 		if start == nil {
 			t.Fatalf("no subscription eligible: the self-hosted start waited: %v\n%s", r.calls, r.out)
 		}
-		if slices.Contains(start, loopHostFlag) {
+		if slices.Contains(start, LoopHostFlag) {
 			t.Errorf("a full host took the start: %v", start)
 		}
 	}
@@ -2978,8 +2978,8 @@ func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
 func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
 	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string { return loopRoomJSON })
 	r.pass(t)
-	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
-	if start == nil || !slices.Contains(start, loopHostFlag) {
+	start := r.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
+	if start == nil || !slices.Contains(start, LoopHostFlag) {
 		t.Fatalf("a host with room did not take the start: %v\n%s", start, r.out)
 	}
 	if slices.Contains(start, "--"+excludeFlag) {
@@ -3010,7 +3010,7 @@ func TestLoopHostsFirstFallsBackWhenEveryKindRunsThere(t *testing.T) {
 		return loopRoomJSON
 	})
 	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c == nil || slices.Contains(c, loopHostFlag) {
+	if c := r.called(agentsName, agentStartName); c == nil || slices.Contains(c, LoopHostFlag) {
 		t.Errorf("full hosts did not leave a local fallback: %v", c)
 	}
 }
@@ -3033,7 +3033,7 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 		h.Repositories = map[string]string{"example/elsewhere": "/srv/elsewhere"}
 		r.a.cfg.Agents.Hosts[sshTestSelector] = h
 		r.pass(t)
-		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		start := r.called(agentsName, agentStartName, RepoName(sshTestRepository)+" 9")
 		if !room {
 			if start != nil {
 				t.Errorf("no local room: started %v", start)
@@ -3043,7 +3043,7 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 		if start == nil {
 			t.Fatalf("the unmapped repository waited for a host: %v\n%s", r.calls, r.out)
 		}
-		if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+		if slices.Contains(start, LoopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
 			t.Errorf("the unmapped repository's start = %v, want a plain local start", start)
 		}
 	}
@@ -3059,10 +3059,10 @@ func TestLoopHostsFirstReviewerPreservesChoices(t *testing.T) {
 	r.park(t, pr, time.Now())
 	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopCapacity && slices.Contains(args, loopHostFlag) {
+		if args[0] == LoopCapacity && slices.Contains(args, LoopHostFlag) {
 			return loopNoRoomJSON, 0
 		}
-		if args[0] == loopCapacity {
+		if args[0] == LoopCapacity {
 			return loopRoomJSON, 0
 		}
 		return "", 0
@@ -3077,7 +3077,7 @@ func TestLoopHostsFirstReviewerPreservesChoices(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+	if slices.Contains(start, LoopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
 		t.Errorf("the reviewer start = %v, want local with unchanged choices", start)
 	}
 }
@@ -3106,7 +3106,7 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 2 && args[0] == agentsName && args[1] == agentStartName {
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: args[2], Session: "reviewer-" + args[2]}, By: loopParty, At: time.Now()})
+				st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: args[2], Session: "reviewer-" + args[2]}, By: LoopParty, At: time.Now()})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -3180,7 +3180,7 @@ func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 		st.Agents[i].Execution = &ref
 		st.Agents[i].Park = &state.Park{On: next, At: time.Now(), Waits: "desk review of the next pull request"}
 		st.Records = append(st.Records, state.Record{Session: st.Agents[i].Party, Issue: "https://github.com/o/r/issues/5", By: st.Agents[i].Party, At: time.Now()})
-		st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, By: loopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
+		st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, By: LoopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
 		return nil, nil
 	})
 	if err != nil {
@@ -3202,7 +3202,7 @@ func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
 	for range 2 {
 		r.pass(t)
-		for _, verb := range []string{loopStop, loopRemove} {
+		for _, verb := range []string{LoopStop, LoopRemove} {
 			if c := r.called(agentsName, verb, loopWorker); c != nil {
 				t.Fatalf("retired while it serves open work: %v\n%s", c, r.out)
 			}
@@ -3217,10 +3217,10 @@ func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 	// Its served issue and its next pull request close: it goes.
 	open[issue], open[next] = false, false
 	r.pass(t)
-	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopStop, loopWorker); c == nil {
 		t.Fatalf("the remote worker was not stopped: %v\n%s", r.calls, r.out)
 	}
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("the remote worker stays: %v\n%s", r.calls, r.out)
 	}
 }
@@ -3270,7 +3270,7 @@ func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T)
 
 	assertRetained := func(step string) {
 		t.Helper()
-		for _, verb := range []string{loopStop, loopRemove} {
+		for _, verb := range []string{LoopStop, LoopRemove} {
 			if c := r.called(agentsName, verb, loopWorker); c != nil {
 				t.Fatalf("%s: remote worker retired early (%s): %v\n%s", step, verb, c, r.out)
 			}
@@ -3385,10 +3385,10 @@ func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T)
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopStop, loopWorker); c == nil {
 		t.Fatalf("the remote worker was not stopped after its turn ended: %v\n%s", r.calls, r.out)
 	}
-	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+	if c := r.called(agentsName, LoopRemove, loopWorker); c == nil {
 		t.Fatalf("the remote worker was not removed after its turn ended: %v\n%s", r.calls, r.out)
 	}
 }
@@ -3410,7 +3410,7 @@ func TestLoopLogsAnOrphanedPendingReviewOnce(t *testing.T) {
 	if evs := r.logged(t, "supervisor.leave"); len(evs) != 0 {
 		t.Fatalf("parked pending review reported as orphaned: %+v", evs)
 	}
-	if len(r.logged(t, loopClaimVerb)) == 0 || len(r.logged(t, "supervisor.review")) != 0 {
+	if len(r.logged(t, LoopClaimVerb)) == 0 || len(r.logged(t, "supervisor.review")) != 0 {
 		t.Fatal("expected an uncompleted review claim while capacity refuses")
 	}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -3440,7 +3440,7 @@ func TestLoopLogsAnOrphanedPendingReviewOnce(t *testing.T) {
 // minutes all day.
 func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
 	for count, want := range map[int]time.Duration{2: 5 * time.Minute, 3: 10 * time.Minute, 4: 20 * time.Minute, 5: 40 * time.Minute, 6: time.Hour, 50: time.Hour} {
-		if got := loopFailureDelay(count); got != want {
+		if got := LoopFailureDelay(count); got != want {
 			t.Fatalf("delay after %d failures: %s, want %s", count, got, want)
 		}
 	}
@@ -3452,14 +3452,14 @@ func TestLoopSaysAFailedReleaseLookup(t *testing.T) {
 	r := newLoopRig(t)
 	failing := true
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, selfUpdateCheck) && failing {
+		if slices.Equal(args, SelfUpdateCheck) && failing {
 			return "beekeeper: looking up the latest release: no signed binary found\n", ExitError
 		}
 		return "", 0
 	}
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	l := &Loop{Host: r.a, Said: map[string]bool{}}
 	for range 2 {
-		if v := l.newerRelease(context.Background()); v != "" {
+		if v := l.NewerRelease(context.Background()); v != "" {
 			t.Fatalf("a failed look found %q", v)
 		}
 	}
@@ -3469,9 +3469,9 @@ func TestLoopSaysAFailedReleaseLookup(t *testing.T) {
 	}
 	// A look that succeeds clears it: the next failure is said again.
 	failing = false
-	l.newerRelease(context.Background())
+	l.NewerRelease(context.Background())
 	failing = true
-	l.newerRelease(context.Background())
+	l.NewerRelease(context.Background())
 	if r.out.String() != failed+failed {
 		t.Fatalf("said %q, want the failure again after a success", r.out)
 	}
@@ -3530,7 +3530,7 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 	if c := r.called("board", "block", "o/r#10", "--by", loopClosingIssue); c == nil {
 		t.Fatalf("expected board block o/r#10 --by o/r#70, got calls %v\n%s", r.calls, r.out)
 	}
-	if r.called(loopBoard, loopUnblock, loopClosingIssue, "--by", "o/r#10") == nil {
+	if r.called(LoopBoard, loopUnblock, loopClosingIssue, "--by", "o/r#10") == nil {
 		t.Fatalf("inverse dependency must use closing issue: %v", r.calls)
 	}
 	owner := superloop.PullWorkerName(loopPR)
@@ -3553,25 +3553,25 @@ func TestLoopOverlapWithoutClosingIssueAssignsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopBoard && (args[1] == loopUnblock || args[1] == "block") {
+		if args[0] == LoopBoard && (args[1] == loopUnblock || args[1] == "block") {
 			return "is a pull request: a hold is recorded on an issue", 3
 		}
 		return "", 0
 	}
 	r.pass(t)
-	if r.called(loopBoard, loopUnblock) != nil || r.called(loopBoard, "block") != nil {
+	if r.called(LoopBoard, loopUnblock) != nil || r.called(LoopBoard, "block") != nil {
 		t.Fatalf("attempted issue dependency for issue-less PR: %v", r.calls)
 	}
 	if r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil || len(r.logged(t, "supervisor.owner")) != 1 {
 		t.Fatalf("owner not assigned: %v\n%s", r.calls, r.out)
 	}
-	if len(r.logged(t, loopFailureVerb)) != 0 {
+	if len(r.logged(t, LoopFailureVerb)) != 0 {
 		t.Fatalf("owner failed: %s", r.out)
 	}
 }
 
 func TestParseLoopPullClosingIssueAliases(t *testing.T) {
-	p, err := parseLoopPull(loopPR, []byte(`{"closingIssuesReferences":[{"url":"https://github.com/o/r/issues/101"},{"url":"https://github.com/o/other/issues/102"}]}`))
+	p, err := ParseLoopPull(loopPR, []byte(`{"closingIssuesReferences":[{"url":"https://github.com/o/r/issues/101"},{"url":"https://github.com/o/other/issues/102"}]}`))
 	if err != nil || !slices.Equal(p.Closes, []string{"o/r#101", "o/other#102"}) {
 		t.Fatalf("closing issues = %v, %v", p.Closes, err)
 	}
@@ -3590,7 +3590,7 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.answer = func(args []string) (string, int) {
-				if args[0] == loopBoard && args[1] == operation {
+				if args[0] == LoopBoard && args[1] == operation {
 					return "dependency API unavailable", 1
 				}
 				return "", 0
@@ -3599,18 +3599,18 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 			if got := r.logged(t, "supervisor.owner"); len(got) != 0 {
 				t.Fatalf("dependency failure recorded as taken: %+v", got)
 			}
-			if got := r.logged(t, loopFailureVerb); len(got) != 1 || !strings.Contains(got[0].Detail, "dependency") {
+			if got := r.logged(t, LoopFailureVerb); len(got) != 1 || !strings.Contains(got[0].Detail, "dependency") {
 				t.Fatalf("dependency failure not reported: %+v", got)
 			}
 			if r.called(agentsName, agentStartName) != nil || r.called(agentsName, agentWakeName) != nil {
 				t.Fatalf("assigned owner before dependency confirmation: %v", r.calls)
 			}
-			if operation == loopUnblock && r.called(loopBoard, "block") != nil {
+			if operation == loopUnblock && r.called(LoopBoard, "block") != nil {
 				t.Fatalf("continued after failed unblock: %v", r.calls)
 			}
 			r.answer = func([]string) (string, int) { return "", 0 }
 			r.pass(t)
-			if r.called(loopBoard, "block", "o/r#10", "--by", loopClosingIssue) == nil || r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil {
+			if r.called(LoopBoard, "block", "o/r#10", "--by", loopClosingIssue) == nil || r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil {
 				t.Fatalf("retry did not record dependency then assign owner: %v", r.calls)
 			}
 			if got := r.logged(t, "supervisor.owner"); len(got) != 1 {
@@ -3628,17 +3628,17 @@ func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := r.a.now
-	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	failures, filed := map[string]LoopFailure{}, map[string]time.Time{}
 	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: refOne}
 	for count := 1; count <= 7; count++ {
-		if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+		if err := l.Failed(act, failures, errors.New("unavailable")); err != nil {
 			t.Fatal(err)
 		}
 		f := failures[act.Key]
 		if f.Count != count || !f.Since.Equal(start) {
 			t.Fatalf("episode lost at retry %d: %+v", count, f)
 		}
-		if err := l.stuck(failures, filed); err != nil {
+		if err := l.Stuck(failures, filed); err != nil {
 			t.Fatal(err)
 		}
 		r.a.now = f.RetryAt
@@ -3646,11 +3646,11 @@ func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
 			r.a.now = start.Add(time.Minute)
 		}
 	}
-	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+	if evs := r.logged(t, LoopFileVerb); len(evs) != 1 {
 		t.Fatalf("filed %d times", len(evs))
 	}
-	r.a.now = failures[act.Key].RetryAt.Add(loopStuckRecent)
-	if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+	r.a.now = failures[act.Key].RetryAt.Add(LoopStuckRecent)
+	if err := l.Failed(act, failures, errors.New("unavailable")); err != nil {
 		t.Fatal(err)
 	}
 	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(r.a.now) {
@@ -3667,26 +3667,26 @@ func TestLoopStuckEpisodeUsesRunningClock(t *testing.T) {
 	}
 	start := r.a.now
 	r.a.loopNow = &atomic.Pointer[time.Time]{}
-	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	failures, filed := map[string]LoopFailure{}, map[string]time.Time{}
 	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: refOne}
 	for i, minute := range []int{0, 1, 6, 16, 36, 76} {
 		now := start.Add(time.Duration(minute) * time.Minute)
 		r.a.loopNow.Store(&now)
-		if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+		if err := l.Failed(act, failures, errors.New("unavailable")); err != nil {
 			t.Fatal(err)
 		}
 		f := failures[act.Key]
 		if f.Count != i+1 || !f.Since.Equal(start) || !f.At.Equal(now) {
 			t.Fatalf("episode at minute %d: %+v", minute, f)
 		}
-		if err := l.stuck(failures, filed); err != nil {
+		if err := l.Stuck(failures, filed); err != nil {
 			t.Fatal(err)
 		}
 		want := 0
 		if minute >= 36 {
 			want = 1
 		}
-		if got := len(r.logged(t, loopFileVerb)); got != want {
+		if got := len(r.logged(t, LoopFileVerb)); got != want {
 			t.Fatalf("running loop filed %d problems after %d minutes, want %d", got, minute, want)
 		}
 		for _, at := range filed {
@@ -3696,21 +3696,21 @@ func TestLoopStuckEpisodeUsesRunningClock(t *testing.T) {
 		}
 	}
 	// Missing the scheduled retry expires the group, even with startup fixed.
-	expired := failures[act.Key].RetryAt.Add(loopStuckRecent)
+	expired := failures[act.Key].RetryAt.Add(LoopStuckRecent)
 	r.a.loopNow.Store(&expired)
-	if group := l.stuckGroup(failures, act.Kind, "unavailable"); len(group) != 0 {
+	if group := l.StuckGroup(failures, act.Kind, "unavailable"); len(group) != 0 {
 		t.Fatalf("quiet group did not expire: %+v", group)
 	}
-	if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+	if err := l.Failed(act, failures, errors.New("unavailable")); err != nil {
 		t.Fatal(err)
 	}
 	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(expired) || !f.At.Equal(expired) {
 		t.Fatalf("quiet episode continued: %+v", f)
 	}
-	if err := l.stuck(failures, filed); err != nil {
+	if err := l.Stuck(failures, filed); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(r.logged(t, loopFileVerb)); got != 1 {
+	if got := len(r.logged(t, LoopFileVerb)); got != 1 {
 		t.Fatalf("new episode filed immediately: %d", got)
 	}
 }
@@ -3732,11 +3732,11 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	capOut, capCode := "capacity full", 1
 	boardCalls := 0
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == loopBoard {
+		if len(args) > 0 && args[0] == LoopBoard {
 			boardCalls++
 			return "", 0
 		}
-		if len(args) > 0 && args[0] == loopCapacity {
+		if len(args) > 0 && args[0] == LoopCapacity {
 			return capOut, capCode
 		}
 		return "", 0
@@ -3761,9 +3761,9 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 // Reviewers without a worker GitHub App follow the placement preferences of workers,
 // including Codex, and retain review and self-hosted capacity accounting.
 func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
-	branch := ghDefaultBranch
-	t.Cleanup(func() { ghDefaultBranch = branch })
-	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	branch := GhDefaultBranch
+	t.Cleanup(func() { GhDefaultBranch = branch })
+	GhDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
 	for _, harness := range []string{claudeComm, execution.HarnessCodex} {
 		for _, first := range []bool{false, true} {
 			for _, localRoom := range []bool{false, true} {
@@ -3778,11 +3778,11 @@ func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 						h.Harnesses = []string{harness}
 						r.a.cfg.Agents.Hosts[sshTestSelector] = h
 						r.answer = func(args []string) (string, int) {
-							if args[0] == loopCapacity {
+							if args[0] == LoopCapacity {
 								if !slices.Contains(args, "--review") || slices.Contains(args, "--"+reviewOfSelfHostedFlag) != selfHosted {
 									t.Fatalf("lost review capacity flags: %v", args)
 								}
-								if localRoom || slices.Contains(args, loopHostFlag) {
+								if localRoom || slices.Contains(args, LoopHostFlag) {
 									return loopRoomJSON, 0
 								}
 								return loopNoRoomJSON, 0
@@ -3793,18 +3793,18 @@ func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 						p := r.pull
 						p.Ref, p.URL, p.Branch = act.Ref, act.URL, "feat/pr-7"
 						r.pulls[act.Ref] = p
-						if _, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act); err != nil {
+						if _, err := (&Loop{Host: r.a, Said: map[string]bool{}}).StartReviewer(context.Background(), act); err != nil {
 							t.Fatal(err)
 						}
 						start := r.called(agentsName, agentStartName)
 						if start == nil {
 							t.Fatal("no reviewer started")
 						}
-						if slices.Contains(start, loopHostFlag) != (first || !localRoom) {
+						if slices.Contains(start, LoopHostFlag) != (first || !localRoom) {
 							t.Fatalf("wrong placement: %v", start)
 						}
 						if first || !localRoom {
-							for _, want := range []string{sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, "feat/pr-7"} {
+							for _, want := range []string{sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, "feat/pr-7"} {
 								if !slices.Contains(start, want) {
 									t.Fatalf("missing %s: %v", want, start)
 								}
@@ -3862,7 +3862,7 @@ func TestCombinedPullInheritsClosingKeywordsAndMergeClosesNamedIssues(t *testing
 	r.pull.Closes = []string{issueC}
 
 	var editedBody string
-	editPullBody = func(_ context.Context, pr github.PR, body string) error {
+	EditPullBody = func(_ context.Context, pr github.PR, body string) error {
 		if pr.Repo != repo || pr.N != 7 {
 			t.Fatalf("unexpected editPullBody target: %+v", pr)
 		}
@@ -3870,7 +3870,7 @@ func TestCombinedPullInheritsClosingKeywordsAndMergeClosesNamedIssues(t *testing
 		return nil
 	}
 	closedIssues := map[string]string{}
-	closePullIssue = func(_ context.Context, iss github.PR, pullURL string) error {
+	ClosePullIssue = func(_ context.Context, iss github.PR, pullURL string) error {
 		closedIssues[refName(iss)] = pullURL
 		return nil
 	}
@@ -3926,7 +3926,7 @@ func TestCombinedPullInheritsClosingKeywordsAndMergeClosesNamedIssues(t *testing
 		}
 	}
 
-	parsed, err := parseLoopPull(loopPR, []byte(`{"url":"`+loopURL+`","state":"OPEN","headRefOid":"`+loopHead+`","baseRefName":"release-1.0","title":"fix: closes #53","body":"This does not fix https://github.com/o/r/issues/99\nCloses https://github.com/o/r/issues/54","closingIssuesReferences":[]}`))
+	parsed, err := ParseLoopPull(loopPR, []byte(`{"url":"`+loopURL+`","state":"OPEN","headRefOid":"`+loopHead+`","baseRefName":"release-1.0","title":"fix: closes #53","body":"This does not fix https://github.com/o/r/issues/99\nCloses https://github.com/o/r/issues/54","closingIssuesReferences":[]}`))
 	if err != nil {
 		t.Fatalf("parseLoopPull: %v", err)
 	}
@@ -3969,7 +3969,7 @@ func TestReview3325ClosureFailureRetriesDurably(t *testing.T) {
 	r.pull.Absorbs = []string{origA}
 
 	failEditOnce := true
-	editPullBody = func(_ context.Context, _ github.PR, _ string) error {
+	EditPullBody = func(_ context.Context, _ github.PR, _ string) error {
 		if failEditOnce {
 			failEditOnce = false
 			return errors.New("transient editPullBody failure")
@@ -3978,7 +3978,7 @@ func TestReview3325ClosureFailureRetriesDurably(t *testing.T) {
 	}
 	failClose := true
 	closedIssues := map[string]string{}
-	closePullIssue = func(_ context.Context, iss github.PR, pullURL string) error {
+	ClosePullIssue = func(_ context.Context, iss github.PR, pullURL string) error {
 		if failClose {
 			return errors.New("transient closePullIssue failure")
 		}
@@ -4083,7 +4083,7 @@ func TestReview3325MissingClosureStatesSurviveReplay(t *testing.T) {
 					}
 					return states, nil
 				}
-				act := superloop.Action{Ref: target, URL: pullRefURL(target), Message: strings.ToLower(superloop.Merged)}
+				act := superloop.Action{Ref: target, URL: PullRefURL(target), Message: strings.ToLower(superloop.Merged)}
 				if absorbed {
 					act.Message = "absorbed by " + loopPR
 				}
@@ -4103,7 +4103,7 @@ func TestReview3325MissingClosureStatesSurviveReplay(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err := l.endMerged(context.Background(), st, act); err == nil {
+					if _, err := l.EndMerged(context.Background(), st, act); err == nil {
 						t.Fatal("missing closure state completed reconciliation")
 					}
 					st, err = reopened.Read()
@@ -4123,7 +4123,7 @@ func TestReview3325MissingClosureStatesSurviveReplay(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := l.endMerged(context.Background(), st, act); err != nil {
+				if _, err := l.EndMerged(context.Background(), st, act); err != nil {
 					t.Fatalf("confirmed closure failed: %v", err)
 				}
 				st, err = r.a.store.Read()
@@ -4147,28 +4147,28 @@ func TestLoopStepCanceledByTheLoopIsNoFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, inTurn := beekeeperRun, loopInTurn
-	t.Cleanup(func() { beekeeperRun, loopInTurn = run, inTurn })
-	beekeeperRun = func(ctx context.Context, _ ...string) (string, int, error) {
+	run, inTurn := BeekeeperRun, loopInTurn
+	t.Cleanup(func() { BeekeeperRun, loopInTurn = run, inTurn })
+	BeekeeperRun = func(ctx context.Context, _ ...string) (string, int, error) {
 		return "", 0, cmp.Or(ctx.Err(), errors.New("unavailable"))
 	}
 	loopInTurn = func(*app, state.Party) bool { return false }
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "w1"}}}}
 	act := superloop.Action{Kind: superloop.KindDone, Key: "done w1", Agent: "w1"}
-	failures := map[string]loopFailure{}
+	failures := map[string]LoopFailure{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := l.execAction(ctx, st, nil, failures, act); err != nil {
+	if err := l.ExecAction(ctx, st, nil, failures, act); err != nil {
 		t.Fatal(err)
 	}
 	if len(failures) != 0 {
 		t.Fatalf("a canceled step was recorded as failed: %+v", failures)
 	}
-	if evs := r.logged(t, loopFailureVerb); len(evs) != 0 {
+	if evs := r.logged(t, LoopFailureVerb); len(evs) != 0 {
 		t.Fatalf("a canceled step logged a failure: %+v", evs)
 	}
 	// The same error while the loop runs is the step's own failure.
-	if err := l.execAction(context.Background(), st, nil, failures, act); err != nil {
+	if err := l.ExecAction(context.Background(), st, nil, failures, act); err != nil {
 		t.Fatal(err)
 	}
 	if failures[act.Key].Count != 1 {
@@ -4180,10 +4180,10 @@ func TestLoopStepCanceledByTheLoopIsNoFailure(t *testing.T) {
 // the loop skips the pass instead of exiting on it.
 func TestLoopTellsABusyStateLock(t *testing.T) {
 	busy := &state.LockBusyError{PID: 1, Command: "beekeeper guide watch", Since: time.Now(), Waited: 2 * time.Minute}
-	if !lockBusy(busy) || !lockBusy(fmt.Errorf("reading the state: %w", busy)) {
+	if !LockBusy(busy) || !LockBusy(fmt.Errorf("reading the state: %w", busy)) {
 		t.Fatal("a busy state lock was not told")
 	}
-	if lockBusy(errors.New("disk full")) || lockBusy(nil) {
+	if LockBusy(errors.New("disk full")) || LockBusy(nil) {
 		t.Fatal("another failure was told a busy lock")
 	}
 }
@@ -4209,7 +4209,7 @@ func TestLoopDoesNotReexecDuringShutdown(t *testing.T) {
 			} else {
 				cancel()
 			}
-			if reexec, err := l.reexec(ctx); err != nil || reexec {
+			if reexec, err := l.Reexec(ctx); err != nil || reexec {
 				t.Fatalf("shutdown reexec = %v, %v", reexec, err)
 			}
 			if r.execs != 0 {
@@ -4232,11 +4232,11 @@ func TestLoopDoesNotReexecWhenShutdownBeginsWhileWatchDrains(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stopped := false
-	l.stopWatch = func() {
+	l.StopWatch = func() {
 		stopped = true
 		cancel()
 	}
-	if reexec, err := l.reexec(ctx); err != nil || reexec {
+	if reexec, err := l.Reexec(ctx); err != nil || reexec {
 		t.Fatalf("shutdown reexec = %v, %v", reexec, err)
 	}
 	if !stopped || ctx.Err() == nil {
@@ -4255,7 +4255,7 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !l.beginInFlight("stream:workers") {
+	if !l.BeginInFlight("stream:workers") {
 		t.Fatal("failed to mark worker stream in flight")
 	}
 	alertReads := 0
@@ -4266,13 +4266,13 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 		return nil, nil
 	}
 	pullReads := 0
-	oldReadPull := readLoopPull
-	t.Cleanup(func() { readLoopPull = oldReadPull })
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	oldReadPull := ReadLoopPull
+	t.Cleanup(func() { ReadLoopPull = oldReadPull })
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		pullReads++
 		return r.pull, nil
 	}
-	if err := l.pass(context.Background()); err != nil {
+	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if r.execs != 0 {
@@ -4284,14 +4284,14 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 	if !strings.Contains(r.out.String(), "SUPERVISOR LOOP restart held: claims are in flight") {
 		t.Fatalf("missing restart-held log: %s", r.out.String())
 	}
-	if err := l.settleStaleNext([]superloop.Action{{Key: "next 1", Kind: superloop.KindNext}}); err != nil {
+	if err := l.SettleStaleNext([]superloop.Action{{Key: "next 1", Kind: superloop.KindNext}}); err != nil {
 		t.Fatal(err)
 	}
 	if evs := r.logged(t, "supervisor."+superloop.KindNext); len(evs) != 0 {
 		t.Fatalf("settled stale next while draining for re-exec: %+v", evs)
 	}
-	l.endInFlight("stream:workers")
-	if reexec, err := l.reexec(context.Background()); err != nil || !reexec || r.execs != 1 {
+	l.EndInFlight("stream:workers")
+	if reexec, err := l.Reexec(context.Background()); err != nil || !reexec || r.execs != 1 {
 		t.Fatalf("reexec after draining in-flight claim = %v, %v (execs=%d)", reexec, err, r.execs)
 	}
 }
@@ -4314,15 +4314,15 @@ func TestLoopReexecCancelsInFlightActionsWhenRecoveryWriterFenced(t *testing.T) 
 	if !state.WriterFenced(r.a.store) {
 		t.Fatal("expected candidate store to be fenced after recovery")
 	}
-	bgCtx := l.backgroundContext(context.Background())
-	if !l.beginInFlight("stream:workers") {
+	bgCtx := l.BackgroundContext(context.Background())
+	if !l.BeginInFlight("stream:workers") {
 		t.Fatal("failed to mark worker stream in flight")
 	}
-	l.passActions.Go(func() {
-		defer l.endInFlight("stream:workers")
+	l.PassActions.Go(func() {
+		defer l.EndInFlight("stream:workers")
 		<-bgCtx.Done()
 	})
-	reexec, err := l.reexec(context.Background())
+	reexec, err := l.Reexec(context.Background())
 	if err != nil || !reexec || r.execs != 1 {
 		t.Fatalf("fenced reexec with in-flight action = %v, %v (execs=%d)", reexec, err, r.execs)
 	}
@@ -4363,7 +4363,7 @@ func TestLoopReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.lifecycle = &loopLifecycle{Version: recoveryBadVersion, Started: now}
+	l.Lifecycle = &LoopLifecycle{Version: recoveryBadVersion, Started: now}
 	prevInTurn := loopInTurn
 	t.Cleanup(func() { loopInTurn = prevInTurn })
 	loopInTurn = func(*app, state.Party) bool { return false }
@@ -4380,12 +4380,12 @@ func TestLoopReviewWorkersStopOnRecoveryWriterFence(t *testing.T) {
 		}
 		return "cannot write the state: " + state.ErrRecoveryWriterFenced.Error(), 1
 	}
-	err = l.endReviewWorkers(context.Background(), st)
+	err = l.EndReviewWorkers(context.Background(), st)
 	if !errors.Is(err, state.ErrRecoveryWriterFenced) || runCalls != 1 {
 		t.Fatalf("endReviewWorkers error = %v (runCalls=%d), want %v and 1 call", err, runCalls, state.ErrRecoveryWriterFenced)
 	}
 	// Once fenced, a subsequent pass stops before running any further worker commands.
-	if err := l.endReviewWorkers(context.Background(), st); err != nil || runCalls != 1 {
+	if err := l.EndReviewWorkers(context.Background(), st); err != nil || runCalls != 1 {
 		t.Fatalf("fenced endReviewWorkers = %v (runCalls=%d), want nil and no extra calls", err, runCalls)
 	}
 }
@@ -4453,8 +4453,8 @@ func TestLoopClassifyRechecksParkState(t *testing.T) {
 					ag.Park.Resumable = at.Add(time.Second)
 				}
 			})
-			l := &supervisorLoop{a: r.a}
-			_, err = l.classify(t.Context(), st, superloop.Action{Agent: loopWorker, Event: &superloop.Event{At: at, Agent: loopWorker, Verb: parkEvent}})
+			l := &Loop{Host: r.a}
+			_, err = l.Classify(t.Context(), st, superloop.Action{Agent: loopWorker, Event: &superloop.Event{At: at, Agent: loopWorker, Verb: parkEvent}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4462,7 +4462,7 @@ func TestLoopClassifyRechecksParkState(t *testing.T) {
 			if wake := r.called(agentsName, agentWakeName); (wake != nil) != wantWake {
 				t.Fatalf("wake %v, want wake %v", wake, wantWake)
 			}
-			if note := r.called(loopNote, loopAdd); note != nil {
+			if note := r.called(LoopNote, LoopAdd); note != nil {
 				t.Fatalf("unexpected person note: %v", note)
 			}
 		})

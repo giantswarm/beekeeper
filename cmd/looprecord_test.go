@@ -17,20 +17,20 @@ import (
 func TestDryRunRecordsBeyondOneSweepBatch(t *testing.T) {
 	r := newLoopRig(t)
 	var open []string
-	for n := range sweepReadsPerPass + 10 {
+	for n := range SweepReadsPerPass + 10 {
 		ref := sweepRef(100 + n)
 		open = append(open, ref)
 		r.pulls[ref] = superloop.Pull{Ref: ref, URL: fmt.Sprintf("https://github.com/o/r/pull/%d", 100+n), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	}
-	listed := readOpenPulls
-	t.Cleanup(func() { readOpenPulls = listed })
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
+	listed := ReadOpenPulls
+	t.Cleanup(func() { ReadOpenPulls = listed })
+	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
 	dir := t.TempDir()
 	if err := r.a.dryRunSupervisorLoop(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}
-	var recorded loopRecording
-	readReplayJSON(t, filepath.Join(dir, loopRecordInputFile), &recorded)
+	var recorded LoopRecording
+	readReplayJSON(t, filepath.Join(dir, LoopRecordInputFile), &recorded)
 	if len(recorded.Planner.Pulls) != len(open) {
 		t.Fatalf("recorded %d pulls, want %d", len(recorded.Planner.Pulls), len(open))
 	}
@@ -41,25 +41,25 @@ func TestDryRunRecordsBeyondOneSweepBatch(t *testing.T) {
 
 func TestLoopRecordAnonymizesAndDoesNotOverwrite(t *testing.T) {
 	const privateRef = "private-owner/private-repo#9876"
-	input := loopRecording{
+	input := LoopRecording{
 		Planner: superloop.Input{Workers: []superloop.Worker{{Name: "private-worker", ParkedOn: privateRef}}, Pulls: map[string]superloop.Pull{privateRef: {Ref: privateRef, URL: "https://github.com/private-owner/private-repo/pull/9876", Body: "private-body", Head: "private-head"}}},
 		Agents:  []state.Agent{{Party: state.Party{Name: "private-worker", Session: "private-session"}, Task: "private-task", Park: &state.Park{On: privateRef, Continuation: []string{"private-event"}}}},
 	}
 	input.Planner.Open = func(ref string) bool { return ref == privateRef }
-	input.capture(input.Planner)
+	input.Capture(input.Planner)
 	_ = input.Planner.Open(privateRef)
 	dir := t.TempDir()
-	if err := writeLoopRecording(dir, input); err != nil {
+	if err := WriteLoopRecording(dir, input); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, loopRecordInputFile)) //nolint:gosec // test TempDir fixture
+	data, err := os.ReadFile(filepath.Join(dir, LoopRecordInputFile)) //nolint:gosec // test TempDir fixture
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "private-") || strings.Contains(string(data), "9876") {
 		t.Fatal("recording leaked identity or free text")
 	}
-	var replay loopRecording
+	var replay LoopRecording
 	if err := json.Unmarshal(data, &replay); err != nil {
 		t.Fatal(err)
 	}
@@ -67,10 +67,10 @@ func TestLoopRecordAnonymizesAndDoesNotOverwrite(t *testing.T) {
 	if worker.Name == "" || worker.Name != replay.Agents[0].Name || worker.ParkedOn != replay.Agents[0].Park.On || replay.Planner.Pulls[worker.ParkedOn].Ref != worker.ParkedOn {
 		t.Fatal("inconsistent placeholders")
 	}
-	if !replay.replayInput().Open(worker.ParkedOn) {
+	if !replay.ReplayInput().Open(worker.ParkedOn) {
 		t.Fatal("recorded query fact lost")
 	}
-	if err := writeLoopRecording(dir, input); err == nil {
+	if err := WriteLoopRecording(dir, input); err == nil {
 		t.Fatal("overwrote evidence")
 	}
 }
@@ -84,7 +84,7 @@ func TestStandstillReplay(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
-			var in loopRecording
+			var in LoopRecording
 			readReplayJSON(t, path, &in)
 			var want struct {
 				Starts        int
@@ -94,12 +94,12 @@ func TestStandstillReplay(t *testing.T) {
 			readReplayJSON(t, filepath.Join(filepath.Dir(path), "want.json"), &want)
 			a, out := supervisorApp(t)
 			a.now = in.Planner.Now
-			l := &supervisorLoop{a: a, dryRun: true, said: map[string]bool{}}
+			l := &Loop{Host: a, DryRun: true, Said: map[string]bool{}}
 			st := &state.State{Agents: in.Agents, Deliveries: in.Deliveries}
-			if got := l.deliveryRoom(in.Room, st); got < want.Starts {
+			if got := l.DeliveryRoom(in.Room, st); got < want.Starts {
 				t.Fatalf("standstill: starts %d, need %d", got, want.Starts)
 			}
-			if err := l.continueParks(t.Context(), st); err != nil {
+			if err := l.ContinueParks(t.Context(), st); err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range want.Continuations {
@@ -108,7 +108,7 @@ func TestStandstillReplay(t *testing.T) {
 				}
 			}
 			counts := map[string]int{}
-			for _, action := range superloop.Plan(in.replayInput()) {
+			for _, action := range superloop.Plan(in.ReplayInput()) {
 				counts[action.Kind]++
 			}
 			for kind, minimum := range want.Actions {
@@ -143,8 +143,8 @@ func TestDryRunWritesRecordingWithoutActions(t *testing.T) {
 	if err := r.a.dryRunSupervisorLoop(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}
-	var recorded loopRecording
-	readReplayJSON(t, filepath.Join(dir, loopRecordInputFile), &recorded)
+	var recorded LoopRecording
+	readReplayJSON(t, filepath.Join(dir, LoopRecordInputFile), &recorded)
 	if len(recorded.Planner.Workers) == 0 {
 		t.Fatal("no planner workers recorded")
 	}

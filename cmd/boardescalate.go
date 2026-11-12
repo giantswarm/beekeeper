@@ -151,7 +151,7 @@ func agentsParkedOn(st *state.State, ref, url string) []state.Agent {
 			continue
 		}
 		if strings.EqualFold(ag.Park.On, ref) || strings.EqualFold(ag.Park.On, url) ||
-			strings.EqualFold(loopServes(st, ag), ref) || namesURL(ag.Task, url) {
+			strings.EqualFold(LoopServes(st, ag), ref) || namesURL(ag.Task, url) {
 			out = append(out, ag)
 		}
 	}
@@ -336,9 +336,9 @@ func (a *app) escalateRun(me state.Party, ref, asked string) (string, error) {
 		w = append(w, "--"+configFlag, shellQuote(a.cfgPath))
 	}
 	if me.Name != "" {
-		w = append(w, "--"+asFlag, shellQuote(me.Name))
+		w = append(w, "--"+AsFlag, shellQuote(me.Name))
 	}
-	w = append(w, loopBoard, boardEscalateName)
+	w = append(w, LoopBoard, boardEscalateName)
 	if asked != "" {
 		w = append(w, "--"+askedFlag, shellQuote(asked))
 	}
@@ -352,7 +352,7 @@ func (a *app) beekeeperAs(me state.Party, args ...string) []string {
 		out = append(out, "--"+configFlag, a.cfgPath)
 	}
 	if me.Name != "" {
-		out = append(out, "--"+asFlag, me.Name)
+		out = append(out, "--"+AsFlag, me.Name)
 	}
 	return append(out, args...)
 }
@@ -364,13 +364,13 @@ func (a *app) recheck(ctx context.Context, me state.Party, e escalation, every t
 	if err != nil {
 		return err
 	}
-	return a.beekeeperStep(ctx, "timer add", e.Ref, a.beekeeperAs(me, loopTimer, loopAdd, every.String(), escalateWhat+e.Ref, "--run", run))
+	return a.beekeeperStep(ctx, "timer add", e.Ref, a.beekeeperAs(me, LoopTimer, LoopAdd, every.String(), escalateWhat+e.Ref, "--run", run))
 }
 
 // beekeeperStep runs one beekeeper command for ref and makes its failure
 // an error.
 func (a *app) beekeeperStep(ctx context.Context, name, ref string, args []string) error {
-	out, code, err := beekeeperRun(ctx, args...)
+	out, code, err := BeekeeperRun(ctx, args...)
 	if err != nil {
 		return err
 	}
@@ -403,7 +403,7 @@ func (a *app) escalate(ctx context.Context, me state.Party, e escalation, every 
 	// linked, as a note for the person needs.
 	question := fmt.Sprintf("What unblocks %s?", e.URL)
 	quo := fmt.Sprintf("%s (%s) sits in Blocked on the board. Who: %s. Evidence: %s.", e.URL, linked(e.Title), linked(e.Who), linked(strings.Join(e.Evidence, "; ")))
-	note := a.beekeeperAs(me, loopNote, loopAdd, "--for", person, "--ref", e.Ref, "--due", a.cfg.Supervisor.NoteDue.String(),
+	note := a.beekeeperAs(me, LoopNote, LoopAdd, "--for", person, "--ref", e.Ref, "--due", a.cfg.Supervisor.NoteDue.String(),
 		"--status-quo", truncate(quo, 2900),
 		"--why", "a blocked item gets no worker until what holds it is settled",
 		"--default", fmt.Sprintf("it stays blocked; beekeeper looks again in %s and asks again only when what holds it changed", every),

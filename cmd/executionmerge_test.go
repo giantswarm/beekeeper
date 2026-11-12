@@ -25,12 +25,12 @@ func TestExecutionMergeCoordinatorConsumesOnceAndAudits(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	oldRead, oldMerge := readLoopPull, runExecutionMerge
-	t.Cleanup(func() { readLoopPull, runExecutionMerge = oldRead, oldMerge })
+	oldRead, oldMerge := ReadLoopPull, runExecutionMerge
+	t.Cleanup(func() { ReadLoopPull, runExecutionMerge = oldRead, oldMerge })
 	approved := superloop.Review{Verdict: superloop.Approved, At: now}
 	useForReview := execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	round := completeMergeReview(t, a, useForReview, &approved)
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
 	use := execution.MergeUse{ID: "grant-test", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
@@ -82,8 +82,8 @@ func TestExecutionMergeLiveDeniesStopHoldMovedHeadAndMissingLease(t *testing.T) 
 	st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Minute)}
 	head := strings.Repeat("a", 40)
 	use := execution.MergeUse{ID: "grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
-	old := readLoopPull
-	t.Cleanup(func() { readLoopPull = old })
+	old := ReadLoopPull
+	t.Cleanup(func() { ReadLoopPull = old })
 	pull := superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved}}}
 	completeMergeReview(t, a, use, &pull.Reviews[0])
 	st, err = a.store.Read()
@@ -92,7 +92,7 @@ func TestExecutionMergeLiveDeniesStopHoldMovedHeadAndMissingLease(t *testing.T) 
 	}
 	st.Starts[0].Execution.Request = r
 	st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Minute)}
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
 	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +130,8 @@ func TestExecutionMergeLiveAdmitsTheLoopsOwnMergeWithoutAGrant(t *testing.T) {
 	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
 	head := strings.Repeat("a", 40)
 	use := execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
-	old := readLoopPull
-	t.Cleanup(func() { readLoopPull = old })
+	old := ReadLoopPull
+	t.Cleanup(func() { ReadLoopPull = old })
 	pull := superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved}}}
 	completeMergeReview(t, a, use, &pull.Reviews[0])
 	st, err := a.store.Read()
@@ -140,7 +140,7 @@ func TestExecutionMergeLiveAdmitsTheLoopsOwnMergeWithoutAGrant(t *testing.T) {
 	}
 	st.Starts[0].Execution.Request = r
 	st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Minute)}
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
 	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
 		t.Fatalf("loop merge of an approved head refused: %v", err)
 	}
@@ -166,16 +166,16 @@ func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	reviewEvent := about(event(loopParty, "supervisor.review", "[review %s#7@%s] reviewer: independent round", r.Repository, head), r.Repository+"#7")
+	reviewEvent := about(event(LoopParty, "supervisor.review", "[review %s#7@%s] reviewer: independent round", r.Repository, head), r.Repository+"#7")
 	reviewEvent.At = now.Add(-time.Minute)
 	if err := a.store.Record(reviewEvent); err != nil {
 		t.Fatal(err)
 	}
-	old := readLoopPull
-	t.Cleanup(func() { readLoopPull = old })
+	old := ReadLoopPull
+	t.Cleanup(func() { ReadLoopPull = old })
 	approved := superloop.Review{Verdict: superloop.Approved}
 	completeMergeReview(t, a, execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}, &approved)
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
 	for _, p := range []state.Party{{Session: "s-worker", Name: r.Name}, session} {
@@ -185,14 +185,14 @@ func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	}
 	// The loop's own --as call as caller() builds it: the configured person,
 	// team and host stamped on its name.
-	stamped := loopParty
+	stamped := LoopParty
 	stamped.Person, stamped.Team, stamped.Host = "Pat", ourTeam, "desk-host"
 	grant, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, stamped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stored, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), grant.ID)
-	if err != nil || stored.Issuer != loopParty.Name || stored.Ref != r.Ref {
+	if err != nil || stored.Issuer != LoopParty.Name || stored.Ref != r.Ref {
 		t.Fatal("grant identity not durable", err)
 	}
 }
@@ -206,10 +206,10 @@ func TestExecutionMergeRetryReadsResultWithoutRepeatingMutation(t *testing.T) {
 	if err := execution.WriteMergeAuthorization(a.mergeAuthorityRoot(), grant, "used", now); err != nil {
 		t.Fatal(err)
 	}
-	oldRead, oldMerge := readLoopPull, runExecutionMerge
-	t.Cleanup(func() { readLoopPull, runExecutionMerge = oldRead, oldMerge })
+	oldRead, oldMerge := ReadLoopPull, runExecutionMerge
+	t.Cleanup(func() { ReadLoopPull, runExecutionMerge = oldRead, oldMerge })
 	reads := 0
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		reads++
 		return superloop.Pull{State: superloop.Merged, Head: head}, nil
 	}

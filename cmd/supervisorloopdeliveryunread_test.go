@@ -37,8 +37,8 @@ func TestDeliveryPullsOutsideDeskAreNotTracked(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var observed []string
-	fixture := readObservedLoopPull
-	readObservedLoopPull = func(l *supervisorLoop, ctx context.Context, ref string, changed time.Time, step string) (loopPullObservation, error) {
+	fixture := ReadObservedLoopPull
+	ReadObservedLoopPull = func(l *Loop, ctx context.Context, ref string, changed time.Time, step string) (LoopPullObservation, error) {
 		mu.Lock()
 		observed = append(observed, ref)
 		mu.Unlock()

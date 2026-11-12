@@ -23,7 +23,7 @@ var loopBroker = func(ctx context.Context) (string, error) {
 	if err != nil {
 		return "no broker runs", nil //nolint:nilerr // no broker unit: nothing to put on the new binary
 	}
-	exe, err := executablePath()
+	exe, err := ExecutablePath()
 	if err != nil {
 		return "", err
 	}
@@ -37,7 +37,7 @@ var loopBroker = func(ctx context.Context) (string, error) {
 	}
 	switch step, calls := brokerDue(pid, bin, exe, fi.ModTime(), t); step {
 	case brokerBusy:
-		return fmt.Sprintf("the broker serves %d call(s)", calls), errLoopLater
+		return fmt.Sprintf("the broker serves %d call(s)", calls), ErrLoopLater
 	case brokerRestart:
 		if err := restartBroker(ctx); err != nil {
 			return "", fmt.Errorf("restarting the broker: %w", err)
@@ -109,11 +109,11 @@ var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
 // sleeping waits, takes off the roster any finished agent (done, relieved or
 // stale with no CLI) that superloop.Plan is not still handling in planned, and
 // archives or stops owed desktop and background sessions once their turns end.
-func loopRoster(l *supervisorLoop, ctx context.Context, planned map[string]bool) error {
-	if l.pauseForReexec() || ctx.Err() != nil {
+func loopRoster(l *Loop, ctx context.Context, planned map[string]bool) error {
+	if l.PauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
-	a := l.a.snapshotAtNow()
+	a := l.Host.snapshotAtNow()
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -126,16 +126,16 @@ func loopRoster(l *supervisorLoop, ctx context.Context, planned map[string]bool)
 	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
 	waits := sleepingWaits(st, sessions, t, inFlight, a.timeNow())
 	for _, w := range waits {
-		if l.pauseForReexec() || ctx.Err() != nil {
+		if l.PauseForReexec() || ctx.Err() != nil {
 			return nil
 		}
 		stopProcesses(w.pids())
 		line := "stopped " + w.String()
 		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
-			return []state.Event{event(loopParty, "agents.stop", "%s", line)}, nil
+			return []state.Event{event(LoopParty, "agents.stop", "%s", line)}, nil
 		})
 	}
-	if l.pauseForReexec() || ctx.Err() != nil {
+	if l.PauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
 	busy := func(p state.Party) bool {
@@ -148,7 +148,7 @@ func loopRoster(l *supervisorLoop, ctx context.Context, planned map[string]bool)
 	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.timeNow(), a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
-	_, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
+	_, err = a.finishRoster(ctx, chores, sessions, record, busy, LoopParty, "beekeeper supervisor loop")
 	return err
 }
 
@@ -161,17 +161,17 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 // loopFiledIssues reads the issues created by sessions active since the loop
 // started (Work.Created), with the item or pull request each session was
 // working on when it filed the issue.
-func loopFiledIssues(l *supervisorLoop, st *state.State) []superloop.FiledIssue {
-	sessions, _, err := loopSessions(l.a)
+func loopFiledIssues(l *Loop, st *state.State) []superloop.FiledIssue {
+	sessions, _, err := loopSessions(l.Host)
 	if err != nil || len(sessions) == 0 {
 		return nil
 	}
 	var out []superloop.FiledIssue
 	for _, s := range sessions {
-		if !s.LastActive.IsZero() && s.LastActive.Before(l.since) {
+		if !s.LastActive.IsZero() && s.LastActive.Before(l.Since) {
 			continue
 		}
-		w, _ := harnessForSession(s).ReadTranscript(l.a, s, l.a.timeNow())
+		w, _ := harnessForSession(s).ReadTranscript(l.Host, s, l.Host.timeNow())
 		if len(w.Created) == 0 {
 			continue
 		}
@@ -180,7 +180,7 @@ func loopFiledIssues(l *supervisorLoop, st *state.State) []superloop.FiledIssue 
 		from := ""
 		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
 			agent = st.Agents[i].Name
-			from = agentRef(st, agent)
+			from = AgentRef(st, agent)
 		} else if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(p) {
 			agent = guideName
 		}
@@ -208,9 +208,9 @@ func loopFiledIssues(l *supervisorLoop, st *state.State) []superloop.FiledIssue 
 			url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
 			out = append(out, superloop.FiledIssue{Ref: ref, URL: url, Agent: agent, From: from})
 		}
-		if !l.dryRun && len(createdRefs) > 0 && from == "" && agent != guideName && !holdsRole(st, p) && !agentIdle(st, p) && !endedOwner(st, p) {
-			_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-				return recordSessionIssues(current, p, p, l.a.timeNow(), createdRefs), nil
+		if !l.DryRun && len(createdRefs) > 0 && from == "" && agent != guideName && !holdsRole(st, p) && !agentIdle(st, p) && !endedOwner(st, p) {
+			_ = l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
+				return recordSessionIssues(current, p, p, l.Host.timeNow(), createdRefs), nil
 			})
 		}
 	}
@@ -221,16 +221,16 @@ func loopFiledIssues(l *supervisorLoop, st *state.State) []superloop.FiledIssue 
 // reminders and their desktop notifications. Checks run outside the state
 // lock; settling inside Update lets a concurrent watch take a timer first
 // without either firing it twice. Side effects follow the successful save.
-func loopFireTimers(l *supervisorLoop, ctx context.Context, st *state.State) error {
-	a := l.a
+func loopFireTimers(l *Loop, ctx context.Context, st *state.State) error {
+	a := l.Host
 	var acting []state.Timer
 	for _, t := range st.Timers {
 		if timerActs(t) {
 			acting = append(acting, t)
 		}
 	}
-	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) ||
-		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow())
+	githubHeld := BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) ||
+		a.cfg.GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow())
 	found := a.loopTimerChecks(ctx, acting, a.timeNow(), githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
 	_, _, _, changed := settleTimersMatching(st, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
@@ -255,10 +255,10 @@ func loopFireTimers(l *supervisorLoop, ctx context.Context, st *state.State) err
 		w.outputEvent(line)
 	}
 	timerCtx := ctx
-	if !l.once {
-		timerCtx = l.backgroundContext(ctx)
+	if !l.Once {
+		timerCtx = l.BackgroundContext(ctx)
 	}
-	l.timerActs.Go(func() {
+	l.TimerActs.Go(func() {
 		w.actTimers(timerCtx, fires)
 		w.timerActs.Wait()
 	})

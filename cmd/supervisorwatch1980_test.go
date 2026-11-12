@@ -29,23 +29,23 @@ func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true // These checks inspect completed pass effects.
+	l.Once = true // These checks inspect completed pass effects.
 	for range 3 {
-		if err := l.pass(context.Background()); err != nil {
+		if err := l.Pass(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if l.startsHeld {
+		if l.StartsHeld {
 			t.Fatal("a fill forecast over the floor held starts")
 		}
 	}
-	if r.called(loopDiskKind, "prune", "--apply") != nil {
+	if r.called(LoopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("a fill forecast over the floor pruned")
 	}
 	st, _ := r.a.store.Read()
 	if len(st.Notes) != 0 {
 		t.Fatalf("a fill forecast noted the person: %+v", st.Notes)
 	}
-	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == LoopFileVerb })
 	if err != nil || len(evs) != 0 {
 		t.Fatalf("a fill forecast filed a finding: %+v %v", evs, err)
 	}

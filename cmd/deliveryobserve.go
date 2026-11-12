@@ -61,5 +61,5 @@ func recordDeliveryRelease(st *state.State, repo string, pr int, out merge.Outco
 			applyDeliveryVerdict(d, verdict, out.Release, now)
 		}
 	}
-	return state.DeliveryEvents(prev, st.Deliveries, loopParty)
+	return state.DeliveryEvents(prev, st.Deliveries, LoopParty)
 }

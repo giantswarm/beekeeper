@@ -50,7 +50,7 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 	if request.Diff && request.Body != "" || len(request.Body) > 64<<10 {
 		return "", usageErr("review accepts a diff read or a review body up to 64 KiB")
 	}
-	pull, err := readLoopPull(ctx, round.Ref)
+	pull, err := ReadLoopPull(ctx, round.Ref)
 	if err != nil {
 		return "", err
 	}

@@ -118,7 +118,7 @@ func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
 // An effort agy would ignore must never reach a request, a start record or an
 // event, however it was selected and whichever way agy was chosen.
 func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
-	remote := []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch}
+	remote := []string{LoopHostFlag, sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch}
 	explicit := []string{testHarnessFlag, harnessAgy, modelFlag, agyTestModel}
 	auto := []string{testHarnessFlag, harnessAuto}
 	flag := []string{effortFlag, testEffortHigh}

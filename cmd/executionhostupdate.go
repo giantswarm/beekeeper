@@ -30,7 +30,7 @@ import (
 var (
 	coordinatorVersion = project.Version
 	coordinatorJournal = func() (*update.Journal, error) {
-		exe, err := executablePath()
+		exe, err := ExecutablePath()
 		if err != nil {
 			return nil, err
 		}
@@ -561,7 +561,7 @@ func (a *app) admitExecution(selector string, h execution.Host) error {
 	if pin != nil && pin.Identity != h.Identity {
 		pin = nil
 	}
-	if pin != nil && hostHoldBlocks(*pin) {
+	if pin != nil && HostHoldBlocks(*pin) {
 		return refused("execution host %s is held since %s, it takes no start: %s (beekeeper agents hosts update %s lifts it)", selector, pin.HeldAt.Format(time.RFC3339), pin.Held, selector)
 	}
 	return nil

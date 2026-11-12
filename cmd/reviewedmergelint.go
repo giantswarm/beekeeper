@@ -39,10 +39,10 @@ func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []st
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, _ = runGit(cleanup, dir, "worktree", loopRemove, "--force", baseline)
+		_, _ = runGit(cleanup, dir, "worktree", LoopRemove, "--force", baseline)
 		_ = os.RemoveAll(baseline) //nolint:gosec // owned temporary baseline worktree
 	}()
-	if _, err := runGit(ctx, dir, "worktree", loopAdd, "--detach", baseline, baseSHA); err != nil {
+	if _, err := runGit(ctx, dir, "worktree", LoopAdd, "--detach", baseline, baseSHA); err != nil {
 		return "", fmt.Errorf("creating lint baseline: %w", err)
 	}
 	// Each tree supplies its own repository policy; config changes in the PR

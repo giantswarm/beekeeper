@@ -39,7 +39,7 @@ func (w *watcher) handCITimerToReviewRead(ctx context.Context, f timerFire, ag s
 	if err != nil {
 		return false, err
 	}
-	p, err := parseLoopPull(ref, out)
+	p, err := ParseLoopPull(ref, out)
 	if err != nil {
 		return false, err
 	}

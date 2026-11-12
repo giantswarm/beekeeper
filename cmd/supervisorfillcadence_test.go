@@ -20,24 +20,24 @@ func TestRefillCadenceWhileObservationIsBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.independentFill = true
+	l.IndependentFill = true
 	r.park(t, loopPR, r.a.timeNow())
 	entered, release := make(chan struct{}), make(chan struct{})
-	original := readLoopPull
+	original := ReadLoopPull
 	var first sync.Once
-	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		first.Do(func() { close(entered); <-release })
 		return original(ctx, ref)
 	}
 	passDone := make(chan error, 1)
-	go func() { passDone <- l.pass(t.Context()) }()
+	go func() { passDone <- l.Pass(t.Context()) }()
 	defer func() {
 		close(release)
 		if err := <-passDone; err != nil {
 			t.Error(err)
 		}
-		l.passActions.Wait()
-		l.mergeActions.Wait()
+		l.PassActions.Wait()
+		l.MergeActions.Wait()
 	}()
 	select {
 	case <-entered:
@@ -48,7 +48,7 @@ func TestRefillCadenceWhileObservationIsBlocked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	done := make(chan struct{})
-	go func() { defer close(done); l.runRefillCadence(ctx, ticks) }()
+	go func() { defer close(done); l.RunRefillCadence(ctx, ticks) }()
 	select {
 	case ticks <- r.a.timeNow():
 	case <-ctx.Done():
@@ -75,14 +75,14 @@ func TestRefillCadenceHonoursHoldAndRecovers(t *testing.T) {
 	}
 	w := r.a.newWatcher(false, false)
 	w.publishBudget(true)
-	if err := l.refillTick(t.Context()); err != nil {
+	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 0 {
 		t.Fatal("started through a hold")
 	}
 	w.publishBudget(false)
-	if err := l.refillTick(t.Context()); err != nil {
+	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 3 {
@@ -96,10 +96,10 @@ func TestRefillStallNamesActiveAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.fillRan()
-	l.setFillPhase("board next")
-	r.a.now = r.a.now.Add(loopStallAfter)
-	if err := l.checkStall(); err != nil {
+	l.FillRan()
+	l.SetFillPhase("board next")
+	r.a.now = r.a.now.Add(LoopStallAfter)
+	if err := l.CheckStall(); err != nil {
 		t.Fatal(err)
 	}
 	events := r.logged(t, "supervisor.file")
@@ -116,11 +116,11 @@ func TestRefillCadenceCancelsActiveTick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.backgroundContext(t.Context())
-	defer l.cancelBackgroundActions()
-	original := beekeeperRun
+	l.BackgroundContext(t.Context())
+	defer l.CancelBackgroundActions()
+	original := BeekeeperRun
 	entered := make(chan struct{})
-	beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+	BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
 		if strings.Contains(strings.Join(args, " "), "capacity --json") {
 			close(entered)
 			<-ctx.Done()
@@ -133,7 +133,7 @@ func TestRefillCadenceCancelsActiveTick(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan struct{})
-	go func() { defer close(done); l.runRefillCadence(ctx, ticks) }()
+	go func() { defer close(done); l.RunRefillCadence(ctx, ticks) }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -145,7 +145,7 @@ func TestRefillCadenceCancelsActiveTick(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cadence cancellation did not stop the active refill")
 	}
-	if l.reexecBusy() {
+	if l.ReexecBusy() {
 		t.Fatal("cancelled refill retained its in-flight reservation")
 	}
 }
@@ -156,9 +156,9 @@ func TestRefillCadenceDoesNotOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.beginInFlight(loopFillStream)
-	defer l.endInFlight(loopFillStream)
-	if err := l.refillTick(t.Context()); err != nil {
+	l.BeginInFlight(LoopFillStream)
+	defer l.EndInFlight(LoopFillStream)
+	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 0 {
@@ -173,7 +173,7 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		out, code := original(args)
 		if args[0] == agentsName && args[1] == agentStartName {
-			if err := r.a.store.Record(event(loopParty, verbStart, "%s: started", args[2])); err != nil {
+			if err := r.a.store.Record(event(LoopParty, verbStart, "%s: started", args[2])); err != nil {
 				t.Error(err)
 			}
 		}
@@ -183,42 +183,42 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.lifecycle = &loopLifecycle{Phase: "blocked observation", At: r.a.timeNow()}
-	before := *l.lifecycle
+	l.Lifecycle = &LoopLifecycle{Phase: "blocked observation", At: r.a.timeNow()}
+	before := *l.Lifecycle
 	for range 3 {
-		if err := l.refillTick(t.Context()); err != nil {
+		if err := l.RefillTick(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if *busy != 3 || len(r.logged(t, "supervisor.next")) != 3 {
 		t.Fatalf("replayed completed starts: busy=%d, events=%+v", *busy, r.logged(t, "supervisor.next"))
 	}
-	if l.lifecycle.Phase != before.Phase || !l.lifecycle.At.Equal(before.At) {
+	if l.Lifecycle.Phase != before.Phase || !l.Lifecycle.At.Equal(before.At) {
 		t.Fatal("refill refreshed a blocked observation heartbeat")
 	}
 }
 
 func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
-	for _, condition := range []string{fatalBudgetCommand, secLoad, loopDiskKind, kindStale} {
+	for _, condition := range []string{fatalBudgetCommand, secLoad, LoopDiskKind, kindStale} {
 		t.Run(condition, func(t *testing.T) {
 			r, busy := fillRig(t)
 			l, err := r.a.newSupervisorLoop(false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			l.independentFill = true
+			l.IndependentFill = true
 			w := r.a.newWatcher(false, false)
 			switch condition {
 			case fatalBudgetCommand:
 				w.publishBudget(true)
 			case secLoad:
 				w.check(secLoad, true, "HIGH LOAD")
-			case loopDiskKind:
+			case LoopDiskKind:
 				w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 			case kindStale:
 				r.a.now = r.a.now.Add(time.Hour)
 			}
-			if err := l.refillTick(t.Context()); err != nil {
+			if err := l.RefillTick(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if *busy != 0 {
@@ -229,7 +229,7 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 				w.publishBudget(false)
 			case secLoad:
 				w.clear(secLoad)
-			case loopDiskKind:
+			case LoopDiskKind:
 				w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 			case kindStale:
 				e := event(watchParty, "watch.budget-state", "false")
@@ -238,7 +238,7 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := l.refillTick(t.Context()); err != nil {
+			if err := l.RefillTick(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if *busy != 3 {
@@ -254,12 +254,12 @@ func TestRefillCadenceStartsBeforeFirstTick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.holdStarts(true)
+	l.HoldStarts(true)
 	// A closed clock terminates after the startup refill without supplying a tick.
 	ticks := make(chan time.Time)
 	close(ticks)
-	l.runRefillCadence(t.Context(), ticks)
-	defer l.cancelBackgroundActions()
+	l.RunRefillCadence(t.Context(), ticks)
+	defer l.CancelBackgroundActions()
 	if *busy != 3 {
 		t.Fatalf("startup waited for the first interval: %d", *busy)
 	}
@@ -279,7 +279,7 @@ func TestReexecDrainsRefillAndRestartsAfterFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped := false
-	l.stopRefill = func() { stopped = true }
+	l.StopRefill = func() { stopped = true }
 	filled := make(chan struct{})
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
@@ -291,20 +291,20 @@ func TestReexecDrainsRefillAndRestartsAfterFailure(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	l.bin = refillExecBinary{exec: func() error {
-		if !stopped || l.stopRefill != nil {
+	l.Bin = refillExecBinary{exec: func() error {
+		if !stopped || l.StopRefill != nil {
 			t.Error("exec preceded refill drain")
 		}
 		return errors.New("exec failed")
 	}}
-	if replaced, err := l.reexec(ctx); err != nil || replaced {
+	if replaced, err := l.Reexec(ctx); err != nil || replaced {
 		t.Fatalf("reexec: %v, %v", replaced, err)
 	}
-	if l.stopRefill == nil {
+	if l.StopRefill == nil {
 		t.Fatal("failed exec lost refill cadence")
 	}
-	defer l.cancelBackgroundActions()
-	defer l.stopRefill()
+	defer l.CancelBackgroundActions()
+	defer l.StopRefill()
 	select {
 	case <-filled:
 	case <-time.After(5 * time.Second):
@@ -319,16 +319,16 @@ func TestReloadConfigWaitsForRefill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.refillConfigMu.RLock()
+	l.RefillConfigMu.RLock()
 	entered, done := make(chan struct{}), make(chan struct{})
-	go func() { close(entered); l.reloadConfig(); close(done) }()
+	go func() { close(entered); l.ReloadConfig(); close(done) }()
 	<-entered
 	select {
 	case <-done:
 		t.Error("reload crossed active refill")
 	default:
 	}
-	l.refillConfigMu.RUnlock()
+	l.RefillConfigMu.RUnlock()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):

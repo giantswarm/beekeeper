@@ -36,7 +36,7 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 		var start *state.Start
 		for i := range st.Starts {
 			candidate := &st.Starts[i]
-			if candidate.Name == name && candidate.By.Is(loopParty) && (start == nil || candidate.At.After(start.At)) {
+			if candidate.Name == name && candidate.By.Is(LoopParty) && (start == nil || candidate.At.After(start.At)) {
 				start = candidate
 			}
 		}
@@ -65,7 +65,7 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 				}
 			}
 		}
-		return []state.Event{event(loopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
+		return []state.Event{event(LoopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
 	})
 }
 
@@ -151,7 +151,7 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 		reviewed = roundHead
 	}
 	if !fixes && round != nil && roundHead != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
-		covered, err := readBaseMerge(ctx, pull, roundHead)
+		covered, err := ReadBaseMerge(ctx, pull, roundHead)
 		if err != nil {
 			return err
 		}

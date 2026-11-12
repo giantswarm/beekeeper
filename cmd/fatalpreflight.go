@@ -125,7 +125,7 @@ func fatalHarness(ctx context.Context, path, harness string) fatal.Observation {
 	code, err := fatalProbe(ctx, harness, "--version")
 	if err == nil && code == 0 {
 		var bin string
-		bin, err = executablePath()
+		bin, err = ExecutablePath()
 		if err == nil {
 			code, err = fatalProbe(ctx, bin, workerGitHubConfigOption, path, "fatal", "preflight", harness)
 		}

@@ -18,12 +18,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-// recoverQuota re-queues the task of any local agy worker or reviewer whose
+// RecoverQuota re-queues the task of any local agy worker or reviewer whose
 // run ended with a quota error on another choice. Its bucket is marked full
 // until reset, which goneAgent already frees the slot for. The entry and its
 // quota marker stay until a replacement started: a held, refused or failed
 // start leaves them for the next pass, so no task is lost.
-func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) error {
+func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 	if st.Stop != nil {
 		return nil
 	}
@@ -34,11 +34,11 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 		if ag.Done || ag.Task == "" || ag.Execution != nil || roleRun(st, ag.Party) || ag.Park != nil && len(ag.Park.Continuation) > 0 {
 			continue
 		}
-		qerr := agyQuotaError(l.a.cfg, ag)
+		qerr := agyQuotaError(l.Host.cfg, ag)
 		if qerr == nil {
 			continue
 		}
-		ref := cmp.Or(loopServes(st, ag), agentRef(st, ag.Name))
+		ref := cmp.Or(LoopServes(st, ag), AgentRef(st, ag.Name))
 		if l.agentUnreadRepo(st, ag, ref) != "" {
 			continue
 		}
@@ -46,18 +46,18 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase(loopPhaseRecover)
-		if l.dryRun {
-			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
+		l.LifecyclePhase(LoopPhaseRecover)
+		if l.DryRun {
+			if _, err := fmt.Fprintf(l.Host.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 				return err
 			}
 			continue
 		}
 		startID := agyAgentStartID(ag)
 		_, model := agentHarnessModel(st, nil, ag)
-		l.a.recordAgyQuotaExhaustedForID(startID, model, qerr, l.a.now)
-		if l.startsHeld {
-			l.sayOnce("quota held "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, starts are held: %s waits for its re-queue", ag.Name, qerr.Error(), target)
+		l.Host.recordAgyQuotaExhaustedForID(startID, model, qerr, l.Host.now)
+		if l.StartsHeld {
+			l.SayOnce("quota held "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, starts are held: %s waits for its re-queue", ag.Name, qerr.Error(), target)
 			continue
 		}
 		review, err := l.quotaReview(st, ag)
@@ -68,16 +68,16 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			if errors.Is(err, state.ErrRecoveryWriterFenced) {
 				return err
 			}
-			if errors.Is(err, errLoopLater) {
-				l.sayOnce("quota later "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, no room for its replacement yet: %s waits for its re-queue", ag.Name, qerr.Error(), target)
+			if errors.Is(err, ErrLoopLater) {
+				l.SayOnce("quota later "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, no room for its replacement yet: %s waits for its re-queue", ag.Name, qerr.Error(), target)
 				continue
 			}
-			l.sayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
+			l.SayOnce("quota failed "+startID, "SUPERVISOR QUOTA FAILED %s: %s; %s stays on the roster: %v", ag.Name, qerr.Error(), target, err)
 			continue
 		}
-		note, _, _ := l.a.lastNoteContext(ctx, ag.Party, time.Time{}, func() { l.lifecyclePhase(loopPhaseRecover) })
-		l.lifecyclePhase(loopPhaseRecover)
-		err = l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		note, _, _ := l.Host.lastNoteContext(ctx, ag.Party, time.Time{}, func() { l.LifecyclePhase(LoopPhaseRecover) })
+		l.LifecyclePhase(LoopPhaseRecover)
+		err = l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 			// The replacement took the name, and with it the task; it
 			// serves what the old session served.
 			var next *state.Agent
@@ -94,28 +94,28 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 					st.Records[j].Session = next.Party
 					continue
 				}
-				st.Records[j].Ended, st.Records[j].Waits = l.a.now.UTC(), ""
+				st.Records[j].Ended, st.Records[j].Waits = l.Host.now.UTC(), ""
 			}
 			if i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(ag.Party) }); i >= 0 {
 				removeAgent(st, i)
 			}
 			return []state.Event{
-				event(loopParty, "agents.gone", "%s: %s; task: %s; hand-over: %s", ag.Name, qerr.Error(), ag.Task, note),
-				event(loopParty, "supervisor.quota", "%s: %s; slot freed, task %s re-queued", ag.Name, qerr.Error(), target),
+				event(LoopParty, "agents.gone", "%s: %s; task: %s; hand-over: %s", ag.Name, qerr.Error(), ag.Task, note),
+				event(LoopParty, "supervisor.quota", "%s: %s; slot freed, task %s re-queued", ag.Name, qerr.Error(), target),
 			}, nil
 		})
 		if err != nil {
 			return err
 		}
 		if startID != "" {
-			_ = l.a.endAgy(ctx, startID)
+			_ = l.Host.endAgy(ctx, startID)
 		}
-		l.mu.Lock()
-		l.fillPause = fillPause{}
-		l.fillEmpty = 0
-		l.boardNone = nil
-		l.mu.Unlock()
-		if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR QUOTA %s: %s; slot freed, re-queuing %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
+		l.Mu.Lock()
+		l.FillPause = FillPause{}
+		l.FillEmpty = 0
+		l.BoardNone = nil
+		l.Mu.Unlock()
+		if _, err := fmt.Fprintf(l.Host.out, "SUPERVISOR QUOTA %s: %s; slot freed, re-queuing %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 			return err
 		}
 	}
@@ -134,13 +134,13 @@ type quotaRound struct {
 // quotaReview reads the round of ag when it is a reviewer the loop
 // started, from the last claim the loop logged under ag's name; nil for
 // any other session.
-func (l *supervisorLoop) quotaReview(st *state.State, ag state.Agent) (*quotaRound, error) {
-	evs, err := state.FollowSnapshot(l.a.store, "supervisor-review-quota", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.By.Name == loopParty.Name && e.Verb == loopClaimVerb }))
+func (l *Loop) quotaReview(st *state.State, ag state.Agent) (*quotaRound, error) {
+	evs, err := state.FollowSnapshot(l.Host.store, "supervisor-review-quota", "v1", l.eventHistoryFilter(func(e state.Event) bool { return e.By.Name == LoopParty.Name && e.Verb == LoopClaimVerb }))
 	if err != nil {
 		return nil, err
 	}
 	for i := len(evs) - 1; i >= 0; i-- {
-		key, name, ok := keyed(evs[i].Detail)
+		key, name, ok := Keyed(evs[i].Detail)
 		if !ok || name != ag.Name {
 			continue
 		}
@@ -158,7 +158,7 @@ func (l *supervisorLoop) quotaReview(st *state.State, ag state.Agent) (*quotaRou
 		if err != nil || rd < 1 || superloop.ReviewerName(ref, rd) != ag.Name {
 			return nil, nil
 		}
-		return &quotaRound{key: key, ref: ref, round: rd, selfHosted: reviewedSelfHosted(l.a.cfg.Capacity, st, ref)}, nil
+		return &quotaRound{key: key, ref: ref, round: rd, selfHosted: reviewedSelfHosted(l.Host.cfg.Capacity, st, ref)}, nil
 	}
 	return nil, nil
 }
@@ -169,13 +169,13 @@ func (l *supervisorLoop) quotaReview(st *state.State, ag state.Agent) (*quotaRou
 // model.
 func reviewedSelfHosted(k config.Capacity, st *state.State, ref string) bool {
 	for _, ag := range st.Agents {
-		if ag.Park != nil && strings.EqualFold(loopParkOn(ag.Park), ref) {
-			return selfHostedModel(k, ag.Model)
+		if ag.Park != nil && strings.EqualFold(LoopParkOn(ag.Park), ref) {
+			return SelfHostedModel(k, ag.Model)
 		}
 	}
 	for _, rp := range st.ReviewParks {
 		if strings.EqualFold(rp.On, ref) {
-			return selfHostedModel(k, rp.Model)
+			return SelfHostedModel(k, rp.Model)
 		}
 	}
 	return true
@@ -185,7 +185,7 @@ func reviewedSelfHosted(k config.Capacity, st *state.State, ref string) bool {
 // loop places its starts: a reviewer with the brief of its round and the
 // review flags, a worker with supervisor.workerBrief and its old task.
 // errLoopLater says there is no room for it yet.
-func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag state.Agent, ref string, review *quotaRound) error {
+func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent, ref string, review *quotaRound) error {
 	if review != nil {
 		ref = review.ref
 	}
@@ -194,23 +194,23 @@ func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag s
 		return fmt.Errorf("no task reference")
 	}
 	if l.agentUnreadRepo(st, ag, ref) != "" {
-		return errLoopLater
+		return ErrLoopLater
 	}
 	if (review != nil || superloop.IsPull(ref) && ag.Park != nil && ag.Park.RefKind == github.RefPullRequest || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
-		return errLoopLater
+		return ErrLoopLater
 	}
 	var brief string
 	if review != nil {
-		brief = filepath.Join(l.a.store.Dir(), "supervisor-loop", briefName.ReplaceAllString(review.key, "-")+".md")
+		brief = filepath.Join(l.Host.store.Dir(), "supervisor-loop", briefName.ReplaceAllString(review.key, "-")+".md")
 		if _, err := os.Stat(brief); err != nil {
 			return fmt.Errorf("the brief of review round %d: %w", review.round, err)
 		}
 	} else {
-		if l.a.cfg.Supervisor.WorkerBrief == "" {
+		if l.Host.cfg.Supervisor.WorkerBrief == "" {
 			return fmt.Errorf("no supervisor.workerBrief")
 		}
 		var err error
-		brief, err = l.brief(l.a.cfg.Supervisor.WorkerBrief, "", "quota "+ag.Name, briefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
+		brief, err = l.Brief(l.Host.cfg.Supervisor.WorkerBrief, "", "quota "+ag.Name, BriefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag s
 	if review != nil {
 		args = append(args, "--"+reviewFlag)
 	}
-	if len(l.a.cfg.Capacity.Choices) > 0 {
+	if len(l.Host.cfg.Capacity.Choices) > 0 {
 		args = append(args, "--harness", harnessAuto)
 		if review != nil && review.selfHosted {
 			args = append(args, "--"+reviewOfSelfHostedFlag)
@@ -234,14 +234,14 @@ func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag s
 	}
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.Run(ctx, args...); err != nil {
 		if Code(err) == ExitRefused {
 			if place.remote() {
 				if _, rerr := l.remoteStartRefused(ctx, ag.Name); rerr == nil {
 					return nil
 				}
 			}
-			return errLoopLater
+			return ErrLoopLater
 		}
 		return err
 	}
@@ -261,17 +261,17 @@ func appendBrief(path, text string) error {
 	return err
 }
 
-// recoverParks repairs settled waits whose local worker no longer exists.
+// RecoverParks repairs settled waits whose local worker no longer exists.
 // Discovery failure is not evidence that a worker ended. Managed executions
 // have their own lifecycle and must never be replaced by a local start.
-func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) error {
+func (l *Loop) RecoverParks(ctx context.Context, st *state.State) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if st.Stop != nil || !slices.ContainsFunc(st.Agents, endedParkCandidate) {
 		return nil
 	}
-	sessions, _, err := freshSessions(l.a)
+	sessions, _, err := freshSessions(l.Host)
 	if err != nil {
 		return err
 	}
@@ -292,7 +292,7 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if alive {
 			continue
 		}
-		ref := agentRef(st, ag.Name)
+		ref := AgentRef(st, ag.Name)
 		pullPark := ag.Park != nil && ag.Park.RefKind == github.RefPullRequest
 		if pullPark && ag.Park.On != "" {
 			ref = ag.Park.On
@@ -303,43 +303,43 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase(loopPhaseRecoverParks)
+		l.LifecyclePhase(loopPhaseRecoverParks)
 		if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 			continue
 		}
-		if l.dryRun {
-			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD RESUME %s: check its harness before restarting a gone session\n", ag.Name); err != nil {
+		if l.DryRun {
+			if _, err := fmt.Fprintf(l.Host.out, "SUPERVISOR WOULD RESUME %s: check its harness before restarting a gone session\n", ag.Name); err != nil {
 				return err
 			}
 			continue
 		}
 		// A missing process alone is not a gone verdict. Ask the harness
 		// to resume its inbox first; only errGone permits replacement.
-		if err := loopResumePark(l.a, ctx, loopParty, ag.Name); !errors.Is(err, errGone) {
+		if err := loopResumePark(l.Host, ctx, LoopParty, ag.Name); !errors.Is(err, errGone) {
 			continue
 		}
-		if err := l.restartPark(ctx, ag, ref); err != nil {
+		if err := l.RestartPark(ctx, ag, ref); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref string) error {
+func (l *Loop) RestartPark(ctx context.Context, ag state.Agent, ref string) error {
 	pullPark := ag.Park != nil && ag.Park.RefKind == github.RefPullRequest
 	if pullPark {
 		ref = ag.Park.On
 	}
 	r, ok := parseRef(ref)
 	var startErr error
-	if !ok || (!pullPark && l.a.cfg.Supervisor.WorkerBrief == "") {
+	if !ok || (!pullPark && l.Host.cfg.Supervisor.WorkerBrief == "") {
 		startErr = fmt.Errorf("no task reference or supervisor.workerBrief")
 	} else if l.agentUnreadRepo(nil, ag, ref) != "" {
 		startErr = fmt.Errorf("repository of %s is not owned by supervisor", ref)
 	} else if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 		startErr = fmt.Errorf("pull request %s is not open", ref)
 	} else {
-		file, def := l.a.cfg.Supervisor.WorkerBrief, ""
+		file, def := l.Host.cfg.Supervisor.WorkerBrief, ""
 		url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
 		if pullPark {
 			// A recovery continues the parked task; the board template would
@@ -347,16 +347,16 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 			file, def = "", "Continue your existing task after the pull request {{.URL}} settled."
 			url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
 		}
-		brief, err := l.brief(file, def, "resume "+ag.Name, briefData{URL: url, Repo: r.Repo, Number: r.N, Worker: ag.Name})
+		brief, err := l.Brief(file, def, "resume "+ag.Name, BriefData{URL: url, Repo: r.Repo, Number: r.N, Worker: ag.Name})
 		if err == nil {
-			text := fmt.Sprintf("\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, parkMessage(ag.Park, loopParty.Name))
+			text := fmt.Sprintf("\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, parkMessage(ag.Park, LoopParty.Name))
 			if ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
 				text += fmt.Sprintf("\nRemaining post-merge work: %s\n", *ag.Park.PostMerge)
 			}
 			err = appendBrief(brief, text)
 		}
 		if err == nil {
-			_, err = l.run(ctx, agentsName, agentStartName, ag.Name, brief, "--harness", harnessAuto)
+			_, err = l.Run(ctx, agentsName, agentStartName, ag.Name, brief, "--harness", harnessAuto)
 		}
 		startErr = err
 	}
@@ -367,20 +367,20 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 	// start may already have installed a resumable replacement.
 	gone := ag.Party
 	if startErr != nil {
-		current, err := l.a.store.Read()
+		current, err := l.Host.store.Read()
 		if err != nil {
 			return err
 		}
 		for _, cur := range current.Agents {
 			if cur.Name == ag.Name && cur.Task == ag.Task && !cur.Is(ag.Party) && endedParkCandidate(cur) && cur.Park.At.Equal(ag.Park.At) {
-				if err := loopResumePark(l.a, ctx, loopParty, cur.Name); errors.Is(err, errGone) {
+				if err := loopResumePark(l.Host, ctx, LoopParty, cur.Name); errors.Is(err, errGone) {
 					gone = cur.Party
 				}
 			}
 		}
 	}
 	// A successful start inherits the old task and park through registerAgent.
-	return l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	return l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i := range st.Agents {
 			cur := &st.Agents[i]
 			if cur.Name != ag.Name || cur.Task != ag.Task || cur.Park == nil || !cur.Park.At.Equal(ag.Park.At) {
@@ -391,13 +391,13 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 			} else if cur.Is(gone) {
 				removeAgent(st, i)
 			}
-			return []state.Event{event(loopParty, "supervisor.resume", "%s: restart result: %v", ag.Name, startErr)}, nil
+			return []state.Event{event(LoopParty, "supervisor.resume", "%s: restart result: %v", ag.Name, startErr)}, nil
 		}
 		return nil, nil
 	})
 }
 
 // recoverUnfinishedTurns runs in the command, which holds what it needs (loopRecoverUnfinishedTurns).
-func (l *supervisorLoop) recoverUnfinishedTurns(ctx context.Context, st *state.State) error {
+func (l *Loop) recoverUnfinishedTurns(ctx context.Context, st *state.State) error {
 	return loopRecoverUnfinishedTurns(l, ctx, st)
 }

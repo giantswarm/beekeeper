@@ -68,7 +68,7 @@ func TestContinuationStartupRetainsEventsOnCapacityRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
-	if err := l.continueParks(context.Background(), st); err != nil {
+	if err := l.ContinueParks(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = r.a.store.Read()
@@ -93,8 +93,8 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &supervisorLoop{a: r.a}
-	if err := l.finishContinuation(old, next.Name); err != nil {
+	l := &Loop{Host: r.a}
+	if err := l.FinishContinuation(old, next.Name); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
@@ -104,7 +104,7 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[1].Undelivered = ""; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.finishContinuation(old, next.Name); err != nil {
+	if err := l.FinishContinuation(old, next.Name); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = r.a.store.Read()
@@ -170,7 +170,7 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 	r.answer = func(args []string) (string, int) {
 		if args[0] == agentsName && args[1] == agentStartName {
 			starts++
-			if slices.Contains(args, "--"+loopHostFlag) {
+			if slices.Contains(args, "--"+LoopHostFlag) {
 				t.Fatal("continuation changed its managed publish branch")
 			}
 			brief, err := readStateFixture(r.a.store.Dir(), args[3])
@@ -187,7 +187,7 @@ func TestContinuationStartsFreshOnceWithTaskAndEvent(t *testing.T) {
 	}
 	for range 2 {
 		st, _ := r.a.store.Read()
-		if err := l.continueParks(context.Background(), st); err != nil {
+		if err := l.ContinueParks(context.Background(), st); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -221,11 +221,11 @@ func TestLoopReconcilesQueuedContinuationAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.a.store.Record(event(loopParty, continuationQueuedEvent, "%s: findings retained", loopWorker)); err != nil {
+	if err := r.a.store.Record(event(LoopParty, continuationQueuedEvent, "%s: findings retained", loopWorker)); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
-	_, done, err := l.reconcile(context.Background(), st, superloop.Action{Kind: superloop.KindRed}, loopClaim{target: loopWorker, at: r.a.now.Add(-time.Minute)})
+	_, done, err := l.Reconcile(context.Background(), st, superloop.Action{Kind: superloop.KindRed}, LoopClaim{Target: loopWorker, At: r.a.now.Add(-time.Minute)})
 	if err != nil || !done {
 		t.Fatalf("queued delivery replayed after restart: %v, %v", done, err)
 	}
@@ -256,7 +256,7 @@ func TestContinuationWithoutChoicesUsesGatedDefaultStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
-	if err := l.continueParks(context.Background(), st); err != nil {
+	if err := l.ContinueParks(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	if !started {
@@ -284,7 +284,7 @@ func TestAlertWakeAndEndedParkCandidatePreserveQueuedContinuation(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.settleAlertWake(superloop.Action{Kind: loopAlertKind, Key: "alert wake fp " + loopWorker, Agent: loopWorker}, ag); err != nil {
+	if err := l.SettleAlertWake(superloop.Action{Kind: LoopAlertKind, Key: "alert wake fp " + loopWorker, Agent: loopWorker}, ag); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := r.a.store.Read()
@@ -314,7 +314,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 			if fromTimer {
 				w := &watcher{app: r.a}
 				w.wakeTimer(t.Context(), timerFire{t: state.Timer{ID: 42, By: party, Wake: party.Name, Due: r.a.now, What: message}, reason: paramDue})
-			} else if err := r.a.queueContinuation(loopParty, old, message); err != nil {
+			} else if err := r.a.queueContinuation(LoopParty, old, message); err != nil {
 				t.Fatal(err)
 			}
 			previousRead := readRepoOpenPulls
@@ -345,7 +345,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 				if err := r.a.openPullStartGate(t.Context(), args[2], string(brief), issues, false, false, false); err == nil {
 					t.Fatal("non-loop caller inherited continuation exemption")
 				}
-				r.a.as = loopParty.Name
+				r.a.as = LoopParty.Name
 				if err := r.a.openPullStartGate(t.Context(), "wrong successor", string(brief), issues, false, false, false); err == nil {
 					t.Fatal("wrong successor inherited continuation exemption")
 				}
@@ -363,7 +363,7 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 			}
 			for range 2 {
 				st, _ := r.a.store.Read()
-				if err := l.continueParks(t.Context(), st); err != nil {
+				if err := l.ContinueParks(t.Context(), st); err != nil {
 					t.Fatal(err)
 				}
 			}

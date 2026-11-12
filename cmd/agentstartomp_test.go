@@ -507,10 +507,10 @@ func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
 			{Harness: omp.Harness, Model: id, Provider: rackB},
 		},
 	}
-	if !selfHostedModel(k, recorded) {
+	if !SelfHostedModel(k, recorded) {
 		t.Errorf("selfHostedModel(%q) with the self-hosted choice %q = false", recorded, id)
 	}
-	if selfHostedModel(k, "vllm/unlisted-id") || selfHostedModel(k, "vllm/x"+id) {
+	if SelfHostedModel(k, "vllm/unlisted-id") || SelfHostedModel(k, "vllm/x"+id) {
 		t.Error("selfHostedModel matched a model no choice names")
 	}
 	if p, _ := resolveAgentProviderBucket(k, omp.Harness, recorded); p != rackB {

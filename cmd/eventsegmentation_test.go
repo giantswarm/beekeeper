@@ -9,9 +9,9 @@ import (
 
 func TestEventRotationWaitsForCompatibleRecoveryReader(t *testing.T) {
 	r := newLoopRig(t)
-	oldVersion := loopRunningVersion
-	t.Cleanup(func() { loopRunningVersion = oldVersion })
-	loopRunningVersion = func() string { return recoveryBadVersion }
+	oldVersion := LoopRunningVersion
+	t.Cleanup(func() { LoopRunningVersion = oldVersion })
+	LoopRunningVersion = func() string { return recoveryBadVersion }
 	j := &update.Journal{Candidate: update.Binary{Version: recoveryBadVersion, Digest: "new-reader"}, Previous: &update.Binary{Version: recoveryGoodVersion, Digest: "legacy-reader"}}
 	if err := r.a.recordEventReaders(j); err != nil {
 		t.Fatal(err)

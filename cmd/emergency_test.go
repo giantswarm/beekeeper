@@ -100,9 +100,9 @@ func TestEmergencyMergeMatchesApprovedHeadAndAuditsFailure(t *testing.T) {
 			}
 			old := github.RunGH
 			t.Cleanup(func() { github.RunGH = old })
-			oldRead := readLoopPull
-			t.Cleanup(func() { readLoopPull = oldRead })
-			readLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, nil }
+			oldRead := ReadLoopPull
+			t.Cleanup(func() { ReadLoopPull = oldRead })
+			ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, nil }
 			approved := false
 			fail := true
 			var calls [][]string
@@ -175,8 +175,8 @@ func TestEmergencyInstallPauseOnlyBlocksInstall(t *testing.T) {
 	if !st.AutoInstallPaused || st.Stop != nil || len(st.Holds) != 0 {
 		t.Fatalf("pause changed other controls: %+v", st)
 	}
-	l := &supervisorLoop{a: a}
-	if _, err := l.install(context.Background(), superloop.Action{Version: "v1.2.3"}); !errors.Is(err, errLoopLater) {
+	l := &Loop{Host: a}
+	if _, err := l.Install(context.Background(), superloop.Action{Version: "v1.2.3"}); !errors.Is(err, ErrLoopLater) {
 		t.Fatalf("paused install: %v", err)
 	}
 	if err := emergencyCall(a, "auto-install", agentResumeName, emergencyReasonFlag, "Main is proven."); err != nil {
@@ -386,10 +386,10 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 		t.Fatal(err)
 	}
 	p.Ref = emergencyTestRepo + "#7"
-	oldRead, oldBehind, oldGH := readLoopPull, readReviewedBehind, github.RunGH
-	t.Cleanup(func() { readLoopPull, readReviewedBehind, github.RunGH = oldRead, oldBehind, oldGH })
+	oldRead, oldBehind, oldGH := ReadLoopPull, readReviewedBehind, github.RunGH
+	t.Cleanup(func() { ReadLoopPull, readReviewedBehind, github.RunGH = oldRead, oldBehind, oldGH })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return behind, nil }
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return p, nil }
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) { return p, nil }
 	var calls [][]string
 	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
 		if args[0] == workerGitHubAPIGroup {
@@ -402,7 +402,7 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 		return nil, nil
 	}
 	if authority {
-		if err := a.store.Record(about(event(loopParty, "merge.authorized", "%s at %s: go", "https://github.com/o/r/pull/7", emergencyAdminHead), p.Ref)); err != nil {
+		if err := a.store.Record(about(event(LoopParty, "merge.authorized", "%s at %s: go", "https://github.com/o/r/pull/7", emergencyAdminHead), p.Ref)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -464,7 +464,7 @@ func TestEmergencyAdminMergeNeedsAuthorityAtTheExactHead(t *testing.T) {
 		"draft":          {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Draft = true }), authority: true},
 		"no go":          {words: generalGrant, pull: green},
 		"behind state":   {words: generalGrant, pull: with(func(p *superloop.Pull) { p.MergeState = mergeStateBehind }), authority: true},
-		"conflicting":    {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Mergeable = mergeableConflicting }), authority: true},
+		"conflicting":    {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Mergeable = MergeableConflicting }), authority: true},
 		"review refused": {words: generalGrant, pull: with(func(p *superloop.Pull) { p.ReviewDecision = "CHANGES_REQUESTED" }), authority: true},
 		"no base":        {words: generalGrant, pull: with(func(p *superloop.Pull) { p.Base = "" }), authority: true},
 	} {
@@ -502,7 +502,7 @@ func TestEmergencyAdminMergeWithUnsetReviewDecision(t *testing.T) {
 				}
 				return
 			}
-			want := strings.Fields("pr merge 7 " + loopRepoFlag + " " + emergencyTestRepo + " --squash --admin --match-head-commit " + emergencyAdminHead)
+			want := strings.Fields("pr merge 7 " + LoopRepoFlag + " " + emergencyTestRepo + " --squash --admin --match-head-commit " + emergencyAdminHead)
 			if err != nil || len(calls) != 1 || !slices.Equal(calls[0], want) {
 				t.Fatalf("err %v, calls %v", err, calls)
 			}
@@ -537,7 +537,7 @@ func TestEmergencyAdminRefusesAbsentRequiredScan(t *testing.T) {
 	if err := emergencyCall(a, "on", emergencyReasonFlag, "Admin merge o/r#7 now.", untilFlag, "10m"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.store.Record(about(event(loopParty, "merge.authorized", "https://github.com/o/r/pull/7 at %s: go", emergencyAdminHead), "o/r#7")); err != nil {
+	if err := a.store.Record(about(event(LoopParty, "merge.authorized", "https://github.com/o/r/pull/7 at %s: go", emergencyAdminHead), "o/r#7")); err != nil {
 		t.Fatal(err)
 	}
 	old := github.RunGH
@@ -646,8 +646,8 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 			if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge approved work.", untilFlag, "10m"); err != nil {
 				t.Fatal(err)
 			}
-			oldRead, oldGH := readLoopPull, github.RunGH
-			t.Cleanup(func() { readLoopPull, github.RunGH = oldRead, oldGH })
+			oldRead, oldGH := ReadLoopPull, github.RunGH
+			t.Cleanup(func() { ReadLoopPull, github.RunGH = oldRead, oldGH })
 			review := superloop.Review{Head: emergencyAdminHead, Verdict: superloop.Approved, Member: true, Body: loopApproved}
 			if name == "previous head" {
 				review.Head = "fedcba9"
@@ -660,7 +660,7 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 			if name == "review rejected" {
 				review.Verdict = superloop.ChangesRequested
 			}
-			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+			ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				return superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Green: name != "failing CI", Reviews: []superloop.Review{review}}, nil
 			}
 			merges := 0
@@ -687,10 +687,10 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 }
 
 func TestMergeReviewRequirementAcceptsCurrentDeskReviewFormat(t *testing.T) {
-	previous := readBaseMerge
-	t.Cleanup(func() { readBaseMerge = previous })
+	previous := ReadBaseMerge
+	t.Cleanup(func() { ReadBaseMerge = previous })
 	// The stale review belongs to an unrelated head, not a base-only update.
-	readBaseMerge = func(context.Context, superloop.Pull, string) (bool, error) { return false, nil }
+	ReadBaseMerge = func(context.Context, superloop.Pull, string) (bool, error) { return false, nil }
 	a := emergencyApp(t)
 	a.cfg.Merge.RequireReview = true
 	st, err := a.store.Read()

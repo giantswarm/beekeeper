@@ -298,7 +298,7 @@ func TestSelfUpdateCanaryWithStoppedSupervisor(t *testing.T) {
 				err := a.supervisorStatus(ctx)
 				return out.String(), err
 			}
-			if slices.Equal(args, []string{loopCapacity}) {
+			if slices.Equal(args, []string{LoopCapacity}) {
 				capacityRan = true
 			}
 			return "ok", nil
@@ -314,7 +314,7 @@ func TestSelfUpdateCanaryWithStoppedSupervisor(t *testing.T) {
 			t.Fatalf("status output = %q, want %q", out.String(), want)
 		}
 	}
-	if err := a.store.WriteFile(loopPIDFile, "invalid PID"); err != nil {
+	if err := a.store.WriteFile(LoopPIDFile, "invalid PID"); err != nil {
 		t.Fatal(err)
 	}
 	if why := canaryFailure(context.Background(), "", "candidate"); !strings.Contains(why, "canary supervisor status failed") {

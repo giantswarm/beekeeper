@@ -67,7 +67,7 @@ func TestMergeResultCheckFindsTheCheckoutUnderTheDesksHomeRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo.dir = checkout
-	p, err := parseLoopPull(secondPR, []byte(deskPullJSON(repo.head2)))
+	p, err := ParseLoopPull(secondPR, []byte(deskPullJSON(repo.head2)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestMergeResultCheckFindsTheCheckoutUnderTheDesksHomeRoots(t *testing.T) {
 func TestMergeResultCheckWithoutACheckoutSaysSoAndDoesNotBlock(t *testing.T) {
 	r := newLoopRig(t)
 	home := useDeskRoots(t, r)
-	p, err := parseLoopPull(secondPR, []byte(deskPullJSON("67abfd7cdf165a0c4ff9988278c63cba0c1c057f")))
+	p, err := ParseLoopPull(secondPR, []byte(deskPullJSON("67abfd7cdf165a0c4ff9988278c63cba0c1c057f")))
 	if err != nil {
 		t.Fatal(err)
 	}

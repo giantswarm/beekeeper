@@ -494,14 +494,14 @@ func TestSupervisorLoopReportsAHostBehindForMoreThanOneRelease(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	l := &Loop{Host: r.a, Said: map[string]bool{}}
 	pass := func() {
 		t.Helper()
 		st, err := r.a.store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
-		l.updateHosts(context.Background(), st)
+		l.UpdateHosts(context.Background(), st)
 	}
 	behind := func() []state.Event {
 		t.Helper()
@@ -592,12 +592,12 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 		}
 		return selector + " runs " + hostNewRelease, 0
 	}
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	l := &Loop{Host: r.a, Said: map[string]bool{}}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.updateHosts(context.Background(), st)
+	l.UpdateHosts(context.Background(), st)
 	var updated []string
 	for _, c := range r.calls {
 		if len(c) == 4 && c[2] == hostUpdateCmdName {
@@ -615,7 +615,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || !strings.Contains(findings[0].Detail, fileReportSeparator) || !strings.Contains(findings[0].Detail, "unreachable") {
+	if len(findings) != 1 || !strings.Contains(findings[0].Detail, FileReportSeparator) || !strings.Contains(findings[0].Detail, "unreachable") {
 		t.Fatalf("host hold findings %+v", findings)
 	}
 	// A later pass within the retry interval updates nothing again and
@@ -623,7 +623,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	r.calls = nil
 	r.a.now = r.a.now.Add(time.Minute)
 	st, _ = r.a.store.Read()
-	l.updateHosts(context.Background(), st)
+	l.UpdateHosts(context.Background(), st)
 	for _, c := range r.calls {
 		if len(c) == 4 && c[2] == hostUpdateCmdName {
 			t.Errorf("updated %v again", c)
@@ -634,9 +634,9 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	}
 	// An hour on, the held host is tried again.
 	r.calls = nil
-	r.a.now = r.a.now.Add(hostUpdateRetry)
+	r.a.now = r.a.now.Add(HostUpdateRetry)
 	st, _ = r.a.store.Read()
-	l.updateHosts(context.Background(), st)
+	l.UpdateHosts(context.Background(), st)
 	if len(r.calls) == 0 || r.calls[0][3] != sshTestSelector {
 		t.Errorf("the held host was not tried again: %v", r.calls)
 	}
@@ -807,16 +807,16 @@ func TestSupervisorLoopRetriesRateLimitedHostUpdateAfterResetAndCachesRelease(t 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	l := &Loop{Host: r.a, Said: map[string]bool{}}
 	r.a.now = resetAt.Add(-time.Minute)
 	st, _ := r.a.store.Read()
-	l.updateHosts(context.Background(), st)
+	l.UpdateHosts(context.Background(), st)
 	if len(r.calls) != 0 {
 		t.Fatalf("retried rate-limited host before reset: %v", r.calls)
 	}
 	r.a.now = resetAt.Add(time.Second)
 	st, _ = r.a.store.Read()
-	l.updateHosts(context.Background(), st)
+	l.UpdateHosts(context.Background(), st)
 	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, hostFixtureCommand, hostUpdateCmdName, sshTestSelector}) {
 		t.Fatalf("rate-limited host did not retry immediately after reset: %v", r.calls)
 	}
@@ -881,17 +881,17 @@ func TestSupervisorDefersHostsUntilCoordinatorProbationPasses(t *testing.T) {
 	previous := coordinatorJournal
 	coordinatorJournal = func() (*update.Journal, error) { return j, nil }
 	t.Cleanup(func() { coordinatorJournal = previous })
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	l := &Loop{Host: r.a, Said: map[string]bool{}}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.updateHosts(t.Context(), st)
+	l.UpdateHosts(t.Context(), st)
 	if len(r.calls) != 0 || strings.Contains(r.out.String(), "HOST HELD") {
 		t.Fatalf("probation attempted updates: %v, %s", r.calls, r.out.String())
 	}
 	j.Probation = coordinatorProbationPassed
-	l.updateHosts(t.Context(), st)
+	l.UpdateHosts(t.Context(), st)
 	if len(r.calls) != 1 || !slices.Equal(r.calls[0], []string{agentsName, "hosts", hostUpdateCmdName, sshTestSelector}) {
 		t.Fatalf("no immediate retry after probation: %v", r.calls)
 	}
@@ -915,7 +915,7 @@ func TestHostsProbationRefusalDoesNotHoldHost(t *testing.T) {
 	if pin := st.HostPin(sshTestSelector); pin != nil {
 		t.Fatalf("probation created pin or hold: %+v", pin)
 	}
-	if hostHoldWait(state.HostPin{Held: update.ErrProbationWatched.Error(), Tried: a.now}, nil, a.now) {
+	if HostHoldWait(state.HostPin{Held: update.ErrProbationWatched.Error(), Tried: a.now}, nil, a.now) {
 		t.Fatal("legacy probation hold delays retry")
 	}
 }

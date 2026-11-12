@@ -4168,7 +4168,7 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 		n := 0
 		last := ""
 		for _, ev := range evs {
-			if ev.Verb == loopFileVerb && strings.Contains(ev.Detail, "P1 subscription budget underused") {
+			if ev.Verb == LoopFileVerb && strings.Contains(ev.Detail, "P1 subscription budget underused") {
 				n++
 				last = ev.Detail
 			}

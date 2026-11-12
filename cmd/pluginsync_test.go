@@ -573,7 +573,7 @@ func TestPluginSyncPinsDeclaredMarketplace(t *testing.T) {
 			called := false
 			claudePlugin = func(_ context.Context, args ...string) error {
 				called = true
-				if !slices.Equal(args, []string{"marketplace", loopAdd, "giantswarm/beekeeper#" + latestRelease}) {
+				if !slices.Equal(args, []string{"marketplace", LoopAdd, "giantswarm/beekeeper#" + latestRelease}) {
 					t.Fatalf("commands = %v", args)
 				}
 				got, err := os.ReadFile(path) //nolint:gosec // settings fixture in the test directory

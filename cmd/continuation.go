@@ -102,9 +102,9 @@ func continuationName(ag state.Agent) string {
 	return fmt.Sprintf("%s next-%x", truncate(ag.Name, 60), id[:8])
 }
 
-func loopFinishContinuation(l *supervisorLoop, old state.Agent, name string) error {
+func loopFinishContinuation(l *Loop, old state.Agent, name string) error {
 	finished := false
-	err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(cur state.Agent) bool { return cur.Name == name })
 		j := slices.IndexFunc(st.Agents, func(cur state.Agent) bool { return cur.Is(old.Party) })
 		if i < 0 || j < 0 || st.Agents[i].Undelivered != "" {
@@ -131,7 +131,7 @@ func loopFinishContinuation(l *supervisorLoop, old state.Agent, name string) err
 				st.Records[k].Session = next.Party
 				st.Records[k].Waits = ""
 				if next.Done {
-					st.Records[k].Ended = l.a.now.UTC()
+					st.Records[k].Ended = l.Host.now.UTC()
 				}
 			}
 		}
@@ -167,10 +167,10 @@ func loopFinishContinuation(l *supervisorLoop, old state.Agent, name string) err
 				st.Merges[k].By = next.Party
 			}
 		}
-		if _, err := handClaims(st, lease.Dir(l.a.cfg.LeaseDir), prev.Party, next.Party); err != nil {
+		if _, err := handClaims(st, lease.Dir(l.Host.cfg.LeaseDir), prev.Party, next.Party); err != nil {
 			return nil, err
 		}
-		e := event(loopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
+		e := event(LoopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
 		successor := next.Party
 		removeAgent(st, j)
 		for k := range st.Starts {
@@ -190,7 +190,7 @@ func loopFinishContinuation(l *supervisorLoop, old state.Agent, name string) err
 		if h, id, ok := harnessOf(old.Party); ok {
 			_ = plat.Launcher.Stop(context.Background(), h.Unit(id))
 		}
-		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
+		_, _ = fmt.Fprintf(l.Host.out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
 	}
 	return err
 }

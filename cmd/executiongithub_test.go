@@ -586,9 +586,9 @@ func TestReview3325DirectPushAssignment(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			a, r := workerGitHubTestApp(t)
 			const branch = "fixture/foreign-source"
-			originalRead := readLoopPull
-			t.Cleanup(func() { readLoopPull = originalRead })
-			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+			originalRead := ReadLoopPull
+			t.Cleanup(func() { ReadLoopPull = originalRead })
+			ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				return superloop.Pull{Ref: r.Repository + "#7", State: superloop.Open, Branch: branch}, nil
 			}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {

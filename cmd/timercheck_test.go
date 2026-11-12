@@ -365,7 +365,7 @@ func TestTimerProbeWaitRejected(t *testing.T) {
 
 func TestTimerProbeHelpDocumentsBudget(t *testing.T) {
 	c := (&app{}).timerCmd()
-	add, _, err := c.Find([]string{loopAdd})
+	add, _, err := c.Find([]string{LoopAdd})
 	if err != nil {
 		t.Fatal(err)
 	}

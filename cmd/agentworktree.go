@@ -180,9 +180,9 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 			}
 		}
 	}
-	args := []string{"worktree", loopAdd, branchFlag, branch, target, ref}
+	args := []string{"worktree", LoopAdd, branchFlag, branch, target, ref}
 	if review {
-		args = []string{"worktree", loopAdd, "--detach", target, ref}
+		args = []string{"worktree", LoopAdd, "--detach", target, ref}
 	}
 	if _, err := runGit(ctx, checkout, args...); err != nil {
 		return "", err

@@ -320,12 +320,12 @@ supervisor:
 }
 
 // loop is a supervisor loop over f whose beekeeper runs answer with run.
-func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *supervisorLoop {
+func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *Loop {
 	t.Helper()
 	a := &app{cfg: f.cfg, store: f.store, out: out, now: f.t0.Add(time.Minute)}
-	origRun := beekeeperRun
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
-	t.Cleanup(func() { beekeeperRun = origRun })
+	origRun := BeekeeperRun
+	BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
+	t.Cleanup(func() { BeekeeperRun = origRun })
 	origRefs := refStates
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 		states := map[github.PR]github.RefState{}
@@ -335,7 +335,7 @@ func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []stri
 		return states, nil
 	}
 	t.Cleanup(func() { refStates = origRefs })
-	return &supervisorLoop{a: a, said: map[string]bool{}}
+	return &Loop{Host: a, Said: map[string]bool{}}
 }
 
 func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
@@ -371,7 +371,7 @@ func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
 		runCalls = append(runCalls, args)
 		return "started replacement\n", 0, nil
 	})
-	if err := l.recoverQuota(context.Background(), st); err != nil {
+	if err := l.RecoverQuota(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "SUPERVISOR QUOTA beekeeper 2150:") || !strings.Contains(out.String(), "re-queuing giantswarm/beekeeper#2150 on another choice") {
@@ -426,8 +426,8 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 				runCalls = append(runCalls, args)
 				return "no room\n", tc.code, nil
 			})
-			l.startsHeld = tc.held
-			if err := l.recoverQuota(context.Background(), st); err != nil {
+			l.StartsHeld = tc.held
+			if err := l.RecoverQuota(context.Background(), st); err != nil {
 				t.Fatal(err)
 			}
 			if tc.held != (len(runCalls) == 0) {
@@ -452,9 +452,9 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 
 			// The next pass with room starts the replacement and frees it.
 			runCalls = nil
-			l.startsHeld = false
+			l.StartsHeld = false
 			tc.code = 0
-			if err := l.recoverQuota(context.Background(), after); err != nil {
+			if err := l.RecoverQuota(context.Background(), after); err != nil {
 				t.Fatal(err)
 			}
 			if len(runCalls) != 1 {
@@ -477,7 +477,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 	name := superloop.ReviewerName(ref, 2)
 	f := newQuotaFixture(t, name, "Review https://github.com/giantswarm/beekeeper/pull/2153 at head abc", ref)
 	key := "review " + ref + "@abc"
-	if err := f.store.Record(about(event(loopParty, loopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
+	if err := f.store.Record(about(event(LoopParty, LoopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -486,7 +486,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 		runCalls = append(runCalls, args)
 		return `{"room":1}` + "\n", 0, nil
 	})
-	brief, err := l.brief("", "Review {{.URL}} at {{.Head}}\n", key, briefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
+	brief, err := l.Brief("", "Review {{.URL}} at {{.Head}}\n", key, BriefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +494,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.recoverQuota(context.Background(), st); err != nil {
+	if err := l.RecoverQuota(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	i := slices.IndexFunc(runCalls, func(args []string) bool { return slices.Contains(args, "start") })

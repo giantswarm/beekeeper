@@ -17,46 +17,46 @@ import (
 )
 
 const (
-	loopPullShort     = 30 * time.Second
-	loopPullLong      = 2 * time.Minute
+	LoopPullShort     = 30 * time.Second
+	LoopPullLong      = 2 * time.Minute
 	loopPullBackoff   = 10 * time.Minute
-	loopPullMaxAge    = 5 * time.Minute
+	LoopPullMaxAge    = 5 * time.Minute
 	loopPullBatchSize = 60
-	loopPullWatchFile = "supervisor-pull-observations.json"
+	LoopPullWatchFile = "supervisor-pull-observations.json"
 )
 
 const (
 	pullWatchKey     = "pull watcher"
-	pullContexts     = "contexts"
-	pullSuites       = "checkSuites"
-	pullNodes        = "nodes"
-	pullPageInfo     = "pageInfo"
-	pullHasNext      = "hasNextPage"
-	pullEndCursor    = "endCursor"
-	pullHeadField    = "headRefOid"
+	PullContexts     = "contexts"
+	PullSuites       = "checkSuites"
+	PullNodes        = "nodes"
+	PullPageInfo     = "pageInfo"
+	PullHasNext      = "hasNextPage"
+	PullEndCursor    = "endCursor"
+	PullHeadField    = "headRefOid"
 	pullUpdatedField = "updatedAt"
-	jsonNullLiteral  = "null"
+	JsonNullLiteral  = "null"
 )
 
 // Only the watcher writes these observations. Consumers never renew a read's
 // timestamp by reusing it, and never fall back to a synchronous GitHub read.
-type watchedLoopPull struct {
+type WatchedLoopPull struct {
 	Pull    superloop.Pull `json:"pull"`
 	At      time.Time      `json:"at"`
 	Pending bool           `json:"pending,omitempty"`
 	Error   string         `json:"error,omitempty"`
 }
 
-type loopPullSnapshot struct {
-	Pulls      map[string]watchedLoopPull `json:"pulls"`
+type LoopPullSnapshot struct {
+	Pulls      map[string]WatchedLoopPull `json:"pulls"`
 	Open       []string                   `json:"open,omitempty"`
 	ListedAt   time.Time                  `json:"listedAt"`
 	Incomplete bool                       `json:"incomplete,omitempty"`
 }
 
 type loopPullWatcher struct {
-	mu       sync.Mutex
-	snapshot loopPullSnapshot
+	Mu       sync.Mutex
+	Snapshot LoopPullSnapshot
 	tracked  map[string]bool
 	extra    map[string]bool
 	changed  chan struct{}
@@ -75,26 +75,26 @@ type loopPullWatcher struct {
 }
 
 func newPullWatcher() *loopPullWatcher {
-	return &loopPullWatcher{snapshot: loopPullSnapshot{Pulls: map[string]watchedLoopPull{}}, tracked: map[string]bool{}, extra: map[string]bool{}, changed: make(chan struct{}, 1), ready: make(chan struct{}, 1)}
+	return &loopPullWatcher{Snapshot: LoopPullSnapshot{Pulls: map[string]WatchedLoopPull{}}, tracked: map[string]bool{}, extra: map[string]bool{}, changed: make(chan struct{}, 1), ready: make(chan struct{}, 1)}
 }
 
-func (l *supervisorLoop) pullWatcher() *loopPullWatcher {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Loop) PullWatcher() *loopPullWatcher {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	if l.pullWatch == nil {
 		l.pullWatch = newPullWatcher()
-		var saved loopPullSnapshot
-		if ok, err := l.a.store.ReadFile(loopPullWatchFile, &saved); ok && err == nil && saved.Pulls != nil {
-			l.pullWatch.snapshot = saved
+		var saved LoopPullSnapshot
+		if ok, err := l.Host.store.ReadFile(LoopPullWatchFile, &saved); ok && err == nil && saved.Pulls != nil {
+			l.pullWatch.Snapshot = saved
 		}
 	}
 	return l.pullWatch
 }
 
-func (w *loopPullWatcher) view() loopPullSnapshot {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	s := w.snapshot
+func (w *loopPullWatcher) View() LoopPullSnapshot {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	s := w.Snapshot
 	s.Pulls = maps.Clone(s.Pulls)
 	s.Open = slices.Clone(s.Open)
 	return s
@@ -107,8 +107,8 @@ func signalPullWatch(c chan struct{}) {
 	}
 }
 
-func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []string) {
-	w.mu.Lock()
+func (w *loopPullWatcher) Set(refs, authors, orgs []string, floor int, never []string) {
+	w.Mu.Lock()
 	next := make(map[string]bool, len(refs))
 	added := false
 	for _, ref := range refs {
@@ -120,28 +120,28 @@ func (w *loopPullWatcher) set(refs, authors, orgs []string, floor int, never []s
 	configChanged := w.configured && (!slices.Equal(w.authors, authors) || !slices.Equal(w.orgs, orgs) || w.floor != floor || !slices.Equal(w.never, never))
 	w.configured, w.tracked, w.authors, w.orgs, w.floor, w.never = true, next, slices.Clone(authors), slices.Clone(orgs), floor, slices.Clone(never)
 	if configChanged {
-		w.snapshot.ListedAt = time.Time{}
+		w.Snapshot.ListedAt = time.Time{}
 	}
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	if added || configChanged {
 		signalPullWatch(w.changed)
 	}
 }
 
-// setBots has the listing find the pull requests bots opened in the
+// SetBots has the listing find the pull requests bots opened in the
 // repositories desk owns, teams being the team files' owners as last read
 // (known false until they are): without it the sweep never sees one, and
 // a green bot pull request without a worker waits for nobody.
-func (w *loopPullWatcher) setBots(bots []string, desk superloop.Desk, teams map[string]string, known bool) {
-	w.mu.Lock()
+func (w *loopPullWatcher) SetBots(bots []string, desk superloop.Desk, teams map[string]string, known bool) {
+	w.Mu.Lock()
 	oldScopes, oldOK := w.botDesk.BotScopes(w.teams, w.teamsKnown)
 	newScopes, newOK := desk.BotScopes(teams, known)
 	changed := !slices.Equal(w.bots, bots) || len(bots) > 0 && (known != w.teamsKnown || oldOK != newOK || !slices.Equal(oldScopes, newScopes))
 	w.bots, w.botDesk, w.teams, w.teamsKnown = slices.Clone(bots), desk, maps.Clone(teams), known
 	if changed {
-		w.snapshot.ListedAt = time.Time{}
+		w.Snapshot.ListedAt = time.Time{}
 	}
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	if changed {
 		signalPullWatch(w.changed)
 	}
@@ -153,9 +153,9 @@ func (w *loopPullWatcher) setBots(bots []string, desk superloop.Desk, teams map[
 // Each bot is searched on its own: one bot's failure (a login GitHub's
 // search refuses, a transient error) leaves the others' listed.
 func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out, short, listedBots []string, failed map[string]error) {
-	w.mu.Lock()
+	w.Mu.Lock()
 	bots, desk, teams, known := slices.Clone(w.bots), w.botDesk, maps.Clone(w.teams), w.teamsKnown
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	if len(desk.Orgs) == 0 {
 		desk.Orgs = orgs
 	}
@@ -165,7 +165,7 @@ func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out,
 	}
 	for _, b := range bots {
 		login := superloop.BotLogin(b)
-		listed, err := readOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, scopes)
+		listed, err := ReadOpenPulls(ctx, func() ([]string, error) { return []string{login}, nil }, scopes)
 		if err != nil {
 			if failed == nil {
 				failed = map[string]error{}
@@ -174,7 +174,7 @@ func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out,
 			continue
 		}
 		listedBots = append(listedBots, login)
-		if len(listed) >= sweepListLimit {
+		if len(listed) >= SweepListLimit {
 			short = append(short, login)
 		}
 		for _, ref := range listed {
@@ -187,9 +187,9 @@ func (w *loopPullWatcher) readBotPulls(ctx context.Context, orgs []string) (out,
 }
 
 func (w *loopPullWatcher) needsPoll(tracked []string, now time.Time) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.snapshot.ListedAt.IsZero() || now.Sub(w.snapshot.ListedAt) >= sweepListEvery || w.snapshot.Incomplete {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	if w.Snapshot.ListedAt.IsZero() || now.Sub(w.Snapshot.ListedAt) >= SweepListEvery || w.Snapshot.Incomplete {
 		return true
 	}
 	desk := superloop.Desk{Orgs: w.orgs, Never: w.never}
@@ -197,72 +197,72 @@ func (w *loopPullWatcher) needsPoll(tracked []string, now time.Time) bool {
 		if why, _ := desk.Unread(ref); why != "" {
 			return false
 		}
-		p, ok := w.snapshot.Pulls[ref]
+		p, ok := w.Snapshot.Pulls[ref]
 		if !ok || p.Error != "" || p.Pull.State == "" {
 			return true
 		}
-		return p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && (p.At.IsZero() || now.Sub(p.At) > loopPullMaxAge)
+		return p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && (p.At.IsZero() || now.Sub(p.At) > LoopPullMaxAge)
 	}
-	return slices.ContainsFunc(tracked, check) || slices.ContainsFunc(w.snapshot.Open, check)
+	return slices.ContainsFunc(tracked, check) || slices.ContainsFunc(w.Snapshot.Open, check)
 }
 
-func (w *loopPullWatcher) read(ref string, now time.Time) (watchedLoopPull, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	p, ok := w.snapshot.Pulls[ref]
+func (w *loopPullWatcher) Read(ref string, now time.Time) (WatchedLoopPull, error) {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	p, ok := w.Snapshot.Pulls[ref]
 	if !ok {
 		if !w.extra[ref] {
 			w.extra[ref] = true
 			signalPullWatch(w.changed)
 		}
-		return p, fmt.Errorf("%s has no watcher observation: %w", ref, errLoopLater)
+		return p, fmt.Errorf("%s has no watcher observation: %w", ref, ErrLoopLater)
 	}
 	if p.Error != "" {
-		return p, fmt.Errorf("%s: %s: %w", ref, p.Error, errLoopLater)
+		return p, fmt.Errorf("%s: %s: %w", ref, p.Error, ErrLoopLater)
 	}
 	if p.Pull.State == "" {
-		return p, fmt.Errorf("%s unavailable at %s: %w", ref, p.At.Format(time.RFC3339), errLoopLater)
+		return p, fmt.Errorf("%s unavailable at %s: %w", ref, p.At.Format(time.RFC3339), ErrLoopLater)
 	}
 	// A terminal observation is final; it no longer consumes a poll slot.
-	if p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && (p.At.IsZero() || now.Sub(p.At) > loopPullMaxAge) {
-		return p, fmt.Errorf("%s observation is %s old (limit %s): %w", ref, now.Sub(p.At).Round(time.Second), loopPullMaxAge, errLoopLater)
+	if p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && (p.At.IsZero() || now.Sub(p.At) > LoopPullMaxAge) {
+		return p, fmt.Errorf("%s observation is %s old (limit %s): %w", ref, now.Sub(p.At).Round(time.Second), LoopPullMaxAge, ErrLoopLater)
 	}
 	return p, nil
 }
 
-// readObservedLoopPull is a seam for planner/action fixtures. Production always
+// ReadObservedLoopPull is a seam for planner/action fixtures. Production always
 // reads the watcher, including --once and --dry-run, which use its saved snapshot.
-var readObservedLoopPull = func(l *supervisorLoop, ctx context.Context, ref string, _ time.Time, _ string) (loopPullObservation, error) {
+var ReadObservedLoopPull = func(l *Loop, ctx context.Context, ref string, _ time.Time, _ string) (LoopPullObservation, error) {
 	if err := ctx.Err(); err != nil {
-		return loopPullObservation{}, err
+		return LoopPullObservation{}, err
 	}
-	now := l.a.timeNow()
-	if l.a.loopNow != nil {
+	now := l.Host.timeNow()
+	if l.Host.loopNow != nil {
 		now = clk.Now()
 	}
-	p, err := l.pullWatcher().read(ref, now)
-	return loopPullObservation{pull: p.Pull, at: p.At}, err
+	p, err := l.PullWatcher().Read(ref, now)
+	return LoopPullObservation{Pull: p.Pull, At: p.At}, err
 }
 
-func (l *supervisorLoop) readPull(ctx context.Context, ref string) (superloop.Pull, error) {
-	p, err := readObservedLoopPull(l, ctx, ref, time.Time{}, "")
-	return p.pull, err
+func (l *Loop) readPull(ctx context.Context, ref string) (superloop.Pull, error) {
+	p, err := ReadObservedLoopPull(l, ctx, ref, time.Time{}, "")
+	return p.Pull, err
 }
 
-// startLoopPullWatcher owns one cancellable timer and one fetch at a time. Its
+// StartLoopPullWatcher owns one cancellable timer and one fetch at a time. Its
 // independent clock does not stop at the beginning of a supervisor pass.
-var startLoopPullWatcher = func(ctx context.Context, l *supervisorLoop) func() {
+var StartLoopPullWatcher = func(ctx context.Context, l *Loop) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	w := l.pullWatcher()
-	w.set(nil, l.a.cfg.Supervisor.Ownership.Authors, l.a.cfg.GitHub.AllowedOrgs, l.a.cfg.GitHub.Floor, l.a.cfg.Supervisor.Ownership.Never)
-	own := l.a.cfg.Supervisor.Ownership
-	w.setBots(own.Bots, superloop.Desk{Orgs: l.a.cfg.GitHub.AllowedOrgs, Team: own.Team, Review: own.Review, Never: own.Never}, nil, false)
+	w := l.PullWatcher()
+	w.Set(nil, l.Host.cfg.Supervisor.Ownership.Authors, l.Host.cfg.GitHub.AllowedOrgs, l.Host.cfg.GitHub.Floor, l.Host.cfg.Supervisor.Ownership.Never)
+	own := l.Host.cfg.Supervisor.Ownership
+	w.SetBots(own.Bots, superloop.Desk{Orgs: l.Host.cfg.GitHub.AllowedOrgs, Team: own.Team, Review: own.Review, Never: own.Never}, nil, false)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		timer := clk.NewTimer(0)
 		defer timer.Stop()
-		schedule := loopPullSchedule{}
+		schedule := LoopPullSchedule{}
 		var lastPoll time.Time
 		for {
 			select {
@@ -270,87 +270,87 @@ var startLoopPullWatcher = func(ctx context.Context, l *supervisorLoop) func() {
 				return
 			case <-w.changed:
 				// New work must not defeat rate-limit backoff.
-				if schedule.failures > 0 {
+				if schedule.Failures > 0 {
 					continue
 				}
 				// Coalesce arrivals from any number of sessions into the same
 				// short interval rather than spending a request per new park.
-				if delay := clk.Until(lastPoll.Add(loopPullShort)); delay > 0 {
+				if delay := clk.Until(lastPoll.Add(LoopPullShort)); delay > 0 {
 					timer.Reset(delay)
 					continue
 				}
 			case <-timer.C:
 			}
 			lastPoll = clk.Now()
-			next, err := w.poll(ctx, l)
+			next, err := w.Poll(ctx, l)
 			if ctx.Err() != nil {
 				return
 			}
-			next = schedule.after(l, next, err)
+			next = schedule.After(l, next, err)
 			timer.Reset(next)
 		}
 	}()
 	return func() { cancel(); <-done }
 }
 
-var pollOncePullWatcher = func(ctx context.Context, l *supervisorLoop) {
-	var schedule loopPullSchedule
-	next, err := l.pullWatcher().poll(ctx, l)
-	schedule.after(l, next, err)
+var PollOncePullWatcher = func(ctx context.Context, l *Loop) {
+	var schedule LoopPullSchedule
+	next, err := l.PullWatcher().Poll(ctx, l)
+	schedule.After(l, next, err)
 }
 
-type loopPullSchedule struct{ failures int }
+type LoopPullSchedule struct{ Failures int }
 
-func (s *loopPullSchedule) after(l *supervisorLoop, next time.Duration, err error) time.Duration {
+func (s *LoopPullSchedule) After(l *Loop, next time.Duration, err error) time.Duration {
 	if err == nil {
-		s.failures = 0
-		l.clearSaid(pullWatchKey)
+		s.Failures = 0
+		l.ClearSaid(pullWatchKey)
 		return next
 	}
-	s.failures++
-	l.sayOnce(pullWatchKey, "SUPERVISOR PULL WATCH held: %v; retrying with backoff up to %s", err, loopPullBackoff)
-	return pullWatchRetry(s.failures)
+	s.Failures++
+	l.SayOnce(pullWatchKey, "SUPERVISOR PULL WATCH held: %v; retrying with backoff up to %s", err, loopPullBackoff)
+	return PullWatchRetry(s.Failures)
 }
 
-func pullWatchRetry(failures int) time.Duration {
-	return min(loopPullBackoff, loopPullShort*time.Duration(1<<min(failures, 5)))
+func PullWatchRetry(failures int) time.Duration {
+	return min(loopPullBackoff, LoopPullShort*time.Duration(1<<min(failures, 5)))
 }
 
-func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Duration, error) {
+func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	w.mu.Lock()
+	w.Mu.Lock()
 	authors, orgs, floor := slices.Clone(w.authors), slices.Clone(w.orgs), w.floor
 	desk := superloop.Desk{Orgs: orgs, Never: slices.Clone(w.never)}
 	refs := maps.Clone(w.tracked)
 	for ref := range w.extra {
 		refs[ref] = true
 	}
-	before := w.snapshot
+	before := w.Snapshot
 	before.Pulls, before.Open = maps.Clone(before.Pulls), slices.Clone(before.Open)
-	w.mu.Unlock()
+	w.Mu.Unlock()
 	now := clk.Now()
 	// The beside-running budget watch owns probes. Polling PRs adds no budget
 	// probes and never holds the pass's GraphQL admission lock during network IO.
 	if floor > 0 {
-		st, err := l.a.store.Peek()
+		st, err := l.Host.store.Peek()
 		if err != nil {
 			return 0, err
 		}
-		if boardBudgetLow(st.Budget, floor, now) || loopBudgetUnknownOrLow(st.Budget, floor, now) || st.Budget.GraphQL.Remaining < floor+loopGraphQLReserve {
-			return 0, fmt.Errorf("GitHub budget unknown or below github.floor: %w", errLoopLater)
+		if BoardBudgetLow(st.Budget, floor, now) || LoopBudgetUnknownOrLow(st.Budget, floor, now) || st.Budget.GraphQL.Remaining < floor+LoopGraphQLReserve {
+			return 0, fmt.Errorf("GitHub budget unknown or below github.floor: %w", ErrLoopLater)
 		}
 	}
 	var discoveryErr error
-	if before.ListedAt.IsZero() || now.Sub(before.ListedAt) >= sweepListEvery {
-		open, err := readOpenPulls(ctx, func() ([]string, error) {
+	if before.ListedAt.IsZero() || now.Sub(before.ListedAt) >= SweepListEvery {
+		open, err := ReadOpenPulls(ctx, func() ([]string, error) {
 			if len(authors) > 0 {
 				return authors, nil
 			}
-			login, err := readDeskLogin(ctx)
+			login, err := ReadDeskLogin(ctx)
 			return []string{login}, err
 		}, orgs)
-		incomplete := len(open) >= sweepListLimit
+		incomplete := len(open) >= SweepListLimit
 		if err == nil {
 			// A bot's pull requests beyond the search's limit, or a bot's
 			// failed search, leave the desk's own listing whole: the sweep
@@ -358,13 +358,13 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 			// listing searches the failed bot again.
 			bots, short, listedBots, failed := w.readBotPulls(ctx, orgs)
 			if len(short) > 0 {
-				l.sayOnce("sweep bot limit", "SUPERVISOR SWEEP pull requests of %s in %s reach GitHub's search limit of %d: the sweep sees only the most recent", strings.Join(short, ", "), strings.Join(orgs, ", "), sweepListLimit)
+				l.SayOnce("sweep bot limit", "SUPERVISOR SWEEP pull requests of %s in %s reach GitHub's search limit of %d: the sweep sees only the most recent", strings.Join(short, ", "), strings.Join(orgs, ", "), SweepListLimit)
 			}
 			for _, login := range slices.Sorted(maps.Keys(failed)) {
-				l.sayOnce("sweep bot search "+login, "SUPERVISOR SWEEP cannot list the pull requests of %s of supervisor.ownership.bots (%v): the sweep lists the desk's own without them", login, failed[login])
+				l.SayOnce("sweep bot search "+login, "SUPERVISOR SWEEP cannot list the pull requests of %s of supervisor.ownership.bots (%v): the sweep lists the desk's own without them", login, failed[login])
 			}
 			for _, login := range listedBots {
-				l.clearSaid("sweep bot search " + login)
+				l.ClearSaid("sweep bot search " + login)
 			}
 			open = append(open, bots...)
 			slices.Sort(open)
@@ -395,7 +395,7 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 		}
 	}
 	slices.Sort(query)
-	found, err := readLoopPullBatch(ctx, query, before.Pulls, floor)
+	found, err := ReadLoopPullBatch(ctx, query, before.Pulls, floor)
 	if err != nil {
 		return 0, err
 	}
@@ -412,20 +412,20 @@ func (w *loopPullWatcher) poll(ctx context.Context, l *supervisorLoop) (time.Dur
 		p := before.Pulls[ref].Pull
 		return p.State == superloop.Merged || p.State == superloop.Closed
 	})
-	next := loopPullLong
+	next := LoopPullLong
 	for _, p := range found {
 		if p.Pending || p.Pull.Mergeable == "UNKNOWN" {
-			next = loopPullShort
+			next = LoopPullShort
 		}
 	}
-	w.mu.Lock()
-	w.snapshot = before
+	w.Mu.Lock()
+	w.Snapshot = before
 	for ref := range found {
 		delete(w.extra, ref)
 	}
-	w.mu.Unlock()
-	if !l.dryRun {
-		_ = l.a.store.WriteFile(loopPullWatchFile, before)
+	w.Mu.Unlock()
+	if !l.DryRun {
+		_ = l.Host.store.WriteFile(LoopPullWatchFile, before)
 	}
 	signalPullWatch(w.ready)
 	return next, discoveryErr
@@ -444,13 +444,13 @@ const loopPullDetailFields = `author { login } title body additions deletions ch
  closingIssuesReferences(first:100) { pageInfo { hasNextPage endCursor } nodes { url } }
  reviews(first:100) { pageInfo { hasNextPage endCursor } nodes { id author { login } authorAssociation body state submittedAt commit { oid } } }`
 
-// readLoopPullBatch uses one light query (including details on first sight),
+// ReadLoopPullBatch uses one light query (including details on first sight),
 // followed only when needed by one query for heads/updatedAt that moved. Sixty
 // ordinary PRs therefore cost at most two requests, including a cold start.
-var readLoopPullBatch = fetchLoopPullBatch
+var ReadLoopPullBatch = FetchLoopPullBatch
 
-func fetchLoopPullBatch(ctx context.Context, refs []string, previous map[string]watchedLoopPull, floor int) (map[string]watchedLoopPull, error) {
-	result := map[string]watchedLoopPull{}
+func FetchLoopPullBatch(ctx context.Context, refs []string, previous map[string]WatchedLoopPull, floor int) (map[string]WatchedLoopPull, error) {
+	result := map[string]WatchedLoopPull{}
 	for start := 0; start < len(refs); start += loopPullBatchSize {
 		chunk := refs[start:min(start+loopPullBatchSize, len(refs))]
 		details := map[string]bool{}
@@ -498,7 +498,7 @@ func combineLoopPull(light, detail superloop.Pull) superloop.Pull {
 	return detail
 }
 
-func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]bool, floor int) (map[string]watchedLoopPull, error) {
+func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]bool, floor int) (map[string]WatchedLoopPull, error) {
 	var q strings.Builder
 	q.WriteString("query { rateLimit { remaining resetAt cost }")
 	for i, ref := range refs {
@@ -518,7 +518,7 @@ func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]b
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]watchedLoopPull{}
+	out := map[string]WatchedLoopPull{}
 	for i, ref := range refs {
 		var repo struct {
 			Pull json.RawMessage `json:"pullRequest"`
@@ -530,16 +530,16 @@ func queryLoopPullBatch(ctx context.Context, refs []string, details map[string]b
 		p, pending, err := parseWatchedLoopPull(ref, expanded, details[ref])
 		err = errors.Join(expandErr, err)
 		if err != nil {
-			out[ref] = watchedLoopPull{Pull: superloop.Pull{Ref: ref}, At: clk.Now(), Error: err.Error()}
+			out[ref] = WatchedLoopPull{Pull: superloop.Pull{Ref: ref}, At: clk.Now(), Error: err.Error()}
 			continue
 		}
-		out[ref] = watchedLoopPull{Pull: p, Pending: pending, At: clk.Now()}
+		out[ref] = WatchedLoopPull{Pull: p, Pending: pending, At: clk.Now()}
 	}
 	return out, nil
 }
 
 func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull, bool, error) {
-	if len(raw) == 0 || string(raw) == jsonNullLiteral {
+	if len(raw) == 0 || string(raw) == JsonNullLiteral {
 		return superloop.Pull{Ref: ref}, false, nil
 	}
 	// Normalize GraphQL connections to gh pr view's representation so check,
@@ -568,7 +568,7 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 		}
 		fields[name] = connection.Nodes
 	}
-	var checks []loopCheck
+	var checks []LoopCheck
 	var suites *loopWatchedSuites
 	pending := true
 	switch {
@@ -582,7 +582,7 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 						Contexts struct {
 							PageInfo struct{ HasNextPage bool }
 							Nodes    []struct {
-								loopCheck
+								LoopCheck
 								CheckSuite struct {
 									WorkflowRun struct{ Workflow struct{ Name string } }
 								}
@@ -606,10 +606,10 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 			}
 			pending = len(rollup.Contexts.Nodes) == 0
 			for _, node := range rollup.Contexts.Nodes {
-				c := node.loopCheck
+				c := node.LoopCheck
 				c.WorkflowName = node.CheckSuite.WorkflowRun.Workflow.Name
 				checks = append(checks, c)
-				if !c.concluded() {
+				if !c.Concluded() {
 					pending = true
 				}
 			}
@@ -619,13 +619,13 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 		if err := json.Unmarshal(fields["statusCheckRollup"], &checks); err != nil {
 			return superloop.Pull{}, false, err
 		}
-		pending = len(checks) == 0 || slices.ContainsFunc(checks, func(c loopCheck) bool { return !c.concluded() })
+		pending = len(checks) == 0 || slices.ContainsFunc(checks, func(c LoopCheck) bool { return !c.Concluded() })
 	}
 	normalized, err := json.Marshal(fields)
 	if err != nil {
 		return superloop.Pull{}, false, err
 	}
-	p, err := parseLoopPull(ref, normalized)
+	p, err := ParseLoopPull(ref, normalized)
 	if err == nil && p.State == superloop.Open && suites != nil {
 		err = suites.apply(&p, checks)
 		pending = pending || !p.Green && len(p.Red) == 0
@@ -651,17 +651,17 @@ type loopWatchedSuites struct {
 	}
 }
 
-func (s *loopWatchedSuites) apply(p *superloop.Pull, checks []loopCheck) error {
+func (s *loopWatchedSuites) apply(p *superloop.Pull, checks []LoopCheck) error {
 	if s.PageInfo.HasNextPage || s.Nodes == nil {
 		return errors.New("workflow suites incomplete; observation unknown")
 	}
-	runs := make([]loopWorkflowRun, 0, len(s.Nodes))
+	runs := make([]LoopWorkflowRun, 0, len(s.Nodes))
 	for _, suite := range s.Nodes {
 		run := suite.WorkflowRun
 		if run == nil {
 			continue // External checks are already represented by the rollup.
 		}
-		runs = append(runs, loopWorkflowRun{
+		runs = append(runs, LoopWorkflowRun{
 			ID: run.DatabaseID, WorkflowID: run.Workflow.DatabaseID,
 			Attempt: run.RunAttempt, Head: p.Head, Name: run.Workflow.Name,
 			URL: run.URL, Status: suite.Status, Conclusion: suite.Conclusion,
@@ -671,25 +671,25 @@ func (s *loopWatchedSuites) apply(p *superloop.Pull, checks []loopCheck) error {
 	if err != nil {
 		return err
 	}
-	return applyLoopWorkflowRuns(p, raw, checks)
+	return ApplyLoopWorkflowRuns(p, raw, checks)
 }
 
 // Discovery shares the watcher's timer; a slow listing cannot stall a pass.
-var readLoopSweep = func(l *supervisorLoop, _ context.Context, _ superloop.Input) {
-	s := l.pullWatcher().view()
-	l.openPulls, l.openPullsAt, l.sweepIncomplete = s.Open, s.ListedAt, s.Incomplete
+var ReadLoopSweep = func(l *Loop, _ context.Context, _ superloop.Input) {
+	s := l.PullWatcher().View()
+	l.OpenPulls, l.OpenPullsAt, l.SweepIncomplete = s.Open, s.ListedAt, s.Incomplete
 }
 
 type loopPullContextKey struct{}
 
 func readLoopContextPull(ctx context.Context, ref string) (superloop.Pull, error) {
-	if l, ok := ctx.Value(loopPullContextKey{}).(*supervisorLoop); ok {
+	if l, ok := ctx.Value(loopPullContextKey{}).(*Loop); ok {
 		return l.readPull(ctx, ref)
 	}
-	return readLoopPull(ctx, ref)
+	return ReadLoopPull(ctx, ref)
 }
 
-func (s loopPullSnapshot) ageLine(now time.Time) string {
+func (s LoopPullSnapshot) AgeLine(now time.Time) string {
 	var oldest time.Time
 	count, stale := 0, 0
 	for _, seen := range s.Pulls {
@@ -700,14 +700,14 @@ func (s loopPullSnapshot) ageLine(now time.Time) string {
 		if oldest.IsZero() || seen.At.Before(oldest) {
 			oldest = seen.At
 		}
-		if seen.At.IsZero() || now.Sub(seen.At) > loopPullMaxAge {
+		if seen.At.IsZero() || now.Sub(seen.At) > LoopPullMaxAge {
 			stale++
 		}
 	}
 	if count == 0 {
 		return ""
 	}
-	return fmt.Sprintf("pull observations: %d, oldest %s, %d stale (limit %s)", count, max(0, now.Sub(oldest)).Round(time.Second), stale, loopPullMaxAge)
+	return fmt.Sprintf("pull observations: %d, oldest %s, %d stale (limit %s)", count, max(0, now.Sub(oldest)).Round(time.Second), stale, LoopPullMaxAge)
 }
 
 func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[string]json.RawMessage, error) {
@@ -735,7 +735,7 @@ func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[strin
 		return nil, err
 	}
 	if floor > 0 && budget.Remaining <= floor {
-		return nil, fmt.Errorf("pull batch reached github.floor: %w", errLoopLater)
+		return nil, fmt.Errorf("pull batch reached github.floor: %w", ErrLoopLater)
 	}
 
 	return response.Data, nil
@@ -744,24 +744,24 @@ func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[strin
 // Follow overflow pages only for connections that need them. Most polls use
 // none. Never infer green or an approval from a truncated check/review list.
 func expandLoopPullConnections(ctx context.Context, ref string, raw []byte, details bool, floor int) ([]byte, error) {
-	if len(raw) == 0 || string(raw) == jsonNullLiteral {
+	if len(raw) == 0 || string(raw) == JsonNullLiteral {
 		return raw, nil
 	}
 	var full map[string]any
 	if err := json.Unmarshal(raw, &full); err != nil {
 		return nil, err
 	}
-	names := []string{pullContexts, pullSuites}
+	names := []string{PullContexts, PullSuites}
 	if details {
 		names = append(names, "files", "reviews", "closingIssuesReferences")
 	}
 	for {
 		cursors := map[string]string{}
 		for _, name := range names {
-			conn := pullConnection(full, name)
-			page, _ := conn[pullPageInfo].(map[string]any)
-			if next, _ := page[pullHasNext].(bool); next {
-				cursor, _ := page[pullEndCursor].(string)
+			conn := PullConnection(full, name)
+			page, _ := conn[PullPageInfo].(map[string]any)
+			if next, _ := page[PullHasNext].(bool); next {
+				cursor, _ := page[PullEndCursor].(string)
 				if cursor == "" {
 					return nil, fmt.Errorf("%s has no continuation cursor", name)
 				}
@@ -791,49 +791,49 @@ func expandLoopPullConnections(ctx context.Context, ref string, raw []byte, deta
 		if err := json.Unmarshal(data["p0"], &wrapper); err != nil {
 			return nil, err
 		}
-		if wrapper.Pull == nil || full[pullHeadField] != wrapper.Pull[pullHeadField] || full[pullUpdatedField] != wrapper.Pull[pullUpdatedField] {
+		if wrapper.Pull == nil || full[PullHeadField] != wrapper.Pull[PullHeadField] || full[pullUpdatedField] != wrapper.Pull[pullUpdatedField] {
 			return nil, fmt.Errorf("%s moved during pagination; retry next poll", ref)
 		}
 		for name, cursor := range cursors {
-			from, to := pullConnection(wrapper.Pull, name), pullConnection(full, name)
+			from, to := PullConnection(wrapper.Pull, name), PullConnection(full, name)
 			if from == nil {
 				return nil, fmt.Errorf("%s missing continuation", name)
 			}
-			page, _ := from[pullPageInfo].(map[string]any)
-			if next, _ := page[pullHasNext].(bool); next && page[pullEndCursor] == cursor {
+			page, _ := from[PullPageInfo].(map[string]any)
+			if next, _ := page[PullHasNext].(bool); next && page[PullEndCursor] == cursor {
 				return nil, fmt.Errorf("%s repeated continuation cursor", name)
 			}
-			nodes, _ := to[pullNodes].([]any)
-			more, _ := from[pullNodes].([]any)
-			to[pullNodes], to[pullPageInfo] = append(nodes, more...), page
+			nodes, _ := to[PullNodes].([]any)
+			more, _ := from[PullNodes].([]any)
+			to[PullNodes], to[PullPageInfo] = append(nodes, more...), page
 		}
 	}
 }
 
-func pullConnection(p map[string]any, name string) map[string]any {
-	if name != pullContexts && name != pullSuites {
+func PullConnection(p map[string]any, name string) map[string]any {
+	if name != PullContexts && name != PullSuites {
 		c, _ := p[name].(map[string]any)
 		return c
 	}
 	commits, _ := p["commits"].(map[string]any)
-	nodes, _ := commits[pullNodes].([]any)
+	nodes, _ := commits[PullNodes].([]any)
 	if len(nodes) == 0 {
 		return nil
 	}
 	node, _ := nodes[0].(map[string]any)
 	commit, _ := node["commit"].(map[string]any)
-	if name == pullSuites {
-		suites, _ := commit[pullSuites].(map[string]any)
+	if name == PullSuites {
+		suites, _ := commit[PullSuites].(map[string]any)
 		return suites
 	}
 	rollup, _ := commit["statusCheckRollup"].(map[string]any)
-	contexts, _ := rollup[pullContexts].(map[string]any)
+	contexts, _ := rollup[PullContexts].(map[string]any)
 	return contexts
 }
 
 func (w *loopPullWatcher) knows(ref string) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_, observed := w.snapshot.Pulls[ref]
-	return observed || w.tracked[ref] || w.extra[ref] || slices.Contains(w.snapshot.Open, ref)
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	_, observed := w.Snapshot.Pulls[ref]
+	return observed || w.tracked[ref] || w.extra[ref] || slices.Contains(w.Snapshot.Open, ref)
 }

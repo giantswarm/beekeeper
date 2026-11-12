@@ -135,7 +135,7 @@ func TestLoopAlertWakesParkedWorkerOnce(t *testing.T) {
 	f := loopFiring()
 	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
-	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.park(t, AlertParkPrefix+f.Alertname, time.Now())
 	r.pass(t)
 	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil || !strings.Contains(c[3], f.Instance()) {
 		t.Fatalf("wake: %v", c)
@@ -159,7 +159,7 @@ func TestLoopAlertReplacesUnresumableWorkerAndRetriesStaffing(t *testing.T) {
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return false }
-	r.park(t, alertParkPrefix+f.Name(), time.Now())
+	r.park(t, AlertParkPrefix+f.Name(), time.Now())
 	fail := true
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName && fail {
@@ -168,7 +168,7 @@ func TestLoopAlertReplacesUnresumableWorkerAndRetriesStaffing(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
-	if r.called(agentsName, loopRemove, loopWorker) == nil {
+	if r.called(agentsName, LoopRemove, loopWorker) == nil {
 		t.Fatal("unresumable session not retired")
 	}
 	if r.called(agentsName, agentWakeName) != nil {
@@ -204,12 +204,12 @@ func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 			f := loopFiring()
 			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 			loopResumable = func(*app, *state.State, state.Agent) bool { return resumable }
-			r.park(t, alertParkPrefix+f.Alertname, time.Now())
+			r.park(t, AlertParkPrefix+f.Alertname, time.Now())
 			if err := r.a.store.Record(event(watchParty, "watch.budget-state", "true")); err != nil {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			if r.called(agentsName, agentWakeName) != nil || r.called(agentsName, agentStartName) != nil || r.called(agentsName, loopRemove) != nil {
+			if r.called(agentsName, agentWakeName) != nil || r.called(agentsName, agentStartName) != nil || r.called(agentsName, LoopRemove) != nil {
 				t.Fatalf("budget hold bypassed: %v", r.calls)
 			}
 		})
@@ -223,14 +223,14 @@ func TestLoopAlertInterruptedWakeAndReplacementAreNotRepeated(t *testing.T) {
 			f := loopFiring()
 			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 			loopResumable = func(*app, *state.State, state.Agent) bool { return resumable }
-			r.park(t, alertParkPrefix+f.Alertname, time.Now())
-			r.failRecord = func(e state.Event) bool { return e.Verb == loopAlertVerb }
+			r.park(t, AlertParkPrefix+f.Alertname, time.Now())
+			r.failRecord = func(e state.Event) bool { return e.Verb == LoopAlertVerb }
 			r.pass(t)
 			if r.failRecord != nil {
 				t.Fatal("interruption was not injected")
 			}
 			r.pass(t)
-			if r.called(agentsName, agentWakeName) != nil || r.called(agentsName, agentStartName) != nil || r.called(agentsName, loopRemove) != nil {
+			if r.called(agentsName, agentWakeName) != nil || r.called(agentsName, agentStartName) != nil || r.called(agentsName, LoopRemove) != nil {
 				t.Fatalf("repeated interrupted side effect: %v", r.calls)
 			}
 		})
@@ -273,7 +273,7 @@ func TestLoopAlertDeliveredWakeDoesNotPageAfterParkClears(t *testing.T) {
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
-	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.park(t, AlertParkPrefix+f.Alertname, time.Now())
 	r.pass(t)
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[0].Park = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
@@ -292,7 +292,7 @@ func TestLoopAlertMissingTranscriptRestaffsOriginalTask(t *testing.T) {
 	r.a.cfg.Claude.ProjectsDir = t.TempDir()
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
-	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.park(t, AlertParkPrefix+f.Alertname, time.Now())
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Session = "missing-transcript-session"
 		return nil, nil
@@ -303,7 +303,7 @@ func TestLoopAlertMissingTranscriptRestaffsOriginalTask(t *testing.T) {
 	if r.called(agentsName, agentWakeName) != nil {
 		t.Fatal("woke a session without a transcript")
 	}
-	if r.called(agentsName, loopRemove, loopWorker) == nil || r.called(agentsName, agentStartName, loopWorker) == nil {
+	if r.called(agentsName, LoopRemove, loopWorker) == nil || r.called(agentsName, agentStartName, loopWorker) == nil {
 		t.Fatal("missing transcript stranded the parked task")
 	}
 }
@@ -316,7 +316,7 @@ func TestLoopAlertFailedWakeDoesNotHideAnotherPage(t *testing.T) {
 	other.Key, other.Alertname = "another-fingerprint", "AnotherWorkloadDown"
 	blockLoopAlert(t, r, other)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f, other}, nil }
-	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.park(t, AlertParkPrefix+f.Alertname, time.Now())
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 1 && args[0] == agentsName && args[1] == agentWakeName {
 			return "no capacity", ExitRefused
@@ -334,12 +334,12 @@ func TestLoopAlertReparkWaitsForNewFiring(t *testing.T) {
 	r := newLoopRig(t)
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
-	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.park(t, AlertParkPrefix+f.Alertname, time.Now())
 	r.pass(t)
 	if r.called(agentsName, agentWakeName) == nil {
 		t.Fatal("initial firing not delivered")
 	}
-	r.park(t, alertParkPrefix+f.Alertname, time.Now().Add(time.Second))
+	r.park(t, AlertParkPrefix+f.Alertname, time.Now().Add(time.Second))
 	r.pass(t)
 	if r.called(agentsName, agentWakeName) != nil {
 		t.Fatal("same firing woke reparked worker")
@@ -380,7 +380,7 @@ func TestLoopAlertUnownedBurstDoesNotPage(t *testing.T) {
 func blockLoopAlert(t *testing.T, r *loopRig, f alerts.Firing) {
 	t.Helper()
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Records = append(st.Records, state.Record{Session: state.Party{Name: "blocked-worker"}, Issue: loopURL, Waits: alertParkPrefix + f.Name()})
+		st.Records = append(st.Records, state.Record{Session: state.Party{Name: "blocked-worker"}, Issue: loopURL, Waits: AlertParkPrefix + f.Name()})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func blockLoopAlert(t *testing.T, r *loopRig, f alerts.Firing) {
 }
 
 func TestLoopAlertRequiresExplicitBlockedWork(t *testing.T) {
-	wait := alertParkPrefix + loopFiring().Alertname
+	wait := AlertParkPrefix + loopFiring().Alertname
 	for _, tc := range []struct {
 		name, issue, waits string
 		ended              bool
@@ -511,7 +511,7 @@ func TestLoopAlertLegacyCompletionIsNotRepeated(t *testing.T) {
 	f := base.Firing(alerts.Page)[0]
 	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
-	if err := r.a.store.Record(event(loopParty, loopAlertVerb, "[alert page %s/%s] legacy completion", original.Installation, original.Key)); err != nil {
+	if err := r.a.store.Record(event(LoopParty, LoopAlertVerb, "[alert page %s/%s] legacy completion", original.Installation, original.Key)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)

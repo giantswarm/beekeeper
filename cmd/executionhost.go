@@ -711,7 +711,7 @@ func (a *app) hostRequiredTools(h execution.Host) (map[string]string, error) {
 	}
 	for repo, hostPath := range h.Repositories {
 		if projectsDir != "" {
-			coordPath := filepath.Join(projectsDir, repoName(repo))
+			coordPath := filepath.Join(projectsDir, RepoName(repo))
 			if _, err := os.Lstat(filepath.Join(coordPath, "go.mod")); err == nil {
 				repos[repo] = coordPath
 				continue
@@ -732,7 +732,7 @@ func (a *app) hostRequiredTools(h execution.Host) (map[string]string, error) {
 			if !strings.Contains(repo, "/") || !h.AdmitsRepository(repo) || repos[repo] != "" {
 				continue
 			}
-			coordPath := filepath.Join(projectsDir, repoName(repo))
+			coordPath := filepath.Join(projectsDir, RepoName(repo))
 			if _, err := os.Lstat(filepath.Join(coordPath, "go.mod")); err == nil {
 				repos[repo] = coordPath
 			}

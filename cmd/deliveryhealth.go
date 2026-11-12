@@ -39,7 +39,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 		var stalls, stallKeys []string
 		file := func(key, detail string) {
 			lines = append(lines, detail)
-			events = append(events, event(loopParty, loopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail))
+			events = append(events, event(LoopParty, LoopFileVerb, "[delivery %s] %s reported at %s%s%s", key, LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, detail))
 		}
 		var active []state.Delivery
 		var signature []string

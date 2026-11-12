@@ -6,18 +6,18 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-// loopVersionFile is the running loop's version marker, beside the state.
-const loopVersionFile = "supervisor-loop-version.json"
+// LoopVersionFile is the running loop's version marker, beside the state.
+const LoopVersionFile = "supervisor-loop-version.json"
 
-type loopVersionRecord struct {
+type LoopVersionRecord struct {
 	PID     int    `json:"pid"`
 	Version string `json:"version"`
 }
 
-// loopRunningVersion returns the binary version of the current process.
-var loopRunningVersion = project.Version
+// LoopRunningVersion returns the binary version of the current process.
+var LoopRunningVersion = project.Version
 
-func normalizeLoopVersion(ver string) string {
+func NormalizeLoopVersion(ver string) string {
 	ver = strings.TrimSpace(ver)
 	if ver == "" {
 		return ""

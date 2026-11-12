@@ -103,8 +103,8 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			st, _ := r.a.store.Read()
-			l := &supervisorLoop{a: r.a, merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
-			_, err := l.endMerged(t.Context(), st, superloop.Action{Key: "test-end", Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)})
+			l := &Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+			_, err := l.EndMerged(t.Context(), st, superloop.Action{Key: "test-end", Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 			if len(st.ReviewParks) != 1 || st.ReviewParks[0].On != multiParkSecondPR || len(st.WorkerReports) != 0 || (roster && st.Agents[0].Done) {
 				t.Fatalf("ended task before second PR: %+v", st)
 			}
-			_, err = l.endMerged(t.Context(), st, superloop.Action{Key: "test-end-second", Kind: superloop.KindEnd, Ref: multiParkSecondPR, URL: secondURL, Message: strings.ToLower(superloop.Merged)})
+			_, err = l.EndMerged(t.Context(), st, superloop.Action{Key: "test-end-second", Kind: superloop.KindEnd, Ref: multiParkSecondPR, URL: secondURL, Message: strings.ToLower(superloop.Merged)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +159,7 @@ func TestLastMergedPullPreservesEarlierPostMergeWork(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l := &supervisorLoop{a: r.a, merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+	l := &Loop{Host: r.a, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestLastMergedPullPreservesEarlierPostMergeWork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := l.endMerged(t.Context(), st, superloop.Action{Key: "end " + ref, Kind: superloop.KindEnd, Ref: ref, URL: url, Message: strings.ToLower(superloop.Merged)}); err != nil {
+		if _, err := l.EndMerged(t.Context(), st, superloop.Action{Key: "end " + ref, Kind: superloop.KindEnd, Ref: ref, URL: url, Message: strings.ToLower(superloop.Merged)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,10 +207,10 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.GitHub.AllowedOrgs = []string{"o"}
-			old := recoverParkReviewHead
-			t.Cleanup(func() { recoverParkReviewHead = old })
+			old := RecoverParkReviewHead
+			t.Cleanup(func() { RecoverParkReviewHead = old })
 			readable := false
-			recoverParkReviewHead = func(_ context.Context, on, dir string) string {
+			RecoverParkReviewHead = func(_ context.Context, on, dir string) string {
 				if on != loopPR || dir != pendingReviewWorktree {
 					t.Fatalf("verification %s in %s", on, dir)
 				}
@@ -232,13 +232,13 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			l := &supervisorLoop{a: r.a}
+			l := &Loop{Host: r.a}
 			recover := func() *state.State {
 				st, err := r.a.store.Read()
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := l.recoverReviewRequests(context.Background(), st); err != nil {
+				if err := l.RecoverReviewRequests(context.Background(), st); err != nil {
 					t.Fatal(err)
 				}
 				st, err = r.a.store.Read()
@@ -254,20 +254,20 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 			readable = true
 			// A request that did not verify waits for its backoff, not the
 			// next pass: each look starts git and reads GitHub.
-			verify := recoverParkReviewHead
-			recoverParkReviewHead = func(context.Context, string, string) string {
+			verify := RecoverParkReviewHead
+			RecoverParkReviewHead = func(context.Context, string, string) string {
 				t.Fatal("unverified request retried before its backoff")
 				return ""
 			}
 			recover()
-			recoverParkReviewHead = verify
-			r.a.now = r.a.now.Add(reviewRecoveryFirst)
+			RecoverParkReviewHead = verify
+			r.a.now = r.a.now.Add(ReviewRecoveryFirst)
 			st = recover()
 			rp, ok := st.ReviewParkFor(loopPR)
 			if !ok || rp.ReviewHead != loopHead || rp.PostMerge == nil || *rp.PostMerge != remaining {
 				t.Fatalf("recovered request: %+v", rp)
 			}
-			recoverParkReviewHead = func(context.Context, string, string) string { t.Fatal("verified request retried"); return "" }
+			RecoverParkReviewHead = func(context.Context, string, string) string { t.Fatal("verified request retried"); return "" }
 			recover()
 		})
 	}

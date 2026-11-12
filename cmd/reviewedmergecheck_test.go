@@ -82,14 +82,14 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 	git("init", "-q", "-b", mainBranch)
 	git("config", "user.name", "Test")
 	git("config", "user.email", "test@example.com")
-	git("remote", loopAdd, "origin", originDir)
+	git("remote", LoopAdd, "origin", originDir)
 	git("remote", "set-url", "--push", "origin", "https://github.com/"+loopMergeRepo+".git")
 
 	write("go.mod", "module example.com/r\n\ngo 1.24\n")
 	for k, v := range baseFiles {
 		write(k, v)
 	}
-	git(loopAdd, ".")
+	git(LoopAdd, ".")
 	git("commit", "-q", "-m", "initial")
 	base := git("rev-parse", "HEAD")
 	git("push", "-q", originDir, mainBranch)
@@ -98,7 +98,7 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 	for k, v := range pr1Files {
 		write(k, v)
 	}
-	git(loopAdd, ".")
+	git(LoopAdd, ".")
 	git("commit", "-q", "-m", "pr 1")
 	head1 := git("rev-parse", "HEAD")
 
@@ -106,7 +106,7 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 	for k, v := range pr2Files {
 		write(k, v)
 	}
-	git(loopAdd, ".")
+	git(LoopAdd, ".")
 	git("commit", "-q", "-m", "pr 2")
 	head2 := git("rev-parse", "HEAD")
 
@@ -257,9 +257,9 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				return "", 0
 			}
 			// Route gate --reviewed-head for either PR #7 or PR #8 to reviewedMerge.
-			prevRun := beekeeperRun
-			t.Cleanup(func() { beekeeperRun = prevRun })
-			beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+			prevRun := BeekeeperRun
+			t.Cleanup(func() { BeekeeperRun = prevRun })
+			BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
 				if g := slices.Index(args, gateCmdName); g >= 0 && slices.Contains(args, "8") {
 					clean := args[g:]
 					r.calls = append(r.calls, clean)

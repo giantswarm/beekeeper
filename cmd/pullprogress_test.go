@@ -24,27 +24,27 @@ func TestRecoveryAcceptsProgressingPullBatchAndRejectsBlockedRead(t *testing.T) 
 	}
 	c.store, c.a.store = store, store
 	j := journal(t, c)
-	oldClock, oldVersion, oldList := loopLifecycleNow, loopRunningVersion, readOpenPulls
+	oldClock, oldVersion, oldList := LoopLifecycleNow, LoopRunningVersion, ReadOpenPulls
 	t.Cleanup(func() {
-		loopLifecycleNow, loopRunningVersion, readOpenPulls = oldClock, oldVersion, oldList
+		LoopLifecycleNow, LoopRunningVersion, ReadOpenPulls = oldClock, oldVersion, oldList
 	})
-	loopLifecycleNow = func() time.Time { return *now }
-	loopRunningVersion = func() string { return recoveryBadVersion }
+	LoopLifecycleNow = func() time.Time { return *now }
+	LoopRunningVersion = func() string { return recoveryBadVersion }
 	refs := make([]string, 12)
 	for i := range refs {
 		refs[i] = fmt.Sprintf("o/r#%d", i+100)
 	}
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
 		return refs, nil
 	}
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
-	l.lifecycle = &loopLifecycle{Version: recoveryBadVersion, Started: *now}
+	l.Once = true
+	l.Lifecycle = &LoopLifecycle{Version: recoveryBadVersion, Started: *now}
 	reads := 0
-	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > time.Minute {
 			t.Fatal("PR observation has no bounded deadline")
 		}
@@ -69,11 +69,11 @@ func TestRecoveryAcceptsProgressingPullBatchAndRejectsBlockedRead(t *testing.T) 
 		return superloop.Pull{Ref: ref, State: superloop.Open, Draft: true, Author: loopDesk}, nil
 	}
 	t.Cleanup(func() {
-		l.passActions.Wait()
-		l.mergeActions.Wait()
-		l.timerActs.Wait()
+		l.PassActions.Wait()
+		l.MergeActions.Wait()
+		l.TimerActs.Wait()
 	})
-	if err := l.pass(t.Context()); err != nil {
+	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if reads != len(refs) {
@@ -87,14 +87,14 @@ func TestPullObservationCancellationBeforeRead(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500
 	healthyLoopBudget(t, r)
-	l := &supervisorLoop{a: r.a}
+	l := &Loop{Host: r.a}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Fatal("canceled observation reached GitHub")
 		return superloop.Pull{}, nil
 	}
-	_, err := l.observePull(ctx, loopPR, time.Time{})
+	_, err := l.ObservePull(ctx, loopPR, time.Time{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled observation: %v", err)
 	}

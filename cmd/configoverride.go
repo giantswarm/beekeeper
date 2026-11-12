@@ -334,11 +334,11 @@ func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
 
 // loopSettleOverrides is the loop's tick of the overrides: its GitHub reads
 // take the loop's allowance and wait under the budget floor as its timers'.
-func loopSettleOverrides(l *supervisorLoop, ctx context.Context, st *state.State) {
-	a := l.a
-	held := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
-		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st)
-	lines, err := a.settleOverrides(ctx, loopParty, func(ts []state.Timer) map[int]checkResult {
+func loopSettleOverrides(l *Loop, ctx context.Context, st *state.State) {
+	a := l.Host
+	held := BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
+		a.cfg.GitHub.Floor > 0 && LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st)
+	lines, err := a.settleOverrides(ctx, LoopParty, func(ts []state.Timer) map[int]checkResult {
 		return a.loopTimerChecks(ctx, ts, a.now, held)
 	})
 	snapshot := *a
@@ -347,10 +347,10 @@ func loopSettleOverrides(l *supervisorLoop, ctx context.Context, st *state.State
 		w.emitNow("timer", "%s", line)
 	}
 	if err != nil {
-		l.sayOnce("overrides", "SUPERVISOR CONFIG OVERRIDES FAILED: %v", err)
+		l.SayOnce("overrides", "SUPERVISOR CONFIG OVERRIDES FAILED: %v", err)
 		return
 	}
-	delete(l.said, "overrides")
+	delete(l.Said, "overrides")
 }
 
 // finishOverride records how the restore of the ended override o went:

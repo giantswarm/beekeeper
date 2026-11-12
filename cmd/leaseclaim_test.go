@@ -276,7 +276,7 @@ func TestLeaseClaimWaitIsShort(t *testing.T) {
 }
 
 // asSupervisor makes a's caller the supervisor loop.
-func asSupervisor(a *app) { a.as = loopParty.Name }
+func asSupervisor(a *app) { a.as = LoopParty.Name }
 
 // A worker's grant --first is refused; the supervisor loop's grant --first
 // to a session queued second or third moves its grant to the head of the

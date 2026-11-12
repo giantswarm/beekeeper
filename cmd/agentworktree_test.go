@@ -116,7 +116,7 @@ func TestLoopStartKeepsAgentsDir(t *testing.T) {
 	if _, err := start(""); err == nil || !strings.Contains(err.Error(), "exactly one repository checkout") {
 		t.Fatalf("hand start: %v", err)
 	}
-	out, err := start(loopParty.Name)
+	out, err := start(LoopParty.Name)
 	if err != nil {
 		t.Fatalf("loop start: %v", err)
 	}

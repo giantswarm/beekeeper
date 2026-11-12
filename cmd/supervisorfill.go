@@ -39,12 +39,12 @@ func fillRepositoryHoldsKey(st *state.State, now time.Time) string {
 // host; with supervisor.hosts, a hold across all providers (no choice picked
 // and no local machine headroom block) also yields 0 so the pass does not
 // query the board while every provider is held by pace, usage or its ceiling.
-func loopFillRoom(l *supervisorLoop, cap *capacityView) int {
+func loopFillRoom(l *Loop, cap *capacityView) int {
 	if cap == nil || cap.Stopped != "" || cap.Ceiling <= len(cap.Busy) {
 		return 0
 	}
 	room := cap.Ceiling - len(cap.Busy)
-	if !l.placesRemotely() {
+	if !l.PlacesRemotely() {
 		return min(room, cap.Room)
 	}
 	if cap.Choice != nil && cap.Choice.Harness == "" && (cap.Headroom == nil || len(cap.Headroom.blocks(cap.Builds)) == 0) {
@@ -65,13 +65,13 @@ func fillLive(st *state.State) []string {
 	return live
 }
 
-func loopFillCapacity(l *supervisorLoop, ctx context.Context) *capacityView {
+func loopFillCapacity(l *Loop, ctx context.Context) *capacityView {
 	cap, _ := loopReadFillCapacity(l, ctx)
 	return cap
 }
 
-func loopReadFillCapacity(l *supervisorLoop, ctx context.Context) (*capacityView, error) {
-	out, code, err := beekeeperRun(ctx, l.as("capacity", "--json")...)
+func loopReadFillCapacity(l *Loop, ctx context.Context) (*capacityView, error) {
+	out, code, err := BeekeeperRun(ctx, l.As("capacity", "--json")...)
 	if err != nil || code != 0 {
 		return nil, fmt.Errorf("capacity --json: exit %d: %v: %s", code, err, oneLine(out))
 	}
@@ -82,28 +82,28 @@ func loopReadFillCapacity(l *supervisorLoop, ctx context.Context) (*capacityView
 	return &cap, nil
 }
 
-func loopPreviewFill(l *supervisorLoop, ctx context.Context) error {
-	st, err := l.a.store.Read()
+func loopPreviewFill(l *Loop, ctx context.Context) error {
+	st, err := l.Host.store.Read()
 	if err != nil {
 		return err
 	}
-	if l.fillPreview != nil {
-		st = l.fillPreview
+	if l.FillPreview != nil {
+		st = l.FillPreview
 	}
 	capacity, err := loopReadFillCapacity(l, ctx)
 	if err != nil {
 		return err
 	}
-	if l.recording != nil {
-		l.recording.Room = loopFillRoom(l, capacity)
+	if l.Recording != nil {
+		l.Recording.Room = loopFillRoom(l, capacity)
 	}
-	room := l.deliveryFillRoom(loopFillRoom(l, capacity), st)
+	room := l.DeliveryFillRoom(loopFillRoom(l, capacity), st)
 	if room <= 0 {
 		return nil
 	}
-	next, err := l.nextItem(ctx)
-	if errors.Is(err, errLoopLater) {
-		_, err = fmt.Fprintln(l.a.out, "SUPERVISOR WOULD NEXT wait: admission or GitHub budget holds new work")
+	next, err := l.NextItem(ctx)
+	if errors.Is(err, ErrLoopLater) {
+		_, err = fmt.Fprintln(l.Host.out, "SUPERVISOR WOULD NEXT wait: admission or GitHub budget holds new work")
 		return err
 	}
 	if err != nil {
@@ -113,7 +113,7 @@ func loopPreviewFill(l *supervisorLoop, ctx context.Context) error {
 	if next != nil {
 		count, first = room, next.URL
 	}
-	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR WOULD NEXT fill %d to capacity.ceiling (first: %s)\n", count, first)
+	_, err = fmt.Fprintf(l.Host.out, "SUPERVISOR WOULD NEXT fill %d to capacity.ceiling (first: %s)\n", count, first)
 	return err
 }
 
@@ -125,57 +125,57 @@ func loopPreviewFill(l *supervisorLoop, ctx context.Context) error {
 // the local machine and every host itself, so a full coordinator still
 // fills onto hosts. Claims are per board item, so an interrupted start is
 // reconciled before another start.
-func loopFill(l *supervisorLoop, ctx context.Context, st *state.State, claims map[string]loopClaim, taken []superloop.Taken, reserved ...[]string) (result error) {
+func loopFill(l *Loop, ctx context.Context, st *state.State, claims map[string]LoopClaim, taken []superloop.Taken, reserved ...[]string) (result error) {
 	startedCount := 0
 	why := "no worker brief configured"
 	defer func() {
-		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && startedCount == 0 {
+		if !l.DryRun && l.Host.cfg.Supervisor.WorkerBrief != "" && startedCount == 0 {
 			if result != nil {
 				why = oneLine(result.Error())
 			}
-			_, _ = fmt.Fprintf(l.a.out, refillZeroFormat, why)
+			_, _ = fmt.Fprintf(l.Host.out, RefillZeroFormat, why)
 		}
 	}()
-	if l.a.cfg.Supervisor.WorkerBrief == "" {
+	if l.Host.cfg.Supervisor.WorkerBrief == "" {
 		return nil
 	}
-	if l.dryRun {
-		return l.previewFill(ctx)
+	if l.DryRun {
+		return l.PreviewFill(ctx)
 	}
-	if l.pauseForReexec() || ctx.Err() != nil {
+	if l.PauseForReexec() || ctx.Err() != nil {
 		why = "loop stopping or waiting to re-exec"
 		return nil
 	}
 	attempts := map[string]int{}
 	for _, t := range taken {
-		if ref, ok := strings.CutPrefix(t.Key, loopFillKey); ok {
+		if ref, ok := strings.CutPrefix(t.Key, LoopFillKey); ok {
 			ref, _, _ = strings.Cut(ref, " ")
 			attempts[ref]++
 		}
 	}
-	l.fillRan()
-	defer l.setFillPhase("")
+	l.FillRan()
+	defer l.SetFillPhase("")
 	why = "loop stopping or waiting to re-exec"
 	startedHere := map[string]bool{}
 	attemptedHere := map[string]bool{}
 	for key, c := range claims {
-		if l.pauseForReexec() || ctx.Err() != nil {
+		if l.PauseForReexec() || ctx.Err() != nil {
 			return nil
 		}
-		if !strings.HasPrefix(key, loopFillKey) {
+		if !strings.HasPrefix(key, LoopFillKey) {
 			continue
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: key}
-		l.setFillPhase("reconcile " + key)
-		what, done, err := l.reconcile(ctx, st, act, c)
+		l.SetFillPhase("reconcile " + key)
+		what, done, err := l.Reconcile(ctx, st, act, c)
 		if err != nil {
 			return err
 		}
 		if done {
-			if err := l.record(act, what); err != nil {
+			if err := l.Record(act, what); err != nil {
 				return err
 			}
-			ref, _, _ := strings.Cut(strings.TrimPrefix(key, loopFillKey), " ")
+			ref, _, _ := strings.Cut(strings.TrimPrefix(key, LoopFillKey), " ")
 			attempts[ref]++
 			startedHere[ref] = true
 			startedCount++
@@ -184,28 +184,28 @@ func loopFill(l *supervisorLoop, ctx context.Context, st *state.State, claims ma
 	// A non-positive limit means the first fresh capacity read sets it.
 	limit := 0
 	for started := 0; ; started++ {
-		if l.holdingStarts() {
+		if l.HoldingStarts() {
 			why = "starts held"
-			l.stallClear()
+			l.StallClear()
 			return nil
 		}
-		if l.pauseForReexec() || ctx.Err() != nil {
+		if l.PauseForReexec() || ctx.Err() != nil {
 			return nil
 		}
-		l.setFillPhase("capacity --json")
+		l.SetFillPhase("capacity --json")
 		cap, capacityErr := loopReadFillCapacity(l, ctx)
 		if capacityErr != nil {
 			why = oneLine(capacityErr.Error())
-			l.stallWait("", why)
+			l.StallWait("", why)
 			return nil // a gate refusal is never a reason to start
 		}
-		l.setFillPhase("read capacity reservations")
-		live, err := l.a.store.Read()
+		l.SetFillPhase("read capacity reservations")
+		live, err := l.Host.store.Read()
 		if err != nil {
 			return err
 		}
 		capacityRoom := loopFillRoom(l, cap)
-		room := l.deliveryFillRoom(capacityRoom, live, reserved...)
+		room := l.DeliveryFillRoom(capacityRoom, live, reserved...)
 		if room <= 0 {
 			why = "no room for a worker"
 			if capacityRoom <= 0 {
@@ -217,27 +217,27 @@ func loopFill(l *supervisorLoop, ctx context.Context, st *state.State, claims ma
 					why += ": " + cap.Choice.Reason
 				}
 			} else {
-				v := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy())
+				v := readDeliveryWIP(live, l.Host.cfg.Delivery.WIPLimit, l.Host.cfg.Supervisor.LoopInterval.Duration, l.Host.timeNow(), l.Host.deliveryPolicy())
 				why = fmt.Sprintf("delivery admission: %s (%d flowing, limit %d; last complete observation %s)", v.Reason, v.Count, v.Limit, v.CompleteAt.UTC().Format(time.RFC3339))
 			}
-			l.stallClear() // no admitted slot: nothing waits on the refill
+			l.StallClear() // no admitted slot: nothing waits on the refill
 			return nil
 		}
-		ordinary := readDeliveryWIP(live, l.a.cfg.Delivery.WIPLimit, l.a.cfg.Supervisor.LoopInterval.Duration, l.a.timeNow(), l.a.deliveryPolicy()).Reason == ""
-		capacity, alive := fillCapacityKey(cap)+"/"+fillRepositoryHoldsKey(live, l.a.timeNow()), fillLive(live)
-		l.mu.Lock()
-		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
-			if !l.fillPause.until.IsZero() && l.fillPause.changed(capacity, alive) {
-				l.fillEmpty = 0 // a change may make room: the backoff starts over
+		ordinary := readDeliveryWIP(live, l.Host.cfg.Delivery.WIPLimit, l.Host.cfg.Supervisor.LoopInterval.Duration, l.Host.timeNow(), l.Host.deliveryPolicy()).Reason == ""
+		capacity, alive := fillCapacityKey(cap)+"/"+fillRepositoryHoldsKey(live, l.Host.timeNow()), fillLive(live)
+		l.Mu.Lock()
+		if !l.FillPause.Holds(l.Host.timeNow(), capacity, alive) {
+			if !l.FillPause.Until.IsZero() && l.FillPause.Changed(capacity, alive) {
+				l.FillEmpty = 0 // a change may make room: the backoff starts over
 			}
-			l.fillPause = fillPause{}
+			l.FillPause = FillPause{}
 		}
-		paused := !l.fillPause.until.IsZero()
-		pauseUntil := l.fillPause.until
-		l.mu.Unlock()
+		paused := !l.FillPause.Until.IsZero()
+		pauseUntil := l.FillPause.Until
+		l.Mu.Unlock()
 		pause := func() {
 			if ordinary {
-				l.pauseFill(capacity, alive)
+				l.PauseFill(capacity, alive)
 			}
 		}
 		if started == 0 {
@@ -250,18 +250,18 @@ func loopFill(l *supervisorLoop, ctx context.Context, st *state.State, claims ma
 			why = "board retry backoff until " + pauseUntil.UTC().Format(time.RFC3339)
 			return nil
 		}
-		l.setFillPhase("board next")
-		next, err := l.nextItem(ctx)
-		if errors.Is(err, errLoopLater) {
+		l.SetFillPhase("board next")
+		next, err := l.NextItem(ctx)
+		if errors.Is(err, ErrLoopLater) {
 			why = oneLine(err.Error())
-			l.stallWait("", why)
+			l.StallWait("", why)
 			return nil // the budget recovers on its own: no pause, no failure
 		}
 		if err != nil {
 			why = "board next failed: " + oneLine(err.Error())
-			l.stallWait("", why)
+			l.StallWait("", why)
 			pause()
-			l.sayOnce("fill board", "SUPERVISOR NEXT FAILED board next: %v", err)
+			l.SayOnce("fill board", "SUPERVISOR NEXT FAILED board next: %v", err)
 			return nil
 		}
 		if next == nil {
@@ -269,37 +269,37 @@ func loopFill(l *supervisorLoop, ctx context.Context, st *state.State, claims ma
 			if !ordinary {
 				why += " in WIP-exempt intake; ordinary intake is held"
 			}
-			l.stallClear() // the board offers nothing: nothing waits
+			l.StallClear() // the board offers nothing: nothing waits
 			pause()
 			return nil
 		}
-		if startedHere[next.Ref] || attemptedHere[next.Ref] || slices.Contains(l.fillSkipped(), next.Ref) {
+		if startedHere[next.Ref] || attemptedHere[next.Ref] || slices.Contains(l.FillSkipped(), next.Ref) {
 			why = "board returned an already attempted or deferred item: " + next.URL
 			pause()
 			return nil // a stale board answer must not dispatch the same item twice
 		}
 		r, _ := parseRef(next.Ref)
-		name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+		name := fmt.Sprintf("%s %d", RepoName(r.Repo), r.N)
 		if slices.ContainsFunc(live.Agents, func(ag state.Agent) bool { return ag.Name == name }) {
 			why = fmt.Sprintf("board next offers %s, but the roster already has an agent named %q", next.URL, name)
-			l.stallWait(next.URL, why)
+			l.StallWait(next.URL, why)
 			pause()
 			return nil // the board may lag the worker's registration
 		}
-		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
+		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", LoopFillKey, next.Ref, attempts[next.Ref]+1)}
 		attemptedHere[next.Ref] = true
-		l.setFillPhase("start " + next.URL)
-		what, err := l.startItem(ctx, act, *next, reserved...)
+		l.SetFillPhase("start " + next.URL)
+		what, err := l.StartItem(ctx, act, *next, reserved...)
 		if err == nil {
 			startedCount++ // a later recording failure must not report zero starts
 		}
 		if err != nil {
-			var failed *refillStartError
+			var failed *RefillStartError
 			if errors.As(err, &failed) {
-				l.deferFill(next.Ref)
+				l.DeferFill(next.Ref)
 				why = next.URL + ": its start failed: " + oneLine(err.Error())
-				l.stallWait(next.URL, why)
-				l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", next.URL, err)
+				l.StallWait(next.URL, why)
+				l.SayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", next.URL, err)
 				// Bound a pass even when the board keeps offering refused items.
 				if len(attemptedHere) >= 32 {
 					return nil
@@ -308,27 +308,27 @@ func loopFill(l *supervisorLoop, ctx context.Context, st *state.State, claims ma
 				continue
 			}
 			why = next.URL + ": its start failed: " + oneLine(err.Error())
-			if errors.Is(err, errLoopLater) {
+			if errors.Is(err, ErrLoopLater) {
 				why = next.URL + ": " + oneLine(err.Error())
 			}
-			l.stallWait(next.URL, why)
-			if !errors.Is(err, errLoopLater) {
+			l.StallWait(next.URL, why)
+			if !errors.Is(err, ErrLoopLater) {
 				pause()
 			}
-			if !errors.Is(err, errLoopLater) {
-				l.sayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", act.Key, err)
+			if !errors.Is(err, ErrLoopLater) {
+				l.SayOnce(act.Key, "SUPERVISOR NEXT FAILED %s: %v", act.Key, err)
 			}
 			return nil
 		}
-		if err := l.record(act, what); err != nil {
+		if err := l.Record(act, what); err != nil {
 			return fmt.Errorf("recording capacity refill: %w", err)
 		}
 		attempts[next.Ref]++
 		startedHere[next.Ref] = true
-		l.stallClear()
-		l.mu.Lock()
-		l.fillEmpty = 0
-		delete(l.fillRetries, next.Ref)
-		l.mu.Unlock()
+		l.StallClear()
+		l.Mu.Lock()
+		l.FillEmpty = 0
+		delete(l.FillRetries, next.Ref)
+		l.Mu.Unlock()
 	}
 }

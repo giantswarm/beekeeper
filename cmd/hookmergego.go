@@ -17,20 +17,20 @@ import (
 func recordedMergeGo(events []state.Event, worker state.Party, ref, head string) bool {
 	allowed := false
 	for _, e := range events {
-		if e.By != loopParty {
+		if e.By != LoopParty {
 			continue
 		}
-		key, rest, ok := keyed(e.Detail)
+		key, rest, ok := Keyed(e.Detail)
 		if !ok {
 			continue
 		}
 
 		switch e.Verb {
-		case loopGoVerb:
+		case LoopGoVerb:
 			if strings.HasPrefix(key, "go "+ref+"@") {
 				allowed = key == "go "+ref+"@"+head && strings.HasPrefix(rest, worker.Name+": ")
 			}
-		case loopMergeVerb, loopClaimEndVerb:
+		case LoopMergeVerb, LoopClaimEndVerb:
 			if strings.HasPrefix(key, "go "+ref+"@") {
 				allowed = false
 			}
@@ -43,7 +43,7 @@ func recordedMergeGo(events []state.Event, worker state.Party, ref, head string)
 			if strings.HasPrefix(key, "forward "+ref+" ") {
 				allowed = false
 			}
-		case loopEndVerb:
+		case LoopEndVerb:
 			if key == "end "+ref {
 				allowed = false
 			}
@@ -103,7 +103,7 @@ func (a *app) hookMergeGo(session, repo string, pr int, head string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	pull, err := readLoopPull(ctx, ref)
+	pull, err := ReadLoopPull(ctx, ref)
 	if err != nil {
 		return "merge head and CI cannot be checked: " + err.Error()
 	}
@@ -113,7 +113,7 @@ func (a *app) hookMergeGo(session, repo string, pr int, head string) string {
 	if pull.State != superloop.Open || pull.Head != head || !pull.Green {
 		return "merge head moved or current CI is not green; park for a new exact-head go"
 	}
-	if latestReviewRequestsChanges(pull) {
+	if LatestReviewRequestsChanges(pull) {
 		return "a review requested changes; park for a review approving the current head"
 	}
 	if err := store.Log(about(event(worker, "merge.authorized", "https://github.com/%s/pull/%d at %s: supervisor go checked", repo, pr, head), ref)); err != nil {

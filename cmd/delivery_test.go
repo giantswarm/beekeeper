@@ -46,7 +46,7 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 				st.Merges = []state.Merge{{Repo: deliveryFixtureRepo, PR: 20, HandCut: tc.hand}}
 			})
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				return recordRun(st, 0, config.Lane{}, loopParty, runOutcome{out: tc.out}, now, ""), nil
+				return recordRun(st, 0, config.Lane{}, LoopParty, runOutcome{out: tc.out}, now, ""), nil
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -90,29 +90,29 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 		ref := fmt.Sprintf("o/r#%d", i+10)
 		in.Pulls[ref] = superloop.Pull{Ref: ref, State: superloop.Merged, MergeCommit: loopHead}
 	}
-	old := readDeliveryRelease
-	t.Cleanup(func() { readDeliveryRelease = old })
+	old := ReadDeliveryRelease
+	t.Cleanup(func() { ReadDeliveryRelease = old })
 	calls := 0
-	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
+	ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
 		calls++
 		return "", "", errors.New("offline")
 	}
-	l := &supervisorLoop{a: a, said: map[string]bool{}}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	l := &Loop{Host: a, Said: map[string]bool{}}
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
-	if calls != deliveryReleaseReads {
+	if calls != DeliveryReleaseReads {
 		t.Fatalf("calls %d", calls)
 	}
 	// Restart processes; failed attempts still back off, while other PRs get a turn.
-	l = &supervisorLoop{a: a, said: map[string]bool{}}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	l = &Loop{Host: a, Said: map[string]bool{}}
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 4 {
 		t.Fatalf("calls after restart %d", calls)
 	}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 4 {
@@ -124,11 +124,11 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 			t.Fatalf("failed read ended %+v", d)
 		}
 	}
-	in.Now = now.Add(deliveryReleaseEvery)
-	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
+	in.Now = now.Add(DeliveryReleaseEvery)
+	ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
 		return verdictAvailable, deliveryAvailableTag, nil
 	}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = a.store.Read()
@@ -138,7 +138,7 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 			done++
 		}
 	}
-	if done != deliveryReleaseReads {
+	if done != DeliveryReleaseReads {
 		t.Fatalf("done %d", done)
 	}
 }
@@ -156,7 +156,7 @@ func TestDeliveryStartsAtomicAndRestartIdempotent(t *testing.T) {
 				prev := append([]state.Delivery(nil), st.Deliveries...)
 				s := state.Start{Party: state.Party{Name: fmt.Sprintf("delivery worker %d", i), Session: fmt.Sprint(i)}, At: now}
 				_, err := recordStart(st, s, "research", fmt.Sprintf("o/r#%d", i), func(state.Party) bool { return false })
-				return state.DeliveryEvents(prev, st.Deliveries, loopParty), err
+				return state.DeliveryEvents(prev, st.Deliveries, LoopParty), err
 			})
 		}()
 	}
@@ -173,8 +173,8 @@ func TestDeliveryStartsAtomicAndRestartIdempotent(t *testing.T) {
 	}
 	in := superloop.Input{Now: now, Workers: []superloop.Worker{{Name: "delivery worker 1", Serves: refOne}, {Name: "delivery worker 2", Serves: idleRef}}}
 	for range 2 {
-		l := &supervisorLoop{a: r.a, said: map[string]bool{}}
-		if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+		l := &Loop{Host: r.a, Said: map[string]bool{}}
+		if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -340,12 +340,12 @@ func TestDeliveryRESTTagMustContainActualMerge(t *testing.T) {
 		}
 	}
 	p := superloop.Pull{Ref: "example/delivery#2", Base: mainBranch, MergeCommit: loopFixed, State: superloop.Merged}
-	verdict, _, err := readDeliveryRelease(t.Context(), p)
+	verdict, _, err := ReadDeliveryRelease(t.Context(), p)
 	if err != nil || verdict != "" {
 		t.Fatalf("tag does not contain merge: %s %v", verdict, err)
 	}
 	status = "ahead"
-	verdict, tag, err := readDeliveryRelease(t.Context(), p)
+	verdict, tag, err := ReadDeliveryRelease(t.Context(), p)
 	if err != nil || verdict != verdictAvailable || tag != "v3.1.0-rc.2" {
 		t.Fatalf("tag contains merge: %s %s %v", verdict, tag, err)
 	}
@@ -364,9 +364,9 @@ func TestDeliveryCompleteSeedAndPartialReadTimestamp(t *testing.T) {
 	now := a.timeNow()
 	old := now.Add(-time.Hour)
 	seed(t, a, func(st *state.State) { st.DeliveriesAt = old })
-	l := &supervisorLoop{a: a, said: map[string]bool{}, openPulls: []string{refOne, idleRef}}
+	l := &Loop{Host: a, Said: map[string]bool{}, OpenPulls: []string{refOne, idleRef}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{refOne: {Ref: refOne, State: superloop.Open}}}
-	if err := l.observeDeliveries(t.Context(), in, map[string]bool{idleRef: true}); err != nil {
+	if err := l.ObserveDeliveries(t.Context(), in, map[string]bool{idleRef: true}); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
@@ -374,7 +374,7 @@ func TestDeliveryCompleteSeedAndPartialReadTimestamp(t *testing.T) {
 		t.Fatalf("partial seed: %+v at %s", st.Deliveries, st.DeliveriesAt)
 	}
 	in.Pulls[idleRef] = superloop.Pull{Ref: idleRef, State: superloop.Open}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = a.store.Read()
@@ -382,8 +382,8 @@ func TestDeliveryCompleteSeedAndPartialReadTimestamp(t *testing.T) {
 		t.Fatal(st.DeliveriesAt)
 	}
 	events, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == state.DeliveryStepVerb })
-	l = &supervisorLoop{a: a, said: map[string]bool{}, openPulls: []string{refOne, idleRef}}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	l = &Loop{Host: a, Said: map[string]bool{}, OpenPulls: []string{refOne, idleRef}}
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == state.DeliveryStepVerb })
@@ -444,22 +444,22 @@ func TestDeliveryFailedTagDoesNotBecomeReleaseProof(t *testing.T) {
 	seed(t, a, func(st *state.State) {
 		st.Deliveries = []state.Delivery{{Ref: refOne, Pulls: []string{idleRef}, Step: state.DeliveryReleasing, Verdict: state.DeliveryReleaseFailed, Release: deliveryFailedTag, Started: now, Since: now}}
 	})
-	old := readDeliveryRelease
-	t.Cleanup(func() { readDeliveryRelease = old })
+	old := ReadDeliveryRelease
+	t.Cleanup(func() { ReadDeliveryRelease = old })
 	tag := deliveryFailedTag
-	readDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return verdictAvailable, tag, nil }
-	l := &supervisorLoop{a: a, said: map[string]bool{}}
+	ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return verdictAvailable, tag, nil }
+	l := &Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{idleRef: {Ref: idleRef, State: superloop.Merged}}}
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
 	if st.Deliveries[0].Step != state.DeliveryReleasing || st.Deliveries[0].Verdict != state.DeliveryReleaseFailed {
 		t.Fatal(st.Deliveries)
 	}
-	in.Now = now.Add(deliveryReleaseEvery)
+	in.Now = now.Add(DeliveryReleaseEvery)
 	tag = "v2.0.2"
-	if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = a.store.Read()
@@ -480,12 +480,12 @@ func TestDeliveryUnreadableRepositoryIsNotNoRelease(t *testing.T) {
 		return nil, errors.New("HTTP 404")
 	}
 	p := superloop.Pull{Ref: "example/hidden#3", Base: mainBranch, MergeCommit: loopHead, State: superloop.Merged}
-	verdict, _, err := readDeliveryRelease(t.Context(), p)
+	verdict, _, err := ReadDeliveryRelease(t.Context(), p)
 	if err == nil || verdict != "" {
 		t.Fatalf("unreadable repo ended: %q %v", verdict, err)
 	}
 	readable = true
-	verdict, _, err = readDeliveryRelease(t.Context(), p)
+	verdict, _, err = ReadDeliveryRelease(t.Context(), p)
 	if err != nil || verdict != state.DeliveryNoRelease {
 		t.Fatalf("readable branch: %q %v", verdict, err)
 	}
@@ -538,11 +538,11 @@ func TestDeliveryGeneralTagCheckKeepsSelfUpdateWakesScoped(t *testing.T) {
 	calls := 0
 	github.RunGH = func(context.Context, ...string) ([]byte, error) { calls++; return []byte("ahead"), nil }
 	ref := "example/delivery#2"
-	contains, err := releaseTagContains(t.Context(), ref, loopFixed, "v3.0.0")
+	contains, err := ReleaseTagContains(t.Context(), ref, loopFixed, "v3.0.0")
 	if err != nil || !contains || calls != 1 {
 		t.Fatalf("general check: %v %v calls %d", contains, err, calls)
 	}
-	contains, err = loopReleaseContains(t.Context(), ref, loopFixed, "v3.0.0")
+	contains, err = LoopReleaseContains(t.Context(), ref, loopFixed, "v3.0.0")
 	if err != nil || contains || calls != 1 {
 		t.Fatalf("self-update crossed repositories: %v %v calls %d", contains, err, calls)
 	}
@@ -580,17 +580,17 @@ func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	now := a.timeNow()
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{}}
 	seed(t, a, func(st *state.State) {
-		for i := 1; i <= deliveryReleaseReads+1; i++ {
+		for i := 1; i <= DeliveryReleaseReads+1; i++ {
 			ref := fmt.Sprintf("o/r#%d", i+10)
 			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: ref, Pulls: []string{ref}, Step: state.DeliveryReleasing, Started: now, Since: now})
 			in.Pulls[ref] = superloop.Pull{Ref: ref, State: superloop.Merged, MergeCommit: loopHead}
 		}
 	})
-	old := readDeliveryRelease
-	t.Cleanup(func() { readDeliveryRelease = old })
+	old := ReadDeliveryRelease
+	t.Cleanup(func() { ReadDeliveryRelease = old })
 	var probed []string
-	tail := fmt.Sprintf("o/r#%d", deliveryReleaseReads+11)
-	readDeliveryRelease = func(_ context.Context, p superloop.Pull) (string, string, error) {
+	tail := fmt.Sprintf("o/r#%d", DeliveryReleaseReads+11)
+	ReadDeliveryRelease = func(_ context.Context, p superloop.Pull) (string, string, error) {
 		probed = append(probed, p.Ref)
 		if p.Ref == tail {
 			return verdictAvailable, deliveryAvailableTag, nil
@@ -599,13 +599,13 @@ func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	}
 	for pass := range 2 {
 		// Restart too: fairness follows persisted attempt times, not process state.
-		in.Now = now.Add(time.Duration(pass) * (deliveryReleaseEvery + time.Minute))
-		l := &supervisorLoop{a: a, said: map[string]bool{}}
+		in.Now = now.Add(time.Duration(pass) * (DeliveryReleaseEvery + time.Minute))
+		l := &Loop{Host: a, Said: map[string]bool{}}
 		before := len(probed)
-		if err := l.observeDeliveries(t.Context(), in, nil); err != nil {
+		if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 			t.Fatal(err)
 		}
-		if len(probed)-before > deliveryReleaseReads {
+		if len(probed)-before > DeliveryReleaseReads {
 			t.Fatal("exceeded release probe allowance")
 		}
 	}

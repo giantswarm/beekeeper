@@ -9,21 +9,21 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const loopPullStep = "pull"
+const LoopPullStep = "pull"
 
-const loopSweepStep = "sweep"
+const LoopSweepStep = "sweep"
 
 // Keep room for an admitted query and for concurrent callers. The large
 // board regression checks a whole walk below this per-request reserve.
-const loopGraphQLReserve = 500
+const LoopGraphQLReserve = 500
 
-type loopPullObservation struct {
-	pull    superloop.Pull
-	at      time.Time
-	changed time.Time
+type LoopPullObservation struct {
+	Pull    superloop.Pull
+	At      time.Time
+	Changed time.Time
 }
 
-func loopPullChanged(in superloop.Input, ref string) time.Time {
+func LoopPullChanged(in superloop.Input, ref string) time.Time {
 	var changed time.Time
 	mark := func(at time.Time) {
 		if at.After(changed) {
@@ -61,35 +61,35 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 	return changed
 }
 
-func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed time.Time) (superloop.Pull, error) {
-	return l.observePullStep(ctx, ref, changed, loopPullStep)
+func (l *Loop) ObservePull(ctx context.Context, ref string, changed time.Time) (superloop.Pull, error) {
+	return l.ObservePullStep(ctx, ref, changed, LoopPullStep)
 }
 
 // Observation lookup performs no IO against GitHub. Keep the original read
 // time when copying a watcher's observation into this pass's action cache.
-func (l *supervisorLoop) observePullStep(ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
-	seen, err := readObservedLoopPull(l, ctx, ref, changed, step)
+func (l *Loop) ObservePullStep(ctx context.Context, ref string, changed time.Time, step string) (superloop.Pull, error) {
+	seen, err := ReadObservedLoopPull(l, ctx, ref, changed, step)
 	if err != nil {
 		return superloop.Pull{}, err
 	}
-	l.mu.Lock()
-	if l.pulls == nil {
-		l.pulls = map[string]loopPullObservation{}
+	l.Mu.Lock()
+	if l.Pulls == nil {
+		l.Pulls = map[string]LoopPullObservation{}
 	}
-	l.pulls[ref] = seen
-	l.mu.Unlock()
-	return seen.pull, nil
+	l.Pulls[ref] = seen
+	l.Mu.Unlock()
+	return seen.Pull, nil
 }
 
 // A reset is not evidence of recovery: wait for a reading from the new
 // window, the watch's or the held pass's own (refreshLoopBudget). Unknown
 // and stale observations fail closed.
-func loopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
+func LoopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
 	if b == nil || b.GraphQL == nil {
 		return true
 	}
 	g := b.GraphQL
-	return boardBudgetLow(b, floor, now) || g.Remaining <= floor || loopReadingStale(b, now)
+	return BoardBudgetLow(b, floor, now) || g.Remaining <= floor || loopReadingStale(b, now)
 }
 
 // loopReadingStale: the saved GraphQL reading is missing, older than a

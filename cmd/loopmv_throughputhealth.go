@@ -13,7 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const throughputStartFailed = "start-command-failed"
+const ThroughputStartFailed = "start-command-failed"
 
 type eligibleWait struct {
 	Head, URL string
@@ -29,9 +29,9 @@ type throughputObservation struct {
 
 // Keep retry/backoff decisions out of this ledger. Only a command actually
 // attempted contributes; capacity and budget refusals are intentional holds.
-func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, args ...string) (string, error) {
-	begin := l.a.timeNow()
-	out, err := l.run(ctx, args...)
+func (l *Loop) RunStart(ctx context.Context, act superloop.Action, args ...string) (string, error) {
+	begin := l.Host.timeNow()
+	out, err := l.Run(ctx, args...)
 	if err != nil && (errors.Is(err, context.Canceled) || Code(err) == ExitRefused || isLoopGitHubHeldOutput(out)) {
 		return out, err
 	}
@@ -43,19 +43,19 @@ func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, arg
 	if err != nil && len(args) >= 3 && strings.Contains("\n"+out, "\nstarted "+args[2]+":") && l.startRegistered(args[2], begin) {
 		err = nil
 	}
-	reason := throughputStartFailed
+	reason := ThroughputStartFailed
 	if err == nil {
 		reason = ""
 	}
-	if saveErr := l.a.operationOutcome(agentStartName, reason, act.URL, err == nil); saveErr != nil {
+	if saveErr := l.Host.operationOutcome(agentStartName, reason, act.URL, err == nil); saveErr != nil {
 		return out, saveErr
 	}
 	return out, err
 }
 
 // startRegistered says whether the roster holds name, registered since begin.
-func (l *supervisorLoop) startRegistered(name string, begin time.Time) bool {
-	st, err := l.a.store.Read()
+func (l *Loop) startRegistered(name string, begin time.Time) bool {
+	st, err := l.Host.store.Read()
 	if err != nil {
 		return false
 	}
@@ -67,43 +67,43 @@ func (l *supervisorLoop) startRegistered(name string, begin time.Time) bool {
 // Phase progress refreshes liveness without invalidating the last planner
 // observation before the next pass's health check reads it. The planner's
 // checkpoint below still marks eligibility unknown while gathering inputs.
-func (l *supervisorLoop) refreshThroughputHeartbeat(now time.Time) error {
+func (l *Loop) refreshThroughputHeartbeat(now time.Time) error {
 	var obs throughputObservation
-	found, err := l.a.store.ReadFile(throughputObservationFile, &obs)
+	found, err := l.Host.store.ReadFile(throughputObservationFile, &obs)
 	if err != nil {
 		return err
 	}
-	candidate := normalizeLoopVersion(loopRunningVersion())
+	candidate := NormalizeLoopVersion(LoopRunningVersion())
 	if !found || obs.Candidate != candidate {
 		obs.Unknown = true
 	}
 	obs.At, obs.Candidate = now, candidate
-	return l.a.store.WriteFile(throughputObservationFile, obs)
+	return l.Host.store.WriteFile(throughputObservationFile, obs)
 }
 
-// checkpointThroughput reports bounded pass progress before expensive history
+// CheckpointThroughput reports bounded pass progress before expensive history
 // loading. Keep eligibility ages intact until planning can observe them afresh.
 // Use wall time: the pass snapshot can already be minutes old after handover.
 // This is not a background keepalive; a stuck pass stops refreshing it.
-func (l *supervisorLoop) checkpointThroughput(now time.Time) error {
+func (l *Loop) CheckpointThroughput(now time.Time) error {
 	var obs throughputObservation
-	if _, err := l.a.store.ReadFile(throughputObservationFile, &obs); err != nil {
+	if _, err := l.Host.store.ReadFile(throughputObservationFile, &obs); err != nil {
 		return err
 	}
-	obs.At, obs.Candidate, obs.Unknown = now, normalizeLoopVersion(loopRunningVersion()), true
-	return l.a.store.WriteFile(throughputObservationFile, obs)
+	obs.At, obs.Candidate, obs.Unknown = now, NormalizeLoopVersion(LoopRunningVersion()), true
+	return l.Host.store.WriteFile(throughputObservationFile, obs)
 }
 
-func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superloop.Action, unknown bool) error {
+func (l *Loop) ObserveThroughput(in superloop.Input, actions []superloop.Action, unknown bool) error {
 	var old throughputObservation
-	_, err := l.a.store.ReadFile(throughputObservationFile, &old)
+	_, err := l.Host.store.ReadFile(throughputObservationFile, &old)
 	if err != nil {
 		old = throughputObservation{}
 		unknown = true
 	}
-	now := l.a.timeNow()
-	next := throughputObservation{At: now, Candidate: normalizeLoopVersion(loopRunningVersion()), Unknown: unknown, Eligible: map[string]eligibleWait{}}
-	if l.lifecycle != nil {
+	now := l.Host.timeNow()
+	next := throughputObservation{At: now, Candidate: NormalizeLoopVersion(LoopRunningVersion()), Unknown: unknown, Eligible: map[string]eligibleWait{}}
+	if l.Lifecycle != nil {
 		// Liveness uses completion time, not the frozen planning snapshot.
 		next.At = clk.Now().UTC()
 	}
@@ -127,7 +127,7 @@ func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superlo
 				approved = true
 			}
 		}
-		if !approved || p.Draft || strings.EqualFold(p.Mergeable, mergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
+		if !approved || p.Draft || strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
 			continue
 		}
 		wait := eligibleWait{Head: p.Head, URL: publicPullURL(p.URL), Since: now}
@@ -136,5 +136,5 @@ func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superlo
 		}
 		next.Eligible[act.Ref] = wait
 	}
-	return l.a.store.WriteFile(throughputObservationFile, next)
+	return l.Host.store.WriteFile(throughputObservationFile, next)
 }

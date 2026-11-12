@@ -35,23 +35,23 @@ var loopVersionOf = func(ctx context.Context, path string) string {
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) >= 2 && fields[0] == project.Name {
-		return normalizeLoopVersion(fields[1])
+		return NormalizeLoopVersion(fields[1])
 	}
 	if len(fields) > 0 {
-		return normalizeLoopVersion(fields[0])
+		return NormalizeLoopVersion(fields[0])
 	}
 	return ""
 }
 
 func (a *app) writeLoopVersion() error {
-	return a.store.WriteFile(loopVersionFile, loopVersionRecord{
+	return a.store.WriteFile(LoopVersionFile, LoopVersionRecord{
 		PID:     os.Getpid(),
-		Version: normalizeLoopVersion(loopRunningVersion()),
+		Version: NormalizeLoopVersion(LoopRunningVersion()),
 	})
 }
 
 func (a *app) clearLoopVersion() {
-	_ = a.store.WriteFile(loopVersionFile, loopVersionRecord{})
+	_ = a.store.WriteFile(LoopVersionFile, LoopVersionRecord{})
 }
 
 func (a *app) supervisorCmd() *cobra.Command {
@@ -82,7 +82,7 @@ Without a subcommand, shows whether the loop runs. A stopped loop is a valid sta
 // loopPID is the PID of the running supervisor loop, 0 when none runs.
 func (a *app) loopPID() int {
 	var pid int
-	found, err := a.store.ReadFile(loopPIDFile, &pid)
+	found, err := a.store.ReadFile(LoopPIDFile, &pid)
 	if err != nil || !found || pid <= 0 || !proc.Alive(pid) {
 		return 0
 	}
@@ -122,7 +122,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		c = ctx[0]
 	}
 	var pid int
-	if _, err := a.store.ReadFile(loopPIDFile, &pid); err != nil {
+	if _, err := a.store.ReadFile(LoopPIDFile, &pid); err != nil {
 		return fmt.Errorf("reading supervisor loop PID: %w", err)
 	}
 	if pid <= 0 || !proc.Alive(pid) {
@@ -146,7 +146,7 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 		return a.printJSON(supervisorView{Hosts: a.hostPlacementViews(st), Epics: epics, Delivery: &delivery, Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}
 	for _, host := range a.hostPlacementViews(st) {
-		if _, err := fmt.Fprintln(a.out, host.line()); err != nil {
+		if _, err := fmt.Fprintln(a.out, host.Line()); err != nil {
 			return err
 		}
 	}
@@ -180,13 +180,13 @@ func (a *app) loopWaitLines() (held, pulls string) {
 	if found, err := a.store.ReadFile(loopGraphQLFile, &spend); err == nil && found {
 		held = a.heldLine(spend)
 	}
-	var count loopSweepCount
-	if found, err := a.store.ReadFile(loopSweepFile, &count); err == nil && found {
-		pulls = count.line(a)
+	var count LoopSweepCount
+	if found, err := a.store.ReadFile(LoopSweepFile, &count); err == nil && found {
+		pulls = count.Line(a)
 	}
-	var snapshot loopPullSnapshot
-	if found, err := a.store.ReadFile(loopPullWatchFile, &snapshot); found && err == nil {
-		if line := snapshot.ageLine(a.timeNow()); line != "" {
+	var snapshot LoopPullSnapshot
+	if found, err := a.store.ReadFile(LoopPullWatchFile, &snapshot); found && err == nil {
+		if line := snapshot.AgeLine(a.timeNow()); line != "" {
 			pulls = strings.TrimSpace(pulls + "\n" + line)
 		}
 	}
@@ -198,12 +198,12 @@ func (a *app) loopVersion(ctx context.Context, pid int) string {
 	if pid <= 0 {
 		return ""
 	}
-	var rec loopVersionRecord
-	if found, err := a.store.ReadFile(loopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
-		return normalizeLoopVersion(rec.Version)
+	var rec LoopVersionRecord
+	if found, err := a.store.ReadFile(LoopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
+		return NormalizeLoopVersion(rec.Version)
 	}
 	if pid == os.Getpid() {
-		return normalizeLoopVersion(loopRunningVersion())
+		return NormalizeLoopVersion(LoopRunningVersion())
 	}
 	for _, path := range []string{
 		fmt.Sprintf("/proc/%d/exe", pid),
@@ -218,7 +218,7 @@ func (a *app) loopVersion(ctx context.Context, pid int) string {
 	}
 	if path, replaced := processBinary(pid); path != "" && !replaced {
 		if installed, err := installedLoopBinary(); err == nil && sameBinaryFile(path, installed) {
-			return normalizeLoopVersion(loopRunningVersion())
+			return NormalizeLoopVersion(LoopRunningVersion())
 		}
 	}
 	return ""
@@ -256,7 +256,7 @@ func (a *app) staleLoopLine(ctx context.Context) string {
 	if pid <= 0 {
 		return ""
 	}
-	installedVer := normalizeLoopVersion(loopRunningVersion())
+	installedVer := NormalizeLoopVersion(LoopRunningVersion())
 	if installed, err := installedLoopBinary(); err == nil && installed != "" {
 		_, selfReplaced := replacedBinary(os.Getpid())
 		if self, selfErr := os.Executable(); selfErr != nil || !sameBinaryFile(installed, self) || selfReplaced {

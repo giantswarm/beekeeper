@@ -252,7 +252,7 @@ func (a *app) notifyRejectedReports(ctx context.Context) error {
 			continue
 		}
 		message := fmt.Sprintf("Session report %s was rejected: %s. Re-read the task and send corrected input.", id, receipt.Error)
-		if err := a.wakeAgent(ctx, loopParty, reportWakeTarget(receipt.By), message, ""); err != nil {
+		if err := a.wakeAgent(ctx, LoopParty, reportWakeTarget(receipt.By), message, ""); err != nil {
 			continue
 		}
 		if err := a.store.Update(func(current *state.State) ([]state.Event, error) {

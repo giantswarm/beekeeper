@@ -19,7 +19,7 @@ func (a *app) hostPlacementViews(st *state.State) []hostPlacementView {
 		}
 		if pin := st.HostPin(selector); pin != nil && pin.Identity == a.cfg.Agents.Hosts[selector].Identity {
 			v.Update = pin.UpdateError
-			if hostHoldBlocks(*pin) {
+			if HostHoldBlocks(*pin) {
 				v.Reason = "held: " + pin.Held
 			} else if pin.Held != "" {
 				v.Update = pin.Held

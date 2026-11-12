@@ -32,7 +32,7 @@ func TestParseLoopPullReadsRedChecks(t *testing.T) {
 	  {"status":"COMPLETED","conclusion":"SUCCESS","name":"unit"},
 	  {"status":"COMPLETED","conclusion":"NEUTRAL","name":"neutral"},
 	  {"state":"PENDING","context":"ci/pending"}]`
-	p, err := parseLoopPull(loopPR, []byte(`{"state":"OPEN","headRefOid":"x","statusCheckRollup":`+rollup+`}`))
+	p, err := ParseLoopPull(loopPR, []byte(`{"state":"OPEN","headRefOid":"x","statusCheckRollup":`+rollup+`}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestParseLoopPullReadsRedChecks(t *testing.T) {
 			t.Errorf("red[%d] = %+v, want %+v", i, p.Red[i], want[i])
 		}
 	}
-	p, err = parseLoopPull(loopPR, []byte(`{"state":"OPEN","headRefOid":"x","statusCheckRollup":[{"status":"QUEUED","conclusion":""}]}`))
+	p, err = ParseLoopPull(loopPR, []byte(`{"state":"OPEN","headRefOid":"x","statusCheckRollup":[{"status":"QUEUED","conclusion":""}]}`))
 	if err != nil || len(p.Red) != 0 {
 		t.Errorf("pending checks read as red: %+v, %v", p.Red, err)
 	}
@@ -129,10 +129,10 @@ func TestLoopWakesAWorkerOnARedCheck(t *testing.T) {
 
 // Parsing feeds both the wake decision and the approved head's green gate.
 func TestLoopSupersededChecks(t *testing.T) {
-	old := loopCheck{Name: "test-check", WorkflowName: "ci", Status: checkCompleted, Conclusion: "CANCELLED", StartedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), DetailsURL: "https://github.com/o/r/actions/runs/10/job/1"}
+	old := LoopCheck{Name: "test-check", WorkflowName: "ci", Status: CheckCompleted, Conclusion: "CANCELLED", StartedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), DetailsURL: "https://github.com/o/r/actions/runs/10/job/1"}
 	newer := old
 	newer.StartedAt = old.StartedAt.Add(time.Minute)
-	newer.Conclusion = checkSuccess
+	newer.Conclusion = CheckSuccess
 	newer.DetailsURL = "https://github.com/o/r/actions/runs/11/job/2"
 	pending := newer
 	pending.Status, pending.Conclusion, pending.StartedAt = "QUEUED", "", time.Time{}
@@ -150,11 +150,11 @@ func TestLoopSupersededChecks(t *testing.T) {
 	externalOld := old
 	externalOld.DetailsURL = "https://ci.example/check/1"
 	failed := old
-	failed.Conclusion = checkFailure
+	failed.Conclusion = CheckFailure
 	timedOut := old
 	timedOut.Conclusion = "TIMED_OUT"
 	externalFailed := externalOld
-	externalFailed.Conclusion = checkFailure
+	externalFailed.Conclusion = CheckFailure
 	rerun := newer
 	rerun.DetailsURL = old.DetailsURL
 	otherWorkflow := newer
@@ -167,45 +167,45 @@ func TestLoopSupersededChecks(t *testing.T) {
 	delayedOld.StartedAt = newer.StartedAt.Add(time.Minute)
 	for _, tt := range []struct {
 		name       string
-		checks     []loopCheck
+		checks     []LoopCheck
 		green, red bool
 	}{
-		{"newer success", []loopCheck{old, newer}, true, false},
-		{"reverse order", []loopCheck{newer, old}, true, false},
-		{"older success", []loopCheck{old, older}, false, true},
-		{"external check timestamp", []loopCheck{externalOld, external}, true, false},
-		{"commit status is not replacement", []loopCheck{old, {Name: "test-check", State: checkSuccess}}, false, true},
-		{"lone cancellation", []loopCheck{old}, false, true},
-		{"queued replacement", []loopCheck{old, pending}, false, false},
-		{"different check", []loopCheck{old, other}, false, true},
-		{"same workflow newer run", []loopCheck{old, workflow}, true, false},
-		{"same workflow same run", []loopCheck{old, sameRun}, false, true},
-		{"failed run superseded by success on same head", []loopCheck{failed, newer}, true, false},
-		{"failed run reverse order", []loopCheck{newer, failed}, true, false},
-		{"failed run superseded by queued run", []loopCheck{failed, pending}, false, false},
-		{"same name in different workflow stays red", []loopCheck{failed, otherWorkflow}, false, true},
-		{"same name in different workflow reverse order", []loopCheck{otherWorkflow, failed}, false, true},
-		{"different workflow queued job does not hide failure", []loopCheck{failed, otherWorkflowPending}, false, true},
-		{"different external workflow does not hide failure", []loopCheck{externalFailed, otherWorkflowExternal}, false, true},
-		{"different failed check stays red", []loopCheck{failed, other}, false, true},
-		{"failed job not replaced by renamed workflow job", []loopCheck{failed, workflow}, false, true},
-		{"external failure superseded by timestamp", []loopCheck{externalFailed, external}, true, false},
-		{"same workflow run rerun by timestamp", []loopCheck{failed, rerun}, true, false},
-		{"run ID orders delayed starts", []loopCheck{delayedOld, newer}, true, false},
-		{"timeout superseded by success", []loopCheck{timedOut, newer}, true, false},
-		{"newer failure wins", []loopCheck{older, failed}, false, true},
-		{"newer queued run supersedes green", []loopCheck{older, pending}, false, false},
+		{"newer success", []LoopCheck{old, newer}, true, false},
+		{"reverse order", []LoopCheck{newer, old}, true, false},
+		{"older success", []LoopCheck{old, older}, false, true},
+		{"external check timestamp", []LoopCheck{externalOld, external}, true, false},
+		{"commit status is not replacement", []LoopCheck{old, {Name: "test-check", State: CheckSuccess}}, false, true},
+		{"lone cancellation", []LoopCheck{old}, false, true},
+		{"queued replacement", []LoopCheck{old, pending}, false, false},
+		{"different check", []LoopCheck{old, other}, false, true},
+		{"same workflow newer run", []LoopCheck{old, workflow}, true, false},
+		{"same workflow same run", []LoopCheck{old, sameRun}, false, true},
+		{"failed run superseded by success on same head", []LoopCheck{failed, newer}, true, false},
+		{"failed run reverse order", []LoopCheck{newer, failed}, true, false},
+		{"failed run superseded by queued run", []LoopCheck{failed, pending}, false, false},
+		{"same name in different workflow stays red", []LoopCheck{failed, otherWorkflow}, false, true},
+		{"same name in different workflow reverse order", []LoopCheck{otherWorkflow, failed}, false, true},
+		{"different workflow queued job does not hide failure", []LoopCheck{failed, otherWorkflowPending}, false, true},
+		{"different external workflow does not hide failure", []LoopCheck{externalFailed, otherWorkflowExternal}, false, true},
+		{"different failed check stays red", []LoopCheck{failed, other}, false, true},
+		{"failed job not replaced by renamed workflow job", []LoopCheck{failed, workflow}, false, true},
+		{"external failure superseded by timestamp", []LoopCheck{externalFailed, external}, true, false},
+		{"same workflow run rerun by timestamp", []LoopCheck{failed, rerun}, true, false},
+		{"run ID orders delayed starts", []LoopCheck{delayedOld, newer}, true, false},
+		{"timeout superseded by success", []LoopCheck{timedOut, newer}, true, false},
+		{"newer failure wins", []LoopCheck{older, failed}, false, true},
+		{"newer queued run supersedes green", []LoopCheck{older, pending}, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
-			raw, err := json.Marshal(loopPullJSON{State: superloop.Open, Head: loopHead, Rollup: tt.checks})
+			raw, err := json.Marshal(LoopPullJSON{State: superloop.Open, Head: loopHead, Rollup: tt.checks})
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, err := parseLoopPull(loopPR, raw)
+			p, err := ParseLoopPull(loopPR, raw)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -227,7 +227,7 @@ func TestLoopSupersededChecks(t *testing.T) {
 // A workflow may fail before it creates ci-ok. The old ci-ok success in
 // the rollup must not let that head authorize a merge.
 func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
-	old := loopWorkflowRun{ID: 10, WorkflowID: 1, Attempt: 1, Head: loopWorkflowHead, Name: "CI", Status: workerGitHubCompleted, Conclusion: loopWorkflowSuccess}
+	old := LoopWorkflowRun{ID: 10, WorkflowID: 1, Attempt: 1, Head: loopWorkflowHead, Name: "CI", Status: workerGitHubCompleted, Conclusion: loopWorkflowSuccess}
 	newRun := old
 	newRun.ID = 20
 	other := old
@@ -249,12 +249,12 @@ func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			newRun.Status, newRun.Conclusion = tc.status, tc.conclusion
-			for _, runs := range [][]loopWorkflowRun{{old, newRun, other}, {other, newRun, old}} {
+			for _, runs := range [][]LoopWorkflowRun{{old, newRun, other}, {other, newRun, old}} {
 				// Separate pages ensure pagination and response order do not
 				// change which suite is authoritative.
 				var raw []byte
 				for _, run := range runs {
-					page, err := json.Marshal(map[string]any{"workflow_runs": []loopWorkflowRun{run}})
+					page, err := json.Marshal(map[string]any{"workflow_runs": []LoopWorkflowRun{run}})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -264,9 +264,9 @@ func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
 				if !tc.missing {
 					id = "20"
 				}
-				rollup := []loopCheck{{Name: "ci-ok", WorkflowName: "CI", Status: "COMPLETED", Conclusion: "SUCCESS", DetailsURL: "https://github.com/o/r/actions/runs/" + id + "/job/1"}}
+				rollup := []LoopCheck{{Name: "ci-ok", WorkflowName: "CI", Status: "COMPLETED", Conclusion: "SUCCESS", DetailsURL: "https://github.com/o/r/actions/runs/" + id + "/job/1"}}
 				p := superloop.Pull{Head: loopWorkflowHead, Green: true}
-				if err := applyLoopWorkflowRuns(&p, raw, rollup); err != nil {
+				if err := ApplyLoopWorkflowRuns(&p, raw, rollup); err != nil {
 					t.Fatal(err)
 				}
 				if p.Green != tc.green || len(p.Red) != tc.red {
@@ -280,7 +280,7 @@ func TestLoopNewestWorkflowWithoutRequiredJob(t *testing.T) {
 func TestLoopWorkflowRunsUnreadable(t *testing.T) {
 	for _, raw := range []string{"", "{}", "{", `{"workflow_runs":[{"head_sha":"head"}]}`} {
 		p := superloop.Pull{Head: loopWorkflowHead, Green: true}
-		if err := applyLoopWorkflowRuns(&p, []byte(raw), nil); err == nil {
+		if err := ApplyLoopWorkflowRuns(&p, []byte(raw), nil); err == nil {
 			t.Fatalf("accepted %q", raw)
 		}
 	}
@@ -293,7 +293,7 @@ func TestLoopWorkflowRunAttemptsAndOtherHeads(t *testing.T) {
 		{"id":20,"workflow_id":1,"run_attempt":1,"head_sha":"head","status":"completed","conclusion":"failure"},
 		{"id":30,"workflow_id":1,"run_attempt":1,"head_sha":"other","status":"completed","conclusion":"failure"}
 	]}`
-	if err := applyLoopWorkflowRuns(&p, []byte(raw), nil); err != nil {
+	if err := ApplyLoopWorkflowRuns(&p, []byte(raw), nil); err != nil {
 		t.Fatal(err)
 	}
 	if !p.Green || len(p.Red) != 0 {

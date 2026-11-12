@@ -31,18 +31,18 @@ func TestRedHandoffIncludesBoundedFailureOutput(t *testing.T) {
 		return []byte(strings.Repeat("x", 13000) + "FAIL: useful tail"), nil
 	}, time.Millisecond)
 	url := redLogURL
-	act := attachRedLogs(context.Background(), superloop.Action{Ref: redLogRef, Message: url + " " + url})
+	act := AttachRedLogs(context.Background(), superloop.Action{Ref: redLogRef, Message: url + " " + url})
 	if calls != 1 || !strings.Contains(act.Message, "CI failure output from "+url+":") || !strings.Contains(act.Message, "earlier output truncated") || !strings.HasSuffix(act.Message, "FAIL: useful tail") || len(act.Message) > 12500 {
 		t.Fatalf("calls=%d, output length=%d, msg=%q", calls, len(act.Message), act.Message)
 	}
 }
 
 func TestRedHandoffRetainsLinkWhenLogsUnavailable(t *testing.T) {
-	old := readRedJobLog
-	t.Cleanup(func() { readRedJobLog = old })
-	readRedJobLog = func(context.Context, string, int64) (string, error) { return "", errors.New("unavailable") }
+	old := ReadRedJobLog
+	t.Cleanup(func() { ReadRedJobLog = old })
+	ReadRedJobLog = func(context.Context, string, int64) (string, error) { return "", errors.New("unavailable") }
 	url := redLogURL
-	act := attachRedLogs(context.Background(), superloop.Action{Ref: redLogRef, Message: url})
+	act := AttachRedLogs(context.Background(), superloop.Action{Ref: redLogRef, Message: url})
 	if !strings.Contains(act.Message, "CI failure output unavailable; read "+url) {
 		t.Fatal(act.Message)
 	}

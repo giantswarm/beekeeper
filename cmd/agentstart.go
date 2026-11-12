@@ -414,7 +414,7 @@ work, which takes no choice on a self-hosted provider.`,
 			// The supervisor loop has a repository, no checkout: its workers
 			// and reviewers start in agents.dir, and a resumed or replaced
 			// worker keeps a branch and worktree that already exist.
-			worktreeManaged := a.as != loopParty.Name
+			worktreeManaged := a.as != LoopParty.Name
 			if worktreeManaged {
 				dir, err = a.startCheckout(dir)
 				if err != nil {

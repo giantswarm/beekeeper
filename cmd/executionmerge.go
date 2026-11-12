@@ -105,7 +105,7 @@ func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, u
 			}
 		}
 	}
-	pull, err := readLoopPull(ctx, fmt.Sprintf("%s#%d", use.Repository, use.PR))
+	pull, err := ReadLoopPull(ctx, fmt.Sprintf("%s#%d", use.Repository, use.PR))
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func (a *app) reconcileExecutionMerge(ctx context.Context, use execution.MergeUs
 	if grant.ID != use.ID || grant.Ref != use.Ref || grant.Repository != use.Repository || grant.PR != use.PR || grant.Head != use.Head || !grant.Consumed {
 		return result, refused("merge reconciliation tuple mismatch")
 	}
-	pull, err := readLoopPull(ctx, fmt.Sprintf("%s#%d", grant.Repository, grant.PR))
+	pull, err := ReadLoopPull(ctx, fmt.Sprintf("%s#%d", grant.Repository, grant.PR))
 	if err != nil {
 		return result, err
 	}

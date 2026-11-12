@@ -74,9 +74,9 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 	if _, err := restarted.FollowSnapshot("large-history-projection", "v1", keep); err != nil || decoded != 0 {
 		t.Fatalf("restart replayed %d historical events: %v", decoded, err)
 	}
-	oldList := readOpenPulls
-	t.Cleanup(func() { readOpenPulls = oldList })
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return nil, nil }
+	oldList := ReadOpenPulls
+	t.Cleanup(func() { ReadOpenPulls = oldList })
+	ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return nil, nil }
 	for _, label := range []string{"cold migration", "checkpoint restart"} {
 		reopened, err := state.Open(store.Dir())
 		if err != nil {
@@ -92,13 +92,13 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 		if startup >= update.HeartbeatGrace {
 			t.Fatalf("%s startup %s exceeds probation grace %s", label, startup, update.HeartbeatGrace)
 		}
-		l.once = true
-		l.lifecycle = &loopLifecycle{Version: normalizeLoopVersion(loopRunningVersion()), Started: started}
+		l.Once = true
+		l.Lifecycle = &LoopLifecycle{Version: NormalizeLoopVersion(LoopRunningVersion()), Started: started}
 		started = time.Now()
-		err = l.pass(t.Context())
-		l.passActions.Wait()
-		l.mergeActions.Wait()
-		l.timerActs.Wait()
+		err = l.Pass(t.Context())
+		l.PassActions.Wait()
+		l.MergeActions.Wait()
+		l.TimerActs.Wait()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,8 +106,8 @@ func TestLargeHistoryStartupAndPass(t *testing.T) {
 		if elapsed >= 10*time.Minute {
 			t.Fatalf("%s pass %s exceeds WIP freshness bound", label, elapsed)
 		}
-		var life loopLifecycle
-		if found, err := reopened.ReadFile(loopLifecycleFile, &life); err != nil || !found || life.At.IsZero() {
+		var life LoopLifecycle
+		if found, err := reopened.ReadFile(LoopLifecycleFile, &life); err != nil || !found || life.At.IsZero() {
 			t.Fatalf("no first-pass health evidence: %+v %v", life, err)
 		}
 		t.Logf("%s: %d events, %d bytes; startup=%s pass=%s", label, count, bytesWritten, startup, elapsed)

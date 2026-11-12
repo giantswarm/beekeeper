@@ -184,7 +184,7 @@ func TestSSHAgentStartKindAdmission(t *testing.T) {
 						t.Fatal("kind refusal or dry run reached SSH transport")
 						return nil
 					}
-					args := []string{agentStartName, filerTwo, brief, loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch, modelFlag, bgModel}
+					args := []string{agentStartName, filerTwo, brief, LoopHostFlag, sshTestSelector, LoopRepoFlag, sshTestRepository, LoopRefFlag, mainBranch, modelFlag, bgModel}
 					if dry {
 						args = append(args, testDryRunFlag)
 					}

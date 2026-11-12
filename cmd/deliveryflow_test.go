@@ -130,8 +130,8 @@ func TestDeliveryExternalHoldRestoresBoardAfterRestart(t *testing.T) {
 		st.StartDelivery(heldRef, workerRole, "", a.timeNow())
 		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{Waits: deliveryFlowTestVisit}}}
 	})
-	l := &supervisorLoop{a: a}
-	if err := l.syncDeliveryHolds(t.Context()); err != nil {
+	l := &Loop{Host: a}
+	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if f.statusOf(7) != holdBlocked {
@@ -142,8 +142,8 @@ func TestDeliveryExternalHoldRestoresBoardAfterRestart(t *testing.T) {
 		t.Fatalf("hold %+v", st.DeliveryHolds)
 	}
 	seed(t, a, func(st *state.State) { st.Agents[0].Park = nil })
-	l = &supervisorLoop{a: a}
-	if err := l.syncDeliveryHolds(t.Context()); err != nil {
+	l = &Loop{Host: a}
+	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if f.statusOf(7) != holdWorking {
@@ -193,8 +193,8 @@ func TestDeliveryHoldCoexistsWithDecisionHold(t *testing.T) {
 		st.StartDelivery(heldRef, workerRole, "", a.timeNow())
 		st.Agents = []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{External: true, Waits: "equipment delivery"}}}
 	})
-	l := &supervisorLoop{a: a}
-	if err := l.syncDeliveryHolds(t.Context()); err != nil {
+	l := &Loop{Host: a}
+	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
@@ -209,14 +209,14 @@ func TestDeliveryHoldCoexistsWithDecisionHold(t *testing.T) {
 		st.Notes = []state.Note{{ID: 1, For: holderPerson, Refs: []string{heldRef}, Held: h}}
 		st.Agents[0].Park = nil
 	})
-	if err := l.syncDeliveryHolds(t.Context()); err != nil {
+	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if f.statusOf(7) != holdBlocked {
 		t.Fatal("released another note's hold")
 	}
 	seed(t, a, func(st *state.State) { st.Notes = nil })
-	if err := l.syncDeliveryHolds(t.Context()); err != nil {
+	if err := l.SyncDeliveryHolds(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if f.statusOf(7) != holdWorking {

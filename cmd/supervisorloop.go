@@ -317,7 +317,7 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // runSupervisorLoop runs the loop on this command's state.
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
-	return runLoop(ctx, a, once)
+	return RunLoop(ctx, a, once)
 }
 
 // loopUnit is the user service that runs the loop, which beekeeper install
@@ -326,10 +326,10 @@ const loopUnit = "beekeeper-supervisor-loop.service"
 
 // dryRunSupervisorLoop is the loop's dry run on this command's state.
 func (a *app) dryRunSupervisorLoop(ctx context.Context, recordDirs ...string) error {
-	return dryRunLoop(ctx, a, recordDirs...)
+	return DryRunLoop(ctx, a, recordDirs...)
 }
 
 // newSupervisorLoop is a loop on this command's state.
-func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*supervisorLoop, error) {
-	return newLoop(a, dryRun, progress...)
+func (a *app) newSupervisorLoop(dryRun bool, progress ...func()) (*Loop, error) {
+	return NewLoop(a, dryRun, progress...)
 }

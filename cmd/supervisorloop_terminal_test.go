@@ -24,7 +24,7 @@ func TestLoopSettlesReportWithoutRefOnce(t *testing.T) {
 	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "names no issue or pull request") {
 		t.Fatalf("classification = %+v; output %s", evs, r.out)
 	}
-	if evs := r.logged(t, loopFailureVerb); len(evs) != 0 {
+	if evs := r.logged(t, LoopFailureVerb); len(evs) != 0 {
 		t.Fatalf("failures = %+v", evs)
 	}
 }
@@ -38,7 +38,7 @@ func TestLoopSettlesNonIssueIntakeOnce(t *testing.T) {
 	}
 	moves := 0
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, []string{loopBoard, loopBoardMove, "org/engine#89", "backlog", "--intake"}) {
+		if slices.Equal(args, []string{LoopBoard, loopBoardMove, "org/engine#89", "backlog", "--intake"}) {
 			moves++
 			return "beekeeper: org/engine#89 is no issue: Could not resolve to an Issue with the number of 89.", ExitRefused
 		}
@@ -51,7 +51,7 @@ func TestLoopSettlesNonIssueIntakeOnce(t *testing.T) {
 	if moves != 1 || len(evs) != 1 || !strings.Contains(evs[0].Detail, "not an issue") {
 		t.Fatalf("moves=%d intake=%+v output=%s", moves, evs, r.out)
 	}
-	if evs := r.logged(t, loopFailureVerb); len(evs) != 0 {
+	if evs := r.logged(t, LoopFailureVerb); len(evs) != 0 {
 		t.Fatalf("failures = %+v", evs)
 	}
 }

@@ -14,28 +14,28 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-// sweepListEvery is how often the loop lists the desk's open pull requests
+// SweepListEvery is how often the loop lists the desk's open pull requests
 // for the orphan sweep: a third of superloop.OrphanWait, so one without an
 // owner is seen well within it.
-const sweepListEvery = superloop.OrphanWait / 3
+const SweepListEvery = superloop.OrphanWait / 3
 
 const (
-	// sweepListLimit is the most results GitHub's search returns: a list
+	// SweepListLimit is the most results GitHub's search returns: a list
 	// that long may stop short of the desk's open pull requests.
-	sweepListLimit = 1000
-	// sweepReadsPerPass bounds issue detail reads in delivery discovery.
+	SweepListLimit = 1000
+	// SweepReadsPerPass bounds issue detail reads in delivery discovery.
 	// PR observations are batched by the independent watcher.
-	sweepReadsPerPass = 50
+	SweepReadsPerPass = 50
 	// sweepPileStep is how much the pile grows between the lines the loop
 	// says about it.
 	sweepPileStep = 25
-	// loopSweepFile is the side file supervisor status reads the count from.
-	loopSweepFile = "loop-sweep.json"
+	// LoopSweepFile is the side file supervisor status reads the count from.
+	LoopSweepFile = "loop-sweep.json"
 )
 
-// loopSweepCount is what the last pass knew of the desk's open pull
+// LoopSweepCount is what the last pass knew of the desk's open pull
 // requests: a growing pile nobody owns is visible, not silent.
-type loopSweepCount struct {
+type LoopSweepCount struct {
 	At time.Time `json:"at"`
 	// Listed is the open pull requests the last list held; AtLimit says the
 	// list may have stopped short of them.
@@ -48,8 +48,8 @@ type loopSweepCount struct {
 	Unread int `json:"unread,omitempty"`
 }
 
-// line says the count in one line, "" when no pull request lacks an owner.
-func (c loopSweepCount) line(a *app) string {
+// Line says the count in one line, "" when no pull request lacks an owner.
+func (c LoopSweepCount) Line(a *app) string {
 	if c.Ownerless == 0 && c.Unread == 0 && !c.AtLimit {
 		return ""
 	}
@@ -69,30 +69,30 @@ func (c loopSweepCount) line(a *app) string {
 
 // reportSweep publishes the pass's count for supervisor status, and says
 // it in the loop's log each time the pile grows by sweepPileStep.
-func (l *supervisorLoop) reportSweep(ownerless map[string]time.Time, unread map[string]bool) error {
-	c := loopSweepCount{At: l.a.timeNow(), Listed: len(l.openPulls), AtLimit: len(l.openPulls) >= sweepListLimit, Ownerless: len(ownerless), Unread: len(unread)}
+func (l *Loop) reportSweep(ownerless map[string]time.Time, unread map[string]bool) error {
+	c := LoopSweepCount{At: l.Host.timeNow(), Listed: len(l.OpenPulls), AtLimit: len(l.OpenPulls) >= SweepListLimit, Ownerless: len(ownerless), Unread: len(unread)}
 	for _, since := range ownerless {
 		if c.Oldest.IsZero() || since.Before(c.Oldest) {
 			c.Oldest = since
 		}
 	}
 	if pile := c.Ownerless / sweepPileStep; pile > 0 {
-		l.sayOnce(fmt.Sprintf("sweep pile %d", pile), "SUPERVISOR SWEEP %s", c.line(l.a))
+		l.SayOnce(fmt.Sprintf("sweep pile %d", pile), "SUPERVISOR SWEEP %s", c.Line(l.Host))
 	}
-	return l.a.store.WriteFile(loopSweepFile, c)
+	return l.Host.store.WriteFile(LoopSweepFile, c)
 }
 
 const (
-	// sweepRepoBatch bounds the --repo flags in a single gh search prs call so a
+	// SweepRepoBatch bounds the --repo flags in a single gh search prs call so a
 	// desk with many team repositories stays within GitHub's search query limits.
-	sweepRepoBatch = 25
-	sweepOwnerFlag = "--owner"
+	SweepRepoBatch = 25
+	SweepOwnerFlag = "--owner"
 )
 
-// sweepFlagBatches splits scopes (owners without a slash, owner/repo with
+// SweepFlagBatches splits scopes (owners without a slash, owner/repo with
 // one) into gh search prs flag slices. Owners and repositories are searched in
 // separate calls because gh ANDs --owner with --repo when both are given.
-func sweepFlagBatches(scopes []string) [][]string {
+func SweepFlagBatches(scopes []string) [][]string {
 	var owners, repos []string
 	for _, s := range scopes {
 		if strings.Contains(s, "/") {
@@ -105,14 +105,14 @@ func sweepFlagBatches(scopes []string) [][]string {
 	if len(owners) > 0 {
 		var flags []string
 		for _, o := range owners {
-			flags = append(flags, sweepOwnerFlag, o)
+			flags = append(flags, SweepOwnerFlag, o)
 		}
 		batches = append(batches, flags)
 	}
-	for start := 0; start < len(repos); start += sweepRepoBatch {
+	for start := 0; start < len(repos); start += SweepRepoBatch {
 		var flags []string
-		for _, r := range repos[start:min(start+sweepRepoBatch, len(repos))] {
-			flags = append(flags, loopRepoFlag, r)
+		for _, r := range repos[start:min(start+SweepRepoBatch, len(repos))] {
+			flags = append(flags, LoopRepoFlag, r)
 		}
 		batches = append(batches, flags)
 	}
@@ -122,19 +122,19 @@ func sweepFlagBatches(scopes []string) [][]string {
 	return batches
 }
 
-// readOpenPulls lists the open pull requests (owner/repo#n) the logins
+// ReadOpenPulls lists the open pull requests (owner/repo#n) the logins
 // authors opened, in scopes (owners without a slash, repositories with one)
 // when any are named: REST searches per login that spend no GraphQL budget.
-var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
+var ReadOpenPulls = func(ctx context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
 	logins, err := authors()
 	if err != nil {
 		return nil, err
 	}
-	batches := sweepFlagBatches(scopes)
+	batches := SweepFlagBatches(scopes)
 	var out []string
 	for _, login := range logins {
 		for _, flags := range batches {
-			args := append(strings.Fields("search prs --state open --json repository,number"), "--limit", strconv.Itoa(sweepListLimit), "--author", login)
+			args := append(strings.Fields("search prs --state open --json repository,number"), "--limit", strconv.Itoa(SweepListLimit), "--author", login)
 			args = append(args, flags...)
 			c, cancel := context.WithTimeout(ctx, time.Minute)
 			b, err := github.RunGH(c, args...)
@@ -162,14 +162,14 @@ var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), 
 	return slices.Compact(out), nil
 }
 
-// sweepPulls are the desk's open pull requests the pass reads beside
+// SweepPulls are the desk's open pull requests the pass reads beside
 // tracked, for the orphan sweep: listed every sweepListEvery, less those
 // tracked already, outside the desk, or owned by an agent the roster names
 // for them (parked on one, or its worker by name), which need no read.
-func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tracked []string) []string {
-	readLoopSweep(l, ctx, in)
+func (l *Loop) SweepPulls(ctx context.Context, in superloop.Input, tracked []string) []string {
+	ReadLoopSweep(l, ctx, in)
 	var out []string
-	for _, ref := range l.openPulls {
+	for _, ref := range l.OpenPulls {
 		if slices.ContainsFunc(tracked, func(t string) bool { return strings.EqualFold(t, ref) }) {
 			continue
 		}
@@ -185,15 +185,15 @@ func (l *supervisorLoop) sweepPulls(ctx context.Context, in superloop.Input, tra
 	}
 	// Least recently read first: with a read bound per pass, every pull
 	// request gets its turn.
-	slices.SortStableFunc(out, func(a, b string) int { return l.pulls[a].at.Compare(l.pulls[b].at) })
+	slices.SortStableFunc(out, func(a, b string) int { return l.Pulls[a].At.Compare(l.Pulls[b].At) })
 	return out
 }
 
 // ownerlessSince opens the detail of a loopOwnerlessVerb line that starts
 // a stretch without an owner; ownerlessEnd is the one that ends it.
 const (
-	ownerlessSince = "since "
-	ownerlessEnd   = "owned"
+	OwnerlessSince = "since "
+	OwnerlessEnd   = "owned"
 )
 
 // markOwnerless records since when each open pull request of the pass has
@@ -201,15 +201,15 @@ const (
 // logs it (loopOwnerlessVerb), and it stays so until a pass sees an owner,
 // across restarts. An action of the loop's claimed or in flight on it owns
 // it meanwhile. logged is what the log says so far.
-func (l *supervisorLoop) markOwnerless(in superloop.Input, claims map[string]loopClaim, logged map[string]time.Time, unread map[string]bool) (map[string]time.Time, error) {
-	now := l.a.timeNow()
+func (l *Loop) markOwnerless(in superloop.Input, claims map[string]LoopClaim, logged map[string]time.Time, unread map[string]bool) (map[string]time.Time, error) {
+	now := l.Host.timeNow()
 	acting := func(ref string) bool {
 		on := func(key string) bool { return strings.Contains(key, " "+ref+"@") || strings.HasSuffix(key, " "+ref) }
 		if slices.ContainsFunc(slices.Collect(maps.Keys(claims)), on) {
 			return true
 		}
-		l.mu.Lock()
-		defer l.mu.Unlock()
+		l.Mu.Lock()
+		defer l.Mu.Unlock()
 		for key, flying := range l.inFlight {
 			if flying && on(key) {
 				return true
@@ -227,8 +227,8 @@ func (l *supervisorLoop) markOwnerless(in superloop.Input, claims map[string]loo
 			continue
 		}
 		next[ref] = now
-		if !l.dryRun {
-			if err := l.a.store.Record(about(event(loopParty, loopOwnerlessVerb, "[%s] %s%s", ref, ownerlessSince, now.UTC().Format(time.RFC3339Nano)), ref)); err != nil {
+		if !l.DryRun {
+			if err := l.Host.store.Record(about(event(LoopParty, LoopOwnerlessVerb, "[%s] %s%s", ref, OwnerlessSince, now.UTC().Format(time.RFC3339Nano)), ref)); err != nil {
 				return nil, err
 			}
 		}
@@ -242,10 +242,10 @@ func (l *supervisorLoop) markOwnerless(in superloop.Input, claims map[string]loo
 		}
 		// A pull request the pass did not read (merged, closed, gone from
 		// the list) ends its stretch as one with an owner does.
-		if _, still := next[ref]; still || l.dryRun {
+		if _, still := next[ref]; still || l.DryRun {
 			continue
 		}
-		if err := l.a.store.Record(about(event(loopParty, loopOwnerlessVerb, "[%s] %s", ref, ownerlessEnd), ref)); err != nil {
+		if err := l.Host.store.Record(about(event(LoopParty, LoopOwnerlessVerb, "[%s] %s", ref, OwnerlessEnd), ref)); err != nil {
 			return nil, err
 		}
 	}

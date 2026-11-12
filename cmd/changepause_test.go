@@ -19,9 +19,9 @@ func TestWaitNextPassChangeKeepsGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.a.cfg.Supervisor.LoopInterval.Duration = time.Hour
-	old := passChangeGap
-	t.Cleanup(func() { passChangeGap = old })
-	passChangeGap = 600 * time.Millisecond
+	old := PassChangeGap
+	t.Cleanup(func() { PassChangeGap = old })
+	PassChangeGap = 600 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	writing := make(chan struct{})
@@ -39,10 +39,10 @@ func TestWaitNextPassChangeKeepsGap(t *testing.T) {
 		}
 	}()
 	start := time.Now()
-	if !l.waitNextPass(ctx) {
+	if !l.WaitNextPass(ctx) {
 		t.Fatal("change did not wake the pass")
 	}
-	if took := time.Since(start); took < passChangeGap {
-		t.Fatalf("change woke the pass after %s, before the %s gap", took, passChangeGap)
+	if took := time.Since(start); took < PassChangeGap {
+		t.Fatalf("change woke the pass after %s, before the %s gap", took, PassChangeGap)
 	}
 }

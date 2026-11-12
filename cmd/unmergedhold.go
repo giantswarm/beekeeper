@@ -258,7 +258,7 @@ func servedIssuesForPull(st *state.State, prRef string) []string {
 	}
 	for _, ag := range st.Agents {
 		if ag.Park != nil && strings.EqualFold(ag.Park.On, prRef) {
-			if s := cmp.Or(loopServes(st, ag), loopTaskServes(ag, prRef)); s != "" {
+			if s := cmp.Or(LoopServes(st, ag), LoopTaskServes(ag, prRef)); s != "" {
 				add(s)
 			}
 		}
@@ -311,7 +311,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 
 	// Only the loop's in-flight replacement of a recorded park inherits
 	// that worker's PR. A name or a PR URL in an arbitrary brief is no grant.
-	if a.as == loopParty.Name && st != nil {
+	if a.as == LoopParty.Name && st != nil {
 		for _, ag := range st.Agents {
 			if !freshPark(st, ag) || !ag.Park.Continuing || len(ag.Park.Continuation) == 0 || continuationName(ag) != name {
 				continue
@@ -329,16 +329,16 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 
 	if a.store != nil {
 		if evs, err := state.FollowSnapshot(a.store, "start-gate-loop-claims", "v1", func(e state.Event) bool {
-			return e.By.Name == loopParty.Name && (e.Verb == loopClaimVerb || e.Verb == loopClaimEndVerb)
+			return e.By.Name == LoopParty.Name && (e.Verb == LoopClaimVerb || e.Verb == LoopClaimEndVerb)
 		}); err == nil {
 			settled := map[string]bool{}
 			for i := len(evs) - 1; i >= 0; i-- {
 				e := evs[i]
-				key, agent, ok := keyed(e.Detail)
+				key, agent, ok := Keyed(e.Detail)
 				if !ok {
 					continue
 				}
-				if e.Verb == loopClaimEndVerb {
+				if e.Verb == LoopClaimEndVerb {
 					settled[key] = true
 					continue
 				}

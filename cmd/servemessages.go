@@ -99,7 +99,7 @@ func toolSendMessage(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	var msg a2aMessage
-	if err := json.Unmarshal(raw, &msg); err != nil || string(raw) == jsonNullLiteral {
+	if err := json.Unmarshal(raw, &msg); err != nil || string(raw) == JsonNullLiteral {
 		return nil, usageErr("message is required: an A2A Message object")
 	}
 	if strings.TrimSpace(msg.MessageID) == "" || len(msg.Parts) == 0 {

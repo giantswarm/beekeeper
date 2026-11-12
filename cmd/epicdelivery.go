@@ -204,25 +204,25 @@ func (a *app) epicStatus(st *state.State) (string, error) {
 	return b.String(), nil
 }
 
-func loopEpicStart(l *supervisorLoop, next loopBoardItem) error {
+func loopEpicStart(l *Loop, next LoopBoardItem) error {
 	if !next.EpicOwner && next.Epic == "" {
 		return nil
 	}
-	st, err := l.a.store.Read()
+	st, err := l.Host.store.Read()
 	if err != nil {
 		return err
 	}
 	var view epicSnapshot
-	if _, err := l.a.store.ReadFile(epicSnapshotFile, &view); err != nil {
+	if _, err := l.Host.store.ReadFile(epicSnapshotFile, &view); err != nil {
 		return err
 	}
 	if next.EpicOwner && epicOwner(st, next.Ref) != nil {
-		return errLoopLater
+		return ErrLoopLater
 	}
 	c := board.Candidate{Item: board.Item{Ref: next.Ref}, Epic: next.Epic, EpicOwner: next.EpicOwner}
-	sc := pickScope{epics: view, epicLimit: l.a.cfg.Delivery.EpicLimit, epicParallel: l.a.cfg.Delivery.EpicParallel, listed: l.a.timeNow(), wipPolicy: l.a.deliveryPolicy()}
+	sc := pickScope{epics: view, epicLimit: l.Host.cfg.Delivery.EpicLimit, epicParallel: l.Host.cfg.Delivery.EpicParallel, listed: l.Host.timeNow(), wipPolicy: l.Host.deliveryPolicy()}
 	if why := epicAdmission(st, c, sc); why != "" {
-		return fmt.Errorf("%s: %s: %w", next.URL, why, errLoopLater)
+		return fmt.Errorf("%s: %s: %w", next.URL, why, ErrLoopLater)
 	}
 	return nil
 }

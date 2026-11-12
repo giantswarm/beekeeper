@@ -1578,8 +1578,8 @@ func (w *watcher) checkUsageUnderused(condKey, file, target string, sd *usageWin
 	report := fmt.Sprintf("P1: subscription budget for %s is heavily underused: %s. File a P1 issue and ensure starts use this subscription budget before reset.",
 		subject, fig)
 	detail := fmt.Sprintf("[%s %s] P1 subscription budget underused (%s)%s%s",
-		condKey, winKey, subject, fileReportSeparator, report)
-	if err := w.store.Record(state.Event{At: w.now, By: watchParty, Verb: loopFileVerb, Detail: detail}); err != nil {
+		condKey, winKey, subject, FileReportSeparator, report)
+	if err := w.store.Record(state.Event{At: w.now, By: watchParty, Verb: LoopFileVerb, Detail: detail}); err != nil {
 		w.fail(condKey+"-guide", "cannot retain usage underuse finding for guide: %v", err)
 	}
 }
@@ -1757,8 +1757,8 @@ func (w *watcher) reportUsageFallback(key, provider, failure string) {
 	}
 	line := w.fail(key, "%s unreadable: %s", label, failure)
 	if line != "" && w.chores && w.store != nil {
-		detail := fmt.Sprintf("[%s %s] usage reader failure%s%s", key, w.now.UTC().Format(time.RFC3339Nano), fileReportSeparator, line)
-		if err := w.store.Record(state.Event{At: w.now, By: watchParty, Verb: loopFileVerb, Detail: detail}); err != nil {
+		detail := fmt.Sprintf("[%s %s] usage reader failure%s%s", key, w.now.UTC().Format(time.RFC3339Nano), FileReportSeparator, line)
+		if err := w.store.Record(state.Event{At: w.now, By: watchParty, Verb: LoopFileVerb, Detail: detail}); err != nil {
 			w.fail(key+"-guide", "cannot retain usage failure for guide: %v", err)
 		}
 	}

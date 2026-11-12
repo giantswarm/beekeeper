@@ -150,7 +150,7 @@ func (a *app) startRecovery(artifact, target string) error {
 // rearmRecovery starts a supervised candidate's controller again where none
 // runs: a reboot ends it, and a watch of either binary brings it back.
 func (a *app) rearmRecovery() {
-	target, err := executablePath()
+	target, err := ExecutablePath()
 	if err != nil || a.cfg == nil || !update.WatchedProbation(target) {
 		return
 	}
@@ -321,7 +321,7 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 // refreshHeartbeat updates s's heartbeat fields from the latest throughput
 // observation and supervisor-loop lifecycle checkpoint.
 func (c *recoveryController) refreshHeartbeat(j *update.Journal, s *update.Signals) bool {
-	version := normalizeLoopVersion(j.Candidate.Version)
+	version := NormalizeLoopVersion(j.Candidate.Version)
 	now := c.now()
 	var obs throughputObservation
 	found, err := c.store.ReadFile(throughputObservationFile, &obs)
@@ -355,7 +355,7 @@ func (c *recoveryController) refreshHeartbeat(j *update.Journal, s *update.Signa
 			s.HeartbeatRequired = true
 			if life.Exited && life.Code != 0 {
 				s.Heartbeat = false
-			} else if !life.Exited && life.Phase != "" && life.Phase != loopPhaseStartup && now.Sub(life.At) <= 3*throughputCadence {
+			} else if !life.Exited && life.Phase != "" && life.Phase != LoopPhaseStartup && now.Sub(life.At) <= 3*throughputCadence {
 				if !s.Heartbeat || now.Sub(life.At) < s.HeartbeatAgo {
 					s.HeartbeatAgo = max(now.Sub(life.At), 0)
 				}
@@ -377,7 +377,7 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 		return s
 	}
 	s.Intentional = st.Stop != nil
-	version := normalizeLoopVersion(j.Candidate.Version)
+	version := NormalizeLoopVersion(j.Candidate.Version)
 	if !c.refreshHeartbeat(j, &s) {
 		return s
 	}
@@ -486,8 +486,8 @@ func (c *recoveryController) finish(ctx context.Context, j *update.Journal) (boo
 func (c *recoveryController) report(line string) error {
 	now := c.now()
 	key := "recovery " + now.UTC().Format(time.RFC3339Nano)
-	body := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, line)
-	if err := recoveryRecord(c.store, event(loopParty, loopFileVerb, "[%s] %s", key, body)); err != nil {
+	body := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, line)
+	if err := recoveryRecord(c.store, event(LoopParty, LoopFileVerb, "[%s] %s", key, body)); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(c.w, line)
@@ -573,7 +573,7 @@ func (c *recoveryController) promote(ctx context.Context, j *update.Journal) (bo
 	if err := c.store.ResumeRecoveredWrites(j.Candidate.Version); err != nil {
 		return true, err
 	}
-	return true, recoveryRecord(c.store, event(loopParty, verbRecovery, "%s passed its probation: last known good", j.Candidate.Version))
+	return true, recoveryRecord(c.store, event(LoopParty, verbRecovery, "%s passed its probation: last known good", j.Candidate.Version))
 }
 
 // hold is a recovery that cannot go on: nothing is destroyed, no update

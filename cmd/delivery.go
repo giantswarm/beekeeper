@@ -130,7 +130,7 @@ func deliveryURL(ref string, pull bool) string {
 	}
 	kind := "issues"
 	if pull {
-		kind = loopPullStep
+		kind = LoopPullStep
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/%d", r.Repo, kind, r.N)
 }
@@ -249,7 +249,7 @@ func (a *app) deliveryDropCmd() *cobra.Command {
 		// Bind to the actual GitHub head, which may have moved since the last
 		// supervisor observation. A failed read cannot produce an unbound drop.
 		for _, ref := range observed.Pulls {
-			p, err := readLoopPull(c.Context(), ref)
+			p, err := ReadLoopPull(c.Context(), ref)
 			if err != nil {
 				return err
 			}

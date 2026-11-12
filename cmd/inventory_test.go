@@ -59,7 +59,7 @@ func TestInventoryCursorDoesNotSkipTimestampTies(t *testing.T) {
 		if calls == 2 {
 			pulls[99].Body = "Closes https://github.com/o/r/issues/55"
 		}
-		return inventoryPage(t, pulls, calls == 1, deliveryNextCommand), nil
+		return inventoryPage(t, pulls, calls == 1, DeliveryNextCommand), nil
 	}
 	pulls, err := readRepoOpenPullsWithGH(context.Background(), run, repo)
 	if err != nil || len(pulls) != 200 || calls != 2 {
@@ -92,7 +92,7 @@ func TestInventoryConditionalReuseAndFailure(t *testing.T) {
 	}
 	revision := 0
 	failed := false
-	readRepoPullRevision = func(_ context.Context, repo, etag string) (string, bool, error) {
+	ReadRepoPullRevision = func(_ context.Context, repo, etag string) (string, bool, error) {
 		revision++
 		if failed {
 			return "", false, errors.New("unavailable")
@@ -100,26 +100,26 @@ func TestInventoryConditionalReuseAndFailure(t *testing.T) {
 		return `"v1"`, etag == `"v1"`, nil
 	}
 	for i := range 3 {
-		if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err != nil {
+		if _, _, err := l.RepoRecentUnmerged(context.Background(), repo); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			if _, _, err := l.repoRecentUnmerged(context.Background(), "O/R"); err != nil {
+			if _, _, err := l.RepoRecentUnmerged(context.Background(), "O/R"); err != nil {
 				t.Fatal(err)
 			}
 		}
-		r.a.now = r.a.now.Add(unmergedCacheTTL)
+		r.a.now = r.a.now.Add(UnmergedCacheTTL)
 	}
 	if reads != 1 || revision != 3 {
 		t.Fatalf("unchanged inventory: reads=%d probes=%d", reads, revision)
 	}
 	failed = true
-	if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err == nil {
+	if _, _, err := l.RepoRecentUnmerged(context.Background(), repo); err == nil {
 		t.Fatal("failed revision served stale inventory")
 	}
 	failed = false
 	r.a.now = r.a.now.Add(time.Hour)
-	if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err != nil {
+	if _, _, err := l.RepoRecentUnmerged(context.Background(), repo); err != nil {
 		t.Fatal(err)
 	}
 	if reads != 2 {
@@ -135,8 +135,8 @@ func TestInventoryHonorsLoopBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	readRepoPullRevision = func(context.Context, string, string) (string, bool, error) { calls++; return "", false, nil }
-	if _, _, err := l.repoRecentUnmerged(context.Background(), repo); err == nil || calls != 0 {
+	ReadRepoPullRevision = func(context.Context, string, string) (string, bool, error) { calls++; return "", false, nil }
+	if _, _, err := l.RepoRecentUnmerged(context.Background(), repo); err == nil || calls != 0 {
 		t.Fatalf("unbudgeted inventory calls=%d err=%v", calls, err)
 	}
 }
@@ -208,7 +208,7 @@ func TestPullRevisionUsesConditionalAllStateUpdates(t *testing.T) {
 			}
 			return []byte(fmt.Sprintf("HTTP/2.0 %d response\r\nETag: next\r\nContent-Length: 2\r\n\r\n{}", status)), runErr
 		}
-		etag, unchanged, err := readRepoPullRevisionWithGH(context.Background(), run, repo, "inventory-etag-old")
+		etag, unchanged, err := ReadRepoPullRevisionWithGH(context.Background(), run, repo, "inventory-etag-old")
 		if status == 403 {
 			if err == nil {
 				t.Fatal("refusal accepted")
@@ -218,7 +218,7 @@ func TestPullRevisionUsesConditionalAllStateUpdates(t *testing.T) {
 		if err != nil || unchanged != (status == 304) {
 			t.Fatalf("status %d unchanged=%t err=%v", status, unchanged, err)
 		}
-		if status == 304 && etag != "inventory-etag-old" || status == 200 && etag != deliveryNextCommand {
+		if status == 304 && etag != "inventory-etag-old" || status == 200 && etag != DeliveryNextCommand {
 			t.Fatalf("wrong validator %s", etag)
 		}
 	}
@@ -241,14 +241,14 @@ func TestOrphanDetailsRespectRESTAllowanceWhileTrackedPullsContinue(t *testing.T
 		t.Fatal(err)
 	}
 	reads := 0
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		reads++
 		return r.pull, nil
 	}
-	if _, err := l.observePullStep(context.Background(), "orphan", r.a.now, "sweep"); !errors.Is(err, errLoopLater) || reads != 0 {
+	if _, err := l.ObservePullStep(context.Background(), "orphan", r.a.now, "sweep"); !errors.Is(err, ErrLoopLater) || reads != 0 {
 		t.Fatalf("orphan bypassed exhausted REST allowance: reads=%d err=%v", reads, err)
 	}
-	if _, err := l.observePull(context.Background(), "tracked", r.a.now); err != nil || reads != 1 {
+	if _, err := l.ObservePull(context.Background(), "tracked", r.a.now); err != nil || reads != 1 {
 		t.Fatalf("scan hold blocked tracked pull: reads=%d err=%v", reads, err)
 	}
 }
@@ -274,7 +274,7 @@ func TestLoopScanAllowanceSurvivesDisabledFloor(t *testing.T) {
 					remaining -= loopRESTReserve
 					return nil
 				})
-				if errors.Is(err, errLoopLater) {
+				if errors.Is(err, ErrLoopLater) {
 					break
 				}
 				if err != nil {
@@ -289,13 +289,13 @@ func TestLoopScanAllowanceSurvivesDisabledFloor(t *testing.T) {
 			scans := runs
 			// A restarted caller and a different scan type share the ledger.
 			restarted := *r.a
-			if err := restarted.loopGitHub(context.Background(), loopSweepStep, func() error {
+			if err := restarted.loopGitHub(context.Background(), LoopSweepStep, func() error {
 				t.Fatal("orphan scan bypassed exhausted allowance")
 				return nil
-			}); !errors.Is(err, errLoopLater) {
+			}); !errors.Is(err, ErrLoopLater) {
 				t.Fatalf("exhausted scan: %v", err)
 			}
-			if err := restarted.loopGitHub(context.Background(), loopPullStep, func() error {
+			if err := restarted.loopGitHub(context.Background(), LoopPullStep, func() error {
 				runs++
 				return nil
 			}); err != nil || runs != scans+1 {
@@ -317,7 +317,7 @@ func TestLoopScanDisabledFloorRetainsUnknownSpend(t *testing.T) {
 		}
 		return github.Budget{Remaining: 4900, Reset: reset}, nil
 	}
-	if err := r.a.loopGitHub(context.Background(), loopSweepStep, func() error { return nil }); !errors.Is(err, errLoopLater) {
+	if err := r.a.loopGitHub(context.Background(), LoopSweepStep, func() error { return nil }); !errors.Is(err, ErrLoopLater) {
 		t.Fatalf("unknown spend accepted: %v", err)
 	}
 	var spend loopRESTSpend
@@ -327,7 +327,7 @@ func TestLoopScanDisabledFloorRetainsUnknownSpend(t *testing.T) {
 	if err := r.a.loopGitHub(context.Background(), "inventory", func() error {
 		t.Fatal("unreadable budget admitted a scan")
 		return nil
-	}); !errors.Is(err, errLoopLater) {
+	}); !errors.Is(err, ErrLoopLater) {
 		t.Fatalf("unreadable budget: %v", err)
 	}
 }
@@ -347,13 +347,13 @@ func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *t
 	if err := r.a.loopScanREST(context.Background(), "inventory", func() error {
 		t.Fatal("exhausted loopScanREST ran")
 		return nil
-	}); !errors.Is(err, errLoopLater) || probes != 0 {
+	}); !errors.Is(err, ErrLoopLater) || probes != 0 {
 		t.Fatalf("loopScanREST probed GitHub while held: probes=%d err=%v", probes, err)
 	}
 	if err := r.a.loopGitHub(context.Background(), "inventory", func() error {
 		t.Fatal("exhausted inventory scan ran")
 		return nil
-	}); !errors.Is(err, errLoopLater) || probes != 0 {
+	}); !errors.Is(err, ErrLoopLater) || probes != 0 {
 		t.Fatalf("loopGitHub scan probed GitHub while REST held: probes=%d err=%v", probes, err)
 	}
 
@@ -365,30 +365,30 @@ func TestExhaustedRESTAllowanceSkipsGitHubProbeAndCachePersistsAcrossReexec(t *t
 	const cacheLogin = "fixture-user"
 	const cacheTeam = "team-a"
 	const cacheETag = `"etag-7"`
-	l.login = cacheLogin
-	l.teams = map[string]string{cacheTeam: cacheLogin}
-	l.teamsAt = now
-	l.tidyAt = now
-	l.openPulls = []string{loopPR}
-	l.openPullsAt = now
-	l.unmerged = map[string]loopUnmergedObservation{
-		repo: {pulls: []unmergedPull{{Number: 7, State: emergencyOpenState, CreatedAt: now}}, etag: cacheETag, at: now, fullAt: now},
+	l.Login = cacheLogin
+	l.Teams = map[string]string{cacheTeam: cacheLogin}
+	l.TeamsAt = now
+	l.TidyAt = now
+	l.OpenPulls = []string{loopPR}
+	l.OpenPullsAt = now
+	l.Unmerged = map[string]LoopUnmergedObservation{
+		repo: {Pulls: []unmergedPull{{Number: 7, State: emergencyOpenState, CreatedAt: now}}, Etag: cacheETag, At: now, FullAt: now},
 	}
-	l.unmergedCursor = repo
-	l.defaultBranches = map[string]string{repo: mainBranch}
-	l.cachePull(loopPR, superloop.Pull{Ref: loopPR, State: superloop.Merged})
-	if obs := l.unmerged[repo]; obs.etag != cacheETag || len(obs.pulls) != 0 || !obs.at.IsZero() {
+	l.UnmergedCursor = repo
+	l.DefaultBranches = map[string]string{repo: mainBranch}
+	l.CachePull(loopPR, superloop.Pull{Ref: loopPR, State: superloop.Merged})
+	if obs := l.Unmerged[repo]; obs.Etag != cacheETag || len(obs.Pulls) != 0 || !obs.At.IsZero() {
 		t.Fatalf("cachePull did not preserve ETag while dropping merged PR: %+v", obs)
 	}
-	l.saveCache()
+	l.SaveCache()
 
 	restarted, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted.loadCache()
-	if restarted.login != cacheLogin || restarted.teams[cacheTeam] != cacheLogin || restarted.defaultBranches[repo] != mainBranch || restarted.unmerged[repo].etag != cacheETag || restarted.unmergedCursor != repo {
-		t.Fatalf("restarted loop lost persisted cache: login=%q teams=%v branches=%v unmerged=%+v", restarted.login, restarted.teams, restarted.defaultBranches, restarted.unmerged)
+	restarted.LoadCache()
+	if restarted.Login != cacheLogin || restarted.Teams[cacheTeam] != cacheLogin || restarted.DefaultBranches[repo] != mainBranch || restarted.Unmerged[repo].Etag != cacheETag || restarted.UnmergedCursor != repo {
+		t.Fatalf("restarted loop lost persisted cache: login=%q teams=%v branches=%v unmerged=%+v", restarted.Login, restarted.Teams, restarted.DefaultBranches, restarted.Unmerged)
 	}
 }
 

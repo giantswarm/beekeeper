@@ -11,8 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-func (l *supervisorLoop) otherReviewParks(party state.Party, ref string) bool {
-	st, err := l.a.store.Read()
+func (l *Loop) otherReviewParks(party state.Party, ref string) bool {
+	st, err := l.Host.store.Read()
 	if err != nil {
 		// Preserve the task if pending requests cannot be read.
 		return true
@@ -25,15 +25,15 @@ func (l *supervisorLoop) otherReviewParks(party state.Party, ref string) bool {
 	return false
 }
 
-// recoverReviewRequests upgrades explicit review waits only after re-proving
+// RecoverReviewRequests upgrades explicit review waits only after re-proving
 // their published worktree. Older parks omitted Worktree; their recorded start
 // directory supplies it. An API failure leaves the request pending for a later
 // pass after budget recovery, never granting authority from the wait text alone.
-func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.State) error {
-	if l.dryRun || st.Stop != nil {
+func (l *Loop) RecoverReviewRequests(ctx context.Context, st *state.State) error {
+	if l.DryRun || st.Stop != nil {
 		return nil
 	}
-	now := l.a.timeNow()
+	now := l.Host.timeNow()
 	if l.reviewRecoveries == nil {
 		l.reviewRecoveries = map[string]reviewRecovery{}
 	}
@@ -69,12 +69,12 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
 			return err
 		}
-		l.lifecyclePhase(loopPhaseRecoverReviews)
+		l.LifecyclePhase(loopPhaseRecoverReviews)
 		verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		head := recoverParkReviewHead(verifyCtx, p.On, dir)
+		head := RecoverParkReviewHead(verifyCtx, p.On, dir)
 		cancel()
 		if head == "" {
-			wait := reviewRecoveryFirst
+			wait := ReviewRecoveryFirst
 			if r, ok := l.reviewRecoveries[key]; ok {
 				wait = min(2*r.wait, reviewRecoveryMax)
 			}
@@ -83,7 +83,7 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 		}
 		delete(l.reviewRecoveries, key)
 		verified := false
-		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := l.Host.store.Update(func(current *state.State) ([]state.Event, error) {
 			for i := range current.Agents {
 				a := &current.Agents[i]
 				if !a.Is(ag.Party) || a.Done || a.Park == nil || a.Park.On != p.On || !a.Park.At.Equal(p.At) || a.Park.Waits != p.Waits || a.Park.ReviewHead != "" {
@@ -92,14 +92,14 @@ func (l *supervisorLoop) recoverReviewRequests(ctx context.Context, st *state.St
 				a.Park.ReviewHead, a.Park.Worktree, a.Park.RefKind = head, dir, github.RefPullRequest
 				recordAgentReviewPark(current, *a)
 				verified = true
-				return []state.Event{event(loopParty, "agents.review-verified", "%s: review request verified for %s at pushed HEAD %s", a.Name, p.On, head)}, nil
+				return []state.Event{event(LoopParty, "agents.review-verified", "%s: review request verified for %s at pushed HEAD %s", a.Name, p.On, head)}, nil
 			}
 			return nil, nil
 		}); err != nil {
 			return err
 		}
 		if verified {
-			if err := l.a.recordFatalRepair(ag.Name, p.On); err != nil {
+			if err := l.Host.recordFatalRepair(ag.Name, p.On); err != nil {
 				return err
 			}
 		}
@@ -123,7 +123,7 @@ type reviewRecovery struct {
 // reviewRecoveryFirst; each further one waits twice as long, up to
 // reviewRecoveryMax.
 const (
-	reviewRecoveryFirst = time.Minute
+	ReviewRecoveryFirst = time.Minute
 	reviewRecoveryMax   = 10 * time.Minute
 )
 
@@ -134,9 +134,9 @@ func reviewRecoveryKey(ag state.Agent, dir string) string {
 	return strings.Join([]string{ag.Name, ag.Session, p.On, p.At.UTC().Format(time.RFC3339Nano), p.Waits, dir}, "\x00")
 }
 
-// recoverParkReviewHead starts no git in a worktree that is gone: it cannot
+// RecoverParkReviewHead starts no git in a worktree that is gone: it cannot
 // verify there.
-var recoverParkReviewHead = func(ctx context.Context, on, dir string) string {
+var RecoverParkReviewHead = func(ctx context.Context, on, dir string) string {
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return ""
 	}

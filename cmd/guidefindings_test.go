@@ -10,17 +10,17 @@ import (
 
 func TestGuideRecoverySettlesBeforeEitherFeed(t *testing.T) {
 	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: guideName}}}}
-	report := "report" + fileReportSeparator + "DELIVERY STALLED fixture"
+	report := "report" + FileReportSeparator + "DELIVERY STALLED fixture"
 	events := []state.Event{
 		{At: relayNow, Detail: "[delivery fixture] " + report},
-		{At: relayNow.Add(time.Minute), Detail: "[delivery recovered fixture] report" + fileReportSeparator + "RECOVERED: DELIVERY STALLED fixture"},
+		{At: relayNow.Add(time.Minute), Detail: "[delivery recovered fixture] report" + FileReportSeparator + "RECOVERED: DELIVERY STALLED fixture"},
 	}
 	lines, _ := guideProblemLines(st, events)
 	if len(lines) != 0 || len(st.GuideWork) != 0 {
 		t.Fatalf("recovered batch announced: %q %+v", lines, st.GuideWork)
 	}
 	retainGuideReport(st, "delivery another", report, relayNow, state.Party{})
-	retainGuideReport(st, "delivery recovered another", "report"+fileReportSeparator+"RECOVERED: DELIVERY STALLED fixture", relayNow, state.Party{})
+	retainGuideReport(st, "delivery recovered another", "report"+FileReportSeparator+"RECOVERED: DELIVERY STALLED fixture", relayNow, state.Party{})
 	if len(st.GuideWork) != 0 {
 		t.Fatal("recovery left due work")
 	}
@@ -28,8 +28,8 @@ func TestGuideRecoverySettlesBeforeEitherFeed(t *testing.T) {
 
 func TestGuideReportHasOneDeliveryAcrossFeedsAndRearm(t *testing.T) {
 	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: guideName}}}}
-	ev := state.Event{At: relayNow, Detail: "[fixture] report" + fileReportSeparator + "new defect"}
-	key, text, _ := keyed(ev.Detail)
+	ev := state.Event{At: relayNow, Detail: "[fixture] report" + FileReportSeparator + "new defect"}
+	key, text, _ := Keyed(ev.Detail)
 	if !retainGuideReport(st, key, text, ev.At, state.Party{}) {
 		t.Fatal("monitor did not retain work")
 	}
@@ -47,10 +47,10 @@ func TestGuideReportHasOneDeliveryAcrossFeedsAndRearm(t *testing.T) {
 
 func TestGuideKnownFindingTalliesWithoutNewWork(t *testing.T) {
 	st := &state.State{Guide: &state.Role{}}
-	text := "report at now" + fileReportSeparator + "same defect"
+	text := "report at now" + FileReportSeparator + "same defect"
 	fingerprint := guideFindingFingerprint(text)
 	st.GuideFindings = map[string]state.GuideFinding{fingerprint: {Issue: issueOneURL, Count: 1}}
-	if retainGuideReport(st, "new observation", "another reporter"+fileReportSeparator+"same defect", relayNow, state.Party{}) {
+	if retainGuideReport(st, "new observation", "another reporter"+FileReportSeparator+"same defect", relayNow, state.Party{}) {
 		t.Fatal("known issue announced")
 	}
 	if len(st.GuideWork) != 0 || st.GuideFindings[fingerprint].Count != 2 {
@@ -74,7 +74,7 @@ func TestDeliveryDoesNotDiagnoseSecondsOldRelease(t *testing.T) {
 
 func TestGuideFilingReasonMapsAndUnmapsReport(t *testing.T) {
 	a := guideNextApp(t)
-	text := "report" + fileReportSeparator + "defect to file"
+	text := "report" + FileReportSeparator + "defect to file"
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		retainGuideReport(st, "first", text, a.now, st.Guide.Holder.Party)
 		return nil, nil

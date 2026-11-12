@@ -76,7 +76,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 	defer func() { cancel(); <-monitorDone }()
 	tick := clk.NewTicker(timerTick)
 	defer tick.Stop()
-	binary := loopBinary()
+	binary := LoopBinary()
 	for {
 		if ctx.Err() != nil {
 			return nil

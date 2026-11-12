@@ -64,7 +64,7 @@ func TestSimCommands(t *testing.T) {
 	var events []state.Event
 	stepAt := func(at time.Time, step string) {
 		raw, _ := json.Marshal(state.Delivery{Ref: simTestRef, Pulls: []string{}, Step: step, Since: at, Started: t0})
-		events = append(events, state.Event{At: at, By: loopParty, Verb: state.DeliveryStepVerb, Subject: simTestRef, Detail: string(raw)})
+		events = append(events, state.Event{At: at, By: LoopParty, Verb: state.DeliveryStepVerb, Subject: simTestRef, Detail: string(raw)})
 	}
 	at := t0
 	for _, s := range []struct {
@@ -76,15 +76,15 @@ func TestSimCommands(t *testing.T) {
 	}
 	stepAt(at, state.DeliveryDone)
 	for at := since; at.Before(since.Add(24 * time.Hour)); at = at.Add(10 * time.Minute) {
-		events = append(events, state.Event{At: at, By: loopParty, Verb: "supervisor.claim", Detail: "[go o/r#1@abc] w"})
+		events = append(events, state.Event{At: at, By: LoopParty, Verb: "supervisor.claim", Detail: "[go o/r#1@abc] w"})
 	}
 	for at := since; at.Before(now); at = at.Add(30 * time.Minute) {
 		events = append(events, state.Event{At: at, By: watchParty, Verb: "watch.usage", Detail: "USAGE: codex: 2 busy of ceiling 7, usage 7d 30%"})
 	}
 	events = append(events,
-		state.Event{At: t0, By: loopParty, Verb: "supervisor.failure", Detail: `[review o/r#2@abc] {"message":"o/r#2 already requested this head or review round","count":3}`},
-		state.Event{At: t0, By: loopParty, Verb: "merge.failed", Detail: "o/r#3 exit 5, nothing merged: refused"},
-		state.Event{At: t0, By: loopParty, Verb: "merging", Detail: "o/r#1 in lane o/r"},
+		state.Event{At: t0, By: LoopParty, Verb: "supervisor.failure", Detail: `[review o/r#2@abc] {"message":"o/r#2 already requested this head or review round","count":3}`},
+		state.Event{At: t0, By: LoopParty, Verb: "merge.failed", Detail: "o/r#3 exit 5, nothing merged: refused"},
+		state.Event{At: t0, By: LoopParty, Verb: "merging", Detail: "o/r#1 in lane o/r"},
 	)
 	if err := a.store.Update(func(*state.State) ([]state.Event, error) { return events, nil }); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestSimForecastAndCheck(t *testing.T) {
 	a.cfg.Capacity.Ceiling = 7
 	a.kindClusters = func() ([]string, error) { return nil, nil }
 	t.Setenv("PATH", t.TempDir())
-	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+	if err := a.store.WriteFile(LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
 	const stuckRef, staleRef, stalePull = "o/r#2", "o/r#3", "o/r#13"

@@ -10,17 +10,17 @@ import (
 // candidateLoop reads the lifecycle of the candidate's own loop: life is nil
 // unless that loop started after the install, and otherAlive says a loop of
 // another version still runs, the one that hands over at its next quiet pass.
-func (c *recoveryController) candidateLoop(jVersion string, installed time.Time) (life *loopLifecycle, otherAlive bool, err error) {
-	var l loopLifecycle
-	found, err := c.store.ReadFile(loopLifecycleFile, &l)
+func (c *recoveryController) candidateLoop(jVersion string, installed time.Time) (life *LoopLifecycle, otherAlive bool, err error) {
+	var l LoopLifecycle
+	found, err := c.store.ReadFile(LoopLifecycleFile, &l)
 	if err != nil {
 		return nil, false, err
 	}
-	if found && l.Version == normalizeLoopVersion(jVersion) && !l.Started.Before(installed) && !l.At.Before(l.Started) && !l.At.After(c.now()) {
+	if found && l.Version == NormalizeLoopVersion(jVersion) && !l.Started.Before(installed) && !l.At.Before(l.Started) && !l.At.After(c.now()) {
 		return &l, false, nil
 	}
-	var incumbent loopVersionRecord
-	if ok, readErr := c.store.ReadFile(loopVersionFile, &incumbent); readErr == nil && ok && incumbent.Version != "" && normalizeLoopVersion(incumbent.Version) != normalizeLoopVersion(jVersion) && proc.Alive(incumbent.PID) {
+	var incumbent LoopVersionRecord
+	if ok, readErr := c.store.ReadFile(LoopVersionFile, &incumbent); readErr == nil && ok && incumbent.Version != "" && NormalizeLoopVersion(incumbent.Version) != NormalizeLoopVersion(jVersion) && proc.Alive(incumbent.PID) {
 		otherAlive = true
 	}
 	return nil, otherAlive, nil

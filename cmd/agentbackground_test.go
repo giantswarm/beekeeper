@@ -580,7 +580,7 @@ func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
 	remove := func(name string) {
 		t.Helper()
 		c := a.agentsCmd()
-		c.SetArgs([]string{loopRemove, name})
+		c.SetArgs([]string{LoopRemove, name})
 		c.SetContext(t.Context())
 		if err := c.Execute(); err != nil {
 			t.Fatal(err)

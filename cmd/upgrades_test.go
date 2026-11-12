@@ -577,7 +577,7 @@ func TestDelayedUpgradeCachePublicationMergesLatest(t *testing.T) {
 	if _, err := other.ReadFile(upgrade.ReadingsFile, &disk); err != nil {
 		t.Fatal(err)
 	}
-	for name, got := range map[string]upgrade.Readings{"caller": older, loopDiskKind: disk} {
+	for name, got := range map[string]upgrade.Readings{"caller": older, LoopDiskKind: disk} {
 		if len(got) != 3 || !got[snapshotInstallation].At.Equal(now.Add(time.Minute)) || !got.Running(snapshotInstallation) {
 			t.Errorf("%s lost newer or disjoint readings: %+v", name, got)
 		}

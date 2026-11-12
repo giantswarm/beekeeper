@@ -16,27 +16,27 @@ func TestLoopStaleNextSettlesBeforeClaimReconciliation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
-	l.startedAt = r.a.now.Add(-30 * time.Minute)
+	l.Once = true
+	l.StartedAt = r.a.now.Add(-30 * time.Minute)
 	acts := []superloop.Action{}
-	claims := map[string]loopClaim{}
+	claims := map[string]LoopClaim{}
 	for i, age := range []time.Duration{6 * 24 * time.Hour, 2 * time.Hour, 61 * time.Minute} {
 		key := fmt.Sprintf("stale next %d", i)
 		acts = append(acts, superloop.Action{Key: key, Kind: superloop.KindNext, Event: &superloop.Event{At: r.a.now.Add(-age), Verb: superloop.VerbDone}})
-		claims[key] = loopClaim{target: "interrupted worker", at: r.a.now.Add(-age)}
+		claims[key] = LoopClaim{Target: "interrupted worker", At: r.a.now.Add(-age)}
 	}
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.runPassActions(t.Context(), st, claims, nil, nil, acts); err != nil {
+	if err := l.RunPassActions(t.Context(), st, claims, nil, nil, acts); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 3 {
 		t.Fatalf("refill busy=%d: %s", *busy, r.out)
 	}
 	for _, act := range acts {
-		if !l.isCompleted(act.Key) {
+		if !l.IsCompleted(act.Key) {
 			t.Fatalf("unsettled %s", act.Key)
 		}
 	}
@@ -61,7 +61,7 @@ func TestLoopStaleNextBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.startedAt = r.a.now.Add(-2 * time.Hour)
+	l.StartedAt = r.a.now.Add(-2 * time.Hour)
 	for _, tc := range []struct {
 		age   time.Duration
 		stale bool
@@ -69,7 +69,7 @@ func TestLoopStaleNextBoundaries(t *testing.T) {
 		{time.Hour, false}, {time.Hour + time.Nanosecond, true}, {time.Minute, false},
 	} {
 		act := superloop.Action{Kind: superloop.KindNext, Event: &superloop.Event{At: r.a.now.Add(-tc.age)}}
-		if got := l.staleNext(act); got != tc.stale {
+		if got := l.StaleNext(act); got != tc.stale {
 			t.Fatalf("age=%s stale=%v", tc.age, got)
 		}
 	}
@@ -83,9 +83,9 @@ func TestLoopRefillSurvivesNextFailureAndInflightIntake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			l.once = true
-			l.beginInFlight("stream:intake")
-			defer l.endInFlight("stream:intake")
+			l.Once = true
+			l.BeginInFlight("stream:intake")
+			defer l.EndInFlight("stream:intake")
 			acts := []superloop.Action{
 				{Kind: superloop.KindDone, Key: "done missing worker", Agent: "missing next-action worker"},
 				{Kind: superloop.KindIntake, Key: "intake pending"},
@@ -104,7 +104,7 @@ func TestLoopRefillSurvivesNextFailureAndInflightIntake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_ = l.runPassActions(t.Context(), st, nil, map[string]loopFailure{}, nil, acts)
+			_ = l.RunPassActions(t.Context(), st, nil, map[string]LoopFailure{}, nil, acts)
 			if *busy != 3 {
 				t.Fatalf("busy=%d: %s", *busy, r.out)
 			}
@@ -130,10 +130,10 @@ func TestLoopNextWithOpenPullSettles(t *testing.T) {
 		t.Fatal(err)
 	}
 	act := superloop.Action{Kind: superloop.KindNext, Key: "next refused"}
-	if err := l.execAction(t.Context(), st, nil, map[string]loopFailure{}, act); err != nil {
+	if err := l.ExecAction(t.Context(), st, nil, map[string]LoopFailure{}, act); err != nil {
 		t.Fatal(err)
 	}
-	if !l.isCompleted(act.Key) {
+	if !l.IsCompleted(act.Key) {
 		t.Fatalf("open delivery did not settle next: %s", r.out)
 	}
 	if len(r.logged(t, "supervisor.next")) != 1 {

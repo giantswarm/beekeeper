@@ -14,38 +14,38 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const alertParkPrefix = "alert:"
+const AlertParkPrefix = "alert:"
 
 const loopAlertIntent = "supervisor.alert-replacement"
 
-const loopAlertKind = "alert"
+const LoopAlertKind = "alert"
 
-const loopAlertVerb = "supervisor." + loopAlertKind
+const LoopAlertVerb = "supervisor." + LoopAlertKind
 
 type alertReplacement struct {
 	Key, Name, Brief string
 	Original         state.Party
 }
 
-func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
-	a := l.a
+func (l *Loop) watchAlerts(ctx context.Context) error {
+	a := l.Host
 	evs, err := state.FollowSnapshot(a.store, "supervisor-alert-history", "v2", l.eventHistoryFilter(func(e state.Event) bool {
-		return e.Verb == loopAlertVerb || e.Verb == loopAlertIntent || e.Verb == loopClaimVerb || e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent || e.Verb == "agents.start"
+		return e.Verb == LoopAlertVerb || e.Verb == loopAlertIntent || e.Verb == LoopClaimVerb || e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent || e.Verb == "agents.start"
 	}))
 	if err != nil {
 		return err
 	}
 	done := map[string]bool{}
-	claims := map[string]loopClaim{}
+	claims := map[string]LoopClaim{}
 	var pending []alertReplacement
 	pendingKeys := map[string]bool{}
 	for _, e := range evs {
-		key, rest, ok := keyed(e.Detail)
-		if e.Verb == loopAlertVerb && ok {
+		key, rest, ok := Keyed(e.Detail)
+		if e.Verb == LoopAlertVerb && ok {
 			done[key] = true
 		}
-		if e.Verb == loopClaimVerb && ok {
-			claims[key] = loopClaim{at: e.At, target: rest}
+		if e.Verb == LoopClaimVerb && ok {
+			claims[key] = LoopClaim{At: e.At, Target: rest}
 		}
 		if e.Verb == loopAlertIntent {
 			var r alertReplacement
@@ -61,10 +61,10 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			continue
 		}
 		if err := l.replaceAlertWorker(ctx, r, evs); err != nil {
-			l.sayOnce("replace "+r.Key, "SUPERVISOR ALERT REPLACEMENT FAILED %s: %v", r.Name, err)
+			l.SayOnce("replace "+r.Key, "SUPERVISOR ALERT REPLACEMENT FAILED %s: %v", r.Name, err)
 			continue
 		}
-		if !l.holdingStarts() {
+		if !l.HoldingStarts() {
 			done[r.Key] = true
 		}
 	}
@@ -104,21 +104,21 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			if ag.Park == nil {
 				continue
 			}
-			q, ok := strings.CutPrefix(ag.Park.On, alertParkPrefix)
+			q, ok := strings.CutPrefix(ag.Park.On, AlertParkPrefix)
 			if !ok || len(alerts.Match([]alerts.Firing{f}, q)) == 0 {
 				continue
 			}
 			waiting = true
 			key := "alert wake " + f.ScopedKey() + " " + ag.Name
-			if done[key] || pendingKeys[key] || l.holdingStarts() {
+			if done[key] || pendingKeys[key] || l.HoldingStarts() {
 				continue
 			}
 			err := l.wakeAlertWorker(ctx, st, ag, f, key, claims, evs)
 			if err != nil {
-				l.sayOnce(key, "SUPERVISOR ALERT WAKE FAILED %s: %v", ag.Name, err)
+				l.SayOnce(key, "SUPERVISOR ALERT WAKE FAILED %s: %v", ag.Name, err)
 				continue
 			}
-			l.clearSaid(key)
+			l.ClearSaid(key)
 			done[key] = true
 		}
 		// Existing firing pages are included: taking over from a watch must
@@ -139,7 +139,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			unowned = append(unowned, f)
 			continue
 		}
-		act := superloop.Action{Kind: loopAlertKind, Key: key}
+		act := superloop.Action{Kind: LoopAlertKind, Key: key}
 		question := "Assign an owner to the firing alert " + f.Name() + "?"
 		// Alert identities are events, not GitHub issues. File a local note
 		// directly, so no invented issue reference or public data is needed.
@@ -187,7 +187,7 @@ func teamAlert(team string, f alerts.Firing) bool { return team == "" || f.Team 
 func blockedAlertRefs(st *state.State, f alerts.Firing) []string {
 	var refs []string
 	for _, r := range st.Records {
-		q, ok := strings.CutPrefix(r.Waits, alertParkPrefix)
+		q, ok := strings.CutPrefix(r.Waits, AlertParkPrefix)
 		ref, valid := parseRef(r.Issue)
 		if !r.Ended.IsZero() || !valid || !ok || len(alerts.Match([]alerts.Firing{f}, q)) == 0 {
 			continue
@@ -200,38 +200,38 @@ func blockedAlertRefs(st *state.State, f alerts.Firing) []string {
 	return refs
 }
 
-func (l *supervisorLoop) alertNote(act superloop.Action, question string, f alerts.Firing, refs []string) error {
-	if l.a.cfg.Guide.Person == "" {
+func (l *Loop) alertNote(act superloop.Action, question string, f alerts.Firing, refs []string) error {
+	if l.Host.cfg.Guide.Person == "" {
 		return fmt.Errorf("guide.person is unset: cannot route unowned alert %s", f.Name())
 	}
 	question = truncate(question, 150)
-	err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		// Use the same durable note state as note add, without GitHub calls.
 		st.NextNote++
 		id := st.NextNote
 		status := fmt.Sprintf("%s %s since %s blocks %s", f.Instance(), f.Where, f.Since, strings.Join(refs, ", "))
 		st.Notes = append(st.Notes, state.Note{
-			Refs: refs, ID: id, For: l.a.cfg.Guide.Person, By: loopParty,
-			Text: question + "\n" + status, At: l.a.timeNow(), Kind: noteDecision,
+			Refs: refs, ID: id, For: l.Host.cfg.Guide.Person, By: LoopParty,
+			Text: question + "\n" + status, At: l.Host.timeNow(), Kind: noteDecision,
 			Question: question, StatusQuo: status,
 			Default: "keep this alert unowned until an owner is assigned",
 		})
-		return []state.Event{event(loopParty, "note.add", "#%d %s: %s %s since %s", id, question, f.Instance(), f.Where, f.Since), event(loopParty, loopAlertVerb, "%s", superloop.Detail(act, "unowned alert sent to the guide: "+f.Instance()))}, nil
+		return []state.Event{event(LoopParty, "note.add", "#%d %s: %s %s since %s", id, question, f.Instance(), f.Where, f.Since), event(LoopParty, LoopAlertVerb, "%s", superloop.Detail(act, "unowned alert sent to the guide: "+f.Instance()))}, nil
 	})
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(l.a.out, "SUPERVISOR ALERT unowned alert sent to the guide:", f.Instance())
+	_, err = fmt.Fprintln(l.Host.out, "SUPERVISOR ALERT unowned alert sent to the guide:", f.Instance())
 	return err
 }
 
-func (l *supervisorLoop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs []state.Event) error {
-	if l.holdingStarts() {
+func (l *Loop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs []state.Event) error {
+	if l.HoldingStarts() {
 		return nil
 	}
 	// The intent precedes remove/start. Reconcile a successful start after
 	// a crash before recording completion, without retiring the replacement.
-	intents, err := l.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopAlertIntent && replacementKey(e.Detail) == r.Key })
+	intents, err := l.Host.store.Events(0, func(e state.Event) bool { return e.Verb == loopAlertIntent && replacementKey(e.Detail) == r.Key })
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func (l *supervisorLoop) replaceAlertWorker(ctx context.Context, r alertReplacem
 		})
 	}
 	if !started {
-		st, err := l.a.store.Read()
+		st, err := l.Host.store.Read()
 		if err != nil {
 			return err
 		}
@@ -251,19 +251,19 @@ func (l *supervisorLoop) replaceAlertWorker(ctx context.Context, r alertReplacem
 			if !st.Agents[i].Is(r.Original) {
 				return fmt.Errorf("replacement %s waits: its roster name now belongs to another session", r.Name)
 			}
-			if err := l.remove(ctx, r.Name, "supervisor loop: unresumable parked worker replaced on its original task"); err != nil {
+			if err := l.Remove(ctx, r.Name, "supervisor loop: unresumable parked worker replaced on its original task"); err != nil {
 				return err
 			}
 		}
 		args := []string{agentsName, agentStartName, r.Name, r.Brief}
-		if len(l.a.cfg.Capacity.Choices) > 0 {
+		if len(l.Host.cfg.Capacity.Choices) > 0 {
 			args = append(args, "--harness", harnessAuto)
 		}
-		if _, err := l.run(ctx, args...); err != nil {
+		if _, err := l.Run(ctx, args...); err != nil {
 			return err
 		}
 	}
-	return l.record(superloop.Action{Kind: loopAlertKind, Key: r.Key}, "replaced unresumable parked worker "+r.Name+" on its original task")
+	return l.Record(superloop.Action{Kind: LoopAlertKind, Key: r.Key}, "replaced unresumable parked worker "+r.Name+" on its original task")
 }
 
 func replacementKey(detail string) string {
@@ -272,26 +272,26 @@ func replacementKey(detail string) string {
 	return r.Key
 }
 
-func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Agent, f alerts.Firing, key string, claims map[string]loopClaim, evs []state.Event) error {
-	a := l.a
-	act := superloop.Action{Kind: loopAlertKind, Key: key, Agent: ag.Name, Message: "Your parked event fired: " + f.Instance() + " " + f.Where + ". Re-query the live state of your task and continue it."}
+func (l *Loop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Agent, f alerts.Firing, key string, claims map[string]LoopClaim, evs []state.Event) error {
+	a := l.Host
+	act := superloop.Action{Kind: LoopAlertKind, Key: key, Agent: ag.Name, Message: "Your parked event fired: " + f.Instance() + " " + f.Where + ". Re-query the live state of your task and continue it."}
 	if c, ok := claims[key]; ok && slices.ContainsFunc(evs, func(e state.Event) bool {
-		return (e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent) && !e.At.Before(c.at) && strings.HasPrefix(e.Detail, ag.Name+":")
+		return (e.Verb == agentWakeEvent || e.Verb == continuationQueuedEvent) && !e.At.Before(c.At) && strings.HasPrefix(e.Detail, ag.Name+":")
 	}) {
-		return l.settleAlertWake(act, ag)
+		return l.SettleAlertWake(act, ag)
 	}
 	if !loopResumable(a, st, ag) {
 		// Write the complete replacement brief before retiring the old
 		// roster entry: a restart can finish staffing exactly this task.
 		task := ag.Task
-		if ref := agentRef(st, ag.Name); ref != "" {
+		if ref := AgentRef(st, ag.Name); ref != "" {
 			task += "\nWork the original item " + ref + "; read its acceptance criteria and finish it in full."
 		}
-		data := briefData{Task: task + "\n\n" + act.Message, Worker: ag.Name}
-		if ref, ok := parseRef(agentRef(st, ag.Name)); ok {
+		data := BriefData{Task: task + "\n\n" + act.Message, Worker: ag.Name}
+		if ref, ok := parseRef(AgentRef(st, ag.Name)); ok {
 			data.Repo, data.Number, data.URL = ref.Repo, ref.N, fmt.Sprintf("https://github.com/%s/issues/%d", ref.Repo, ref.N)
 		}
-		brief, err := l.brief(a.cfg.Supervisor.WorkerBrief, "{{.Task}}", key, data)
+		brief, err := l.Brief(a.cfg.Supervisor.WorkerBrief, "{{.Task}}", key, data)
 		if err != nil {
 			return err
 		}
@@ -300,7 +300,7 @@ func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, a
 		if err != nil {
 			return err
 		}
-		if err := a.store.Record(event(loopParty, loopAlertIntent, "%s", raw)); err != nil {
+		if err := a.store.Record(event(LoopParty, loopAlertIntent, "%s", raw)); err != nil {
 			return err
 		}
 		if err := l.replaceAlertWorker(ctx, r, evs); err != nil {
@@ -310,28 +310,28 @@ func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, a
 		if err := l.wake(ctx, act); err != nil {
 			return err
 		}
-		return l.settleAlertWake(act, ag)
+		return l.SettleAlertWake(act, ag)
 	}
 	return nil
 }
 
 // End exactly the park whose wake was delivered, and record completion in
 // the same save. A fast worker may already have parked on a new event.
-func (l *supervisorLoop) settleAlertWake(act superloop.Action, ag state.Agent) error {
-	err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+func (l *Loop) SettleAlertWake(act superloop.Action, ag state.Agent) error {
+	err := l.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		for i := range st.Agents {
 			current := &st.Agents[i]
 			if current.Is(ag.Party) && current.Park != nil && current.Park.On == ag.Park.On && current.Park.At.Equal(ag.Park.At) && len(current.Park.Continuation) == 0 {
 				current.Park = nil
-				evs = append(evs, event(loopParty, resumedEvent, "%s: alert event fired", ag.Name))
+				evs = append(evs, event(LoopParty, resumedEvent, "%s: alert event fired", ag.Name))
 			}
 		}
-		return append(evs, event(loopParty, loopAlertVerb, "%s", superloop.Detail(act, "alert wake delivered to "+ag.Name))), nil
+		return append(evs, event(LoopParty, LoopAlertVerb, "%s", superloop.Detail(act, "alert wake delivered to "+ag.Name))), nil
 	})
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(l.a.out, "SUPERVISOR ALERT woke", ag.Name)
+	_, err = fmt.Fprintln(l.Host.out, "SUPERVISOR ALERT woke", ag.Name)
 	return err
 }

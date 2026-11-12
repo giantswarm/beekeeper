@@ -48,7 +48,7 @@ var readParkRelease = func(ctx context.Context, repo, version string) ([]byte, e
 }
 
 func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []settledPark {
-	if boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	if BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		return nil
 	}
 	checked := map[string]bool{}
@@ -88,7 +88,7 @@ func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []se
 			}
 			key := "park-release-" + p.On
 			if err != nil {
-				if !errors.Is(err, errLoopLater) {
+				if !errors.Is(err, ErrLoopLater) {
 					w.fail(key, "cannot check release %s: %v", p.On, err)
 				}
 			} else {
