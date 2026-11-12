@@ -180,7 +180,7 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-      - output: {contains: ["SUPERVISOR REFILL started 1"]}
+      - output: {contains: ['"app 3" started on https://github.com/example/app/issues/3']}
   # The fourth issue waits for a place: two deliveries are in progress.
   - name: next
     run: {args: [board, next, --json]}
