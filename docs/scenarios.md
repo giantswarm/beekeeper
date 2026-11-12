@@ -240,6 +240,14 @@ over a model, so a scenario can override any call.
   URL wherever it fetches or pushes itself, so every transport of a scenario
   ends in the same origins.
 
+The fakes pass [the world's clock](#the-clock) on. An execution's runner
+starts its harness with a cleaned environment, without
+`BEEKEEPER_SCENARIO_CLOCK`; the fake names the clock again, so the
+`beekeeper` a worker script calls reads the world's time on every machine.
+What the fakes write themselves carries the system's time: a session's
+record and transcript, and the reset times a usage probe reports.
+`given.clock.start` and `advance` do not move those yet.
+
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
 live background session), the desktop app, and `gh`, which the fake GitHub
 of https://github.com/giantswarm/beekeeper/issues/3790 answers; until then a
