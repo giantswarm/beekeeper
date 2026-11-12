@@ -348,6 +348,11 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 			l.once = true // These checks inspect completed pass effects.
 			pass := func() {
 				t.Helper()
+				fresh := event(watchParty, "watch.budget-state", "false")
+				fresh.At = r.a.now
+				if err := r.a.store.Record(fresh); err != nil {
+					t.Fatal(err)
+				}
 				if err := l.pass(t.Context()); err != nil {
 					t.Fatal(err)
 				}
@@ -1008,6 +1013,13 @@ func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
 	passes := func(d time.Duration) {
 		t.Helper()
 		for end := r.a.now.Add(d); r.a.now.Before(end); r.a.now = r.a.now.Add(30 * time.Second) {
+			// Advance the watch with the test clock: this scenario exercises
+			// board backoff, not a hold caused by stale watch observations.
+			fresh := event(watchParty, "watch.budget-state", "false")
+			fresh.At = r.a.now
+			if err := r.a.store.Record(fresh); err != nil {
+				t.Fatal(err)
+			}
 			if err := l.pass(t.Context()); err != nil {
 				t.Fatal(err)
 			}

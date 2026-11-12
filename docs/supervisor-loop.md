@@ -19,12 +19,11 @@ empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, 
 one of the changes below, unless `capacity.ceiling` changes or an agent is done or leaves the roster
 first; a park, a resume, a wait or a new task, and the busy count and room they move, do not end it.
 
-An empty or failed read answers the rest of its pass, the done-triggered starts included. `board
-next` exiting 3 with no pick (nothing free) is that empty read: a done event's next start settles on
-it ("the board offers nothing") and is never retried as a failure. No board read runs while the
-GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading until its
-reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait
-unsettled and the refill skips its read, without a failure or a pause.
+An empty or failed read answers the rest of that refill. `board next` exiting 3 with no pick
+(nothing free) is an empty read and is never retried as a failed start. No board read runs while
+the GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading
+until its reset, an hour after the reading when GitHub named none, or a GraphQL refusal):
+the refill skips its read, without a failure or a pause.
 
 The loop also holds ownership and PR observations under the GraphQL floor or while the reading is
 unknown or stale. Board queries and tracked PR reads check a fresh budget against a durable

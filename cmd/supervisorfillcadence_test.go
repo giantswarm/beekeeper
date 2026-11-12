@@ -105,3 +105,61 @@ func TestRefillStallNamesActiveAction(t *testing.T) {
 		t.Fatalf("stall did not identify the blocked action: %+v", events)
 	}
 }
+
+// A background context already owned by observation must not hide cancellation
+// of the cadence itself: shutdown joins the active refill before closing state.
+func TestRefillCadenceCancelsActiveTick(t *testing.T) {
+	r, _ := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.backgroundContext(t.Context())
+	defer l.cancelBackgroundActions()
+	original := beekeeperRun
+	entered := make(chan struct{})
+	beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+		if strings.Contains(strings.Join(args, " "), "capacity --json") {
+			close(entered)
+			<-ctx.Done()
+			return "", 1, ctx.Err()
+		}
+		return original(ctx, args...)
+	}
+	ticks := make(chan time.Time, 1)
+	ticks <- r.a.timeNow()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); l.runRefillCadence(ctx, ticks) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refill never entered capacity")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cadence cancellation did not stop the active refill")
+	}
+	if l.reexecBusy() {
+		t.Fatal("cancelled refill retained its in-flight reservation")
+	}
+}
+
+func TestRefillCadenceDoesNotOverlap(t *testing.T) {
+	r, busy := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.beginInFlight(loopFillStream)
+	defer l.endInFlight(loopFillStream)
+	if err := l.refillTick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if *busy != 0 {
+		t.Fatal("started a second refill while the first was active")
+	}
+}

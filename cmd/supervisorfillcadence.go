@@ -36,11 +36,19 @@ func (l *supervisorLoop) runRefillCadence(ctx context.Context, ticks <-chan time
 		case <-ctx.Done():
 			return
 		case now := <-ticks:
-			l.a.loopNow.Store(&now)
+			if l.a.loopNow != nil {
+				l.a.loopNow.Store(&now)
+			}
 			if ctx.Err() != nil {
 				return
 			}
-			if err := l.refillTick(ctx); err != nil {
+			// Both a fenced re-exec and cadence shutdown cancel this tick.
+			actCtx, cancel := context.WithCancel(l.backgroundContext(ctx))
+			stop := context.AfterFunc(ctx, cancel)
+			err := l.refillTick(actCtx)
+			stop()
+			cancel()
+			if err != nil {
 				l.sayOnce("refill cadence", "SUPERVISOR REFILL FAILED: %v", err)
 			} else {
 				l.clearSaid("refill cadence")
@@ -50,7 +58,7 @@ func (l *supervisorLoop) runRefillCadence(ctx context.Context, ticks <-chan time
 }
 
 func (l *supervisorLoop) refillTick(ctx context.Context) error {
-	if l.pauseForReexec() || !l.beginInFlight(loopFillStream) {
+	if ctx.Err() != nil || l.a.cfg.Supervisor.WorkerBrief == "" || l.pauseForReexec() || !l.beginInFlight(loopFillStream) {
 		return nil
 	}
 	defer l.endInFlight(loopFillStream)
