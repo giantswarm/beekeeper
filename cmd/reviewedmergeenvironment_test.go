@@ -52,14 +52,14 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 					dirs = append(dirs, runner.Dir)
 				}
 				commands = append(commands, strings.Join(argv, " "))
-				if argv[0] == "golangci-lint" && !strings.Contains(commands[len(commands)-1], "--config .golangci.yaml") {
+				if argv[0] == mergeLintCommand && !strings.Contains(commands[len(commands)-1], "--config .golangci.yaml") {
 					t.Fatalf("remote lint config is not worktree-relative: %v", argv)
 				}
 				switch {
 				case mode == modeRunnerDown:
 					return false, 0
 				case mode == modeCodeFailure:
-					if argv[0] == "golangci-lint" {
+					if argv[0] == mergeLintCommand {
 						return true, 0
 					}
 					_, _ = fmt.Fprintln(runner.Stdout, "--- FAIL: TestCombinedRegression")

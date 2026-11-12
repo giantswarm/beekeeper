@@ -265,7 +265,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 	// Whole-module checks include unchanged tests, reverse dependents and
 	// dependency-only changes. Filename correspondence cannot prove coverage.
 	pkgs := []string{"./..."}
-	if _, err := exec.LookPath("golangci-lint"); local && err != nil {
+	if _, err := exec.LookPath(mergeLintCommand); local && err != nil {
 		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
 	}
 	// Never approximate a repository's linter policy with a separate check or
@@ -281,14 +281,14 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 		if local {
 			configPath = filepath.Join(worktreeDir, configName)
 		}
-		lintArgs = append(lintArgs, "--config", configPath)
+		lintArgs = append(lintArgs, workerGitHubConfigOption, configPath)
 		configLabel = configName
 	}
 	// Independent merge worktrees may lint concurrently with other workers.
 	// Avoid the host-wide runner lock without suppressing lint findings.
 	lintArgs = append(lintArgs, "--allow-parallel-runners")
 	lintArgs = append(lintArgs, pkgs...)
-	if out, err := run(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
+	if out, err := run(ctx, worktreeDir, mergeLintCommand, lintArgs...); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}

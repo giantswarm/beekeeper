@@ -298,7 +298,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 			f.force = true
 		case strings.HasPrefix(arg, "--config="):
 			f.scratchCfg = strings.TrimPrefix(arg, "--config=")
-		case arg == "--config" && i+1 < len(args):
+		case arg == workerGitHubConfigOption && i+1 < len(args):
 			i++
 			f.scratchCfg = args[i]
 		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):

@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const mergeLintCommand = "golangci-lint"
+
 type mergeLintIssue struct {
 	FromLinter  string
 	Text        string
@@ -47,7 +49,7 @@ func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []st
 	// must still expose newly enabled findings.
 	baseArgs := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--config" {
+		if args[i] == workerGitHubConfigOption {
 			i++
 			continue
 		}
@@ -59,7 +61,7 @@ func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []st
 		if local {
 			config = filepath.Join(baseline, config)
 		}
-		baseArgs = append(baseArgs, "--config", config)
+		baseArgs = append(baseArgs, workerGitHubConfigOption, config)
 	} else {
 		baseArgs = append(baseArgs, "--no-config")
 	}
@@ -72,7 +74,7 @@ func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []st
 
 func readMergeLintIssues(ctx context.Context, dir string, args []string, run mergeCheckCommand) ([]mergeLintIssue, error) {
 	args = append(append([]string{}, args...), "--output.json.path=stdout", "--output.text.path=", "--show-stats=false", "--path-mode=", "--path-prefix=", "--issues-exit-code=0")
-	out, err := run(ctx, dir, "golangci-lint", args...)
+	out, err := run(ctx, dir, mergeLintCommand, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading lint findings: %w: %s", err, summarizeMergeCheckOutput(out))
 	}

@@ -670,13 +670,13 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 			_ = stdinPipe.Close()
 			if cmd.Process != nil {
 				select {
-				case _ = <-processExited: // Idle shutdown intentionally ignores the process exit status.
+				case <-processExited:
 				case <-time.After(100 * time.Millisecond):
 					_ = cmd.Process.Kill()
-					_ = <-processExited
+					<-processExited
 				}
 			} else {
-				_ = <-processExited
+				<-processExited
 			}
 			drain(events, stderrDone)
 			if qerr := getQuotaErr(); qerr != nil {
