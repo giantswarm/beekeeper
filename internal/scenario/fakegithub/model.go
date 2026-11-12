@@ -4,6 +4,7 @@ package fakegithub
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -220,7 +221,30 @@ type Asset struct {
 	Name        string
 	ContentType string
 	Content     []byte
-	CreatedAt   time.Time
+	// File, when set, holds the content instead of Content: a path read at
+	// each download, so a binary is not kept in memory.
+	File      string
+	CreatedAt time.Time
+}
+
+// Size is the asset's size in bytes; 0 for a file that cannot be read.
+func (a *Asset) Size() int {
+	if a.File == "" {
+		return len(a.Content)
+	}
+	fi, err := os.Stat(a.File)
+	if err != nil {
+		return 0
+	}
+	return int(fi.Size())
+}
+
+// Bytes is the asset's content.
+func (a *Asset) Bytes() ([]byte, error) {
+	if a.File == "" {
+		return a.Content, nil
+	}
+	return os.ReadFile(a.File) //nolint:gosec // a file the scenario names
 }
 
 // Release is a release.

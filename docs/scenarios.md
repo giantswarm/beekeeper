@@ -48,10 +48,10 @@ scenario's own artifacts under `<flow>/<name>/`: the world's call log
    hands each call to the world. The world logs every call in order. A
    call that no `given.calls` entry answers and no fake models (see
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
-   scenario**. With `given.github`, `gh` and the GitHub API are answered
-   by a model: see [The scenario's GitHub](scenarios-github.md).
-   Beside it the world serves its clock (see [The clock](#the-clock)),
-   which every process reads.
+   scenario**. Beside it the world serves its clock (see
+   [The clock](#the-clock)), which every process reads. With
+   `given.github`, `gh` and the GitHub API are answered by a model
+   instead: see [The scenario's GitHub](scenarios-github.md).
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -118,10 +118,10 @@ then:
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
+| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
 | `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
-| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 
 ### Expectations
 
@@ -245,10 +245,10 @@ over a model, so a scenario can override any call.
   URL wherever it fetches or pushes itself, so every transport of a scenario
   ends in the same origins.
 
-`gh` is answered by [the scenario's GitHub](scenarios-github.md) with
-`given.github`, else by `given.calls`. Not modeled yet: a message to a
-running `claude` session (`agents wake` of a live background session) and
-the desktop app.
+Not modeled yet: a message to a running `claude` session (`agents wake` of a
+live background session), the desktop app, and `gh`, which the fake GitHub
+of https://github.com/giantswarm/beekeeper/issues/3790 answers; until then a
+scenario answers the `gh` calls of its flow in `given.calls`.
 
 ### Worker scripts
 

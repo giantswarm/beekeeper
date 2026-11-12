@@ -77,6 +77,8 @@ type Given struct {
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
+	// Clock is the world's clock.
+	Clock Clock `yaml:"clock"`
 	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
 	// that answers gh and the API base variables (docs/scenarios-github.md).
 	// Its repositories get origins like Repositories.
@@ -87,8 +89,9 @@ type Given struct {
 	// Hosts are the SSH execution hosts: each gets a root of its own and
 	// an agents.hosts entry of the desk.
 	Hosts []harness.Host `yaml:"hosts"`
-	// Clock is the world's clock.
-	Clock Clock `yaml:"clock"`
+	// Releases are beekeeper's own releases, for self-update: the one the
+	// desk runs and those the scenario's GitHub publishes.
+	Releases Releases `yaml:"releases"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -121,7 +124,7 @@ type Response struct {
 }
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// github, fault, host and advance, with optional expectations of its own
+// advance, github, fault and host, with optional expectations of its own
 // response.
 type Step struct {
 	Name string `yaml:"name"`
@@ -134,22 +137,24 @@ type Step struct {
 	Stop string `yaml:"stop"`
 	// WaitFor polls its expectations until they hold, bounded.
 	WaitFor *WaitFor `yaml:"wait_for"`
+	// Advance moves the world's clock forward.
+	Advance *Advance `yaml:"advance"`
 	// GitHub is something that happens on the scenario's GitHub; Fault
 	// arms or clears one of its faults.
 	GitHub *fakegithub.Step      `yaml:"github"`
 	Fault  *fakegithub.FaultStep `yaml:"fault"`
 	// Host changes an execution host's faults.
-	Host *harness.HostStep `yaml:"host"`
-	// Advance moves the world's clock forward.
-	Advance *Advance `yaml:"advance"`
-	Expect  []Expect `yaml:"expect"`
+	Host   *harness.HostStep `yaml:"host"`
+	Expect []Expect          `yaml:"expect"`
 }
 
-// Run is a call of the candidate binary.
+// Run is a call of the candidate binary, or with Release of that release's
+// build (given.releases): a process still on a release the desk moved from.
 type Run struct {
-	Args  []string          `yaml:"args"`
-	Env   map[string]string `yaml:"env"`
-	Stdin string            `yaml:"stdin"`
+	Args    []string          `yaml:"args"`
+	Env     map[string]string `yaml:"env"`
+	Stdin   string            `yaml:"stdin"`
+	Release string            `yaml:"release"`
 }
 
 // WaitFor polls Expect every Interval (100ms) until all hold or Timeout,
@@ -166,10 +171,10 @@ const (
 	KindBackground = "background"
 	KindStop       = "stop"
 	KindWaitFor    = "wait_for"
+	KindAdvance    = "advance"
 	KindGitHub     = "github"
 	KindFault      = "fault"
 	KindHost       = "host"
-	KindAdvance    = "advance"
 )
 
 // Kind is the step's kind, "" unless exactly one is set.
@@ -187,6 +192,9 @@ func (s Step) Kind() string {
 	if s.WaitFor != nil {
 		kinds = append(kinds, KindWaitFor)
 	}
+	if s.Advance != nil {
+		kinds = append(kinds, KindAdvance)
+	}
 	if s.GitHub != nil {
 		kinds = append(kinds, KindGitHub)
 	}
@@ -195,9 +203,6 @@ func (s Step) Kind() string {
 	}
 	if s.Host != nil {
 		kinds = append(kinds, KindHost)
-	}
-	if s.Advance != nil {
-		kinds = append(kinds, KindAdvance)
 	}
 	if len(kinds) != 1 {
 		return ""
@@ -224,6 +229,8 @@ type Expect struct {
 	// repository's origin.
 	Worker *harness.WorkerExpect `yaml:"worker"`
 	Origin *OriginExpect         `yaml:"origin"`
+	// Log checks what a background step has written so far.
+	Log *LogExpect `yaml:"log"`
 }
 
 // TextExpect checks a text: every Contains is in it, no NotContains is,
@@ -291,7 +298,7 @@ func (e Expect) kinds() []string {
 		"exit": e.Exit != nil, "output": e.Output != nil, "stderr": e.Stderr != nil,
 		"json_path": e.JSONPath != nil, "events": e.Events != nil, "duration": e.Duration != nil,
 		"process": e.Process != nil, "calls": e.Calls != nil, "github": e.GitHub != nil,
-		"worker": e.Worker != nil, "origin": e.Origin != nil,
+		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil,
 	} {
 		if set {
 			k = append(k, name)
@@ -345,10 +352,28 @@ func Parse(file string, raw []byte) (*Scenario, error) {
 		return nil, fmt.Errorf("%s: one scenario per file", file)
 	}
 	s.File = file
+	s.Given.publishReleases()
 	if err := s.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}
 	return &s, nil
+}
+
+// repositoryNames are the scenario's repositories: given.repositories and
+// given.github's, each once. Every one has an origin.
+func (s *Scenario) repositoryNames() []string {
+	var out []string
+	for _, r := range s.Given.Repositories {
+		out = append(out, r.Name)
+	}
+	if g := s.Given.GitHub; g != nil {
+		for _, name := range g.RepositoryNames() {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 // Validate checks what the decoder cannot: required fields, exactly one
@@ -384,6 +409,9 @@ func (s *Scenario) Validate() error {
 			bad("given.github: %v", err)
 		}
 	}
+	for _, line := range s.Given.Releases.validate() {
+		bad("given.releases: %s", line)
+	}
 	for i, c := range s.Given.Calls {
 		if !slices.Contains(Fakes, c.Program) {
 			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(Fakes, ", "))
@@ -395,7 +423,7 @@ func (s *Scenario) Validate() error {
 			bad("given.calls[%d]: %v", i, err)
 		}
 	}
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, s.repositories()), s.Given.Harness.Validate(s.Given.Hosts)} {
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, s.repositoryNames()), s.Given.Harness.Validate(s.Given.Hosts)} {
 		if err == nil {
 			continue
 		}
@@ -425,7 +453,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, github, fault, host and advance", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, github, fault and host", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {
@@ -450,6 +478,9 @@ func (s *Scenario) Validate() error {
 			}
 			if len(r.Args) == 0 {
 				bad("%s: %s without args", where, kind)
+			}
+			if r.Release != "" && !s.Given.Releases.known(r.Release) {
+				bad("%s: release %q is none of given.releases", where, r.Release)
 			}
 		case KindStop:
 			if !slices.Contains(background, st.Stop) {
@@ -499,23 +530,6 @@ func (s *Scenario) Validate() error {
 	return errors.Join(errs...)
 }
 
-// repositories names the repositories with an origin: given.repositories
-// and given.github's, each once.
-func (s *Scenario) repositories() []string {
-	out := make([]string, 0, len(s.Given.Repositories))
-	for _, r := range s.Given.Repositories {
-		out = append(out, r.Name)
-	}
-	if g := s.Given.GitHub; g != nil {
-		for _, name := range g.RepositoryNames() {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
-
 // stepObserves are the expectation kinds a step kind's response holds;
 // events, calls and process are the desk's and the world's, held by all.
 var stepObserves = map[string][]string{
@@ -523,10 +537,10 @@ var stepObserves = map[string][]string{
 	KindBackground: {"duration"},
 	KindStop:       {"duration"},
 	KindWaitFor:    {"duration"},
+	KindAdvance:    {"duration"},
 	KindGitHub:     {"duration"},
 	KindFault:      {"duration"},
 	KindHost:       {"duration"},
-	KindAdvance:    {"duration"},
 }
 
 func (s *Scenario) validateExpect(where string, e Expect, stepKind string, background []string, inThen bool) []error {
@@ -537,11 +551,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	kind := e.Kind()
 	if kind == "" {
-		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker and origin (has %v)", e.kinds())
+		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin and log (has %v)", e.kinds())
 		return errs
 	}
 	switch kind {
-	case "events", "calls", "process", "github", "worker", "origin":
+	case "events", "calls", "process", "github", "worker", "origin", "log":
 	default:
 		if stepKind != "" && !slices.Contains(stepObserves[stepKind], kind) {
 			bad("%s is not observed for a %s step", kind, stepKind)
@@ -606,8 +620,8 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if o := e.Origin; o != nil {
-		if !slices.Contains(s.repositories(), o.Repository) {
-			bad("origin: repository %q is none of given.repositories and given.github's", o.Repository)
+		if !slices.Contains(s.repositoryNames(), o.Repository) {
+			bad("origin: repository %q is none of given.repositories", o.Repository)
 		}
 		if o.Branch == "" {
 			bad("origin without a branch")
@@ -616,6 +630,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 		if o.Exists != nil && !*o.Exists && o.Ahead != nil {
 			bad("origin: ahead of a branch that is not there")
+		}
+	}
+	if l := e.Log; l != nil {
+		for _, line := range l.validate(background) {
+			bad("%s", line)
 		}
 	}
 	if c := e.Calls; c != nil {

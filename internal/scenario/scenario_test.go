@@ -38,7 +38,7 @@ func TestParseRejects(t *testing.T) {
 		{"no when", "name: x\nflow: smoke\nthen:\n  - calls: {max: 0}\n", "no when"},
 		{"unbounded wait_for", strings.Replace(validScenario, "run: {args: [version]}", "wait_for: {expect: [{calls: {min: 1}}]}", 1), "without a timeout is unbounded"},
 		{"wait_for beyond the scenario", "name: x\nflow: smoke\ntimeout: 5s\nwhen:\n  - wait_for: {timeout: 10s, expect: [{calls: {min: 1}}]}\nthen:\n  - calls: {min: 1}\n", "exceeds the scenario's"},
-		{"two step kinds", strings.Replace(validScenario, "run: {args: [version]}", "run: {args: [version]}\n    stop: x", 1), "exactly one of run, background, stop, wait_for, github, fault, host and advance"},
+		{"two step kinds", strings.Replace(validScenario, "run: {args: [version]}", "run: {args: [version]}\n    stop: x", 1), "exactly one of run, background, stop, wait_for"},
 		{"expectation without a kind", strings.Replace(validScenario, "exit: 0", "step: version", 1), "exactly one of exit"},
 		{"two expectation kinds", strings.Replace(validScenario, "exit: 0", "{exit: 0, duration: {max: 1s}}", 1), "exactly one of exit"},
 		{"expectation the step does not observe", "name: x\nflow: smoke\nwhen:\n  - {name: b, background: {args: [watch]}}\nthen:\n  - exit: 0\n", "exit is not observed for a background step"},
@@ -63,7 +63,7 @@ func TestParseRejects(t *testing.T) {
 		{"host with an unknown fault", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  hosts: [{name: builder, fault: on-fire}]\nwhen:", 1), `fault "on-fire"`},
 		{"host step of no host", strings.Replace(validScenario, "run: {args: [version]}", "host: {name: builder, clear: true}", 1), `host "builder" is none of given.hosts`},
 		{"worker expectation without a check", strings.Replace(validScenario, "exit: 0", "worker: {name: w}", 1), "one of turns, outcome and running"},
-		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories and given.github's"},
+		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))
