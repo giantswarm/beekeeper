@@ -21,6 +21,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -265,7 +266,7 @@ func publishGit(ctx context.Context, dir string, args ...string) (string, error)
 
 // ownedPulls lists the pull requests of the owned branch, in any state.
 func ownedPulls(ctx context.Context, repository, branch string) ([]publicationPull, error) {
-	raw, err := executionPublishGH(ctx, "pr", "list", loopRepoFlag, repository, "--head", branch, "--state", "all", "--json", "url,state,"+publicationTitle+","+publicationBody)
+	raw, err := executionPublishGH(ctx, "pr", "list", loop.LoopRepoFlag, repository, "--head", branch, "--state", "all", "--json", "url,state,"+publicationTitle+","+publicationBody)
 	if err != nil {
 		// gh pr list uses GraphQL. Its failure must not strand a pushed
 		// branch when the REST pull endpoint can settle the same outcome.
@@ -622,7 +623,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if len(pulls) == 0 {
 			absorbs = superloop.ParseAbsorbedPulls(r.Request.Repository+"#0", p.Title, p.Body)
 			if len(absorbs) > 0 {
-				absorbedIssues, absorbErr := absorbedClosingIssues(ctx, st, absorbs)
+				absorbedIssues, absorbErr := loop.AbsorbedClosingIssues(ctx, st, absorbs)
 				if absorbErr != nil {
 					return result, absorbErr
 				}
@@ -665,7 +666,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 				return result, writeErr
 			}
 			defer cancelCreate()
-			raw, err = executionPublishGH(createCtx, "pr", "create", loopRepoFlag, r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
+			raw, err = executionPublishGH(createCtx, "pr", "create", loop.LoopRepoFlag, r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
 			if err != nil {
 				if result.URL, err = settleCreatedPull(ctx, r.Request.Repository, result.Branch, publicationGHReason(createCtx, err)); err != nil {
 					return result, err

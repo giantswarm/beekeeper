@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/install"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -485,7 +486,7 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		"colleague review":       {parkedIssueRef, "a colleague's review", true},
 		"untargeted answer":      {"", "awaiting the person's answer", false},
 		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
-		loopTimer:                {"timer 12", "timer for the person's answer", false},
+		loop.LoopTimer:           {"timer 12", "timer for the person's answer", false},
 		workerGitHubReleaseGroup: {"release v1.2.0", "release after the operator's go", false},
 		kindLease:                {leaseParkOn(labOne), litThePersonSAnswer, false},
 		verbHold:                 {holdParkOn("merges"), litThePersonSAnswer, false},
@@ -795,13 +796,13 @@ func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
-	oldInstalled, oldVerOf, oldRunningVer := installedLoopBinary, loopVersionOf, loopRunningVersion
+	oldInstalled, oldVerOf, oldRunningVer := installedLoopBinary, loopVersionOf, loop.LoopRunningVersion
 	t.Cleanup(func() {
 		installedLoopBinary = oldInstalled
 		loopVersionOf = oldVerOf
-		loopRunningVersion = oldRunningVer
+		loop.LoopRunningVersion = oldRunningVer
 	})
-	loopRunningVersion = func() string { return testLoopNewVer }
+	loop.LoopRunningVersion = func() string { return testLoopNewVer }
 	installedBin := filepath.Join(t.TempDir(), "beekeeper")
 	if err := os.WriteFile(installedBin, []byte("installed"), 0o600); err != nil {
 		t.Fatal(err)
@@ -814,10 +815,10 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 		return ""
 	}
 	pid := os.Getpid()
-	if err := a.store.WriteFile(loopPIDFile, pid); err != nil {
+	if err := a.store.WriteFile(loop.LoopPIDFile, pid); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
+	if err := a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty})
@@ -828,7 +829,7 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 		t.Fatalf("staleLoop = %q, want stale supervisor loop %s vs %s", rep.staleLoop, testLoopOldVer, testLoopNewVer)
 	}
 
-	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopNewVer}); err != nil {
+	if err := a.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{PID: pid, Version: testLoopNewVer}); err != nil {
 		t.Fatal(err)
 	}
 	installedLoopBinary = os.Executable

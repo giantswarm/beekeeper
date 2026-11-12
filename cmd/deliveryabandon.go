@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -54,7 +55,7 @@ func abandonEndedDeliveries(st *state.State, now time.Time) []state.Event {
 		}
 		d.Step, d.Since, d.Abandoned, d.Waits = state.DeliveryDropped, now, true, ""
 		d.Outcome, d.Evidence, d.OutcomeAt = state.DeliveryDropped, "worker ended without completion outcome", now
-		events = append(events, state.DeliveryEvents(nil, []state.Delivery{*d}, loopParty)...)
+		events = append(events, state.DeliveryEvents(nil, []state.Delivery{*d}, loop.LoopParty)...)
 	}
 	return events
 }

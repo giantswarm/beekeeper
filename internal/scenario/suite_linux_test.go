@@ -60,6 +60,9 @@ var (
 	buildOnce sync.Once
 	built     string
 	buildErr  error
+	// releases builds the release builds of given.releases beside the
+	// candidate, each once.
+	releases *ReleaseBuilder
 )
 
 // runner builds the candidate once per test binary and returns the runner;
@@ -76,6 +79,7 @@ func runner(t *testing.T) *Runner {
 			return
 		}
 		built = filepath.Join(dir, "beekeeper")
+		releases = &ReleaseBuilder{Repo: filepath.Join("..", ".."), Dir: dir}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		start := time.Now()
@@ -89,7 +93,7 @@ func runner(t *testing.T) *Runner {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Runner{Candidate: built, Fake: self, Artifacts: os.Getenv(ReportEnv)}
+	return &Runner{Candidate: built, Fake: self, Artifacts: os.Getenv(ReportEnv), Release: releases.Build}
 }
 
 // TestScenarios runs every scenario under scenarios/ (filtered by

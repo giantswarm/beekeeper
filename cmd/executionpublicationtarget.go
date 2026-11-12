@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -112,7 +113,7 @@ func closeDuplicateExecutionPulls(ctx context.Context, st *state.State, merged s
 		return nil, nil
 	}
 	repository := ref.Repo
-	mergedURL := cmp.Or(merged.URL, pullRefURL(merged.Ref))
+	mergedURL := cmp.Or(merged.URL, loop.PullRefURL(merged.Ref))
 	closes := pullClosingIssues(merged.Ref, merged.Title, merged.Body, merged.Closes)
 	if len(closes) == 0 {
 		return nil, nil
@@ -161,7 +162,7 @@ func closeDuplicateExecutionPulls(ctx context.Context, st *state.State, merged s
 			continue
 		}
 		comment := fmt.Sprintf("Superseded by %s, which merged and closes %s.", mergedURL, issueRefURL(issue))
-		if _, err := executionPublishGH(github.ActingOn(ctx, repository), "pr", "close", url, loopRepoFlag, repository, "--comment", comment); err != nil {
+		if _, err := executionPublishGH(github.ActingOn(ctx, repository), "pr", "close", url, loop.LoopRepoFlag, repository, "--comment", comment); err != nil {
 			return closed, fmt.Errorf("close superseded %s: %w", url, err)
 		}
 		closed = append(closed, url)

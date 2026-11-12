@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -46,7 +47,7 @@ func TestExecutionContinuationPublishesExistingPull(t *testing.T) {
 	// determines the destination. Passing an unrelated source ref grants nothing.
 	const name = "continuation fixture"
 	on := rig.request.Repository + "#42"
-	if err := rig.a.store.Record(about(event(loopParty, loopClaimVerb, "[red %s@%s] %s", on, priorHead, name), on)); err != nil {
+	if err := rig.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[red %s@%s] %s", on, priorHead, name), on)); err != nil {
 		t.Fatal(err)
 	}
 	_, repairs, _ := rig.a.startGateExemptions(name, "", nil, rig.a.timeNow())

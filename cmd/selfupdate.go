@@ -41,6 +41,11 @@ const recoverOutdatedJudgeFlag = "recover-outdated-judge"
 // self-update canary and is skipped.
 const verbSelfUpdateCanary = "self-update.canary"
 
+// verbSelfUpdateComparison is the event logged when a candidate release goes
+// past the dry-run comparison uncompared: the running release's own pass gave
+// no baseline.
+const verbSelfUpdateComparison = "self-update.comparison"
+
 // skippedReleasesFile records releases whose self-update canary failed so they
 // are skipped on later checks and updates.
 const skippedReleasesFile = "skipped-releases.json"
@@ -260,7 +265,11 @@ reset. A development build (version dev) is refused.`,
 					if err != nil {
 						return fmt.Errorf("locating running release for dry-run comparison: %w", err)
 					}
-					return compareLoopPasses(ctx, current, path, a.cfgPath)
+					note, err := compareLoopPasses(ctx, current, path, a.cfgPath)
+					if err == nil && note != "" {
+						a.noteUncompared(w, version, note)
+					}
+					return err
 				},
 				Health: func(ctx context.Context, path, _ string) error {
 					return probationHealth(ctx, a.cfgPath, path)
@@ -498,6 +507,17 @@ func (a *app) skipRelease(version, why string) {
 	skipped[version] = why
 	_ = s.WriteFile(skippedReleasesFile, skipped)
 	_ = s.Record(event(state.Party{Name: selfUpdateCmdName}, verbSelfUpdateCanary, "skipping %s: %s", version, why))
+}
+
+// noteUncompared says, and logs, that candidate version goes on without a
+// dry-run comparison, and why.
+func (a *app) noteUncompared(w io.Writer, version, why string) {
+	version = "v" + strings.TrimPrefix(version, "v")
+	line := fmt.Sprintf("%s is not compared with the running release: %s; signature, canary checks and probation still apply", version, why)
+	_, _ = fmt.Fprintln(w, line+".")
+	if s := a.selfUpdateStore(); s != nil {
+		_ = s.Record(event(state.Party{Name: selfUpdateCmdName}, verbSelfUpdateComparison, "%s", line))
+	}
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {

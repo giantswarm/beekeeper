@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -48,7 +49,7 @@ func (a *app) checkReviewedMergeResult(ctx context.Context, p superloop.Pull, he
 		return reasonDeskStopped, github.SquashNotApplicable
 	}
 	if ref, ok := parseRef(p.Ref); ok {
-		if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, ref.Repo, ref.N, a.cfg.LaneOf(ref.Repo)); held {
+		if _, held := merge.BlockingFor(st, time.Now(), loop.LoopParty.Name, ref.Repo, ref.N, a.cfg.LaneOf(ref.Repo)); held {
 			return reasonMergeHeld, github.SquashNotApplicable
 		}
 	}
@@ -143,10 +144,10 @@ func (a *app) checkReviewedMergeAttempt(ctx context.Context, repoDir, baseSHA st
 	defer func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, _ = runGit(cleanCtx, repoDir, "worktree", loopRemove, "--force", tmpDir)
+		_, _ = runGit(cleanCtx, repoDir, "worktree", loop.LoopRemove, "--force", tmpDir)
 		_ = os.RemoveAll(tmpDir) //nolint:gosec // owned temporary worktree under state directory
 	}()
-	if _, err := runGit(ctx, repoDir, "worktree", loopAdd, "--force", "--detach", tmpDir, baseSHA); err != nil {
+	if _, err := runGit(ctx, repoDir, "worktree", loop.LoopAdd, "--force", "--detach", tmpDir, baseSHA); err != nil {
 		return "creating merge-check worktree: " + err.Error(), github.SquashTooling
 	}
 	// The merge commit is thrown away, so the machine's signing setup never applies.

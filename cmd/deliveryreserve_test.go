@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -63,8 +64,8 @@ func TestDeliveryReservationsReserveOnlyStartsTheLoopMakes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out.Reset()
-			l := &supervisorLoop{a: a, said: map[string]bool{}}
-			if got := l.deliveryRoom(tc.room, &tc.st); got != tc.want {
+			l := &loop.Loop{Host: a, Said: map[string]bool{}}
+			if got := l.DeliveryRoom(tc.room, &tc.st); got != tc.want {
 				t.Fatalf("room %d, want %d: %s", got, tc.want, out)
 			}
 			if tc.skipped != "" && !strings.Contains(out.String(), "not reserved: "+tc.skipped) {
@@ -86,14 +87,14 @@ func TestDeliveryReservationsSayOncePerSet(t *testing.T) {
 		{Ref: reserveIssue, Step: state.DeliveryFixing, Since: now},
 		{Ref: reservePull, Step: state.DeliveryFixing, Since: now.Add(-2 * time.Hour)},
 	}}
-	l := &supervisorLoop{a: a, said: map[string]bool{}}
-	_ = l.deliveryRoom(2, st)
-	_ = l.deliveryRoom(2, st)
+	l := &loop.Loop{Host: a, Said: map[string]bool{}}
+	_ = l.DeliveryRoom(2, st)
+	_ = l.DeliveryRoom(2, st)
 	if strings.Count(out.String(), "NEXT RESERVES") != 1 || !strings.Contains(out.String(), "not reserved: 1 older than 1h") {
 		t.Fatal(out)
 	}
 	st.Deliveries[0].Since = now.Add(-2 * time.Hour)
-	_ = l.deliveryRoom(2, st)
+	_ = l.DeliveryRoom(2, st)
 	if strings.Count(out.String(), "NEXT RESERVES") != 2 || !strings.Contains(out.String(), "not reserved: 2 older than 1h") {
 		t.Fatal(out)
 	}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
@@ -524,7 +525,7 @@ func gitCheckout(t *testing.T, url string) string {
 	t.Helper()
 	dir := t.TempDir()
 	const gitInit = "init"
-	for _, args := range [][]string{{gitInit, "-q"}, {"remote", loopAdd, "origin", url}} {
+	for _, args := range [][]string{{gitInit, "-q"}, {"remote", loop.LoopAdd, "origin", url}} {
 		c := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // the test's own git calls
 		c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		if out, err := c.CombinedOutput(); err != nil {
