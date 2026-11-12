@@ -6,7 +6,7 @@ description: >
   counts the failures and is stopped mid-way. A second controller restores
   the previous release from the journal alone, with no person and no
   backlog: the candidate is quarantined, the person's line names both
-  versions, the work in flight is kept, the failed version can no longer
+  versions, the work in flight (an open timer) is kept, the failed version can no longer
   write the state, and the restored desk's probe merges again while the
   broken candidate's fails.
   Moved from internal/loopworkflow TestRecoveryRestoresABrokenCandidate,
@@ -31,7 +31,7 @@ given:
 
 when:
   - name: work
-    run: {args: [--as, scenario, note, add, --for, scenario, --status-quo, the desk works, --why, the work in flight outlives an update, --default, the desk keeps its work in flight and goes on, --due, 3h, "Is the work in flight kept?"]}
+    run: {args: [--as, scenario, timer, add, 3h, "Is the work in flight kept?"]}
     expect:
       - exit: 0
   - name: first
@@ -43,7 +43,7 @@ when:
         - install: {probe_failures: {min: 1}}
   - stop: first
   - name: half-way
-    run: {args: [note, list]}
+    run: {args: [timer, list]}
     expect:
       - install: {installed: v1.0.0-rc.2+pull-parser-drops-the-base, probation: pending}
   - name: second
@@ -52,8 +52,8 @@ when:
     expect:
       - exit: 0
       - output: {contains: ["RELEASE ROLLED BACK: v1.0.0-rc.2 failed", "restored v1.0.0-rc.1"]}
-  - name: notes
-    run: {args: [--json, note, list]}
+  - name: timers
+    run: {args: [--json, timer, list]}
     expect:
       - exit: 0
       - json_path: {path: ., len: 1}
@@ -61,7 +61,7 @@ when:
   - name: fenced
     run:
       release: v1.0.0-rc.2+pull-parser-drops-the-base
-      args: [--as, scenario, note, add, --for, scenario, --status-quo, the desk works, --why, the work in flight outlives an update, --default, the desk keeps its work in flight and goes on, --due, 3h, "Does the failed version still write?"]
+      args: [--as, scenario, timer, add, 3h, "Does the failed version still write?"]
     expect:
       - stderr: {contains: [state writes fenced after binary recovery]}
   - name: restored-probe
