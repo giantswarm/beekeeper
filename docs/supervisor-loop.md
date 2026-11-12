@@ -5,21 +5,28 @@ the desk from the board, watches pull requests and outages, and routes alerts.
 
 ## Filling the desk
 
-With `supervisor.workerBrief` configured, each pass fills the desk to `capacity.ceiling` from the
+With `supervisor.workerBrief` configured, refill runs on its own `supervisor.loopInterval` cadence,
+independently of slow observations, retirement, intake and next bookkeeping. The first refill runs
+immediately on startup. Each tick refreshes watch budget, machine and disk holds before filling
+the desk to `capacity.ceiling` from the
 next free board items, including after a restart or roster loss without a done report. Each start
 rechecks capacity and stops when its gates refuse, the ceiling is reached, or the board offers
-nothing. The existing done-triggered next-item transition remains active. An empty or failed board
+nothing. Refills never overlap. Shutdown and binary replacement cancel and drain the active refill;
+a failed binary replacement restarts its cadence. Configuration reload waits for the active refill.
+Completed start claims are not replayed on later ticks. Background refills never refresh the
+observation pass's health heartbeat. Start holds and capacity, budget and delivery gates still apply. The stall alarm names the active
+refill action (for example, capacity, board next or a worker start). `--once` refills within its pass.
+Legacy done-triggered next actions settle as bookkeeping. An empty or failed board
 read waits `supervisor.fillRetryEvery` (5m by default) before retrying, doubled for each further
 empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
 one of the changes below, unless `capacity.ceiling` changes or an agent is done or leaves the roster
 first; a park, a resume, a wait or a new task, and the busy count and room they move, do not end it.
 
-An empty or failed read answers the rest of its pass, the done-triggered starts included. `board
-next` exiting 3 with no pick (nothing free) is that empty read: a done event's next start settles on
-it ("the board offers nothing") and is never retried as a failure. No board read runs while the
-GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading until its
-reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait
-unsettled and the refill skips its read, without a failure or a pause.
+An empty or failed read answers the rest of that refill. `board next` exiting 3 with no pick
+(nothing free) is an empty read and is never retried as a failed start. No board read runs while
+the GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading
+until its reset, an hour after the reading when GitHub named none, or a GraphQL refusal):
+the refill skips its read, without a failure or a pause.
 
 The loop also holds ownership and PR observations under the GraphQL floor or while the reading is
 unknown or stale. Board queries and tracked PR reads check a fresh budget against a durable

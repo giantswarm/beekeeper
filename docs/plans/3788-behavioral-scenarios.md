@@ -354,3 +354,11 @@ In order, each with its own "Done when":
   guards it with the contract test; if that test shows drift often, revisit.
 - Scenario runs need Linux namespaces. CI has them; a developer machine
   without them gets a refusal, not a host run.
+
+## Refill regression before the scenario harness
+
+The regression for https://github.com/giantswarm/beekeeper/issues/3636 is covered in
+`cmd/supervisorfillcadence_test.go`: given a blocked pull observation and free capacity,
+a refill tick starts board workers before the observation is released. Companion cases
+check hold recovery and the action named by the stall alarm. These run in the existing
+in-process loop rig; port this behavior to the real-process scenarios when the harness lands.

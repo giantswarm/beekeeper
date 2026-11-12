@@ -800,10 +800,12 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt     time.Time
-	startsHeld    bool
-	stopWatch     func()
-	stopPullWatch func()
+	releaseAt      time.Time
+	startsHeld     bool
+	stopWatch      func()
+	stopPullWatch  func()
+	stopRefill     func()
+	refillConfigMu sync.RWMutex
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release or intake stages finished, by key; stageDetail
@@ -817,8 +819,11 @@ type supervisorLoop struct {
 	// fillEmpty counts the refill's unproductive board reads since its last
 	// start or a change that ended its pause; each one doubles the next
 	// pause, up to fillBackoff times.
-	fillEmpty   int
-	fillRetries map[string]fillRetry
+	fillEmpty       int
+	fillRetries     map[string]fillRetry
+	refillFold      takenFold
+	independentFill bool
+	fillPhase       string
 	// takenFold is the loop's own history folded so far (looptakenfold.go).
 	takenFold takenFold
 	// reviewRecoveries are the desk-review parks whose published HEAD did
@@ -1085,6 +1090,16 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) (runErr error) {
 			}
 		}()
 	}
+	if !once {
+		l.independentFill = true
+		l.holdStarts(true) // the first watch observation must admit starts
+		l.stopRefill = l.startRefillCadence(ctx)
+		defer func() {
+			if l.stopRefill != nil {
+				l.stopRefill()
+			}
+		}()
+	}
 	for {
 		now := time.Now()
 		if once {
@@ -1338,6 +1353,11 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.sayOnce("reexec-busy", "SUPERVISOR LOOP restart held: claims are in flight; re-executing the installed binary once they finish")
 		return false, nil
 	}
+	wasRefilling := l.stopRefill != nil
+	if wasRefilling {
+		l.stopRefill()
+		l.stopRefill = nil
+	}
 	if fenced {
 		// Once state writes are fenced after binary recovery, in-flight
 		// background actions on the failed binary cannot record completions
@@ -1381,6 +1401,9 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 		l.reexecFailed = true
 		l.mu.Unlock()
 		l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+		if wasRefilling {
+			l.stopRefill = l.startRefillCadence(ctx)
+		}
 		if wasPullWatching {
 			l.stopPullWatch = startLoopPullWatcher(ctx, l)
 		}
@@ -1398,6 +1421,8 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 // since startup or the last pass, so live config edits and settled overrides
 // take effect without restarting the loop process.
 func (l *supervisorLoop) reloadConfig() {
+	l.refillConfigMu.Lock()
+	defer l.refillConfigMu.Unlock()
 	path := cmp.Or(l.a.cfgPath, l.a.loadedCfg)
 	if path == "" {
 		return
@@ -1615,7 +1640,7 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	ctx = context.WithValue(ctx, loopPullContextKey{}, l)
 	dispatched := false
 	defer func() {
-		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && !dispatched {
+		if !l.dryRun && l.a.cfg.Supervisor.WorkerBrief != "" && !dispatched && !l.independentFill {
 			why := "pass ended before refill dispatch (GitHub observation held or loop stopping)"
 			if result != nil {
 				why = "pass ended before refill dispatch: " + oneLine(result.Error())
@@ -1626,9 +1651,11 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	l.lifecyclePhase("reload configuration")
 	l.reloadConfig()
 	a := l.a.snapshotAtNow()
-	l.mu.Lock()
-	l.boardNone = nil
-	l.mu.Unlock()
+	if !l.independentFill {
+		l.mu.Lock()
+		l.boardNone = nil
+		l.mu.Unlock()
+	}
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
 	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
@@ -2475,7 +2502,9 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	// are bookkeeping now: neither they nor intake may hold the start stream
 	// across passes, or compete with refill for the same capacity snapshot.
 	fillLaunched = true
-	if l.beginInFlight(loopFillStream) {
+	if l.independentFill {
+		// The cadence owns refill; observation never dispatches a second one.
+	} else if l.beginInFlight(loopFillStream) {
 		l.passActions.Go(func() {
 			defer l.endInFlight(loopFillStream)
 			setErr(l.fill(bgCtx, st, claims, taken, reservations))
