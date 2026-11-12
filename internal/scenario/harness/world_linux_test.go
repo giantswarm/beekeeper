@@ -63,21 +63,34 @@ func TestWorldHandsOutTurnsAndRecordsReports(t *testing.T) {
 		t.Fatalf("failures: %v", f)
 	}
 	three, yes, no := 3, true, false
-	for _, tc := range []struct {
+	type workerCase struct {
 		e    WorkerExpect
 		want string
-	}{
-		{WorkerExpect{Name: "app-worker", Harness: Claude, Turns: &three, Outcome: Crash, Running: &yes}, ""},
-		{WorkerExpect{Name: "app-.*", Harness: Claude, Outcome: Finish}, `ended "crash", want "finish"`},
+	}
+	check := func(cases []workerCase) {
+		t.Helper()
+		for _, tc := range cases {
+			err := w.CheckWorker(tc.e)
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Errorf("CheckWorker(%+v) = %v, want %q", tc.e, err, tc.want)
+			}
+		}
+	}
+	// The third turn is handed out and has not reported: the second's
+	// crash is not its outcome.
+	check([]workerCase{
+		{WorkerExpect{Name: "app-worker", Harness: Claude, Turns: &three, Running: &yes}, ""},
+		{WorkerExpect{Name: "app-worker", Harness: Claude, Turns: &three, Outcome: Crash}, `its last turn has not ended yet, want it ended "crash"`},
+		{WorkerExpect{Name: "app-.*", Harness: Claude, Outcome: Finish}, "has not ended yet"},
 		{WorkerExpect{Name: "app-worker", Harness: Claude, Running: &no}, "running true, want false"},
 		{WorkerExpect{Name: "nobody", Turns: &three}, "0 turn(s), want 3"},
 		{WorkerExpect{Name: "app-worker", Host: "builder", Turns: &three}, "0 turn(s), want 3"},
-	} {
-		err := w.CheckWorker(tc.e)
-		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
-			t.Errorf("CheckWorker(%+v) = %v, want %q", tc.e, err, tc.want)
-		}
-	}
+	})
+	w.handle(request{Op: opTurnDone, Session: s, Report: &report{Index: 2, Outcome: Finish}})
+	check([]workerCase{
+		{WorkerExpect{Name: "app-worker", Harness: Claude, Turns: &three, Outcome: Finish, Running: &yes}, ""},
+		{WorkerExpect{Name: "app-.*", Harness: Claude, Outcome: Crash}, `ended "finish", want "crash"`},
+	})
 	// A budget turn fills the provider's session window from its end on.
 	l := &sessionID{Harness: Claude, Name: "looper", ID: "s2"}
 	for i := range 2 {

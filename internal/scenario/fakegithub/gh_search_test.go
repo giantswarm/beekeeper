@@ -49,8 +49,11 @@ func TestGHSearchPRs(t *testing.T) {
 	if res := gh(s, "test", "search", "prs", "--json", "number", "--draft"); res.Handled && res.Exit == 0 {
 		t.Errorf("a flag the translator does not know was answered: %+v", res)
 	}
-	if res := gh(s, "test", "search", "prs", "--json", "commentsCount"); res.Exit != 1 || !strings.Contains(res.Stderr, `Unknown JSON field: "commentsCount"`) {
-		t.Errorf("an unknown field: exit %d, %q", res.Exit, res.Stderr)
+	if res := gh(s, "test", "search", "prs", "--json", "number,commentsCount"); res.Handled || !strings.Contains(res.Reason, `"commentsCount"`) {
+		t.Errorf("a field gh knows and the translator does not serve was answered: %+v", res)
+	}
+	if res := gh(s, "test", "search", "prs", "--json", "headRefName"); res.Exit != 1 || !strings.Contains(res.Stderr, `Unknown JSON field: "headRefName"`) || !strings.Contains(res.Stderr, "commentsCount") {
+		t.Errorf("a field gh does not know: exit %d, %q", res.Exit, res.Stderr)
 	}
 	if res := gh(s, "test", "search", "prs", "--json", "number", "--state", "merged"); res.Exit != 1 || !strings.Contains(res.Stderr, "valid values are {open|closed}") {
 		t.Errorf("a state search does not have: exit %d, %q", res.Exit, res.Stderr)
