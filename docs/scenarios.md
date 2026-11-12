@@ -76,8 +76,9 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
 3. The driver writes the desk: `/work/config.yaml` (a base configuration
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
-   `given.repositories` under `/work/origins/<owner>/<name>.git`, and a
-   root for each of `given.hosts` (see [Execution hosts](#execution-hosts)).
+   `given.repositories` and of `given.github`'s repositories under
+   `/work/origins/<owner>/<name>.git`, and a root for each of
+   `given.hosts` (see [Execution hosts](#execution-hosts)).
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -293,9 +294,10 @@ record and transcript, and the reset times a usage probe reports.
 `given.clock.start` and `advance` do not move those yet.
 
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
-live background session), the desktop app, and `gh`, which the fake GitHub
-of https://github.com/giantswarm/beekeeper/issues/3790 answers; until then a
-scenario answers the `gh` calls of its flow in `given.calls`.
+live background session) and the desktop app. `gh` is not a fake of this
+package: with `given.github`, [the scenario's GitHub](scenarios-github.md)
+answers it; without, a scenario answers the `gh` calls of its flow in
+`given.calls`. A host's pinned `gh` answers only the host's probes itself.
 
 ### Worker scripts
 
