@@ -260,20 +260,32 @@ when:
   whose version is the checkout's.
 - **Published releases** are releases of `giantswarm/beekeeper` on the
   scenario's GitHub (`given.github` is created for them when the scenario
-  has none): this platform's binary and its bundle as assets, the tag on
-  the repository's `main`, a pre-release where the version has a
-  pre-release part.
+  has none): this platform's binary and its bundle as assets, and a
+  pre-release where the version has a pre-release part.
 - **A scenario build asks the scenario's GitHub** for releases
   (`BEEKEEPER_GITHUB_API`) and verifies a download against a scenario
   bundle, the binary's SHA-256, where a release build verifies the cosign
   bundle of a CircleCI build. A release build has neither seam
   (`internal/update/source_release.go`).
-- **The recovery controller** of a watched candidate is a unit of the fake
-  service manager (`beekeeper-recovery.service`). It evaluates once a
-  minute on the world's clock, so an `advance` in steps of `1m` is its
-  probation; its isolated workflow probe runs as on a desk. Give each step
-  a `quiet` long enough for one evaluation: a tick that arrives during an
-  evaluation is dropped, as a ticker's is.
+- **The recovery controller** of a watched candidate is a unit the updater
+  asks the service manager for (`beekeeper-recovery.service`). It evaluates
+  once a minute, and one evaluation with its isolated workflow probe takes
+  longer than a step of the world's clock, so evaluations would be dropped.
+  A scenario therefore answers that `systemd-run` call in `given.calls` and
+  runs the unit's command itself, as a background step of the last known
+  good release with the controller's own cadence flags:
+  `run: {release: <last known good>, args: [self-update, --recovery-controller,
+  --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]}`.
+  Each evaluation then counts for a minute of probation and comes every
+  500 ms; the controller exits once it has promoted or rolled back, which
+  `process: {name: …, exit: 0}` waits for. A loop that owes the heartbeat
+  runs with `supervisor.loopInterval: 1s`.
+- **Each published release is a commit** of its own on the repository's
+  `main`, in the order of `published`: the lookup takes a tag that shares
+  its commit with an older release for a stale one.
+- **A running loop installs a newer release itself** at its first pass.
+  Where a scenario installs by hand, a fault answers that loop's lookup
+  (`match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: <loop>}`).
 - **Use release candidates** for a rollback. A full release that saved the
   state stamps it as its writer, and a rollback to an older release is then
   refused; a pre-release neither stamps the state nor is judged by the

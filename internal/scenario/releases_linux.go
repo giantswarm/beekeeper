@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,6 +112,48 @@ func (r *Runner) placeReleases(ctx context.Context, s *Scenario, work string) (s
 		}
 	}
 	return desk, nil
+}
+
+// tagReleases gives each published release a commit of its own on the
+// main of the updater's repository and tags it there, in the order they
+// are published. A release is a commit: the lookup takes a tag that shares
+// its commit with an older release for a stale one. The scenario's GitHub
+// keeps a tag that is there.
+func (d *driver) tagReleases(ctx context.Context) error {
+	published := d.s.Given.Releases.Published
+	if len(published) == 0 {
+		return nil
+	}
+	bare := filepath.Join(originsDir, update.Repository+".git")
+	git := func(args ...string) (string, error) {
+		c := exec.CommandContext(ctx, binDir+"/git", append([]string{"--git-dir", bare}, args...)...) //nolint:gosec // real git on the scenario's own origin
+		c.Env = env(nil)
+		out, err := c.Output()
+		if err != nil {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	for _, version := range published {
+		tree, err := git("rev-parse", "refs/heads/main^{tree}")
+		if err != nil {
+			return err
+		}
+		parent, err := git("rev-parse", "refs/heads/main")
+		if err != nil {
+			return err
+		}
+		commit, err := git("commit-tree", tree, "-p", parent, "-m", "release "+version)
+		if err != nil {
+			return err
+		}
+		for _, ref := range []string{"refs/heads/main", "refs/tags/" + version} {
+			if _, err := git("update-ref", ref, commit); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // binaryOf is the binary a run or background step starts: the desk's, or
