@@ -344,7 +344,7 @@ func TestHTTPNamesTheCaller(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	base := s.Env("loop")[APIEnv]
-	if base != s.URL()+"/caller/loop" || s.Env("loop")[CallerEnv] != "loop" {
+	if base != s.URL()+"/caller/loop" || s.Env("loop")[APIURLEnv] != base || s.Env("loop")[CallerEnv] != "loop" {
 		t.Fatalf("Env: %v", s.Env("loop"))
 	}
 	get := func(url string) (*http.Response, string) {
