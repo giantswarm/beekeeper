@@ -16,8 +16,15 @@ import (
 // search/issues page by page and exports the asked fields.
 
 // searchPRFields are the --json fields of gh search prs the translator
-// serves; any other is an unanswered call.
+// serves; another field gh knows is an unanswered call.
 var searchPRFields = []string{"body", "closedAt", "createdAt", "id", "isDraft", "isPullRequest", "number", "repository", "state", "title", "updatedAt", "url"}
+
+// searchPRJSONFields are the --json fields gh search prs knows: a field
+// beyond them gets gh's own error.
+var searchPRJSONFields = []string{
+	"assignees", "author", "authorAssociation", "body", "closedAt", "commentsCount", "createdAt", "id", "isDraft", "isLocked",
+	"isPullRequest", "labels", "number", "repository", "state", "title", "updatedAt", "url",
+}
 
 // searchPRsQuery is the search gh writes for the flags of gh search prs:
 // the keywords, then the qualifiers in the order of their names.
@@ -51,9 +58,14 @@ func (g *ghRun) searchPRs(args []string) error {
 	if !f.has("json") {
 		return unhandled("the fake gh translates gh search prs with --json only")
 	}
-	asked, err := g.fields(f, searchPRFields)
+	asked, err := g.fields(f, searchPRJSONFields)
 	if err != nil {
 		return err
+	}
+	for _, field := range asked {
+		if !slices.Contains(searchPRFields, field) {
+			return unhandled("the fake gh does not serve the gh search prs field %q", field)
+		}
 	}
 	if state := f.str("state"); state != "" && state != "open" && state != "closed" {
 		return fmt.Errorf("invalid argument %q for \"--state\" flag: valid values are {open|closed}", state)
