@@ -396,6 +396,9 @@ func UID(pid int) int {
 
 // Cgroup returns the cgroup v2 path of pid ("/user.slice/…"), or "".
 func Cgroup(pid int) string {
+	if cg, ok := scenarioCgroup(pid); ok {
+		return cg
+	}
 	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cgroup"))
 	if err != nil {
 		return ""
