@@ -18,8 +18,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 )
 
-// WorldEnv names the world's Unix socket to the fakes.
-const WorldEnv = "BEEKEEPER_SCENARIO_WORLD"
+// WorldEnv names the world's Unix socket to the fakes; DefaultWorldSocket is
+// where it listens in a scenario's sandbox.
+const (
+	WorldEnv           = "BEEKEEPER_SCENARIO_WORLD"
+	DefaultWorldSocket = "/work/world.sock"
+)
 
 // CallRequest is one external call a fake hands to the world.
 type CallRequest struct {
@@ -298,8 +302,17 @@ func Ask(socket string, req CallRequest) (CallResponse, error) {
 func ServeFake() (code int, served bool) {
 	socket := os.Getenv(WorldEnv)
 	name := baseName(os.Args[0])
-	if socket == "" || !slices.Contains(Fakes, name) {
+	if !slices.Contains(Fakes, name) {
 		return 0, false
+	}
+	if socket == "" {
+		// A session of an execution host starts with an environment of
+		// beekeeper's choosing, without WorldEnv: its gh (a park's
+		// reference read) finds the world at its place in the sandbox.
+		if fi, err := os.Stat(DefaultWorldSocket); err != nil || fi.Mode()&os.ModeSocket == 0 {
+			return 0, false
+		}
+		socket = DefaultWorldSocket
 	}
 	req := CallRequest{Program: name, Args: os.Args[1:], Stdin: readStdin(2 * time.Second), Env: map[string]string{}}
 	req.Dir, _ = os.Getwd()

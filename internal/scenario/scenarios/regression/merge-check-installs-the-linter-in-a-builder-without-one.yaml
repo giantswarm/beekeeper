@@ -115,11 +115,9 @@ when:
       timeout: 90s
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+        # The gate has finished its merge: the loop is not stopped in it.
+        - events: {contains: [merge.finished]}
   - stop: loop
-  - name: failed-merges
-    run: {args: [log, --verb, merge.failed]}
-  - name: merges
-    run: {args: [log, --verb, merge.]}
 
 then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
@@ -129,4 +127,4 @@ then:
   - calls: {program: golangci-lint, args: [run], min: 1}
   - calls: {program: go, args: [test, -short], min: 1}
   - calls: {program: kubectl, args: [exec], min: 1}
-  - events: {contains: [merge.authorized, merge.start]}
+  - events: {contains: [merge.authorized, merge.finished], not_contains: [merge.failed]}

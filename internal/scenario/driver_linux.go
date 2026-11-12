@@ -38,7 +38,7 @@ const (
 	originsDir   = workDir + "/origins"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
-	worldSocket  = workDir + "/world.sock"
+	worldSocket  = DefaultWorldSocket
 	deskIdentity = "scenario"
 	scenarioFile = workDir + "/scenario.yaml"
 	resultFile   = workDir + "/result.json"
