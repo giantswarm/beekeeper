@@ -79,7 +79,9 @@ CircleCI job `test-scenarios` on every pull request.
 ### Real binary, temporary desk
 
 - The suite builds the candidate once with `-tags scenario` (the only
-  difference from a release build: the clock hook below) and copies it into
+  differences from a release build: the clock hook below, and the unit a
+  process runs in, which the scenario's service manager names in the unit's
+  environment because a sandbox can create no cgroup) and copies it into
   each scenario's root.
 - Each scenario gets its own root: `HOME`, `XDG_CONFIG_HOME`,
   `XDG_STATE_HOME`, a generated `config.yaml` from the scenario's `desk:`

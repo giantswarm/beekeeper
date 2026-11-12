@@ -1,0 +1,55 @@
+name: claude-turn-reports-usage-and-hits-the-limit
+description: >
+  The desk reads Claude's usage as the scenario gives it. A worker's first
+  turn then ends on the subscription's limit: the session window is full,
+  and capacity names no choice with room for another start.
+issue: https://github.com/giantswarm/beekeeper/issues/3791
+flow: harness
+tags: [harness, claude, usage]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      # Read the usage again at every look, not from the last five minutes.
+      capacity: {providers: {claude: {usage: {every: 50ms}}}}
+  harness:
+    usage:
+      claude: {session: 40, week: 20}
+    workers:
+      - name: limit-worker
+        harness: claude
+        turns:
+          - outcome: budget
+            tokens: {input: 9000, output: 700}
+
+when:
+  - name: before
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.claude.fiveHour.usedPercent, equals: 40}
+      - json_path: {path: providers.claude.sevenDay.usedPercent, equals: 20}
+      - json_path: {path: choice.model, equals: sonnet}
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, limit-worker, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 20s
+      expect:
+        - worker: {name: limit-worker, outcome: budget}
+  - name: after
+    run: {args: [capacity, --json]}
+
+then:
+  - {step: after, exit: 0}
+  - {step: after, json_path: {path: providers.claude.fiveHour.usedPercent, equals: 100}}
+  - {step: after, json_path: {path: providers.claude.sevenDay.usedPercent, equals: 20}}
+  - {step: after, json_path: {path: providers.claude.high, equals: true}}
+  - {step: after, json_path: {path: providers.claude.room, equals: 0}}
+  - {step: after, json_path: {path: choice.harness, exists: false}}
+  - {step: after, json_path: {path: busy, equals: [limit-worker]}}
+  - worker: {name: limit-worker, harness: claude, turns: 1, outcome: budget, running: true}
+  - calls: {program: claude, args: ['-p', /usage], min: 2}

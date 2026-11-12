@@ -64,7 +64,7 @@ test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with lo
 
 .PHONY: test-scenarios
 test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox. Set BEEKEEPER_SCENARIO_FLOW, _TAG or _REPORT.
-	go test -tags scenario ./internal/scenario -count=1 -timeout=15m -v
+	go test -tags scenario ./internal/scenario/... -count=1 -timeout=15m -v
 
 .PHONY: install-cosign-retry
 install-cosign-retry: ## Retry Rekor's conflict lookup race in the later steps of this CircleCI job.

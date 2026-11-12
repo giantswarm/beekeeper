@@ -1,0 +1,83 @@
+name: omp-worker-parks-on-its-pull
+description: >
+  A worker started on omp runs in a transient unit with its standard input
+  on its inbox: the brief is its first message, and its turn commits,
+  pushes its branch to the origin, opens a pull request and parks on it.
+  The desk then shows it parked on that pull request.
+issue: https://github.com/giantswarm/beekeeper/issues/3791
+flow: harness
+tags: [harness, omp]
+timeout: 60s
+
+given:
+  repositories:
+    - name: example/app
+  harness:
+    workers:
+      - name: app-worker
+        harness: omp
+        turns:
+          - steps:
+              # Cloned by path: under its GitHub URL the park would verify the
+              # pull request's head, which the fake GitHub will answer
+              # (https://github.com/giantswarm/beekeeper/issues/3790).
+              - git: [clone, --quiet, /work/origins/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-worker]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-worker]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-worker, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+                save: pull
+              - beekeeper: [agents, park, --on, 'example/app#2', desk review]
+                dir: app
+  calls:
+    - program: gh
+      args: [pr, create]
+      respond: {stdout: "https://github.com/example/app/pull/2\n"}
+    # The pull request the worker parks on is open.
+    - program: gh
+      args: [api, graphql, 'query=.*issueOrPullRequest\(number:2\).*']
+      respond:
+        stdout: |
+          {"data":{"r0":{"issueOrPullRequest":{"__typename":"PullRequest","state":"OPEN","mergedAt":null,
+            "author":{"login":"desk"},"reviews":{"nodes":[]},"comments":{"nodes":[]}}}}}
+    # The desk has no token of its own and no other open pull request.
+    - program: gh
+      args: [auth, token]
+      respond: {stderr: "no oauth token found for github.com\n", exit: 1}
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app-worker, /work/worker.txt, --harness, omp, --model, local/qwen]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app-worker, outcome: finish}
+  - name: pass
+    run: {args: [supervisor, loop, --once]}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: pass, exit: 0}
+  - {step: roster, exit: 0}
+  - {step: roster, json_path: {path: '[0].name', equals: app-worker}}
+  - {step: roster, json_path: {path: '[0].park.on', equals: 'example/app#2'}}
+  - {step: roster, json_path: {path: '[0].park.refKind', equals: PullRequest}}
+  - {step: roster, json_path: {path: '[0].kept', equals: 'parked on example/app#2: desk review'}}
+  - events: {contains: [agents.start, agents.park], not_contains: [session.report-rejected]}
+  - worker: {name: app-worker, harness: omp, turns: 1, outcome: finish}
+  - origin: {repository: example/app, branch: app-worker, ahead: 1}
+  - calls: {program: gh, args: [pr, create], min: 1, max: 1}

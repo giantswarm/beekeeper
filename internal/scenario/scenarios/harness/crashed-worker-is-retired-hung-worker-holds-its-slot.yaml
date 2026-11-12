@@ -1,0 +1,86 @@
+name: crashed-worker-is-retired-hung-worker-holds-its-slot
+description: >
+  Two workers on claude stop making progress in different ways. One crashes
+  in its first turn: its CLI is gone, the roster says "not running", and
+  once agents.staleAfter has passed the loop takes it off the roster as
+  gone. The other hangs: its CLI stays alive and silent, so the loop keeps
+  it on the roster and it goes on holding its slot.
+issue: https://github.com/giantswarm/beekeeper/issues/3791
+flow: harness
+tags: [harness, claude, crash, hang]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      agents: {staleAfter: 3s}
+      supervisor: {loopInterval: 1s}
+  harness:
+    workers:
+      - name: hung-worker
+        turns:
+          - outcome: hang
+      - name: crashed-worker
+        turns:
+          - outcome: crash
+            exit: 3
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stderr: "no oauth token found for github.com\n", exit: 1}
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+    # The loop's own watch reads the journal (the kernel's, systemd-oomd's)
+    # and devctl's login.
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+
+when:
+  - name: start-hung
+    run:
+      args: [--as, supervisor loop, agents, start, hung-worker, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - name: start-crashed
+    run:
+      args: [--as, supervisor loop, agents, start, crashed-worker, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 20s
+      expect:
+        - worker: {name: crashed-worker, outcome: crash, running: false}
+        - worker: {name: hung-worker, turns: 1, running: true}
+  - name: before
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: '[0].name', equals: hung-worker}
+      - json_path: {path: '[0].reachable', equals: live}
+      - json_path: {path: '[1].name', equals: crashed-worker}
+      - json_path: {path: '[1].reachable', equals: not running}
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 45s
+      expect:
+        - events: {contains: [agents.gone]}
+  - stop: loop
+  - name: after
+    run: {args: [agents, --json]}
+  - name: capacity
+    run: {args: [capacity, --json]}
+
+then:
+  - {step: after, json_path: {path: ., len: 1}}
+  - {step: after, json_path: {path: '[0].name', equals: hung-worker}}
+  - {step: after, json_path: {path: '[0].reachable', equals: live}}
+  - {step: capacity, json_path: {path: busy, equals: [hung-worker]}}
+  - {step: capacity, json_path: {path: gone, len: 0}}
+  - {step: capacity, json_path: {path: providers.claude.room, equals: 1}}
+  - events: {contains: [agents.gone, agents.remove]}
+  - worker: {name: hung-worker, turns: 1, running: true}
+  - worker: {name: crashed-worker, turns: 1, running: false}
