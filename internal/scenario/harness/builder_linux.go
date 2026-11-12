@@ -40,8 +40,12 @@ var (
 	builderOptional = []string{"sh", "env", "cp", "ln", "ls", "chmod", "head", "tail", "tr", "cut", "sed", "grep", "wc", "sort", "basename", "dirname", "mktemp", "true", "false", "timeout", "id"}
 )
 
-// podScratch is what a builder pod keeps under its /work.
-var podScratch = []string{"runs", "src", "tmp", "tools", "busy", "active", "control.lock", "go-cache", "go-mod", "target", "cargo"}
+// podWork is a builder pod's /work: the sandbox's own. podScratch is what
+// the pod keeps there.
+var (
+	podWork    = "/work"
+	podScratch = []string{"runs", "src", "tmp", "tools", "busy", "active", "control.lock", "go-cache", "go-mod", "target", "cargo"}
+)
 
 // ProvisionBuilder builds the image's tool directory and returns the
 // desk's run.remote.
@@ -254,11 +258,11 @@ func (w *World) kube(req request) reply {
 		}
 		// What the Job's watchdog does as its pod starts.
 		for _, dir := range []string{"runs", "src", "tmp"} {
-			if err := os.MkdirAll(filepath.Join("/work", dir), 0o700); err != nil {
+			if err := os.MkdirAll(filepath.Join(podWork, dir), 0o700); err != nil {
 				return reply{Error: err.Error()}
 			}
 		}
-		if err := os.WriteFile("/work/active", nil, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(podWork, "active"), nil, 0o600); err != nil {
 			return reply{Error: err.Error()}
 		}
 		if w.jobs == nil {
@@ -280,7 +284,7 @@ func (w *World) kube(req request) reply {
 		w.jobOrder = slices.DeleteFunc(w.jobOrder, func(j string) bool { return j == name })
 		// The pod and its emptyDir go with the Job.
 		for _, entry := range podScratch {
-			_ = os.RemoveAll(filepath.Join("/work", entry))
+			_ = os.RemoveAll(filepath.Join(podWork, entry))
 		}
 		return reply{Message: fmt.Sprintf("job.batch %q deleted", name)}
 	case "exec":

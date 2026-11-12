@@ -73,6 +73,11 @@ given:
       respond: {stdout: '{"github":{"present":false}}'}
     - program: journalctl
       respond: {stdout: ""}
+    # The repository publishes no release: nothing to wait for after a
+    # merge.
+    - program: devctl
+      args: [release, wait]
+      respond: {stdout: '{"verdict":"no_release","reason":"the repository has no release workflow"}'}
     - program: gh
       args: [search, prs, --author, desk]
       respond: {stdout: "[]\n"}
@@ -98,7 +103,7 @@ when:
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
   # The head is green: the loop starts its reviewer, who approves it.
   - name: review
-    advance: {by: 4m, step: 1m, quiet: 200ms}
+    advance: {by: 4m, step: 1m, quiet: 1s}
   - name: reviewed
     wait_for:
       timeout: 60s
@@ -109,7 +114,7 @@ when:
   - name: base-moves
     github: {push: {repo: example/app, branch: main, file: a.go, content: "package app\n\nvar A = 2\n"}}
   - name: go
-    advance: {by: 4m, step: 1m, quiet: 200ms}
+    advance: {by: 4m, step: 1m, quiet: 1s}
   - name: merged
     wait_for:
       timeout: 90s

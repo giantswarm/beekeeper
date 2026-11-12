@@ -89,6 +89,11 @@ given:
       respond: {stdout: '{"github":{"present":false}}'}
     - program: journalctl
       respond: {stdout: ""}
+    # The repository publishes no release: nothing to wait for after a
+    # merge.
+    - program: devctl
+      args: [release, wait]
+      respond: {stdout: '{"verdict":"no_release","reason":"the repository has no release workflow"}'}
     # The pull watcher's list of the desk's open pull requests: the parks
     # track the task's own.
     - program: gh
@@ -121,7 +126,7 @@ when:
   # The loop tells the red check to the parked execution, ends it for the
   # review, and the task gets its next execution on the host.
   - name: continue
-    advance: {by: 8m, step: 1m, quiet: 200ms}
+    advance: {by: 8m, step: 1m, quiet: 1s}
   - name: continued
     wait_for:
       timeout: 60s
@@ -135,14 +140,14 @@ when:
       - github: {issue: {repo: example/app, number: 1, open_pulls: 1}}
       - origin: {repository: example/app, branch: 'beekeeper-execution/[0-9a-f-]+/1', ahead: 2}
   - name: review
-    advance: {by: 6m, step: 1m, quiet: 200ms}
+    advance: {by: 6m, step: 1m, quiet: 1s}
   - name: reviewed
     wait_for:
       timeout: 60s
       expect:
         - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
   - name: merge
-    advance: {by: 6m, step: 1m, quiet: 200ms}
+    advance: {by: 6m, step: 1m, quiet: 1s}
   - name: merged
     wait_for:
       timeout: 60s

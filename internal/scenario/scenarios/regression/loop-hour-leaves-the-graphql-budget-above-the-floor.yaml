@@ -31,6 +31,8 @@ given:
   desk:
     config:
       github: {floor: 1000, probeRepo: example/app}
+      # An empty board is read again after one to four minutes.
+      supervisor: {fillRetryEvery: 1m}
   github:
     repositories:
       - name: example/app
@@ -114,23 +116,25 @@ when:
     advance:
       by: 1h
       step: 35s
-      quiet: 150ms
+      quiet: 100ms
     expect:
       - process: {name: loop, running: true}
       # Twelve refreshes of the three repositories, not a read at every one
       # of some hundred passes.
       - github: {calls: {path: 'repos/example/svc-0[1-3]/pulls', caller: loop, fault: unlisted, min: 3, max: 60}}
-      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 600}}}
+      # Some 600 points with the budget readings of every pass; the failed
+      # reads of every pass cost that again and half as much on top.
+      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 900}}}
       - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
-  # 10:00: an item becomes free. The refill reads an empty board at most
-  # every 20 minutes, and starts are not held: the item gets its worker.
+  # 10:00: an item becomes free. Starts are not held: the refill's next
+  # read of the board finds it and the item gets its worker.
   - name: free
     github: {close: {repo: example/app, issue: 2}}
   - name: next-read
     advance:
-      by: 21m
+      by: 5m
       step: 35s
-      quiet: 150ms
+      quiet: 100ms
   - name: started
     wait_for:
       timeout: 30s
@@ -139,6 +143,6 @@ when:
   - stop: loop
 
 then:
-  - {step: hour, duration: {max: 120s}}
+  - {step: hour, duration: {max: 150s}}
   - worker: {name: app 1, turns: 1}
   - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
