@@ -118,14 +118,11 @@ type Command struct {
 	IsDeskReviewWait           func(waits string) bool
 	IssueURL                   func(ref string) string
 	LoopBroker                 func(ctx context.Context) (string, error)
-	LoopDeliveryPriority       func(l *Loop, ctx context.Context, reserved ...[]string) error
 	LoopEpicStart              func(l *Loop, next LoopBoardItem) error
 	LoopFiledIssues            func(l *Loop, st *state.State) []superloop.FiledIssue
-	LoopFill                   func(l *Loop, ctx context.Context, st *state.State, claims map[string]LoopClaim, taken []superloop.Taken, reserved ...[]string) error
 	LoopFinishContinuation     func(l *Loop, old state.Agent, name string) error
 	LoopFireTimers             func(l *Loop, ctx context.Context, st *state.State) error
 	LoopInTurn                 func(a Host, p state.Party) bool
-	LoopPreviewFill            func(l *Loop, ctx context.Context) error
 	LoopRecoverUnfinishedTurns func(l *Loop, ctx context.Context, st *state.State) error
 	LoopResumable              func(a Host, st *state.State, ag state.Agent) bool
 	LoopResumePark             func(a Host, ctx context.Context, by state.Party, q string) error

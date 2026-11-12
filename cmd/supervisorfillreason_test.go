@@ -164,7 +164,7 @@ func TestRefillReadsCapacityBeforeItsDiagnostics(t *testing.T) {
 		return `{"room": 2, "blocks": []}` + "\nstate snapshot is 2m0s old (supervisor pass 30s)\n", 0, nil
 	}
 	l := &loop.Loop{Host: &app{}}
-	got, err := loopReadFillCapacity(l, t.Context())
+	got, err := l.ReadFillCapacity(t.Context())
 	if err != nil {
 		t.Fatalf("a diagnostic after the document failed the read: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRefillReadsCapacityBeforeItsDiagnostics(t *testing.T) {
 	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) {
 		return "state snapshot is 2m0s old (supervisor pass 30s)\n", 0, nil
 	}
-	if _, err := loopReadFillCapacity(l, t.Context()); err == nil {
+	if _, err := l.ReadFillCapacity(t.Context()); err == nil {
 		t.Fatal("output without a document was read as capacity")
 	}
 }
