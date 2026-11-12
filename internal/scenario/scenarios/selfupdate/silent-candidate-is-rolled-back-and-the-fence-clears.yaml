@@ -66,13 +66,14 @@ when:
     expect:
       - exit: 0
   # Its loop runs for a while: this machine runs a loop, so a candidate
-  # owes a heartbeat.
+  # owes a heartbeat. Once its refill has read the board, the loop is up
+  # and has sent its own.
   - name: good-loop
     background: {args: [supervisor, loop]}
   - wait_for:
       timeout: 30s
       expect:
-        - log: {name: good-loop, contains: ["candidate v1.0.0-rc.2"]}
+        - log: {name: good-loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
         - events: {contains: [watch.budget-state]}
   - stop: good-loop
   # Candidate 3 is installed; nothing starts its loop.
@@ -138,7 +139,7 @@ when:
   - wait_for:
       timeout: 30s
       expect:
-        - log: {name: later-loop, contains: ["candidate v1.0.0-rc.4"]}
+        - log: {name: later-loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
   - name: still-fenced
     run:
       release: v1.0.0-rc.3

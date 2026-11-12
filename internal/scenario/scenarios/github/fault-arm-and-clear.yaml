@@ -7,6 +7,11 @@ issue: https://github.com/giantswarm/beekeeper/issues/3790
 flow: github
 tags: [github, fault]
 timeout: 30s
+control:
+  none: >
+    states how board next fails on a GraphQL outage and picks once it ends,
+    which main already does; this pull request changes no beekeeper code,
+    only adds the fake GitHub and its fault step
 
 given:
   github:

@@ -388,7 +388,20 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
-func (d *driver) repositories() []string { return d.s.repositoryNames() }
+func (d *driver) repositories() []string {
+	var out []string
+	for _, r := range d.s.Given.Repositories {
+		out = append(out, r.Name)
+	}
+	if g := d.s.Given.GitHub; g != nil {
+		for _, name := range g.RepositoryNames() {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
 
 // startGitHub builds the scenario's GitHub from given.github over the
 // origins, serves it on a loopback port and makes it answer gh.
@@ -403,7 +416,8 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
-		// The budgets' windows reset on the world's clock.
+		// The world's clock: budgets reset and fault windows close as
+		// advance moves it, and reset times agree with the candidate's.
 		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
@@ -576,10 +590,6 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		}
 	case KindWaitFor:
 		sr.Failures = append(sr.Failures, d.waitFor(ctx, st.WaitFor)...)
-	case KindAdvance:
-		var failures []string
-		sr.Args, failures = d.advance(ctx, st.Advance)
-		sr.Failures = append(sr.Failures, failures...)
 	case KindGitHub, KindFault:
 		var err error
 		switch {
@@ -593,6 +603,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	case KindHost:
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())

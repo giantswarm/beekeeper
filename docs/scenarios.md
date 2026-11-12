@@ -85,10 +85,10 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
    hands each call to the world. The world logs every call in order. A
    call that no `given.calls` entry answers and no fake models (see
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
-   scenario**. Beside it the world serves its clock (see
-   [The clock](#the-clock)), which every process reads. With
-   `given.github`, `gh` and the GitHub API are answered by a model
-   instead: see [The scenario's GitHub](scenarios-github.md).
+   scenario**. With `given.github`, `gh` and the GitHub API are answered
+   by a model instead: see [The scenario's GitHub](scenarios-github.md).
+   Beside it the world serves its clock (see [The clock](#the-clock)),
+   which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -156,9 +156,9 @@ then:
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
-| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
+| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
 
 ### Expectations
@@ -202,8 +202,10 @@ The world's time starts at `given.clock.start`, or at the system's time. It
 runs as the system's does, so a pass that waits a second waits a second.
 `advance` moves it forward. The step returns once every process has fired
 the timers, tickers and sleeps that are then due and acknowledged the new
-time. A process started later reads the advanced time. A ticker that missed
-several periods ticks once, as Go's does.
+time. A process that ends before it acknowledges is not waited for; one
+that does not acknowledge within 10 seconds fails the step, named by its
+PID and command line. A process started later reads the advanced time. A
+ticker that missed several periods ticks once, as Go's does.
 
 ```yaml
 - advance: 30m                       # at once
@@ -274,12 +276,13 @@ when:
   A scenario therefore answers that `systemd-run` call in `given.calls` and
   runs the unit's command itself, as a background step of the last known
   good release with the controller's own cadence flags:
-  `run: {release: <last known good>, args: [self-update, --recovery-controller,
+  `background: {release: <last known good>, args: [self-update, --recovery-controller,
   --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]}`.
   Each evaluation then counts for a minute of probation and comes every
   500 ms; the controller exits once it has promoted or rolled back, which
   `process: {name: …, exit: 0}` waits for. A loop that owes the heartbeat
-  runs with `supervisor.loopInterval: 1s`.
+  runs with `supervisor.loopInterval: 1s` and writes it with every pass:
+  it is there once the loop's log has its first `SUPERVISOR REFILL` line.
 - **Each published release is a commit** of its own on the repository's
   `main`, in the order of `published`: the lookup takes a tag that shares
   its commit with an older release for a stale one.

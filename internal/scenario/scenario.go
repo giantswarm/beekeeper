@@ -80,6 +80,10 @@ type Given struct {
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
+	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
+	// that answers gh and the API base variables (docs/scenarios-github.md).
+	// Its repositories get origins like Repositories.
+	GitHub *fakegithub.Given `yaml:"github"`
 	// Harness scripts the workers the fake harnesses run and sets what
 	// their usage probes report.
 	Harness harness.Given `yaml:"harness"`
@@ -88,10 +92,6 @@ type Given struct {
 	Hosts []harness.Host `yaml:"hosts"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
-	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
-	// that answers gh and the API base variables (docs/scenarios-github.md).
-	// Its repositories get origins like Repositories.
-	GitHub *fakegithub.Given `yaml:"github"`
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
@@ -384,23 +384,6 @@ func Parse(file string, raw []byte) (*Scenario, error) {
 	return &s, nil
 }
 
-// repositoryNames are the scenario's repositories: given.repositories and
-// given.github's, each once. Every one has an origin.
-func (s *Scenario) repositoryNames() []string {
-	var out []string
-	for _, r := range s.Given.Repositories {
-		out = append(out, r.Name)
-	}
-	if g := s.Given.GitHub; g != nil {
-		for _, name := range g.RepositoryNames() {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
-
 // Validate checks what the decoder cannot: required fields, exactly one
 // kind per step and expectation, references and patterns.
 func (s *Scenario) Validate() error {
@@ -464,7 +447,11 @@ func (s *Scenario) Validate() error {
 			bad("given.calls[%d]: %v", i, err)
 		}
 	}
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, s.repositoryNames()), s.Given.Harness.Validate(s.Given.Hosts)} {
+	repositories := make([]string, 0, len(s.Given.Repositories))
+	for _, r := range s.Given.Repositories {
+		repositories = append(repositories, r.Name)
+	}
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts)} {
 		if err == nil {
 			continue
 		}
@@ -661,7 +648,7 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if o := e.Origin; o != nil {
-		if !slices.Contains(s.repositoryNames(), o.Repository) {
+		if !slices.ContainsFunc(s.Given.Repositories, func(r Repository) bool { return r.Name == o.Repository }) {
 			bad("origin: repository %q is none of given.repositories", o.Repository)
 		}
 		if o.Branch == "" {

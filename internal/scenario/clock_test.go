@@ -78,7 +78,7 @@ func TestParseRejectsAdvance(t *testing.T) {
 		t.Fatalf("a bad start: %v", err)
 	}
 	_, err = Parse("advance-and-run.yaml", []byte(strings.Replace(advanceScenario("1m"), "  - advance: 1m", "  - {advance: 1m, run: {args: [version]}}", 1)))
-	if err == nil || !strings.Contains(err.Error(), "exactly one of run, background, stop, wait_for") {
+	if err == nil || !strings.Contains(err.Error(), "exactly one of run, background, stop, wait_for, advance, github, fault and host") {
 		t.Fatalf("an advance with a run: %v", err)
 	}
 }
