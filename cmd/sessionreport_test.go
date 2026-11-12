@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -267,7 +268,7 @@ func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	}
 	// The loop's own roster tidy removes through the same path.
 	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg)
-	if removed, err := a.removeAgents(chores, loopParty); err != nil || len(removed) != 0 {
+	if removed, err := a.removeAgents(chores, loop.LoopParty); err != nil || len(removed) != 0 {
 		t.Fatalf("removed with a waiting report: %+v, %v", removed, err)
 	}
 	st, err = a.store.Read()
