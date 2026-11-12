@@ -63,6 +63,10 @@ when:
       expect:
         - worker: {name: app 1, turns: 1}
         - github: {calls: {path: repos/example/app/pulls, caller: loop, conditional: false, status: 200, min: 1}}
+  # The refill's tick ends with a board read that finds nothing free; only
+  # then does the second item become free.
+  - name: settled
+    advance: {by: 1s, quiet: 500ms}
   - name: unblock
     github: {close: {repo: example/app, issue: 3}}
   # 09:07: the inventory is older than five minutes, so the start of the

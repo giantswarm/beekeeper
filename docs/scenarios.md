@@ -341,3 +341,30 @@ The `host` step changes a host's faults while the scenario runs:
 `host: {name: builder, fault: unreachable}`, `host: {name: builder, slow: 2s}`
 or `host: {name: builder, clear: true}`. `older-go` is part of a host's
 provisioning and only `given.hosts` names it.
+
+### The builder
+
+`given.builder` gives the desk the Kubernetes builder of its remote builds
+([Remote build slots](remote-builds.md)) without a cluster. The driver sets
+the desk's `run.remote` and puts a fake `kubectl` on its `PATH`.
+
+```yaml
+given:
+  builder:
+    tools: [go]                      # the Go image's toolchain: go, golangci-lint
+```
+
+- **`kubectl`** keeps the Jobs the desk creates and answers `get`, `create`,
+  `wait` and `delete` from them. `exec` runs its command in place, under the
+  Job's container environment and the image's `PATH`, so the desk's own
+  upload, launch and follow scripts run as they are. A pod's `/work` is the
+  sandbox's: one builder runs at a time, and deleting its Job empties it.
+- **The image** is `/work/builder/bin`: the system's shell and coreutils,
+  and a fake for each of `tools`. An image without `golangci-lint` is one
+  the desk's merge validation installs the linter into.
+- **`go`** in the pod passes every build, vet and test. `go install` puts
+  the fake of the tool it names into `GOBIN`, as the real one puts the
+  tool there. **`golangci-lint`** reports no findings.
+
+Every call of `kubectl`, `go` and `golangci-lint` is in the world's call
+log, so `calls` expectations may name them.

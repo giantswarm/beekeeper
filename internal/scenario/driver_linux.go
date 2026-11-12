@@ -175,7 +175,7 @@ func (d *driver) run() {
 	}
 	if err == nil {
 		d.fakes, err = harness.NewWorld(harness.Options{
-			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
+			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Builder: d.s.Given.Builder, Env: env(nil), Artifacts: artifactsDir,
 			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
 				r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
 				return r.Stdout, r.Stderr, r.Exit, r.Given
@@ -281,6 +281,18 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	cfg := baseConfig(orgs)
+	if b := d.s.Given.Builder; b != nil {
+		// The desk's remote builds go to the scenario's builder, through
+		// the fake kubectl on its PATH.
+		remote, err := harness.ProvisionBuilder(b, binDir+"/"+fakeBinary)
+		if err != nil {
+			return fmt.Errorf("given.builder: %w", err)
+		}
+		if err := os.Symlink(fakeBinary, filepath.Join(binDir, harness.Kubectl)); err != nil {
+			return err
+		}
+		overlay(cfg, map[string]any{"run": map[string]any{"remote": remote}})
+	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {

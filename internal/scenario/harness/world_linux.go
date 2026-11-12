@@ -24,6 +24,8 @@ type Options struct {
 	// Env is the desk's own environment: what a transient unit of the
 	// desk's service manager starts with.
 	Env []string
+	// Builder is the scenario's Kubernetes builder; nil for none.
+	Builder *Builder
 	// Artifacts receives the logs of what the world runs: the units, the
 	// claude daemons and every worker's turns.
 	Artifacts string
@@ -52,6 +54,10 @@ type World struct {
 	usage    map[string]Usage
 	full     map[string]bool
 	hosts    map[string]*hostState
+	// jobs are the builder Jobs the desk created through kubectl, as it
+	// wrote them, in jobOrder.
+	jobs     map[string]string
+	jobOrder []string
 	failures []string
 	turnLog  *os.File
 
@@ -262,6 +268,8 @@ func (w *World) handle(req request) reply {
 		return reply{Models: models}
 	case opSSH:
 		return w.ssh(req.Dest)
+	case opKube:
+		return w.kube(req)
 	}
 	return reply{Error: "unknown operation " + req.Op}
 }

@@ -238,6 +238,46 @@ func TestAdvanceDoesNotWaitForAProcessThatEnded(t *testing.T) {
 	}
 }
 
+// A process that ends while an advance waits for its acknowledgement is
+// skipped at once: the advance holds the server's lock meanwhile, and the
+// ended process must not need that lock to be known as gone. A short-lived
+// child of a loop under an hour of advances ends this way sooner or later
+// (https://github.com/giantswarm/beekeeper/issues/3795).
+func TestAdvanceSkipsAProcessThatEndsUnacknowledged(t *testing.T) {
+	s, path := serve(t)
+	answering := connect(t, path)
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(c).Encode(hello{PID: 4343, Command: "ending"}); err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(c)
+	var first offset
+	if err := dec.Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	// It reads the advance and ends without an acknowledgement.
+	go func() {
+		var next offset
+		_ = dec.Decode(&next)
+		_ = c.Close()
+	}()
+	began := time.Now()
+	a, err := s.Advance(time.Minute)
+	if err != nil {
+		t.Fatalf("the advance failed on a process that ended: %v", err)
+	}
+	if took := time.Since(began); took > ackTimeout/2 {
+		t.Fatalf("the advance waited %s for a process that had ended", took)
+	}
+	if a.Processes != 1 {
+		t.Fatalf("the answering process alone acknowledges: %+v", a)
+	}
+	near(t, "the answering process", answering.now(), start.Add(time.Minute))
+}
+
 func TestAdvanceNamesAProcessThatDoesNotAnswer(t *testing.T) {
 	old := ackTimeout
 	ackTimeout = 200 * time.Millisecond

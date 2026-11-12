@@ -1,0 +1,153 @@
+name: execution-continuation-keeps-one-pull
+description: >
+  A task's worker runs on an SSH execution host, publishes its pull request
+  and parks on it for the desk review; the loop ends the parked execution.
+  CI then fails on that head, and the loop starts a continuation of the
+  task on the host: a new execution. It must continue the open pull
+  request: its fix lands on that pull request's branch, the task keeps one
+  open pull request, and after the merge no other pull request of the task
+  is open. Live, every continuation published a branch and a pull request
+  of its own, and the superseded ones stayed open after the merge.
+issue: https://github.com/giantswarm/beekeeper/issues/3738
+pending: https://github.com/giantswarm/beekeeper/issues/3738
+flow: regression
+tags: [regression, hosts, delivery, duplicate-pr]
+timeout: 300s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      watch: {interval: 1h}
+      # The loop places its starts on the execution host.
+      supervisor: {loopInterval: 1m, hosts: [builder]}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The task, board: Ready}
+  harness:
+    workers:
+      - name: app 1
+        host: builder
+        turns:
+          # The first execution: one commit, published as the task's pull
+          # request, and the park for the desk review.
+          - steps:
+              - write: {path: change.txt, content: "the first execution's change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, "feat: the task's change"]
+              - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
+              - run:
+                  - sh
+                  - -c
+                  - |
+                    out=$(beekeeper agents publish --title "feat: the task's change" --body-file "$1") || exit 1
+                    IFS='"'; set -- $out; printf '%s\n' "$8"
+                  - sh
+                  - '${dir}/.beekeeper-scratch/body.md'
+                save: pull
+              - beekeeper: [agents, park, --on, '${pull}', --post-merge, '', desk review]
+          # The continuation, a new execution of the same task: one more
+          # commit, published the same way, and the park on what the
+          # publication answered.
+          - steps:
+              - write: {path: fix.txt, content: "the continuation's fix\n"}
+              - git: [add, fix.txt]
+              - git: [commit, --quiet, -m, "fix: what CI found"]
+              - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
+              - run:
+                  - sh
+                  - -c
+                  - |
+                    out=$(beekeeper agents publish --title "feat: the task's change" --body-file "$1") || exit 1
+                    IFS='"'; set -- $out; printf '%s\n' "$8"
+                  - sh
+                  - '${dir}/.beekeeper-scratch/body.md'
+                save: pull
+              - beekeeper: [agents, park, --on, '${pull}', --post-merge, '', desk review]
+      # The desk review of the pull request, on the host as well: it reads
+      # and posts through the coordinator.
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - git: [rev-parse, HEAD]
+                save: head
+              - write: {path: .beekeeper-scratch/review.md, content: "Desk review (opus): approved\nHead reviewed: `${head}`\n"}
+              - beekeeper: [agents, review, --body-file, '${dir}/.beekeeper-scratch/review.md']
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    # The pull watcher's list of the desk's open pull requests: the parks
+    # track the task's own.
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - name: admitted
+    wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: tick
+    advance: 1m
+  # 09:01: the refill starts the item's worker on the host; it publishes
+  # the task's pull request and parks on it.
+  - name: published
+    wait_for:
+      timeout: 60s
+      expect:
+        - worker: {name: app 1, host: builder, turns: 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  # CI fails on the head the worker parked on.
+  - name: red
+    github: {check: {repo: example/app, pull: 2, name: build, state: red}}
+    expect:
+      - github: {issue: {repo: example/app, number: 1, pulls: 1, open_pulls: 1}}
+  # The loop ends the parked execution and starts the task's continuation
+  # for the red check: a new execution on the host.
+  - name: continue
+    advance: {by: 6m, step: 1m, quiet: 200ms}
+  - name: continued
+    wait_for:
+      timeout: 60s
+      expect:
+        - worker: {name: app 1, host: builder, turns: 2, outcome: finish}
+  # The continuation's fix is on the task's one pull request; CI passes on
+  # its head.
+  - name: green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+    expect:
+      - github: {issue: {repo: example/app, number: 1, pulls: 1, open_pulls: 1}}
+  - name: review
+    advance: {by: 4m, step: 1m, quiet: 200ms}
+  - name: reviewed
+    wait_for:
+      timeout: 60s
+      expect:
+        - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
+  - name: merge
+    advance: {by: 4m, step: 1m, quiet: 200ms}
+  - name: merged
+    wait_for:
+      timeout: 60s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - stop: loop
+
+then:
+  # After the merge the task is closed and none of its pull requests is
+  # left open.
+  - github: {issue: {repo: example/app, number: 1, state: closed, pulls: 1, open_pulls: 0}}
+  - worker: {name: app 1, host: builder, turns: 2, outcome: finish}

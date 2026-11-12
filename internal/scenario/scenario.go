@@ -87,6 +87,9 @@ type Given struct {
 	// Hosts are the SSH execution hosts: each gets a root of its own and
 	// an agents.hosts entry of the desk.
 	Hosts []harness.Host `yaml:"hosts"`
+	// Builder is the Kubernetes builder of the desk's run.remote: a fake
+	// kubectl and one builder image.
+	Builder *harness.Builder `yaml:"builder"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
 }
@@ -413,7 +416,7 @@ func (s *Scenario) Validate() error {
 		}
 	}
 	repositories := s.repositoryNames()
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts)} {
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts), s.Given.Builder.Validate()} {
 		if err == nil {
 			continue
 		}
@@ -620,8 +623,8 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if c := e.Calls; c != nil {
-		if c.Program != "" && !slices.Contains(Fakes, c.Program) {
-			bad("calls: program %q is none of %s", c.Program, strings.Join(Fakes, ", "))
+		if c.Program != "" && !slices.Contains(Called(), c.Program) {
+			bad("calls: program %q is none of %s", c.Program, strings.Join(Called(), ", "))
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("calls: %v", err)
@@ -631,6 +634,12 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	return errs
+}
+
+// Called are the programs whose calls the world logs: the fakes, and with
+// given.builder the fake kubectl and the builder image's tools.
+func Called() []string {
+	return append(append(slices.Clone(Fakes), harness.Kubectl), harness.BuilderTools...)
 }
 
 // compileArgs compiles argument patterns, each matching one argument whole

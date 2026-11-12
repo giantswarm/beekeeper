@@ -96,7 +96,6 @@ func (s *Server) serve(c net.Conn) {
 		return
 	}
 	p := &conn{c: c, enc: json.NewEncoder(c), hello: h, acks: make(chan ack, 16), gone: make(chan struct{})}
-	defer close(p.gone)
 	s.mu.Lock()
 	err := p.enc.Encode(offset{Seq: s.seq, Offset: s.offset.Load()})
 	if err == nil {
@@ -108,6 +107,9 @@ func (s *Server) serve(c net.Conn) {
 	}
 	_ = c.SetDeadline(time.Time{})
 	defer func() {
+		// Gone first: an advance holds the lock while it waits for this
+		// process, and learns here that it ended.
+		close(p.gone)
 		s.mu.Lock()
 		delete(s.conns, p)
 		s.mu.Unlock()
