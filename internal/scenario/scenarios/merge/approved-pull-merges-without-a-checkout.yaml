@@ -1,0 +1,98 @@
+name: approved-pull-merges-without-a-checkout
+description: >
+  A worker publishes its branch from a clone outside every folder the desk
+  searches for checkouts (agents.dir, disk.checkouts), opens a pull request
+  and parks on it for desk review. Once CI is green the loop starts the
+  independent reviewer, which approves the exact head. Without a checkout
+  the merge-result check is skipped and the pull request's own green checks
+  stand: the next passes merge that head, once, through the merge API, and
+  the merged review park ends the worker's task. The parser control in
+  controls_linux_test.go runs this scenario against a candidate whose pull
+  parser drops the base: it must refuse with no base branch, before any
+  merge.
+  Moved from internal/loopworkflow TestWorkflow, case no-checkout.
+issue: https://github.com/giantswarm/beekeeper/issues/3797
+flow: merge
+tags: [merge, review, loop, github, claude]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      supervisor: {reviewRounds: 1}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The change}
+  harness:
+    workers:
+      - name: app-1
+        harness: claude
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, /work/home/clones/app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: /work/home/clones/app
+              - write: {path: /work/home/clones/app/change.txt, content: "the change\n"}
+              - git: [add, change.txt]
+                dir: /work/home/clones/app
+              - git: [commit, --quiet, -m, "feat: the change"]
+                dir: /work/home/clones/app
+              - git: [push, --quiet, origin, app-1]
+                dir: /work/home/clones/app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the change", --body, "Closes #1"]
+                dir: /work/home/clones/app
+              - beekeeper: [agents, park, --on, 'example/app#2', desk review]
+                dir: /work/home/clones/app
+      - name: 'Review app 2 r[0-9]+'
+        harness: claude
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - write: {path: review.md, content: "Desk review (opus): approved\nHead reviewed: `${head}`\n"}
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body-file, review.md]
+              - beekeeper: [agents, idle, --done, --problem, none, --report, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+  calls:
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+
+when:
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app-1, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app-1, outcome: finish}
+  - name: green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - name: merge
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: end
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - github: {issue: {repo: example/app, number: 1, state: closed}}
+  - github: {calls: {method: PUT, path: repos/example/app/pulls/2/merge, min: 1, max: 1}}
+  - events: {contains: [agents.start, agents.park, supervisor.review, supervisor.merge, supervisor.end]}

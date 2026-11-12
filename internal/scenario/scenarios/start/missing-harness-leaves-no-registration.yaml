@@ -1,0 +1,52 @@
+name: missing-harness-leaves-no-registration
+description: >
+  A forced start of a codex worker on a machine where codex is not on PATH
+  fails before anything is launched: it names the missing executable, and
+  the desk holds neither a start nor an agent for it. With capacity.ceiling
+  0 the loop's pass then has no room for a start of the Ready issue either.
+  Moved from internal/loopworkflow TestWorkflow, case failed-start.
+issue: https://github.com/giantswarm/beekeeper/issues/3797
+flow: start
+tags: [start, codex, capacity]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      capacity: {ceiling: 0}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Ready item, board: Ready}
+  calls:
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+
+when:
+  # Only the candidate itself is reachable: PATH holds no harness at all.
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app-worker, /work/worker.txt, --harness, codex, --model, gpt-codex, --force]
+      env: {PATH: /work/no-tools}
+    expect:
+      - exit: 1
+      - stderr: {contains: ['"codex": executable file not found']}
+  - name: roster
+    run: {args: [agents, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 0}
+  - name: pass
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: [no room for a start]}
+
+then:
+  - events: {not_contains: [agents.start]}
+  - calls: {program: codex, max: 0}
+  - github: {issue: {repo: example/app, number: 1, state: open, board: Ready}}

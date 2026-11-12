@@ -1,0 +1,106 @@
+name: moved-head-at-the-gate-gives-no-merge
+description: >
+  The pass plans the merge of the approved head and the gate's turn comes
+  (merging). Before the gate re-reads the pull request, the worker's branch
+  moves to a new commit: the gate's reads are slowed by two seconds while a
+  push lands, so they see the new head. The merge of the reviewed head is
+  refused, the merge API is never called and the pull request stays open on
+  the new head.
+  Moved from internal/loopworkflow TestWorkflow, case moved-head.
+issue: https://github.com/giantswarm/beekeeper/issues/3797
+flow: merge
+tags: [merge, loop, github, fault, race]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      supervisor: {reviewRounds: 1}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The change}
+  harness:
+    workers:
+      - name: app-1
+        harness: claude
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the change", --body, "Closes #1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', desk review]
+                dir: app
+      - name: 'Review app 2 r[0-9]+'
+        harness: claude
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - write: {path: review.md, content: "Desk review (opus): approved\nHead reviewed: `${head}`\n"}
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body-file, review.md]
+              - beekeeper: [agents, idle, --done, --problem, none, --report, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+  calls:
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+
+when:
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app-1, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app-1, outcome: finish}
+  - name: green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - name: slow-pulls
+    fault:
+      arm:
+        name: pull-reads
+        match: {path: graphql, operation: PullRequestByNumber, caller: merge}
+        respond: {delay: 2s}
+  - name: merge
+    background: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 30s
+      interval: 20ms
+      expect:
+        - events: {contains: [merging]}
+  - name: push
+    github: {push: {repo: example/app, branch: app-1, file: more.txt, content: "a later change\n"}}
+  - wait_for:
+      timeout: 40s
+      expect:
+        - process: {name: merge, running: false}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - github: {issue: {repo: example/app, number: 1, state: open}}
+  - github: {calls: {method: PUT, path: repos/example/app/pulls/2/merge, max: 0}}
+  - process: {name: merge, exit: 0}
+  - events: {contains: [merging, supervisor.failure], not_contains: [supervisor.merge, merged]}

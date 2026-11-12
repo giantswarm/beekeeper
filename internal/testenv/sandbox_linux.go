@@ -70,33 +70,3 @@ func EnterSandbox(root string) error {
 	}
 	return os.Chdir("/work/repo")
 }
-
-// WorkflowEnv is an allowlist, deliberately independent of os.Environ.
-// GitHub Git transport uses the fixture remote helper; Git has no system or
-// user config. The private network namespace also blocks direct socket calls.
-func WorkflowEnv() []string {
-	return []string{
-		"PATH=/work/bin:/usr/bin:/bin",
-		"HOME=/work/home",
-		"TMPDIR=/tmp",
-		"LANG=C",
-		// Helpers are race-instrumented test binaries; do not sleep on every CLI exit.
-		"GORACE=atexit_sleep_ms=0",
-		"XDG_CONFIG_HOME=/work/home/config",
-		"XDG_STATE_HOME=/work/home/state",
-		"XDG_CACHE_HOME=/work/home/cache",
-		"BEEKEEPER_CONFIG=/work/config.yaml",
-		"BEEKEEPER_LOADAVG=0.10 0.10 0.10",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_ALLOW_PROTOCOL=file:https",
-		"GIT_EXEC_PATH=/work/bin",
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_AUTHOR_NAME=Test",
-		"GIT_AUTHOR_EMAIL=test@example.invalid",
-		"GIT_COMMITTER_NAME=Test",
-		"GIT_COMMITTER_EMAIL=test@example.invalid",
-		"GOPROXY=off",
-		"GOSUMDB=off",
-	}
-}
