@@ -80,6 +80,10 @@ type Given struct {
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
+	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
+	// that answers gh and the API base variables (docs/scenarios-github.md).
+	// Its repositories get origins like Repositories.
+	GitHub *fakegithub.Given `yaml:"github"`
 	// Harness scripts the workers the fake harnesses run and sets what
 	// their usage probes report.
 	Harness harness.Given `yaml:"harness"`
@@ -88,10 +92,6 @@ type Given struct {
 	Hosts []harness.Host `yaml:"hosts"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
-	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
-	// that answers gh and the API base variables (docs/scenarios-github.md).
-	// Its repositories get origins like Repositories.
-	GitHub *fakegithub.Given `yaml:"github"`
 	// Tools are further programs on the desk's PATH (go, golangci-lint):
 	// fakes like Fakes, which only given.calls answer.
 	Tools []string `yaml:"tools"`

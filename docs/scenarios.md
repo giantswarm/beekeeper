@@ -76,8 +76,9 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
 3. The driver writes the desk: `/work/config.yaml` (a base configuration
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
-   `given.repositories` under `/work/origins/<owner>/<name>.git`, and a
-   root for each of `given.hosts` (see [Execution hosts](#execution-hosts)).
+   `given.repositories` and of `given.github`'s repositories under
+   `/work/origins/<owner>/<name>.git`, and a root for each of
+   `given.hosts` (see [Execution hosts](#execution-hosts)).
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -85,10 +86,10 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
    hands each call to the world. The world logs every call in order. A
    call that no `given.calls` entry answers and no fake models (see
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
-   scenario**. Beside it the world serves its clock (see
-   [The clock](#the-clock)), which every process reads. With
-   `given.github`, `gh` and the GitHub API are answered by a model
-   instead: see [The scenario's GitHub](scenarios-github.md).
+   scenario**. With `given.github`, `gh` and the GitHub API are answered
+   by a model instead: see [The scenario's GitHub](scenarios-github.md).
+   Beside it the world serves its clock (see [The clock](#the-clock)),
+   which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -156,9 +157,9 @@ then:
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
-| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
+| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
 
 ### Expectations
@@ -198,8 +199,10 @@ The world's time starts at `given.clock.start`, or at the system's time. It
 runs as the system's does, so a pass that waits a second waits a second.
 `advance` moves it forward. The step returns once every process has fired
 the timers, tickers and sleeps that are then due and acknowledged the new
-time. A process started later reads the advanced time. A ticker that missed
-several periods ticks once, as Go's does.
+time. A process that ends before it acknowledges is not waited for; one
+that does not acknowledge within 10 seconds fails the step, named by its
+PID and command line. A process started later reads the advanced time. A
+ticker that missed several periods ticks once, as Go's does.
 
 ```yaml
 - advance: 30m                       # at once
@@ -317,9 +320,10 @@ record and transcript, and the reset times a usage probe reports.
 `given.clock.start` and `advance` do not move those yet.
 
 Not modeled yet: a message to a running `claude` session (`agents wake` of a
-live background session), the desktop app, and `gh`, which the fake GitHub
-of https://github.com/giantswarm/beekeeper/issues/3790 answers; until then a
-scenario answers the `gh` calls of its flow in `given.calls`.
+live background session) and the desktop app. `gh` is not a fake of this
+package: with `given.github`, [the scenario's GitHub](scenarios-github.md)
+answers it; without, a scenario answers the `gh` calls of its flow in
+`given.calls`. A host's pinned `gh` answers only the host's probes itself.
 
 ### Worker scripts
 

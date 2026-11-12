@@ -12,7 +12,8 @@ Everything that reaches GitHub in the scenario reaches that one server:
   renders gh's output and exit codes for a pipe: the body as it is, `--jq`, `--include`,
   `--paginate`, `gh: Not Found (HTTP 404)` with exit 1, `gh: HTTP 304` with exit 1.
 - **Code that calls HTTP itself** is pointed at the server's loopback port through
-  `BEEKEEPER_GITHUB_API`, the only API base variable beekeeper has today.
+  its API base variables: `BEEKEEPER_GITHUB_API` (the budget probes and the loop's checks) and
+  `BEEKEEPER_GITHUB_API_URL` (`app create`).
 
 So budgets, ETags, faults and the call log hold for both. Nothing is matched on a joined argument
 string: a call is parsed (gh's flags, the REST route, the GraphQL document) and answered from the
@@ -94,9 +95,14 @@ on a pull request declare them instead.
 ## Callers and budgets
 
 Every call is logged with its **caller**: the name of the `run` or `background` step whose process
-made it. The driver sets `BEEKEEPER_SCENARIO_CALLER` for the fake `gh` and names the caller in the
-API base (`http://127.0.0.1:<port>/caller/<name>`). A fake harness gives a worker its own caller
-with `Server.Env`.
+made it (`step-<i>`, its index in `when`, for an unnamed `run`). The driver sets
+`BEEKEEPER_SCENARIO_CALLER` for the fake `gh` and names the caller in the API base
+(`http://127.0.0.1:<port>/caller/<name>`). What a step's process starts in its own environment
+inherits both: a worker session the `loop` step starts spends as `loop`. A transient unit of the
+fake `systemd-run` (without `--scope`) and a command on an execution host start from the desk's
+environment and carry neither: their `gh` calls have no caller, and code there that calls HTTP
+itself is not pointed at the server. A caller of a worker's own, and the server for units and
+hosts, are the follow-up https://github.com/giantswarm/beekeeper/issues/3844.
 
 The server keeps GitHub's buckets: `core` and `graphql` (5000 points an hour), `search` (30 a
 minute) and `code_search` (10 a minute). Every answer carries the `X-RateLimit-*` headers of its

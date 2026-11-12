@@ -397,8 +397,8 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
-		// GitHub's time is the world's: a review is dated on the clock the
-		// desk dates its parks and goes on.
+		// The world's clock: budgets reset and fault windows close as
+		// advance moves it, and reset times agree with the candidate's.
 		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
@@ -567,10 +567,6 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		}
 	case KindWaitFor:
 		sr.Failures = append(sr.Failures, d.waitFor(ctx, st.WaitFor)...)
-	case KindAdvance:
-		var failures []string
-		sr.Args, failures = d.advance(ctx, st.Advance)
-		sr.Failures = append(sr.Failures, failures...)
 	case KindGitHub, KindFault:
 		var err error
 		switch {
@@ -584,6 +580,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	case KindHost:
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
