@@ -60,8 +60,8 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_CONFIG":    configFile,
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
-		harness.SocketEnv:     harness.DefaultSocket,
 		clock.Env:             clockSocket,
+		harness.SocketEnv:     harness.DefaultSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
 		"GIT_ALLOW_PROTOCOL":  "file:https",
@@ -116,9 +116,9 @@ func (p *proc) stop() {
 type driver struct {
 	s     *Scenario
 	world *World
+	clock *clock.Server
 	// fakes is the world of the fake harnesses, units and hosts.
 	fakes *harness.World
-	clock *clock.Server
 	res   *Result
 	procs map[string]*proc
 	views map[string]View
@@ -365,7 +365,8 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
-		// Budget windows, faults and timestamps run on the world's clock.
+		// The world's clock: budgets reset and fault windows close as
+		// advance moves it, and reset times agree with the candidate's.
 		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
@@ -549,14 +550,14 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
-	case KindHost:
-		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
-			sr.Failures = append(sr.Failures, err.Error())
-		}
 	case KindAdvance:
 		var failures []string
 		sr.Args, failures = d.advance(ctx, st.Advance)
 		sr.Failures = append(sr.Failures, failures...)
+	case KindHost:
+		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
+			sr.Failures = append(sr.Failures, err.Error())
+		}
 	}
 	dur := time.Since(started)
 	sr.Duration = dur

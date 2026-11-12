@@ -129,7 +129,7 @@ type Response struct {
 }
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// advance, host, github and fault, with optional expectations of its own
+// advance, github, fault and host, with optional expectations of its own
 // response.
 type Step struct {
 	Name string `yaml:"name"`
@@ -142,15 +142,15 @@ type Step struct {
 	Stop string `yaml:"stop"`
 	// WaitFor polls its expectations until they hold, bounded.
 	WaitFor *WaitFor `yaml:"wait_for"`
+	// Advance moves the world's clock forward.
+	Advance *Advance `yaml:"advance"`
 	// GitHub is something that happens on the scenario's GitHub; Fault
 	// arms or clears one of its faults.
 	GitHub *fakegithub.Step      `yaml:"github"`
 	Fault  *fakegithub.FaultStep `yaml:"fault"`
 	// Host changes an execution host's faults.
-	Host *harness.HostStep `yaml:"host"`
-	// Advance moves the world's clock forward.
-	Advance *Advance `yaml:"advance"`
-	Expect  []Expect `yaml:"expect"`
+	Host   *harness.HostStep `yaml:"host"`
+	Expect []Expect          `yaml:"expect"`
 }
 
 // Run is a call of the candidate binary.
@@ -174,10 +174,10 @@ const (
 	KindBackground = "background"
 	KindStop       = "stop"
 	KindWaitFor    = "wait_for"
+	KindAdvance    = "advance"
 	KindGitHub     = "github"
 	KindFault      = "fault"
 	KindHost       = "host"
-	KindAdvance    = "advance"
 )
 
 // Kind is the step's kind, "" unless exactly one is set.
@@ -195,6 +195,9 @@ func (s Step) Kind() string {
 	if s.WaitFor != nil {
 		kinds = append(kinds, KindWaitFor)
 	}
+	if s.Advance != nil {
+		kinds = append(kinds, KindAdvance)
+	}
 	if s.GitHub != nil {
 		kinds = append(kinds, KindGitHub)
 	}
@@ -203,9 +206,6 @@ func (s Step) Kind() string {
 	}
 	if s.Host != nil {
 		kinds = append(kinds, KindHost)
-	}
-	if s.Advance != nil {
-		kinds = append(kinds, KindAdvance)
 	}
 	if len(kinds) != 1 {
 		return ""
@@ -454,7 +454,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, advance, host, github and fault", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, github, fault and host", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {
@@ -535,10 +535,10 @@ var stepObserves = map[string][]string{
 	KindBackground: {"duration"},
 	KindStop:       {"duration"},
 	KindWaitFor:    {"duration"},
+	KindAdvance:    {"duration"},
 	KindGitHub:     {"duration"},
 	KindFault:      {"duration"},
 	KindHost:       {"duration"},
-	KindAdvance:    {"duration"},
 }
 
 func (s *Scenario) validateExpect(where string, e Expect, stepKind string, background []string, inThen bool) []error {

@@ -8,6 +8,11 @@ issue: https://github.com/giantswarm/beekeeper/issues/3790
 flow: github
 tags: [github, budget, fault]
 timeout: 30s
+control:
+  none: >
+    states budget --gate on a secondary rate limit with Retry-After, which
+    main already has; this pull request changes no beekeeper code, only adds
+    the fake GitHub's fault that answers it
 
 given:
   desk:

@@ -29,11 +29,12 @@ const (
 	viaHTTP = "http"
 )
 
-// APIEnv is the API base variable of code that calls GitHub over HTTP
-// itself (internal/github.APIURL), and CallerEnv names the caller of a
-// process to the fake gh.
+// APIEnv and APIURLEnv are the API base variables of code that calls
+// GitHub over HTTP itself (internal/github.APIURL; app create), and
+// CallerEnv names the caller of a process to the fake gh.
 const (
 	APIEnv    = "BEEKEEPER_GITHUB_API"
+	APIURLEnv = "BEEKEEPER_GITHUB_API_URL"
 	CallerEnv = "BEEKEEPER_SCENARIO_CALLER"
 )
 
@@ -586,7 +587,8 @@ func (s *Server) Close() error {
 func (s *Server) Env(caller string) map[string]string {
 	env := map[string]string{CallerEnv: caller}
 	if s.url != "" {
-		env[APIEnv] = s.url + callerPrefix + url.PathEscape(caller)
+		base := s.url + callerPrefix + url.PathEscape(caller)
+		env[APIEnv], env[APIURLEnv] = base, base
 	}
 	return env
 }

@@ -38,7 +38,7 @@ func TestParseRejects(t *testing.T) {
 		{"no when", "name: x\nflow: smoke\nthen:\n  - calls: {max: 0}\n", "no when"},
 		{"unbounded wait_for", strings.Replace(validScenario, "run: {args: [version]}", "wait_for: {expect: [{calls: {min: 1}}]}", 1), "without a timeout is unbounded"},
 		{"wait_for beyond the scenario", "name: x\nflow: smoke\ntimeout: 5s\nwhen:\n  - wait_for: {timeout: 10s, expect: [{calls: {min: 1}}]}\nthen:\n  - calls: {min: 1}\n", "exceeds the scenario's"},
-		{"two step kinds", strings.Replace(validScenario, "run: {args: [version]}", "run: {args: [version]}\n    stop: x", 1), "exactly one of run, background, stop, wait_for, advance, host, github and fault"},
+		{"two step kinds", strings.Replace(validScenario, "run: {args: [version]}", "run: {args: [version]}\n    stop: x", 1), "exactly one of run, background, stop, wait_for, advance, github, fault and host"},
 		{"expectation without a kind", strings.Replace(validScenario, "exit: 0", "step: version", 1), "exactly one of exit"},
 		{"two expectation kinds", strings.Replace(validScenario, "exit: 0", "{exit: 0, duration: {max: 1s}}", 1), "exactly one of exit"},
 		{"expectation the step does not observe", "name: x\nflow: smoke\nwhen:\n  - {name: b, background: {args: [watch]}}\nthen:\n  - exit: 0\n", "exit is not observed for a background step"},

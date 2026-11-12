@@ -4,6 +4,7 @@ package clock
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -41,6 +42,48 @@ func connect(t *testing.T, path string) *remote {
 	}
 	t.Cleanup(func() { _ = r.conn.Close() })
 	return r
+}
+
+// process is a process on the world's clock that speaks the protocol
+// itself, so that a test decides whether and when it answers and ends.
+type process struct {
+	c   net.Conn
+	enc *json.Encoder
+	dec *json.Decoder
+}
+
+// connectProcess connects a process on the world at path as pid running
+// command and reads the world's first offset.
+func connectProcess(t *testing.T, path string, pid int, command string) *process {
+	t.Helper()
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	p := &process{c: c, enc: json.NewEncoder(c), dec: json.NewDecoder(c)}
+	if err := p.enc.Encode(hello{PID: pid, Command: command}); err != nil {
+		t.Fatal(err)
+	}
+	var first offset
+	if err := p.dec.Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// endOnAdvance reads the world's next offset and ends the process; with
+// fired it first acknowledges the offset as having fired that many timers.
+func (p *process) endOnAdvance(fired int) error {
+	defer func() { _ = p.c.Close() }()
+	var o offset
+	if err := p.dec.Decode(&o); err != nil {
+		return fmt.Errorf("reading the advance: %w", err)
+	}
+	if fired == 0 {
+		return nil
+	}
+	return p.enc.Encode(ack{Seq: o.Seq, Fired: fired})
 }
 
 // near fails unless got is within a second after want: the world's time
@@ -238,44 +281,44 @@ func TestAdvanceDoesNotWaitForAProcessThatEnded(t *testing.T) {
 	}
 }
 
-// A process that ends while an advance waits for its acknowledgement is
-// skipped at once: the advance holds the server's lock meanwhile, and the
-// ended process must not need that lock to be known as gone. A short-lived
-// child of a loop under an hour of advances ends this way sooner or later
-// (https://github.com/giantswarm/beekeeper/issues/3795).
-func TestAdvanceSkipsAProcessThatEndsUnacknowledged(t *testing.T) {
+// A process that ends after the world sent it the new time does not hold
+// the advance up: it counts if it acknowledged before it ended and is
+// skipped at once otherwise, never waited for until ackTimeout
+// (https://github.com/giantswarm/beekeeper/issues/3830).
+func TestAdvanceDoesNotWaitForAProcessThatEndsDuringIt(t *testing.T) {
 	s, path := serve(t)
 	answering := connect(t, path)
-	c, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.NewEncoder(c).Encode(hello{PID: 4343, Command: "ending"}); err != nil {
-		t.Fatal(err)
-	}
-	dec := json.NewDecoder(c)
-	var first offset
-	if err := dec.Decode(&first); err != nil {
-		t.Fatal(err)
-	}
-	// It reads the advance and ends without an acknowledgement.
-	go func() {
-		var next offset
-		_ = dec.Decode(&next)
-		_ = c.Close()
-	}()
+	ends := connectProcess(t, path, 4242, "ends")
+	acksAndEnds := connectProcess(t, path, 4343, "acks and ends")
+	ended := make(chan error, 2)
+	go func() { ended <- ends.endOnAdvance(0) }()
+	go func() { ended <- acksAndEnds.endOnAdvance(3) }()
 	began := time.Now()
 	a, err := s.Advance(time.Minute)
+	took := time.Since(began)
+	for range 2 {
+		if err := <-ended; err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err != nil {
-		t.Fatalf("the advance failed on a process that ended: %v", err)
+		t.Fatalf("the advance waited for a process that ended: %v", err)
 	}
-	if took := time.Since(began); took > ackTimeout/2 {
-		t.Fatalf("the advance waited %s for a process that had ended", took)
+	if took >= ackTimeout/2 {
+		t.Fatalf("the advance took %s, waiting for a process that ended", took)
 	}
-	if a.Processes != 1 {
-		t.Fatalf("the answering process alone acknowledges: %+v", a)
+	if a.Processes != 2 || a.Fired != 3 {
+		t.Fatalf("advance %+v, want 2 processes (the answering one and the one that acknowledged before it ended) and 3 fired", a)
 	}
 	near(t, "the answering process", answering.now(), start.Add(time.Minute))
+	for deadline := time.Now().Add(10 * time.Second); len(s.Processes()) > 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("ended processes stayed connected: %q", s.Processes())
+		}
+	}
+	if a := advance(t, s, time.Minute); a.Processes != 1 {
+		t.Fatalf("the next advance was acknowledged by %d processes, want the answering one: %+v", a.Processes, a)
+	}
 }
 
 func TestAdvanceNamesAProcessThatDoesNotAnswer(t *testing.T) {
@@ -284,18 +327,7 @@ func TestAdvanceNamesAProcessThatDoesNotAnswer(t *testing.T) {
 	t.Cleanup(func() { ackTimeout = old })
 	s, path := serve(t)
 	answering := connect(t, path)
-	c, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = c.Close() }()
-	if err := json.NewEncoder(c).Encode(hello{PID: 4242, Command: "stuck"}); err != nil {
-		t.Fatal(err)
-	}
-	var first offset
-	if err := json.NewDecoder(c).Decode(&first); err != nil {
-		t.Fatal(err)
-	}
+	connectProcess(t, path, 4242, "stuck")
 	a, err := s.Advance(time.Minute)
 	if err == nil {
 		t.Fatal("an advance nobody answered succeeded")

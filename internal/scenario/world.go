@@ -59,14 +59,14 @@ type CallRecord struct {
 	// Answer is the index of the given call that answered it, -1 for none.
 	Answer   int  `json:"answer"`
 	Answered bool `json:"answered"`
-	// Handler says the program's handler answered it, not a given call;
-	// Reason why nothing answered it, when a handler said.
-	Handler bool   `json:"handler,omitempty"`
-	Reason  string `json:"reason,omitempty"`
 	// Modeled says the call's fake answered it from its model of the
 	// program, no given call; its exit code is the fake's own.
 	Modeled bool `json:"modeled,omitempty"`
 	Exit    int  `json:"exit"`
+	// Handler says the program's handler answered it, not a given call;
+	// Reason why nothing answered it, when a handler said.
+	Handler bool   `json:"handler,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // Line is the call as a command line, shortened for reports.
@@ -152,7 +152,8 @@ func matchArgs(pats []*regexp.Regexp, args []string) bool {
 }
 
 // Answer answers one call and logs it: with the first given call that
-// matches, else with the program's handler.
+// matches, else a modeled call with its fake's model, else with the
+// program's handler.
 func (w *World) Answer(req CallRequest) CallResponse {
 	w.inFlight.Add(1)
 	defer w.inFlight.Add(-1)
@@ -168,6 +169,10 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit, Given: true}
 		break
 	}
+	if !rec.Answered && req.Modeled {
+		rec.Answered, rec.Modeled = true, true
+		resp = CallResponse{}
+	}
 	handler := w.handlers[req.Program]
 	w.mu.Unlock()
 	if !rec.Answered && handler != nil {
@@ -175,14 +180,9 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		// are answered meanwhile.
 		if got, answered, reason := handler(req); answered {
 			resp, rec.Answered, rec.Handler = got, true, true
-			resp.Given = true
 		} else {
 			rec.Reason = reason
 		}
-	}
-	if !rec.Answered && req.Modeled {
-		rec.Answered, rec.Modeled = true, true
-		resp = CallResponse{}
 	}
 	if !rec.Answered {
 		resp.Stderr = fmt.Sprintf("scenario world: no given call answers %s\n", rec.Line())
