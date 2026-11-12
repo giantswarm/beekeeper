@@ -599,13 +599,18 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			return result, refused("%s", reason)
 		}
 		// Reconcile a lost create response by the exact owned branch. An existing
-		// PR takes only the title and body this publication names.
-		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
+		// PR takes only the title and body this publication names. A
+		// continuation's PR is the one it was assigned, read by its number: it
+		// is never created, and never another PR of the same branch.
+		var pulls []publicationPull
+		var listErr error
+		if r.Request.PublicationPR != "" {
+			pulls, listErr = assignedContinuationPull(ctx, r.Request.Repository, r.Request.PublicationPR, result.Branch)
+		} else {
+			pulls, listErr = ownedPulls(ctx, r.Request.Repository, result.Branch)
+		}
 		if listErr != nil {
 			return result, listErr
-		}
-		if r.Request.PublicationPR != "" && (len(pulls) != 1 || pulls[0].URL != r.Request.PublicationPR) {
-			return result, refused("assigned continuation pull request is unavailable; no new PR will be created")
 		}
 		if len(pulls) == 1 && pulls[0].State != github.Open {
 			return result, refused("owned pull request is already closed; a new execution is required")

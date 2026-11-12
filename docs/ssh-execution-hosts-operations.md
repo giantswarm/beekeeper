@@ -888,8 +888,10 @@ existing PR's head and keeps its branch and PR, even with a new execution ID.
 The coordinator pins that assignment separately from the source ref: naming a
 branch or mentioning a PR in a brief does not grant write access. Closed PRs,
 fork branches and ambiguous repair assignments are refused. A continuation uses
-`beekeeper agents publish` without title/body flags and cannot create another PR;
-
+`beekeeper agents publish` without title/body flags. Its publication reads the
+assigned PR by its number and pushes to that PR's branch; it never creates a PR.
+If that PR was closed or moved to another branch meanwhile, the publication is
+refused and nothing is pushed. Beyond the continuation's assignment,
 a worker cannot select a repository, remote, destination ref, default branch,
 force option or arbitrary GitHub API operation. The coordinator resolves the
 repository's default branch and creates the PR against it. Both PR text and
@@ -900,12 +902,21 @@ for patch deletions. PR text cannot ping accounts.
 The first publication requires a title and body file. Once a PR exists, review
 fixes need only `beekeeper agents publish`: the same branch advances by a normal
 fast-forward push and the existing PR is returned without changing its text or
-discussion. After merge, the loop closes older open execution PRs recorded for
-the exact same task and repository as superseded. Closed PRs cannot be reused. For a lost push, create or callback reply,
+discussion. Closed PRs cannot be reused. For a lost push, create or callback reply,
 repeat the publication: Git rejects history rewrites, and the coordinator looks
 up the exact owned branch before creating a PR. A create attempt is never retried
 blindly. PR editing and commenting continue to use coordinating workflows;
 this command grants no general GitHub API authority.
+
+When a PR merges, the supervisor loop closes the PRs other executions published
+for the same task that are still open, with a comment naming the merged PR. The
+same task means the same repository and an issue both PRs close (a closing
+keyword in the title or body, or GitHub's closing link). Only a PR at the URL and
+on the branch the coordinator recorded for an execution's publication is closed:
+a shared title, brief line or mere mention of an issue is no task identity, and a
+PR no execution published is never touched. The merge does not wait for this
+cleanup. When GitHub cannot be read or a close fails, the loop logs `SUPERVISOR
+SUPERSEDED PULLS of <PR> stay open` and the merge goes on.
 
 To bring the latest default branch into the workspace before publishing again
 (before the desk review approves the PR; after approval only the merge moves the

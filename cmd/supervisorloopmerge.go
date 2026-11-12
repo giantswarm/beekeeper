@@ -465,13 +465,17 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		mp.Ref = cmp.Or(mp.Ref, act.Ref)
 		mp.URL = cmp.Or(mp.URL, act.URL)
-		if err := closeDuplicateExecutionPulls(ctx, st, mp.URL); err != nil {
-			return "", err
-		}
 		closed, closeErr := closeMergedPullIssues(ctx, st, mp)
 		l.recordClosedPullIssues(closed)
 		if closeErr != nil {
 			return "", closeErr
+		}
+		// A safety net beside the merge, never a hold on it: a duplicate
+		// left open is said, and the merge's own wake goes on.
+		if superseded, err := closeDuplicateExecutionPulls(ctx, st, mp); err != nil {
+			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR SUPERSEDED PULLS of %s stay open: %v\n", mp.URL, err)
+		} else if len(superseded) > 0 {
+			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR SUPERSEDED by %s: closed %s\n", mp.URL, strings.Join(superseded, ", "))
 		}
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
