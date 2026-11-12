@@ -7,7 +7,7 @@ description: >
   merge until the release that
   carries the merge commit is out. The pass after the release starts the
   third issue and still holds the fourth. Every delivery step is recorded:
-  implementing, ci, reviewing, fixing, releasing and done.
+  implementing, ci, review-queued, fixing, releasing and done.
   Moved from internal/loopworkflow TestSupervisorWorkflowDeliveryLimit.
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: workflow
@@ -176,6 +176,7 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
+      - output: {contains: ["SUPERVISOR REFILL started 1"]}
   - name: stats
     run: {args: [delivery, --stats, --json]}
 
@@ -186,4 +187,4 @@ then:
   - github: {issue: {repo: example/app, number: 4, state: open, board: Ready}}
   - {step: stats, exit: 0}
   - {step: stats, json_path: {path: released, equals: 1}}
-  - {step: stats, output: {contains: ['"step": "implementing"', '"step": "ci"', '"step": "reviewing"', '"step": "fixing"', '"step": "releasing"']}}
+  - {step: stats, output: {contains: ['"step": "implementing"', '"step": "ci"', '"step": "review-queued"', '"step": "fixing"', '"step": "releasing"']}}
