@@ -72,12 +72,15 @@ given:
               - beekeeper: [agents, idle, --done, --report, "Desk review (opus): changes requested https://github.com/example/app/pull/2", --problem, none]
   calls:
     # What the watch reads beside GitHub: no GitHub App login beside the gh
-    # login, and an empty kernel journal.
+    # login, and empty journals of the kernel and of systemd-oomd.
     - program: devctl
       args: [auth, status]
       respond: {stdout: '{"github":{"present":false}}'}
     - program: journalctl
       args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
       respond: {stdout: ""}
 
 when:

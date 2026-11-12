@@ -35,12 +35,15 @@ given:
           - outcome: hang
   calls:
     # What the watch reads beside GitHub: no GitHub App login beside the gh
-    # login, and an empty kernel journal.
+    # login, and empty journals of the kernel and of systemd-oomd.
     - program: devctl
       args: [auth, status]
       respond: {stdout: '{"github":{"present":false}}'}
     - program: journalctl
       args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
       respond: {stdout: ""}
 
 when:
