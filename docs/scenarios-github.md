@@ -101,9 +101,14 @@ on a pull request declare them instead.
 ## Callers and budgets
 
 Every call is logged with its **caller**: the name of the `run` or `background` step whose process
-made it. The driver sets `BEEKEEPER_SCENARIO_CALLER` for the fake `gh` and names the caller in the
-API base (`http://127.0.0.1:<port>/caller/<name>`). A fake harness gives a worker its own caller
-with `Server.Env`.
+made it (`step-<i>`, its index in `when`, for an unnamed `run`). The driver sets
+`BEEKEEPER_SCENARIO_CALLER` for the fake `gh` and names the caller in the API base
+(`http://127.0.0.1:<port>/caller/<name>`). What a step's process starts in its own environment
+inherits both: a worker session the `loop` step starts spends as `loop`. A transient unit of the
+fake `systemd-run` (without `--scope`) and a command on an execution host start from the desk's
+environment and carry neither: their `gh` calls have no caller, and code there that calls HTTP
+itself is not pointed at the server. A caller of a worker's own, and the server for units and
+hosts, are the follow-up https://github.com/giantswarm/beekeeper/issues/3844.
 
 The server keeps GitHub's buckets: `core` and `graphql` (5000 points an hour), `search` (30 a
 minute) and `code_search` (10 a minute). Every answer carries the `X-RateLimit-*` headers of its

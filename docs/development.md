@@ -516,7 +516,8 @@ measured with `beekeeper sessions --json` against the installed release on the s
 
 A long-running command's CPU is profiled where it runs: `BEEKEEPER_CPUPROFILE=<file>` writes the
 process's CPU profile to the file until it exits (a watch, on SIGINT or SIGTERM), for
-`go tool pprof -top -cum <binary> <file>`. Profile a watch against a copy of the state directory
+`go tool pprof -top -cum <binary> <file>`. Only that process profiles: the variable is cleared
+before it starts another beekeeper. Profile a watch against a copy of the state directory
 (`stateDir` in a copy of the configuration, `BEEKEEPER_CONFIG`), so that it takes no line, note or
 timer from the running watches.
 
