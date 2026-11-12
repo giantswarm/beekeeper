@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -623,13 +624,15 @@ type watchClock interface {
 	Timer(d time.Duration) (fire <-chan time.Time, stop func())
 }
 
-// wallClock is the time a watch keeps outside its tests.
+// wallClock is the time a watch keeps outside its tests: the system's, or
+// in a behavioral scenario the world's (internal/clock), so that the loop's
+// own watch polls, and reads the GitHub budget, as the scenario's time moves.
 type wallClock struct{}
 
-func (wallClock) Now() time.Time { return time.Now() }
+func (wallClock) Now() time.Time { return clk.Now() }
 
 func (wallClock) Timer(d time.Duration) (<-chan time.Time, func()) {
-	t := time.NewTimer(d)
+	t := clk.NewTimer(d)
 	return t.C, func() { t.Stop() }
 }
 

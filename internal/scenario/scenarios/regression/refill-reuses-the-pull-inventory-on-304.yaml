@@ -18,8 +18,8 @@ given:
   desk:
     config:
       github: {probeRepo: example/app}
-      # One reading of the watch admits starts for the whole scenario: the
-      # watch keeps the system's time, not the world's.
+      # One reading of the loop's watch admits starts for the whole
+      # scenario: its next one is an hour away.
       watch: {interval: 1h}
       supervisor: {loopInterval: 1m}
   github:
@@ -45,8 +45,18 @@ given:
 when:
   - name: loop
     background: {args: [supervisor, loop]}
-  # 09:00: the first refill reads the repository's pull requests in full
-  # and starts the first item's worker. The second item is blocked.
+  # The loop's first refill runs before its watch has read the GitHub
+  # budget, and starts nothing. The watch's first reading admits starts;
+  # the next refill tick is one loop interval later.
+  - name: admitted
+    wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: tick
+    advance: 1m
+  # 09:01: the refill reads the repository's pull requests in full and
+  # starts the first item's worker. The second item is blocked.
   - name: first
     wait_for:
       timeout: 30s
@@ -55,7 +65,7 @@ when:
         - github: {calls: {path: repos/example/app/pulls, caller: loop, conditional: false, status: 200, min: 1}}
   - name: unblock
     github: {close: {repo: example/app, issue: 3}}
-  # 09:06: the inventory is older than five minutes, so the start of the
+  # 09:07: the inventory is older than five minutes, so the start of the
   # second item asks GitHub again, conditionally.
   - name: later
     advance: 6m

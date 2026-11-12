@@ -19,6 +19,8 @@ given:
   desk:
     config:
       github: {probeRepo: example/app}
+      # One reading of the loop's watch admits starts for the whole
+      # scenario: its next one is an hour away.
       watch: {interval: 1h}
       supervisor: {loopInterval: 1m, fillRetryEvery: 1m}
       capacity: {ceiling: 3, providers: {claude: {ceiling: 3}}}
@@ -55,6 +57,8 @@ when:
       timeout: 30s
       expect:
         - github: {calls: {path: repos/example/slow/pulls, caller: loop, status: 200, min: 1}}
+        # The watch's first reading of the GitHub budget admits starts.
+        - events: {contains: [watch.budget-state]}
   # 09:04: the first item is free and gets its worker, which leaves the
   # refill a fresh inventory of example/app.
   - name: free-first

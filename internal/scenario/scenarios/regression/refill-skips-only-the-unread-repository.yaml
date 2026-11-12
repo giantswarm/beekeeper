@@ -17,6 +17,8 @@ given:
   desk:
     config:
       github: {probeRepo: example/first}
+      # One reading of the loop's watch admits starts for the whole
+      # scenario: its next one is an hour away.
       watch: {interval: 1h}
       supervisor: {loopInterval: 1m}
       capacity: {ceiling: 3, providers: {claude: {ceiling: 3}}}
@@ -48,6 +50,16 @@ given:
 when:
   - name: loop
     background: {args: [supervisor, loop]}
+  # The loop's first refill runs before its watch has read the GitHub
+  # budget, and starts nothing. The watch's first reading admits starts;
+  # the next refill tick is one loop interval later.
+  - name: admitted
+    wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: tick
+    advance: 1m
   - name: refill
     wait_for:
       timeout: 30s

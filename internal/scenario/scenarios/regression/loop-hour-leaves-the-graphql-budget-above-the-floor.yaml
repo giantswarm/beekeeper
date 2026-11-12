@@ -21,7 +21,6 @@ given:
   desk:
     config:
       github: {floor: 1000, probeRepo: example/app}
-      watch: {interval: 1h}
   github:
     repositories:
       - name: example/app
@@ -69,7 +68,9 @@ given:
         pulls:
           - {number: 2, title: "An open pull request in svc-08", head: work-08, author: desk, body: "Closes #1"}
     budgets:
-      graphql: {remaining: 3000}
+      # The desk's other callers have spent 2000 points of this window,
+      # which lasts for the whole scenario.
+      graphql: {remaining: 3000, reset_in: 2h}
     faults:
       - name: unlisted
         match: {path: 'repos/example/svc-[0-9]+/pulls'}
@@ -88,11 +89,11 @@ given:
 when:
   - name: loop
     background: {args: [supervisor, loop]}
-  - name: observed
+  - name: admitted
     wait_for:
       timeout: 30s
       expect:
-        - github: {calls: {path: 'repos/example/svc-[0-9]+/pulls', caller: loop, fault: unlisted, min: 8}}
+        - events: {contains: [watch.budget-state]}
   # 09:00 to 10:00 in steps of a pass interval; each step waits until the
   # work the last one woke is done.
   - name: hour
@@ -102,11 +103,17 @@ when:
       quiet: 50ms
     expect:
       - process: {name: loop, running: true}
+      # Twelve refreshes of eight repositories, not 120 passes of them.
+      - github: {calls: {path: 'repos/example/svc-[0-9]+/pulls', caller: loop, fault: unlisted, min: 8, max: 200}}
+      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 600}}}
+      - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
+  # 10:00: an item becomes free. The refill reads an empty board at most
+  # every 20 minutes, and starts are not held: the item gets its worker.
   - name: free
     github: {close: {repo: example/app, issue: 2}}
-  - name: next-pass
+  - name: next-read
     advance:
-      by: 2m
+      by: 21m
       step: 30s
       quiet: 50ms
   - name: started
@@ -117,9 +124,6 @@ when:
   - stop: loop
 
 then:
-  - {step: hour, duration: {max: 90s}}
+  - {step: hour, duration: {max: 120s}}
   - worker: {name: app 1, turns: 1}
-  # Twelve refreshes of eight repositories, not 120 passes of them.
-  - github: {calls: {path: 'repos/example/svc-[0-9]+/pulls', caller: loop, fault: unlisted, max: 120}}
   - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
-  - github: {budget: {bucket: graphql, caller: loop, spent: {max: 2000}}}
