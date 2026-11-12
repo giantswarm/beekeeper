@@ -1,0 +1,51 @@
+# Keeps README.md a front page and the Markdown in docs/ readable
+# (.github/check-markdown-budget.sh): README.md within its line and byte
+# budget, and no Markdown line in README.md or docs/ over the line limit.
+# The self-test proves the check fails on a README that grows past its budget
+# and on an over-long line in docs/.
+name: markdown-budget
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markdown-budget-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdown-budget:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the README budget and Markdown line lengths
+        run: .github/check-markdown-budget.sh
+      - name: Self-test, a grown README and a long docs line fail
+        run: |
+          set -euo pipefail
+          check="$PWD/.github/check-markdown-budget.sh"
+          grown="$(mktemp -d)"
+          cp -R README.md docs "$grown/"
+          for i in $(seq 1 200); do echo "Another paragraph appended to the README, line $i." >> "$grown/README.md"; done
+          if "$check" "$grown"; then
+            echo "the check passed a README of $(wc -l < "$grown/README.md") lines" >&2
+            exit 1
+          fi
+          long="$(mktemp -d)"
+          cp -R README.md docs "$long/"
+          printf '%0300d\n' 0 >> "$long/docs/overview.md"
+          if "$check" "$long"; then
+            echo "the check passed a docs line of 300 bytes" >&2
+            exit 1
+          fi
+          echo "the check fails a grown README and a long docs line"

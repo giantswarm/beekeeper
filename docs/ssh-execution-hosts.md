@@ -495,17 +495,33 @@ uses the host component as a relay to a bounded synchronous coordinator merge;
 raw host merge commands remain denied. See the operator guide for the supported
 surface, disconnected-stop bound and same-account limitations.
 
-| Acceptance line | First slice | Required follow-up if deferred |
-| --- | --- | --- |
-| Selector and five-operation transport; identity/version/rules validation; local behavior | Selector, lifecycle methods and durable `Message` delivery; local dispatch unchanged | None |
-| Per-host checkouts and workspaces; preserve dirty work; isolated Git metadata | Complete for the Claude adapter | None |
-| User supervisor; stable handle; one registration; interrupted startup recovery | Complete, including before-activation receipt and recovery command | None |
-| Durable ordered acknowledged messaging; identity; notes/reports/parks/resumes; no duplicate process | Durable controls and wake envelopes; ID-bearing harness acceptance, ordered cursors, retained parks and explicit uncertain delivery | None; crash-atomic model execution remains a harness limitation |
-| Shared capacity and holds; reachability; stop acknowledgement/unreachable state | Shared reservations, signed expiring coordinator lease, owned service stop and acknowledged reconciliation | None for new starts; older executions retain explicit-stop behavior |
-| Matching host rules/hooks and bound revocable audited merge authorization | Installed policy and host guards; live coordinator validates, consumes and audits exact-tuple grants before a bounded synchronous merge | None for supported Claude component commands; raw remote merge commands remain denied |
-| Credential-free branch and PR publication | Coordinator callback transfers verified bundles, pushes only an execution-owned branch, recovers its PR and synchronizes the default branch | None for the Claude publication component; see the operations guide for transfer bounds |
-| Separate authentication and ownership restrictions | Complete; no copying credentials or adopting personal sessions | None |
-| Failure tests, operator status and recovery | Lifecycle, messaging, identity, policy, ownership, lease expiry/replay/lost replies and authorization lifecycle tests | Real hosts, paid models and real merges are intentionally excluded from these tests |
+- Selector and five-operation transport; identity/version/rules validation; local behavior
+  - First slice: Selector, lifecycle methods and durable `Message` delivery; local dispatch unchanged
+  - Required follow-up if deferred: None
+- Per-host checkouts and workspaces; preserve dirty work; isolated Git metadata
+  - First slice: Complete for the Claude adapter
+  - Required follow-up if deferred: None
+- User supervisor; stable handle; one registration; interrupted startup recovery
+  - First slice: Complete, including before-activation receipt and recovery command
+  - Required follow-up if deferred: None
+- Durable ordered acknowledged messaging; identity; notes/reports/parks/resumes; no duplicate process
+  - First slice: Durable controls and wake envelopes; ID-bearing harness acceptance, ordered cursors, retained parks and explicit uncertain delivery
+  - Required follow-up if deferred: None; crash-atomic model execution remains a harness limitation
+- Shared capacity and holds; reachability; stop acknowledgement/unreachable state
+  - First slice: Shared reservations, signed expiring coordinator lease, owned service stop and acknowledged reconciliation
+  - Required follow-up if deferred: None for new starts; older executions retain explicit-stop behavior
+- Matching host rules/hooks and bound revocable audited merge authorization
+  - First slice: Installed policy and host guards; live coordinator validates, consumes and audits exact-tuple grants before a bounded synchronous merge
+  - Required follow-up if deferred: None for supported Claude component commands; raw remote merge commands remain denied
+- Credential-free branch and PR publication
+  - First slice: Coordinator callback transfers verified bundles, pushes only an execution-owned branch, recovers its PR and synchronizes the default branch
+  - Required follow-up if deferred: None for the Claude publication component; see the operations guide for transfer bounds
+- Separate authentication and ownership restrictions
+  - First slice: Complete; no copying credentials or adopting personal sessions
+  - Required follow-up if deferred: None
+- Failure tests, operator status and recovery
+  - First slice: Lifecycle, messaging, identity, policy, ownership, lease expiry/replay/lost replies and authorization lifecycle tests
+  - Required follow-up if deferred: Real hosts, paid models and real merges are intentionally excluded from these tests
 
 ## Verification matrix
 
@@ -514,24 +530,22 @@ and host processes, not just mocked method calls. Inject interruption on both
 sides of every durable write and reply. Count harness launches, roster
 registrations, capacity reservations and applied control mutations.
 
-| Case | Test and operator result |
-| --- | --- |
-| Invalid/changed host, key or identity | Fake SSH/loopback key mismatch; fail before clone or launch; `hosts check` identifies the failed check |
-| Unsupported harness/version, missing rules/hook, stale digest | Conformance probes and table tests fail closed; preparation is named, no model process starts |
-| Injection, hostile refs/paths, oversized JSON, unexpected reply | Transport tests show fixed remote command, data only on stdin, bounded output, no workspace escape |
-| Dirty source checkout and isolated workspace | Real temporary repositories, modified/untracked files and symlinks; source work and Git metadata unchanged, workspace independent |
-| Startup before roster registration | Pause before coordinator commit; zero harness launches; fail activation with absent, wrong or replayed cross-execution receipt |
-| Interrupted startup, duplicate start and coordinator restart | Drop prepare/activate replies and race identical requests; recover same handle, one unit, one roster entry; conflicting payload refused |
-| Unit failure or prompt not accepted | No start success; show recorded failure or unknown outcome with `recover` command; preserve workspace |
-| Shell identity preservation | Fake harness executes a login shell and hook process, then note/report/park; coordinator attributes each to the original execution; spoofed identity/`--as` refused |
-| Lost callback acknowledgement | Retry note/report/park with the same key after restart; one mutation and original receipt; no host-local fallback note |
-| Transport interruption during work or logs | Unit continues, task unchanged, reachability unreachable; logs resume at cursor; inspect/recover never launch |
-| Duplicate/out-of-order messages and lost acceptance | Full message follow-up restarts both sides around store/accept/ack; one accepted envelope per ID in sequence, uncertain consumption visible |
-| Unreachable host during stop | Durable pending stop, nonzero result, capacity retained; reconnect retries same stop; termination acknowledged before freeing reservation |
-| Shared subscription and simultaneous starts | Two fake hosts sharing a provider; one usage reading and aggregate busy count; final slot reserved once; stale usage/host metrics and holds refuse |
-| Stale/missing authorization | Slice 1 refuses every remote merge; full authorization tests wrong host/execution/repository/PR/head, expiry, revocation, moved head and unreachable authority |
-| Personal sessions coexist | Seed unrelated unit/conversation and same-name host entry; inspect/stop/archive never touch them; local discovery cannot replace an unreachable owned worker |
-| Local regression and portability | Existing start/wake/park/capacity suites unchanged; full `make test`, lint and platform build checks from `docs/development.md` through `beekeeper run` |
+- Invalid/changed host, key or identity: Fake SSH/loopback key mismatch; fail before clone or launch; `hosts check` identifies the failed check
+- Unsupported harness/version, missing rules/hook, stale digest: Conformance probes and table tests fail closed; preparation is named, no model process starts
+- Injection, hostile refs/paths, oversized JSON, unexpected reply: Transport tests show fixed remote command, data only on stdin, bounded output, no workspace escape
+- Dirty source checkout and isolated workspace: Real temporary repositories, modified/untracked files and symlinks; source work and Git metadata unchanged, workspace independent
+- Startup before roster registration: Pause before coordinator commit; zero harness launches; fail activation with absent, wrong or replayed cross-execution receipt
+- Interrupted startup, duplicate start and coordinator restart: Drop prepare/activate replies and race identical requests; recover same handle, one unit, one roster entry; conflicting payload refused
+- Unit failure or prompt not accepted: No start success; show recorded failure or unknown outcome with `recover` command; preserve workspace
+- Shell identity preservation: Fake harness executes a login shell and hook process, then note/report/park; coordinator attributes each to the original execution; spoofed identity/`--as` refused
+- Lost callback acknowledgement: Retry note/report/park with the same key after restart; one mutation and original receipt; no host-local fallback note
+- Transport interruption during work or logs: Unit continues, task unchanged, reachability unreachable; logs resume at cursor; inspect/recover never launch
+- Duplicate/out-of-order messages and lost acceptance: Full message follow-up restarts both sides around store/accept/ack; one accepted envelope per ID in sequence, uncertain consumption visible
+- Unreachable host during stop: Durable pending stop, nonzero result, capacity retained; reconnect retries same stop; termination acknowledged before freeing reservation
+- Shared subscription and simultaneous starts: Two fake hosts sharing a provider; one usage reading and aggregate busy count; final slot reserved once; stale usage/host metrics and holds refuse
+- Stale/missing authorization: Slice 1 refuses every remote merge; full authorization tests wrong host/execution/repository/PR/head, expiry, revocation, moved head and unreachable authority
+- Personal sessions coexist: Seed unrelated unit/conversation and same-name host entry; inspect/stop/archive never touch them; local discovery cannot replace an unreachable owned worker
+- Local regression and portability: Existing start/wake/park/capacity suites unchanged; full `make test`, lint and platform build checks from `docs/development.md` through `beekeeper run`
 
 Operator recovery always begins with `agents inspect`, then `agents recover`
 or `agents hosts sync`. These reconcile existing identities and pending

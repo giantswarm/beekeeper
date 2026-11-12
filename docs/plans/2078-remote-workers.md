@@ -195,13 +195,21 @@ proof is additional evidence, not a substitute. CI is the full-check owner.
 Each implementation worker records its published head, focused tests and residual
 risk before desk review; each live proof names the installed release and host.
 
-| Milestone | Hosts | Required evidence |
-| --- | --- | --- |
-| First usable Codex | One leased host | Guarded tools, valid policy after repeated starts, GitHub read/push/PR, same-thread CI park/wake, independent review, coordinator merge |
-| Current configuration | Each configured host | Changed coordinator rule/skill reaches next start; expected manifest matches; approved MCP tool works; unsupported required capability refuses admission |
-| Lifecycle and cleanup | Each configured host | Terminal success/stop/crash, dirty-work recovery, parked-worker retention, bounded revocation retry, before/after resource inventory and clean hosts check |
-| Fleet parity | host-a, host-c, host-b | Loop places real Codex board work on each host in a repository beyond desk/beekeeper, repository tests pass, PR reviewed/merged, resources retired |
-| Epic completion | All configured supported harnesses | Claude acceptance retained, remaining harness proofs linked, installer fresh/rerun proof, workarounds removed only after replacement behavior is proven |
+- First usable Codex
+  - Hosts: One leased host
+  - Required evidence: Guarded tools, valid policy after repeated starts, GitHub read/push/PR, same-thread CI park/wake, independent review, coordinator merge
+- Current configuration
+  - Hosts: Each configured host
+  - Required evidence: Changed coordinator rule/skill reaches next start; expected manifest matches; approved MCP tool works; unsupported required capability refuses admission
+- Lifecycle and cleanup
+  - Hosts: Each configured host
+  - Required evidence: Terminal success/stop/crash, dirty-work recovery, parked-worker retention, bounded revocation retry, before/after resource inventory and clean hosts check
+- Fleet parity
+  - Hosts: host-a, host-c, host-b
+  - Required evidence: Loop places real Codex board work on each host in a repository beyond desk/beekeeper, repository tests pass, PR reviewed/merged, resources retired
+- Epic completion
+  - Hosts: All configured supported harnesses
+  - Required evidence: Claude acceptance retained, remaining harness proofs linked, installer fresh/rerun proof, workarounds removed only after replacement behavior is proven
 
 An unreachable host is unknown, never a clean audit. A closed issue, successful
 start or passing version probe alone is insufficient. Retained recovery artifacts

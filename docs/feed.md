@@ -62,14 +62,12 @@ may have aged out unread. Through muster a client reads the feed with `call_tool
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `id` | A decimal string of 19 digits that only grows, across restarts too: sorted as text or as a number, it orders the events. A reader prints the events whose id is above the last one it printed. |
-| `kind` | The verb, `<area>.<what>`: `lease.claim`, `lease.release`, `hold.set`, `note.add`, `note.answer`, `agents.register`, `message.expired`, … |
-| `subject` | The record the event concerns, `<Kind>/<name>`; a team's namespace (`Namespace/beekeeper-<team>`) for an event without one, such as `message.expired`. |
-| `actor` | Who acted: the agent's name, its person (the verified email), team and host. |
-| `time` | When, RFC 3339 in UTC. |
-| `line` | The event as the local watch and log print it, without the time. |
+- `id`: A decimal string of 19 digits that only grows, across restarts too: sorted as text or as a number, it orders the events. A reader prints the events whose id is above the last one it printed.
+- `kind`: The verb, `<area>.<what>`: `lease.claim`, `lease.release`, `hold.set`, `note.add`, `note.answer`, `agents.register`, `message.expired`, …
+- `subject`: The record the event concerns, `<Kind>/<name>`; a team's namespace (`Namespace/beekeeper-<team>`) for an event without one, such as `message.expired`.
+- `actor`: Who acted: the agent's name, its person (the verified email), team and host.
+- `time`: When, RFC 3339 in UTC.
+- `line`: The event as the local watch and log print it, without the time.
 
 Each event is a Kubernetes Event on its subject (`kubectl describe` shows it), carrying its id in
 the annotation `beekeeper.giantswarm.io/id`; after a restart the ids continue above the highest

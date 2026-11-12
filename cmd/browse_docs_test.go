@@ -7,13 +7,13 @@ import (
 )
 
 func TestBrowseDocsRouteXReads(t *testing.T) {
-	readme, err := os.ReadFile("../README.md")
+	page, err := os.ReadFile("../docs/browser.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, text := range map[string]string{
-		"README": string(readme),
-		litHelp:  (&app{}).browseCmd().Long,
+		"docs/browser.md": string(page),
+		litHelp:           (&app{}).browseCmd().Long,
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, line := range strings.Split(text, "\n") {

@@ -1,0 +1,181 @@
+# The supervisor loop
+
+The supervisor loop is the desk's supervisor. It is a user service, not a session: it fills
+the desk from the board, watches pull requests and outages, and routes alerts.
+
+## Filling the desk
+
+With `supervisor.workerBrief` configured, each pass fills the desk to `capacity.ceiling` from the
+next free board items, including after a restart or roster loss without a done report. Each start
+rechecks capacity and stops when its gates refuse, the ceiling is reached, or the board offers
+nothing. The existing done-triggered next-item transition remains active. An empty or failed board
+read waits `supervisor.fillRetryEvery` (5m by default) before retrying, doubled for each further
+empty or failed read in a row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
+one of the changes below, unless `capacity.ceiling` changes or an agent is done or leaves the roster
+first; a park, a resume, a wait or a new task, and the busy count and room they move, do not end it.
+
+An empty or failed read answers the rest of its pass, the done-triggered starts included. `board
+next` exiting 3 with no pick (nothing free) is that empty read: a done event's next start settles on
+it ("the board offers nothing") and is never retried as a failure. No board read runs while the
+GitHub budget is under `github.floor` (REST until its reset, or the last GraphQL reading until its
+reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait
+unsettled and the refill skips its read, without a failure or a pause.
+
+The loop also holds ownership and PR observations under the GraphQL floor or while the reading is
+unknown or stale. Board queries and tracked PR reads check a fresh budget against a durable
+allowance of 1,500 points per hour, keeping 300 points for two identities' budget probes and
+reserving 500 points before each work request. Budget probes run at most every 30 seconds.
+Concurrent timer commands share its lock. An interrupted request keeps its reservation.
+
+Traffic between observations counts conservatively toward the allowance as `shared`; a busy desk can
+therefore pause the loop early. `budget --json` exposes the window, spent points and `board`,
+`pull`, `watch`, `timers`, `pass` and `shared` totals under `loop`. The embedded watch's note and
+parked-PR reads and GitHub timer conditions share the allowance; local timer jobs remain
+independent. `budget` names the stored `gh` login and the configured devctl `app` login, with each
+account's login, counters and reset under JSON `identities`.
+
+Both routes are explicit, independent of the checkout, and cached separately. Each identity retains
+all unexpired observed GraphQL `windows`: a newer high window cannot erase an older drained one, and
+counters cannot increase before their window resets. An older unlabelled low reading is retained as
+`unlabelled` until its reset rather than silently reassigned to a credential. The top-level REST and
+GraphQL readings each select their lowest balance; `budget --gate`, merge admission and the loop use
+those minima.
+
+An unknown or missing previously configured identity holds the gate. Refusals on a higher-balance
+identity also hold it without hiding the lowest counter. Loop spend tracks each identity's counter
+separately; selecting another minimum or a GitHub window resetting never replenishes its own hourly
+allowance. One independent watcher reads the pull requests of active deliveries, parks and sweep
+discoveries in GraphQL batches of up to 60. It polls every 30 seconds while checks or mergeability
+are pending and every two minutes when settled.
+
+Files, body and reviews refresh only when the head or `updatedAt` changes. Errors and rate limits
+are logged once per episode and back off exponentially to ten minutes, respecting `github.floor`.
+The pass never waits on these reads: it consumes dated observations, treating nonterminal ones older
+than five minutes as unknown. `beekeeper supervisor status` shows observation age; `--once` and
+`--dry-run` consume the watcher's saved observations. Terminal pull requests leave the poll set
+after their final read.
+
+Repository backlog inventories use paged GraphQL connections instead of REST search. The loop reuses
+each inventory for five minutes, then checks the latest updated pull in all states with an ETag: an
+unchanged response costs no REST core points and skips the GraphQL inventory. A full refresh runs at
+least hourly; missing validators and failed or incomplete reads never certify an empty backlog.
+Background inventory and orphan scans always share a separate durable allowance of 1,000 REST points
+per window, reserving 50 points before a batch and preserving an enabled `github.floor` for other
+work.
+
+Disabling the shared floor for emergency access does not disable this scan allowance or make scans
+depend on GraphQL admission. Fresh conditional budget samples settle the reservation; an interrupted
+or unreadable sample keeps it. Concurrent callers' spending during a batch counts conservatively.
+Exhausting this allowance holds background scans until reset; tracked PR reads, reviews and merges
+retain their own admission. Supervisor status names the scan hold.
+
+`supervisor loop --dry-run` previews refill intent with read-only capacity
+and board queries and starts nothing.
+
+## Outages and emergencies
+
+`beekeeper fatal status` reports each outage's scope. A red repository default
+branch holds merges into that branch, except the reserved repair PR, and release
+promotions from that repository. Workers in that repository and other repositories
+keep starting; other repositories' merges and releases continue. The repair PR
+keeps its exception through review and worker handoffs, but still requires green
+CI and merge-result validation, independent review, and the normal stop and hold
+checks. Infrastructure outages retain the global ordinary-start barrier. A
+successful probe clears only its own outage; an unreadable probe clears none.
+
+On the person's explicit emergency authorization, the current guide can run `beekeeper emergency on --reason
+"<their verbatim words>" --until 30m`, then `beekeeper emergency merge owner/repo 123`. The merge
+requires GitHub approval and matches the observed head; it bypasses desk review and the merge lane
+while GitHub branch protection still applies. `emergency merge owner/repo 123 --admin --head <sha>`
+is the person's exception for a pull request GitHub keeps at REVIEW_REQUIRED or with an unset review
+decision (no GitHub review required): the current guide interprets the verbatim authorization,
+including a general merge order, and selects one PR and head per invocation.
+
+It must be green, mergeable and up to date with its base at that exact head, with an approved desk
+review or the loop's go. It reads the base's effective rules and requires every required context on
+that head, including any required App identity. It refuses unreadable requirements, classic
+protection, and non-review rules it cannot verify. Ruleset `required_reviewers` is a review
+requirement covered by this exception. `emergency hold set/lift`, `emergency start` (forced capacity
+admission, retaining infrastructure outage barriers), and `emergency capacity capacity.ceiling 4`
+use the same expiring grant.
+
+Every action and result records the quoted reason. Under an active grant, admin merge attempts and
+results also name the full PR URL and exact head, including refused or failed attempts; a moved head
+requires a new invocation and approval or loop go for that head. `beekeeper emergency off` ends it
+early; a successor guide needs a new grant. Direct merge commands and other guide work remain
+guarded.
+
+## Bot pull requests
+
+A green bot pull request the desk did not open is left alone until its login
+is in `supervisor.ownership.bots`. The sweep then lists the bot's open pull
+requests in the repositories the desk owns (no `team`, the team's own by its
+team files, or `supervisor.ownership.review`; never `never`): one without a
+live owner for 15 minutes gets the loop's review, on approval its go, and the
+gated merge follows as for the desk's own. A head the bot moves (a rebase after
+another merge) gets a new review. A worker's park on one requests the same
+review at once.
+
+Independently, `beekeeper emergency auto-install pause --reason "<their words>"`
+pauses the loop's release installation without stopping reviews, merges or
+workers. Resume it with `beekeeper emergency auto-install resume --reason
+"<their words>"`. The pause persists across restarts, until explicitly resumed;
+`beekeeper emergency` shows both controls. An installation already running
+finishes; the pause prevents the next installation step. Manual self-update
+remains available.
+
+## Release proofs after a merge
+
+A worker whose reviewed pull request merges stays reachable for its release proof
+and final `agents idle --done` report. The loop retires an unreported worker only
+after `supervisor.postMergeWindow` (default `2h`) without activity, once its turn
+ends; the log names its merged pull request and missing report. A worker whose
+task spans several pull requests stays while it still serves an open issue
+(`sessions serve`) or is parked on another open pull request; it is retired at
+its own done report, once that work closed, or after `agents.staleAfter`
+without activity, park or wake timer. A completed
+self-update wakes retained workers whose merge commit the installed release
+contains, after the broker and post-install steps finish. Stopping or retiring
+a worker immediately reconciles any gate run that ended with it; a runner
+still alive outside the worker continues under the gate.
+
+## Alerts
+
+The loop routes only relevant alerts, those the watch publishes at
+`alerts.pageSeverity`:
+
+1. The team's own alerts (`alerts.team`) are relevant 24/7: an alert of the
+   team that only `InhibitionOutsideWorkingHours` inhibits is read and routed
+   like any other. With `alerts.team` unset every alert is the desk's.
+2. A silenced alert is ignored, the team's included: beekeeper creates no
+   silence, so every silence is another person's or team's. It gets no
+   summary line and no note.
+
+Everything else, another team's or a team-less alert, gets no note and no
+summary line. A relevant alert nobody owns that a session record explicitly
+waits on (`sessions serve … --waits alert:<name>`) is one decision for the
+guide, which decides whether a worker starts on it; the rest are one
+`SUPERVISOR ALERTS unowned` summary line per pass. A worker parked on an
+alert (`agents park --on alert:<name>`) is woken by it whoever's it is.
+
+## The supervisor loop down
+
+The supervisor is the supervisor loop; no session holds its role. While the loop does not run,
+the standby watch on Linux starts its `beekeeper-supervisor-loop` systemd service again (on
+macOS launchd's `KeepAlive` restarts a failed loop instead), at most once a minute and
+never while `beekeeper stop` stands (`SUPERVISOR LOOP RESTARTED`, or `SUPERVISOR LOOP RESTART
+FAILED` with the reason). Once it has been down two minutes every watch says `SUPERVISOR LOOP
+DOWN` once and the standby sends a critical `no-supervisor` notification, again after
+`notify.repeat` while the gap lasts; the loop back is `SUPERVISOR LOOP BACK`, once. A watch under
+a scratch configuration (`--config`, `BEEKEEPER_CONFIG`) restarts no service.
+
+The loop's service can be alive while release work makes no progress. Both watches also
+evaluate durable merge and worker-start outcomes, at most once a minute. Three consecutive
+failures with the same normalized reason for one operation file one incident for the guide;
+a successful corresponding operation resets that streak, including across restarts.
+An approved, exact-head, green PR selected by the loop's merge policy also files an incident
+once it has waited `watch.throughputAfter` (default `2h`). The report includes the running
+candidate version, oldest eligible wait and public PR URLs. Recovery is filed once.
+Capacity and budget refusals, stops, red CI and pending review do not add failures.
+Missing observations get one minute for initialization; unreadable observations, or a snapshot
+older than three minutes, report unknown rather than healthy. Retry backoff is independent.
