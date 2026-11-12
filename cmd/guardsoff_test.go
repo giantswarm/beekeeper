@@ -26,10 +26,14 @@ func TestPreToolUseGuardsOff(t *testing.T) {
 			if err := os.WriteFile(a.cfgPath, []byte("stateDir: "+dir+"\nhooks:\n  guards: false\nsandbox:\n  required: true\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			// Secret reads, local builds, gh merges and devctl commands must pass
-			// unchanged without command rewriting, even when sandbox enforcement
-			// would otherwise block this session.
-			for _, command := range []string{"sops -d secrets.enc.yaml", "go test ./...", "gh pr merge 1 --repo example/repo", "devctl pr merge example/repo 1"} {
+			// Secret reads, gh merges and devctl commands must pass unchanged
+			// without command rewriting, even when sandbox enforcement would
+			// otherwise block this session. A build is never refused either, but
+			// a Claude session's build still runs under `beekeeper run` (run.remote):
+			// where it runs is placement, not a guard (#3873).
+			const build = "go test ./..."
+			for _, command := range []string{"sops -d secrets.enc.yaml", build, "gh pr merge 1 --repo example/repo", "devctl pr merge example/repo 1"} {
+				routed := command == build && format == claudeComm
 				raw, err := json.Marshal(map[string]any{transcriptHookEventKey: guard.PreToolUseEvent, executionOmpSession: "guards-off", executionOmpCwd: filepath.Join(dir, "desk"), transcriptToolName: tToolBash, transcriptInputKey: map[string]string{hookTypeCommand: command}})
 				if err != nil {
 					t.Fatal(err)
@@ -41,8 +45,14 @@ func TestPreToolUseGuardsOff(t *testing.T) {
 				if err := c.Execute(); err != nil {
 					t.Fatal(err)
 				}
-				for _, unwanted := range []string{`"deny"`, `"block"`, `updatedInput`, `updated_input`, github.DevctlSkipVersionCheckEnv} {
-					if strings.Contains(out.String(), unwanted) {
+				unwanted := []string{`"deny"`, `"block"`, github.DevctlSkipVersionCheckEnv}
+				if !routed {
+					unwanted = append(unwanted, `updatedInput`, `updated_input`)
+				} else if !strings.Contains(out.String(), `updatedInput`) || !strings.Contains(out.String(), ` run -- `) {
+					t.Fatalf("%s: not routed through beekeeper run: %s", command, out.String())
+				}
+				for _, u := range unwanted {
+					if strings.Contains(out.String(), u) {
 						t.Fatalf("%s: %s", command, out.String())
 					}
 				}

@@ -9,7 +9,7 @@ import (
 // hooks.guards is off.
 func routeOnly(t *testing.T, h Hook, command string, extra map[string]any) *decision {
 	t.Helper()
-	ti := map[string]any{"command": command}
+	ti := map[string]any{commandKey: command}
 	for k, v := range extra {
 		ti[k] = v
 	}
@@ -28,13 +28,16 @@ func routeOnly(t *testing.T, h Hook, command string, extra map[string]any) *deci
 	return &d
 }
 
+// goTestAll is the build the guards-off cases route.
+const goTestAll = "go test ./..."
+
 // With the guards off, builds still go to `beekeeper run` (and so to
 // run.remote): where a build runs is placement, not a guard.
 func TestRouteBuildsWithGuardsOff(t *testing.T) {
 	for _, tc := range []struct{ name, in, want string }{
-		{"a build alone", "go test ./...", slot("go test ./...")},
-		{"only the build of a line", "git fetch && go vet ./... && go test ./...",
-			"git fetch && " + slot("go vet ./... && go test ./...")},
+		{"a build alone", goTestAll, slot(goTestAll)},
+		{"only the build of a line", "git fetch && go vet ./... && " + goTestAll,
+			"git fetch && " + slot("go vet ./... && "+goTestAll)},
 		{"cargo", "cargo build --release", slot("cargo build --release")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -42,7 +45,7 @@ func TestRouteBuildsWithGuardsOff(t *testing.T) {
 			if d == nil || d.UpdatedInput == nil {
 				t.Fatalf("not routed: %+v", d)
 			}
-			if got := d.UpdatedInput["command"]; got != tc.want {
+			if got := d.UpdatedInput[commandKey]; got != tc.want {
 				t.Errorf("got  %s\nwant %s", got, tc.want)
 			}
 			if d.PermissionDecision != decisionAllow {
@@ -56,7 +59,7 @@ func TestRouteBuildsWithGuardsOffLeavesTheRest(t *testing.T) {
 	for _, cmd := range []string{
 		"git status --short && ls -la",
 		"rm -rf /tmp/x",
-		self + " run -- zsh -c 'go test ./...'",
+		self + " run -- zsh -c '" + goTestAll + "'",
 		"go version",
 		"",
 	} {
@@ -73,11 +76,11 @@ func TestRouteBuildsWithGuardsOffLeavesTheRest(t *testing.T) {
 }
 
 func TestRouteBuildsWithGuardsOffBackground(t *testing.T) {
-	d := routeOnly(t, Hook{}, "go test ./...", map[string]any{backgroundKey: true})
+	d := routeOnly(t, Hook{}, goTestAll, map[string]any{backgroundKey: true})
 	if d == nil || d.UpdatedInput == nil {
 		t.Fatalf("not routed: %+v", d)
 	}
-	if got, want := d.UpdatedInput["command"], backgroundExport+slot("go test ./..."); got != want {
+	if got, want := d.UpdatedInput[commandKey], backgroundExport+slot(goTestAll); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
