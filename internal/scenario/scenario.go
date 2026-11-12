@@ -92,6 +92,9 @@ type Given struct {
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
+	// Install is an installation in probation, for the recovery
+	// controller: given.releases' and its own builds.
+	Install Install `yaml:"install"`
 	// Tools are further programs on the desk's PATH (go, golangci-lint):
 	// fakes like Fakes, which only given.calls answer.
 	Tools []string `yaml:"tools"`
@@ -234,6 +237,8 @@ type Expect struct {
 	Origin *OriginExpect         `yaml:"origin"`
 	// Log checks what a background step has written so far.
 	Log *LogExpect `yaml:"log"`
+	// Install checks the installation of given.install.
+	Install *InstallExpect `yaml:"install"`
 }
 
 // TextExpect checks a text: every Contains is in it, no NotContains is,
@@ -301,7 +306,7 @@ func (e Expect) kinds() []string {
 		"exit": e.Exit != nil, "output": e.Output != nil, "stderr": e.Stderr != nil,
 		"json_path": e.JSONPath != nil, "events": e.Events != nil, "duration": e.Duration != nil,
 		"process": e.Process != nil, "calls": e.Calls != nil, "github": e.GitHub != nil,
-		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil,
+		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil, "install": e.Install != nil,
 	} {
 		if set {
 			k = append(k, name)
@@ -426,6 +431,9 @@ func (s *Scenario) Validate() error {
 			bad("given.github: %v", err)
 		}
 	}
+	for _, line := range s.Given.Install.validate() {
+		bad("given.install: %s", line)
+	}
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
 	}
@@ -506,8 +514,8 @@ func (s *Scenario) Validate() error {
 			if len(r.Args) == 0 {
 				bad("%s: %s without args", where, kind)
 			}
-			if r.Release != "" && !s.Given.Releases.known(r.Release) {
-				bad("%s: release %q is none of given.releases", where, r.Release)
+			if r.Release != "" && !s.Given.knownBuild(r.Release) {
+				bad("%s: release %q is none of given.releases and given.install", where, r.Release)
 			}
 		case KindStop:
 			if !slices.Contains(background, st.Stop) {
@@ -578,11 +586,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	kind := e.Kind()
 	if kind == "" {
-		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin and log (has %v)", e.kinds())
+		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin, log and install (has %v)", e.kinds())
 		return errs
 	}
 	switch kind {
-	case "events", "calls", "process", "github", "worker", "origin", "log":
+	case "events", "calls", "process", "github", "worker", "origin", "log", "install":
 	default:
 		if stepKind != "" && !slices.Contains(stepObserves[stepKind], kind) {
 			bad("%s is not observed for a %s step", kind, stepKind)
@@ -657,6 +665,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 		if o.Exists != nil && !*o.Exists && o.Ahead != nil {
 			bad("origin: ahead of a branch that is not there")
+		}
+	}
+	if in := e.Install; in != nil {
+		for _, line := range in.validate(s) {
+			bad("%s", line)
 		}
 	}
 	if l := e.Log; l != nil {

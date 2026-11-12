@@ -1,7 +1,9 @@
 // Package loopworkflow is a scratch GitHub and Git origin that exercises a real
-// beekeeper binary across the loop, parser and merge boundary: the integration
-// tests drive every scenario, and a recovery controller's probe drives one on
-// an idle desk. Nothing here touches a real desk, account or network.
+// beekeeper binary across the loop, parser and merge boundary: a recovery
+// controller's installation probe drives it on an idle desk, and the staged
+// canary through a worker, a reviewer and the merge. The behavioral scenarios
+// (internal/scenario, flows recovery and canary) run both. Nothing here
+// touches a real desk, account or network.
 package loopworkflow
 
 import (
@@ -51,7 +53,6 @@ const (
 	ghPR             = "pr"
 	ghInclude        = "--include"
 	acceptRawHeader  = "Accept: application/vnd.github.raw"
-	deliveryScenario = "delivery"
 	dataField        = "data"
 	nodesField       = "nodes"
 	statusField      = "status"
@@ -129,9 +130,6 @@ func serveGitHub() int {
 	args := os.Args[1:]
 	trace(append([]string{ghCmd}, args...))
 	root := os.Getenv("FIXTURE_DIR")
-	if code, handled := deliveryGitHub(args); handled {
-		return code
-	}
 	raw, err := os.ReadFile(filepath.Join(root, pullJSONFile)) //nolint:gosec // scratch fixture state
 	if err != nil {
 		panic(err)
@@ -148,27 +146,6 @@ func serveGitHub() int {
 			panic(err)
 		}
 		return 0
-	}
-	observePull := func() map[string]any {
-		// Model a push between the planner's read and the merge executor's read.
-		if os.Getenv("FIXTURE_CASE") == "moved-head" {
-			countPath := filepath.Join(root, "read-count")
-			b, _ := os.ReadFile(countPath) //nolint:gosec // scratch fixture state
-			if len(b) > 0 {
-				p["headRefOid"] = strings.Repeat("f", 40)
-				raw, err = json.Marshal(p)
-				if err != nil {
-					panic(err)
-				}
-				if err = os.WriteFile(filepath.Join(root, pullJSONFile), raw, 0600); err != nil { //nolint:gosec // scratch fixture state
-					panic(err)
-				}
-			}
-			if err := os.WriteFile(countPath, []byte("read"), 0600); err != nil { //nolint:gosec // scratch fixture state
-				panic(err)
-			}
-		}
-		return p
 	}
 	switch {
 	case starts("auth", "token"):
@@ -240,7 +217,7 @@ func serveGitHub() int {
 		fmt.Println(fixtureTimestamp)
 		return 0
 	case starts(ghPR, "view"):
-		return emit(observePull())
+		return emit(p)
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "viewer { login }") }):
 		return emit(map[string]any{dataField: map[string]any{
 			"viewer": map[string]any{loginField: fixtureBot},
@@ -271,7 +248,7 @@ func serveGitHub() int {
 			num, _, _ := strings.Cut(after, ")")
 			var found any
 			if num == "1" {
-				found = observePull()
+				found = p
 			}
 			data[alias] = map[string]any{pullRequestField: found}
 		}
@@ -283,9 +260,6 @@ func serveGitHub() int {
 		fmt.Println(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[{"id":"I","status":{"name":"Ready"},"content":{"number":2,"url":"https://github.com/fixture/project/issues/2","title":"fixture task","state":"OPEN","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","repository":{"nameWithOwner":"fixture/project"},"blockedBy":{"totalCount":0,"nodes":[]},"subIssuesSummary":{"total":0,"completed":0}}}]}}}}}`)
 		return 0
 	case starts(ghAPI, ghGraphQL) && slices.ContainsFunc(args, func(s string) bool { return strings.Contains(s, "mergeQueue(branch:") }):
-		if os.Getenv("FIXTURE_CASE") == "unreadable-queue" {
-			return emit(map[string]any{"errors": []any{map[string]any{"message": "fixture unavailable"}}})
-		}
 		return emit(map[string]any{dataField: map[string]any{repositoryField: map[string]any{"mergeQueue": nil}}})
 	case starts(ghPR, "merge"):
 		pin := slices.Index(args, "--match-head-commit")
@@ -354,11 +328,6 @@ func serveClaude() int {
 		}
 	}
 	switch {
-	case os.Getenv("FIXTURE_CASE") == deliveryScenario && slices.Contains(args, "SendMessage"):
-		// The fixture worker accepts the supervisor's findings notification;
-		// the integration test then drives that worker's deterministic turn.
-		fmt.Println(`{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}`)
-		return 0
 	case len(args) > 0 && args[0] == "plugin":
 		fmt.Println("[]")
 		return 0
@@ -377,14 +346,6 @@ func serveClaude() int {
 			writeSessions(rows)
 		}
 		return 0
-	case os.Getenv("FIXTURE_CASE") == deliveryScenario && slices.Contains(args, "--bg") && slices.Contains(args, "--resume"):
-		idx := slices.Index(args, "--resume")
-		if idx+1 >= len(args) {
-			panic("fixture resume lacks session")
-		}
-		id := args[idx+1]
-		fmt.Printf("backgrounded · %s · fixture resumed worker\n", id[:min(8, len(id))])
-		return 0
 	case slices.Contains(args, "--bg"):
 		name := "worker"
 		if idx := slices.Index(args, "-n"); idx >= 0 && idx+1 < len(args) {
@@ -402,26 +363,7 @@ func serveClaude() int {
 			"pid":          1,
 		})
 		writeSessions(rows)
-		if os.Getenv("FIXTURE_CASE") == deliveryScenario {
-			// Real starts write a transcript before a parked session can resume.
-			// Keep it in the fixture's isolated Claude project tree.
-			dir := filepath.Join(root, "home", ".claude", "projects", "fixture")
-			if err := os.MkdirAll(dir, 0700); err != nil { //nolint:gosec // isolated scratch fixture
-				panic(err)
-			}
-			cwd, err := os.Getwd()
-			if err != nil {
-				panic(err)
-			}
-			raw, err := json.Marshal(map[string]any{"cwd": cwd, sessionIDField: sessionID, "type": "assistant"})
-			if err != nil {
-				panic(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), append(raw, '\n'), 0600); err != nil { //nolint:gosec // isolated scratch fixture transcript
-				panic(err)
-			}
-		}
-		if strings.HasPrefix(name, "Review ") && os.Getenv("FIXTURE_CASE") != deliveryScenario {
+		if strings.HasPrefix(name, "Review ") {
 			raw, err := os.ReadFile(filepath.Join(root, pullJSONFile)) //nolint:gosec // scratch fixture state
 			if err != nil {
 				panic(err)

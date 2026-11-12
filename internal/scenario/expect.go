@@ -41,6 +41,8 @@ type View struct {
 	Origin func(repository, branch string) (exists bool, ahead int, err error)
 	// Log reads what a background step has written so far.
 	Log func(name string) (string, error)
+	// Install checks the installation of given.install.
+	Install func(e *InstallExpect) error
 }
 
 // Check checks one expectation against a view.
@@ -157,6 +159,11 @@ func Check(e Expect, v View) error {
 		if o.Ahead != nil && ahead != *o.Ahead {
 			return fmt.Errorf("origin %s: branch %s is %d commit(s) ahead of main, want %d", o.Repository, o.Branch, ahead, *o.Ahead)
 		}
+	case "install":
+		if v.Install == nil {
+			return missing("install")
+		}
+		return v.Install(e.Install)
 	case "log":
 		if v.Log == nil {
 			return missing("log")

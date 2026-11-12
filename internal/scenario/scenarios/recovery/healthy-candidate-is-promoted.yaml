@@ -1,0 +1,42 @@
+name: healthy-candidate-is-promoted
+description: >
+  With no backlog and one isolated workflow, the recovery controller of
+  the previous release probes a healthy candidate with the candidate's own
+  installation probe, which proves a merge, and ends its probation with
+  the candidate as the last known good. The candidate then writes the
+  state as before: a normal probation leaves no writer fence.
+  Moved from internal/loopworkflow TestRecoveryPromotesAHealthyCandidate
+  and TestCandidateProbeIgnoresRetainedFixture: the controller's own
+  fixture never judges the candidate.
+issue: https://github.com/giantswarm/beekeeper/issues/3797
+flow: recovery
+tags: [recovery, self-update, probation]
+timeout: 180s
+
+given:
+  # The probe's own fixture serves its GitHub on loopback, which the
+  # scenario's GitHub brings up.
+  github:
+    repositories:
+      - name: example/app
+  releases: {installed: v1.1.0-rc.1}
+  install:
+    candidate: {version: v1.1.0-rc.2}
+    previous: v1.1.0-rc.1
+
+when:
+  - name: controller
+    run:
+      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
+    expect:
+      - exit: 0
+      - output: {not_contains: [RELEASE ROLLED BACK]}
+  - name: writes
+    run:
+      release: v1.1.0-rc.2
+      args: [note, add, Does the promoted release write?]
+    expect:
+      - exit: 0
+
+then:
+  - install: {installed: v1.1.0-rc.2, probation: passed, probe_failures: {max: 0}}

@@ -25,6 +25,12 @@
 # needs a systemd user manager and runs nightly in GitHub Actions
 # (.github/workflows/performance.yaml).
 #
+# test-loop-workflow proves the merge-result lint policy with the real linter
+# and replays the standstills with their negative controls. It keeps its name,
+# a required check of main, and requires test-scenarios: the check is green
+# only once the scenarios that replaced internal/loopworkflow's workflow
+# tests passed too (https://github.com/giantswarm/beekeeper/issues/3797).
+#
 # test-scenarios runs the behavioral scenarios (docs/scenarios.md) on every
 # pull request. Each scenario runs in its own user, mount, PID and network
 # namespaces, which the Docker executor's seccomp profile refuses, so the job
@@ -41,7 +47,6 @@ jobs:
     resource_class: medium
     environment:
       LANG: C.UTF-8
-      BEEKEEPER_TEST_LOOP_ARTIFACTS: /tmp/loop-workflow-artifacts
     steps:
     - checkout
     - architect/tools-info
@@ -52,10 +57,6 @@ jobs:
           set -euo pipefail
           golangci-lint version
           BEEKEEPER_TEST_REAL_LINT=1 go test ./cmd -run '^TestMergeResultRealLint' -count=1 -timeout=5m -v
-    - run:
-        name: Exercise the real supervisor binary and historical parser control
-        no_output_timeout: 15m
-        command: timeout 15m make test-loop-workflow
     - run:
         name: Replay standstills and reject the historical defects
         no_output_timeout: 30m
@@ -292,7 +293,10 @@ workflows:
             only: /^v.*/
     # No path or branch filters: loop, merge, capacity, watch, update and CI
     # changes all run the same check. Tags also exercise it before release.
+    # The required check waits for the scenarios.
     - test-loop-workflow:
+        requires:
+        - test-scenarios
         filters:
           tags:
             only: /^v.*/

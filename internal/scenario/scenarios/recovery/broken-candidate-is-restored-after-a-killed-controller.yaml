@@ -1,0 +1,78 @@
+name: broken-candidate-is-restored-after-a-killed-controller
+description: >
+  A candidate that passed everything else cannot merge on the desk: its
+  pull parser drops the base branch. The recovery controller of the
+  previous release probes it with the candidate's own installation probe,
+  counts the failures and is stopped mid-way. A second controller restores
+  the previous release from the journal alone, with no person and no
+  backlog: the candidate is quarantined, the person's line names both
+  versions, the work in flight is kept, the failed version can no longer
+  write the state, and the restored desk's probe merges again while the
+  broken candidate's fails.
+  Moved from internal/loopworkflow TestRecoveryRestoresABrokenCandidate,
+  with the writer fence of TestRetainedRecoveryController.
+issue: https://github.com/giantswarm/beekeeper/issues/3797
+flow: recovery
+tags: [recovery, self-update, probation, mutation]
+timeout: 240s
+
+given:
+  # The probe's own fixture serves its GitHub on loopback, which the
+  # scenario's GitHub brings up.
+  github:
+    repositories:
+      - name: example/app
+  releases: {installed: v1.1.0-rc.1}
+  install:
+    candidate: {version: v1.1.0-rc.2, mutation: pull-parser-drops-the-base}
+    previous: v1.1.0-rc.1
+
+when:
+  - name: work
+    run: {args: [note, add, Is the work in flight kept?]}
+    expect:
+      - exit: 0
+  - name: first
+    background:
+      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
+  - wait_for:
+      timeout: 90s
+      expect:
+        - install: {probe_failures: {min: 1}}
+  - stop: first
+  - name: half-way
+    run: {args: [note, list]}
+    expect:
+      - install: {installed: v1.1.0-rc.2+pull-parser-drops-the-base, probation: pending}
+  - name: second
+    run:
+      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
+    expect:
+      - exit: 0
+      - output: {contains: ["RELEASE ROLLED BACK: v1.1.0-rc.2 failed", "restored v1.1.0-rc.1"]}
+  - name: notes
+    run: {args: [--json, note, list]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 1}
+  # The failed version's processes cannot resume writing the state.
+  - name: fenced
+    run:
+      release: v1.1.0-rc.2+pull-parser-drops-the-base
+      args: [note, add, Does the failed version still write?]
+    expect:
+      - stderr: {contains: [state writes fenced after binary recovery]}
+  - name: restored-probe
+    run: {args: [self-update, --installation-probe]}
+    expect:
+      - exit: 0
+  - name: broken-probe
+    run:
+      release: v1.1.0-rc.2+pull-parser-drops-the-base
+      args: [self-update, --installation-probe]
+    expect:
+      - exit: 1
+
+then:
+  - install: {installed: v1.1.0-rc.1, probation: rolled-back, quarantined: v1.1.0-rc.2+pull-parser-drops-the-base, notified: true}
+  - install: {probe_failures: {min: 1}}

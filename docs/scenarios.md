@@ -142,6 +142,7 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
+| `install` | [the installation](#installations-and-mutated-builds): the build `installed`, `probation`, `quarantined`, `probe_failures`, `notified`, `judge_recovered` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
@@ -202,6 +203,33 @@ the scenario to fail and reports it as pending. Once the scenario passes,
 the run fails and asks for the marker's removal, so the fix removes the
 marker in the same pull request. A failure of the harness itself, such as
 no sandbox, fails the run even for a pending scenario.
+
+### Installations and mutated builds
+
+`given.install` is an installation in probation, as an update leaves it,
+for the recovery controller:
+
+```yaml
+given:
+  releases: {installed: v1.1.0-rc.1}      # the desk runs the previous release
+  install:
+    candidate: {version: v1.1.0-rc.2, mutation: pull-parser-drops-the-base}
+    previous: v1.1.0-rc.1
+    rolled_back: probe failed 3 times     # optional: rolled back already
+```
+
+The candidate is copied to `/work/install/beekeeper`, both builds into
+`/work/install/beekeeper.update/<sha256>`, and the journal records a watched,
+pending probation; with `rolled_back` the installation is rolled back before
+the steps. Each build is a release build (version-stamped, `-tags scenario`)
+under `/work/releases/<build>/`, named by its version, with `+<mutation>` for
+a build that carries a defect of `Mutations` (`internal/scenario/mutations.go`),
+put back into its source through a Go overlay. A `run` step's `release:`
+runs such a build by that name.
+
+`TestMutationControls` runs a scenario against a mutated candidate and
+requires it to fail on an assertion and the output to name the defect's
+refusal: the scenario catches the defect it guards against.
 
 ## The fake machines
 

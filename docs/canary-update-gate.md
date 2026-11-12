@@ -139,8 +139,8 @@ Required sandbox repository settings:
 ## Publishing and rollout order
 
 On tag builds (`/v.*/`), CircleCI runs `publish-canary-evidence`
-(`.circleci/publish-canary-evidence.sh`) after `go-build`, `test-loop-workflow`,
-and `upload-release-assets`:
+(`.circleci/publish-canary-evidence.sh`) after `go-build`, `test-loop-workflow`
+(which waits for `test-scenarios`), and `upload-release-assets`:
 
 1. `go-build` compiles and signs the cross-platform binaries, and
    `upload-release-assets` attaches `<binary>` and `<binary>.bundle` to the

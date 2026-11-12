@@ -37,6 +37,18 @@ type Releases struct {
 type ReleaseBuild struct {
 	// Version is the version the build is stamped with ("v1.2.0").
 	Version string
+	// Mutation names a defect of Mutations the build carries; empty for
+	// the source as it is.
+	Mutation string
+}
+
+// Name names the build in the sandbox and in a run's release: its
+// version, with "+<mutation>" for a mutated build.
+func (b ReleaseBuild) Name() string {
+	if b.Mutation == "" {
+		return b.Version
+	}
+	return b.Version + "+" + b.Mutation
 }
 
 // releasesDir holds the release builds inside the sandbox:
@@ -53,9 +65,10 @@ func ReleaseAsset() string {
 	return name
 }
 
-// releaseBinary is the release build of version inside the sandbox.
-func releaseBinary(version string) string {
-	return path.Join(releasesDir, version, ReleaseAsset())
+// releaseBinary is the release build of that name (ReleaseBuild.Name)
+// inside the sandbox.
+func releaseBinary(name string) string {
+	return path.Join(releasesDir, name, ReleaseAsset())
 }
 
 // builds are the release builds the scenario needs, each once.
@@ -69,9 +82,22 @@ func (r Releases) builds() []ReleaseBuild {
 	return out
 }
 
-// known says whether version is one of the scenario's release builds.
-func (r Releases) known(version string) bool {
-	return slices.Contains(r.builds(), ReleaseBuild{Version: version})
+// builds are every build the scenario needs, each once: given.releases'
+// and given.install's.
+func (g *Given) builds() []ReleaseBuild {
+	out := g.Releases.builds()
+	for _, b := range g.Install.builds() {
+		if !slices.Contains(out, b) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// knownBuild says whether name (ReleaseBuild.Name) is one of the
+// scenario's builds.
+func (g *Given) knownBuild(name string) bool {
+	return slices.ContainsFunc(g.builds(), func(b ReleaseBuild) bool { return b.Name() == name })
 }
 
 // validate is what the loader refuses of given.releases.

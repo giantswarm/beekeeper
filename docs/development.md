@@ -1193,64 +1193,32 @@ use `--local` for tests that need the managed assets.
 
 ## Supervisor workflow regression
 
-Issue #2255's `test-loop-workflow` CircleCI job runs on every branch and PR,
-without path filters, and on release tags. Run it locally with
-`make test-loop-workflow` (Go and Git are required). It builds the candidate and
-runs the public `supervisor loop --once`, `board next` and worker-start commands
-in subprocesses. The test executable supplies only the external GitHub CLI and
-Git trace wrapper; a local HTTP adapter supplies the budget API. The planner,
-`readLoopPull`/`parseLoopPull`, merge-result validation and gate are production
-code. Raw pull responses include base, head, branch, checks and reviews; raw
-project responses include metadata and a selectable issue. The merge adapter
-actually squashes the branch and pushes a local bare origin. Success requires
-that origin's base to match the reported merge commit, exactly one mutation,
-and durable completion of the saved review park on the next loop pass.
+The real binary's workflow across the loop, parser, merge-result validation
+and gate runs as behavioral scenarios ([scenarios.md](scenarios.md)) on every
+pull request and release tag: `make test-scenarios`, the `test-scenarios`
+CircleCI job. They replaced `internal/loopworkflow`'s integration suite and
+`internal/testenv`'s `TestSupervisorWorkflow`
+(https://github.com/giantswarm/beekeeper/issues/3797):
 
-This boundary fixture starts with a durable published review park and review
-round, rather than replacing parsed pulls with in-memory planner objects. The
-full worker/reviewer lifecycle harness is tracked separately in #2254. A failed
-public worker start is also exercised with its worker executable unavailable: it must not
-create a registration or merge proof. The fixture caps starts at zero to avoid
-any dependence on the runner's available capacity or subscriptions.
+- `merge/`: an approved pull request merges with and without a checkout, and
+  is refused for red CI, a moved head at the gate, an unreadable merge queue,
+  a GraphQL budget under the floor and unavailable merge-result validation;
+  `merge-result/` covers a diverged Go base and a red merge result.
+- `start/`: a worker start without its harness leaves no registration.
+- `delivery/` and `workflow/`: board item to merged and Done, a stale
+  approval, the delivery limit until release.
+- `recovery/` and `canary/`: probation, rollback, the outdated judge and the
+  staged canary on real release builds.
 
-The matrix covers the supported no-checkout policy, non-Go checkouts, current
-and diverged Go checkouts, a combined Go tree that fails while each branch's
-changes are valid, a head moving after planning, red checks, missing base,
-unavailable validation with no server queue, an unreadable queue, budget hold
-and failed start. A separate control builds a candidate through a Go overlay
-that removes the parsed base assignment (the historical regression); the same
-complete response must then fail before merge. Unknown GitHub calls fail the
-suite even if the application handles their error.
+`TestMutationControls` rebuilds the candidate with the historical parser
+defect (the parsed base dropped) through a Go overlay; the no-checkout merge
+scenario must then fail before any merge, naming the missing base.
 
-Every subprocess gets an explicit environment, private configuration/state,
-file-only Git transport, offline module resolution and a small command PATH.
-No account credentials or production state are inherited. The fixture uses
-`LANG=C.UTF-8`; builds have a five-minute deadline, scenarios a ninety-second
-deadline, Go tests a twelve-minute deadline and the CI command a fifteen-minute
-outer deadline. There is no opt-in environment switch or skip path.
-
-On failures, the job stores sanitized command/event traces, command output and
-Git refs (both a listing and a bundle of the fixture origin) under the
-`loop-workflow` artifacts. `BEEKEEPER_TEST_LOOP_ARTIFACTS`
-selects the local artifact directory. Only known fixture files are retained;
-the fixture root is replaced by `<fixture>` and the configured identity is
-synthetic. Credentials and the runner environment are never uploaded.
-
-Required repository configuration prerequisite: after its first pipeline,
-add **`ci/circleci: test-loop-workflow`** to the required status checks in the
-branch protection/ruleset for main and protected release branches, using the
-CircleCI check's exact name as reported on the PR and selecting CircleCI as its
-source where supported. Keep this check required even for CI-only changes.
-Adding YAML does not change GitHub branch protection; a repository administrator
-must configure that rule before treating the check as a merge requirement.
-
-Release publication is also guarded without changing generated workflows:
-`make test` depends on the same uncached `test-loop-workflow` target. The
-generated `go-build` job invokes `make test`, and release asset/image publishing
-requires `go-build` (chart publication depends on the image publication).
-Consequently a workflow regression fails the release prerequisite, including
-on tags. The dedicated job gives PRs a stable required-check name and retained
-failure artifacts. Do not add path filters or a skip-on-missing-tool fallback.
+The `test-loop-workflow` job keeps the name of its required check. It proves
+the merge-result lint policy with the real linter and replays the standstills
+with their negative controls, and it requires `test-scenarios`, so the check
+is green only after the scenarios passed. Do not add path filters or a
+skip-on-missing-tool fallback to either job.
 
 ## State/event recovery and guide continuity
 

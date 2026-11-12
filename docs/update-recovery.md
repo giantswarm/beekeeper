@@ -242,20 +242,24 @@ protocol does not claim durable installation on filesystems without them.
     digest. If a recovery hold (`RELEASE RECOVERY FAILED`) blocked updates and
     starts, resolve the underlying cause and run
     `beekeeper self-update --clear-recovery-hold`.
-- **End-to-end containment and recovery proofs (`make test-loop-workflow`):**
-  Running `BEEKEEPER_TEST_LOOP_ARTIFACTS=/tmp/loop-workflow-artifacts make test-loop-workflow`
-  executes the full integration suite and writes sanitized proof artifacts under
-  `/tmp/loop-workflow-artifacts`:
-  - `recovery-proof/containment-proof.json`: staged canary evidence for a good
-    candidate (`status: "success"`, `merge_commit` populated) alongside failed
-    evidence for candidates with a pull-request parser regression and missing
-    merge-worktree validation (`status: "failed"`, `merge_commit` empty).
-  - `recovery-proof/recovery-proof.json`: probation rollback proof showing the
-    retained last-known-good controller detecting consecutive isolated workflow
-    probe failures on the broken candidate, restoring the verified previous
-    binary within the 30-minute probation window, quarantining the broken digest,
-    recording `RELEASE ROLLED BACK`, and passing the post-rollback workflow merge
-    probe.
+- **End-to-end containment and recovery proofs (`make test-scenarios`):**
+  behavioral scenarios ([scenarios.md](scenarios.md)) run the real release
+  builds against an installation in probation (`given.install`), with the
+  historical pull-request parser defect as the broken candidate:
+  - `canary/staged-canary-proves-a-good-candidate-and-fails-a-broken-one`:
+    staged canary evidence for a good candidate (`status: "success"`,
+    `merge_commit` set) and failed evidence for the parser regression and for
+    missing merge-worktree validation (`status: "failed"`, `merge_commit`
+    empty). Such evidence blocks every install route (`TestEvidenceGate`).
+  - `recovery/broken-candidate-is-restored-after-a-killed-controller`: the
+    controller of the previous release counts the failed probes of the broken
+    candidate, is stopped mid-way, and a second controller restores the
+    verified previous binary from the journal alone, quarantines the broken
+    digest, records `RELEASE ROLLED BACK`, fences the failed version's writes
+    and passes the post-rollback merge probe.
+  - `recovery/healthy-candidate-is-promoted` and the `outdated-judge-*`
+    scenarios: promotion after probation, and `--recover-outdated-judge` for a
+    healthy and a broken candidate.
 
 ### Workflow fixture compatibility and updater contention
 

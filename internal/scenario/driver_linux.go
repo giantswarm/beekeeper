@@ -193,6 +193,9 @@ func (d *driver) run() {
 	if err == nil {
 		err = d.provisionHosts(ctx)
 	}
+	if err == nil {
+		err = d.install(ctx)
+	}
 	if err != nil {
 		if d.fakes != nil {
 			_ = d.fakes.Close()
@@ -489,6 +492,7 @@ func (d *driver) globals(v View) View {
 	}
 	v.Worker = d.fakes.CheckWorker
 	v.Log = d.backgroundLog
+	v.Install = d.checkInstall
 	v.Origin = func(repository, branch string) (bool, int, error) { return originBranch(repository, branch) }
 	v.Process = func(name string) (bool, int, bool) {
 		p, ok := d.procs[name]

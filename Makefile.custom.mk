@@ -58,10 +58,6 @@ helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest sui
 tools-doc: ## Regenerate docs/tools.md, every tool's description and input schema as a model reads them, from the registered tools.
 	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/
 
-.PHONY: test-loop-workflow
-test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with local Git and GitHub fixtures.
-	env -u BEEKEEPER_TEST_LOOP_BINARY LANG=C.UTF-8 go test -tags=integration ./internal/loopworkflow -count=1 -timeout=12m
-
 .PHONY: test-scenarios
 test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox, the scenario clock's and the sandbox's tests. Set BEEKEEPER_SCENARIO_FLOW, _TAG or _REPORT.
 	go test -tags scenario ./internal/clock ./internal/scenario/... ./internal/testenv -count=1 -timeout=15m -v
@@ -79,10 +75,6 @@ install-cosign-retry: ## Retry Rekor's conflict lookup race in the later steps o
 ifeq ($(CIRCLE_JOB),go-build)
 test: install-cosign-retry
 endif
-
-# The generated go-build release prerequisite invokes make test. Keep the same
-# uncached regression mandatory there, so publication cannot bypass this suite.
-test: test-loop-workflow
 
 .PHONY: browse-upload-live
 browse-upload-live: ## Check browse --file against the installed Claude CLI and connected Chrome.

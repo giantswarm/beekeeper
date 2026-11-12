@@ -24,10 +24,22 @@ import (
 // binary and a scenario build verifies a download against.
 func BuildRelease(ctx context.Context, repo, out string, b ReleaseBuild) error {
 	stamp := "-X " + project.Module + "/pkg/project.version=" + b.Version
-	c := exec.CommandContext(ctx, "go", "build", "-tags", "scenario", "-ldflags", stamp, "-o", out, ".") //nolint:gosec // the repository's own build
+	args := []string{"build", "-tags", "scenario", "-ldflags", stamp}
+	if b.Mutation != "" {
+		m, ok := Mutations[b.Mutation]
+		if !ok {
+			return fmt.Errorf("build release %s: no mutation %q", b.Name(), b.Mutation)
+		}
+		overlay, err := m.Overlay(repo, filepath.Dir(out))
+		if err != nil {
+			return fmt.Errorf("build release %s: %w", b.Name(), err)
+		}
+		args = append(args, "-overlay", overlay)
+	}
+	c := exec.CommandContext(ctx, "go", append(args, "-o", out, ".")...) //nolint:gosec // the repository's own build
 	c.Dir = repo
 	if raw, err := c.CombinedOutput(); err != nil {
-		return fmt.Errorf("build release %s: %w\n%s", b.Version, err, raw)
+		return fmt.Errorf("build release %s: %w\n%s", b.Name(), err, raw)
 	}
 	binary, err := os.ReadFile(out) //nolint:gosec // the build this function wrote
 	if err != nil {
@@ -64,7 +76,7 @@ func (rb *ReleaseBuilder) Build(ctx context.Context, b ReleaseBuild) (string, er
 	if err := BuildRelease(ctx, rb.Repo, out, b); err != nil {
 		return "", err
 	}
-	fmt.Fprintf(os.Stderr, "scenario release %s built in %s\n", b.Version, time.Since(started).Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "scenario release %s built in %s\n", b.Name(), time.Since(started).Round(time.Millisecond))
 	if rb.builds == nil {
 		rb.builds = map[ReleaseBuild]string{}
 	}
@@ -77,7 +89,7 @@ func (rb *ReleaseBuilder) Build(ctx context.Context, b ReleaseBuild) (string, er
 // desk runs: the installed release's, or the candidate.
 func (r *Runner) placeReleases(ctx context.Context, s *Scenario, work string) (string, error) {
 	desk := r.Candidate
-	for _, b := range s.Given.Releases.builds() {
+	for _, b := range s.Given.builds() {
 		if r.Release == nil {
 			return "", errors.New("given.releases: this runner builds no releases")
 		}
@@ -85,7 +97,7 @@ func (r *Runner) placeReleases(ctx context.Context, s *Scenario, work string) (s
 		if err != nil {
 			return "", err
 		}
-		dir := filepath.Join(work, "releases", b.Version)
+		dir := filepath.Join(work, "releases", b.Name())
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}
@@ -94,7 +106,7 @@ func (r *Runner) placeReleases(ctx context.Context, s *Scenario, work string) (s
 				return "", err
 			}
 		}
-		if b.Version == s.Given.Releases.Installed {
+		if b.Mutation == "" && b.Version == s.Given.Releases.Installed {
 			desk = built
 		}
 	}

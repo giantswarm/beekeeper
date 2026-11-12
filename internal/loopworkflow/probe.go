@@ -157,7 +157,8 @@ func (p *probe) runAll(cwd string, steps ...[]string) error {
 }
 
 // prepare builds the origin, one reviewed change, the configuration and the
-// state, as the integration test's no-checkout scenario does.
+// state of a reviewed pull request without a checkout: merge-result
+// validation is skipped, so the merge proves the loop, parser and gate.
 func (p *probe) prepare(server string) (err error) {
 	if p.git, err = exec.LookPath(gitCmd); err != nil {
 		return err

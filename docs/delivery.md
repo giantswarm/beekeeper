@@ -113,12 +113,12 @@ these differences instead of treating PR count as the delivery count.
 
 ## End-to-end acceptance evidence
 
-`TestSupervisorWorkflowDeliveryLimit` in `internal/loopworkflow` drives the
-public candidate CLI against a scratch Git origin, four ready board items
-and external tool adapters. CI verifies a limit of two despite four free
-slots, idle slots while full, review and a fix ahead of issue three, and a
-merge that cannot free a place until release is observed. The next pass
-admits issue three after that release.
+The behavioral scenario `workflow/delivery-limit-holds-until-release`
+([scenarios.md](scenarios.md)) drives the real binary against the
+scenario's GitHub, four ready board items and scripted workers. It verifies a
+limit of two despite four free slots, idle slots while full, review and a fix
+ahead of issue three, and a merge that cannot free a place until release is
+observed. The next pass admits issue three after that release.
 
 After a release containing the whole feature, observe at least one real
 cycle. Record the release version, `delivery` readings, one issue's
