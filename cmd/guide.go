@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/feed"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -1037,7 +1038,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if !q.checked {
 		idleQ = idleRoleReading(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
 	}
-	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loopFileVerb })
+	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
 		return nil, err
 	}
@@ -1289,10 +1290,10 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 	recovered := workBeforeRecovery != guideWorkText(st) || reportsBeforeRecovery != len(st.GuideReports)
 	current := map[string]bool{}
 	for _, e := range events {
-		key, text, ok := keyed(e.Detail)
+		key, text, ok := loop.Keyed(e.Detail)
 		// Legacy file events summarized a note already delivered to the guide;
 		// only the format carrying the actual report belongs in this feed.
-		if ok && strings.Contains(text, fileReportSeparator) {
+		if ok && strings.Contains(text, loop.FileReportSeparator) {
 			current["problem:"+key] = true
 		}
 	}
@@ -1304,8 +1305,8 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 		})
 		changed = recovered || len(r.Fed) != before
 		for _, e := range events {
-			key, text, ok := keyed(e.Detail)
-			if !ok || !strings.Contains(text, fileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
+			key, text, ok := loop.Keyed(e.Detail)
+			if !ok || !strings.Contains(text, loop.FileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
 				continue
 			}
 			if r.Holder != nil {

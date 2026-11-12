@@ -31,11 +31,6 @@ const diskHoldingFile = "disk-holding.json"
 // diskHoldingMin is the smallest uncovered directory a pressure run names.
 var diskHoldingMin int64 = 100 << 20
 
-type diskHolding struct {
-	At   time.Time `json:"at"`
-	Text string    `json:"text"`
-}
-
 // keptReferencesUnknown keeps a candidate decided while some process's
 // references could not be read.
 const keptReferencesUnknown = "process references unknown"

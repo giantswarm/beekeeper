@@ -1,4 +1,4 @@
-package cmd
+package loop
 
 import (
 	"encoding/json"
@@ -10,14 +10,14 @@ import (
 )
 
 const (
-	loopRecordInputFile = "input.json"
+	LoopRecordInputFile = "input.json"
 	loopFactBaseMerged  = "base-merged"
 	loopFactNitsChecked = "nits-checked"
 )
 
-// loopRecording includes the data for the pure planner and the separate
+// LoopRecording includes the data for the pure planner and the separate
 // continuation/reservation planners. No configuration or credentials are copied.
-type loopRecording struct {
+type LoopRecording struct {
 	Planner    superloop.Input
 	Facts      []loopRecordedFact
 	Agents     []state.Agent
@@ -25,7 +25,7 @@ type loopRecording struct {
 	Room       int
 }
 
-func writeLoopRecording(dir string, in loopRecording) error {
+func WriteLoopRecording(dir string, in LoopRecording) error {
 	data, err := json.MarshalIndent(superloop.Recording(in), "", "  ")
 	if err != nil {
 		return err
@@ -34,7 +34,7 @@ func writeLoopRecording(dir string, in loopRecording) error {
 		return err
 	}
 	// Refuse to overwrite a previous incident's evidence.
-	file, err := os.OpenFile(filepath.Join(dir, loopRecordInputFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) //nolint:gosec // explicit recording destination
+	file, err := os.OpenFile(filepath.Join(dir, LoopRecordInputFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) //nolint:gosec // explicit recording destination
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ type loopRecordedFact struct {
 	Value bool
 }
 
-func (r *loopRecording) capture(in superloop.Input) superloop.Input {
+func (r *LoopRecording) Capture(in superloop.Input) superloop.Input {
 	if query := in.Open; query != nil {
 		in.Open = func(ref string) bool {
 			value := query(ref)
@@ -79,7 +79,7 @@ func (r *loopRecording) capture(in superloop.Input) superloop.Input {
 	return in
 }
 
-func (r *loopRecording) replayInput() superloop.Input {
+func (r *LoopRecording) ReplayInput() superloop.Input {
 	in := r.Planner
 	lookup := func(kind, ref, head string) bool {
 		for _, fact := range r.Facts {

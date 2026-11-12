@@ -21,7 +21,7 @@ import (
 var migrated = []string{
 	// The supervisor loop, its planner and the timers it fires.
 	"cmd/supervisor*.go", "cmd/loop*.go", "cmd/changepause.go", "cmd/root.go", "cmd/throughputhealth.go",
-	"cmd/timer*.go", "internal/superloop",
+	"cmd/timer*.go", "internal/loop", "internal/superloop",
 	// Capacity.
 	"cmd/capacity*.go", "cmd/usage.go", "cmd/claude_usage.go",
 	// The GitHub budget.
@@ -32,6 +32,9 @@ var migrated = []string{
 	"cmd/selfupdate*.go", "cmd/recovery.go", "internal/update",
 	// The state every flow records in.
 	"internal/state",
+	// The watch's loops and samples: the supervisor loop owns one, whose
+	// budget reading admits the loop's starts.
+	"cmd/watch.go",
 }
 
 // clockFuncs are the time package's clock functions, each with what

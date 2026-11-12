@@ -2129,7 +2129,7 @@ nothing; it makes no GitHub call.`,
 				p("local: %s", v.Local.line())
 			}
 			for _, host := range v.Hosts {
-				p("%s", host.line())
+				p("%s", host.Line())
 			}
 			for _, name := range liveCap.ProviderNames() {
 				if pv := v.Providers[name]; pv != nil {

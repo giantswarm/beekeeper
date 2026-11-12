@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -83,12 +84,12 @@ func TestPullWatcherBatchesSixtyAndRefreshesOnlyMovedDetails(t *testing.T) {
 	for i := range refs {
 		refs[i] = fmt.Sprintf("o/r#%d", i+1)
 	}
-	first, err := fetchLoopPullBatch(t.Context(), refs, nil, 2500)
+	first, err := loop.FetchLoopPullBatch(t.Context(), refs, nil, 2500)
 	if err != nil || len(first) != 60 || *calls != 1 {
 		t.Fatalf("cold poll: calls=%d found=%d err=%v", *calls, len(first), err)
 	}
-	status = checkSuccess // CI does not update the PR timestamp or any desk event.
-	next, err := fetchLoopPullBatch(t.Context(), refs, first, 2500)
+	status = loop.CheckSuccess // CI does not update the PR timestamp or any desk event.
+	next, err := loop.FetchLoopPullBatch(t.Context(), refs, first, 2500)
 	if err != nil || *calls != 2 {
 		t.Fatalf("CI-only poll: calls=%d err=%v", *calls, err)
 	}
@@ -98,7 +99,7 @@ func TestPullWatcherBatchesSixtyAndRefreshesOnlyMovedDetails(t *testing.T) {
 		}
 	}
 	head, updated = loopFixed, "2026-01-01T00:01:00Z"
-	next, err = fetchLoopPullBatch(t.Context(), refs, next, 2500)
+	next, err = loop.FetchLoopPullBatch(t.Context(), refs, next, 2500)
 	if err != nil || *calls != 4 {
 		t.Fatalf("moved poll: calls=%d err=%v", *calls, err)
 	}
@@ -119,10 +120,10 @@ func TestPullWatcherHourlyRequestsDoNotScaleWithTrackedCount(t *testing.T) {
 			for i := range refs {
 				refs[i] = fmt.Sprintf("o/r#%d", i+1)
 			}
-			var seen map[string]watchedLoopPull
+			var seen map[string]loop.WatchedLoopPull
 			for range 120 { // an hour of short intervals, regardless of session count
 				var err error
-				seen, err = fetchLoopPullBatch(t.Context(), refs, seen, 0)
+				seen, err = loop.FetchLoopPullBatch(t.Context(), refs, seen, 0)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -135,82 +136,82 @@ func TestPullWatcherHourlyRequestsDoNotScaleWithTrackedCount(t *testing.T) {
 }
 
 func TestPullWatcherPassUsesObservationsWhileFetchIsBlocked(t *testing.T) {
-	observe, sweep := readObservedLoopPull, readLoopSweep
+	observe, sweep := loop.ReadObservedLoopPull, loop.ReadLoopSweep
 	r := newLoopRig(t)
-	readObservedLoopPull, readLoopSweep = observe, sweep
+	loop.ReadObservedLoopPull, loop.ReadLoopSweep = observe, sweep
 	r.park(t, loopPR, r.a.now)
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
-	w := l.pullWatcher()
+	l.Once = true
+	w := l.PullWatcher()
 	p := r.pull
 	p.Green = false
-	w.snapshot = loopPullSnapshot{Pulls: map[string]watchedLoopPull{loopPR: {Pull: p, At: r.a.now, Pending: true}}, ListedAt: time.Now()}
-	w.set([]string{loopPR}, nil, nil, 0, nil)
+	w.Snapshot = loop.LoopPullSnapshot{Pulls: map[string]loop.WatchedLoopPull{loopPR: {Pull: p, At: r.a.now, Pending: true}}, ListedAt: time.Now()}
+	w.Set([]string{loopPR}, nil, nil, 0, nil)
 	// Fail if a future pass change restores the old per-PR read path.
-	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		t.Error("pass read a tracked PR from GitHub")
 		return superloop.Pull{}, errors.New("unexpected read")
 	}
-	old := readLoopPullBatch
-	t.Cleanup(func() { readLoopPullBatch = old })
+	old := loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadLoopPullBatch = old })
 	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	readLoopPullBatch = func(ctx context.Context, _ []string, _ map[string]watchedLoopPull, _ int) (map[string]watchedLoopPull, error) {
+	loop.ReadLoopPullBatch = func(ctx context.Context, _ []string, _ map[string]loop.WatchedLoopPull, _ int) (map[string]loop.WatchedLoopPull, error) {
 		close(entered)
 		select {
 		case <-release:
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		return map[string]watchedLoopPull{loopPR: {Pull: p, At: r.a.now, Pending: true}}, nil
+		return map[string]loop.WatchedLoopPull{loopPR: {Pull: p, At: r.a.now, Pending: true}}, nil
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	go func() { defer close(done); _, _ = w.poll(ctx, l) }()
+	go func() { defer close(done); _, _ = w.Poll(ctx, l) }()
 	<-entered
-	if err := l.pass(t.Context()); err != nil {
+	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.pass(t.Context()); err != nil {
+	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
 	<-done
-	r.a.now = r.a.now.Add(loopPullMaxAge + time.Second)
-	if err := l.pass(t.Context()); err != nil {
+	r.a.now = r.a.now.Add(loop.LoopPullMaxAge + time.Second)
+	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.out.String(), "observation is") || !strings.Contains(w.view().ageLine(r.a.now), "1 stale") {
+	if !strings.Contains(r.out.String(), "observation is") || !strings.Contains(w.View().AgeLine(r.a.now), "1 stale") {
 		t.Fatalf("stale age missing: %s", r.out)
 	}
 }
 
 func TestPullWatcherGreenReachesDeliveryWithoutDeskEvent(t *testing.T) {
-	observe, sweep := readObservedLoopPull, readLoopSweep
+	observe, sweep := loop.ReadObservedLoopPull, loop.ReadLoopSweep
 	r := newLoopRig(t)
-	readObservedLoopPull, readLoopSweep = observe, sweep
+	loop.ReadObservedLoopPull, loop.ReadLoopSweep = observe, sweep
 	r.park(t, loopPR, r.a.now)
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
-	w := l.pullWatcher()
-	w.set([]string{loopPR}, nil, nil, 0, nil)
-	w.snapshot.ListedAt = time.Now()
+	l.Once = true
+	w := l.PullWatcher()
+	w.Set([]string{loopPR}, nil, nil, 0, nil)
+	w.Snapshot.ListedAt = time.Now()
 	p := r.pull
 	p.Green = false
-	old := readLoopPullBatch
-	t.Cleanup(func() { readLoopPullBatch = old })
-	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
-		return map[string]watchedLoopPull{loopPR: {Pull: p, At: r.a.now, Pending: !p.Green}}, nil
+	old := loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadLoopPullBatch = old })
+	loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {
+		return map[string]loop.WatchedLoopPull{loopPR: {Pull: p, At: r.a.now, Pending: !p.Green}}, nil
 	}
-	if next, err := w.poll(t.Context(), l); err != nil || next != loopPullShort {
+	if next, err := w.Poll(t.Context(), l); err != nil || next != loop.LoopPullShort {
 		t.Fatalf("pending: %s %v", next, err)
 	}
-	if err := l.pass(t.Context()); err != nil {
+	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	check := func(want string) {
@@ -231,17 +232,17 @@ func TestPullWatcherGreenReachesDeliveryWithoutDeskEvent(t *testing.T) {
 		t.Fatalf("delivery missing: %+v", v)
 	}
 	check(state.DeliveryCI)
-	r.a.now = r.a.now.Add(loopPullShort)
+	r.a.now = r.a.now.Add(loop.LoopPullShort)
 	p.Green = true
-	if next, err := w.poll(t.Context(), l); err != nil || next != loopPullLong {
+	if next, err := w.Poll(t.Context(), l); err != nil || next != loop.LoopPullLong {
 		t.Fatalf("settled: %s %v", next, err)
 	}
 	// The watcher wakes a pass even when the configured loop interval is long.
 	r.a.cfg.Supervisor.LoopInterval.Duration = time.Hour
-	if !l.waitNextPass(t.Context()) {
+	if !l.WaitNextPass(t.Context()) {
 		t.Fatal("watcher did not wake pass")
 	}
-	if err := l.pass(t.Context()); err != nil {
+	if err := l.Pass(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	check(state.DeliveryReviewQueued)
@@ -253,36 +254,36 @@ func TestPullWatcherFloorAndTerminalRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := l.pullWatcher()
-	w.set([]string{loopPR}, nil, nil, 2500, nil)
-	w.snapshot.ListedAt = time.Now()
-	old := readLoopPullBatch
-	t.Cleanup(func() { readLoopPullBatch = old })
+	w := l.PullWatcher()
+	w.Set([]string{loopPR}, nil, nil, 2500, nil)
+	w.Snapshot.ListedAt = time.Now()
+	old := loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadLoopPullBatch = old })
 	calls := 0
-	readLoopPullBatch = func(_ context.Context, refs []string, _ map[string]watchedLoopPull, _ int) (map[string]watchedLoopPull, error) {
+	loop.ReadLoopPullBatch = func(_ context.Context, refs []string, _ map[string]loop.WatchedLoopPull, _ int) (map[string]loop.WatchedLoopPull, error) {
 		calls++
 		if calls > 1 && len(refs) != 0 {
 			t.Fatal("terminal PR queried again")
 		}
 		p := r.pull
 		p.State = superloop.Merged
-		return map[string]watchedLoopPull{loopPR: {Pull: p, At: r.a.now}}, nil
+		return map[string]loop.WatchedLoopPull{loopPR: {Pull: p, At: r.a.now}}, nil
 	}
-	if _, err := w.poll(t.Context(), l); !errors.Is(err, errLoopLater) || calls != 0 {
+	if _, err := w.Poll(t.Context(), l); !errors.Is(err, loop.ErrLoopLater) || calls != 0 {
 		t.Fatalf("unknown floor: calls=%d err=%v", calls, err)
 	}
 	healthyLoopBudget(t, r)
-	if _, err := w.poll(t.Context(), l); err != nil {
+	if _, err := w.Poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.poll(t.Context(), l); err != nil {
+	if _, err := w.Poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.read(loopPR, r.a.now.Add(time.Hour)); err != nil {
+	if _, err := w.Read(loopPR, r.a.now.Add(time.Hour)); err != nil {
 		t.Fatal("lost final observation", err)
 	}
 	for n, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 10 * time.Minute, 10 * time.Minute} {
-		if got := pullWatchRetry(n + 1); got != want {
+		if got := loop.PullWatchRetry(n + 1); got != want {
 			t.Fatalf("retry %d: %s want %s", n, got, want)
 		}
 	}
@@ -294,22 +295,22 @@ func TestPullWatcherRateLimitLogsOnceAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := l.pullWatcher()
-	w.snapshot.ListedAt = time.Now()
-	w.set([]string{loopPR}, nil, nil, 0, nil)
-	old := readLoopPullBatch
-	t.Cleanup(func() { readLoopPullBatch = old })
+	w := l.PullWatcher()
+	w.Snapshot.ListedAt = time.Now()
+	w.Set([]string{loopPR}, nil, nil, 0, nil)
+	old := loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadLoopPullBatch = old })
 	fail := true
-	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
+	loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {
 		if fail {
 			return nil, errors.New("rate limit")
 		}
-		return map[string]watchedLoopPull{loopPR: {Pull: r.pull, At: r.a.now}}, nil
+		return map[string]loop.WatchedLoopPull{loopPR: {Pull: r.pull, At: r.a.now}}, nil
 	}
-	schedule := loopPullSchedule{}
+	schedule := loop.LoopPullSchedule{}
 	for i := 1; i <= 8; i++ {
-		next, err := w.poll(t.Context(), l)
-		if got := schedule.after(l, next, err); got != pullWatchRetry(i) {
+		next, err := w.Poll(t.Context(), l)
+		if got := schedule.After(l, next, err); got != loop.PullWatchRetry(i) {
 			t.Fatalf("retry %d: %s", i, got)
 		}
 	}
@@ -317,16 +318,16 @@ func TestPullWatcherRateLimitLogsOnceAndRecovers(t *testing.T) {
 		t.Fatalf("failure logged %d times", n)
 	}
 	fail = false
-	next, err := w.poll(t.Context(), l)
-	if err != nil || schedule.after(l, next, err) != loopPullLong || schedule.failures != 0 {
+	next, err := w.Poll(t.Context(), l)
+	if err != nil || schedule.After(l, next, err) != loop.LoopPullLong || schedule.Failures != 0 {
 		t.Fatalf("did not recover: %v", err)
 	}
-	if _, err := w.read(loopPR, r.a.now); err != nil {
+	if _, err := w.Read(loopPR, r.a.now); err != nil {
 		t.Fatal(err)
 	}
 	fail = true
-	next, err = w.poll(t.Context(), l)
-	if schedule.after(l, next, err) != time.Minute {
+	next, err = w.Poll(t.Context(), l)
+	if schedule.After(l, next, err) != time.Minute {
 		t.Fatal("backoff did not reset")
 	}
 	if n := strings.Count(r.out.String(), "SUPERVISOR PULL WATCH held"); n != 2 {
@@ -336,21 +337,21 @@ func TestPullWatcherRateLimitLogsOnceAndRecovers(t *testing.T) {
 
 func TestPullWatcherPaginatesBeforeCallingChecksGreen(t *testing.T) {
 	calls := fakePullGraphQL(t, func(query string, call int) map[string]any {
-		status := checkSuccess
+		status := loop.CheckSuccess
 		if call == 2 {
-			status = checkFailure
+			status = loop.CheckFailure
 		}
 		p := pullGraphQLFixture(t, query, status, loopHead, watchFixtureUpdated)
-		c := pullConnection(p, pullContexts)
+		c := loop.PullConnection(p, loop.PullContexts)
 		if call == 1 {
-			c[pullPageInfo] = map[string]any{pullHasNext: true, pullEndCursor: "more"}
+			c[loop.PullPageInfo] = map[string]any{loop.PullHasNext: true, loop.PullEndCursor: "more"}
 		}
 		if call == 2 && !strings.Contains(query, `contexts(first:100,after:"more")`) {
 			t.Fatal("missing check cursor")
 		}
 		return p
 	})
-	seen, err := fetchLoopPullBatch(t.Context(), []string{loopPR}, nil, 0)
+	seen, err := loop.FetchLoopPullBatch(t.Context(), []string{loopPR}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,49 +365,49 @@ func TestPullWatcherNullReferenceDoesNotDiscardOtherPulls(t *testing.T) {
 		if strings.Contains(query, "number:8)") {
 			return nil
 		}
-		return pullGraphQLFixture(t, query, checkSuccess, loopHead, watchFixtureUpdated)
+		return pullGraphQLFixture(t, query, loop.CheckSuccess, loopHead, watchFixtureUpdated)
 	})
-	seen, err := fetchLoopPullBatch(t.Context(), []string{loopPR, multiParkSecondPR}, nil, 0)
+	seen, err := loop.FetchLoopPullBatch(t.Context(), []string{loopPR, multiParkSecondPR}, nil, 0)
 	if err != nil || !seen[loopPR].Pull.Green || seen[multiParkSecondPR].Pull.State != "" {
 		t.Fatalf("partial lookup: %+v %v", seen, err)
 	}
 }
 
 func TestPullWatcherHasOneFetchAndCancelsOnStop(t *testing.T) {
-	start := startLoopPullWatcher
+	start := loop.StartLoopPullWatcher
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := readLoopPullBatch
-	t.Cleanup(func() { readLoopPullBatch = old })
+	old := loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadLoopPullBatch = old })
 	entered := make(chan struct{})
-	readLoopPullBatch = func(ctx context.Context, _ []string, _ map[string]watchedLoopPull, _ int) (map[string]watchedLoopPull, error) {
+	loop.ReadLoopPullBatch = func(ctx context.Context, _ []string, _ map[string]loop.WatchedLoopPull, _ int) (map[string]loop.WatchedLoopPull, error) {
 		close(entered) // a concurrent second fetch would panic
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	stop := start(t.Context(), l)
 	<-entered
-	l.pullWatcher().set([]string{loopPR}, nil, nil, 0, nil)
+	l.PullWatcher().Set([]string{loopPR}, nil, nil, 0, nil)
 	stop()
 
 	polledOnce := false
-	pollOncePullWatcher = func(context.Context, *supervisorLoop) { polledOnce = true }
-	l.once = true
+	loop.PollOncePullWatcher = func(context.Context, *loop.Loop) { polledOnce = true }
+	l.Once = true
 	now := r.a.now
 	r.a.loopNow = &atomic.Pointer[time.Time]{}
 	r.a.loopNow.Store(&now)
-	if err := l.pass(t.Context()); err != nil || !polledOnce {
+	if err := l.Pass(t.Context()); err != nil || !polledOnce {
 		t.Fatalf("once pass poll: polled=%v err=%v", polledOnce, err)
 	}
 }
 
 func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T) {
-	observe, sweep := readObservedLoopPull, readLoopSweep
+	observe, sweep := loop.ReadObservedLoopPull, loop.ReadLoopSweep
 	r := newLoopRig(t)
-	readObservedLoopPull, readLoopSweep = observe, sweep
+	loop.ReadObservedLoopPull, loop.ReadLoopSweep = observe, sweep
 	r.a.cfg.Supervisor.Ownership.Authors = []string{loopDesk}
 	r.a.cfg.GitHub.AllowedOrgs = []string{"o"}
 	r.a.cfg.GitHub.Floor = 2500
@@ -414,15 +415,15 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 	r.park(t, loopPR, r.a.now)
 
 	listed := r.a.now.Add(-time.Minute)
-	saved := loopPullSnapshot{
-		Pulls:    map[string]watchedLoopPull{loopPR: {Pull: r.pull, At: r.a.now}},
+	saved := loop.LoopPullSnapshot{
+		Pulls:    map[string]loop.WatchedLoopPull{loopPR: {Pull: r.pull, At: r.a.now}},
 		ListedAt: listed,
 	}
-	if err := r.a.store.WriteFile(loopPullWatchFile, saved); err != nil {
+	if err := r.a.store.WriteFile(loop.LoopPullWatchFile, saved); err != nil {
 		t.Fatal(err)
 	}
 	polled := 0
-	pollOncePullWatcher = func(context.Context, *supervisorLoop) { polled++ }
+	loop.PollOncePullWatcher = func(context.Context, *loop.Loop) { polled++ }
 	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
 		t.Fatalf("dryRun with fresh saved snapshot: %v", err)
 	}
@@ -432,19 +433,19 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 
 	// When the saved snapshot is missing a tracked PR (or absent during upgrade),
 	// dry-run polls once in memory without overwriting the saved file.
-	if err := r.a.store.WriteFile(loopPullWatchFile, loopPullSnapshot{Pulls: map[string]watchedLoopPull{}}); err != nil {
+	if err := r.a.store.WriteFile(loop.LoopPullWatchFile, loop.LoopPullSnapshot{Pulls: map[string]loop.WatchedLoopPull{}}); err != nil {
 		t.Fatal(err)
 	}
-	oldBatch, oldOpen := readLoopPullBatch, readOpenPulls
-	t.Cleanup(func() { readLoopPullBatch, readOpenPulls = oldBatch, oldOpen })
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+	oldBatch, oldOpen := loop.ReadLoopPullBatch, loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadLoopPullBatch, loop.ReadOpenPulls = oldBatch, oldOpen })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
 		return []string{loopPR}, nil
 	}
-	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
-		return map[string]watchedLoopPull{loopPR: {Pull: r.pull, At: time.Now()}}, nil
+	loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {
+		return map[string]loop.WatchedLoopPull{loopPR: {Pull: r.pull, At: time.Now()}}, nil
 	}
-	pollOncePullWatcher = func(ctx context.Context, l *supervisorLoop) {
-		if _, err := l.pullWatcher().poll(ctx, l); err != nil {
+	loop.PollOncePullWatcher = func(ctx context.Context, l *loop.Loop) {
+		if _, err := l.PullWatcher().Poll(ctx, l); err != nil {
 			t.Fatal(err)
 		}
 		polled++
@@ -455,8 +456,8 @@ func TestPullWatcherPreservesSavedListedAtAndPollsDryRunWhenMissing(t *testing.T
 	if polled != 1 {
 		t.Fatalf("dryRun polled %d times, want 1", polled)
 	}
-	var disk loopPullSnapshot
-	if ok, err := r.a.store.ReadFile(loopPullWatchFile, &disk); !ok || err != nil || len(disk.Pulls) != 0 {
+	var disk loop.LoopPullSnapshot
+	if ok, err := r.a.store.ReadFile(loop.LoopPullWatchFile, &disk); !ok || err != nil || len(disk.Pulls) != 0 {
 		t.Fatalf("dryRun mutated saved snapshot on disk: ok=%v err=%v pulls=%d", ok, err, len(disk.Pulls))
 	}
 }
@@ -482,11 +483,11 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, batch := readOpenPulls, readLoopPullBatch
-	t.Cleanup(func() { readOpenPulls, readLoopPullBatch = listed, batch })
+	listed, batch := loop.ReadOpenPulls, loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadOpenPulls, loop.ReadLoopPullBatch = listed, batch })
 	var searched []string
 	var botFails bool
-	readOpenPulls = func(_ context.Context, authors func() ([]string, error), orgs []string) ([]string, error) {
+	loop.ReadOpenPulls = func(_ context.Context, authors func() ([]string, error), orgs []string) ([]string, error) {
 		logins, err := authors()
 		if err != nil {
 			return nil, err
@@ -503,52 +504,52 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		}
 		return []string{reserveIssue}, nil
 	}
-	readLoopPullBatch = func(context.Context, []string, map[string]watchedLoopPull, int) (map[string]watchedLoopPull, error) {
-		return map[string]watchedLoopPull{}, nil
+	loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {
+		return map[string]loop.WatchedLoopPull{}, nil
 	}
-	w := l.pullWatcher()
-	w.set(nil, []string{"me"}, []string{"o"}, 0, []string{botTool})
+	w := l.PullWatcher()
+	w.Set(nil, []string{"me"}, []string{"o"}, 0, []string{botTool})
 	desk := superloop.Desk{Orgs: []string{"o"}, Team: botTeam, Review: []string{"o/*-configs"}, Never: []string{botTool}}
-	w.setBots([]string{botName}, desk, nil, false)
-	if _, err := w.poll(t.Context(), l); err != nil {
+	w.SetBots([]string{botName}, desk, nil, false)
+	if _, err := w.Poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(searched, []string{"me", botLogin}) {
 		t.Errorf("searched %v", searched)
 	}
-	if got, want := w.view().Open, []string{reserveIssue, botPull}; !slices.Equal(got, want) {
+	if got, want := w.View().Open, []string{reserveIssue, botPull}; !slices.Equal(got, want) {
 		t.Errorf("teams unread: open = %v, want %v", got, want)
 	}
 	// Once read, the team files admit the team's own repositories: the
 	// listing runs again at once.
-	w.setBots([]string{botName}, desk, map[string]string{repo: botTeam, botOther: "team-b", botTool: botTeam}, true)
-	if !w.view().ListedAt.IsZero() {
+	w.SetBots([]string{botName}, desk, map[string]string{repo: botTeam, botOther: "team-b", botTool: botTeam}, true)
+	if !w.View().ListedAt.IsZero() {
 		t.Fatal("team files read without a new listing")
 	}
-	if _, err := w.poll(t.Context(), l); err != nil {
+	if _, err := w.Poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := w.view().Open, []string{reserveIssue, idleRef, botPull}; !slices.Equal(got, want) {
+	if got, want := w.View().Open, []string{reserveIssue, idleRef, botPull}; !slices.Equal(got, want) {
 		t.Errorf("teams read: open = %v, want %v", got, want)
 	}
-	if w.view().Incomplete {
+	if w.View().Incomplete {
 		t.Error("a short bot listing marked the desk's incomplete")
 	}
 	// One bot's failed search (a login GitHub's search refuses) leaves the
 	// desk's own listing and the other bots' whole, and is said once.
 	botFails = true
 	searched = nil
-	w.setBots([]string{"renovat", botName}, desk, map[string]string{repo: botTeam}, true)
+	w.SetBots([]string{"renovat", botName}, desk, map[string]string{repo: botTeam}, true)
 	for range 2 {
-		if _, err := w.poll(t.Context(), l); err != nil {
+		if _, err := w.Poll(t.Context(), l); err != nil {
 			t.Fatal(err)
 		}
-		if v := w.view(); v.ListedAt.IsZero() || v.Incomplete || !slices.Equal(v.Open, []string{reserveIssue, idleRef, botPull}) {
+		if v := w.View(); v.ListedAt.IsZero() || v.Incomplete || !slices.Equal(v.Open, []string{reserveIssue, idleRef, botPull}) {
 			t.Errorf("a bot's search failed: listed %v, incomplete %v, open %v", v.ListedAt, v.Incomplete, v.Open)
 		}
-		w.mu.Lock()
-		w.snapshot.ListedAt = time.Time{}
-		w.mu.Unlock()
+		w.Mu.Lock()
+		w.Snapshot.ListedAt = time.Time{}
+		w.Mu.Unlock()
 	}
 	if !slices.Equal(searched, []string{"me", badLogin, botLogin, "me", badLogin, botLogin}) {
 		t.Errorf("a bot's search failed: searched %v", searched)
@@ -559,18 +560,18 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 	botFails = false
 	// No bots: one search, the desk's.
 	searched = nil
-	w.setBots(nil, desk, nil, true)
-	if _, err := w.poll(t.Context(), l); err != nil {
+	w.SetBots(nil, desk, nil, true)
+	if _, err := w.Poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(searched, []string{"me"}) || !slices.Equal(w.view().Open, []string{reserveIssue}) {
-		t.Errorf("without bots: searched %v, open %v", searched, w.view().Open)
+	if !slices.Equal(searched, []string{"me"}) || !slices.Equal(w.View().Open, []string{reserveIssue}) {
+		t.Errorf("without bots: searched %v, open %v", searched, w.View().Open)
 	}
 	// A multi-org desk without a team file that names its repositories in
 	// supervisor.ownership.review searches only those scopes for bots, not
 	// whole shared orgs.
 	var gotScopes [][]string
-	readOpenPulls = func(_ context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
+	loop.ReadOpenPulls = func(_ context.Context, authors func() ([]string, error), scopes []string) ([]string, error) {
 		logins, err := authors()
 		if err != nil {
 			return nil, err
@@ -581,16 +582,16 @@ func TestPullWatcherListsTheDesksBotPullRequests(t *testing.T) {
 		}
 		return []string{reserveIssue}, nil
 	}
-	w.set(nil, []string{"me"}, []string{"o", litShared}, 0, nil)
+	w.Set(nil, []string{"me"}, []string{"o", litShared}, 0, nil)
 	scoped := superloop.Desk{Orgs: []string{"o", litShared}, Review: []string{orgWildcard, sharedRepo}}
-	w.setBots([]string{botName}, scoped, nil, false)
-	if _, err := w.poll(t.Context(), l); err != nil {
+	w.SetBots([]string{botName}, scoped, nil, false)
+	if _, err := w.Poll(t.Context(), l); err != nil {
 		t.Fatal(err)
 	}
 	if len(gotScopes) != 2 || !slices.Equal(gotScopes[0], []string{"o", litShared}) || !slices.Equal(gotScopes[1], []string{"o", sharedRepo}) {
 		t.Errorf("scoped bot search scopes = %v", gotScopes)
 	}
-	if got, want := w.view().Open, []string{reserveIssue, idleRef, sharedPull}; !slices.Equal(got, want) {
+	if got, want := w.View().Open, []string{reserveIssue, idleRef, sharedPull}; !slices.Equal(got, want) {
 		t.Errorf("scoped open = %v, want %v", got, want)
 	}
 }

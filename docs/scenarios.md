@@ -153,8 +153,8 @@ then:
 
 | Step | Does |
 | --- | --- |
-| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit |
-| `background` | starts the candidate and leaves it running; needs a `name` |
+| `run` | runs the candidate with `args` (and `env`, `stdin`) to its exit; `release` runs that release's build |
+| `background` | starts the candidate and leaves it running; needs a `name`; `release` as for `run` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
@@ -180,11 +180,14 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome` (none while a begun turn has not reported), whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
+| `log` | what the background step `name` wrote so far: `contains`, `not_contains`, `matches` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
 sessions; `name` and an `origin`'s `branch` are regular expressions that
-match the whole name.
+match the whole name. A `log` reads a background step's standard output and
+error as one text: the lines a running loop and its watch say
+(`SUPERVISOR STARTS HELD`, `HIGH LOAD`), which no event records.
 
 ### The clock
 
@@ -259,6 +262,62 @@ A scenario drives the loop pass by pass: `run: {args: [supervisor, loop,
   session's next turn. The desk's codex has a model catalog
   (`~/.codex/models_cache.json`) with the models of its codex choices, which
   the loop's `supervisor.effort` is validated against.
+
+### Releases and self-update
+
+`given.releases` gives a scenario beekeeper's own releases, so that
+`self-update` runs for real: the lookup, the download, the verification,
+the canary, the replacement, probation and the recovery controller.
+
+```yaml
+given:
+  releases:
+    installed: v1.0.0-rc.1            # the desk runs this release's build
+    published: [v1.0.0-rc.2, v1.0.0-rc.3]   # on the scenario's GitHub
+when:
+  - run: {args: [self-update, --version, v1.0.0-rc.2]}
+  - run: {release: v1.0.0-rc.1, args: [version]}   # a process still on a release
+```
+
+- **A release is a build.** The suite builds the candidate once more for
+  each version, stamped as the release pipeline stamps it
+  (`-ldflags -X …/pkg/project.version=<version>`), once per run. The builds
+  are in the sandbox under `/work/releases/<version>/`; `installed` is
+  `/work/bin/beekeeper`. Without `installed` the desk runs the candidate,
+  whose version is the checkout's.
+- **Published releases** are releases of `giantswarm/beekeeper` on the
+  scenario's GitHub (`given.github` is created for them when the scenario
+  has none): this platform's binary and its bundle as assets, and a
+  pre-release where the version has a pre-release part.
+- **A scenario build asks the scenario's GitHub** for releases
+  (`BEEKEEPER_GITHUB_API`) and verifies a download against a scenario
+  bundle, the binary's SHA-256, where a release build verifies the cosign
+  bundle of a CircleCI build. A release build has neither seam
+  (`internal/update/source_release.go`).
+- **The recovery controller** of a watched candidate is a unit the updater
+  asks the service manager for (`beekeeper-recovery.service`). It evaluates
+  once a minute, and one evaluation with its isolated workflow probe takes
+  longer than a step of the world's clock, so evaluations would be dropped.
+  A scenario therefore answers that `systemd-run` call in `given.calls` and
+  runs the unit's command itself, as a background step of the last known
+  good release with the controller's own cadence flags:
+  `background: {release: <last known good>, args: [self-update, --recovery-controller,
+  --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]}`.
+  Each evaluation then counts for a minute of probation and comes every
+  500 ms; the controller exits once it has promoted or rolled back, which
+  `process: {name: …, exit: 0}` waits for. A loop that owes the heartbeat
+  runs with `supervisor.loopInterval: 1s` and writes it with every pass:
+  it is there once the loop's log has its first `SUPERVISOR REFILL` line.
+- **Each published release is a commit** of its own on the repository's
+  `main`, in the order of `published`: the lookup takes a tag that shares
+  its commit with an older release for a stale one.
+- **A running loop installs a newer release itself** at its first pass.
+  Where a scenario installs by hand, a fault answers that loop's lookup
+  (`match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: <loop>}`).
+- **Use release candidates** for a rollback. A full release that saved the
+  state stamps it as its writer, and a rollback to an older release is then
+  refused; a pre-release neither stamps the state nor is judged by the
+  stamp.
 
 ### Pending scenarios
 

@@ -70,6 +70,9 @@ type Runner struct {
 	// Artifacts, when set, receives each scenario's artifacts under
 	// <flow>/<name>/.
 	Artifacts string
+	// Release builds a release of given.releases and returns its binary,
+	// its scenario bundle beside it (ReleaseBuilder.Build).
+	Release func(ctx context.Context, b ReleaseBuild) (string, error)
 }
 
 // Run runs one scenario in root, a fresh empty directory, and returns its
@@ -102,7 +105,11 @@ func (r *Runner) run(ctx context.Context, s *Scenario, root string) *Result {
 		}
 	}
 	bin := filepath.Join(work, "bin")
-	if err := linkOrCopy(r.Candidate, filepath.Join(bin, "beekeeper")); err != nil {
+	desk, err := r.placeReleases(ctx, s, work)
+	if err != nil {
+		return harness(err)
+	}
+	if err := linkOrCopy(desk, filepath.Join(bin, "beekeeper")); err != nil {
 		return harness(err)
 	}
 	if err := linkOrCopy(r.Fake, filepath.Join(bin, fakeBinary)); err != nil {

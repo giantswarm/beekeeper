@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -39,7 +40,7 @@ func (a *app) checkDeliveries(now time.Time) (string, error) {
 		var stalls, stallKeys []string
 		file := func(key, detail string) {
 			lines = append(lines, detail)
-			events = append(events, event(loopParty, loopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, detail))
+			events = append(events, event(loop.LoopParty, loop.LoopFileVerb, "[delivery %s] %s reported at %s%s%s", key, loop.LoopParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, detail))
 		}
 		var active []state.Delivery
 		var signature []string
