@@ -189,6 +189,9 @@ func (d *driver) run() {
 		err = d.setup(ctx)
 	}
 	if err == nil {
+		err = d.seedState()
+	}
+	if err == nil {
 		err = d.startGitHub(&logMu)
 	}
 	if err != nil {
@@ -416,7 +419,10 @@ func baseConfig(orgs []string) map[string]any {
 			"providers": map[string]any{"claude": map[string]any{"ceiling": 2}},
 			"choices":   []any{map[string]any{"harness": "claude", "model": "sonnet"}},
 		},
-		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000},
+		// The machine the suite runs on is busy with the suite: neither its
+		// load nor its CPU pressure holds a scenario's starts or slows its
+		// watch's reads.
+		"watch": map[string]any{"availMinMiB": 1, "loadMax": 1000000, "cpuPSIMax": 1000, "psiMax": 1000},
 		"supervisor": map[string]any{
 			"effort": "low", "workerBrief": workDir + "/worker.txt",
 			"ownership": map[string]any{"authors": []any{"desk"}},

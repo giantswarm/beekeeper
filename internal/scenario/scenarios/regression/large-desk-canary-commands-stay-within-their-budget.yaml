@@ -1,0 +1,75 @@
+name: large-desk-canary-commands-stay-within-their-budget
+description: >
+  A desk larger than the lab's coordinator was when its updates failed: 120
+  workers on the roster, 1500 serve records of ended sessions, 1200
+  deliveries in flight, 3000 reports and an event log of 20000 events. The
+  four commands self-update runs as its canary on a staged release (the
+  version, the budget gate, the supervisor's status and capacity) each
+  answer within three seconds there, and so does capacity --json. Live,
+  supervisor status took more than six seconds of CPU on such a state (it
+  searched every serve record for every worker of every delivery) and
+  waited on the state lock besides; the canary killed it, and every
+  release candidate was refused or rolled back.
+issue: https://github.com/giantswarm/beekeeper/issues/3345
+flow: regression
+tags: [regression, selfupdate, canary, performance]
+timeout: 120s
+
+# The bug's fix is on main already, so the scenario passes on this change's
+# base. Its control is a run on the code before the fix, linked on the pull
+# request that added the scenario.
+control:
+  none: >-
+    the fix https://github.com/giantswarm/beekeeper/pull/3700 is on main
+    already; the run that fails on the code before it is linked on the pull
+    request that adds this scenario
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: An item on the board, board: Todo}
+  state:
+    generate:
+      agents: 120
+      records: 1500
+      deliveries: 1200
+      reports: 3000
+      events: 20000
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+
+when:
+  - name: version
+    run: {args: [version]}
+    expect:
+      - exit: 0
+      - duration: {max: 3s}
+  - name: budget
+    run: {args: [budget, --gate]}
+    expect:
+      - duration: {max: 3s}
+  - name: status
+    run: {args: [supervisor, status]}
+    expect:
+      - duration: {max: 3s}
+  - name: capacity
+    run: {args: [capacity]}
+    expect:
+      - duration: {max: 3s}
+  - name: capacity-json
+    run: {args: [capacity, --json]}
+    expect:
+      - duration: {max: 3s}
+
+then:
+  - {step: status, duration: {max: 3s}}
+  - {step: capacity-json, json_path: {path: idle, len: 120}}

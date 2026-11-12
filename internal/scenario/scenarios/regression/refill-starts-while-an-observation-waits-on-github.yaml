@@ -79,6 +79,9 @@ when:
       timeout: 30s
       expect:
         - worker: {name: app 1, turns: 1}
+  # The refill's tick ends with a board read that finds nothing free.
+  - name: settled
+    advance: {by: 1s, quiet: 500ms}
   # From now on GitHub answers the pull requests of example/slow eight
   # seconds late.
   - name: slow

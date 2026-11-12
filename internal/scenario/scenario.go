@@ -93,6 +93,8 @@ type Given struct {
 	// Builder is the Kubernetes builder of the desk's run.remote: a fake
 	// kubectl and one builder image.
 	Builder *harness.Builder `yaml:"builder"`
+	// State seeds the desk's state: a generated desk of some size.
+	State *State `yaml:"state"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
 }
@@ -422,7 +424,7 @@ func (s *Scenario) Validate() error {
 		}
 	}
 	repositories := s.repositoryNames()
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts), s.Given.Builder.Validate()} {
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts), s.Given.Builder.Validate(), s.Given.State.validate(repositories)} {
 		if err == nil {
 			continue
 		}

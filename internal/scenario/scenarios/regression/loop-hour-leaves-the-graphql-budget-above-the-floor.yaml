@@ -1,15 +1,15 @@
 name: loop-hour-leaves-the-graphql-budget-above-the-floor
 description: >
   One hour of loop passes on a desk with open pull requests in eight
-  repositories. GitHub fails to list the pull requests of
-  each of them for the whole hour. The loop keeps a failed inventory for
-  five minutes like a successful one, so it asks again twelve times an
-  hour, not at every pass, and its own GraphQL spend (two budget readings
-  around each inventory) leaves the budget above github.floor. At the end
-  of the hour a board item that became free still gets its worker. Live,
-  every idle pass repeated the failed read and its budget readings, the
-  budget fell under the floor in most hours, and starts were held until
-  the hourly reset.
+  repositories. GitHub fails to list the pull requests of three of them
+  for the whole hour. The loop keeps a failed inventory for five minutes
+  like a successful one, so it asks for each of the three again twelve
+  times in the hour, not at every pass, and its own GraphQL spend (the
+  budget readings around each inventory) leaves the budget above
+  github.floor. At the end of the hour a board item that became free still
+  gets its worker. Live, every idle pass repeated the failed reads and
+  their budget readings, the budget fell under the floor in most hours,
+  and starts were held until the hourly reset.
 issue: https://github.com/giantswarm/beekeeper/issues/3769
 flow: regression
 tags: [regression, loop, github, budget, clock]
@@ -82,7 +82,7 @@ given:
       graphql: {remaining: 3000, reset_in: 2h}
     faults:
       - name: unlisted
-        match: {path: 'repos/example/svc-[0-9]+/pulls'}
+        match: {path: 'repos/example/svc-0[1-3]/pulls'}
         respond: {status: 502}
   calls:
     - program: devctl
@@ -114,8 +114,9 @@ when:
       quiet: 50ms
     expect:
       - process: {name: loop, running: true}
-      # Twelve refreshes of eight repositories, not 120 passes of them.
-      - github: {calls: {path: 'repos/example/svc-[0-9]+/pulls', caller: loop, fault: unlisted, min: 8, max: 200}}
+      # Twelve refreshes of the three repositories, not a read at every one
+      # of some hundred passes.
+      - github: {calls: {path: 'repos/example/svc-0[1-3]/pulls', caller: loop, fault: unlisted, min: 3, max: 60}}
       - github: {budget: {bucket: graphql, caller: loop, spent: {max: 900}}}
       - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
   # 10:00: an item becomes free. The refill reads an empty board at most

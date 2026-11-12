@@ -78,7 +78,20 @@ given:
               - git: [rev-parse, HEAD]
                 save: head
               - write: {path: .beekeeper-scratch/review.md, content: "Desk review (opus): approved\nHead reviewed: `${head}`\n"}
-              - beekeeper: [agents, review, --body-file, '${dir}/.beekeeper-scratch/review.md']
+              # The review round is assigned to the execution right after
+              # its start: the reviewer asks until it is.
+              - run:
+                  - sh
+                  - -c
+                  - |
+                    i=0
+                    while [ "$i" -lt 200 ]; do
+                      beekeeper agents review --body-file "$1" && exit 0
+                      i=$((i+1))
+                    done
+                    exit 1
+                  - sh
+                  - '${dir}/.beekeeper-scratch/review.md'
               - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
   calls:
     - program: devctl
@@ -145,6 +158,8 @@ when:
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - stop: loop
+  - name: story
+    run: {args: [log, -n, '0']}
 
 then:
   # After the merge the task is closed and none of its pull requests is

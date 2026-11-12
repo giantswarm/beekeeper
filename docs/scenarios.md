@@ -413,3 +413,27 @@ given:
 
 Every call of `kubectl`, `go` and `golangci-lint` is in the world's call
 log, so `calls` expectations may name them.
+
+### A generated desk
+
+`given.state` seeds the desk's state before the first step. `generate` fills
+it like a coordinator's that has worked for weeks, at rest: idle workers on
+the roster, serve records of sessions that ended, deliveries in flight (each
+with a pull request under review), finished workers' reports and an event
+log. Every command reads all of it, which is what a large desk costs.
+
+```yaml
+given:
+  state:
+    generate:
+      repository: example/app        # default: the scenario's first
+      agents: 120                    # idle workers, each with its start
+      records: 1500                  # serve records of ended sessions
+      deliveries: 1200               # deliveries in flight
+      reports: 3000                  # reports, about a kibibyte each
+      events: 20000                  # events, about 400 bytes each
+```
+
+The issues and pull requests it names (numbers from 10000 on) are not on the
+scenario's GitHub. A scenario that runs a loop on a generated desk sees that
+loop read them and find nothing.
