@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -39,6 +40,8 @@ type Options struct {
 // hosts' faults.
 type World struct {
 	opts Options
+	// envMu guards opts.Env, which AddEnv extends.
+	envMu sync.RWMutex
 
 	mu       sync.Mutex
 	units    map[string]*unit
@@ -178,13 +181,37 @@ func (w *World) fail(format string, args ...any) {
 	w.failures = append(w.failures, fmt.Sprintf(format, args...))
 }
 
+// AddEnv adds variables to the desk's environment for what the world
+// starts from now on: the driver names the scenario's GitHub once it
+// listens, after the hosts were provisioned.
+func (w *World) AddEnv(vars map[string]string) {
+	w.envMu.Lock()
+	defer w.envMu.Unlock()
+	env := slices.DeleteFunc(slices.Clone(w.opts.Env), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		_, replaced := vars[k]
+		return replaced
+	})
+	for _, k := range slices.Sorted(maps.Keys(vars)) {
+		env = append(env, k+"="+vars[k])
+	}
+	w.opts.Env = env
+}
+
+// deskEnv is the desk's environment as it is now.
+func (w *World) deskEnv() []string {
+	w.envMu.RLock()
+	defer w.envMu.RUnlock()
+	return slices.Clone(w.opts.Env)
+}
+
 // machineEnv is the environment of a machine's service manager and of a
 // command an ssh call runs there.
 func (w *World) machineEnv(machine string) []string {
 	if machine == LocalHost || machine == "" {
-		return slices.Clone(w.opts.Env)
+		return w.deskEnv()
 	}
-	return HostEnv(w.opts.Env, machine)
+	return HostEnv(w.deskEnv(), machine)
 }
 
 func (w *World) handle(req request) reply {
@@ -467,7 +494,8 @@ func (w *World) ssh(dest string) reply {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if dest == CoordinatorAlias {
-		return reply{SSH: &sshRoute{Root: "/work", Home: homeOf(w.opts.Env), Env: slices.Clone(w.opts.Env)}}
+		env := w.deskEnv()
+		return reply{SSH: &sshRoute{Root: "/work", Home: homeOf(env), Env: env}}
 	}
 	hs := w.hosts[dest]
 	if hs == nil {
@@ -478,7 +506,7 @@ func (w *World) ssh(dest string) reply {
 		fault = ""
 	}
 	root := HostRoot(dest)
-	return reply{SSH: &sshRoute{Root: root, Home: filepath.Join(root, "home"), Env: HostEnv(w.opts.Env, dest), Fault: fault, Slow: hs.slow.Milliseconds()}}
+	return reply{SSH: &sshRoute{Root: root, Home: filepath.Join(root, "home"), Env: HostEnv(w.deskEnv(), dest), Fault: fault, Slow: hs.slow.Milliseconds()}}
 }
 
 func homeOf(env []string) string {

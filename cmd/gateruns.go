@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -212,7 +213,7 @@ devctl's. End one with gate stop, never a kill by pid.`,
 				_, err := fmt.Fprintln(a.out, "no detached runs")
 				return err
 			}
-			now := time.Now()
+			now := clk.Now()
 			w := a.table()
 			_, _ = fmt.Fprintln(w, "ID\tKIND\tPHASE\tOWNER\tSINCE\tPID\tDEVCTL\tCOMMAND")
 			for _, r := range runs {

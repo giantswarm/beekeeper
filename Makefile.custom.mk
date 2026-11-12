@@ -63,8 +63,8 @@ test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with lo
 	env -u BEEKEEPER_TEST_LOOP_BINARY LANG=C.UTF-8 go test -tags=integration ./internal/loopworkflow -count=1 -timeout=12m
 
 .PHONY: test-scenarios
-test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox. Set BEEKEEPER_SCENARIO_FLOW, _TAG or _REPORT.
-	go test -tags scenario ./internal/scenario/... -count=1 -timeout=15m -v
+test-scenarios: ## Run the behavioral scenarios (docs/scenarios.md) against the real binary, each in its own namespace sandbox, and the scenario clock's tests. Set BEEKEEPER_SCENARIO_FLOW, _TAG or _REPORT.
+	go test -tags scenario ./internal/clock ./internal/scenario/... -count=1 -timeout=15m -v
 
 .PHONY: test-gh-contract
 test-gh-contract: ## On demand: compare the scenarios' fake gh with the real gh on PATH against the same fake GitHub (docs/scenarios-github.md).

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/merge"
 )
 
@@ -31,7 +32,7 @@ func (g *gateRun) readRetrying(what string, read func() error) error {
 		select {
 		case <-g.ctx.Done():
 			return err
-		case <-time.After(pause):
+		case <-clk.After(pause):
 		}
 	}
 }

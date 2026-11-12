@@ -21,6 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -60,6 +61,7 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
 		harness.SocketEnv:     harness.DefaultSocket,
+		clock.Env:             clockSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
 		"GIT_ALLOW_PROTOCOL":  "file:https",
@@ -116,6 +118,7 @@ type driver struct {
 	world *World
 	// fakes is the world of the fake harnesses, units and hosts.
 	fakes *harness.World
+	clock *clock.Server
 	res   *Result
 	procs map[string]*proc
 	views map[string]View
@@ -168,6 +171,9 @@ func (d *driver) run() {
 		err = d.world.Serve(worldSocket)
 	}
 	if err == nil {
+		err = d.startClock()
+	}
+	if err == nil {
 		d.fakes, err = harness.NewWorld(harness.Options{
 			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
 			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
@@ -201,6 +207,9 @@ func (d *driver) run() {
 			d.res.Fail("%s", f)
 		}
 		_ = d.world.Close()
+		if d.clock != nil {
+			_ = d.clock.Close()
+		}
 		d.res.Calls = d.world.Calls()
 		for _, c := range d.world.Unanswered() {
 			if c.Reason != "" {
@@ -245,6 +254,10 @@ func (d *driver) run() {
 	d.res.Steps = append(d.res.Steps, then)
 	d.res.Failures = append(d.res.Failures, then.Failures...)
 }
+
+// workersCaller is the caller of the GitHub calls of what the fakes start
+// beside the steps' own processes.
+const workersCaller = "workers"
 
 type writerFunc func([]byte) (int, error)
 
@@ -322,6 +335,8 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
+		// Budget windows, faults and timestamps run on the world's clock.
+		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
 			logMu.Lock()
@@ -337,6 +352,9 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 		return fmt.Errorf("the scenario's GitHub: %w", err)
 	}
 	d.github = srv
+	// What the fakes start (a unit, a session of an execution host, a
+	// host's call back to its coordinator) reaches the same GitHub.
+	d.fakes.AddEnv(srv.Env(workersCaller))
 	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
 		res := srv.GH(context.Background(), fakegithub.GHCall{Args: req.Args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
 		return CallResponse{Stdout: res.Stdout, Stderr: res.Stderr, Exit: res.Exit}, res.Handled, res.Reason
@@ -502,6 +520,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
+	case KindAdvance:
+		var failures []string
+		sr.Args, failures = d.advance(ctx, st.Advance)
+		sr.Failures = append(sr.Failures, failures...)
 	}
 	dur := time.Since(started)
 	sr.Duration = dur
