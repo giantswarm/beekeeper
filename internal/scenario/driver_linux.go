@@ -357,6 +357,8 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 	}
 	d.githubLog = log
 	srv, err := fakegithub.New(g, fakegithub.Options{
+		// The budgets' windows reset on the world's clock.
+		Clock:   d.clock.Now,
 		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
 		Log: writerFunc(func(b []byte) (int, error) {
 			logMu.Lock()
@@ -482,6 +484,7 @@ func (d *driver) globals(v View) View {
 		v.GitHub = d.github.Check
 	}
 	v.Worker = d.fakes.CheckWorker
+	v.Log = d.backgroundLog
 	v.Origin = func(repository, branch string) (bool, int, error) { return originBranch(repository, branch) }
 	v.Process = func(name string) (bool, int, bool) {
 		p, ok := d.procs[name]
@@ -559,7 +562,7 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 }
 
 func (d *driver) runCandidate(ctx context.Context, i int, st Step) (exit int, stdout, stderr string, err error) {
-	c := exec.CommandContext(ctx, candidate, st.Run.Args...) //nolint:gosec // the candidate with the scenario's arguments
+	c := exec.CommandContext(ctx, binaryOf(st.Run), st.Run.Args...) //nolint:gosec // the candidate, or a release build, with the scenario's arguments
 	c.Dir = repoDir
 	c.Env = d.stepEnv(cmpOr(st.Name, fmt.Sprintf("step-%d", i)), st.Run.Env)
 	c.Stdin = strings.NewReader(st.Run.Stdin)
@@ -591,7 +594,7 @@ func (d *driver) start(st Step) error {
 	if err != nil {
 		return err
 	}
-	c := exec.Command(candidate, st.Background.Args...) //nolint:gosec // the candidate with the scenario's arguments
+	c := exec.Command(binaryOf(st.Background), st.Background.Args...) //nolint:gosec // the candidate, or a release build, with the scenario's arguments
 	c.Dir = repoDir
 	c.Env = d.stepEnv(st.Name, st.Background.Env)
 	c.Stdin = strings.NewReader(st.Background.Stdin)

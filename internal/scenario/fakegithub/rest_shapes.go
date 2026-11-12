@@ -297,7 +297,7 @@ func (c *restCtx) assetShape(rel *Release) func(a *Asset) obj {
 	return func(a *Asset) obj {
 		return obj{
 			"id": a.ID, "node_id": a.NodeID, "name": a.Name, "label": "", "content_type": a.ContentType, "state": "uploaded",
-			"size": len(a.Content), "download_count": 0, "created_at": ts(a.CreatedAt), "updated_at": ts(a.CreatedAt),
+			"size": a.Size(), "download_count": 0, "created_at": ts(a.CreatedAt), "updated_at": ts(a.CreatedAt),
 			"browser_download_url": fmt.Sprintf("%s/releases/download/%s/%s", rel.repo.URL(), rel.Tag, a.Name),
 			"url":                  fmt.Sprintf("%s/releases/assets/%d", c.repoURL(rel.repo), a.ID),
 			"uploader":             c.user(rel.Author),

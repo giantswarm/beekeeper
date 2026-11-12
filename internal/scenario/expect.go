@@ -39,6 +39,8 @@ type View struct {
 	Worker func(harness.WorkerExpect) error
 	// Origin reads a branch of a repository's origin.
 	Origin func(repository, branch string) (exists bool, ahead int, err error)
+	// Log reads what a background step has written so far.
+	Log func(name string) (string, error)
 }
 
 // Check checks one expectation against a view.
@@ -155,6 +157,11 @@ func Check(e Expect, v View) error {
 		if o.Ahead != nil && ahead != *o.Ahead {
 			return fmt.Errorf("origin %s: branch %s is %d commit(s) ahead of main, want %d", o.Repository, o.Branch, ahead, *o.Ahead)
 		}
+	case "log":
+		if v.Log == nil {
+			return missing("log")
+		}
+		return e.Log.check(v.Log)
 	default:
 		return fmt.Errorf("expectation without exactly one kind: %v", e.kinds())
 	}

@@ -884,7 +884,7 @@ func init() {
 	define("ReleaseAsset", fieldsOf[*Asset]{
 		"id":          func(_ *gqlExec, a *Asset, _ args) any { return a.NodeID },
 		"name":        func(_ *gqlExec, a *Asset, _ args) any { return a.Name },
-		"size":        func(_ *gqlExec, a *Asset, _ args) any { return len(a.Content) },
+		"size":        func(_ *gqlExec, a *Asset, _ args) any { return a.Size() },
 		"contentType": func(_ *gqlExec, a *Asset, _ args) any { return a.ContentType },
 		"createdAt":   func(_ *gqlExec, a *Asset, _ args) any { return a.CreatedAt },
 	})
