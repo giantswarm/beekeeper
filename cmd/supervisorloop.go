@@ -3830,7 +3830,8 @@ Read the PR, its closing issues and their parent epic, including acceptance line
 Check fulfilment in full, not just correctness or the minimum that passes CI. Nothing may be
 narrowed or deferred without a linked follow-up allowed by the issue. Check behaviour tests,
 including failure paths; dead paths; unsupported claims in code, docs and the PR; and changes
-that a later epic sub-issue would need to undo.
+that a later epic sub-issue would need to undo. Behaviour the PR adds or changes is documented
+in its docs/ topic page, not appended to README.md.
 
 Trust green CI on the exact reviewed head. Do not run local tests, lints, builds or probes.
 Inspect the code and tests. For a full review use your own worktree at the pinned head;
