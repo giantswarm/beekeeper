@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -143,7 +144,7 @@ func (g *gateRun) urgentTurn(b state.Budget) (run bool, why string, err error) {
 func (g *gateRun) settleUrgent(urgent bool, before state.Budget) {
 	spent := -1
 	if urgent {
-		g.now = time.Now()
+		g.now = clk.Now()
 		if after, err := g.gateBudget(); err == nil && after.Reset.Equal(before.Reset) {
 			spent = before.Remaining - after.Remaining
 		}

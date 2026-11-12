@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -183,9 +184,9 @@ func (a *app) runRecoveryController(ctx context.Context, w io.Writer, target str
 	if err != nil {
 		return err
 	}
-	c := &recoveryController{a: a, store: store, w: w, target: target, server: server, scratch: a.cfg.StateDir, step: step, now: time.Now}
+	c := &recoveryController{a: a, store: store, w: w, target: target, server: server, scratch: a.cfg.StateDir, step: step, now: clk.Now}
 	c.moveProcesses = c.restart
-	t := time.NewTicker(every)
+	t := clk.NewTicker(every)
 	defer t.Stop()
 	for {
 		settled, err := c.tick(ctx)

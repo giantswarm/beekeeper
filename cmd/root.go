@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -314,7 +315,7 @@ func (a *app) load() error {
 	if err != nil {
 		return err
 	}
-	a.now = time.Now()
+	a.now = clk.Now()
 	a.queueReports = true
 	a.observeREST()
 	return nil
@@ -720,7 +721,7 @@ func withOwner(s string, p state.Party) string {
 func quotedOwner(p state.Party) string { return withOwner(fmt.Sprintf("%q", p.Name), p) }
 
 func event(by state.Party, verb, format string, a ...any) state.Event {
-	return state.Event{At: time.Now().UTC(), By: by, Verb: verb, Detail: fmt.Sprintf(format, a...)}
+	return state.Event{At: clk.Now().UTC(), By: by, Verb: verb, Detail: fmt.Sprintf(format, a...)}
 }
 
 // about is e with the issue or pull request ref names (owner/repo#n or its

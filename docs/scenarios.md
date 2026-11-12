@@ -45,7 +45,8 @@ scenario's own artifacts under `<flow>/<name>/`: the world's call log
    `agy`, `omp`, `ssh`, `devctl`, `systemctl` and `journalctl`. They are one
    executable that dispatches on its name and hands each call to the world.
    The world logs every call in order. A call that no `given.calls` entry
-   answers gets exit 1 and **fails the scenario**.
+   answers gets exit 1 and **fails the scenario**. Beside it the world
+   serves its clock (see [The clock](#the-clock)), which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -54,8 +55,8 @@ scenario's own artifacts under `<flow>/<name>/`: the world's call log
 Put a file at `internal/scenario/scenarios/<flow>/<name>.yaml`. The loader
 is strict. A scenario fails to load when it has an unknown key, step or
 expectation, has no `when` or no `then`, has a step or expectation with more
-or fewer than one kind, or has a `wait_for` without a timeout. A unit test
-loads every file.
+or fewer than one kind, or has a `wait_for` or a `settle` without a timeout.
+A unit test loads every file.
 
 ```yaml
 name: board-next-fake-board          # unique, lower-case and dashes
@@ -79,6 +80,8 @@ given:
       args: [api, graphql, 'query=.*items\(first:80.*']
       respond: {stdout: '{"data": …}', stderr: '', exit: 0}
       times: 1                       # answer at most once; default always
+  clock:
+    start: "2026-11-12T09:00:00Z"   # the world's time at the start; default now
 
 when:
   - name: next
@@ -92,6 +95,7 @@ when:
       interval: 200ms                # default 100ms
       expect:
         - events: {contains: [supervisor.end]}
+  - advance: 30m                     # the world's clock, timers due fire
   - stop: loop
 
 then:
@@ -108,6 +112,7 @@ then:
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
+| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 
 ### Expectations
 
@@ -126,6 +131,53 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `process` | a background step is `running`, or exited with `exit` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
+
+### The clock
+
+Every process of a scenario reads the world's time: the candidate is built
+with `-tags scenario`, and `BEEKEEPER_SCENARIO_CLOCK` names the world's clock
+socket. The core flows read the time through `internal/clock`, never through
+the `time` package's `Now`, `Since`, `Until`, `After`, `Sleep`, `NewTimer`,
+`NewTicker` or `AfterFunc`. A release build uses the system clock and never
+reads the variable; a test checks that.
+
+The world's time starts at `given.clock.start`, or at the system's time. It
+runs as the system's does, so a pass that waits a second waits a second.
+`advance` moves it forward. The step returns once every process has fired
+the timers, tickers and sleeps that are then due and acknowledged the new
+time. A process started later reads the advanced time. A ticker that missed
+several periods ticks once, as Go's does.
+
+```yaml
+- advance: 30m                       # at once
+- advance:
+    by: 1h
+    step: 5m                         # in 12 steps
+    quiet: 100ms                     # before each step and after the last
+    settle:                          # after each step, as a wait_for
+      timeout: 5s
+      interval: 20ms
+      expect:                        # calls counted from that step on
+        - calls: {program: gh, min: 1}
+```
+
+With `step`, the clock moves in steps. After each step, `settle` waits until
+the work the step woke has happened, before the next step. Its `calls`
+count only the calls since that step. With `quiet`, each step first waits
+until the desk has been quiet that long: no process armed a timer on the
+clock and no fake was called. The work the last step woke is then done and
+waits on the clock again, so the step reaches it; without `quiet`, a timer
+armed a moment after a step would wait for the next one. Each step goes to
+the scenario's `clock.jsonl` artifact: the world's time, the processes that
+acknowledged it, how many timers fired, how long it took and how long it
+waited for quiet.
+
+`internal/clock`'s `TestMigratedPackagesUseTheClock` lists the migrated
+flows (the supervisor loop and its timers, capacity, the GitHub budget, the
+gate, self-update and probation, and the state) and fails when one of their
+files calls the `time` package's clock again. To migrate a flow, replace
+those calls with `internal/clock`'s (imported as `clk` in `cmd`, whose
+`clock` function formats times) and add its files to that list.
 
 ### Pending scenarios
 

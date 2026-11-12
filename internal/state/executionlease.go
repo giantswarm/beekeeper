@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
@@ -71,7 +72,7 @@ func (s *FileStore) RenewExecutionLease(ctx context.Context, ref execution.Ref, 
 		r := st.Starts[i].Execution
 		if r != nil && r.Request.Ref == ref {
 			r.Lease = grant
-			if err := s.stamp(st, time.Now()); err != nil {
+			if err := s.stamp(st, clock.Now()); err != nil {
 				return nil, err
 			}
 			if err := ctx.Err(); err != nil {
@@ -92,7 +93,7 @@ func (s *FileStore) preserveRenewals(st *State, leasesBefore map[execution.Ref]e
 	if err != nil {
 		return err
 	}
-	if err := s.checkWriter(current, time.Now()); err != nil {
+	if err := s.checkWriter(current, clock.Now()); err != nil {
 		return err
 	}
 	leases := make(map[execution.Ref]*ExecutionRecord)
