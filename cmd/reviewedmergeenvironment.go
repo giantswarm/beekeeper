@@ -57,7 +57,7 @@ func (a *app) recordMergeEnvironment(p superloop.Pull, head, reason string) erro
 	return a.store.Record(about(event(loopParty, loopFileVerb, "[%s] %s%s%s", key, loopParty.Name, fileReportSeparator, finding), p.Ref))
 }
 
-func (a *app) runReviewedMergeChecks(ctx context.Context, dir, _, base, head string) (string, int) {
+func (a *app) runReviewedMergeChecks(ctx context.Context, dir, baseSHA, base, head string) (string, int) {
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
 		return "", 0
 	}
@@ -65,17 +65,24 @@ func (a *app) runReviewedMergeChecks(ctx context.Context, dir, _, base, head str
 		var output bytes.Buffer
 		runner := remotebuild.Runner{Dir: dir, Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir,
 			Stdout: &output, Stderr: &output, Record: a.runRecorder(), Head: head}
+		dirs := []string{dir}
 		defer func() {
 			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			// This attempt's worktree is finished, including after an environment
 			// failure. A retry gets a new Job with fresh scratch and build caches.
-			_ = runner.Sweep(cleanup, []string{dir}, false)
+			_ = runner.Sweep(cleanup, dirs, false)
 		}()
-		run := func(ctx context.Context, _, name string, args ...string) (string, error) {
+		run := func(ctx context.Context, checkDir, name string, args ...string) (string, error) {
 			ctx, cancel := context.WithTimeout(ctx, mergeCheckTimeout)
 			defer cancel()
 			output.Reset()
+			runner.Dir = checkDir
+			runner.Head = head
+			if checkDir != dir {
+				runner.Head = baseSHA
+				dirs = append(dirs, checkDir)
+			}
 			runner.Name = name + " " + strings.Join(args, " ")
 			handled, rc := mergeRemoteCheck(ctx, runner, append([]string{name}, args...))
 			out := output.String()
@@ -87,7 +94,7 @@ func (a *app) runReviewedMergeChecks(ctx context.Context, dir, _, base, head str
 			}
 			return out, nil
 		}
-		return runReviewedMergeChecksWith(ctx, dir, base, head, run, false)
+		return runReviewedMergeChecksWith(ctx, dir, baseSHA, base, head, run, false)
 	}
 	if err := mergeLocalHeadroom(dir); err != nil {
 		return mergeValidationUnavailable("%v", err), github.SquashTooling
@@ -103,5 +110,5 @@ func (a *app) runReviewedMergeChecks(ctx context.Context, dir, _, base, head str
 	run := func(ctx context.Context, dir, name string, args ...string) (string, error) {
 		return runMergeCheckCmdEnv(ctx, dir, env, name, args...)
 	}
-	return runReviewedMergeChecksWith(ctx, dir, base, head, run, true)
+	return runReviewedMergeChecksWith(ctx, dir, baseSHA, base, head, run, true)
 }
