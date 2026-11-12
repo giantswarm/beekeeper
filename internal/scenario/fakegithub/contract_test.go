@@ -62,6 +62,8 @@ var contractCases = []contractCase{
 		"number,state,title,body,url,headRefName,baseRefName,isDraft,author,labels,mergedAt,mergeCommit,reviewDecision,mergeable,closingIssuesReferences,reviews"}},
 	{name: "pr view of no pull request", args: []string{"pr", "view", "99", "--repo", "example/app", "--json", "state"}},
 	{name: "pr list --json", how: sameJSON, args: []string{"pr", "list", "--repo", "example/app", "--state", "all", "--json", "number,title,state,headRefName"}},
+	{name: "search prs --json", how: sameJSON, args: []string{"search", "prs", "--state", "open", "--json", "repository,number", "--limit", "1000", "--author", "desk", "--owner", "example"}},
+	{name: "search prs of nobody", how: sameJSON, args: []string{"search", "prs", "--state", "open", "--json", "number,title,state,url,isDraft", "--author", "nobody", "--repo", "example/app"}},
 }
 
 var (
