@@ -35,12 +35,15 @@ const maxAdvanceSteps = 10000
 // process has fired the timers, tickers and sleeps then due. With Step it
 // moves in steps of Step (the last one the rest), and after each step
 // Settle, when set, is polled like a wait_for until its expectations hold,
-// its calls counted from that step on: the work the step woke has been
-// done before the next step. Written as a duration ("advance: 5m") it is
-// By alone.
+// its calls counted from that step on. With Quiet each step waits, before
+// it moves the clock and once more after the last, until the desk has been
+// quiet that long: no process armed a timer on the clock and no fake was
+// called, so the work a step woke is done and waits on the clock again.
+// Written as a duration ("advance: 5m") it is By alone.
 type Advance struct {
 	By     Duration `yaml:"by"`
 	Step   Duration `yaml:"step"`
+	Quiet  Duration `yaml:"quiet"`
 	Settle *WaitFor `yaml:"settle"`
 }
 
@@ -69,11 +72,18 @@ func (a *Advance) UnmarshalYAML(n *yaml.Node) error {
 
 // String is the advance as the report names it.
 func (a Advance) String() string {
-	if a.Step.Duration == 0 {
-		return "by " + a.By.String()
+	s := "by " + a.By.String()
+	if a.Step.Duration > 0 {
+		s += " in steps of " + a.Step.String()
 	}
-	return fmt.Sprintf("by %s in steps of %s", a.By, a.Step)
+	if a.Quiet.Duration > 0 {
+		s += ", quiet " + a.Quiet.String()
+	}
+	return s
 }
+
+// maxQuietWait bounds a wait for a quiet desk.
+const maxQuietWait = 10 * time.Second
 
 func (s *Scenario) validateAdvance(where string, a *Advance, background []string) []error {
 	var errs []error
@@ -81,6 +91,9 @@ func (s *Scenario) validateAdvance(where string, a *Advance, background []string
 	if a.By.Duration == 0 {
 		bad("advance without by")
 		return errs
+	}
+	if a.Quiet.Duration > maxQuietWait/2 {
+		bad("advance quiet %s exceeds %s", a.Quiet, maxQuietWait/2)
 	}
 	if a.Step.Duration > a.By.Duration {
 		bad("advance step %s exceeds its by %s", a.Step, a.By)

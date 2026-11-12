@@ -271,3 +271,40 @@ func TestAdvanceNamesAProcessThatDoesNotAnswer(t *testing.T) {
 		t.Fatal("the world's time went back")
 	}
 }
+
+// A process notes each timer, ticker or sleep it arms, so that the world
+// sees when the desk has gone quiet; re-arming on an advance or a tick is
+// none of the process's doing and is not noted.
+func TestArmsAreNoted(t *testing.T) {
+	s, path := serve(t)
+	r := connect(t, path)
+	if !s.LastArmed().IsZero() {
+		t.Fatalf("armed before anything was: %s", s.LastArmed())
+	}
+	noted := func(after time.Time) time.Time {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+			if at := s.LastArmed(); at.After(after) {
+				return at
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the arm was never noted")
+			}
+		}
+	}
+	r.newTimer(time.Hour, nil)
+	timer := noted(time.Time{})
+	advance(t, s, time.Minute)
+	time.Sleep(50 * time.Millisecond)
+	if at := s.LastArmed(); !at.Equal(timer) {
+		t.Fatalf("re-arming on an advance was noted at %s", at)
+	}
+	ticker := r.newTicker(time.Minute)
+	defer ticker.Stop()
+	ticked := noted(timer)
+	advance(t, s, 5*time.Minute)
+	time.Sleep(50 * time.Millisecond)
+	if at := s.LastArmed(); !at.Equal(ticked) {
+		t.Fatalf("a tick was noted at %s", at)
+	}
+}

@@ -16,7 +16,9 @@ import (
 // The protocol between the world's Server and a process's remote, JSON
 // lines on one Unix socket connection per process: the process says hello,
 // the server answers with its offset and sends every later offset, and the
-// process acknowledges each once the timers then due have fired.
+// process acknowledges each once the timers then due have fired. Between
+// them the process notes that it armed a timer, so that the world knows
+// when the desk has gone quiet.
 
 // hello is a process's first line: who it is, for the world's report.
 type hello struct {
@@ -32,10 +34,12 @@ type offset struct {
 }
 
 // ack is the process's answer to an offset: Fired timers, tickers and
-// sleeps were due and have fired.
+// sleeps were due and have fired. With Armed it is a note instead: the
+// process armed a timer, ticker or sleep since its last note.
 type ack struct {
-	Seq   int64 `json:"seq"`
-	Fired int   `json:"fired"`
+	Seq   int64 `json:"seq,omitempty"`
+	Fired int   `json:"fired,omitempty"`
+	Armed bool  `json:"armed,omitempty"`
 }
 
 // dialTimeout bounds the connection and the server's first answer.
@@ -52,6 +56,11 @@ type remote struct {
 	waiters map[*waiter]struct{}
 
 	conn net.Conn
+	// wmu orders the process's lines: acknowledgements and notes.
+	wmu sync.Mutex
+	enc *json.Encoder
+	// armed holds a note not sent yet: arms between two notes are one.
+	armed chan struct{}
 }
 
 // dial connects to the world's clock at path and reads its offset.
@@ -60,13 +69,13 @@ func dial(path string) (*remote, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &remote{waiters: map[*waiter]struct{}{}, conn: conn}
+	r := &remote{waiters: map[*waiter]struct{}{}, conn: conn, enc: json.NewEncoder(conn), armed: make(chan struct{}, 1)}
 	_ = conn.SetDeadline(time.Now().Add(dialTimeout))
 	cmd := strings.Join(os.Args, " ")
 	if len(cmd) > 200 {
 		cmd = cmd[:200]
 	}
-	if err := json.NewEncoder(conn).Encode(hello{PID: os.Getpid(), Command: cmd}); err != nil {
+	if err := r.enc.Encode(hello{PID: os.Getpid(), Command: cmd}); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -79,13 +88,20 @@ func dial(path string) (*remote, error) {
 	_ = conn.SetDeadline(time.Time{})
 	r.offset.Store(first.Offset)
 	go r.follow(dec)
+	go r.note()
 	return r, nil
+}
+
+// send writes one line to the world.
+func (r *remote) send(a ack) error {
+	r.wmu.Lock()
+	defer r.wmu.Unlock()
+	return r.enc.Encode(a)
 }
 
 // follow applies every offset the world sends and acknowledges it. When
 // the world goes, the last offset stays.
 func (r *remote) follow(dec *json.Decoder) {
-	enc := json.NewEncoder(r.conn)
 	for {
 		var o offset
 		if err := dec.Decode(&o); err != nil {
@@ -93,8 +109,18 @@ func (r *remote) follow(dec *json.Decoder) {
 			return
 		}
 		fired := r.set(o.Offset)
-		if err := enc.Encode(ack{Seq: o.Seq, Fired: fired}); err != nil {
+		if err := r.send(ack{Seq: o.Seq, Fired: fired}); err != nil {
 			_ = r.conn.Close()
+			return
+		}
+	}
+}
+
+// note tells the world each time the process armed something since the
+// last note.
+func (r *remote) note() {
+	for range r.armed {
+		if err := r.send(ack{Armed: true}); err != nil {
 			return
 		}
 	}
@@ -188,13 +214,19 @@ func (r *remote) fire(w *waiter, now time.Time) {
 	r.stop(w)
 }
 
-// start makes w due after d from now and adds it (r.mu held).
+// start makes w due after d from now and adds it (r.mu held). It is the
+// process arming something, which the world is told of; re-arming on an
+// offset or a tick is not.
 func (r *remote) start(w *waiter, d time.Duration) {
 	now := r.now()
 	w.when = now.Add(d)
 	w.active = true
 	r.waiters[w] = struct{}{}
 	w.arm(now)
+	select {
+	case r.armed <- struct{}{}:
+	default:
+	}
 }
 
 // stop takes w out (r.mu held): it fires no more.

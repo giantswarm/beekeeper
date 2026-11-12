@@ -153,6 +153,7 @@ several periods ticks once, as Go's does.
 - advance:
     by: 1h
     step: 5m                         # in 12 steps
+    quiet: 100ms                     # before each step and after the last
     settle:                          # after each step, as a wait_for
       timeout: 5s
       interval: 20ms
@@ -162,9 +163,14 @@ several periods ticks once, as Go's does.
 
 With `step`, the clock moves in steps. After each step, `settle` waits until
 the work the step woke has happened, before the next step. Its `calls`
-count only the calls since that step. Each step goes to the scenario's
-`clock.jsonl` artifact: the world's time, the processes that acknowledged it,
-how many timers fired and how long it took.
+count only the calls since that step. With `quiet`, each step first waits
+until the desk has been quiet that long: no process armed a timer on the
+clock and no fake was called. The work the last step woke is then done and
+waits on the clock again, so the step reaches it; without `quiet`, a timer
+armed a moment after a step would wait for the next one. Each step goes to
+the scenario's `clock.jsonl` artifact: the world's time, the processes that
+acknowledged it, how many timers fired, how long it took and how long it
+waited for quiet.
 
 `internal/clock`'s `TestMigratedPackagesUseTheClock` lists the migrated
 flows (the supervisor loop and its timers, capacity, the GitHub budget, the

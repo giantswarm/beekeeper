@@ -26,12 +26,15 @@ func (d *driver) startClock() error {
 	return d.clock.Serve(clockSocket)
 }
 
-// advanceRecord is one step of an advance in the scenario's clock.jsonl.
+// advanceRecord is one step of an advance in the scenario's clock.jsonl:
+// the real time it took to move the clock, and the waits for a quiet desk
+// before it.
 type advanceRecord struct {
 	Step  int    `json:"step"`
 	Moved string `json:"moved"`
 	clock.Advanced
 	Real  time.Duration `json:"real"`
+	Quiet time.Duration `json:"quiet,omitempty"`
 	Error string        `json:"error,omitempty"`
 }
 
@@ -60,12 +63,16 @@ func (d *driver) advance(ctx context.Context, a *Advance) (args, failures []stri
 			return args, []string{fmt.Sprintf("the scenario timed out after %s of the advance %s", moved, a)}
 		}
 		inc := min(step, a.By.Duration-moved)
+		waited, err := d.quiet(ctx, a.Quiet.Duration)
+		if err != nil {
+			return args, []string{fmt.Sprintf("before %s of the advance: %v", moved+inc, err)}
+		}
 		since := len(d.world.Calls())
 		started := time.Now()
 		res, err := d.clock.Advance(inc)
 		moved += inc
 		fired += res.Fired
-		rec := advanceRecord{Step: n, Moved: moved.String(), Advanced: res, Real: time.Since(started)}
+		rec := advanceRecord{Step: n, Moved: moved.String(), Advanced: res, Real: time.Since(started), Quiet: waited}
 		if err != nil {
 			rec.Error = err.Error()
 		}
@@ -82,8 +89,43 @@ func (d *driver) advance(ctx context.Context, a *Advance) (args, failures []stri
 			}
 		}
 	}
+	if _, err := d.quiet(ctx, a.Quiet.Duration); err != nil {
+		return args, []string{fmt.Sprintf("after the advance: %v", err)}
+	}
 	args = append(args, "now "+d.clock.Now().UTC().Format(time.RFC3339), fmt.Sprintf("fired %d", fired))
 	return args, nil
+}
+
+// quiet waits until no process has armed a timer on the world's clock and
+// no fake was called for q (none for zero), at most maxQuietWait; it
+// returns how long it waited. A call is seen when the world's log grows.
+func (d *driver) quiet(ctx context.Context, q time.Duration) (time.Duration, error) {
+	if q <= 0 {
+		return 0, nil
+	}
+	started := time.Now()
+	calls, called := len(d.world.Calls()), started
+	for {
+		now := time.Now()
+		if n := len(d.world.Calls()); n != calls {
+			calls, called = n, now
+		}
+		last := called
+		if armed := d.clock.LastArmed(); armed.After(last) {
+			last = armed
+		}
+		if now.Sub(last) >= q {
+			return now.Sub(started), nil
+		}
+		if now.Sub(started) > maxQuietWait {
+			return now.Sub(started), fmt.Errorf("the desk was not quiet for %s within %s: a timer was armed or a fake called %s ago", q, maxQuietWait, now.Sub(last).Round(time.Millisecond))
+		}
+		select {
+		case <-ctx.Done():
+			return now.Sub(started), ctx.Err()
+		case <-time.After(min(q-now.Sub(last), 5*time.Millisecond)):
+		}
+	}
 }
 
 // settle polls w's expectations until all hold, its calls counted from the

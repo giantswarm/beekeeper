@@ -24,6 +24,9 @@ var ackTimeout = 10 * time.Second
 // and moved forward by Advance.
 type Server struct {
 	offset atomic.Int64
+	// armed is when a process last noted that it armed a timer, ticker or
+	// sleep, in the system's Unix nanoseconds.
+	armed atomic.Int64
 
 	// mu orders advances and connections: a process connecting during an
 	// advance gets the offset after it.
@@ -114,11 +117,27 @@ func (s *Server) serve(c net.Conn) {
 		if err := dec.Decode(&a); err != nil {
 			return
 		}
+		if a.Armed {
+			s.armed.Store(time.Now().UnixNano())
+			continue
+		}
 		select {
 		case p.acks <- a:
 		default:
 		}
 	}
+}
+
+// LastArmed is when a process last armed a timer, ticker or sleep on the
+// world's clock, in the system's time; zero before the first. A desk whose
+// processes arm nothing and call nothing for a while is quiet: the work an
+// advance woke is done and waits on the clock again.
+func (s *Server) LastArmed() time.Time {
+	n := s.armed.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 // Advanced is what an advance did.

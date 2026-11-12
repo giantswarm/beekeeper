@@ -33,6 +33,13 @@ func TestParseAdvance(t *testing.T) {
 	if got := a.String(); got != "by 1h0m0s in steps of 5m0s" {
 		t.Fatalf("String() = %q", got)
 	}
+	s, err = Parse("quiet.yaml", []byte(advanceScenario("{by: 30m, step: 6m, quiet: 100ms}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := s.When[1].Advance; a.Quiet.Duration != 100*time.Millisecond || a.String() != "by 30m0s in steps of 6m0s, quiet 100ms" {
+		t.Fatalf("quiet read as %+v (%s)", a, a.String())
+	}
 	s, err = Parse("start.yaml", []byte("given:\n  clock: {start: 2001-02-03T04:05:06Z}\n"+advanceScenario("1m")))
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +59,7 @@ func TestParseRejectsAdvance(t *testing.T) {
 		{"negative", "-5m", "must be positive"},
 		{"step beyond by", "{by: 5m, step: 1h}", "exceeds its by"},
 		{"too many steps", "{by: 1000h, step: 1s}", "more than 10000 steps"},
+		{"quiet too long", "{by: 1h, quiet: 6s}", "advance quiet 6s exceeds 5s"},
 		{"unbounded settle", "{by: 1h, settle: {expect: [{calls: {min: 1}}]}}", "settle without a timeout is unbounded"},
 		{"settle beyond the scenario", "{by: 1h, settle: {timeout: 2m, expect: [{calls: {min: 1}}]}}", "exceeds the scenario's"},
 		{"settle without expectations", "{by: 1h, settle: {timeout: 1s}}", "settle without expectations"},

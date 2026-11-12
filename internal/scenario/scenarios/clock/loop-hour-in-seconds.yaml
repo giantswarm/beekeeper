@@ -3,7 +3,8 @@ description: >
   An hour of supervisor loop passes, a GitHub budget reset included, takes
   seconds of real time. The loop runs in the background on the world's
   clock with a 5-minute pass interval, and the world advances in 6-minute
-  steps, each waking the loop's pass and its pull watcher. The watcher
+  steps, each waking the loop's pass and its pull watcher; each step waits
+  until the desk is quiet, the work the last one woke done. The watcher
   lists the open pull requests of the desk's 15 authors at most every 5
   minutes (a minute's margin per step): 15 background REST searches each
   time. While the GitHub budget is unknown, the background REST allowance
@@ -43,9 +44,8 @@ given:
     - program: devctl
       args: [auth, status]
       respond: {stderr: "not logged in\n", exit: 1}
-    # The watch's machine reads: an empty kernel journal, no units.
+    # The watch's machine reads: empty journals, no units.
     - program: journalctl
-      args: [-k]
       respond: {stdout: ""}
     - program: systemctl
       args: [--user, list-units]
@@ -65,6 +65,7 @@ when:
     advance:
       by: 30m
       step: 6m
+      quiet: 100ms
       settle:
         timeout: 5s
         interval: 20ms
@@ -79,6 +80,7 @@ when:
     advance:
       by: 24m
       step: 6m
+      quiet: 100ms
   - wait_for:
       timeout: 5s
       interval: 20ms
