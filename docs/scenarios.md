@@ -85,10 +85,10 @@ branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the 
    hands each call to the world. The world logs every call in order. A
    call that no `given.calls` entry answers and no fake models (see
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
-   scenario**. Beside it the world serves its clock (see
-   [The clock](#the-clock)), which every process reads. With
-   `given.github`, `gh` and the GitHub API are answered by a model
-   instead: see [The scenario's GitHub](scenarios-github.md).
+   scenario**. With `given.github`, `gh` and the GitHub API are answered
+   by a model instead: see [The scenario's GitHub](scenarios-github.md).
+   Beside it the world serves its clock (see [The clock](#the-clock)),
+   which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
    `then` expectations, and stops every background process by PID.
 
@@ -155,9 +155,9 @@ then:
 | `background` | starts the candidate and leaves it running; needs a `name` |
 | `stop` | stops the named background step by PID (SIGTERM, then SIGKILL) |
 | `wait_for` | polls its expectations until all hold, bounded by `timeout` |
-| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
+| `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
 
 ### Expectations

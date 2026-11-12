@@ -12,7 +12,8 @@ Everything that reaches GitHub in the scenario reaches that one server:
   renders gh's output and exit codes for a pipe: the body as it is, `--jq`, `--include`,
   `--paginate`, `gh: Not Found (HTTP 404)` with exit 1, `gh: HTTP 304` with exit 1.
 - **Code that calls HTTP itself** is pointed at the server's loopback port through
-  `BEEKEEPER_GITHUB_API`, the only API base variable beekeeper has today.
+  its API base variables: `BEEKEEPER_GITHUB_API` (the budget probes and the loop's checks) and
+  `BEEKEEPER_GITHUB_API_URL` (`app create`).
 
 So budgets, ETags, faults and the call log hold for both. Nothing is matched on a joined argument
 string: a call is parsed (gh's flags, the REST route, the GraphQL document) and answered from the

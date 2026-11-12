@@ -141,7 +141,8 @@ func matchArgs(pats []*regexp.Regexp, args []string) bool {
 }
 
 // Answer answers one call and logs it: with the first given call that
-// matches, else with the program's handler.
+// matches, else a modeled call with its fake's model, else with the
+// program's handler.
 func (w *World) Answer(req CallRequest) CallResponse {
 	rec := CallRecord{At: time.Now().UTC(), Program: req.Program, Args: req.Args, Dir: req.Dir, Answer: -1}
 	resp := CallResponse{Exit: 1}
@@ -155,14 +156,13 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit, Given: true}
 		break
 	}
-	handler := w.handlers[req.Program]
-	w.mu.Unlock()
-	switch {
-	case rec.Answered:
-	case req.Modeled:
+	if !rec.Answered && req.Modeled {
 		rec.Answered, rec.Modeled = true, true
 		resp = CallResponse{}
-	case handler != nil:
+	}
+	handler := w.handlers[req.Program]
+	w.mu.Unlock()
+	if !rec.Answered && handler != nil {
 		// A handler may hold its answer (a slow GitHub): the other fakes
 		// are answered meanwhile.
 		if got, answered, reason := handler(req); answered {

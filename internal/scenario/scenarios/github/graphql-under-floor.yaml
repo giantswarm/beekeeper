@@ -9,6 +9,11 @@ issue: https://github.com/giantswarm/beekeeper/issues/3790
 flow: github
 tags: [github, budget]
 timeout: 30s
+control:
+  none: >
+    states budget --gate under its GraphQL floor, which main already has;
+    this pull request changes no beekeeper code, only adds the fake GitHub's
+    budgets that serve the bucket
 
 given:
   desk:

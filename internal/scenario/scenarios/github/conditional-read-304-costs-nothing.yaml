@@ -9,6 +9,11 @@ issue: https://github.com/giantswarm/beekeeper/issues/3790
 flow: github
 tags: [github, budget, etag]
 timeout: 30s
+control:
+  none: >
+    states board next's conditional read of the pick's comments, which main
+    already has; this pull request changes no beekeeper code, only adds the
+    fake GitHub's ETags and budgets that answer it
 
 given:
   desk:

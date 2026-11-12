@@ -49,7 +49,7 @@ func TestReleasesArePublished(t *testing.T) {
 	if got := s.Given.Releases.builds(); len(got) != 3 || got[0].Version != "v1.0.0-rc.1" {
 		t.Errorf("builds = %+v, want the installed release and the two published ones", got)
 	}
-	if names := s.repositoryNames(); len(names) != 1 || names[0] != update.Repository {
+	if names := g.RepositoryNames(); len(names) != 1 || names[0] != update.Repository {
 		t.Errorf("repositories = %v: the updater's repository gets an origin for its tags", names)
 	}
 }
