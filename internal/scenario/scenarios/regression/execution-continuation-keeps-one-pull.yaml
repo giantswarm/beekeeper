@@ -149,8 +149,6 @@ when:
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - stop: loop
-  - name: story
-    run: {args: [log, -n, '0']}
 
 then:
   # After the merge the task is closed and none of its pull requests is

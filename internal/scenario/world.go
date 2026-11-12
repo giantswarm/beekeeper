@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
@@ -108,7 +109,13 @@ type World struct {
 	log      io.Writer
 	ln       net.Listener
 	wg       sync.WaitGroup
+	// inFlight counts the calls being answered now: a call enters the log
+	// once it is answered.
+	inFlight atomic.Int64
 }
+
+// InFlight is how many calls the world answers at this moment.
+func (w *World) InFlight() int { return int(w.inFlight.Load()) }
 
 // Handle makes h answer the calls of program that no given call answers.
 func (w *World) Handle(program string, h Handler) {
@@ -147,6 +154,8 @@ func matchArgs(pats []*regexp.Regexp, args []string) bool {
 // Answer answers one call and logs it: with the first given call that
 // matches, else with the program's handler.
 func (w *World) Answer(req CallRequest) CallResponse {
+	w.inFlight.Add(1)
+	defer w.inFlight.Add(-1)
 	rec := CallRecord{At: time.Now().UTC(), Program: req.Program, Args: req.Args, Dir: req.Dir, Answer: -1}
 	resp := CallResponse{Exit: 1}
 	w.mu.Lock()

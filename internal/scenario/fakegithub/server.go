@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -136,6 +137,8 @@ type Server struct {
 	log     io.Writer
 	// sleep waits a fault's delay.
 	sleep func(context.Context, time.Duration)
+	// inFlight counts the requests being answered now.
+	inFlight atomic.Int64
 
 	ln   net.Listener
 	http *http.Server
@@ -316,8 +319,15 @@ type graphqlRequest struct {
 	Variables     map[string]any `json:"variables"`
 }
 
+// InFlight is how many requests the server answers at this moment: a desk
+// whose process waits for GitHub's answer is not quiet, however long the
+// answer takes.
+func (s *Server) InFlight() int { return int(s.inFlight.Load()) }
+
 // Do answers one request.
 func (s *Server) Do(ctx context.Context, req *Request) *Response {
+	s.inFlight.Add(1)
+	defer s.inFlight.Add(-1)
 	req.Path = normalizePath(req.Path)
 	if req.Header == nil {
 		req.Header = http.Header{}
