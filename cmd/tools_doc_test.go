@@ -22,7 +22,7 @@ var docsServer = sync.OnceValue(func() *mcpserver.MCPServer { return (&server{})
 // TOOLS_DOC_UPDATE=1 rewrites the file (make tools-doc).
 func TestToolsDocIsCurrent(t *testing.T) {
 	tooldesctest.AssertServerDoc(t, docsServer(),
-		"# The tools\n\nGenerated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`. "+
+		"# The tools\n\nGenerated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`.\n"+
 			"Tools that use caller identity declare `agent` and `host`, which tell one person's agents apart; other tools still accept them for auditing.",
 		"../docs/tools.md")
 }

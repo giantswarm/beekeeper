@@ -15,10 +15,11 @@ publishes fixture evidence nor establishes live canary proof.
 
 ## Reactivation
 
-The provisioning follow-up must supply dedicated BEEKEEPER_CANARY_REPO,
-BEEKEEPER_CANARY_ALLOW_ORG, BEEKEEPER_CANARY_PROJECT and
-BEEKEEPER_CANARY_GITHUB_TOKEN settings through the existing CI configuration.
-Reactivation is tracked by [the dedicated sandbox provisioning and reactivation follow-up](https://github.com/giantswarm/beekeeper/issues/3362); dedicated provisioning must be complete before enabling this policy.
+The provisioning follow-up must supply dedicated BEEKEEPER_CANARY_REPO, BEEKEEPER_CANARY_ALLOW_ORG,
+BEEKEEPER_CANARY_PROJECT and BEEKEEPER_CANARY_GITHUB_TOKEN settings through the existing CI
+configuration. Reactivation is tracked by [the dedicated sandbox provisioning and reactivation
+follow-up](https://github.com/giantswarm/beekeeper/issues/3362); dedicated provisioning must be
+complete before enabling this policy.
 
 After provisioning and a real sandbox proof, change the shared policy to `true`
 and update TestSandboxProofPolicyDefault in the same PR. Run the focused updater

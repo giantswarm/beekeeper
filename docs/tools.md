@@ -1,6 +1,7 @@
 # The tools
 
-Generated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`. Tools that use caller identity declare `agent` and `host`, which tell one person's agents apart; other tools still accept them for auditing.
+Generated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`.
+Tools that use caller identity declare `agent` and `host`, which tell one person's agents apart; other tools still accept them for auditing.
 
 | Tool | Kind |
 |---|---|
