@@ -21,9 +21,9 @@ import (
 var migrated = []string{
 	// The supervisor loop, its planner and the timers it fires.
 	"cmd/supervisor*.go", "cmd/loop*.go", "cmd/changepause.go", "cmd/root.go", "cmd/throughputhealth.go",
-	"cmd/timer*.go", "internal/superloop",
+	"cmd/timer*.go", "internal/loop", "internal/superloop",
 	// Capacity.
-	"cmd/capacity*.go", "cmd/usage.go", "cmd/claude_usage.go",
+	"cmd/capacity*.go", "cmd/usage.go", "cmd/claude_usage.go", "internal/capacity",
 	// The GitHub budget.
 	"cmd/budget*.go", "cmd/backgroundrest.go", "cmd/githubcalls.go", "internal/github",
 	// The gate.

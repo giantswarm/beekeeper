@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -52,6 +53,7 @@ func TestDeliveryReservationsReserveOnlyStartsTheLoopMakes(t *testing.T) {
 		{name: "lifted hold reserves", st: state.State{Deliveries: []state.Delivery{queued(nil)}, Holds: []state.Hold{{Target: repo, At: now.Add(-time.Hour), Until: now.Add(-time.Minute)}}}, room: 4, want: 3},
 		{name: "review requested at head skips", st: state.State{Deliveries: []state.Delivery{queued(nil)}, ReviewRequests: []state.ReviewRequest{{Ref: reservePull, Head: reserveHead, Round: 1}}}, room: 4, want: 4, skipped: reserveAsked},
 		{name: "desk review at head skips", st: state.State{Deliveries: []state.Delivery{queued(nil)}, DeskReviews: []state.DeskReview{{Ref: reservePull, Head: reserveHead, Round: 1}}}, room: 4, want: 4, skipped: reserveAsked},
+		{name: "released desk review at head reserves", st: state.State{Deliveries: []state.Delivery{queued(nil)}, DeskReviews: []state.DeskReview{{Ref: reservePull, Head: reserveHead, Round: 1, Released: now}}}, room: 4, want: 3},
 		{name: "review requested at an older head reserves", st: state.State{Deliveries: []state.Delivery{queued(nil)}, ReviewRequests: []state.ReviewRequest{{Ref: reservePull, Head: "h0", Round: 1}}}, room: 4, want: 3},
 		{name: "unknown head and any request skips", st: state.State{Deliveries: []state.Delivery{queued(func(d *state.Delivery) { d.Heads = nil })}, ReviewRequests: []state.ReviewRequest{{Ref: reservePull, Head: "h0", Round: 1}}}, room: 4, want: 4, skipped: reserveAsked},
 		{name: "old skips", st: state.State{Deliveries: []state.Delivery{queued(func(d *state.Delivery) { d.Since = now.Add(-2 * time.Hour) })}}, room: 4, want: 4, skipped: "1 older than 1h"},
@@ -63,8 +65,8 @@ func TestDeliveryReservationsReserveOnlyStartsTheLoopMakes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out.Reset()
-			l := &supervisorLoop{a: a, said: map[string]bool{}}
-			if got := l.deliveryRoom(tc.room, &tc.st); got != tc.want {
+			l := &loop.Loop{Host: a, Said: map[string]bool{}}
+			if got := l.DeliveryRoom(tc.room, &tc.st); got != tc.want {
 				t.Fatalf("room %d, want %d: %s", got, tc.want, out)
 			}
 			if tc.skipped != "" && !strings.Contains(out.String(), "not reserved: "+tc.skipped) {
@@ -86,14 +88,14 @@ func TestDeliveryReservationsSayOncePerSet(t *testing.T) {
 		{Ref: reserveIssue, Step: state.DeliveryFixing, Since: now},
 		{Ref: reservePull, Step: state.DeliveryFixing, Since: now.Add(-2 * time.Hour)},
 	}}
-	l := &supervisorLoop{a: a, said: map[string]bool{}}
-	_ = l.deliveryRoom(2, st)
-	_ = l.deliveryRoom(2, st)
+	l := &loop.Loop{Host: a, Said: map[string]bool{}}
+	_ = l.DeliveryRoom(2, st)
+	_ = l.DeliveryRoom(2, st)
 	if strings.Count(out.String(), "NEXT RESERVES") != 1 || !strings.Contains(out.String(), "not reserved: 1 older than 1h") {
 		t.Fatal(out)
 	}
 	st.Deliveries[0].Since = now.Add(-2 * time.Hour)
-	_ = l.deliveryRoom(2, st)
+	_ = l.DeliveryRoom(2, st)
 	if strings.Count(out.String(), "NEXT RESERVES") != 2 || !strings.Contains(out.String(), "not reserved: 2 older than 1h") {
 		t.Fatal(out)
 	}

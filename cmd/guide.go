@@ -18,8 +18,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/feed"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -736,7 +738,7 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 			sessions, _, _ = a.sessions()
 		}
 		a.syncAgyQuotaFromState(st, a.now)
-		readings := make(map[string]providerReadingResult, len(k.Providers))
+		readings := make(map[string]capacity.ProviderReadingResult, len(k.Providers))
 		anySubscription := false
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
@@ -748,43 +750,43 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 				continue
 			}
 			r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
-			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+			readings[name] = capacity.ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 		}
 		if !anySubscription {
 			return nil
 		}
 		pa := countProviderAgents(st, sessions, k, a.now, a.cfg)
-		providers := make(map[string]*providerView, len(k.Providers))
+		providers := make(map[string]*capacity.ProviderView, len(k.Providers))
 		var lines []string
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
 			if p.SelfHosted() {
-				providers[name] = buildSelfHostedProviderView(name, p, pa[name], providerReadingResult{}, a.now)
+				providers[name] = capacity.BuildSelfHostedProviderView(name, p, pa[name], capacity.ProviderReadingResult{}, a.now)
 				continue
 			}
-			pv := buildSingleProviderView(name, p, pa[name], readings[name], a.now)
+			pv := capacity.BuildSingleProviderView(name, p, pa[name], readings[name], a.now)
 			providers[name] = pv
-			line := name + ": " + pv.line(a.now)
+			line := name + ": " + pv.Line(a.now)
 			if pv.Underused {
-				if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
+				if len(pv.Buckets) > 0 && !pv.SupplementalBuckets {
 					var uParts []string
-					for _, bName := range pv.bucketOrder {
+					for _, bName := range pv.BucketOrder {
 						if bv := pv.Buckets[bName]; bv != nil && bv.Underused {
-							uParts = append(uParts, bName+": "+underusedFigureText(bv.SevenDay, p.Usage, a.now))
+							uParts = append(uParts, bName+": "+capacity.UnderusedFigureText(bv.SevenDay, p.Usage, a.now))
 						}
 					}
 					if len(uParts) > 0 {
 						line += "; UNDERUSED (" + strings.Join(uParts, "; ") + ")"
 					}
-				} else if fig := underusedFigureText(pv.SevenDay, p.Usage, a.now); fig != "" {
+				} else if fig := capacity.UnderusedFigureText(pv.SevenDay, p.Usage, a.now); fig != "" {
 					line += "; UNDERUSED (" + fig + ")"
 				}
 			}
 			lines = append(lines, line)
 		}
 		if len(k.Choices) > 0 {
-			cv := evaluateChoices(k, providers, nil, a.noStart(st), nil, forWorker, a.now)
-			lines = append(lines, "choice: "+cv.line())
+			cv := capacity.EvaluateChoices(k, providers, nil, a.noStart(st), nil, capacity.ForWorker, a.now)
+			lines = append(lines, "choice: "+cv.Line())
 		}
 		return lines
 	}
@@ -795,9 +797,9 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 	if u == nil {
 		return nil
 	}
-	line := u.snapshotLine(a.now)
+	line := u.SnapshotLine(a.now)
 	if u.Underused {
-		if fig := underusedFigureText(u.SevenDay, k.Usage, a.now); fig != "" {
+		if fig := capacity.UnderusedFigureText(u.SevenDay, k.Usage, a.now); fig != "" {
 			line += "; UNDERUSED (" + fig + ")"
 		}
 	}
@@ -1037,7 +1039,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if !q.checked {
 		idleQ = idleRoleReading(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
 	}
-	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loopFileVerb })
+	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
 	if err != nil {
 		return nil, err
 	}
@@ -1289,10 +1291,10 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 	recovered := workBeforeRecovery != guideWorkText(st) || reportsBeforeRecovery != len(st.GuideReports)
 	current := map[string]bool{}
 	for _, e := range events {
-		key, text, ok := keyed(e.Detail)
+		key, text, ok := loop.Keyed(e.Detail)
 		// Legacy file events summarized a note already delivered to the guide;
 		// only the format carrying the actual report belongs in this feed.
-		if ok && strings.Contains(text, fileReportSeparator) {
+		if ok && strings.Contains(text, loop.FileReportSeparator) {
 			current["problem:"+key] = true
 		}
 	}
@@ -1304,8 +1306,8 @@ func guideProblemLines(st *state.State, events []state.Event) (lines []string, c
 		})
 		changed = recovered || len(r.Fed) != before
 		for _, e := range events {
-			key, text, ok := keyed(e.Detail)
-			if !ok || !strings.Contains(text, fileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
+			key, text, ok := loop.Keyed(e.Detail)
+			if !ok || !strings.Contains(text, loop.FileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
 				continue
 			}
 			if r.Holder != nil {

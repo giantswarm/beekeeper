@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -95,7 +97,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 					if !room || *busy > 0 {
 						return fillNoRoomJSON, 0
 					}
-				case loopBoard:
+				case loop.LoopBoard:
 					st, err := r.a.store.Read()
 					if err != nil {
 						t.Fatal(err)
@@ -119,7 +121,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 			}
 			r.pass(t)
 			if !room {
-				if *busy != 0 || len(dispatched) != 0 || r.called(loopBoard, "next") != nil {
+				if *busy != 0 || len(dispatched) != 0 || r.called(loop.LoopBoard, "next") != nil {
 					t.Fatalf("capacity bypassed: %s", r.out)
 				}
 				return
@@ -128,7 +130,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 				t.Fatalf("foreign board pick not dispatched: busy %d, briefs %v, %s", *busy, dispatched, r.out)
 			}
 			calls := r.called(agentsName, agentStartName)
-			if len(calls) == 0 || !slices.Contains(calls, harnessAuto) {
+			if len(calls) == 0 || !slices.Contains(calls, capacity.HarnessAuto) {
 				t.Fatalf("lost capacity model choice: %v", calls)
 			}
 		})
@@ -183,14 +185,14 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 		switch {
 		case args[0] == fillCapacityCommand && (!admit || *busy > 0):
 			return fillNoRoomJSON, 0
-		case slices.Equal(args, []string{loopBoard, loopBoardMove, filedRef, "backlog", "--intake"}):
+		case slices.Equal(args, []string{loop.LoopBoard, loopBoardMove, filedRef, "backlog", "--intake"}):
 			// GitHub adds a new item at the very bottom of the board in Backlog
 			// (after crossBacklog).
 			snap.Items = append(snap.Items, board.Item{
 				Ref: filedRef, URL: filedURL, OnBoard: true, Status: stepBacklog, Created: now, Updated: now,
 			})
 			return "added org/engine#88 to the board personal/1, Team X: → Backlog\n", 0
-		case len(args) == 5 && args[0] == loopBoard && args[1] == "rank" && args[2] == filedRef && args[3] == "--after":
+		case len(args) == 5 && args[0] == loop.LoopBoard && args[1] == "rank" && args[2] == filedRef && args[3] == "--after":
 			anchor := args[4]
 			// Move filedRef right after anchor in snap.Items (as updateProjectV2ItemPosition does).
 			idx := slices.IndexFunc(snap.Items, func(it board.Item) bool { return it.Ref == filedRef })
@@ -205,7 +207,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 				}
 			}
 			return "ranked org/engine#88 on the board personal/1: after " + anchor + "\n", 0
-		case args[0] == loopBoard && slices.Contains(args, "next"):
+		case args[0] == loop.LoopBoard && slices.Contains(args, "next"):
 			st, err := r.a.store.Read()
 			if err != nil {
 				t.Fatal(err)
@@ -240,13 +242,13 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	}
 
 	r.pass(t)
-	if r.called(loopBoard, loopBoardMove, filedRef, "backlog", "--intake") == nil {
+	if r.called(loop.LoopBoard, loopBoardMove, filedRef, "backlog", "--intake") == nil {
 		t.Fatalf("loop did not intake %s onto the board: calls %v\n%s", filedRef, r.calls, r.out)
 	}
-	if r.called(loopBoard, "rank", filedRef, "--after", crossHome) == nil {
+	if r.called(loop.LoopBoard, "rank", filedRef, "--after", crossHome) == nil {
 		t.Fatalf("loop did not rank %s after %s: calls %v\n%s", filedRef, crossHome, r.calls, r.out)
 	}
-	if r.called("note", loopAdd) != nil {
+	if r.called("note", loop.LoopAdd) != nil {
 		t.Fatalf("person was asked about filed issue: calls %v", r.calls)
 	}
 	// The existing worker occupies capacity during intake. Once a slot frees,
@@ -288,9 +290,9 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	rankCode := 1
 	r.answer = func(args []string) (string, int) {
 		switch {
-		case args[0] == loopBoard && slices.Contains(args, "--intake"):
+		case args[0] == loop.LoopBoard && slices.Contains(args, "--intake"):
 			return "added " + args[2] + " to the board personal/1: → Backlog\n", 0
-		case args[0] == loopBoard && slices.Contains(args, "--after"):
+		case args[0] == loop.LoopBoard && slices.Contains(args, "--after"):
 			if rankCode != 0 {
 				return "gh failed: 502 Bad Gateway\n", rankCode
 			}
@@ -302,7 +304,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	// 1. Move succeeds, then anchor lookup fails: intake is not settled.
 	anchorErr = errors.New("anchor query failed")
 	r.pass(t)
-	if r.called(loopBoard, loopBoardMove, reportIssue, "backlog", "--intake") == nil {
+	if r.called(loop.LoopBoard, loopBoardMove, reportIssue, "backlog", "--intake") == nil {
 		t.Fatalf("move did not run on pass 1: %v", r.calls)
 	}
 	if len(r.logged(t, intakeVerb)) != 0 {
@@ -313,10 +315,10 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	// intake still remains unsettled.
 	anchorErr = nil
 	r.pass(t)
-	if r.called(loopBoard, loopBoardMove, reportIssue, "backlog", "--intake") != nil {
+	if r.called(loop.LoopBoard, loopBoardMove, reportIssue, "backlog", "--intake") != nil {
 		t.Fatalf("move repeated on retry pass: %v", r.calls)
 	}
-	if r.called(loopBoard, "rank", reportIssue, "--after", crossHome) == nil {
+	if r.called(loop.LoopBoard, "rank", reportIssue, "--after", crossHome) == nil {
 		t.Fatalf("rank did not run on retry pass: %v", r.calls)
 	}
 	if len(r.logged(t, intakeVerb)) != 0 {
@@ -326,10 +328,10 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	// 3. Rank succeeds: intake settles without repeating move.
 	rankCode = 0
 	r.pass(t)
-	if r.called(loopBoard, loopBoardMove, reportIssue, "backlog", "--intake") != nil {
+	if r.called(loop.LoopBoard, loopBoardMove, reportIssue, "backlog", "--intake") != nil {
 		t.Fatalf("move repeated on final pass: %v", r.calls)
 	}
-	if r.called(loopBoard, "rank", reportIssue, "--after", crossHome) == nil {
+	if r.called(loop.LoopBoard, "rank", reportIssue, "--after", crossHome) == nil {
 		t.Fatalf("rank did not run on final pass: %v", r.calls)
 	}
 	if len(r.logged(t, intakeVerb)) != 1 {
@@ -346,11 +348,11 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.failRecord = func(e state.Event) bool {
-		return e.Verb == loopStageVerb && strings.Contains(e.Detail, restartRef)
+		return e.Verb == loop.LoopStageVerb && strings.Contains(e.Detail, restartRef)
 	}
 	r.pass(t)
-	if r.called(loopBoard, loopBoardMove, restartRef, "backlog", "--intake") == nil ||
-		r.called(loopBoard, "rank", restartRef, "--after", crossHome) != nil {
+	if r.called(loop.LoopBoard, loopBoardMove, restartRef, "backlog", "--intake") == nil ||
+		r.called(loop.LoopBoard, "rank", restartRef, "--after", crossHome) != nil {
 		t.Fatalf("interrupted pass did not stop between move and rank: %v", r.calls)
 	}
 	if len(r.logged(t, intakeVerb)) != 1 {
@@ -358,10 +360,10 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	}
 
 	r.pass(t)
-	if r.called(loopBoard, loopBoardMove, restartRef, "backlog", "--intake") != nil {
+	if r.called(loop.LoopBoard, loopBoardMove, restartRef, "backlog", "--intake") != nil {
 		t.Fatalf("move repeated after restart between move and rank: %v", r.calls)
 	}
-	if r.called(loopBoard, "rank", restartRef, "--after", crossHome) == nil {
+	if r.called(loop.LoopBoard, "rank", restartRef, "--after", crossHome) == nil {
 		t.Fatalf("rank did not resume after restart between move and rank: %v", r.calls)
 	}
 	if evs := r.logged(t, intakeVerb); len(evs) != 2 || strings.Contains(evs[1].Detail, "before an interruption") {

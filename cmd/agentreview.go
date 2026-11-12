@@ -13,7 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -63,7 +65,7 @@ with execution review flags.`,
 			if !ok {
 				return usageErr("expected owner/repo#n")
 			}
-			p, err := readLoopPull(cmd.Context(), refName(r))
+			p, err := loop.ReadLoopPull(cmd.Context(), refName(r))
 			if err != nil {
 				return err
 			}
@@ -84,7 +86,7 @@ with execution review flags.`,
 				return err
 			}
 			events, err := a.store.Events(0, func(e state.Event) bool {
-				return e.By.Name == loopParty.Name && e.Verb == "supervisor.review" && strings.HasPrefix(e.Detail, "[review "+p.Ref+"@"+p.Head+"]")
+				return e.By.Name == loop.LoopParty.Name && e.Verb == "supervisor.review" && strings.HasPrefix(e.Detail, "[review "+p.Ref+"@"+p.Head+"]")
 			})
 			if err != nil {
 				return err
@@ -134,16 +136,16 @@ with execution review flags.`,
 			if err != nil {
 				return err
 			}
-			l.reviewDir = dir
-			l.cachePull(p.Ref, p)
+			l.ReviewDir = dir
+			l.CachePull(p.Ref, p)
 			oldModel := a.cfg.Supervisor.ReviewModel
 			a.cfg.Supervisor.ReviewModel = cmp.Or(model, oldModel, defaultReviewModel)
 			defer func() { a.cfg.Supervisor.ReviewModel = oldModel }()
-			what, err := l.startReviewer(cmd.Context(), act)
+			what, err := l.StartReviewer(cmd.Context(), act)
 			if err != nil {
 				return err
 			}
-			if err := a.store.Record(about(event(loopParty, "supervisor.review", "%s", act.Line(what)), p.Ref)); err != nil {
+			if err := a.store.Record(about(event(loop.LoopParty, "supervisor.review", "%s", act.Line(what)), p.Ref)); err != nil {
 				return err
 			}
 			if err := a.noteReviewStarter(act); err != nil {
@@ -170,7 +172,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		if r.Verdict == "" {
 			continue
 		}
-		if sameCommit(r.Head, p.Head) {
+		if loop.SameCommit(r.Head, p.Head) {
 			return 0, "", refused("%s already has a review of head %s", p.Ref, p.Head)
 		}
 		round++
@@ -180,7 +182,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		if !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
-		if sameCommit(r.Head, p.Head) {
+		if loop.SameCommit(r.Head, p.Head) && r.Released.IsZero() {
 			return 0, "", refused("%s already has a reviewer for head %s", p.Ref, p.Head)
 		}
 		round = max(round, r.Round+1)
@@ -189,7 +191,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, string, error) {
 		if !reviewRequestActive(st, r) || !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
-		if sameCommit(r.Head, p.Head) {
+		if loop.SameCommit(r.Head, p.Head) {
 			return 0, "", refused("%s already requested review of head %s", p.Ref, p.Head)
 		}
 		round = max(round, r.Round+1)
@@ -330,7 +332,7 @@ func reviewStarter(st *state.State, ag state.Agent, report string) state.Party {
 		}
 	}
 	if k := st.StartIndex(ag.Party); k >= 0 {
-		if by := st.Starts[k].By; by != (state.Party{}) && by.Name != loopParty.Name && !by.Is(ag.Party) {
+		if by := st.Starts[k].By; by != (state.Party{}) && by.Name != loop.LoopParty.Name && !by.Is(ag.Party) {
 			return by
 		}
 	}
@@ -356,7 +358,7 @@ func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
 	for _, r := range reviews {
 		reviewed := cmp.Or(r.Head, r.Commit)
 		line := fmt.Sprintf("%s: %s at head %s by %s, %s", p.Ref, r.Verdict, shortSHA(reviewed), r.Author, r.At.UTC().Format(time.RFC3339))
-		if !sameCommit(reviewed, p.Head) {
+		if !loop.SameCommit(reviewed, p.Head) {
 			line += fmt.Sprintf(" (head is now %s)", shortSHA(p.Head))
 		}
 		if _, err := fmt.Fprintln(a.out, line); err != nil {
@@ -366,15 +368,27 @@ func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
 	return nil
 }
 
+// reviewReleasedVerb logs an assignment released because its reviewer is
+// gone, for its head to get a new reviewer.
+const reviewReleasedVerb = "review.released"
+
+// reserveReview reserves act's review of its head. An assignment at that
+// head whose reviewer is gone is released first (releaseGoneReviews): it
+// would otherwise refuse every retry of the head for good.
 func (a *app) reserveReview(act superloop.Action) error {
+	live, err := a.reviewersLive(act)
+	if err != nil {
+		return err
+	}
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		released := releaseGoneReviews(st, act.Ref, act.Head, live, a.timeNow().UTC())
 		for _, request := range st.ReviewRequests {
 			if reviewRequestActive(st, request) && strings.EqualFold(request.Ref, act.Ref) && (request.Head == act.Head || request.Round == act.Round) {
 				return nil, refused("%s already requested this head or review round", act.Ref)
 			}
 		}
 		for _, round := range st.DeskReviews {
-			if strings.EqualFold(round.Ref, act.Ref) && round.Head == act.Head {
+			if round.Released.IsZero() && strings.EqualFold(round.Ref, act.Ref) && round.Head == act.Head {
 				return nil, refused("%s already assigned review of this head", act.Ref)
 			}
 		}
@@ -382,8 +396,82 @@ func (a *app) reserveReview(act superloop.Action) error {
 			return strings.EqualFold(r.Ref, act.Ref) && (r.Head == act.Head || r.Round == act.Round)
 		})
 		st.ReviewRequests = append(st.ReviewRequests, state.ReviewRequest{Ref: act.Ref, Head: act.Head, Round: act.Round, PID: os.Getpid()})
-		return nil, nil
+		return released, nil
 	})
+}
+
+// reviewersLive says which parties have a running process, read only when
+// an assignment at act's head could be released: a reviewer's process can
+// outlive its roster entry. nil keeps every assignment held, also when the
+// process table cannot be read.
+func (a *app) reviewersLive(act superloop.Action) (func(state.Party) bool, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool {
+		return r.Released.IsZero() && r.Result == nil && strings.EqualFold(r.Ref, act.Ref) && r.Head == act.Head
+	}) {
+		return nil, nil
+	}
+	sessions, _, err := loopSessions(a)
+	if err != nil {
+		return nil, nil //nolint:nilerr // unread processes hold the assignment
+	}
+	return func(p state.Party) bool {
+		_, ok := claude.Live(sessions, p)
+		return ok
+	}, nil
+}
+
+// releaseGoneReviews releases every assignment at ref's head that no longer
+// holds it (deskReviewHeld) and logs each: its reviewer is gone without a
+// result, and the head gets a new reviewer in a new round.
+func releaseGoneReviews(st *state.State, ref, head string, live func(state.Party) bool, now time.Time) []state.Event {
+	var events []state.Event
+	for i := range st.DeskReviews {
+		round := &st.DeskReviews[i]
+		if !round.Released.IsZero() || !strings.EqualFold(round.Ref, ref) || round.Head != head || deskReviewHeld(st, *round, live) {
+			continue
+		}
+		round.Released = now
+		events = append(events, about(event(loop.LoopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (done or off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, shortSHA(round.Head), round.Reviewer.Name), round.Ref))
+	}
+	return events
+}
+
+// deskReviewHeld says whether round still holds its head: it is not
+// released and has a reported result, or its reviewer is on the roster and
+// not done, runs a remote execution not yet ended, or has a live process.
+// A nil live holds every unreleased round.
+func deskReviewHeld(st *state.State, round state.DeskReview, live func(state.Party) bool) bool {
+	if !round.Released.IsZero() {
+		return false
+	}
+	if round.Result != nil || live == nil {
+		return true
+	}
+	name := superloop.ReviewerName(round.Ref, round.Round)
+	reviewer := func(p state.Party) bool {
+		return sameReviewSession(round.Reviewer, p) || strings.EqualFold(p.Name, name) || round.Reviewer.Name != "" && strings.EqualFold(p.Name, round.Reviewer.Name)
+	}
+	for _, ag := range st.Agents {
+		if ag.Done || !reviewer(ag.Party) {
+			continue
+		}
+		if ag.Execution != nil {
+			if rec, _ := executionRecord(st, *ag.Execution); rec != nil && rec.Terminal() {
+				continue
+			}
+		}
+		return true
+	}
+	for _, start := range st.Starts {
+		if start.Execution != nil && !start.Execution.Terminal() && reviewer(start.Party) {
+			return true
+		}
+	}
+	return live(round.Reviewer)
 }
 
 // reviewRequestActive distinguishes a start in progress from historical intent.
@@ -416,7 +504,7 @@ func reviewRequestOwned(st *state.State, r state.ReviewRequest) bool {
 		}
 	}
 	for _, round := range st.DeskReviews {
-		if strings.EqualFold(round.Ref, r.Ref) && (round.Head == r.Head || round.Round == r.Round) {
+		if round.Released.IsZero() && strings.EqualFold(round.Ref, r.Ref) && (round.Head == r.Head || round.Round == r.Round) {
 			return true
 		}
 	}

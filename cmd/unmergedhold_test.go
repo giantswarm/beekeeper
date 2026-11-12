@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -102,7 +104,7 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 	const backlogCapacity = `{"ceiling":2,"room":2}`
 	var starts []string
 	r.answer = func(args []string) (string, int) {
-		if args[0] == loopCapacity {
+		if args[0] == loop.LoopCapacity {
 			return backlogCapacity, 0
 		}
 		if len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName {
@@ -117,8 +119,8 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.once = true
-	if err := l.pass(context.Background()); err != nil {
+	l.Once = true
+	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	// Existing PR review still starts on o/r#7 despite the unmerged backlog.
@@ -132,7 +134,7 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 		holdURL = "https://github.com/o/r/issues/42"
 	)
 	act := superloop.Action{Key: "next " + holdRef, Kind: superloop.KindNext, Ref: holdRef, URL: holdURL}
-	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); !errors.Is(err, errLoopLater) {
+	if _, err := l.StartItem(context.Background(), act, loop.LoopBoardItem{Ref: holdRef, URL: holdURL}); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("startItem on clogged repo = %v, want errLoopLater", err)
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR START WAITS o/r#42: held: o/r has 10 unmerged pull requests opened in the last 7d") {
@@ -140,7 +142,7 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 	}
 
 	// A second attempt in the same backlog episode does not file a duplicate guide problem.
-	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); !errors.Is(err, errLoopLater) {
+	if _, err := l.StartItem(context.Background(), act, loop.LoopBoardItem{Ref: holdRef, URL: holdURL}); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("second startItem on clogged repo = %v, want errLoopLater", err)
 	}
 	evs, err := r.a.store.Events(0, func(e state.Event) bool {
@@ -155,10 +157,10 @@ func TestSupervisorLoopHoldsBackNewStartsAndEscalatesUnmergedBacklogWhileReviews
 
 	// Once the backlog drains below 10, new starts in o/r proceed and the stage clears.
 	openPulls = cloggedPulls[:4]
-	l.mu.Lock()
-	l.unmerged = nil
-	l.mu.Unlock()
-	if _, err := l.startItem(context.Background(), act, loopBoardItem{Ref: holdRef, URL: holdURL}); err != nil {
+	l.Mu.Lock()
+	l.Unmerged = nil
+	l.Mu.Unlock()
+	if _, err := l.StartItem(context.Background(), act, loop.LoopBoardItem{Ref: holdRef, URL: holdURL}); err != nil {
 		t.Fatalf("startItem after backlog drained failed: %v", err)
 	}
 	if !slices.Contains(starts, "r 42") {
@@ -299,7 +301,7 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 			Serves: "o/r#70",
 		})
 		return []state.Event{
-			about(event(loopParty, loopClaimVerb, "[red %s@%s] %s", loopPR, loopHead, superloop.PullWorkerName(loopPR)), loopPR),
+			about(event(loop.LoopParty, loop.LoopClaimVerb, "[red %s@%s] %s", loopPR, loopHead, superloop.PullWorkerName(loopPR)), loopPR),
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -370,10 +372,10 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.unmergedStart(context.Background(), incidentRef); err != nil {
+	if err := l.UnmergedStart(context.Background(), incidentRef); err != nil {
 		t.Fatalf("unmergedStart for named incident repair = %v, want nil", err)
 	}
-	if err := l.unmergedStart(context.Background(), "o/r#89"); !errors.Is(err, errLoopLater) {
+	if err := l.UnmergedStart(context.Background(), "o/r#89"); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("unmergedStart for non-exempt issue = %v, want errLoopLater", err)
 	}
 	if err := r.a.openPullStartGate(context.Background(), "r 88", incidentURL, []string{incidentRef}, false, false, false); err != nil {
@@ -404,7 +406,7 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.unmergedStart(context.Background(), issueRef); !errors.Is(err, errLoopLater) {
+	if err := l.UnmergedStart(context.Background(), issueRef); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("unmergedStart on PR-list error = %v, want errLoopLater", err)
 	}
 	cands := []board.Candidate{
@@ -449,7 +451,7 @@ func TestPRListErrorsFailClosedAndPaginationFindsDuplicatesBeyond100(t *testing.
 		if err := json.Unmarshal([]byte(page.String()), &pulls); err != nil {
 			t.Fatal(err)
 		}
-		return inventoryPage(t, pulls, true, deliveryNextCommand), nil
+		return inventoryPage(t, pulls, true, loop.DeliveryNextCommand), nil
 	}
 	unmergedGH = mockGH
 	readRepoOpenPulls = func(ctx context.Context, targetRepo string) ([]unmergedPull, error) {
@@ -598,11 +600,11 @@ const review3325ShortMissingTimestamp = "short missing timestamp"
 
 func TestReview3325RepairSessionOwnership(t *testing.T) {
 	owner := state.Party{Name: "retained owner", Session: "original-session", Host: "host-a"}
-	for _, kind := range []string{taskKindReview, "retained park", a2aRoleAgent} {
+	for _, kind := range []string{capacity.TaskKindReview, "retained park", a2aRoleAgent} {
 		t.Run(kind, func(t *testing.T) {
 			st := &state.State{}
 			switch kind {
-			case taskKindReview:
+			case capacity.TaskKindReview:
 				st.ReviewParks = []state.ReviewPark{{On: loopPR, Agent: owner.Name, Party: owner}}
 			case "retained park":
 				st.Parks = []state.Park{{On: loopPR, By: owner}}

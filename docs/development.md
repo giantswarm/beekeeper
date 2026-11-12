@@ -542,6 +542,19 @@ timer from the running watches.
 - `internal/github`: The budget from rate-limit headers, the GraphQL limit and its refusal from a
   `rateLimit` query, the search limits from `/rate_limit` (`BEEKEEPER_GITHUB_API` points the probes
   at a test's server); a pull request's state from `gh pr view`.
+- `internal/capacity`: What a start is judged by: the views `capacity` prints and writes as JSON,
+  the usage data model they are derived from, and the math from the roster's counts, the usage
+  readings and the machine's headroom to a verdict and a choice. `cmd` counts the roster, reads
+  usage and headroom, and holds the commands and the start gate. What the package still needs of
+  the command is named in `command.go` (`Cmd`, six text helpers) and `vocabulary.go` (three of the
+  command's constants, kept equal by `cmd`'s `TestCapacityVocabulary`). A seam entry goes when its
+  target moves to a package capacity can import.
+- `internal/loop`: The supervisor loop: the pass, the streams its actions run in, the refill and
+  the stall alarms. `cmd` runs it and is its `Host`. What it still needs of the command is named in
+  `host.go` (`Host` for the app, `Cmd` for the package's functions) and `vocabulary.go` (the
+  command's names, flags and exit codes, kept equal by `cmd`'s `TestLoopVocabulary`). Steps whose
+  bodies need the command's own types stay in `cmd` as functions over `*loop.Loop`, behind a
+  forwarder that says so. A seam entry goes when its target moves to a package the loop can import.
 - `internal/lease`: Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim.
 - `internal/peer`: The command-line send to a running Claude session: one headless `claude -p` turn
   whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's

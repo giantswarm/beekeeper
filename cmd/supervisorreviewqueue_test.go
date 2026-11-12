@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -26,20 +28,20 @@ const (
 // turn, its stretch runs on while it waits, and the pile is counted.
 func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 	r := newLoopRig(t)
-	total := sweepReadsPerPass + 10
+	total := loop.SweepReadsPerPass + 10
 	var open []string
 	for n := range total {
 		ref := sweepRef(100 + n)
 		open = append(open, ref)
 		r.pulls[ref] = superloop.Pull{Ref: ref, URL: fmt.Sprintf("https://github.com/o/r/pull/%d", 100+n), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk, Branch: "bulk"}
 	}
-	listed := readOpenPulls
-	t.Cleanup(func() { readOpenPulls = listed })
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
+	listed := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = listed })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
 	var reads atomic.Int32
-	read := readLoopPull
-	t.Cleanup(func() { readLoopPull = read })
-	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+	read := loop.ReadLoopPull
+	t.Cleanup(func() { loop.ReadLoopPull = read })
+	loop.ReadLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		if slices.Contains(open, ref) {
 			reads.Add(1)
 		}
@@ -50,23 +52,23 @@ func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 		t.Fatal(err)
 	}
 	settled := func() {
-		l.passActions.Wait()
-		l.mergeActions.Wait()
-		l.timerActs.Wait()
+		l.PassActions.Wait()
+		l.MergeActions.Wait()
+		l.TimerActs.Wait()
 	}
 	r.loopPass(t, l)
 	settled()
 	if n := reads.Load(); n != int32(total) {
 		t.Fatalf("first pass read %d, want %d", n, total)
 	}
-	var count loopSweepCount
-	if found, err := r.a.store.ReadFile(loopSweepFile, &count); err != nil || !found {
+	var count loop.LoopSweepCount
+	if found, err := r.a.store.ReadFile(loop.LoopSweepFile, &count); err != nil || !found {
 		t.Fatalf("no count: %v", err)
 	}
 	if count.Listed != total || count.Ownerless != total || count.Unread != 0 || count.Oldest.IsZero() {
 		t.Fatalf("count = %+v", count)
 	}
-	line := count.line(r.a)
+	line := count.Line(r.a)
 	for _, want := range []string{fmt.Sprintf("%d listed", total), fmt.Sprintf("%d without a live owner", total)} {
 		if !strings.Contains(line, want) {
 			t.Errorf("line %q lacks %q", line, want)
@@ -82,8 +84,8 @@ func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 	if n := reads.Load(); n != 0 {
 		t.Fatalf("second pass read %d, want none", n)
 	}
-	count = loopSweepCount{}
-	if _, err := r.a.store.ReadFile(loopSweepFile, &count); err != nil {
+	count = loop.LoopSweepCount{}
+	if _, err := r.a.store.ReadFile(loop.LoopSweepFile, &count); err != nil {
 		t.Fatal(err)
 	}
 	if count.Ownerless != total || count.Unread != 0 {
@@ -93,10 +95,10 @@ func TestSweepConsumesAllAvailableObservationsAndCountsThePile(t *testing.T) {
 
 func TestSweepCountSaysAListAtGitHubsLimit(t *testing.T) {
 	r := newLoopRig(t)
-	if got := (loopSweepCount{}).line(r.a); got != "" {
+	if got := (loop.LoopSweepCount{}).Line(r.a); got != "" {
 		t.Fatalf("nothing to say, said %q", got)
 	}
-	if got := (loopSweepCount{Listed: sweepListLimit, AtLimit: true}).line(r.a); !strings.Contains(got, "there may be more") {
+	if got := (loop.LoopSweepCount{Listed: loop.SweepListLimit, AtLimit: true}).Line(r.a); !strings.Contains(got, "there may be more") {
 		t.Fatalf("line %q", got)
 	}
 }
@@ -105,22 +107,22 @@ func TestSweepCountSaysAListAtGitHubsLimit(t *testing.T) {
 // well under it, a review waits too, and says the floor that held it.
 func TestReviewStartHasALowerDiskFloor(t *testing.T) {
 	k := config.Capacity{Ceiling: 2, ReviewHeadroom: 2}
-	disk := func(free int) *headroom {
+	disk := func(free int) *capacity.Headroom {
 		h := roomy()
 		h.Disk = &watchDiskReading{Low: true, FreeMiB: free, MinMiB: 102400}
 		return h
 	}
-	if v := newStartCapacity(agentCount{}, k, disk(98783), false, forWorker); v.Room != 0 || !strings.Contains(v.verdict(), "floor 102400 MiB") {
-		t.Fatalf("worker: %s", v.verdict())
+	if v := capacity.NewStartCapacity(capacity.AgentCount{}, k, disk(98783), false, capacity.ForWorker); v.Room != 0 || !strings.Contains(v.Verdict(), "floor 102400 MiB") {
+		t.Fatalf("worker: %s", v.Verdict())
 	}
-	if v := newStartCapacity(agentCount{}, k, disk(98783), false, forReview); v.Room == 0 {
-		t.Fatalf("review held just under the floor: %s", v.verdict())
+	if v := capacity.NewStartCapacity(capacity.AgentCount{}, k, disk(98783), false, capacity.ForReview); v.Room == 0 {
+		t.Fatalf("review held just under the floor: %s", v.Verdict())
 	}
-	if v := newStartCapacity(agentCount{}, k, disk(1024), false, forReview); v.Room != 0 || !strings.Contains(v.verdict(), "floor 51200 MiB") {
-		t.Fatalf("review on a nearly full disk: %s", v.verdict())
+	if v := capacity.NewStartCapacity(capacity.AgentCount{}, k, disk(1024), false, capacity.ForReview); v.Room != 0 || !strings.Contains(v.Verdict(), "floor 51200 MiB") {
+		t.Fatalf("review on a nearly full disk: %s", v.Verdict())
 	}
 	h := disk(98783)
-	if h.forStart(forReview); !h.Disk.Low {
+	if h.ForStart(capacity.ForReview); !h.Disk.Low {
 		t.Fatal("a review's floor changed the shared reading")
 	}
 }
@@ -130,7 +132,7 @@ func TestGraphQLLimitIsConfigurableAndItsHoldVisible(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 100
 	now := r.a.timeNow()
-	spend := loopGraphQLSpend{Reset: now.Add(time.Hour), Spent: 1535, Remaining: 4000, Steps: map[string]int{loopPullStep: 1535}}
+	spend := loopGraphQLSpend{Reset: now.Add(time.Hour), Spent: 1535, Remaining: 4000, Steps: map[string]int{loop.LoopPullStep: 1535}}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		g := &state.GraphQL{Remaining: 3000, Limit: 5000, Reset: spend.Reset, At: now}
 		st.Budget = &state.Budget{Remaining: 4000, Limit: 5000, Reset: spend.Reset, At: now, GraphQL: g}
@@ -156,7 +158,7 @@ func TestGraphQLLimitIsConfigurableAndItsHoldVisible(t *testing.T) {
 
 // removeRig has a loop whose agents remove answers code with out, the
 // agent gone from the roster or not.
-func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *supervisorLoop) {
+func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *loop.Loop) {
 	t.Helper()
 	r := newLoopRig(t)
 	if onRoster {
@@ -168,7 +170,7 @@ func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *su
 		}
 	}
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[1] == loopRemove {
+		if len(args) > 1 && args[1] == loop.LoopRemove {
 			return out, code
 		}
 		return "", 0
@@ -184,10 +186,10 @@ func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *su
 // used to fail on every retry.
 func TestLoopRemoveOfAnAgentOffTheRosterIsDone(t *testing.T) {
 	r, l := removeRig(t, false, ExitRefused, queueNoSuchName+` "worker-x"`)
-	if err := l.remove(context.Background(), "worker-x", "task done"); err != nil {
+	if err := l.Remove(context.Background(), "worker-x", "task done"); err != nil {
 		t.Fatal(err)
 	}
-	if c := r.called(agentsName, loopRemove); !slices.Contains(c, "--"+reasonFlagName) || !slices.Contains(c, "task done") {
+	if c := r.called(agentsName, loop.LoopRemove); !slices.Contains(c, "--"+reasonFlagName) || !slices.Contains(c, "task done") {
 		t.Fatalf("no reason passed: %v", c)
 	}
 }
@@ -196,7 +198,7 @@ func TestLoopRemoveOfAnAgentOffTheRosterIsDone(t *testing.T) {
 // must confirm termination first.
 func TestLoopRemoveRefusedForAnAgentOnTheRosterFails(t *testing.T) {
 	_, l := removeRig(t, true, ExitRefused, "SSH execution must have confirmed termination before removal")
-	if err := l.remove(context.Background(), "worker-x", "task done"); err == nil {
+	if err := l.Remove(context.Background(), "worker-x", "task done"); err == nil {
 		t.Fatal("a refused removal counted as done")
 	}
 }
@@ -209,7 +211,7 @@ func TestRemovedDetailKeepsTheNameReadable(t *testing.T) {
 		t.Fatal("no reason, no suffix")
 	}
 	for detail, want := range map[string]bool{"w": true, "w: why": true, "w2: why": false, "w2": false} {
-		if removedAgent(detail, "w") != want {
+		if loop.RemovedAgent(detail, "w") != want {
 			t.Errorf("removedAgent(%q) != %v", detail, want)
 		}
 	}
@@ -227,9 +229,9 @@ func TestReviewStarterGetsTheVerdict(t *testing.T) {
 		report string
 		want   state.Party
 	}{
-		{"by agents review", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1, By: guide}}, Starts: []state.Start{{Party: reviewer, By: loopParty}}}, queueVerdict, guide},
+		{"by agents review", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1, By: guide}}, Starts: []state.Start{{Party: reviewer, By: loop.LoopParty}}}, queueVerdict, guide},
 		{"by agents start", state.State{Starts: []state.Start{{Party: reviewer, By: guide}}}, queueVerdict, guide},
-		{"by the loop", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1}}, Starts: []state.Start{{Party: reviewer, By: loopParty}}}, queueVerdict, state.Party{}},
+		{"by the loop", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1}}, Starts: []state.Start{{Party: reviewer, By: loop.LoopParty}}}, queueVerdict, state.Party{}},
 		{"no verdict", state.State{Starts: []state.Start{{Party: reviewer, By: guide}}}, "shipped it", state.Party{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

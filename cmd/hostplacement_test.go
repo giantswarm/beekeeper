@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -28,7 +30,7 @@ func TestHostCapacityReasons(t *testing.T) {
 		{"policy mismatch", 3, nil, "policy mismatch"},
 		{"", 0, errors.New("host unreachable"), "host unreachable"},
 	} {
-		got := hostCapacityReason(tc.out, tc.code, tc.err)
+		got := loop.HostCapacityReason(tc.out, tc.code, tc.err)
 		if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
 			t.Errorf("capacity %q: %q, want %q", tc.out, got, tc.want)
 		}
@@ -94,23 +96,23 @@ func TestLookupFailurePreservesExistingInstallationHold(t *testing.T) {
 func TestHostPlacementDiagnosticsSurviveLoopRestart(t *testing.T) {
 	r := newLoopRig(t)
 	r.sshLoopHost(t, true)
-	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
-	l.recordHostPlacement(sshTestSelector, sshTestRepository, "repository is not mapped")
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
+	l.RecordHostPlacement(sshTestSelector, sshTestRepository, "repository is not mapped")
 	st, err := r.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	views := r.a.hostPlacementViews(st)
-	if len(views) != 1 || views[0].At.IsZero() || !strings.Contains(views[0].line(), "not mapped") {
+	if len(views) != 1 || views[0].At.IsZero() || !strings.Contains(views[0].Line(), "not mapped") {
 		t.Fatalf("missing dated placement: %+v", views)
 	}
 	if err := r.a.supervisorStatus(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.out.String(), views[0].line()) {
+	if !strings.Contains(r.out.String(), views[0].Line()) {
 		t.Fatalf("status lost host reason: %s", r.out)
 	}
-	encoded, err := json.Marshal(&capacityView{Hosts: views})
+	encoded, err := json.Marshal(&capacity.View{Hosts: views})
 	if err != nil || !strings.Contains(string(encoded), `"selector":"`+sshTestSelector+`"`) || !strings.Contains(string(encoded), `"reason":"repository is not mapped"`) {
 		t.Fatalf("capacity JSON lost host diagnostics: %s, %v", encoded, err)
 	}
@@ -133,7 +135,7 @@ func TestHostStarvationSurvivesRestartsAndClearsOnRemoteStart(t *testing.T) {
 			t.Fatal(err)
 		}
 		// New loop object on every observation proves the alarm is durable.
-		if err := (&supervisorLoop{a: r.a}).checkHostUtilization(st); err != nil {
+		if err := (&loop.Loop{Host: r.a}).CheckHostUtilization(st); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,8 +180,8 @@ func TestHostStarvationSurvivesRestartsAndClearsOnRemoteStart(t *testing.T) {
 func TestIdleDeskAndUnsentRemoteReservationDoNotHideStarvation(t *testing.T) {
 	r := newLoopRig(t)
 	r.sshLoopHost(t, true)
-	l := &supervisorLoop{a: r.a}
-	if err := l.checkHostUtilization(&state.State{}); err != nil {
+	l := &loop.Loop{Host: r.a}
+	if err := l.CheckHostUtilization(&state.State{}); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(r.logged(t, "supervisor.file")); n != 0 {
@@ -189,7 +191,7 @@ func TestIdleDeskAndUnsentRemoteReservationDoNotHideStarvation(t *testing.T) {
 		{At: r.a.now.Add(-2 * time.Hour), Kind: workerRole},
 		{At: r.a.now, Execution: &state.ExecutionRecord{Phase: executionPending, StartUnsent: true}},
 	}}
-	if err := l.checkHostUtilization(st); err != nil {
+	if err := l.CheckHostUtilization(st); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(r.logged(t, "supervisor.file")); n != 1 {

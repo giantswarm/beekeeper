@@ -18,7 +18,7 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: selfupdate
 tags: [selfupdate, release, canary, probation]
-timeout: 240s
+timeout: 360s
 
 given:
   desk:
@@ -133,8 +133,10 @@ when:
     background:
       release: v1.0.0-rc.2
       args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
+  # About a minute on a CI runner: 30 evaluations, six of them with the
+  # workflow probe. The bound leaves room for a busier runner.
   - wait_for:
-      timeout: 120s
+      timeout: 240s
       interval: 200ms
       expect:
         - process: {name: controller, exit: 0}

@@ -1,10 +1,13 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // rest are the members of one JSON object its Go type does not know: a newer
@@ -21,22 +24,122 @@ func decodeKeeping[P any](raw []byte, v *P, r *rest) error {
 	if err := json.Unmarshal(raw, v); err != nil {
 		return err
 	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &all); err != nil {
+	all, err := unknownMembers(raw, jsonKeys(reflect.TypeFor[P]()))
+	if err != nil {
 		return err
 	}
-	known := jsonKeys(reflect.TypeFor[P]())
-	for k := range all {
-		// encoding/json matches names case-insensitively.
-		if known[strings.ToLower(k)] {
-			delete(all, k)
+	*r = all
+	return nil
+}
+
+var errMemberSyntax = errors.New("invalid JSON object")
+
+// unknownMembers are the members of the object raw whose names known lacks,
+// as decoding raw into a map of raw messages keeps them: the last of a
+// repeated name, each value's bytes as written; nil for none, or for null.
+// encoding/json matches names case-insensitively, and known holds lower-cased
+// names. raw was decoded already, so it is valid JSON. Only the unknown
+// members are copied: the known ones, nearly the whole document, are neither
+// copied nor decoded a second time, at any depth of the state's objects.
+func unknownMembers(raw []byte, known map[string]bool) (rest, error) {
+	i := skipSpace(raw, 0)
+	if bytes.HasPrefix(raw[i:], []byte("null")) {
+		return nil, nil
+	}
+	if i >= len(raw) || raw[i] != '{' {
+		return nil, errMemberSyntax
+	}
+	var r rest
+	for i = skipSpace(raw, i+1); i < len(raw) && raw[i] != '}'; {
+		end, err := valueEnd(raw, i)
+		if err != nil || raw[i] != '"' {
+			return nil, errMemberSyntax
+		}
+		name, err := memberName(raw[i:end])
+		if err != nil {
+			return nil, err
+		}
+		if i = skipSpace(raw, end); i >= len(raw) || raw[i] != ':' {
+			return nil, errMemberSyntax
+		}
+		start := skipSpace(raw, i+1)
+		if end, err = valueEnd(raw, start); err != nil {
+			return nil, err
+		}
+		if !known[strings.ToLower(name)] {
+			if r == nil {
+				r = rest{}
+			}
+			r[name] = json.RawMessage(bytes.Clone(raw[start:end]))
+		}
+		if i = skipSpace(raw, end); i < len(raw) && raw[i] == ',' {
+			i = skipSpace(raw, i+1)
+		} else if i >= len(raw) || raw[i] != '}' {
+			return nil, errMemberSyntax
 		}
 	}
-	*r = nil
-	if len(all) > 0 {
-		*r = all
+	if i >= len(raw) {
+		return nil, errMemberSyntax
 	}
-	return nil
+	return r, nil
+}
+
+// memberName is the quoted JSON string q decoded.
+func memberName(q []byte) (string, error) {
+	if s := q[1 : len(q)-1]; bytes.IndexByte(s, '\\') < 0 && utf8.Valid(s) {
+		return string(s), nil
+	}
+	var name string
+	err := json.Unmarshal(q, &name)
+	return name, err
+}
+
+func skipSpace(raw []byte, i int) int {
+	for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\n' || raw[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+// valueEnd is the index just past the JSON value starting at raw[i].
+func valueEnd(raw []byte, i int) (int, error) {
+	if i >= len(raw) {
+		return 0, errMemberSyntax
+	}
+	depth := 0
+	for j := i; j < len(raw); j++ {
+		switch raw[j] {
+		case '"':
+			for j++; j < len(raw) && raw[j] != '"'; j++ {
+				if raw[j] == '\\' {
+					j++
+				}
+			}
+			if j >= len(raw) {
+				return 0, errMemberSyntax
+			}
+			if depth == 0 {
+				return j + 1, nil
+			}
+		case '{', '[':
+			depth++
+		case '}', ']':
+			if depth == 0 {
+				return j, nil
+			}
+			if depth--; depth == 0 {
+				return j + 1, nil
+			}
+		case ',', ' ', '\t', '\n', '\r':
+			if depth == 0 {
+				return j, nil
+			}
+		}
+	}
+	if depth != 0 {
+		return 0, errMemberSyntax
+	}
+	return len(raw), nil
 }
 
 // encodeKeeping encodes v, a type without JSON methods, with the members r

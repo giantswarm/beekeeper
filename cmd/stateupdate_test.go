@@ -82,22 +82,33 @@ func updateSlowCalls(filename string, source any) ([]token.Position, error) {
 	return positions, nil
 }
 
+// updateGuardedDirs are the packages whose state updates the guard checks:
+// the commands and the supervisor loop they run.
+var updateGuardedDirs = []string{".", filepath.Join("..", "internal", "loop")}
+
 func TestUpdateCallbacksHaveNoExplicitSlowCalls(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		positions, err := updateSlowCalls(name, nil)
+	for _, dir := range updateGuardedDirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, p := range positions {
-			t.Errorf("%s: move subprocess/network/sleep work before the state Update callback", p)
+		n := 0
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			n++
+			positions, err := updateSlowCalls(filepath.Join(dir, name), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range positions {
+				t.Errorf("%s: move subprocess/network/sleep work before the state Update callback", p)
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s holds no Go file: the guarded directories are stale", dir)
 		}
 	}
 }

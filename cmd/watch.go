@@ -19,12 +19,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/notify"
@@ -401,9 +403,9 @@ type watcher struct {
 	swapSamples []swapSample
 	// swap is the machine sample's latest swap reading, under mu: the
 	// poll's CAPACITY lines weigh a start against it.
-	swap *swapReading
+	swap *capacity.SwapReading
 	// readHeadroom reads the headroom of a start; nil is app.readHeadroom.
-	readHeadroom func(context.Context, *swapReading) *headroom
+	readHeadroom func(context.Context, *capacity.SwapReading) *capacity.Headroom
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
 	// guideRecovery owns crash recovery on its own clock in a continuous watch.
@@ -1265,7 +1267,7 @@ func (w *watcher) sample(ctx context.Context) {
 		if m.SwapTotalMiB > 0 {
 			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
 		}
-		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
+		w.keepSwap(&capacity.SwapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
 			PerHourMiB: t.DiskPerHourMiB, WritebackPerHourMiB: t.WritebackPerHourMiB, Rated: t.Rated})
 	}
 	w.sampleCPU(now, table)
@@ -2163,7 +2165,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	githubHeld := boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	githubHeld := loop.BoardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
 	var found map[int]checkResult
 	if w.loopOwned {
 		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)

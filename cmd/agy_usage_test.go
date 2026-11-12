@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -124,7 +126,7 @@ func TestAgyUsageProbeCwdEnvAndCache(t *testing.T) {
 	t0 := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	a := &app{cfg: cfg, store: store, now: t0}
 	u := cfg.Capacity.Providers[config.AgyHarness].Usage
-	read := func() usageReading {
+	read := func() capacity.UsageReading {
 		t.Helper()
 		r, err := a.resolveReading(context.Background(), usageProviderFile(config.AgyHarness), u)
 		if err != nil {
@@ -189,14 +191,14 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		"Gemini Models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n" +
 		"Claude and GPT models\tWeekly Limit Remaining\t0%\t2026-11-03T09:58:13Z\n" +
 		"Claude and GPT models\tFive Hour Limit Remaining\t95%\t2026-10-28T05:00:00Z\n"
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+	a.readUsage = func(context.Context, []string, time.Duration) (capacity.UsageReading, error) {
 		return parseAgyBuiltinUsage([]byte(exhaustedTSV))
 	}
 	st, err := store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v := a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, capacity.ForWorker)
 	if v.Choice == nil || v.Choice.Model != "gemini-3.1-pro-high" {
 		t.Fatalf("choice with 0%% remaining Claude bucket = %+v, want gemini-3.1-pro-high", v.Choice)
 	}
@@ -211,10 +213,10 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		"Claude and GPT models\tWeekly Limit Remaining\t98%\t2026-11-03T09:58:13Z\n" +
 		"Claude and GPT models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n"
 	_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(config.AgyHarness)))
-	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+	a.readUsage = func(context.Context, []string, time.Duration) (capacity.UsageReading, error) {
 		return parseAgyBuiltinUsage([]byte(laggingTSV))
 	}
-	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, capacity.ForWorker)
 	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
 		t.Fatalf("choice before 429 = %+v, want %s", v.Choice, testModelOpus46)
 	}
@@ -229,7 +231,7 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		Model:      testModelOpus46,
 	}, t0)
 
-	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, capacity.ForWorker)
 	if v.Choice == nil || v.Choice.Model != "gemini-3.1-pro-high" {
 		t.Fatalf("choice after 429 = %+v, want gemini-3.1-pro-high", v.Choice)
 	}
@@ -240,7 +242,7 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 	// After the reset time passes, the quota lock lifts.
 	_ = dir
 	a.now = t0.Add(resetDur + time.Minute)
-	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, capacity.ForWorker)
 	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
 		t.Fatalf("choice after reset = %+v, want %s", v.Choice, testModelOpus46)
 	}
@@ -320,12 +322,12 @@ supervisor:
 }
 
 // loop is a supervisor loop over f whose beekeeper runs answer with run.
-func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *supervisorLoop {
+func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *loop.Loop {
 	t.Helper()
 	a := &app{cfg: f.cfg, store: f.store, out: out, now: f.t0.Add(time.Minute)}
-	origRun := beekeeperRun
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
-	t.Cleanup(func() { beekeeperRun = origRun })
+	origRun := loop.BeekeeperRun
+	loop.BeekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
+	t.Cleanup(func() { loop.BeekeeperRun = origRun })
 	origRefs := refStates
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 		states := map[github.PR]github.RefState{}
@@ -335,7 +337,7 @@ func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []stri
 		return states, nil
 	}
 	t.Cleanup(func() { refStates = origRefs })
-	return &supervisorLoop{a: a, said: map[string]bool{}}
+	return &loop.Loop{Host: a, Said: map[string]bool{}}
 }
 
 func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
@@ -371,7 +373,7 @@ func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
 		runCalls = append(runCalls, args)
 		return "started replacement\n", 0, nil
 	})
-	if err := l.recoverQuota(context.Background(), st); err != nil {
+	if err := l.RecoverQuota(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "SUPERVISOR QUOTA beekeeper 2150:") || !strings.Contains(out.String(), "re-queuing giantswarm/beekeeper#2150 on another choice") {
@@ -426,8 +428,8 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 				runCalls = append(runCalls, args)
 				return "no room\n", tc.code, nil
 			})
-			l.startsHeld = tc.held
-			if err := l.recoverQuota(context.Background(), st); err != nil {
+			l.StartsHeld = tc.held
+			if err := l.RecoverQuota(context.Background(), st); err != nil {
 				t.Fatal(err)
 			}
 			if tc.held != (len(runCalls) == 0) {
@@ -452,9 +454,9 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 
 			// The next pass with room starts the replacement and frees it.
 			runCalls = nil
-			l.startsHeld = false
+			l.StartsHeld = false
 			tc.code = 0
-			if err := l.recoverQuota(context.Background(), after); err != nil {
+			if err := l.RecoverQuota(context.Background(), after); err != nil {
 				t.Fatal(err)
 			}
 			if len(runCalls) != 1 {
@@ -477,7 +479,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 	name := superloop.ReviewerName(ref, 2)
 	f := newQuotaFixture(t, name, "Review https://github.com/giantswarm/beekeeper/pull/2153 at head abc", ref)
 	key := "review " + ref + "@abc"
-	if err := f.store.Record(about(event(loopParty, loopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
+	if err := f.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -486,7 +488,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 		runCalls = append(runCalls, args)
 		return `{"room":1}` + "\n", 0, nil
 	})
-	brief, err := l.brief("", "Review {{.URL}} at {{.Head}}\n", key, briefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
+	brief, err := l.Brief("", "Review {{.URL}} at {{.Head}}\n", key, loop.BriefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +496,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.recoverQuota(context.Background(), st); err != nil {
+	if err := l.RecoverQuota(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	i := slices.IndexFunc(runCalls, func(args []string) bool { return slices.Contains(args, "start") })

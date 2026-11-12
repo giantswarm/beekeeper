@@ -388,20 +388,7 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
-func (d *driver) repositories() []string {
-	var out []string
-	for _, r := range d.s.Given.Repositories {
-		out = append(out, r.Name)
-	}
-	if g := d.s.Given.GitHub; g != nil {
-		for _, name := range g.RepositoryNames() {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
+func (d *driver) repositories() []string { return d.s.repositoryNames() }
 
 // startGitHub builds the scenario's GitHub from given.github over the
 // origins, serves it on a loopback port and makes it answer gh.

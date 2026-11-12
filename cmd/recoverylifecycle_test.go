@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -23,7 +24,7 @@ func TestRecoveryReportsCandidateExitInsteadOfBareSilence(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This is an exit from the actual candidate, not the isolated probe or the old loop.
-	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass, Exited: true, Code: 1, Failure: "state lock busy"}); err != nil {
+	if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass, Exited: true, Code: 1, Failure: "state lock busy"}); err != nil {
 		t.Fatal(err)
 	}
 	// The candidate loop started at the first tick: its grace ends one tick later.
@@ -52,8 +53,8 @@ func TestRecoveryRejectsStaleOrMismatchedPhaseProgress(t *testing.T) {
 			if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: recoveryGoodVersion}); err != nil {
 				t.Fatal(err)
 			}
-			life := loopLifecycle{Version: tc.version, Started: now.Add(tc.age), At: *now, Phase: tc.phase, Exited: tc.exited, Code: 1}
-			if err := c.store.WriteFile(loopLifecycleFile, life); err != nil {
+			life := loop.LoopLifecycle{Version: tc.version, Started: now.Add(tc.age), At: *now, Phase: tc.phase, Exited: tc.exited, Code: 1}
+			if err := c.store.WriteFile(loop.LoopLifecycleFile, life); err != nil {
 				t.Fatal(err)
 			}
 			for range int(update.HeartbeatGrace/time.Minute) + 1 {
@@ -75,11 +76,11 @@ func TestRecoveryProgressingFirstPassPassesProbation(t *testing.T) {
 	// continues beyond both the heartbeat grace and the probation window.
 	for i := range int(update.ProbationWindow / time.Minute) {
 		*now = now.Add(time.Minute)
-		phase := loopPhaseObserve
+		phase := loop.LoopPhaseObserve
 		if i%2 == 0 {
 			phase = "read event history"
 		}
-		if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: started, At: now.Add(-4 * time.Second), Phase: phase}); err != nil {
+		if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: recoveryBadVersion, Started: started, At: now.Add(-4 * time.Second), Phase: phase}); err != nil {
 			t.Fatal(err)
 		}
 		settled := c.mustTick(t)
@@ -94,16 +95,16 @@ func TestRecoveryProgressingFirstPassPassesProbation(t *testing.T) {
 
 func TestLoopPhasePublishesHeartbeatForRetainedController(t *testing.T) {
 	c, _ := recoveryRig(t)
-	previous := loopRunningVersion
-	t.Cleanup(func() { loopRunningVersion = previous })
-	loopRunningVersion = func() string { return recoveryBadVersion }
-	l := &supervisorLoop{a: c.a, lifecycle: &loopLifecycle{Version: recoveryBadVersion, Started: time.Now().UTC()}}
-	l.lifecyclePhase(loopPhaseObserve)
+	previous := loop.LoopRunningVersion
+	t.Cleanup(func() { loop.LoopRunningVersion = previous })
+	loop.LoopRunningVersion = func() string { return recoveryBadVersion }
+	l := &loop.Loop{Host: c.a, Lifecycle: &loop.LoopLifecycle{Version: recoveryBadVersion, Started: time.Now().UTC()}}
+	l.LifecyclePhase(loop.LoopPhaseObserve)
 	var obs throughputObservation
 	if found, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || !found {
 		t.Fatalf("phase heartbeat missing: %v", err)
 	}
-	if obs.Candidate != recoveryBadVersion || !obs.At.Equal(l.lifecycle.At) || !obs.Unknown {
+	if obs.Candidate != recoveryBadVersion || !obs.At.Equal(l.Lifecycle.At) || !obs.Unknown {
 		t.Fatalf("phase progress incompatible with retained controller: %+v", obs)
 	}
 	// Phase heartbeats must retain a completed planner observation.
@@ -111,8 +112,8 @@ func TestLoopPhasePublishesHeartbeatForRetainedController(t *testing.T) {
 	if err := c.store.WriteFile(throughputObservationFile, obs); err != nil {
 		t.Fatal(err)
 	}
-	for _, phase := range []string{"reload configuration", "watch conditions", lifecycleWatchAlerts, loopPhaseBetween} {
-		l.lifecyclePhase(phase)
+	for _, phase := range []string{"reload configuration", "watch conditions", lifecycleWatchAlerts, loop.LoopPhaseBetween} {
+		l.LifecyclePhase(phase)
 		if _, err := c.store.ReadFile(throughputObservationFile, &obs); err != nil || obs.Unknown {
 			t.Fatalf("phase %s erased completed planning: %+v %v", phase, obs, err)
 		}
@@ -124,7 +125,7 @@ func TestRecoveryFailedExitOverridesFreshPhaseHeartbeat(t *testing.T) {
 	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: *now, Candidate: recoveryBadVersion}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass, Exited: true, Code: 1}); err != nil {
+	if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass, Exited: true, Code: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if s := c.signals(t.Context(), journal(t, c)); s.Heartbeat || !s.HeartbeatRequired {
@@ -158,7 +159,7 @@ func TestRecoveryGraceStartsWithALateCandidateLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The old loop still runs: this process stands in for it.
-	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
+	if err := c.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
 		t.Fatal(err)
 	}
 	handover := int(update.HeartbeatGrace/time.Minute) + 5
@@ -169,10 +170,10 @@ func TestRecoveryGraceStartsWithALateCandidateLoop(t *testing.T) {
 		t.Fatalf("rolled back before the candidate's loop ran: %s", journal(t, c).Observed.Reason)
 	}
 	// The candidate's loop starts now and stalls in its first pass.
-	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass}); err != nil {
+	if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryBadVersion, PID: os.Getpid()}); err != nil {
+	if err := c.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{Version: recoveryBadVersion, PID: os.Getpid()}); err != nil {
 		t.Fatal(err)
 	}
 	for range int(update.HeartbeatGrace / time.Minute) {
@@ -196,7 +197,7 @@ func TestRecoveryRollsBackWhenTheOldLoopNeverHandsOver(t *testing.T) {
 	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: recoveryGoodVersion}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
+	if err := c.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
 		t.Fatal(err)
 	}
 	ticks := 0
@@ -217,14 +218,14 @@ func TestRecoveryLateLoopGraceExcludesUnobservedSleep(t *testing.T) {
 	if err := c.store.WriteFile(throughputObservationFile, throughputObservation{At: now.Add(-time.Minute), Candidate: recoveryGoodVersion}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
+	if err := c.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{Version: recoveryGoodVersion, PID: os.Getpid()}); err != nil {
 		t.Fatal(err)
 	}
 	for range 15 {
 		c.mustTick(t)
 		*now = now.Add(time.Minute)
 	}
-	if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass}); err != nil {
+	if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: recoveryBadVersion, Started: *now, At: *now, Phase: lifecycleFirstPass}); err != nil {
 		t.Fatal(err)
 	}
 	// The loop starts just before sleep, without an intervening controller tick.
@@ -248,13 +249,13 @@ func TestRecoveryLateLoopGraceExcludesUnobservedSleep(t *testing.T) {
 
 func TestLoopExitPersistsDiagnosticWithoutErrorContents(t *testing.T) {
 	r := newLoopRig(t)
-	r.failRecord = func(e state.Event) bool { return e.Verb == loopStartVerb }
+	r.failRecord = func(e state.Event) bool { return e.Verb == loop.LoopStartVerb }
 	if err := r.a.runSupervisorLoop(t.Context(), true); err == nil {
 		t.Fatal("expected injected event write failure")
 	}
-	var life loopLifecycle
-	found, err := r.a.store.ReadFile(loopLifecycleFile, &life)
-	if err != nil || !found || !life.Exited || life.Code != 1 || life.Phase != loopPhaseStartupHistory {
+	var life loop.LoopLifecycle
+	found, err := r.a.store.ReadFile(loop.LoopLifecycleFile, &life)
+	if err != nil || !found || !life.Exited || life.Code != 1 || life.Phase != loop.LoopPhaseStartupHistory {
 		t.Fatalf("lost startup exit: %+v, %v", life, err)
 	}
 	if strings.Contains(life.Failure, "disk full") {
@@ -296,7 +297,7 @@ func TestLoopFailureClassificationDoesNotExposePrivateErrorText(t *testing.T) {
 		{&os.PathError{Op: "open", Path: "private path", Err: os.ErrPermission}, "permission denied"},
 		{errors.New("private error text"), "loop error (see candidate service journal)"},
 	} {
-		if got := loopFailureKind(tc.err); got != tc.want {
+		if got := loop.LoopFailureKind(tc.err); got != tc.want {
 			t.Fatalf("got %q want %q", got, tc.want)
 		}
 	}
@@ -304,11 +305,11 @@ func TestLoopFailureClassificationDoesNotExposePrivateErrorText(t *testing.T) {
 
 func TestSecondLoopCannotReplaceOwnerLifecycle(t *testing.T) {
 	r := newLoopRig(t)
-	owner := loopLifecycle{Version: recoveryBadVersion, Started: time.Now(), Phase: lifecycleWatchAlerts}
-	if err := r.a.store.WriteFile(loopLifecycleFile, owner); err != nil {
+	owner := loop.LoopLifecycle{Version: recoveryBadVersion, Started: time.Now(), Phase: lifecycleWatchAlerts}
+	if err := r.a.store.WriteFile(loop.LoopLifecycleFile, owner); err != nil {
 		t.Fatal(err)
 	}
-	lock := flock.New(filepath.Join(r.a.store.Dir(), loopLockFile))
+	lock := flock.New(filepath.Join(r.a.store.Dir(), loop.LoopLockFile))
 	if held, err := lock.TryLock(); !held || err != nil {
 		t.Fatalf("lock: %v %v", held, err)
 	}
@@ -316,15 +317,15 @@ func TestSecondLoopCannotReplaceOwnerLifecycle(t *testing.T) {
 	if err := r.a.runSupervisorLoop(t.Context(), true); Code(err) != ExitRefused {
 		t.Fatalf("second loop: %v", err)
 	}
-	var got loopLifecycle
-	if _, err := r.a.store.ReadFile(loopLifecycleFile, &got); err != nil || got.Exited || got.Phase != owner.Phase || !got.Started.Equal(owner.Started) {
+	var got loop.LoopLifecycle
+	if _, err := r.a.store.ReadFile(loop.LoopLifecycleFile, &got); err != nil || got.Exited || got.Phase != owner.Phase || !got.Started.Equal(owner.Started) {
 		t.Fatalf("contender overwrote owner: %+v %v", got, err)
 	}
 }
 
 func TestRecoveryIdentifiesIncumbentThatNeverHandedOff(t *testing.T) {
 	c, now := recoveryRig(t)
-	if err := c.store.WriteFile(loopVersionFile, loopVersionRecord{PID: os.Getpid(), Version: recoveryGoodVersion}); err != nil {
+	if err := c.store.WriteFile(loop.LoopVersionFile, loop.LoopVersionRecord{PID: os.Getpid(), Version: recoveryGoodVersion}); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.loopSilence(recoveryBadVersion, *now); !strings.Contains(got, "another-version loop is still alive") {
@@ -335,8 +336,8 @@ func TestRecoveryIdentifiesIncumbentThatNeverHandedOff(t *testing.T) {
 func TestLoopSuccessfulExitHasZeroDiagnosticCode(t *testing.T) {
 	r := newLoopRig(t)
 	r.pass(t)
-	var life loopLifecycle
-	if found, err := r.a.store.ReadFile(loopLifecycleFile, &life); err != nil || !found || !life.Exited || life.Code != 0 || life.Failure != "" {
+	var life loop.LoopLifecycle
+	if found, err := r.a.store.ReadFile(loop.LoopLifecycleFile, &life); err != nil || !found || !life.Exited || life.Code != 0 || life.Failure != "" {
 		t.Fatalf("successful loop recorded failure: %+v %v", life, err)
 	}
 }
@@ -344,7 +345,7 @@ func TestLoopSuccessfulExitHasZeroDiagnosticCode(t *testing.T) {
 func TestLoopPanicIsRecordedAndPropagated(t *testing.T) {
 	r := newLoopRig(t)
 	r.failRecord = func(e state.Event) bool {
-		if e.Verb == loopStartVerb {
+		if e.Verb == loop.LoopStartVerb {
 			panic("private panic detail")
 		}
 		return false
@@ -358,8 +359,8 @@ func TestLoopPanicIsRecordedAndPropagated(t *testing.T) {
 		_ = r.a.runSupervisorLoop(t.Context(), true)
 		t.Fatal("panic swallowed")
 	}()
-	var life loopLifecycle
-	if found, err := r.a.store.ReadFile(loopLifecycleFile, &life); err != nil || !found || !life.Exited || life.Code != 1 || life.Failure != "panic (see candidate service journal)" {
+	var life loop.LoopLifecycle
+	if found, err := r.a.store.ReadFile(loop.LoopLifecycleFile, &life); err != nil || !found || !life.Exited || life.Code != 1 || life.Failure != "panic (see candidate service journal)" {
 		t.Fatalf("panic recorded incorrectly: %+v %v", life, err)
 	}
 }
@@ -368,13 +369,13 @@ func TestLoopPanicIsRecordedAndPropagated(t *testing.T) {
 // report progress without waiting for event history or a completed plan.
 func TestRecoveryAcceptsHistoryCheckpointAndRejectsStalledReader(t *testing.T) {
 	c, now := recoveryRig(t)
-	oldVersion := loopRunningVersion
-	t.Cleanup(func() { loopRunningVersion = oldVersion })
-	loopRunningVersion = func() string { return recoveryBadVersion }
+	oldVersion := loop.LoopRunningVersion
+	t.Cleanup(func() { loop.LoopRunningVersion = oldVersion })
+	loop.LoopRunningVersion = func() string { return recoveryBadVersion }
 	j := journal(t, c)
 	*now = now.Add(update.HeartbeatGrace)
-	l := &supervisorLoop{a: c.a}
-	if err := l.checkpointThroughput(*now); err != nil {
+	l := &loop.Loop{Host: c.a}
+	if err := l.CheckpointThroughput(*now); err != nil {
 		t.Fatal(err)
 	}
 	o := update.Observed{Elapsed: update.HeartbeatGrace, ProbePassed: true}
@@ -396,9 +397,9 @@ func TestRecoveryAcceptsHistoryCheckpointAndRejectsStalledReader(t *testing.T) {
 // Follow callback path across more than a heartbeat grace, then stop reading.
 func TestRecoveryAcceptsProgressingEventHistory(t *testing.T) {
 	c, now := recoveryRig(t)
-	oldVersion := loopRunningVersion
-	t.Cleanup(func() { loopRunningVersion = oldVersion })
-	loopRunningVersion = func() string { return recoveryBadVersion }
+	oldVersion := loop.LoopRunningVersion
+	t.Cleanup(func() { loop.LoopRunningVersion = oldVersion })
+	loop.LoopRunningVersion = func() string { return recoveryBadVersion }
 	j := journal(t, c)
 	events := make([]state.Event, 20)
 	for i := range events {
@@ -407,11 +408,11 @@ func TestRecoveryAcceptsProgressingEventHistory(t *testing.T) {
 	if err := c.store.Update(func(*state.State) ([]state.Event, error) { return events, nil }); err != nil {
 		t.Fatal(err)
 	}
-	l := &supervisorLoop{a: c.a}
+	l := &loop.Loop{Host: c.a}
 	checkpoints := 0
-	filter := eventProgressFilter(func(state.Event) bool { return false }, func() {
+	filter := loop.EventProgressFilter(func(state.Event) bool { return false }, func() {
 		checkpoints++
-		if err := l.checkpointThroughput(*now); err != nil {
+		if err := l.CheckpointThroughput(*now); err != nil {
 			t.Fatal(err)
 		}
 		s := c.signals(t.Context(), j)
@@ -435,7 +436,7 @@ func TestRecoveryAcceptsProgressingEventHistory(t *testing.T) {
 func TestEventHistoryProgressIsRateLimited(t *testing.T) {
 	now := time.Now()
 	checkpoints := 0
-	filter := eventProgressFilter(func(e state.Event) bool { return e.Verb == answerRecorded }, func() { checkpoints++ }, func() time.Time { return now })
+	filter := loop.EventProgressFilter(func(e state.Event) bool { return e.Verb == answerRecorded }, func() { checkpoints++ }, func() time.Time { return now })
 	for range 10 {
 		if filter(state.Event{}) {
 			t.Fatal("discarded event retained")
@@ -471,7 +472,7 @@ func TestRecoveryGraceFollowsLastCheckpoint(t *testing.T) {
 				*now = started.Add(time.Duration(minute) * time.Minute)
 				if minute <= 11 {
 					if useLifecycle {
-						if err := c.store.WriteFile(loopLifecycleFile, loopLifecycle{Version: recoveryBadVersion, Started: started, At: *now, Phase: loopPhaseRecover}); err != nil {
+						if err := c.store.WriteFile(loop.LoopLifecycleFile, loop.LoopLifecycle{Version: recoveryBadVersion, Started: started, At: *now, Phase: loop.LoopPhaseRecover}); err != nil {
 							t.Fatal(err)
 						}
 					} else if err := c.store.WriteFile(throughputObservationFile, throughputObservation{Candidate: recoveryBadVersion, At: *now}); err != nil {

@@ -73,6 +73,19 @@ when:
       expect:
         - events: {contains: [supervisor.file]}
         - log: {name: loop, contains: ["Disk remains low after pruning; every worker start is held"]}
+  # One prune for the episode, not one per pass: thirteen minutes of passes
+  # under the floor recorded the loop's disk step, and ran disk prune
+  # --apply, once.
+  - name: one-step
+    run: {args: [log, --verb, supervisor.disk, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 1}
+  - name: one-prune
+    run: {args: [log, --verb, disk.prune, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 1}
   - name: notes
     run: {args: [note]}
     expect:
@@ -86,6 +99,6 @@ when:
 
 then:
   - events: {contains: [watch.disk-state, supervisor.claim, disk.prune, supervisor.disk, supervisor.file], not_contains: [agents.start, note.add]}
-  # One prune for the episode, not one per pass.
+  # The prune itself did not fail.
   - log: {name: loop, not_contains: ["SUPERVISOR DISK prune failed"]}
   - calls: {program: claude, args: [--bg], max: 0}

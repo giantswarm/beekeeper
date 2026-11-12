@@ -15,9 +15,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -211,7 +213,7 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 		kind := strings.TrimSpace(f.taskKind)
 		if kind == "" {
 			if f.review || f.ofSelfHosted {
-				kind = taskKindReview
+				kind = capacity.TaskKindReview
 			} else {
 				kind = workerRole
 			}
@@ -221,7 +223,7 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 	switch f.harness {
 	case omp.Harness:
 		return a.ompNeedsVault(f.model)
-	case harnessAuto, "":
+	case capacity.HarnessAuto, "":
 		return a.autoStartNeedsVault(f)
 	}
 	return false
@@ -255,7 +257,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		switch {
 		case strings.HasPrefix(arg, "--host="):
 			f.host = strings.TrimPrefix(arg, "--host=")
-		case arg == loopHostFlag && i+1 < len(args):
+		case arg == loop.LoopHostFlag && i+1 < len(args):
 			i++
 			f.host = args[i]
 		case strings.HasPrefix(arg, "--name="):
@@ -301,7 +303,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		case arg == workerGitHubConfigOption && i+1 < len(args):
 			i++
 			f.scratchCfg = args[i]
-		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
+		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loop.LoopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
 			i++
 		case !strings.HasPrefix(arg, "-"):
 			pos = append(pos, arg)
@@ -350,17 +352,17 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 	}
 	k := target.liveCapacity()
 	k.TaskKind, k.AuthorModel = f.taskKind, f.authorModel
-	if f.taskKind == taskKindReview {
+	if f.taskKind == capacity.TaskKindReview {
 		f.review = true
 	}
 	if len(k.Choices) == 0 {
 		return false
 	}
 	wantModel := strings.TrimSpace(f.model)
-	if wantModel != "" && !choicesHaveModel(k.Choices, wantModel) {
+	if wantModel != "" && !capacity.ChoicesHaveModel(k.Choices, wantModel) {
 		return false
 	}
-	choicesCap := filterChoiceModel(k, wantModel)
+	choicesCap := capacity.FilterChoiceModel(k, wantModel)
 	if len(k.Providers) > 0 {
 		st := &state.State{}
 		if target.store != nil {
@@ -371,7 +373,7 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 		sessions, _, _ := target.sessions()
 		c := countAgents(st, sessions, target.now, target.cfg)
 		pa := countProviderAgents(st, sessions, k, target.now, target.cfg)
-		readings := make(map[string]providerReadingResult, len(k.Providers))
+		readings := make(map[string]capacity.ProviderReadingResult, len(k.Providers))
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
 			if p.SelfHosted() {
@@ -386,9 +388,9 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 				continue
 			}
 			r, err := target.resolveReading(context.Background(), usageProviderFile(name), p.Usage)
-			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+			readings[name] = capacity.ProviderReadingResult{Reading: r, Err: err, OK: err == nil}
 		}
-		h := &headroom{
+		h := &capacity.Headroom{
 			AvailableMiB:     max(64<<10, k.AvailMinMiB+1024),
 			AvailMinMiB:      k.AvailMinMiB,
 			SwapGrowthMaxMiB: k.SwapGrowthMaxMiB,
@@ -398,16 +400,16 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			SlotsFree:        1,
 			MaxLabs:          1,
 		}
-		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st)
+		v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, capacity.StartKind(f.review, f.ofSelfHosted), target.now), &target, st)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {
 			return false
 		}
 		return ch.Harness == omp.Harness && target.ompChoiceNeedsVault(ch.Model, ch.Provider, wantModel)
 	}
-	normEx := normalizeExcludes(f.excludes)
+	normEx := capacity.NormalizeExcludes(f.excludes)
 	for _, ch := range choicesCap.Choices {
-		if !choiceExcluded(ch, normEx, nil) {
+		if !capacity.ChoiceExcluded(ch, normEx, nil) {
 			return ch.Harness == omp.Harness && target.ompChoiceNeedsVault(ch.Model, ch.EffectiveProvider(), wantModel)
 		}
 	}

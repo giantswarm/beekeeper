@@ -9,27 +9,26 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata" // Named reset zones also work on hosts without zoneinfo.
+
+	"github.com/giantswarm/beekeeper/internal/capacity"
 )
 
-const (
-	claudeNoPlanWindows = "no plan windows"
-	claudeCodeEnv       = "CLAUDECODE"
-)
+const claudeCodeEnv = "CLAUDECODE"
 
 // parseClaudeUsage reads the local command's JSON result without credentials
 // or a model turn. Model weeks supplement the aggregate subscription windows.
-func parseClaudeUsage(raw []byte, now time.Time) (usageReading, error) {
+func parseClaudeUsage(raw []byte, now time.Time) (capacity.UsageReading, error) {
 	var doc struct {
 		Result  string `json:"result"`
 		IsError bool   `json:"is_error"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return usageReading{}, err
+		return capacity.UsageReading{}, err
 	}
 	if doc.IsError {
-		return usageReading{}, fmt.Errorf("claude /usage: %s", doc.Result)
+		return capacity.UsageReading{}, fmt.Errorf("claude /usage: %s", doc.Result)
 	}
-	r := usageReading{Buckets: map[string]usageBucket{}}
+	r := capacity.UsageReading{Buckets: map[string]capacity.UsageBucket{}}
 	for _, line := range strings.Split(doc.Result, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "Current ") {
@@ -37,32 +36,32 @@ func parseClaudeUsage(raw []byte, now time.Time) (usageReading, error) {
 		}
 		label, value, ok := strings.Cut(line, ": ")
 		if !ok {
-			return usageReading{}, fmt.Errorf("invalid Claude usage line %q", line)
+			return capacity.UsageReading{}, fmt.Errorf("invalid Claude usage line %q", line)
 		}
 		w, err := parseClaudeWindow(value, now)
 		if err != nil {
-			return usageReading{}, fmt.Errorf("invalid Claude usage line %q: %w", line, err)
+			return capacity.UsageReading{}, fmt.Errorf("invalid Claude usage line %q: %w", line, err)
 		}
 		switch {
 		case label == "Current session":
 			if r.FiveHour != nil {
-				return usageReading{}, fmt.Errorf("duplicate Claude usage line %q", line)
+				return capacity.UsageReading{}, fmt.Errorf("duplicate Claude usage line %q", line)
 			}
 			r.FiveHour = w
 		case label == "Current week (all models)":
 			if r.SevenDay != nil {
-				return usageReading{}, fmt.Errorf("duplicate Claude usage line %q", line)
+				return capacity.UsageReading{}, fmt.Errorf("duplicate Claude usage line %q", line)
 			}
 			r.SevenDay = w
 		case strings.HasPrefix(label, "Current week (") && strings.HasSuffix(label, ")"):
 			name := strings.TrimSuffix(strings.TrimPrefix(label, "Current week ("), ")")
 			if name == "" || r.Buckets[name].SevenDay != nil {
-				return usageReading{}, fmt.Errorf("invalid Claude usage line %q", line)
+				return capacity.UsageReading{}, fmt.Errorf("invalid Claude usage line %q", line)
 			}
-			r.Buckets[name] = usageBucket{SevenDay: w}
+			r.Buckets[name] = capacity.UsageBucket{SevenDay: w}
 			r.BucketOrder = append(r.BucketOrder, name)
 		default:
-			return usageReading{}, fmt.Errorf("unknown Claude usage line %q", line)
+			return capacity.UsageReading{}, fmt.Errorf("unknown Claude usage line %q", line)
 		}
 	}
 	if r.FiveHour == nil && r.SevenDay == nil && len(r.Buckets) == 0 {
@@ -71,26 +70,26 @@ func parseClaudeUsage(raw []byte, now time.Time) (usageReading, error) {
 			r.NoPlanWindows = true
 			return r, nil
 		}
-		return usageReading{}, fmt.Errorf("claude /usage has no plan windows: %s", doc.Result)
+		return capacity.UsageReading{}, fmt.Errorf("claude /usage has no plan windows: %s", doc.Result)
 	}
 	if r.SevenDay == nil {
-		return usageReading{}, errors.New("claude /usage omits Current week (all models)")
+		return capacity.UsageReading{}, errors.New("claude /usage omits Current week (all models)")
 	}
 	if r.FiveHour == nil {
 		// No Current session line next to the aggregate week is an idle
 		// 5-hour window: none opens until the next request.
-		r.FiveHour = &usageWindow{UsedPercent: 0}
+		r.FiveHour = &capacity.UsageWindow{UsedPercent: 0}
 	}
 	return r, nil
 }
 
-func parseClaudeWindow(value string, now time.Time) (*usageWindow, error) {
+func parseClaudeWindow(value string, now time.Time) (*capacity.UsageWindow, error) {
 	percent, tail, ok := strings.Cut(value, "% used")
 	used, err := strconv.ParseFloat(percent, 64)
 	if !ok || err != nil || math.IsNaN(used) || math.IsInf(used, 0) || used < 0 || used > 100 {
 		return nil, errors.New("invalid used percentage")
 	}
-	w := &usageWindow{UsedPercent: used}
+	w := &capacity.UsageWindow{UsedPercent: used}
 	tail = strings.TrimSpace(tail)
 	if tail == "" && used == 0 {
 		return w, nil

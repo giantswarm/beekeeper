@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -140,7 +141,7 @@ func TestThroughputRestartDedupRecoveryAndEscalation(t *testing.T) {
 	check(true)
 	now = now.Add(4 * time.Minute)
 	check(true) // stale observation degrades rather than reporting recovery
-	evs := r.logged(t, loopFileVerb)
+	evs := r.logged(t, loop.LoopFileVerb)
 	if len(evs) != 2 {
 		t.Fatalf("guide reports: %d", len(evs))
 	}
@@ -155,13 +156,13 @@ func TestThroughputObservationsTrackExactHeadAndRestart(t *testing.T) {
 	r := newLoopRig(t)
 	in := superloop.Input{Pulls: map[string]superloop.Pull{loopPR: {Head: loopHead, Green: true, URL: loopURL, Reviews: []superloop.Review{{Head: loopHead, Verdict: superloop.Approved}}}}}
 	actions := []superloop.Action{{Kind: superloop.KindGo, Ref: loopPR, Head: loopHead}}
-	if err := (&supervisorLoop{a: r.a}).observeThroughput(in, actions, false); err != nil {
+	if err := (&loop.Loop{Host: r.a}).ObserveThroughput(in, actions, false); err != nil {
 		t.Fatal(err)
 	}
 	var old throughputObservation
 	_, _ = r.a.store.ReadFile(throughputObservationFile, &old)
 	r.a.now = r.a.timeNow().Add(time.Minute)
-	if err := (&supervisorLoop{a: r.a}).observeThroughput(in, actions, false); err != nil {
+	if err := (&loop.Loop{Host: r.a}).ObserveThroughput(in, actions, false); err != nil {
 		t.Fatal(err)
 	}
 	var next throughputObservation
@@ -172,7 +173,7 @@ func TestThroughputObservationsTrackExactHeadAndRestart(t *testing.T) {
 	p := in.Pulls[loopPR]
 	p.Green = false
 	in.Pulls[loopPR] = p
-	_ = (&supervisorLoop{a: r.a}).observeThroughput(in, actions, false)
+	_ = (&loop.Loop{Host: r.a}).ObserveThroughput(in, actions, false)
 	next = throughputObservation{}
 	_, _ = r.a.store.ReadFile(throughputObservationFile, &next)
 	if len(next.Eligible) != 0 {
@@ -192,7 +193,7 @@ func TestThroughputLoopAliveStillReports(t *testing.T) {
 	if !w.checkLoop(context.Background(), &state.State{}) {
 		t.Fatal("loop should be alive")
 	}
-	if len(r.logged(t, loopFileVerb)) != 1 {
+	if len(r.logged(t, loop.LoopFileVerb)) != 1 {
 		t.Fatal("alive loop concealed failure")
 	}
 }
@@ -204,14 +205,14 @@ func TestThroughputPublicDiagnostics(t *testing.T) {
 		}
 	}
 	r := newLoopRig(t)
-	if err := r.a.operationOutcome(agentStartName, throughputStartFailed, loopURL, false); err != nil {
+	if err := r.a.operationOutcome(agentStartName, loop.ThroughputStartFailed, loopURL, false); err != nil {
 		t.Fatal(err)
 	}
 	var o throughputOutcome
 	if err := json.Unmarshal([]byte(r.logged(t, throughputOutcomeVerb)[0].Detail), &o); err != nil {
 		t.Fatal(err)
 	}
-	if o.At.IsZero() || o.Operation != agentStartName || o.Reason != throughputStartFailed {
+	if o.At.IsZero() || o.Operation != agentStartName || o.Reason != loop.ThroughputStartFailed {
 		t.Fatal(o)
 	}
 }
@@ -220,8 +221,8 @@ func TestThroughputDetachedMergeDurableReasons(t *testing.T) {
 	r := newLoopRig(t)
 	now := r.a.timeNow()
 	for i := 0; i < 3; i++ {
-		st := &state.State{Merges: []state.Merge{{Repo: devctlRepo, PR: i + 1, By: loopParty, Phase: state.Running}}}
-		events := recordRun(st, 0, config.Lane{Name: devctlRepo}, loopParty, runOutcome{rc: 7, reason: fmt.Sprintf("tool failed with incidental text %d", i)}, now, "")
+		st := &state.State{Merges: []state.Merge{{Repo: devctlRepo, PR: i + 1, By: loop.LoopParty, Phase: state.Running}}}
+		events := recordRun(st, 0, config.Lane{Name: devctlRepo}, loop.LoopParty, runOutcome{rc: 7, reason: fmt.Sprintf("tool failed with incidental text %d", i)}, now, "")
 		if err := r.a.store.Record(events...); err != nil {
 			t.Fatal(err)
 		}
@@ -241,15 +242,15 @@ func TestThroughputDetachedMergeDurableReasons(t *testing.T) {
 
 func TestThroughputStartChangingTextAndIntentionalRefusals(t *testing.T) {
 	r := newLoopRig(t)
-	l := &supervisorLoop{a: r.a}
+	l := &loop.Loop{Host: r.a}
 	for i := 0; i < 3; i++ {
 		r.answer = func([]string) (string, int) { return fmt.Sprintf("start failed, incidental %d", i), 1 }
-		if _, err := l.runStart(context.Background(), superloop.Action{URL: loopURL}, agentsName, agentStartName, workerRole, "brief"); err == nil {
+		if _, err := l.RunStart(context.Background(), superloop.Action{URL: loopURL}, agentsName, agentStartName, workerRole, "brief"); err == nil {
 			t.Fatal("expected failure")
 		}
 	}
 	r.answer = func([]string) (string, int) { return "capacity held", ExitRefused }
-	_, _ = l.runStart(context.Background(), superloop.Action{}, agentsName, agentStartName, workerRole, "brief")
+	_, _ = l.RunStart(context.Background(), superloop.Action{}, agentsName, agentStartName, workerRole, "brief")
 	if len(r.logged(t, throughputOutcomeVerb)) != 3 {
 		t.Fatal("intentional refusal counted")
 	}
@@ -298,7 +299,7 @@ func TestThroughputStallEscalatesAndRecoversAfterUnknown(t *testing.T) {
 	if line := check(); !strings.Contains(line, "RECOVERED") {
 		t.Fatal(line)
 	}
-	if len(r.logged(t, loopFileVerb)) != 2 {
+	if len(r.logged(t, loop.LoopFileVerb)) != 2 {
 		t.Fatal("incident and recovery must each be filed once")
 	}
 }
@@ -383,7 +384,7 @@ func TestLoopReviewStartLaunchFailedAfterRegistering(t *testing.T) {
 	if err := json.Unmarshal([]byte(outcomes[0].Detail), &o); err != nil {
 		t.Fatal(err)
 	}
-	if o.Success || o.Reason != throughputStartFailed {
+	if o.Success || o.Reason != loop.ThroughputStartFailed {
 		t.Fatalf("outcome %+v", o)
 	}
 }
@@ -400,20 +401,20 @@ func TestThroughputCheckpointPreservesEligibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.checkpointThroughput(now); err != nil {
+	if err := l.CheckpointThroughput(now); err != nil {
 		t.Fatal(err)
 	}
 	var got throughputObservation
 	if found, err := r.a.store.ReadFile(throughputObservationFile, &got); err != nil || !found {
 		t.Fatalf("checkpoint missing: %v", err)
 	}
-	if !got.At.Equal(now) || got.Candidate != normalizeLoopVersion(loopRunningVersion()) || !got.Unknown {
+	if !got.At.Equal(now) || got.Candidate != loop.NormalizeLoopVersion(loop.LoopRunningVersion()) || !got.Unknown {
 		t.Fatalf("checkpoint lost progress: %+v", got)
 	}
 	if saved, ok := got.Eligible[loopPR]; !ok || saved.Head != wait.Head || saved.URL != wait.URL || !saved.Since.Equal(wait.Since) {
 		t.Fatalf("checkpoint lost eligibility: %+v", got.Eligible)
 	}
-	if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
+	if err := l.ObserveThroughput(superloop.Input{}, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.a.store.ReadFile(throughputObservationFile, &got); err != nil || got.Unknown {

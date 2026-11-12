@@ -9,6 +9,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
 // Background observations have their own allowance. Merges, starts and
@@ -30,7 +31,7 @@ func (a *app) loopScanREST(ctx context.Context, step string, run func() error) e
 		return err
 	}
 	if !held {
-		return errLoopLater
+		return loop.ErrLoopLater
 	}
 	defer func() { _ = lock.Unlock() }()
 	if err := a.loopRESTHeld(a.timeNow()); err != nil {
@@ -39,7 +40,7 @@ func (a *app) loopScanREST(ctx context.Context, step string, run func() error) e
 	ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
 	before, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil {
-		return fmt.Errorf("loop REST budget unavailable: %w", errLoopLater)
+		return fmt.Errorf("loop REST budget unavailable: %w", loop.ErrLoopLater)
 	}
 	spend, err := a.reserveLoopREST(before, step)
 	if err != nil {
@@ -48,7 +49,7 @@ func (a *app) loopScanREST(ctx context.Context, step string, run func() error) e
 	runErr := run()
 	after, err := readLoopGraphQLBudget(a, ctx)
 	if err != nil {
-		return fmt.Errorf("loop REST spend unknown; reservation retained: %w", errLoopLater)
+		return fmt.Errorf("loop REST spend unknown; reservation retained: %w", loop.ErrLoopLater)
 	}
 	if err := a.settleLoopREST(before, after, spend, step); err != nil {
 		return err
@@ -88,7 +89,7 @@ func (a *app) loopRESTHeld(now time.Time) error {
 	if st, err := a.store.Read(); err == nil && st.Budget != nil && !st.Budget.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, st.Budget.Reset) {
 		return nil
 	}
-	return fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, spend.allowance(a.cfg.GitHub.Floor), spend.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
+	return fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, spend.allowance(a.cfg.GitHub.Floor), spend.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), loop.ErrLoopLater)
 }
 
 // Called under loop-graphql.lock, so parallel loop actions share one ledger.
@@ -99,7 +100,7 @@ func (a *app) reserveLoopREST(b github.Budget, step string) (loopRESTSpend, erro
 	}
 	now := a.timeNow()
 	if b.Reset.IsZero() || !now.Before(b.Reset) {
-		return spend, fmt.Errorf("loop REST budget window unknown: %w", errLoopLater)
+		return spend, fmt.Errorf("loop REST budget window unknown: %w", loop.ErrLoopLater)
 	}
 	if spend.Reset.IsZero() || !sameGraphQLWindow(spend.Reset, b.Reset) {
 		spend = loopRESTSpend{Reset: b.Reset, Steps: map[string]int{}}
@@ -109,7 +110,7 @@ func (a *app) reserveLoopREST(b github.Budget, step string) (loopRESTSpend, erro
 	}
 	spend.Remaining = b.Remaining
 	if spend.held(a.cfg.GitHub.Floor) || b.Remaining < max(0, a.cfg.GitHub.Floor)+loopRESTReserve {
-		return spend, fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, spend.allowance(a.cfg.GitHub.Floor), b.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), errLoopLater)
+		return spend, fmt.Errorf("loop REST held: %d of %d spent, %d remaining (floor %d), reset %s: %w", spend.Spent, spend.allowance(a.cfg.GitHub.Floor), b.Remaining, a.cfg.GitHub.Floor, spend.Reset.UTC().Format(time.RFC3339), loop.ErrLoopLater)
 	}
 	spend.Spent += loopRESTReserve
 	spend.Steps[step] += loopRESTReserve

@@ -10,14 +10,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 )
 
 func TestPreToolUseGuardsOff(t *testing.T) {
 	t.Cleanup(func() { github.SetDevctlSkipVersionCheck(false) })
-	for _, format := range []string{claudeComm, harnessAgy, transcriptTestCodex} {
+	for _, format := range []string{claudeComm, capacity.HarnessAgy, transcriptTestCodex} {
 		t.Run(format, func(t *testing.T) {
 			var out bytes.Buffer
 			a, dir := scopeApp(t, &out)
@@ -135,7 +137,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantSkip {
 		t.Fatalf("devctlToken with guards=false got %q, %v", tok, err)
 	}
-	if out, _, code, err := runArgv(ctx, "", []string{fakeDevctl}); err != nil || code != 0 || strings.TrimSpace(out) != wantSkip {
+	if out, _, code, err := loop.RunArgv(ctx, "", []string{fakeDevctl}); err != nil || code != 0 || strings.TrimSpace(out) != wantSkip {
 		t.Fatalf("runArgv with guards=false got %q, code=%d, err=%v", out, code, err)
 	}
 
@@ -159,7 +161,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantEnf {
 		t.Fatalf("devctlToken with guards=true got %q, %v", tok, err)
 	}
-	if out, _, code, err := runArgv(ctx, "", []string{fakeDevctl}); err != nil || code != 0 || strings.TrimSpace(out) != wantEnf {
+	if out, _, code, err := loop.RunArgv(ctx, "", []string{fakeDevctl}); err != nil || code != 0 || strings.TrimSpace(out) != wantEnf {
 		t.Fatalf("runArgv with guards=true got %q, code=%d, err=%v", out, code, err)
 	}
 }

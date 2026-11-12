@@ -26,7 +26,7 @@ var Mutations = map[string]Mutation{
 	// The pull parser dropped the base branch: a reviewed pull request's
 	// merge must refuse before any merge. internal/loopworkflow built it
 	// for TestHistoricalParserRegression and its recovery tests.
-	"pull-parser-drops-the-base": {File: "cmd/supervisorloop.go", Before: "Base: j.Base,", After: `Base: "",`},
+	"pull-parser-drops-the-base": {File: "internal/loop/loop.go", Before: "Base: j.Base,", After: `Base: "",`},
 }
 
 // MutationNames are the names of Mutations, sorted.
