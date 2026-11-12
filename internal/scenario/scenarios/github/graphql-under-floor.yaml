@@ -1,0 +1,46 @@
+name: graphql-under-floor
+description: >
+  The GraphQL bucket holds 100 points under a floor of 500. budget --gate
+  reads it with a real rateLimit query (one point, 99 left), shows the
+  bucket and the floor in its JSON and exits 3 naming the floor; the core
+  bucket is read from the headers of the conditional probe. capacity --json
+  carries no GitHub budget, so the budget command is where the bucket shows.
+issue: https://github.com/giantswarm/beekeeper/issues/3790
+flow: github
+tags: [github, budget]
+timeout: 30s
+control:
+  none: >
+    states budget --gate under its GraphQL floor, which main already has;
+    this pull request changes no beekeeper code, only adds the fake GitHub's
+    budgets that serve the bucket
+
+given:
+  desk:
+    config:
+      github: {floor: 500, probeRepo: example/app}
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+  github:
+    repositories:
+      - name: example/app
+    budgets:
+      graphql: {remaining: 100}
+
+when:
+  - name: budget
+    run: {args: [budget, --gate, --json]}
+
+then:
+  - exit: 3
+  - json_path: {path: graphql.remaining, equals: 99}
+  - json_path: {path: graphql.limit, equals: 5000}
+  - json_path: {path: floor, equals: 500}
+  - json_path: {path: remaining, equals: 4999}
+  - stderr: {contains: ["under the floor 500"]}
+  - github: {calls: {path: graphql, operation: rateLimit, caller: budget, via: http, min: 1, max: 1}}
+  - github: {budget: {bucket: graphql, caller: budget, spent: 1}}
+  - github: {budget: {bucket: graphql, remaining: 99}}

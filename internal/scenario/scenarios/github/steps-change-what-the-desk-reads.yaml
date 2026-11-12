@@ -1,0 +1,52 @@
+name: steps-change-what-the-desk-reads
+description: >
+  github steps are what happens on GitHub: a push to a pull request's
+  branch in the origin, a green check on its head, an approval and the
+  merge. With supervisor.unmergedLimit 1 the open pull request holds the
+  repository's Ready issue; after the merge board next picks it.
+issue: https://github.com/giantswarm/beekeeper/issues/3790
+flow: github
+tags: [github, board, steps]
+timeout: 30s
+control:
+  none: >
+    states how board next follows a merge under supervisor.unmergedLimit,
+    which main already does; this pull request changes no beekeeper code,
+    only adds the fake GitHub's push, check, review and merge steps
+
+given:
+  desk:
+    config:
+      supervisor: {unmergedLimit: 1}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Ready item, board: Ready}
+        pulls:
+          - {number: 2, title: Unrelated work, head: unrelated, author: worker}
+
+when:
+  - name: held
+    run: {args: [board, next, --json]}
+    expect:
+      - json_path: {path: pick.ref, exists: false}
+      - output: {contains: ["unmerged pull requests"]}
+  - name: push
+    github: {push: {repo: example/app, branch: unrelated, file: more.txt, content: "more\n"}}
+  - name: green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: approve
+    github: {review: {repo: example/app, pull: 2, state: approved}}
+    expect:
+      - github: {pull: {repo: example/app, number: 2, state: open, checks: green, review_decision: approved}}
+  - name: merge
+    github: {merge: {repo: example/app, pull: 2}}
+  - name: free
+    run: {args: [board, next, --json]}
+
+then:
+  - exit: 0
+  - json_path: {path: pick.ref, equals: example/app#1}
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - github: {issue: {repo: example/app, number: 1, state: open, board: Ready}}

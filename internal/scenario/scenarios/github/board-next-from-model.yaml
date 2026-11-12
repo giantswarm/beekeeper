@@ -1,0 +1,40 @@
+name: board-next-from-model
+description: >
+  board next reads the board from the scenario's GitHub instead of answers
+  written by hand: the model answers the board's GraphQL through the fake
+  gh (the fields, the open items, the open pull requests) and the pick is
+  the one Ready issue. Every call is the step's and is paid from the GraphQL
+  bucket; nothing touches REST.
+issue: https://github.com/giantswarm/beekeeper/issues/3790
+flow: github
+tags: [github, board]
+timeout: 30s
+control:
+  none: >
+    states how board next reads the board and picks, which main already does;
+    this pull request changes no beekeeper code, only adds the fake GitHub
+    that answers the board's GraphQL
+
+given:
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Ready item, board: Ready}
+          - {number: 2, title: Not yet, board: Todo}
+
+when:
+  - name: next
+    run: {args: [board, next, --json]}
+
+then:
+  - exit: 0
+  - json_path: {path: pick.ref, equals: example/app#1}
+  # The board's fields and its items, then the repository's open pull requests.
+  - github: {calls: {path: graphql, operation: repositoryOwner, caller: next, via: gh, status: 200, min: 2}}
+  - github: {calls: {path: graphql, operation: repository, caller: next, min: 1}}
+  - github: {budget: {bucket: graphql, caller: next, spent: {min: 3}}}
+  - github: {budget: {bucket: core, spent: 0}}
+  - github: {issue: {repo: example/app, number: 1, state: open, board: Ready}}
+  - calls: {program: gh, args: [graphql], min: 3}
+  - events: {not_contains: [agents.start]}

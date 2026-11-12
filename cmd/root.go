@@ -92,7 +92,7 @@ func Main() int {
 		// git's askpass helper: no configuration, nothing but the socket
 		return secret.AskpassMain(os.Args[1+len(secret.AskpassArgs):], os.Stdout, os.Stderr)
 	}
-	defer cpuProfile(os.Getenv("BEEKEEPER_CPUPROFILE"))()
+	defer cpuProfile(os.Getenv(cpuProfileEnv))()
 	root := New()
 	state.SetCommand(diagnosticCommand(root, os.Args[1:]))
 	err := root.Execute()
