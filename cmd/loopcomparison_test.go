@@ -229,8 +229,8 @@ func TestLoopComparisonStopsWithItsCaller(t *testing.T) {
 	}
 }
 
-// archon's case: the running release's dry-run cannot observe the desk, so
-// self-update installs the candidate on its own pass, says so and logs it.
+// The reproduced case: the running release's dry-run cannot observe the desk,
+// so self-update installs the candidate on its own pass, says so and logs it.
 func TestSelfUpdateInstallsWithoutABaselineAndSaysSo(t *testing.T) {
 	oldUpdate, oldCanary, oldPass := runUpdate, runCanaryCheck, runLoopComparison
 	t.Cleanup(func() { runUpdate, runCanaryCheck, runLoopComparison = oldUpdate, oldCanary, oldPass })
