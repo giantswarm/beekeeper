@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -72,14 +73,15 @@ func TestRefillCadenceHonoursHoldAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.holdStarts(true)
+	w := r.a.newWatcher(false, false)
+	w.publishBudget(true)
 	if err := l.refillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 0 {
 		t.Fatal("started through a hold")
 	}
-	l.holdStarts(false)
+	w.publishBudget(false)
 	if err := l.refillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -161,5 +163,175 @@ func TestRefillCadenceDoesNotOverlap(t *testing.T) {
 	}
 	if *busy != 0 {
 		t.Fatal("started a second refill while the first was active")
+	}
+}
+
+// Production agents.start events must not make completed claims look interrupted.
+func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
+	r, busy := fillRig(t)
+	original := r.answer
+	r.answer = func(args []string) (string, int) {
+		out, code := original(args)
+		if args[0] == agentsName && args[1] == agentStartName {
+			if err := r.a.store.Record(event(loopParty, verbStart, "%s: started", args[2])); err != nil {
+				t.Error(err)
+			}
+		}
+		return out, code
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.lifecycle = &loopLifecycle{Phase: "blocked observation", At: r.a.timeNow()}
+	before := *l.lifecycle
+	for range 3 {
+		if err := l.refillTick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if *busy != 3 || len(r.logged(t, "supervisor.next")) != 3 {
+		t.Fatalf("replayed completed starts: busy=%d, events=%+v", *busy, r.logged(t, "supervisor.next"))
+	}
+	if l.lifecycle.Phase != before.Phase || !l.lifecycle.At.Equal(before.At) {
+		t.Fatal("refill refreshed a blocked observation heartbeat")
+	}
+}
+
+func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
+	for _, condition := range []string{"budget", "load", "disk", "stale"} {
+		t.Run(condition, func(t *testing.T) {
+			r, busy := fillRig(t)
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.independentFill = true
+			w := r.a.newWatcher(false, false)
+			switch condition {
+			case "budget":
+				w.publishBudget(true)
+			case "load":
+				w.check("load", true, "HIGH LOAD")
+			case "disk":
+				w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+			case "stale":
+				r.a.now = r.a.now.Add(time.Hour)
+			}
+			if err := l.refillTick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if *busy != 0 {
+				t.Fatal("started through a newly published hold")
+			}
+			switch condition {
+			case "budget":
+				w.publishBudget(false)
+			case "load":
+				w.clear("load")
+			case "disk":
+				w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
+			case "stale":
+				e := event(watchParty, "watch.budget-state", "false")
+				e.At = r.a.timeNow()
+				if err := r.a.store.Record(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := l.refillTick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if *busy != 3 {
+				t.Fatalf("hold recovery waited for observation pass: %d", *busy)
+			}
+		})
+	}
+}
+
+func TestRefillCadenceStartsBeforeFirstTick(t *testing.T) {
+	r, busy := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.holdStarts(true)
+	// A closed clock terminates after the startup refill without supplying a tick.
+	ticks := make(chan time.Time)
+	close(ticks)
+	l.runRefillCadence(t.Context(), ticks)
+	defer l.cancelBackgroundActions()
+	if *busy != 3 {
+		t.Fatalf("startup waited for the first interval: %d", *busy)
+	}
+}
+
+type refillExecBinary struct {
+	exec func() error
+}
+
+func (refillExecBinary) Replaced() bool         { return true }
+func (b refillExecBinary) Exec(...string) error { return b.exec() }
+
+func TestReexecDrainsRefillAndRestartsAfterFailure(t *testing.T) {
+	r, busy := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	l.stopRefill = func() { stopped = true }
+	filled := make(chan struct{})
+	original := r.answer
+	r.answer = func(args []string) (string, int) {
+		out, code := original(args)
+		if args[0] == agentsName && args[1] == agentStartName && *busy == 3 {
+			close(filled)
+		}
+		return out, code
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	l.bin = refillExecBinary{exec: func() error {
+		if !stopped || l.stopRefill != nil {
+			t.Error("exec preceded refill drain")
+		}
+		return errors.New("exec failed")
+	}}
+	if replaced, err := l.reexec(ctx); err != nil || replaced {
+		t.Fatalf("reexec: %v, %v", replaced, err)
+	}
+	if l.stopRefill == nil {
+		t.Fatal("failed exec lost refill cadence")
+	}
+	defer l.cancelBackgroundActions()
+	defer l.stopRefill()
+	select {
+	case <-filled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed exec did not resume worker starts")
+	}
+}
+
+// A configuration replacement waits until the active refill releases its view.
+func TestReloadConfigWaitsForRefill(t *testing.T) {
+	r, _ := fillRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.refillConfigMu.RLock()
+	entered, done := make(chan struct{}), make(chan struct{})
+	go func() { close(entered); l.reloadConfig(); close(done) }()
+	<-entered
+	select {
+	case <-done:
+		t.Error("reload crossed active refill")
+	default:
+	}
+	l.refillConfigMu.RUnlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload did not resume after refill")
 	}
 }

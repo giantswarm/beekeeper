@@ -188,7 +188,16 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	} else if line != "" {
 		_, _ = fmt.Fprintln(l.a.out, line)
 	}
-	evs, err := state.FollowSnapshot(l.a.store, "supervisor-watch-conditions", "v2", l.eventHistoryFilter(watchConditionEvent))
+	if l.independentFill {
+		return nil // the refill stream owns admission while observations may block
+	}
+	return l.refreshStartConditions(ctx)
+}
+
+// refreshStartConditions belongs to the refill stream in continuous mode and
+// the main pass in once mode. It must not refresh the observation heartbeat.
+func (l *supervisorLoop) refreshStartConditions(ctx context.Context) error {
+	evs, err := state.FollowSnapshot(l.a.store, "supervisor-watch-conditions", "v2", watchConditionEvent)
 	if err != nil {
 		return err
 	}

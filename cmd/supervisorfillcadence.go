@@ -31,37 +31,52 @@ func (l *supervisorLoop) startRefillCadence(ctx context.Context) func() {
 }
 
 func (l *supervisorLoop) runRefillCadence(ctx context.Context, ticks <-chan time.Time) {
+	// Refill immediately on startup; subsequent ticks retain the configured cadence.
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		actCtx, cancel := context.WithCancel(l.backgroundContext(ctx))
+		stop := context.AfterFunc(ctx, cancel)
+		err := l.refillTick(actCtx)
+		stop()
+		cancel()
+		if err != nil {
+			l.sayOnce("refill cadence", "SUPERVISOR REFILL FAILED: %v", err)
+		} else {
+			l.clearSaid("refill cadence")
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticks:
-			if l.a.loopNow != nil {
-				l.a.loopNow.Store(&now)
-			}
-			if ctx.Err() != nil {
+		case now, ok := <-ticks:
+			if !ok {
 				return
 			}
-			// Both a fenced re-exec and cadence shutdown cancel this tick.
-			actCtx, cancel := context.WithCancel(l.backgroundContext(ctx))
-			stop := context.AfterFunc(ctx, cancel)
-			err := l.refillTick(actCtx)
-			stop()
-			cancel()
-			if err != nil {
-				l.sayOnce("refill cadence", "SUPERVISOR REFILL FAILED: %v", err)
-			} else {
-				l.clearSaid("refill cadence")
+			if l.a.loopNow != nil {
+				l.a.loopNow.Store(&now)
 			}
 		}
 	}
 }
 
 func (l *supervisorLoop) refillTick(ctx context.Context) error {
-	if ctx.Err() != nil || l.a.cfg.Supervisor.WorkerBrief == "" || l.pauseForReexec() || !l.beginInFlight(loopFillStream) {
+	// Configuration is stable for the entire dispatch, including its child commands.
+	l.refillConfigMu.RLock()
+	defer l.refillConfigMu.RUnlock()
+	if ctx.Err() != nil || l.pauseForReexec() || !l.beginInFlight(loopFillStream) {
 		return nil
 	}
 	defer l.endInFlight(loopFillStream)
+	if !l.dryRun {
+		if err := l.refreshStartConditions(ctx); err != nil {
+			l.holdStarts(true)
+			return err
+		}
+	}
+	if l.a.cfg.Supervisor.WorkerBrief == "" {
+		return nil
+	}
 	if l.holdingStarts() {
 		l.fillRan()
 		l.stallClear()
@@ -76,11 +91,14 @@ func (l *supervisorLoop) refillTick(ctx context.Context) error {
 	l.setFillPhase("read refill history")
 	// Use a separate cursor from observation; both can advance concurrently.
 	history, err := state.FollowSnapshot(l.a.store, "supervisor-refill-taken", "v1",
-		l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
+		func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") })
 	if err != nil {
 		return err
 	}
 	folded := l.refillFold.fold(history)
+	for _, taken := range folded.taken {
+		delete(folded.claims, taken.Key)
+	}
 	reservations, _ := l.deliveryReservations(st)
 	l.mu.Lock()
 	l.boardNone = nil

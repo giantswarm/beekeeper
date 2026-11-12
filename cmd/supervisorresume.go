@@ -114,9 +114,11 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 		if startID != "" {
 			_ = l.a.endAgy(ctx, startID)
 		}
+		l.mu.Lock()
 		l.fillPause = fillPause{}
 		l.fillEmpty = 0
 		l.boardNone = nil
+		l.mu.Unlock()
 		if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR QUOTA %s: %s; slot freed, re-queuing %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
 			return err
 		}
