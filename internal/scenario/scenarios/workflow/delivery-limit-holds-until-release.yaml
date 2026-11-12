@@ -19,7 +19,9 @@ timeout: 180s
 given:
   desk:
     config:
-      capacity: {ceiling: 4}
+      # Room for four workers on the one provider: only the delivery limit
+      # holds the third and fourth issue.
+      capacity: {ceiling: 4, providers: {claude: {ceiling: 4}}}
       delivery: {wipLimit: 2}
       supervisor: {reviewRounds: 1}
       # One watch reading admits the passes' starts for the whole scenario.
