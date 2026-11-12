@@ -97,6 +97,9 @@ type Given struct {
 	State *State `yaml:"state"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
+	// Tools are further programs on the desk's PATH (go, golangci-lint):
+	// fakes like Fakes, which only given.calls answer.
+	Tools []string `yaml:"tools"`
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
@@ -328,7 +331,22 @@ func (e Expect) Kind() string {
 // dispatching on its name.
 var Fakes = []string{"gh", "claude", "codex", "agy", "omp", "ssh", "devctl", "systemctl", "systemd-run", "journalctl"}
 
+// ToolsEnv names a scenario's given.tools to the fake executable, which
+// serves them beside Fakes.
+const ToolsEnv = "BEEKEEPER_SCENARIO_TOOLS"
+
+// reservedPrograms are the names on the desk's PATH no tool may take: the
+// fake kubectl is given.builder's.
+var reservedPrograms = []string{"beekeeper", "git", "sh", "real-git", "real-git-core", "git-core", "scenario-fake", harness.Kubectl}
+
+// programs are the programs the scenario's world answers: Fakes and
+// given.tools.
+func (s *Scenario) programs() []string {
+	return append(slices.Clone(Fakes), s.Given.Tools...)
+}
+
 var (
+	toolRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 	nameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	issueRE = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
 	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -368,9 +386,9 @@ func Parse(file string, raw []byte) (*Scenario, error) {
 }
 
 // repositoryNames are the scenario's repositories: given.repositories and
-// given.github's, each once.
+// given.github's, each once. Every one has an origin.
 func (s *Scenario) repositoryNames() []string {
-	out := make([]string, 0, len(s.Given.Repositories))
+	var out []string
 	for _, r := range s.Given.Repositories {
 		out = append(out, r.Name)
 	}
@@ -420,12 +438,22 @@ func (s *Scenario) Validate() error {
 			bad("given.github: %v", err)
 		}
 	}
+	for i, tool := range s.Given.Tools {
+		switch {
+		case !toolRE.MatchString(tool):
+			bad("given.tools[%d]: %q is no program name", i, tool)
+		case slices.Contains(Fakes, tool) || slices.Contains(reservedPrograms, tool):
+			bad("given.tools[%d]: %q is on the desk's PATH already", i, tool)
+		case slices.Index(s.Given.Tools, tool) != i:
+			bad("given.tools[%d]: %q is named twice", i, tool)
+		}
+	}
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
 	}
 	for i, c := range s.Given.Calls {
-		if !slices.Contains(Fakes, c.Program) {
-			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(Fakes, ", "))
+		if !slices.Contains(s.programs(), c.Program) {
+			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(s.programs(), ", "))
 		}
 		if c.Times < 0 {
 			bad("given.calls[%d]: times %d", i, c.Times)
@@ -650,8 +678,8 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if c := e.Calls; c != nil {
-		if c.Program != "" && !slices.Contains(Called(), c.Program) {
-			bad("calls: program %q is none of %s", c.Program, strings.Join(Called(), ", "))
+		if c.Program != "" && !slices.Contains(s.called(), c.Program) {
+			bad("calls: program %q is none of %s", c.Program, strings.Join(s.called(), ", "))
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("calls: %v", err)
@@ -663,10 +691,17 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	return errs
 }
 
-// Called are the programs whose calls the world logs: the fakes, and with
-// given.builder the fake kubectl and the builder image's tools.
-func Called() []string {
-	return append(append(slices.Clone(Fakes), harness.Kubectl), harness.BuilderTools...)
+// called are the programs whose calls the world logs: the fakes,
+// given.tools, and with given.builder the fake kubectl and the builder
+// image's tools, each once.
+func (s *Scenario) called() []string {
+	out := s.programs()
+	for _, p := range append([]string{harness.Kubectl}, harness.BuilderTools...) {
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // compileArgs compiles argument patterns, each matching one argument whole

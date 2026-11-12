@@ -1,0 +1,159 @@
+name: red-ci-hands-the-pull-back
+description: >
+  Red CI hands the pull request back to its worker; no review starts on a
+  red head. The worker parks for the desk review and a check on its head
+  concludes red. The loop starts no reviewer and tells the worker which
+  check is red. The worker's next session pushes the fix to the same branch
+  and parks again; that head turns green, gets its review and is merged.
+  The task has one pull request from start to end.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: delivery
+tags: [delivery, loop, review, ci]
+timeout: 180s
+control:
+  none: states the delivery behavior main already has; this change only adds the scenario
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Headless workers: a continuation is a fresh session's next turn.
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+          # The next session of the worker continues its branch and its
+          # pull request: it pushes there and parks on it again.
+          - steps:
+              - git: [fetch, --quiet, origin]
+                dir: app
+              - write: {path: app/fix.txt, content: "the worker's fix\n"}
+              - git: [add, fix.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "fix: what the worker was told"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-red
+    github: {check: {repo: example/app, pull: 2, name: build, state: red}}
+    expect:
+      - github: {pull: {repo: example/app, number: 2, state: open, checks: red}}
+  # Red on the parked head: the worker is told, no reviewer starts.
+  - name: red
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR RED"]}
+      - events: {contains: [agents.park, supervisor.red], not_contains: [supervisor.review]}
+  - name: told
+    run: {args: [log, --verb, supervisor.red, --json]}
+    expect:
+      - exit: 0
+      - output: {contains: ["red checks told:", "build"]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 2, outcome: finish}
+        - origin: {repository: example/app, branch: app-1, ahead: 2}
+  - advance: 2s
+  # The fix is on the same pull request; its head is green now.
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - advance: 2s
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged}}
+  - advance: 2s
+  - name: end
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  # One pull request for the task: the fix went onto it.
+  - github: {issue: {repo: example/app, number: 1, state: closed, pulls: 1, open_pulls: 0}}
+  - worker: {name: 'Review app 2 r\d+', turns: 1}
+  - calls: {program: gh, args: [pr, create], min: 1, max: 1}
+  - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
+  - events: {contains: [supervisor.red, supervisor.review, supervisor.merge, supervisor.end], not_contains: [session.report-rejected]}

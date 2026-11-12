@@ -106,10 +106,10 @@ made it (`step-<i>`, its index in `when`, for an unnamed `run`). The driver sets
 (`http://127.0.0.1:<port>/caller/<name>`). What a step's process starts in its own environment
 inherits both: a worker session the `loop` step starts spends as `loop`. A transient unit of the
 fake `systemd-run` (without `--scope`) and a command on an execution host start from the desk's
-environment, which names the server and the caller `workers` once the server listens: their `gh`
-calls and their HTTP calls reach it as `workers`. A session on an execution host runs in the
-environment beekeeper gives it, without the caller: its own `gh` calls have none. A caller of each
-worker's own is the follow-up https://github.com/giantswarm/beekeeper/issues/3844.
+environment, which names the server and the caller `desk`: their `gh` calls and their HTTP calls
+reach it as `desk`. A session on an execution host runs in the environment beekeeper gives it,
+without the caller: its own `gh` calls have none. A caller of each worker's own is the follow-up
+https://github.com/giantswarm/beekeeper/issues/3844.
 
 The server keeps GitHub's buckets: `core` and `graphql` (5000 points an hour), `search` (30 a
 minute) and `code_search` (10 a minute). Every answer carries the `X-RateLimit-*` headers of its

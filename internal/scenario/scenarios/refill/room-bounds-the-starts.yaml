@@ -1,0 +1,90 @@
+name: room-bounds-the-starts
+description: >
+  The refill fills no further than the room capacity gives. The desk's
+  ceiling is three and three items are Ready, but this machine's own cap
+  (capacity.local.ceiling) is one. Capacity says room for one start, the
+  pass starts one worker, and with that worker busy the next pass starts
+  none and names the cap.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: refill
+tags: [refill, loop, capacity]
+timeout: 90s
+control:
+  none: states the refill behavior main already has; this change only adds the scenario
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      capacity:
+        ceiling: 3
+        local: {ceiling: 1}
+        providers: {claude: {ceiling: 3}}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+          - {number: 2, title: Second item, board: Ready}
+          - {number: 3, title: Third item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: 'app \d'
+        turns:
+          - outcome: hang
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: before
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ceiling, equals: 3}
+      - json_path: {path: room, equals: 1}
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'app \d', turns: 1}
+  - name: after
+    run: {args: [capacity, --json]}
+    expect:
+      - json_path: {path: room, equals: 0}
+      - json_path: {path: local.room, equals: 0}
+  - name: full
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR REFILL started 0: no room for a worker", "capacity.local.ceiling 1"]}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: roster, json_path: {path: ., len: 1}}
+  - worker: {name: 'app \d', turns: 1, running: true}
+  - calls: {program: claude, args: [--bg, --remote-control], min: 1, max: 1}

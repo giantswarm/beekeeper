@@ -305,13 +305,14 @@ func Ask(socket string, req CallRequest) (CallResponse, error) {
 }
 
 // ServeFake runs this process as the fake named by its argv[0] when the
-// world's socket is in the environment: it hands the call to the world,
+// world's socket is in the environment or at DefaultWorldSocket: it hands
+// the call to the world,
 // prints the answer and returns its exit code. served is false for any
 // other process.
 func ServeFake() (code int, served bool) {
 	socket := os.Getenv(WorldEnv)
 	name := baseName(os.Args[0])
-	if !slices.Contains(Fakes, name) {
+	if !slices.Contains(Fakes, name) && !slices.Contains(strings.Split(os.Getenv(ToolsEnv), ","), name) {
 		return 0, false
 	}
 	if socket == "" {
