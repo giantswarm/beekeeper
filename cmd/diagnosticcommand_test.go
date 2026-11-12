@@ -13,7 +13,7 @@ import (
 func TestDiagnosticCommandKeepsNoArgumentOrValue(t *testing.T) {
 	const (
 		private    = "private"
-		loopName   = "loop"
+		loopWord   = "loop"
 		configPath = "/home/" + private + "/config.yaml"
 	)
 	for _, c := range []struct {
@@ -21,9 +21,9 @@ func TestDiagnosticCommandKeepsNoArgumentOrValue(t *testing.T) {
 		want string
 	}{
 		{nil, pluginName},
-		{[]string{workerGitHubConfigOption, configPath, supervisorCommand, loopName}, "beekeeper supervisor loop --config"},
-		{[]string{supervisorCommand, loopName, "--once", testDryRunFlag}, "beekeeper supervisor loop --once --dry-run"},
-		{[]string{workerGitHubConfigOption + "=" + configPath, fatalAsFlag, supervisorCommand + " " + loopName, agentsName, agentStartName, "Review " + private + " 1 r1", "/home/" + private + "/brief.md"}, "beekeeper agents start --config --as"},
+		{[]string{workerGitHubConfigOption, configPath, supervisorCommand, loopWord}, "beekeeper supervisor loop --config"},
+		{[]string{supervisorCommand, loopWord, "--once", testDryRunFlag}, "beekeeper supervisor loop --once --dry-run"},
+		{[]string{workerGitHubConfigOption + "=" + configPath, fatalAsFlag, supervisorCommand + " " + loopWord, agentsName, agentStartName, "Review " + private + " 1 r1", "/home/" + private + "/brief.md"}, "beekeeper agents start --config --as"},
 		{[]string{loop.LoopNote, loop.LoopAdd, "a " + private + " question", "--" + private + "-flag", "--", jsonFlag}, "beekeeper note add"},
 		{[]string{jsonFlag, testStatusWord}, "beekeeper status --json"},
 	} {
