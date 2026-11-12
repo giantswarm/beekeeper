@@ -178,7 +178,7 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `calls` | the world's calls of `program` matching `args` number at least `min`, at most `max` | every step |
 | `process` | a background step is `running`, or exited with `exit` | every step |
 | `github` | [the scenario's GitHub](scenarios-github.md#expectations): calls, budgets, a pull request, an issue | every step |
-| `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome`, whether a CLI is `running` | every step |
+| `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome` (none while a begun turn has not reported), whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.

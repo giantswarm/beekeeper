@@ -394,7 +394,7 @@ func (w *World) CheckWorker(e WorkerExpect) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	turns, outcome, running := 0, "", false
+	turns, outcome, open, running := 0, "", false, false
 	var names []string
 	for _, key := range w.order {
 		ws := w.workers[key]
@@ -403,7 +403,11 @@ func (w *World) CheckWorker(e WorkerExpect) error {
 			continue
 		}
 		turns += ws.turns
-		if n := len(ws.reports); n > 0 {
+		// A turn counts once it is handed out and ends with its report:
+		// while one has not reported, the worker's last turn has no
+		// outcome, and an earlier turn's is not it.
+		outcome, open = "", len(ws.reports) < ws.turns
+		if n := len(ws.reports); n > 0 && !open {
 			outcome = ws.reports[n-1].Outcome
 		}
 		for _, pid := range ws.pids {
@@ -423,6 +427,9 @@ func (w *World) CheckWorker(e WorkerExpect) error {
 		return fmt.Errorf("%s: %d turn(s), want %d (workers: %s)", what, turns, *e.Turns, cmpOr(strings.Join(names, ", "), "none"))
 	}
 	if e.Outcome != "" && outcome != e.Outcome {
+		if open {
+			return fmt.Errorf("%s: its last turn has not ended yet, want it ended %q", what, e.Outcome)
+		}
 		return fmt.Errorf("%s: its last reported turn ended %q, want %q", what, cmpOr(outcome, "not at all"), e.Outcome)
 	}
 	if e.Running != nil && running != *e.Running {
