@@ -12,13 +12,13 @@ permission to install.
 
 Schema 1 maps content to harnesses as follows; settings apply to Codex only:
 
-| Content | Mapping |
-| --- | --- |
-| Rules | `rules/<name>/AGENTS.md` or `CLAUDE.md`, appended in manifest order to host AGENTS.md |
-| Skills and resources | `skills/<name>/...`, requiring a SKILL.md per skill |
-| Harness settings | `model_reasoning_effort`: low, medium, high, xhigh |
-| Plugins | `plugins/<name>/skills/<skill>/...`, requiring a SKILL.md per skill, and `plugins/<name>/commands/<file>.md` |
-| Plugin/tool/connector declarations | Named capabilities (for example `plugin:review` or `tool:search`); a required `plugin:<name>` passes when the bundle carries that plugin's files, any other required capability refuses by name; optional declarations are metadata only |
+- Rules: `rules/<name>/AGENTS.md` or `CLAUDE.md`, appended in manifest order to host AGENTS.md
+- Skills and resources: `skills/<name>/...`, requiring a SKILL.md per skill
+- Harness settings: `model_reasoning_effort`: low, medium, high, xhigh
+- Plugins: `plugins/<name>/skills/<skill>/...`, requiring a SKILL.md per skill, and `plugins/<name>/commands/<file>.md`
+- Plugin/tool/connector declarations: Named capabilities (for example `plugin:review` or
+  `tool:search`); a required `plugin:<name>` passes when the bundle carries that plugin's files, any
+  other required capability refuses by name; optional declarations are metadata only
 
 A plugin travels as its documents: its skills and commands. Its hooks, MCP servers
 and anything else that would execute on a host are refused, since the host's

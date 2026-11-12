@@ -437,7 +437,7 @@ feedback:                   # the person's replies to the reports in Slack, to t
   server: slack             # its muster name: x_<server>_<tool>
   every: 5m                 # how often the report threads are read
   window: 24h               # how long after its post a report's thread is read
-outbound:                   # what the hook refuses to let leave the machine (README: What leaves the machine)
+outbound:                   # what the hook refuses to let leave the machine (docs/threat-model.md)
   phrases: [Project Nightjar]   # never in an issue, commit, post or plan; case-insensitive, named by number in a refusal
   paths: [~/projects/notebook/plans]   # files whose Write and Edit are scanned like a post; a directory covers what is under it
   storeDeny:                # op item|document create|edit, vault kv put|patch refused (globs; empty: any)
@@ -452,18 +452,18 @@ hooks:
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
   personFolders: [~/, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
 
-scan:                       # the value scanner's index (README: What reaches the model); beekeeper scan index reads these
+scan:                       # the value scanner's index (docs/threat-model.md); beekeeper scan index reads these
   sops: [~/projects/configs/*/secrets/*.enc.yaml]   # SOPS file globs (no **), decrypted by sops in beekeeper's process
   vaults: [Team Shared]     # 1Password vaults whose concealed fields are fingerprinted (op item get --reveal)
   minLength: 12             # shorter values are not indexed
 
-sandbox:                    # the agent sandbox (README: The agent sandbox); beekeeper sandbox render prints the policy
+sandbox:                    # the agent sandbox (docs/sandbox.md); beekeeper sandbox render prints the policy
   allowRead: [~/projects, ~/.go, ~/.local/bin]   # re-allowed under the denied home directory: checkouts, toolchains
   allowWrite: [~/projects, ~/.cache, ~/go/pkg/mod]   # writable too: checkouts and worktrees, build and module caches
   domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org, 127.0.0.1:6443]   # hosts commands reach besides GitHub; loopback by port only (a kind lab's API server)
   required: false          # true: a session the policy does not hold (not installed, started before) is refused every tool call but SendMessage
   # The broker's egress proxy keeps devctl's App token in memory and sets
-  # the GitHub request headers itself (README: The agent sandbox).
+  # the GitHub request headers itself (docs/sandbox.md).
 
 plans:                      # note add --for <guide.person> links a pull request here only once merged, or open with its stage check green or at the grill stage (red only for missing stage outputs)
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read; an epic's plan is the open or merged pull request naming it

@@ -15,12 +15,14 @@ SSH and the harnesses are fakes (the test binary under their names, on a PATH
 of nothing else; a local HTTP server for the GitHub API). Nothing reaches the
 network, a real desk or an account.
 
-| test | budget per |
-|---|---|
-| `TestCLIBudgets` | call of `agents`, `agents start --dry-run`, `agents wake`, `capacity`, `supervisor status`, `guide work`, `board show`, `note list`, `budget`: wall and CPU time (median of three calls), bytes read, peak memory and processes started (the most of three) |
-| `TestLoopBudgets` | pass of a running `supervisor loop`: CPU, bytes read and written and processes started, idle and with one new event, and idle again after the event log grew to four times its size: the reads must not grow with it |
-| `TestConcurrentCalls` | 20 calls at once (readers and event writers): time until the last ends, and the longest exclusive hold of the state lock |
-| `TestSessionFootprint` | session: processes and memory of its runner unit, working, idle, parked and off the roster (the last two: none) |
+- `TestCLIBudgets`: call of `agents`, `agents start --dry-run`, `agents wake`, `capacity`,
+  `supervisor status`, `guide work`, `board show`, `note list`, `budget`: wall and CPU time (median
+  of three calls), bytes read, peak memory and processes started (the most of three)
+- `TestLoopBudgets`: pass of a running `supervisor loop`: CPU, bytes read and written and processes
+  started, idle and with one new event, and idle again after the event log grew to four times its
+  size: the reads must not grow with it
+- `TestConcurrentCalls`: 20 calls at once (readers and event writers): time until the last ends, and the longest exclusive hold of the state lock
+- `TestSessionFootprint`: session: processes and memory of its runner unit, working, idle, parked and off the roster (the last two: none)
 
 How it measures: a call runs under the test binary as its measuring
 parent, which reaps it and reads its own `/proc/self/io` (`rchar`, `wchar`,

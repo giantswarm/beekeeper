@@ -11,6 +11,7 @@ Read the filled brief, PR, issue comments and parent epic. Check:
 - No narrowing or deferral without a linked follow-up the issue allows.
 - Tests cover the requested behaviour, including failures, rather than just the happy path.
 - No dead paths, unsupported claims in the PR or docs, or work a later epic sub-issue must undo.
+- Behaviour the PR adds or changes is documented in its `docs/` topic page, not appended to README.md.
 
 Use the light brief for fewer than `supervisor.reviewLightLines` changed lines (default 150; `--light-lines` overrides; negative disables this shortcut), or docs/tests-only changes: diff, issue and CI, with no checkout or build. Otherwise create your own worktree at the pinned head and read repository rules for tests and lints. Trust green CI on that exact head. Do not run local tests, lints, builds or probes; inspect code and tests instead. Never merge.
 

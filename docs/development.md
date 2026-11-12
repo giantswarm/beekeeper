@@ -517,30 +517,89 @@ timer from the running watches.
 
 ## Layout
 
-| Package | What it knows |
-|---|---|
-| `internal/platform` | The seam to the machine: `Machine` (memory, pressure, processes, the desktop and capped-run scopes, OOM kills), `Launcher` (detached units: agent, wake and merge units), `Capper` (the capped scope of `beekeeper run`), `Opener` (`claude://` links to the desktop app), `Notifier` (the D-Bus sender to `org.freedesktop.Notifications`, godbus, never `notify-send`, never an autolaunched bus). Commands call only these; the build tag picks the implementation. |
-| `internal/proc` | The process table from `/proc`, or a copy of it in testdata: parents, children, environment, start time. |
-| `internal/claude` | Sessions: CLI processes (desktop, background, headless, and the children a session starts), desktop session records, transcripts, git checkouts, what each acted on (its commands and tool calls, not the refs it only mentions) and which overlap, and how each has been doing (turns, tool calls and errors, tokens and cost, context), read from the same 512 KiB window of its transcript in one pass. |
-| `internal/agy` | `agy` (Antigravity CLI) sessions: persistent FIFO inbox and `beekeeper agy-run` supervisor, `PreInvocation` mid-turn step injection with at-least-once inflight tracking, session discovery from `agy` processes and brain transcripts, `tail`/`follow`, transcript metrics and `spend`. |
-| `internal/machine` | The Linux readers and parsers behind `platform.Machine` (memory, pressure, the desktop scope, OOM kill lines), disk, build slots, kind clusters, the model servers. |
-| `internal/github` | The budget from rate-limit headers, the GraphQL limit and its refusal from a `rateLimit` query, the search limits from `/rate_limit` (`BEEKEEPER_GITHUB_API` points the probes at a test's server); a pull request's state from `gh pr view`. |
-| `internal/lease` | Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim. |
-| `internal/peer` | The command-line send to a running Claude session: one headless `claude -p` turn whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's undocumented peer messaging, so it is kept here with a live test. |
-| `internal/state` | The shared state document (supervisor and its relay, the guide's role record (`Role`, the same shape the supervisor's flat fields read as through `SupervisorRole`), the relay due the watch reported, grants, holds, agents, notes, timers, session records, merges, the sessions `agents start` started with their mode) and the event log, under a file lock (`Peek` reads it without the lock, for the permission hook); `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
-| `pkg/apis/beekeeper/v1alpha1` | The `beekeeper.giantswarm.io` kinds of `beekeeper serve`, little spec and lots of status: `Environment`, `MergeLane` and `Hold` cluster-scoped, `Note` and `RosterEntry` in the team's namespace `beekeeper-<team>`; queues capped at `MaxQueue`. `config/crd` embeds their CRDs. |
-| `internal/state/kube` | The Kubernetes `state.Store`: the shared records of the state document (grants and release times as Environments, merges as MergeLanes, holds, notes, agents) as those resources. An update writes the one object it changes, or the Notes it changes one by one, under the resourceVersion it read and reruns on a lost race after a growing, jittered backoff, the Notes written before it kept, until a deadline (20s) past which it fails with `ErrContended`; an update of two objects other than Notes, or of anything the resources do not carry (the supervisor, timers, side files), is refused. `Claim` and `Release` set an Environment's holder by compare-and-swap, the loser told the holder. Events are Kubernetes Events on the object. |
-| `internal/identity` | Who calls `beekeeper serve`: a Dex ID token checked against the issuer's JWKS and `serve.clientIDs`, the person its verified email (never `sub`), a member of `serve.organization` or one of `serve.organizations` (a refusal names the groups the token carries), the team of its group in `serve.teams`, a team's supervisor role its group in `serve.supervisors`; `identitytest` is the Dex stand-in of the tests. |
-| `internal/feed` | The versioned shape of `beekeeper://feed` ([docs/feed.md](feed.md)): event ids, kinds, subject, actor, time and the line the watch prints. |
-| `internal/mailbox` | The mailboxes of `beekeeper serve` in Postgres: one `messages` table and a dedupe table, migrated at start; at least once and in order, `Cap` per mailbox, expiry with a notice to the sender, `LISTEN`/`NOTIFY` on every change; `mailboxtest` gives a test a database of its own. |
-| `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
-| `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
-| `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<namespace>/<cluster>` holds the merge gate and `lease claim` read. |
-| `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and refusals (a third lab, the person's folders, default-branch and force pushes, …) in both Claude Code (`--format claude`) and `agy` (`--format agy`) formats, and the PermissionRequest hook's decision. |
-| `internal/runrecord` | The shape of a run's event-log records (`run.start` / `run.end` / `run.fallback`), written by `internal/guard` for a local run and `internal/remotebuild` for a builder pod's, and read by `run stats`: where the run ran, what it built, its duration, exit and failure tail. A leaf so both writers share it. |
-| `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
-| `internal/update` | The latest release, its signature check and the one-rename install. |
-| `cmd` | The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start, relay, relief, restart grace and relay due are written once and parameterised by the role's name, record and configuration; only the supervisor's start moves the grants. The guide's queue (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's `[for <person>]` text prefix, compared without case) and the waiting sessions, running ones from their desktop record and stopped ones from `claude.StoppedWaiting` (a record not parsed unless it holds `"blocked"`), without the guide's own session, an archived one or a test (`Session.Aside`, `Record.Aside`); its feed drops a note it said before that is still open but no longer in the queue without a line. |
+- `internal/platform`: The seam to the machine: `Machine` (memory, pressure, processes, the desktop
+  and capped-run scopes, OOM kills), `Launcher` (detached units: agent, wake and merge units),
+  `Capper` (the capped scope of `beekeeper run`), `Opener` (`claude://` links to the desktop app),
+  `Notifier` (the D-Bus sender to `org.freedesktop.Notifications`, godbus, never `notify-send`,
+  never an autolaunched bus). Commands call only these; the build tag picks the implementation.
+- `internal/proc`: The process table from `/proc`, or a copy of it in testdata: parents, children, environment, start time.
+- `internal/claude`: Sessions: CLI processes (desktop, background, headless, and the children a
+  session starts), desktop session records, transcripts, git checkouts, what each acted on (its
+  commands and tool calls, not the refs it only mentions) and which overlap, and how each has been
+  doing (turns, tool calls and errors, tokens and cost, context), read from the same 512 KiB window
+  of its transcript in one pass.
+- `internal/agy`: `agy` (Antigravity CLI) sessions: persistent FIFO inbox and `beekeeper agy-run`
+  supervisor, `PreInvocation` mid-turn step injection with at-least-once inflight tracking, session
+  discovery from `agy` processes and brain transcripts, `tail`/`follow`, transcript metrics and
+  `spend`.
+- `internal/machine`: The Linux readers and parsers behind `platform.Machine` (memory, pressure, the desktop scope, OOM kill lines), disk, build slots, kind clusters, the model servers.
+- `internal/github`: The budget from rate-limit headers, the GraphQL limit and its refusal from a
+  `rateLimit` query, the search limits from `/rate_limit` (`BEEKEEPER_GITHUB_API` points the probes
+  at a test's server); a pull request's state from `gh pr view`.
+- `internal/lease`: Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim.
+- `internal/peer`: The command-line send to a running Claude session: one headless `claude -p` turn
+  whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's
+  undocumented peer messaging, so it is kept here with a live test.
+- `internal/state`: The shared state document (supervisor and its relay, the guide's role record
+  (`Role`, the same shape the supervisor's flat fields read as through `SupervisorRole`), the relay
+  due the watch reported, grants, holds, agents, notes, timers, session records, merges, the
+  sessions `agents start` started with their mode) and the event log, under a file lock (`Peek`
+  reads it without the lock, for the permission hook); `Log` appends the events that change no state
+  (build runs) with a bounded wait for the lock.
+- `pkg/apis/beekeeper/v1alpha1`: The `beekeeper.giantswarm.io` kinds of `beekeeper serve`, little
+  spec and lots of status: `Environment`, `MergeLane` and `Hold` cluster-scoped, `Note` and
+  `RosterEntry` in the team's namespace `beekeeper-<team>`; queues capped at `MaxQueue`.
+  `config/crd` embeds their CRDs.
+- `internal/state/kube`: The Kubernetes `state.Store`: the shared records of the state document
+  (grants and release times as Environments, merges as MergeLanes, holds, notes, agents) as those
+  resources. An update writes the one object it changes, or the Notes it changes one by one, under
+  the resourceVersion it read and reruns on a lost race after a growing, jittered backoff, the Notes
+  written before it kept, until a deadline (20s) past which it fails with `ErrContended`; an update
+  of two objects other than Notes, or of anything the resources do not carry (the supervisor,
+  timers, side files), is refused. `Claim` and `Release` set an Environment's holder by
+  compare-and-swap, the loser told the holder. Events are Kubernetes Events on the object.
+- `internal/identity`: Who calls `beekeeper serve`: a Dex ID token checked against the issuer's JWKS
+  and `serve.clientIDs`, the person its verified email (never `sub`), a member of
+  `serve.organization` or one of `serve.organizations` (a refusal names the groups the token
+  carries), the team of its group in `serve.teams`, a team's supervisor role its group in
+  `serve.supervisors`; `identitytest` is the Dex stand-in of the tests.
+- `internal/feed`: The versioned shape of `beekeeper://feed` ([docs/feed.md](feed.md)): event ids, kinds, subject, actor, time and the line the watch prints.
+- `internal/mailbox`: The mailboxes of `beekeeper serve` in Postgres: one `messages` table and a
+  dedupe table, migrated at start; at least once and in order, `Cap` per mailbox, expiry with a
+  notice to the sender, `LISTEN`/`NOTIFY` on every change; `mailboxtest` gives a test a database of
+  its own.
+- `internal/notify`: Desktop notifications: the kinds, urgencies and quiet hours and the ledger
+  `notify.json` under `notify.lock` that makes each event one notification across watches and holds
+  the quiet hours' ones; the sender is `platform.Notifier`.
+- `internal/alerts`: The installations' alerts: bounded `kubectl port-forward`s in their own process
+  group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING
+  lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against
+  Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline
+  with the damper's records and its single owner, and recorded answers for `alerts replay`.
+- `internal/upgrade`: Cluster upgrades: the detection over an installation's Clusters, control
+  planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`,
+  stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the
+  release upgraded from, and the automatic `upgrade:<installation>/<namespace>/<cluster>` holds the
+  merge gate and `lease claim` read.
+- `internal/guard`: The build guard: a capped run in a build slot with its `run.start`/`run.end`
+  events, the PreToolUse hook's rewrite and refusals (a third lab, the person's folders,
+  default-branch and force pushes, …) in both Claude Code (`--format claude`) and `agy` (`--format
+  agy`) formats, and the PermissionRequest hook's decision.
+- `internal/runrecord`: The shape of a run's event-log records (`run.start` / `run.end` /
+  `run.fallback`), written by `internal/guard` for a local run and `internal/remotebuild` for a
+  builder pod's, and read by `run stats`: where the run ran, what it built, its duration, exit and
+  failure tail. A leaf so both writers share it.
+- `internal/free`: What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV.
+- `internal/update`: The latest release, its signature check and the one-rename install.
+- `cmd`: The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start,
+  relay, relief, restart grace and relay due are written once and parameterised by the role's name,
+  record and configuration; only the supervisor's start moves the grants. The guide's queue
+  (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's
+  `[for <person>]` text prefix, compared without case) and the waiting sessions, running ones from
+  their desktop record and stopped ones from `claude.StoppedWaiting` (a record not parsed unless it
+  holds `"blocked"`), without the guide's own session, an archived one or a test (`Session.Aside`,
+  `Record.Aside`); its feed drops a note it said before that is still open but no longer in the
+  queue without a line.
 
 ## Automatic disk reclamation
 

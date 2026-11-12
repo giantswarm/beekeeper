@@ -1221,16 +1221,30 @@ their retention. Repeat calls preserve the original deadlines. Unknown or live u
 reconciliation. Failed revocation is recorded for the next audit and retry;
 retention does not advance on that failure. Partial cleanup is retryable.
 
-| Retained class | Duration | Accountable owner / release rule |
-| --- | --- | --- |
-| Execution log | At least 30 days after successful reconciliation | Owning coordinator's desk; review/recovery evidence remains held until explicit release |
-| Workspace, private repository and execution refs, source bundle of a retirement proved disposable | Host `retention`, 7 days by default, after retirement | Owning coordinator's desk; removed by a later retirement or reconciliation, see [remote worker resource retirement](remote-worker-cleanup.md) |
-| The same with recovery work, ignored files or no proof, and recovery bundles | No expiry | Owning coordinator's desk; publish or recover the work, then remove it by hand |
-| Coordinator policy bundle | Host `retention` once no unretired execution is bound to it | Execution host owner; removed by a later bundle sync |
-| Journal, control receipts, accepted-message evidence | Held for review/recovery | Owning coordinator's desk; never deleted by retention |
-| Disposable MCP proxy home | Removed by acknowledged lifecycle stop | Execution host owner; existing lifecycle cleanup |
-| Shared sources, policy, toolchains and authentication homes | Host policy lifetime | Execution host owner; no automatic deletion |
-| Unknown ownership, symlinks and unrelated files | Indefinite ownership hold | Execution host owner must establish provenance before any cleanup |
+- Execution log
+  - Duration: At least 30 days after successful reconciliation
+  - Accountable owner / release rule: Owning coordinator's desk; review/recovery evidence remains held until explicit release
+- Workspace, private repository and execution refs, source bundle of a retirement proved disposable
+  - Duration: Host `retention`, 7 days by default, after retirement
+  - Accountable owner / release rule: Owning coordinator's desk; removed by a later retirement or reconciliation, see [remote worker resource retirement](remote-worker-cleanup.md)
+- The same with recovery work, ignored files or no proof, and recovery bundles
+  - Duration: No expiry
+  - Accountable owner / release rule: Owning coordinator's desk; publish or recover the work, then remove it by hand
+- Coordinator policy bundle
+  - Duration: Host `retention` once no unretired execution is bound to it
+  - Accountable owner / release rule: Execution host owner; removed by a later bundle sync
+- Journal, control receipts, accepted-message evidence
+  - Duration: Held for review/recovery
+  - Accountable owner / release rule: Owning coordinator's desk; never deleted by retention
+- Disposable MCP proxy home
+  - Duration: Removed by acknowledged lifecycle stop
+  - Accountable owner / release rule: Execution host owner; existing lifecycle cleanup
+- Shared sources, policy, toolchains and authentication homes
+  - Duration: Host policy lifetime
+  - Accountable owner / release rule: Execution host owner; no automatic deletion
+- Unknown ownership, symlinks and unrelated files
+  - Duration: Indefinite ownership hold
+  - Accountable owner / release rule: Execution host owner must establish provenance before any cleanup
 
 After the desk verifies a log is no longer needed for review, unpublished work
 or recovery, it may explicitly attest that fact:
@@ -1277,4 +1291,8 @@ from `agents merge`. Verify raw host merge commands remain denied. Record
 failed steps explicitly; a successful launch or fake-harness test alone does
 not complete the PR/review/go/merge proof for that harness.
 
-Repository visibility restrictions also apply at SSH task admission and coordinator write boundaries. Set `github.publicOnlyOwners: [example]` to require verified public visibility for that owner. Private, internal, missing and unreadable visibility results are refused before starting work and when granting write authority, publishing or merging. Owners not listed retain the existing policy.
+Repository visibility restrictions also apply at SSH task admission and coordinator write
+boundaries. Set `github.publicOnlyOwners: [example]` to require verified public visibility for that
+owner. Private, internal, missing and unreadable visibility results are refused before starting work
+and when granting write authority, publishing or merging. Owners not listed retain the existing
+policy.

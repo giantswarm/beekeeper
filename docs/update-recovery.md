@@ -43,14 +43,14 @@ journal, so a killed controller resumes where it stopped. A standby watch of
 either binary starts it again after a reboot. `Elapsed` counts evaluations, not
 wall-clock time: a machine that slept proves nothing and fails nothing meanwhile.
 
-| Signal | Verdict |
-| --- | --- |
-| Three consecutive same-reason merge or start failures of this candidate | Roll back at once |
-| Three consecutive failed isolated workflow probes | Roll back at once |
-| A machine whose loop ran lately, no heartbeat from the candidate's loop 10 minutes after that loop started (the old loop hands over only at its next quiet pass; one that never hands over is judged at the window's end) | Roll back |
-| A stop | Nothing counts |
-| GitHub unavailable, or heartbeat, outcome or state evidence unreadable | Stays unproven: no rollback, no promotion |
-| 30 observed minutes, a current passed probe, the heartbeat where one is owed | Promote to last known good |
+- Three consecutive same-reason merge or start failures of this candidate: Roll back at once
+- Three consecutive failed isolated workflow probes: Roll back at once
+- A machine whose loop ran lately, no heartbeat from the candidate's loop 10 minutes after that loop
+  started (the old loop hands over only at its next quiet pass; one that never hands over is judged
+  at the window's end): Roll back
+- A stop: Nothing counts
+- GitHub unavailable, or heartbeat, outcome or state evidence unreadable: Stays unproven: no rollback, no promotion
+- 30 observed minutes, a current passed probe, the heartbeat where one is owed: Promote to last known good
 
 During event-history loading, the loop refreshes its lifecycle and existing
 throughput heartbeat at most once per minute as it decodes events, including

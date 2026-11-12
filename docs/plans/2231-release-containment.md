@@ -71,7 +71,10 @@ are implementation prerequisites, not permission to combine several slices.
 
 https://github.com/giantswarm/beekeeper/issues/2254
 
-Add a subprocess integration harness with an ephemeral configuration, state store, board, local bare Git origin and stateful GitHub API/CLI adapter. Run the compiled candidate through supervisor loop passes; replace only external GitHub and worker/reviewer executables, not the planner, pull parser, merge validation or gate. Extend internal/testenv as appropriate; keep existing loopRig unit tests.
+Add a subprocess integration harness with an ephemeral configuration, state store, board, local bare
+Git origin and stateful GitHub API/CLI adapter. Run the compiled candidate through supervisor loop
+passes; replace only external GitHub and worker/reviewer executables, not the planner, pull parser,
+merge validation or gate. Extend internal/testenv as appropriate; keep existing loopRig unit tests.
 
 Dependencies: none.
 
@@ -84,21 +87,34 @@ Dependencies: none.
 
 https://github.com/giantswarm/beekeeper/issues/2255
 
-Use the harness to reproduce the boundary missed by https://github.com/giantswarm/beekeeper/pull/2163 and https://github.com/giantswarm/beekeeper/issues/2230. Add the integration job to .circleci/custom.yml and its build workflow; do not edit generated workflows.yml. Exercise raw GitHub pull/board responses through readLoopPull/parseLoopPull into checkReviewedMerge and mergePull.
+Use the harness to reproduce the boundary missed by
+https://github.com/giantswarm/beekeeper/pull/2163 and
+https://github.com/giantswarm/beekeeper/issues/2230. Add the integration job to .circleci/custom.yml
+and its build workflow; do not edit generated workflows.yml. Exercise raw GitHub pull/board
+responses through readLoopPull/parseLoopPull into checkReviewedMerge and mergePull.
 
 Dependencies: 1.
 
 - [ ] Fixture responses include base/head/branch, review, checks and board data; no preconstructed superloop.Pull bypasses parsing.
 - [ ] An injected historical missing-base or unavailable-validation regression fails the workflow before merge; the current supported no-checkout policy and valid checkout workflow pass.
-- [ ] Cover a non-Go repository, a diverged Go merge result, moved reviewed head, red checks, absent queue where required, budget hold and failed worker start; refusals never produce false merge proof.
-- [ ] CircleCI runs the real-binary job on every PR initially, including changes to loop, merge, capacity, watch, update and CI configuration; failure blocks release publication and merge via a required check.
-- [ ] Failures retain sanitized command/event trace and Git refs; the job has a finite deadline, LANG=C.UTF-8, no live account dependency and cannot silently skip. Record the required-check configuration prerequisite.
+- [ ] Cover a non-Go repository, a diverged Go merge result, moved reviewed head, red checks, absent
+  queue where required, budget hold and failed worker start; refusals never produce false merge
+  proof.
+- [ ] CircleCI runs the real-binary job on every PR initially, including changes to loop, merge,
+  capacity, watch, update and CI configuration; failure blocks release publication and merge via a
+  required check.
+- [ ] Failures retain sanitized command/event trace and Git refs; the job has a finite deadline,
+  LANG=C.UTF-8, no live account dependency and cannot silently skip. Record the required-check
+  configuration prerequisite.
 
 ### 3. Run signed release candidates through a sandbox canary
 
 https://github.com/giantswarm/beekeeper/issues/2256
 
-Add an explicit isolated staging mode and runner for a verified release artifact, reusing the workflow scenario. A configurable allowlisted sandbox repository and board exercise real GitHub review/check/merge operations; local recorded mode remains the credential-free PR check. The staged candidate must never replace the coordinator executable or load a live desk configuration.
+Add an explicit isolated staging mode and runner for a verified release artifact, reusing the
+workflow scenario. A configurable allowlisted sandbox repository and board exercise real GitHub
+review/check/merge operations; local recorded mode remains the credential-free PR check. The staged
+candidate must never replace the coordinator executable or load a live desk configuration.
 
 Dependencies: 1, 2.
 
@@ -111,7 +127,10 @@ Dependencies: 1, 2.
 
 https://github.com/giantswarm/beekeeper/issues/2257
 
-Extend internal/update and cmd/selfupdate.go to require trusted release evidence before replacement, in addition to existing signature verification and canaryChecks. Cover supervisorLoop.install and the exact-version InstallVersion route used by cmd/executionhostupdate.go. Publish authenticated canary evidence as a release artifact or trusted status bound to the verified binary digest.
+Extend internal/update and cmd/selfupdate.go to require trusted release evidence before replacement,
+in addition to existing signature verification and canaryChecks. Cover supervisorLoop.install and
+the exact-version InstallVersion route used by cmd/executionhostupdate.go. Publish authenticated
+canary evidence as a release artifact or trusted status bound to the verified binary digest.
 
 Dependencies: 3.
 
@@ -125,11 +144,16 @@ Dependencies: 3.
 
 https://github.com/giantswarm/beekeeper/issues/2258
 
-Add a shared health evaluator used by cmd/supervisorwatch.go and cmd/watch.go, consuming durable loop/merge/start outcomes and eligible PR observations. cmd/supervisorloop.go failed currently backs off per exact message; keep retry policy separate from health. cmd/watch.go checkLoop currently checks service liveness, not useful progress.
+Add a shared health evaluator used by cmd/supervisorwatch.go and cmd/watch.go, consuming durable
+loop/merge/start outcomes and eligible PR observations. cmd/supervisorloop.go failed currently backs
+off per exact message; keep retry policy separate from health. cmd/watch.go checkLoop currently
+checks service liveness, not useful progress.
 
 Dependencies: 2.
 
-- [ ] Persist normalized failure reason codes, operation, candidate version and time; three consecutive same-reason actual merge/start failures trip health even across PRs and process restarts. Successful corresponding operations reset their streak.
+- [ ] Persist normalized failure reason codes, operation, candidate version and time; three
+  consecutive same-reason actual merge/start failures trip health even across PRs and process
+  restarts. Successful corresponding operations reset their streak.
 - [ ] An approved, exact-head, green, otherwise eligible PR waiting without a merge for a configurable duration alerts the guide; propose a two-hour default with a bounded evaluation cadence.
 - [ ] Empty backlog, intentional stop/hold, budget exhaustion, red CI and pending review do not count as release regressions. Unreadable observations report unknown/degraded, never healthy.
 - [ ] Deduplicate one alert per incident and emit recovery; include candidate, oldest eligible wait and affected public PR URLs without host-specific data.
@@ -139,13 +163,19 @@ Dependencies: 2.
 
 https://github.com/giantswarm/beekeeper/issues/2259
 
-Extend internal/update installation to retain the previous verified binary and a durable install journal before atomic replacement. InstallVersion currently stages and replaces without backup. Define rollback-compatible state handling with internal/state version fencing and the process restart rules in cmd/selfupdate.go; do not assume an older binary can read state written by the candidate.
+Extend internal/update installation to retain the previous verified binary and a durable install
+journal before atomic replacement. InstallVersion currently stages and replaces without backup.
+Define rollback-compatible state handling with internal/state version fencing and the process
+restart rules in cmd/selfupdate.go; do not assume an older binary can read state written by the
+candidate.
 
 Dependencies: 4.
 
 - [ ] Journal records previous/candidate version and digest, installation time, probation state and quarantine; crash recovery is idempotent at every replacement boundary.
 - [ ] Keep a verified previous executable accessible without a network download; reject a modified backup and preserve the installed binary on validation error.
-- [ ] Specify backward-compatible writes during probation or an explicit compatible state migration/recovery protocol; preserve work, approvals, notes and post-install events, never blindly restore an old whole-state snapshot.
+- [ ] Specify backward-compatible writes during probation or an explicit compatible state
+  migration/recovery protocol; preserve work, approvals, notes and post-install events, never
+  blindly restore an old whole-state snapshot.
 - [ ] Test supported upgrade/downgrade state combinations, concurrent updater exclusion, symlinks, disk-full and crash interruption; garbage collection preserves the active recovery target.
 - [ ] Last-known-good is promoted only after successful probation, with documented first-install behavior when no recovery target exists.
 
@@ -153,21 +183,32 @@ Dependencies: 4.
 
 https://github.com/giantswarm/beekeeper/issues/2260
 
-Add a recovery controller outside the candidate supervisor process, using the retained executable/journal and shared health evaluator. Connect watch/standby launch and restart handover so a broken loop or failed candidate watch cannot prevent recovery. Quarantine the failed version across coordinator and execution-host update routes.
+Add a recovery controller outside the candidate supervisor process, using the retained
+executable/journal and shared health evaluator. Connect watch/standby launch and restart handover so
+a broken loop or failed candidate watch cannot prevent recovery. Quarantine the failed version
+across coordinator and execution-host update routes.
 
 Dependencies: 5, 6.
 
-- [ ] Within 30 minutes of installation, a candidate with a three-failure streak, failed start probe, or missing health heartbeat is restored to the verified compatible prior release; schedule at most one minute between recovery evaluations.
-- [ ] Probation requires a bounded isolated workflow/start probe when the desk is idle; no production backlog is necessary to establish health. External GitHub outages are classified separately and keep the candidate unproven rather than falsely attributing a code defect.
+- [ ] Within 30 minutes of installation, a candidate with a three-failure streak, failed start
+  probe, or missing health heartbeat is restored to the verified compatible prior release; schedule
+  at most one minute between recovery evaluations.
+- [ ] Probation requires a bounded isolated workflow/start probe when the desk is idle; no
+  production backlog is necessary to establish health. External GitHub outages are classified
+  separately and keep the candidate unproven rather than falsely attributing a code defect.
 - [ ] The recovery helper survives candidate death, restarts the relevant loop/watch/broker safely, preserves in-flight work and honors active operation locks with a bounded recovery policy.
 - [ ] One concise notification identifies failed and restored versions and reason; one rollback per candidate prevents oscillation and ordinary self-update cannot reinstall quarantine.
-- [ ] Missing/corrupt recovery target or incompatible state holds new updates/starts, reports recovery failure, and never destroys current state; fault-injection tests prove rollback of the supported broken-release case without a person.
+- [ ] Missing/corrupt recovery target or incompatible state holds new updates/starts, reports
+  recovery failure, and never destroys current state; fault-injection tests prove rollback of the
+  supported broken-release case without a person.
 
 ### 8. Prove release containment and recovery end to end
 
 https://github.com/giantswarm/beekeeper/issues/2261
 
-Extend the workflow harness with good and deliberately broken candidate artifacts, durable health state, updater and independently launched recovery controller. Add an operations guide and CI recovery scenario in .circleci/custom.yml; bind evidence to the complete release path.
+Extend the workflow harness with good and deliberately broken candidate artifacts, durable health
+state, updater and independently launched recovery controller. Add an operations guide and CI
+recovery scenario in .circleci/custom.yml; bind evidence to the complete release path.
 
 Dependencies: 2, 3, 4, 5, 6, 7.
 
@@ -175,7 +216,9 @@ Dependencies: 2, 3, 4, 5, 6, 7.
 - [ ] Inject a defect after successful staging: the installed candidate fails the desk workflow, recovery restores the good release within 30 minutes and a subsequent worker/review/merge succeeds.
 - [ ] Simulated time checks exact boundaries; one subprocess crash/restart exercise proves recovery independence and journal replay, rather than only evaluating a pure function.
 - [ ] Cover idle desk probing, failure of recovery notification, unavailable GitHub, corrupt backup and incompatible state, with explicit expected held/degraded outcomes.
-- [ ] Document rollout order, evidence inspection, quarantine recovery and rollback limitations. Publish sanitized proof artifacts showing candidate rejection, restored version, preserved work and successful subsequent merge.
+- [ ] Document rollout order, evidence inspection, quarantine recovery and rollback limitations.
+  Publish sanitized proof artifacts showing candidate rejection, restored version, preserved work
+  and successful subsequent merge.
 
 ## Sequencing and release proof
 

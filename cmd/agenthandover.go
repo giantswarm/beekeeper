@@ -418,7 +418,7 @@ func (a *app) handOver(ctx context.Context, h handover) (err error) {
 	userSettings := filepath.Join(filepath.Dir(a.cfg.Claude.ProjectsDir), "settings.json")
 	if files, ok := permissionHook(userSettings, h.dir); !ok {
 		return refused("%q is not handed over: no PermissionRequest hook runs `beekeeper hook permissionrequest` in %s, so its follow-up would stop at its first card; "+
-			"install the hook there (README: Agents started without a click) or pass --dir a folder whose settings have it", ag.Name, strings.Join(files, ", "))
+			"install the hook there (docs/agents.md: Agents started without a click) or pass --dir a folder whose settings have it", ag.Name, strings.Join(files, ", "))
 	}
 	// Before the note request, whose headless turn would wake the session.
 	st, err := a.store.Read()
