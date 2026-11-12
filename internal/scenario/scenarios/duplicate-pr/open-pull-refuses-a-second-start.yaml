@@ -14,6 +14,8 @@ timeout: 120s
 given:
   desk:
     config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
       capacity:
         providers: {codex: {ceiling: 2}}
         choices: [{harness: codex, model: gpt-5.2-codex}]
@@ -23,6 +25,10 @@ given:
         issues:
           - {number: 1, title: First item, board: Ready}
   harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
     workers:
       - name: app 1
         turns:
@@ -42,10 +48,14 @@ given:
               - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
                 dir: app
   calls:
-    # The watch reads devctl's login, which this desk has none of.
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and an empty kernel journal.
     - program: devctl
       args: [auth, status]
-      respond: {stderr: "not logged in\n", exit: 1}
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
 
 when:
   # The watch's reading admits starts: the budget and the machine are fine.

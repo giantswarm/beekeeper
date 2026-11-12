@@ -13,6 +13,8 @@ timeout: 90s
 given:
   desk:
     config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
       capacity:
         ceiling: 3
         local: {ceiling: 1}
@@ -25,15 +27,23 @@ given:
           - {number: 2, title: Second item, board: Ready}
           - {number: 3, title: Third item, board: Ready}
   harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
     workers:
       - name: 'app \d'
         turns:
           - outcome: hang
   calls:
-    # The watch reads devctl's login, which this desk has none of.
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and an empty kernel journal.
     - program: devctl
       args: [auth, status]
-      respond: {stderr: "not logged in\n", exit: 1}
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
 
 when:
   # The watch's reading admits starts: the budget and the machine are fine.
