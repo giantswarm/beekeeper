@@ -252,6 +252,16 @@ func TestPendingReviewParkRecoversAfterGitHubFailure(t *testing.T) {
 				t.Fatal("unverified request gained review authority")
 			}
 			readable = true
+			// A request that did not verify waits for its backoff, not the
+			// next pass: each look starts git and reads GitHub.
+			verify := recoverParkReviewHead
+			recoverParkReviewHead = func(context.Context, string, string) string {
+				t.Fatal("unverified request retried before its backoff")
+				return ""
+			}
+			recover()
+			recoverParkReviewHead = verify
+			r.a.now = r.a.now.Add(reviewRecoveryFirst)
 			st = recover()
 			rp, ok := st.ReviewParkFor(loopPR)
 			if !ok || rp.ReviewHead != loopHead || rp.PostMerge == nil || *rp.PostMerge != remaining {

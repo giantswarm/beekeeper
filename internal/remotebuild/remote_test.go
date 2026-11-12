@@ -156,7 +156,7 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 	t.Setenv("GOFLAGS", "")
 	t.Setenv("RUSTFLAGS", "")
 	t.Setenv("CARGO_ENCODED_RUSTFLAGS", "")
-	for _, mode := range []string{testDisabled, "unreachable", "full", "admission", "placement", "upload", testExit, "reconnect", "lost-launch", "lost-journal", "warm-run"} {
+	for _, mode := range []string{testDisabled, "unreachable", "full", "admission", "placement", "upload", testExit, "reconnect", "lost-launch", "lost-journal", "oom-journal", "warm-run"} {
 		t.Run(mode, func(t *testing.T) {
 			c := validConfig()
 			if mode == testDisabled {
@@ -190,6 +190,13 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 							return json.NewEncoder(out).Encode(Job(c, "bkb-test", "builder:test"))
 						}
 						return nil
+					}
+					if a[1] == "pod" {
+						pod := corev1.Pod{}
+						if mode == "oom-journal" {
+							pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "builder", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}}}}
+						}
+						return json.NewEncoder(out).Encode(pod)
 					}
 					pods := corev1.PodList{}
 					if mode == "full" {
@@ -234,7 +241,7 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						if mode == "lost-journal" {
+						if mode == "lost-journal" || mode == "oom-journal" {
 							return errors.New("offline")
 						}
 						if mode == "reconnect" && streams == 1 {
@@ -258,7 +265,7 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 				return nil
 			}
 			handled, rc := r.Try(context.Background(), []string{"go", "test", testPackages})
-			remote := slices.Contains([]string{testExit, "reconnect", "lost-launch", "lost-journal", "warm-run"}, mode)
+			remote := slices.Contains([]string{testExit, "reconnect", "lost-launch", "lost-journal", "oom-journal", "warm-run"}, mode)
 			if handled != remote {
 				t.Fatalf("handled=%v code=%d: %s", handled, rc, diagnostic.String())
 			}
@@ -272,7 +279,10 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 				if launches != 1 {
 					t.Fatalf("launched %d times", launches)
 				}
-				if mode == "lost-journal" {
+				if mode == "lost-journal" || mode == "oom-journal" {
+					if strings.Contains(diagnostic.String(), "OOMKilled") != (mode == "oom-journal") {
+						t.Fatalf("wrong journal diagnostic: %s", &diagnostic)
+					}
 					if rc != 125 {
 						t.Fatal(rc)
 					}
@@ -295,7 +305,7 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 				if !strings.HasPrefix(end, "run.end remote:builder-pod.") {
 					t.Fatalf("end %q", end)
 				}
-				if mode == "lost-journal" {
+				if mode == "lost-journal" || mode == "oom-journal" {
 					if !strings.Contains(end, "exit 125 after ") || !strings.Contains(end, "remote journal lost") {
 						t.Fatalf("end %q", end)
 					}

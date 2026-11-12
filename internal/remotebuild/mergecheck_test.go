@@ -128,16 +128,22 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 	}
 	tools := t.TempDir()
 	shim := strings.ReplaceAll(lintShim, "/work/tools", tools)
-	installed := filepath.Join(tools, "v2.14.0", "golangci-lint")
-	lint := "#!/bin/sh\necho \"linted by $0 $*\"\n"
-	install := "#!/bin/sh\n[ \"$*\" = 'install " + GolangCILintModule + "' ] || exit 1\nmkdir -p \"$GOBIN\" && printf '%s' '" + lint + "' > \"$GOBIN/golangci-lint\" && chmod 700 \"$GOBIN/golangci-lint\"\n"
+	_, version, ok := strings.Cut(GolangCILintModule, "@")
+	if !ok || version == "" {
+		t.Fatal("golangci-lint module must pin a version")
+	}
+	installed := filepath.Join(tools, version, "golangci-lint")
+	lint := "#!/bin/sh\necho \"linted by $0 $* cache=$GOLANGCI_LINT_CACHE\"\n"
+	// The install must not touch the image's GOPATH, which the builder's
+	// non-root user cannot write.
+	install := "#!/bin/sh\n[ \"$*\" = 'install " + GolangCILintModule + "' ] && [ \"$GOPATH\" = '" + filepath.Join(tools, "gopath") + "' ] && [ -z \"$GOFLAGS\" ] || exit 1\nmkdir -p \"$GOBIN\" && printf '%s' '" + lint + "' > \"$GOBIN/golangci-lint\" && chmod 700 \"$GOBIN/golangci-lint\"\n"
 	for _, tc := range []struct {
 		name, image, goScript, want string
 		rc                          int
 	}{
-		{name: "image linter", image: lint, want: "linted by IMAGE/golangci-lint run ./..."},
-		{name: "install", goScript: install, want: "linted by " + installed + " run ./..."},
-		{name: "already installed", want: "linted by " + installed + " run ./..."},
+		{name: "image linter", image: lint, want: "linted by IMAGE/golangci-lint run ./... cache=" + filepath.Join(tools, "lint-cache")},
+		{name: "install", goScript: install, want: "linted by " + installed + " run ./... cache=" + filepath.Join(tools, "lint-cache")},
+		{name: "already installed", want: "linted by " + installed + " run ./... cache=" + filepath.Join(tools, "lint-cache")},
 		{name: "install fails", goScript: "#!/bin/sh\nexit 1\n", want: "installing " + GolangCILintModule + " failed", rc: 125},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,7 +163,7 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 			}
 			var out bytes.Buffer
 			c := exec.CommandContext(t.Context(), bash, "-c", shim, "golangci-lint", GolangCILintModule, "run", "./...") //nolint:gosec // test-owned shim and fixtures
-			c.Env = []string{"PATH=" + image + ":/usr/bin:/bin"}
+			c.Env = []string{"PATH=" + image + ":/usr/bin:/bin", "GOPATH=/read-only-image-gopath", "GOFLAGS=-mod=mod"}
 			c.Stdout, c.Stderr = &out, &out
 			rc := 0
 			var exit *exec.ExitError
@@ -169,6 +175,29 @@ func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
 			if rc != tc.rc || !strings.Contains(out.String(), strings.ReplaceAll(tc.want, "IMAGE", image)) {
 				t.Fatalf("rc=%d output=%q", rc, &out)
 			}
+		})
+	}
+}
+
+func TestBuilderGoMemoryBudget(t *testing.T) {
+	for _, test := range []struct{ memory, limit string }{
+		{"4Gi", "2147483648B"},
+		{"1Gi", "536870912B"},
+		{"6000M", "3000000000B"},
+	} {
+		t.Run(test.memory, func(t *testing.T) {
+			c := validConfig()
+			c.Memory = test.memory
+			job := Job(c, "memory-builder", "builder:test")
+			for _, env := range job.Spec.Template.Spec.Containers[0].Env {
+				if env.Name == "GOMEMLIMIT" {
+					if env.Value != test.limit {
+						t.Fatalf("Go memory limit = %s, want %s", env.Value, test.limit)
+					}
+					return
+				}
+			}
+			t.Fatal("builder has no Go memory budget")
 		})
 	}
 }

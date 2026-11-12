@@ -1967,6 +1967,12 @@ type FileStore struct {
 	snapshotMu    sync.Mutex
 	snapshotFile  os.FileInfo
 	snapshot      *State
+	snapshotSum   [32]byte
+
+	// outboxFile is the state file whose outbox outboxPendingSeen answers.
+	outboxMu          sync.Mutex
+	outboxFile        os.FileInfo
+	outboxPendingSeen bool
 }
 
 // followed is how far a Follow reader has read the log, and what it kept.
@@ -1976,6 +1982,11 @@ type followed struct {
 	offset int64
 	kept   []Event
 	anchor string
+	// published* are the checkpoint FollowSnapshot last wrote: when, and
+	// up to where in which file.
+	publishedAt     time.Time
+	publishedFile   os.FileInfo
+	publishedOffset int64
 }
 
 var _ Store = (*FileStore)(nil)
@@ -2475,7 +2486,10 @@ func (s *FileStore) followContext(ctx context.Context, at *followed, keep func(E
 		return nil, err
 	}
 	defer closeEventFiles(files)
-	savedFile, savedOffset, savedKept := at.file, at.offset, slices.Clone(at.kept)
+	// kept only grows by append or is replaced, so its elements up to the
+	// saved length stay as they are: a cancelled read restores the slice
+	// without copying everything kept on every call.
+	savedFile, savedOffset, savedKept := at.file, at.offset, at.kept
 	restore := func() {
 		at.file, at.offset, at.kept = savedFile, savedOffset, savedKept
 	}
@@ -2576,11 +2590,16 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	return writeRaw(path, append(raw, '\n'))
+}
+
+// writeRaw atomically replaces path with raw.
+func writeRaw(path string, raw []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	if _, err := tmp.Write(append(raw, '\n')); err != nil {
+	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
 		return err

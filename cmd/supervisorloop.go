@@ -819,6 +819,11 @@ type supervisorLoop struct {
 	// pause, up to fillBackoff times.
 	fillEmpty   int
 	fillRetries map[string]fillRetry
+	// takenFold is the loop's own history folded so far (looptakenfold.go).
+	takenFold takenFold
+	// reviewRecoveries are the desk-review parks whose published HEAD did
+	// not verify, by park: when recoverReviewRequests looks again.
+	reviewRecoveries map[string]reviewRecovery
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
@@ -1156,6 +1161,10 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 	}
 	changes, closeChanges := state.Changes(ctx, filepath.Join(l.a.store.Dir(), "state.json"), filepath.Join(l.a.store.Dir(), "events.jsonl"))
 	defer closeChanges()
+	ended := time.Now()
+	// A change wakes the next pass early, but not sooner than passChangeGap
+	// after this one ended, nor later than the interval.
+	changed := func() bool { return pauseChangeFor(ctx, min(passChangeGap, d)-time.Since(ended)) }
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	const checkEvery = time.Second
@@ -1166,7 +1175,7 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		case <-l.pullWatcher().ready:
 			return true
 		case <-changes:
-			return pauseChange(ctx)
+			return changed()
 		case <-timer.C:
 			return true
 		}
@@ -1180,7 +1189,7 @@ func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
 		case <-l.pullWatcher().ready:
 			return true
 		case <-changes:
-			return pauseChange(ctx)
+			return changed()
 		case <-timer.C:
 			return true
 		case <-ticker.C:
@@ -1515,6 +1524,7 @@ type cachedUnmergedObservation struct {
 	ETag   string         `json:"etag,omitempty"`
 	At     time.Time      `json:"at,omitempty"`
 	FullAt time.Time      `json:"full_at,omitempty"`
+	Error  string         `json:"error,omitempty"`
 }
 
 type loopCache struct {
@@ -1556,7 +1566,11 @@ func (l *supervisorLoop) loadCache() {
 	if len(l.unmerged) == 0 && len(c.Unmerged) > 0 {
 		l.unmerged = make(map[string]loopUnmergedObservation, len(c.Unmerged))
 		for k, v := range c.Unmerged {
-			l.unmerged[k] = loopUnmergedObservation{pulls: slices.Clone(v.Pulls), etag: v.ETag, at: v.At, fullAt: v.FullAt}
+			obs := loopUnmergedObservation{pulls: slices.Clone(v.Pulls), etag: v.ETag, at: v.At, fullAt: v.FullAt}
+			if v.Error != "" {
+				obs.err = errors.New(v.Error)
+			}
+			l.unmerged[k] = obs
 		}
 	}
 	if l.unmergedCursor == "" {
@@ -1585,7 +1599,11 @@ func (l *supervisorLoop) saveCache() {
 	if len(l.unmerged) > 0 {
 		c.Unmerged = make(map[string]cachedUnmergedObservation, len(l.unmerged))
 		for k, v := range l.unmerged {
-			c.Unmerged[k] = cachedUnmergedObservation{Pulls: slices.Clone(v.pulls), ETag: v.etag, At: v.at, FullAt: v.fullAt}
+			obs := cachedUnmergedObservation{Pulls: slices.Clone(v.pulls), ETag: v.etag, At: v.at, FullAt: v.fullAt}
+			if v.err != nil {
+				obs.Error = v.err.Error()
+			}
+			c.Unmerged[k] = obs
 		}
 	}
 	l.mu.Unlock()
@@ -1868,56 +1886,10 @@ func (l *supervisorLoop) pass(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
-	ownerless := map[string]time.Time{}
-	failures := map[string]loopFailure{}
-	stuckFiled := map[string]time.Time{}
-	for _, e := range taken {
-		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
-			in.Taken = append(in.Taken, t)
-			// A step taken is no longer failing.
-			delete(failures, t.Key)
-			if t.Kind == superloop.KindFile && strings.HasPrefix(t.Key, loopStuckKey) {
-				// The episode's start ends the key; filed is by step and error.
-				i := strings.LastIndexByte(t.Key, ' ')
-				stuckFiled[t.Key[:max(i, 0)]] = e.At
-			}
-			continue
-		}
-		key, rest, ok := keyed(e.Detail)
-		switch {
-		case !ok:
-		case e.Verb == loopOwnerlessVerb:
-			if since, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(rest, ownerlessSince)); err == nil {
-				ownerless[key] = since
-			} else {
-				delete(ownerless, key)
-			}
-		case e.Verb == loopClaimVerb:
-			claims[key] = loopClaim{at: e.At, target: rest}
-		case e.Verb == loopClaimEndVerb:
-			delete(claims, key)
-			delete(failures, key)
-			in.Taken = slices.DeleteFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == key })
-		case e.Verb == loopStageVerb:
-			stages[key] = true
-			stageDetail[key] = rest
-		case e.Verb == loopUnstageVerb:
-			delete(stages, key)
-			delete(stageDetail, key)
-		case e.Verb == loopFailureVerb:
-			var f loopFailure
-			if json.Unmarshal([]byte(rest), &f) == nil {
-				// Failures an older loop logged carry neither time.
-				f.At = cmp.Or(f.At, e.At)
-				f.Since = cmp.Or(f.Since, e.At)
-				kind, _, _ := strings.Cut(key, " ")
-				f.Kind = cmp.Or(f.Kind, kind)
-				f.Ref = cmp.Or(f.Ref, e.Subject)
-				failures[key] = f
-			}
-		}
-	}
+	folded := l.takenFold.fold(taken)
+	in.Taken = folded.taken
+	claims, stages, stageDetail := folded.claims, folded.stages, folded.stageDetail
+	ownerless, failures, stuckFiled := folded.ownerless, folded.failures, folded.stuckFiled
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}

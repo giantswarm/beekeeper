@@ -32,7 +32,7 @@ func (s *FileStore) commitEvents(st *State, events []Event, leasesBefore map[exe
 	}
 
 	if len(events) == 0 {
-		return writeJSON(s.path("state.json"), st)
+		return s.writeState(st)
 	}
 	if err := s.rotateEvents(); err != nil {
 		return err
@@ -95,25 +95,47 @@ func (s *FileStore) recoverEvents() (*State, error) {
 
 // recoverPendingEvents checks only the outbox field before appending an event
 // that changes no state, avoiding full State allocation when no outbox is pending.
+// The answer is kept for the state file's identity: an append on every build's
+// path must not scan the whole document again while it is unchanged.
 func (s *FileStore) recoverPendingEvents() error {
-	raw, err := os.ReadFile(s.path("state.json"))
+	pending, err := s.outboxPending()
+	if err != nil || !pending {
+		return err
+	}
+	_, err = s.recoverEvents()
+	return err
+}
+
+func (s *FileStore) outboxPending() (bool, error) {
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	f, err := os.Open(s.path("state.json")) //nolint:gosec // the store's own state file
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if sameSnapshot(s.outboxFile, info) {
+		return s.outboxPendingSeen, nil
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return false, err
 	}
 	var pending struct {
 		EventOutbox *EventOutbox `json:"eventOutbox"`
 	}
 	if err := json.Unmarshal(raw, &pending); err != nil {
-		return err
+		return false, err
 	}
-	if pending.EventOutbox == nil {
-		return nil
-	}
-	_, err = s.recoverEvents()
-	return err
+	s.outboxFile, s.outboxPendingSeen = info, pending.EventOutbox != nil
+	return s.outboxPendingSeen, nil
 }
 
 type outboxFile interface {
@@ -153,7 +175,25 @@ func (s *FileStore) flushEvents(st *State, f outboxFile) error {
 		return err
 	}
 	st.EventOutbox = nil
-	return writeJSON(s.path("state.json"), st)
+	return s.writeState(st)
+}
+
+// writeState replaces state.json unless the document would stay byte for byte
+// the same. A save that changes nothing must not change the file's identity:
+// every process's snapshot cache keys on it, and the loop, the guide and lease
+// waits wake on its replacement. The transaction loaded the current document
+// through the snapshot cache, which keeps its digest. The caller holds the
+// commit lock.
+func (s *FileStore) writeState(st *State) error {
+	raw, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	if s.unchangedSnapshot(raw) {
+		return nil
+	}
+	return writeRaw(s.path("state.json"), raw)
 }
 
 // Windows does not expose a portable directory fsync; file data is still

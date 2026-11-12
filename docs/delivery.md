@@ -182,3 +182,19 @@ If a repository's pull observation fails, refill defers that board item with
 its normal retry backoff and continues looking for work in other repositories.
 It does not start the affected item using stale data. Global GitHub budget
 holds, cancellation and capacity admission still stop the refill.
+
+## Idle inventory and GraphQL budget
+
+Pull inventory observations are shared by repository for five minutes. A failed
+repository observation is cached for the same interval: idle passes return that
+failure without repeating the inventory request or its two fresh GraphQL budget
+probes. Starts still require a successful observation; old pulls are retained
+only so a later successful conditional read can recover without a full fetch.
+Admission holds and canceled passes are not cached as repository failures.
+
+The inventory cost regression simulates an hour of 30-second idle passes with
+three repositories. It bounds the inventory path to zero GraphQL calls between
+refreshes and at most nine calls on a refresh pass, including budget probes,
+even when every repository read fails. This bounds inventory retries, not all
+worker activity or all loop queries. A release still needs a 24-hour live
+observation of budget holds and refill stalls to establish the end-to-end result.

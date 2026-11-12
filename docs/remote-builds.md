@@ -39,7 +39,10 @@ Supervisor merge validation also uses this runner when enabled, including
 `golangci-lint run` in the Go image. An image's own `golangci-lint` runs as is;
 an image without one gets the version CI pins (`GolangCILintModule` in
 `internal/remotebuild`) installed with `go install` into `/work/tools` of the
-builder, so the image needs Go and network access to the module proxy. A failed
+builder, so the image needs Go and network access to the module proxy. The
+builder runs as a non-root user, so the lint step sets `GOPATH` (where Go caches
+the checksum database) and, unless set, `GOLANGCI_LINT_CACHE` under
+`/work/tools` too: an image's own `GOPATH` may not be writable. A failed
 install exits 125, a checker environment finding rather than lint findings.
 Unlike ordinary worker commands, merge validation never
 falls back locally: an unavailable builder is a checker environment finding.
@@ -248,3 +251,17 @@ Shared S3 objects survive it. Configure the store's native size quota or object
 age/lifecycle policy independently for the configured Go and Rust prefixes;
 workers do not receive bucket-administration permissions or enumerate/delete
 shared objects during worktree cleanup.
+
+### Go memory and lost journals
+
+Builders set `GOMEMLIMIT` to half of their configured memory limit. This is a
+per-process soft Go runtime target, leaving headroom for concurrent compiler
+processes, native allocations and the journal wrapper; it is not an aggregate
+hard cap. Kubernetes still enforces the container limit. If a workload's live
+memory exceeds that limit, the container can still be killed.
+
+When journal recovery fails, the runner reads the builder's termination status.
+An `OOMKilled` container is reported as a memory-limit failure with exit 125,
+not as lint findings. The command is never retried locally. Existing warm
+builders have a different specification and must retire before using the new
+memory budget.

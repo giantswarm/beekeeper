@@ -695,6 +695,7 @@ type loopUnmergedObservation struct {
 	etag   string
 	at     time.Time
 	fullAt time.Time
+	err    error // A failed observation is not permission to use the old pulls.
 }
 
 func (l *supervisorLoop) repoRecentUnmerged(ctx context.Context, repo string) ([]unmergedPull, string, error) {
@@ -728,8 +729,18 @@ func (l *supervisorLoop) repoRecentUnmerged(ctx context.Context, repo string) ([
 			return nil
 		})
 		if err != nil {
-			return nil, "", err
+			// Admission and cancellation are not repository observations. Retry
+			// them when their gates clear, without retaining a transient hold.
+			if errors.Is(err, errLoopLater) || ctx.Err() != nil {
+				return nil, "", err
+			}
+			// Keep the last successful payload and validator for recovery, but
+			// cache the failure too: otherwise every idle pass repeats the read
+			// and its before/after GraphQL budget probes indefinitely.
+			next = obs
+			next.at = now
 		}
+		next.err = err
 		obs = next
 		l.mu.Lock()
 		if l.unmerged == nil {
@@ -737,6 +748,9 @@ func (l *supervisorLoop) repoRecentUnmerged(ctx context.Context, repo string) ([
 		}
 		l.unmerged[key] = obs
 		l.mu.Unlock()
+	}
+	if obs.err != nil {
+		return nil, "", obs.err
 	}
 	// Re-filter against today's window even when the inventory is unchanged.
 	recent := recentUnmergedPulls(repo, obs.pulls, now, window)

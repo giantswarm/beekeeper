@@ -99,12 +99,16 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 
 // GolangCILintModule is the golangci-lint a Go image without one gets for
 // merge validation: the version the repository's CI pins.
-const GolangCILintModule = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0"
+const GolangCILintModule = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0"
 
 // lintShim runs the image's golangci-lint, or installs GolangCILintModule into
 // the pod's workspace first. A failed install exits 125, a checker environment
-// failure, so it is never read as lint findings.
-const lintShim = `lint=golangci-lint
+// failure, so it is never read as lint findings. The builder runs as a
+// non-root user, so an image's GOPATH (where Go keeps its checksum database
+// cache) and the user's cache directory may be read-only: both move into the
+// workspace.
+const lintShim = `export GOPATH=/work/tools/gopath GOLANGCI_LINT_CACHE=${GOLANGCI_LINT_CACHE:-/work/tools/lint-cache}
+lint=golangci-lint
 if ! command -v golangci-lint >/dev/null 2>&1; then
  bin=/work/tools/${1##*@}
  if [ ! -x "$bin/golangci-lint" ]; then
@@ -293,13 +297,36 @@ func (r Runner) try(ctx context.Context, argv []string, tool string) (handled bo
 		}
 	}
 	_ = cleanup(interrupt)
-	end(125, "remote journal lost; the command was not retried locally")
-	_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: remote journal unavailable; command was not retried locally")
+	reason := "remote journal unavailable"
+	if r.builderOOMKilled(ctx, pod) {
+		reason = "builder OOMKilled: container memory limit exceeded; remote journal unavailable"
+	}
+	end(125, "remote journal lost; "+reason+"; the command was not retried locally")
+	_, _ = fmt.Fprintf(r.Stderr, "beekeeper run: %s; command was not retried locally\n", reason)
 	return true, 125
 }
 
+// The journal dies with the container on a group OOM. Read only the typed
+// termination reason, never arbitrary pod diagnostics or environment values.
+func (r Runner) builderOOMKilled(ctx context.Context, pod string) bool {
+	var response bytes.Buffer
+	if r.kubectl(ctx, nil, &response, "get", "pod", pod, "-o", "json") != nil {
+		return false
+	}
+	var status corev1.Pod
+	if json.Unmarshal(response.Bytes(), &status) != nil {
+		return false
+	}
+	for _, container := range status.Status.ContainerStatuses {
+		if container.Name == builderContainer && container.State.Terminated != nil && container.State.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Runner) exec(ctx context.Context, pod string, in io.Reader, out io.Writer, args ...string) error {
-	flags := []string{"exec", pod, "-c", "builder"}
+	flags := []string{"exec", pod, "-c", builderContainer}
 	if in != nil {
 		flags = append(flags, "-i")
 	}

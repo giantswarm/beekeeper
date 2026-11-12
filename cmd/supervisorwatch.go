@@ -146,7 +146,7 @@ func (a *app) watchDisk() *watchDiskReading {
 	if at, err := a.readWatchLevel("disk-state", &current); err == nil && !at.IsZero() {
 		return &current
 	}
-	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == watchDiskStateVerb })
+	evs, err := state.FollowLast(a.store, "watch-disk-state", 1, func(e state.Event) bool { return e.Verb == watchDiskStateVerb })
 	if err != nil || len(evs) == 0 {
 		return nil
 	}

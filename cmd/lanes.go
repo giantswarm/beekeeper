@@ -486,7 +486,9 @@ func (a *app) laneViews(st *state.State) []laneView {
 	pairs := pairLines(st)
 	var events []state.Event
 	if a.store != nil {
-		events, _ = a.store.Events(0, func(e state.Event) bool {
+		// Followed: the watch asks every poll, and a search would read the
+		// whole history each time for the few lines appended since.
+		events, _ = a.store.Follow("lane-views", func(e state.Event) bool {
 			return e.Verb == verbMerging || e.Verb == verbMerged || e.Verb == verbLaneSettled
 		})
 	}

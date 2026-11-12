@@ -42,6 +42,35 @@ func FollowSnapshotContext(ctx context.Context, s Store, name, revision string, 
 	return s.Follow(name, keep)
 }
 
+// FollowLast returns the last n events keep accepts, oldest first, as
+// Events(n, keep) does. A file store remembers under name how far it read and
+// keeps only those n, so a reader that asks again every pass, for an event
+// that may never have been logged, reads only what was appended since instead
+// of the whole history again.
+func FollowLast(s Store, name string, n int, keep func(Event) bool) ([]Event, error) {
+	fs, ok := s.(*FileStore)
+	if !ok || n <= 0 {
+		return s.Events(n, keep)
+	}
+	at := fs.eventReader("last:" + name)
+	at.mu.Lock()
+	defer at.mu.Unlock()
+	if _, err := fs.followContext(context.Background(), at, keep); err != nil {
+		return nil, err
+	}
+	if len(at.kept) > n {
+		at.kept = slices.Clone(at.kept[len(at.kept)-n:])
+	}
+	return slices.Clone(at.kept), nil
+}
+
+// A reader republishes its checkpoint after checkpointEvery, or sooner once
+// checkpointBytes of its log were read since the last one.
+const (
+	checkpointEvery = time.Minute
+	checkpointBytes = 1 << 20
+)
+
 type eventCheckpoint struct {
 	Revision string  `json:"revision"`
 	Source   string  `json:"source"`
@@ -70,7 +99,7 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 	dir := s.path("event-checkpoints")
 	path := filepath.Join(dir, name+".json")
 	previousFile, previousOffset := at.file, at.offset
-	savedKept, savedAnchor := slices.Clone(at.kept), at.anchor
+	savedKept, savedAnchor := at.kept, at.anchor // as followContext's restore
 	var saved eventCheckpoint
 	if at.file == nil {
 		if raw, err := os.ReadFile(path); err == nil { //nolint:gosec // validated reader basename under the store checkpoint directory
@@ -102,6 +131,13 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 			return events, nil
 		}
 	}
+	// A checkpoint only shortens the next process's first read. Publishing
+	// one on every appended event rewrites everything kept each time; this
+	// process republishes once enough time or history has passed.
+	if at.anchor != "" && time.Since(at.publishedAt) < checkpointEvery &&
+		(!os.SameFile(at.publishedFile, at.file) || at.offset-at.publishedOffset < checkpointBytes) {
+		return events, nil
+	}
 	// Snapshot publication is best effort. A full/unwritable cache must not
 	// turn a successfully read log into a failed supervisor pass.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -130,13 +166,19 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 			_ = os.Remove(anchor)
 			return events, nil
 		}
-		next := eventCheckpoint{Revision: revision, Source: source, Offset: at.offset, Kept: slices.Clone(at.kept)}
-		if err := writeJSON(path, next); err != nil {
+		// Encoded under the reader's mutex, so kept needs no copy; compact,
+		// as only a reader decodes it.
+		raw, err := json.Marshal(eventCheckpoint{Revision: revision, Source: source, Offset: at.offset, Kept: at.kept})
+		if err == nil {
+			err = writeRaw(path, append(raw, '\n'))
+		}
+		if err != nil {
 			_ = os.Remove(anchor)
 			return events, nil
 		}
 		oldSource := at.anchor
 		at.anchor = source
+		at.publishedAt, at.publishedFile, at.publishedOffset = time.Now(), at.file, at.offset
 		if oldSource == "" {
 			oldSource = saved.Source
 		}
