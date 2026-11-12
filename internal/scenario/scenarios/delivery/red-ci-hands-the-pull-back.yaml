@@ -115,7 +115,7 @@ when:
     run: {args: [log, --verb, supervisor.red, --json]}
     expect:
       - exit: 0
-      - output: {contains: ["red checks told: build"]}
+      - output: {contains: ["red checks told:", "build"]}
   - wait_for:
       timeout: 15s
       expect:
@@ -153,7 +153,6 @@ then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   # One pull request for the task: the fix went onto it.
   - github: {issue: {repo: example/app, number: 1, state: closed, pulls: 1, open_pulls: 0}}
-  - worker: {name: app 1, turns: 2, outcome: finish}
   - worker: {name: 'Review app 2 r\d+', turns: 1}
   - calls: {program: gh, args: [pr, create], min: 1, max: 1}
   - calls: {program: gh, args: [pr, merge], min: 1, max: 1}

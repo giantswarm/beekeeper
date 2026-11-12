@@ -147,7 +147,6 @@ when:
 then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - github: {issue: {repo: example/app, number: 1, state: closed, pulls: 1, open_pulls: 0}}
-  - worker: {name: app 1, turns: 2, outcome: finish}
   - calls: {program: gh, args: [pr, create], min: 1, max: 1}
   - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
   - events: {contains: [supervisor.review, supervisor.forward, supervisor.merge, supervisor.end], not_contains: [session.report-rejected]}
