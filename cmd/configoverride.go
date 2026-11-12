@@ -332,9 +332,9 @@ func (w *watcher) overrides(ctx context.Context, githubHeld bool) {
 	}
 }
 
-// settleOverrides is the loop's tick of the overrides: its GitHub reads
+// loopSettleOverrides is the loop's tick of the overrides: its GitHub reads
 // take the loop's allowance and wait under the budget floor as its timers'.
-func (l *supervisorLoop) settleOverrides(ctx context.Context, st *state.State) {
+func loopSettleOverrides(l *supervisorLoop, ctx context.Context, st *state.State) {
 	a := l.a
 	held := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
 		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st)

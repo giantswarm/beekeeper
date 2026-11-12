@@ -16,12 +16,6 @@ const (
 	deliveryBlocked = "blocked"
 )
 
-type deliveryFlow struct {
-	Class       string `json:"class"`
-	Reason      string `json:"reason,omitempty"`
-	MissingNote bool   `json:"missingNote,omitempty"`
-}
-
 // External events cannot be turned into decisions merely by parking on a
 // person. Unknown prose stays in WIP: only positive evidence frees a place.
 var externalDeliveryWait = regexp.MustCompile(`(?i)\b(?:physical visit|technician|site visit|external party|on.?site measurement|physical measurement)\b`)

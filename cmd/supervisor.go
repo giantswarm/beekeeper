@@ -22,17 +22,6 @@ const supervisorCommand = "supervisor"
 // supervisorGroup is the command group of the supervisor's commands.
 const supervisorGroup = "supervising"
 
-// loopVersionFile is the running loop's version marker, beside the state.
-const loopVersionFile = "supervisor-loop-version.json"
-
-type loopVersionRecord struct {
-	PID     int    `json:"pid"`
-	Version string `json:"version"`
-}
-
-// loopRunningVersion returns the binary version of the current process.
-var loopRunningVersion = project.Version
-
 // installedLoopBinary returns the path of the installed beekeeper binary.
 var installedLoopBinary = os.Executable
 
@@ -52,17 +41,6 @@ var loopVersionOf = func(ctx context.Context, path string) string {
 		return normalizeLoopVersion(fields[0])
 	}
 	return ""
-}
-
-func normalizeLoopVersion(ver string) string {
-	ver = strings.TrimSpace(ver)
-	if ver == "" {
-		return ""
-	}
-	if !strings.HasPrefix(ver, "v") && ver[0] >= '0' && ver[0] <= '9' {
-		return "v" + ver
-	}
-	return ver
 }
 
 func (a *app) writeLoopVersion() error {

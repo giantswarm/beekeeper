@@ -59,9 +59,6 @@ var (
 	}
 )
 
-// hostUpdateRetry paces a held host's or a busy host's next update attempt.
-const hostUpdateRetry = time.Hour
-
 // hostUpdateCmdName is the coordinator's update of an execution host.
 const hostUpdateCmdName = "update"
 

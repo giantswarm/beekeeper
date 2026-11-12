@@ -105,11 +105,11 @@ var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
 	return a.sessions()
 }
 
-// roster runs the doctor's roster and archive step for a pass: it stops left
+// loopRoster runs the doctor's roster and archive step for a pass: it stops left
 // sleeping waits, takes off the roster any finished agent (done, relieved or
 // stale with no CLI) that superloop.Plan is not still handling in planned, and
 // archives or stops owed desktop and background sessions once their turns end.
-func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) error {
+func loopRoster(l *supervisorLoop, ctx context.Context, planned map[string]bool) error {
 	if l.pauseForReexec() || ctx.Err() != nil {
 		return nil
 	}
@@ -158,10 +158,10 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 	return a.boardClient().RankAnchor(ctx, ref, from)
 }
 
-// filedIssues reads the issues created by sessions active since the loop
+// loopFiledIssues reads the issues created by sessions active since the loop
 // started (Work.Created), with the item or pull request each session was
 // working on when it filed the issue.
-func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
+func loopFiledIssues(l *supervisorLoop, st *state.State) []superloop.FiledIssue {
 	sessions, _, err := loopSessions(l.a)
 	if err != nil || len(sessions) == 0 {
 		return nil
@@ -217,11 +217,11 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 	return out
 }
 
-// fireTimers takes only timers with wakes or commands; watch retains line-only
+// loopFireTimers takes only timers with wakes or commands; watch retains line-only
 // reminders and their desktop notifications. Checks run outside the state
 // lock; settling inside Update lets a concurrent watch take a timer first
 // without either firing it twice. Side effects follow the successful save.
-func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error {
+func loopFireTimers(l *supervisorLoop, ctx context.Context, st *state.State) error {
 	a := l.a
 	var acting []state.Timer
 	for _, t := range st.Timers {

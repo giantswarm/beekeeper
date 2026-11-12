@@ -1160,11 +1160,6 @@ var parkWorktree = func(dir string) string {
 	return filepath.Clean(strings.TrimSpace(string(out)))
 }
 
-func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {
-	head, _ := publishedParkVerification(ctx, on, dir, git, gh)
-	return head
-}
-
 func publishedParkVerification(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) (string, string) {
 	r, ok := parseRef(on)
 	if !ok {
