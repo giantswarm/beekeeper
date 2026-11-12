@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -2142,9 +2143,12 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 		return err
 	}
 	defer unlock()
-	st, err := s.recoverEvents()
+	st, base, err := s.begin()
 	if err != nil {
 		return err
+	}
+	if base != nil {
+		defer func() { _ = base.Close() }()
 	}
 	if err := s.checkWriter(st, clock.Now()); err != nil {
 		return err
@@ -2162,7 +2166,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, clock.Now()); err != nil {
 		return err
 	}
-	return s.commitEvents(st, events, leasesBefore)
+	return s.commitEvents(st, events, leasesBefore, base)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -2275,6 +2279,15 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 // checkWriter refuses an older release before an update can have side effects.
 // The caller holds the state lock.
 func (s *FileStore) checkWriter(st *State, now time.Time) error {
+	writer := ""
+	if st.Writer != nil {
+		writer = st.Writer.Version
+	}
+	return s.checkWriterVersion(writer, now)
+}
+
+// checkWriterVersion is checkWriter of a state its writer wrote, "" none.
+func (s *FileStore) checkWriterVersion(writer string, now time.Time) error {
 	if err := s.checkRecoveryFence(); err != nil {
 		return err
 	}
@@ -2282,17 +2295,15 @@ func (s *FileStore) checkWriter(st *State, now time.Time) error {
 	if !ok {
 		return nil
 	}
-	if st.Writer != nil {
-		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
-			return s.refuse(st.Writer.Version, now)
-		}
+	if newer, ok := release(writer); ok && own.LessThan(newer) {
+		return s.refuse(writer, now)
 	}
 	return nil
 }
 
 // refuse is the refused save's error, logged the first time in this process.
 func (s *FileStore) refuse(newer string, now time.Time) error {
-	err := &StaleWriterError{PID: os.Getpid(), Command: command(os.Args), Version: s.version, Newer: newer}
+	err := &StaleWriterError{PID: os.Getpid(), Command: holderCommand(), Version: s.version, Newer: newer}
 	s.mu.Lock()
 	logged := s.refused
 	s.refused = true
@@ -2319,9 +2330,30 @@ func writerRest(w *Writer) rest {
 	return w.rest
 }
 
+// processCommand names this process in the state's diagnostics (SetCommand).
+var processCommand atomic.Pointer[string]
+
+// SetCommand names this process in the state lock's holder record, its lock
+// trace and stale-writer reports: the resolved subcommand path and the names
+// of the flags given, never an argument or a flag's value, which carry a
+// note's text, a start's brief, a configuration path or a session's name.
+// Unset or empty, the command is guessed from the process's arguments.
+func SetCommand(c string) {
+	processCommand.Store(&c)
+}
+
+// holderCommand is this process's command for diagnostics.
+func holderCommand() string {
+	if c := processCommand.Load(); c != nil && *c != "" {
+		return *c
+	}
+	return command(os.Args)
+}
+
 // command is a process's beekeeper command, its subcommand words only: the
 // arguments behind them are a timer's text, a note, a start's whole brief.
-// "beekeeper agents start".
+// "beekeeper agents start". A flag before the subcommand ends it, its value
+// unknown: SetCommand names such a process.
 func command(args []string) string {
 	words := []string{filepath.Base(args[0])}
 	for _, a := range args[1:] {
@@ -2350,7 +2382,7 @@ func (s *FileStore) decode(raw []byte) (*State, error) {
 	if err := json.Unmarshal(raw, st); err != nil {
 		err = fmt.Errorf("%s: %w", s.path("state.json"), err)
 		if newer := s.newerWriter(raw); newer != "" {
-			return nil, &StaleWriterError{PID: os.Getpid(), Command: command(os.Args), Version: s.version, Newer: newer, Load: err}
+			return nil, &StaleWriterError{PID: os.Getpid(), Command: holderCommand(), Version: s.version, Newer: newer, Load: err}
 		}
 		return nil, err
 	}
