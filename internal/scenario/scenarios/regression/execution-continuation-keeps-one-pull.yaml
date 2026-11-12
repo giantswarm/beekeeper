@@ -94,6 +94,11 @@ given:
     - program: devctl
       args: [release, wait]
       respond: {stdout: '{"verdict":"no_release","reason":"the repository has no release workflow"}'}
+    # The host's gh has a login of its own, and so has the desk's: without
+    # one a host gives its workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
     # The pull watcher's list of the desk's open pull requests: the parks
     # track the task's own.
     - program: gh
@@ -114,7 +119,7 @@ when:
   # the task's pull request and parks on it.
   - name: published
     wait_for:
-      timeout: 60s
+      timeout: 30s
       expect:
         - worker: {name: 'app 1.*', host: builder, turns: 1, outcome: finish}
         - github: {pull: {repo: example/app, number: 2, state: open}}
@@ -129,7 +134,7 @@ when:
     advance: {by: 8m, step: 1m, quiet: 1s}
   - name: continued
     wait_for:
-      timeout: 60s
+      timeout: 30s
       expect:
         - worker: {name: 'app 1.*', host: builder, turns: 2, outcome: finish}
   # The continuation's commit is on the branch of the task's one pull
@@ -143,14 +148,14 @@ when:
     advance: {by: 6m, step: 1m, quiet: 1s}
   - name: reviewed
     wait_for:
-      timeout: 60s
+      timeout: 30s
       expect:
         - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
   - name: merge
     advance: {by: 6m, step: 1m, quiet: 1s}
   - name: merged
     wait_for:
-      timeout: 60s
+      timeout: 30s
       expect:
         - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - stop: loop
