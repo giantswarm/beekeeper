@@ -247,11 +247,15 @@ func (a *app) consumeReports(ctx context.Context) error {
 // rejects a message whose assignment left the roster, so whoever takes an
 // entry off leaves it while one waits: the doctor once took a reviewer off as
 // gone with its approval in the inbox, and the approval was lost
-// (https://github.com/giantswarm/beekeeper/issues/3625).
-func reportsPending(messages []state.ReportMessage) func(state.Agent) string {
+// (https://github.com/giantswarm/beekeeper/issues/3625). A message with a
+// receipt is applied already: the consumer only removes it from the inbox.
+func reportsPending(messages []state.ReportMessage, receipts map[string]state.ReportReceipt) func(state.Agent) string {
 	var waiting []sessionReport
 	var ids []string
 	for _, m := range messages {
+		if _, done := receipts[m.ID]; done {
+			continue
+		}
 		var p sessionReport
 		if json.Unmarshal(m.Payload, &p) != nil || !p.Registered {
 			continue

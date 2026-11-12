@@ -163,8 +163,8 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 // it first (a done report then retires the entry as done), or rejects it with
 // the session still there to wake. An unreadable inbox keeps every entry.
 // removeAgents checks the inbox again under the state lock.
-func keepReporting(chores []chore, messages []state.ReportMessage, inboxErr error) []chore {
-	pending := reportsPending(messages)
+func keepReporting(chores []chore, messages []state.ReportMessage, receipts map[string]state.ReportReceipt, inboxErr error) []chore {
+	pending := reportsPending(messages, receipts)
 	for i, c := range chores {
 		if c.kind != choreRemove {
 			continue
@@ -381,7 +381,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		})
 	}
 	messages, inboxErr := state.PendingReports(a.store)
-	chores = keepReporting(chores, messages, inboxErr)
+	chores = keepReporting(chores, messages, st.ReportReceipts, inboxErr)
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }
 	run := r.run
 	if run == nil {
@@ -800,7 +800,7 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 		if err != nil {
 			return nil, err
 		}
-		pending := reportsPending(messages)
+		pending := reportsPending(messages, st.ReportReceipts)
 		var evs []state.Event
 		for _, c := range chores {
 			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool {

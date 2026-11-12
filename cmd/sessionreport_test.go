@@ -316,19 +316,21 @@ func TestKeepReportingMatchesTheAssignment(t *testing.T) {
 	}
 	for name, tt := range map[string]struct {
 		messages []state.ReportMessage
+		receipts map[string]state.ReportReceipt
 		inboxErr error
 		kept     string
 	}{
-		"current assignment": {messages: queued(nil), kept: reportReferencePrefix + "m1"},
-		"earlier assignment": {messages: queued(func(p *sessionReport) { p.AssignedAt = keepNow.Add(-time.Hour) })},
-		"another task":       {messages: queued(func(p *sessionReport) { p.Task = "an earlier task" })},
-		"another assignee":   {messages: queued(func(p *sessionReport) { p.Assignee = tasked("report-other").Party })},
-		"unregistered":       {messages: queued(func(p *sessionReport) { p.Registered = false })},
-		"empty inbox":        {},
-		"unreadable inbox":   {inboxErr: os.ErrPermission, kept: "inbox is unreadable"},
+		"current assignment":       {messages: queued(nil), kept: reportReferencePrefix + "m1"},
+		"applied, not yet removed": {messages: queued(nil), receipts: map[string]state.ReportReceipt{"m1": {At: keepNow, By: ag.Party}}},
+		"earlier assignment":       {messages: queued(func(p *sessionReport) { p.AssignedAt = keepNow.Add(-time.Hour) })},
+		"another task":             {messages: queued(func(p *sessionReport) { p.Task = "an earlier task" })},
+		"another assignee":         {messages: queued(func(p *sessionReport) { p.Assignee = tasked("report-other").Party })},
+		"unregistered":             {messages: queued(func(p *sessionReport) { p.Registered = false })},
+		"empty inbox":              {},
+		"unreadable inbox":         {inboxErr: os.ErrPermission, kept: "inbox is unreadable"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			chores := keepReporting([]chore{{kind: choreRemove, agent: ag, why: "its CLI ended"}}, tt.messages, tt.inboxErr)
+			chores := keepReporting([]chore{{kind: choreRemove, agent: ag, why: "its CLI ended"}}, tt.messages, tt.receipts, tt.inboxErr)
 			if kept := chores[0].kind == choreKeep; kept != (tt.kept != "") || kept && !strings.Contains(chores[0].why, tt.kept) {
 				t.Fatalf("chore = %+v, want kept for %q", chores[0], tt.kept)
 			}
