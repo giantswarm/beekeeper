@@ -1,3 +1,4 @@
+//nolint:goconst // Literal go test -json events and fixture paths keep the external protocol visible.
 package testcontrol
 
 import (

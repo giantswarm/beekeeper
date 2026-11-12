@@ -1,3 +1,4 @@
+//nolint:goconst // Literal paths keep each fixture module readable as the files it writes.
 package testcontrol
 
 import (

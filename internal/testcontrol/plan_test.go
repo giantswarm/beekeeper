@@ -1,3 +1,4 @@
+//nolint:goconst // Literal paths keep each fixture tree readable as the files it writes.
 package testcontrol
 
 import (
@@ -87,7 +88,7 @@ func TestApply(t *testing.T) {
 	head, base := t.TempDir(), t.TempDir()
 	writeTree(t, base, map[string]string{"x/a_test.go": "old", "x/gone_test.go": "gone"})
 	writeTree(t, head, map[string]string{"x/a_test.go": "new", "x/testdata/run.sh": "#!/bin/sh\n"})
-	if err := os.Chmod(filepath.Join(head, "x/testdata/run.sh"), 0o500); err != nil {
+	if err := os.Chmod(filepath.Join(head, "x/testdata/run.sh"), 0o500); err != nil { //nolint:gosec // an executable fixture whose mode Apply must keep
 		t.Fatal(err)
 	}
 	if err := os.Symlink("run.sh", filepath.Join(head, "x/testdata/link")); err != nil {
