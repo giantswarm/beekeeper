@@ -142,6 +142,7 @@ when:
   - github: {merge: {repo: example/app, pull: 4, method: squash}}
   - github: {close: {repo: example/app, issue: 1}}                             # or pull: 4
   - github: {comment: {repo: example/app, issue: 1, author: alice, body: hello}}
+  - github: {release: {repo: example/app, tag: v1.0.1, target: main}}          # tags main
   - github: {budget: {graphql: {remaining: 10}}}
   - fault:
       arm: {name: down, match: {path: graphql}, respond: {status: 502}, times: 3}
@@ -150,8 +151,9 @@ when:
 
 A `github` step is something that happens on GitHub, exactly one action each. `check` sets a check
 run on a named head to `queued`, `pending`, `green` or `red`, and with it the workflow run of that
-commit. `merge` merges as the merge button does, whatever the base's protection says. A `fault`
-step arms a fault (one of the same name is replaced) or clears one.
+commit. `merge` merges as the merge button does, whatever the base's protection says. `release`
+publishes a release at a branch or commit (the default branch) and tags it, as a release pipeline
+does. A `fault` step arms a fault (one of the same name is replaced) or clears one.
 
 ## Expectations
 

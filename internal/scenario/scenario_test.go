@@ -50,7 +50,7 @@ func TestParseRejects(t *testing.T) {
 		{"two documents", validScenario + "---\n" + validScenario, "one scenario per file"},
 		{"json_path without a check", strings.Replace(validScenario, "exit: 0", "json_path: {path: a.b}", 1), "exactly one of equals, exists and len"},
 		{"github step without given.github", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}}", 1), "a github step needs given.github"},
-		{"github step with two actions", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}, close: {repo: example/app, pull: 1}}", 1), "exactly one of push, check, review, merge, close, comment and budget"},
+		{"github step with two actions", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}, close: {repo: example/app, pull: 1}}", 1), "exactly one of push, check, review, merge, close, comment, release and budget"},
 		{"fault step that neither arms nor clears", strings.Replace(validScenario, "run: {args: [version]}", "fault: {}", 1), "exactly one of arm and clear"},
 		{"github expectation without given.github", strings.Replace(validScenario, "exit: 0", "github: {calls: {min: 1}}", 1), "a github expectation needs given.github"},
 		{"github expectation without a kind", strings.Replace(validScenario, "exit: 0", "github: {}", 1), "exactly one of calls, budget, pull and issue"},

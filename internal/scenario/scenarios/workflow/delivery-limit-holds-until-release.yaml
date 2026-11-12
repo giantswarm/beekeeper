@@ -1,0 +1,161 @@
+name: delivery-limit-holds-until-release
+description: >
+  delivery.wipLimit 2 with four Ready issues and room for four workers: the
+  loop starts exactly two. A delivery keeps its place while its worker
+  waits on CI, while the independent reviewer reviews, while the worker
+  fixes the requested changes and after the merge until the release that
+  carries the merge commit is out. The pass after the release starts the
+  third issue and still holds the fourth. Every delivery step is recorded:
+  implementing, ci, reviewing, fixing, releasing and done.
+  Moved from internal/loopworkflow TestSupervisorWorkflowDeliveryLimit.
+issue: https://github.com/giantswarm/beekeeper/issues/3797
+flow: workflow
+tags: [workflow, delivery, review, loop, github, claude, release]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      capacity: {ceiling: 4}
+      delivery: {wipLimit: 2}
+      supervisor: {reviewRounds: 1}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First, board: Ready}
+          - {number: 2, title: Second, board: Ready}
+          - {number: 3, title: Third, board: Ready}
+          - {number: 4, title: Fourth, board: Ready}
+  harness:
+    workers:
+      # The first issue's worker opens pull request 5, parks for desk
+      # review, then fixes the review's findings and parks again until the
+      # release.
+      - name: app 1
+        harness: claude
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app1]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app1
+              - write: {path: app1/change.txt, content: "the change\n"}
+              - git: [add, change.txt]
+                dir: app1
+              - git: [commit, --quiet, -m, "feat: the first change"]
+                dir: app1
+              - git: [push, --quiet, origin, app-1]
+                dir: app1
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the first change", --body, "Closes #1"]
+                dir: app1
+              - beekeeper: [agents, park, --on, 'example/app#5', desk review]
+                dir: app1
+          - steps:
+              - write: {path: app1/change.txt, content: "the corrected change\n"}
+              - git: [commit, --quiet, -am, "fix: the wording"]
+                dir: app1
+              - git: [push, --quiet, origin, app-1]
+                dir: app1
+              - beekeeper: [agents, park, --on, 'example/app#5', --post-merge, post-release proof, desk review]
+                dir: app1
+      # The second issue's worker waits on its implementation, holding its
+      # delivery place but no slot.
+      - name: app 2
+        harness: claude
+        turns:
+          - steps:
+              - beekeeper: [agents, park, implementation wait]
+      - name: 'Review app 5 r[0-9]+'
+        harness: claude
+        turns:
+          - steps:
+              - gh: [pr, view, '5', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - write: {path: review.md, content: "Desk review (opus): changes requested\nHead reviewed: `${head}`\nchange.txt:1: the wording is off → correct it\n"}
+              - gh: [pr, review, '5', --repo, example/app, --comment, --body-file, review.md]
+              - beekeeper: [agents, idle, --done, --problem, none, --report, "Desk review (opus): changes requested\nhttps://github.com/example/app/pull/5"]
+  calls:
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+
+when:
+  # The repository releases what lands on main.
+  - name: releases
+    github:
+      push:
+        repo: example/app
+        branch: main
+        file: .github/workflows/zz_generated.auto_release.yaml
+        content: "on:\n  push:\n    branches: [main]\n"
+  - name: admit
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 1, outcome: finish}
+        - worker: {name: app 2, turns: 1, outcome: finish}
+  - name: ci-pending
+    github: {check: {repo: example/app, pull: 5, name: build, state: pending}}
+  - name: waits-on-ci
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - calls: {program: claude, args: [--bg, 'app [34]'], max: 0}
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 5, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'Review app 5 r1', outcome: finish}
+  - name: forward
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.forward]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 2, outcome: finish}
+  - name: ci-fixed
+    github: {check: {repo: example/app, pull: 5, name: build, state: green}}
+  - name: merge
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: merged
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - github: {pull: {repo: example/app, number: 5, state: merged, merged_into: main}}
+      - calls: {program: claude, args: [--bg, 'app [34]'], max: 0}
+  # The release pipeline publishes the merge; the release probe of the
+  # delivery runs at most every five minutes.
+  - name: release
+    github: {release: {repo: example/app, tag: v1.0.1, target: main}}
+  - name: later
+    advance: 6m
+  - name: released
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: stats
+    run: {args: [delivery, --stats, --json]}
+
+then:
+  - calls: {program: claude, args: [--bg, 'app 3'], min: 1, max: 1}
+  - calls: {program: claude, args: [--bg, 'app 4'], max: 0}
+  - github: {issue: {repo: example/app, number: 1, state: closed}}
+  - github: {issue: {repo: example/app, number: 4, state: open, board: Ready}}
+  - {step: stats, exit: 0}
+  - {step: stats, json_path: {path: released, equals: 1}}
+  - {step: stats, output: {contains: ['"step": "implementing"', '"step": "ci"', '"step": "reviewing"', '"step": "fixing"', '"step": "releasing"']}}

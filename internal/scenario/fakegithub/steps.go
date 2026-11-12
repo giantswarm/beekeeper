@@ -26,6 +26,7 @@ type Step struct {
 	Merge   *MergeStep             `yaml:"merge"`
 	Close   *CloseStep             `yaml:"close"`
 	Comment *CommentStep           `yaml:"comment"`
+	Release *ReleaseStep           `yaml:"release"`
 	Budget  map[string]GivenBudget `yaml:"budget"`
 }
 
@@ -85,12 +86,21 @@ type CommentStep struct {
 	Body   string `yaml:"body"`
 }
 
+// ReleaseStep publishes release Tag of a repository at Target, a branch
+// or a commit (the default branch), and tags Target with it as GitHub's
+// release does for a new tag.
+type ReleaseStep struct {
+	Repo   string `yaml:"repo"`
+	Tag    string `yaml:"tag"`
+	Target string `yaml:"target"`
+}
+
 // Kind is the step's action, "" unless exactly one is set.
 func (s *Step) Kind() string {
 	var kinds []string
 	for name, set := range map[string]bool{
 		"push": s.Push != nil, "check": s.Check != nil, "review": s.Review != nil, "merge": s.Merge != nil,
-		"close": s.Close != nil, "comment": s.Comment != nil, "budget": len(s.Budget) > 0,
+		"close": s.Close != nil, "comment": s.Comment != nil, "release": s.Release != nil, "budget": len(s.Budget) > 0,
 	} {
 		if set {
 			kinds = append(kinds, name)
@@ -123,7 +133,7 @@ func (s *Step) Validate() error {
 	var errs []error
 	switch s.Kind() {
 	case "":
-		return errors.New("exactly one of push, check, review, merge, close, comment and budget")
+		return errors.New("exactly one of push, check, review, merge, close, comment, release and budget")
 	case "push":
 		errs = append(errs, needRepo(s.Push.Repo))
 		if s.Push.Branch == "" {
@@ -158,6 +168,11 @@ func (s *Step) Validate() error {
 		errs = append(errs, needRepo(s.Comment.Repo), oneOf(s.Comment.Issue, s.Comment.Pull))
 		if s.Comment.Body == "" {
 			errs = append(errs, errors.New("comment without a body"))
+		}
+	case "release":
+		errs = append(errs, needRepo(s.Release.Repo))
+		if s.Release.Tag == "" {
+			errs = append(errs, errors.New("release without a tag"))
 		}
 	case "budget":
 		for name := range s.Budget {
@@ -302,6 +317,24 @@ func (s *Server) Run(st *Step) error {
 			}
 			m.AddComment(i, nil, c.Author, c.Body)
 			return nil
+		case "release":
+			rs := st.Release
+			r, err := m.repoOf(rs.Repo)
+			if err != nil {
+				return err
+			}
+			target := cmpOr(rs.Target, r.DefaultBranch)
+			sha, ok := m.Commit(r, target)
+			if !ok {
+				return fmt.Errorf("release: %s is no branch or commit of %s", target, rs.Repo)
+			}
+			if _, tagged := m.Tag(r, rs.Tag); tagged {
+				return fmt.Errorf("release: %s of %s exists", rs.Tag, rs.Repo)
+			}
+			if _, err := m.AddRelease(r, Release{Tag: rs.Tag, Name: rs.Tag, Target: target}); err != nil {
+				return err
+			}
+			return m.SetRef(r, "refs/tags/"+rs.Tag, sha)
 		}
 		return errors.New("a github step with exactly one action")
 	})
