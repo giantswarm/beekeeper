@@ -11,6 +11,8 @@ issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: guide
 tags: [guide, handover, relay, model]
 timeout: 120s
+control:
+  none: states the hand-over behavior main already has; this change only adds the scenario
 
 given:
   desk:

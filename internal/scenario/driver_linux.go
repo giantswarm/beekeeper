@@ -182,6 +182,18 @@ func (d *driver) run() {
 		err = d.startClock()
 	}
 	if err == nil {
+		d.fakes, err = harness.NewWorld(harness.Options{
+			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
+			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
+				r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
+				return r.Stdout, r.Stderr, r.Exit, r.Given
+			},
+		})
+	}
+	if err == nil {
+		err = d.fakes.Serve(harness.DefaultSocket)
+	}
+	if err == nil {
 		err = d.setup(ctx)
 	}
 	if err == nil {

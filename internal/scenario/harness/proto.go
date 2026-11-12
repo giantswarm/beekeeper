@@ -16,6 +16,11 @@ import (
 const (
 	SocketEnv     = "BEEKEEPER_SCENARIO_HARNESS"
 	DefaultSocket = "/work/harness.sock"
+	// ClockSocket is the world's clock (internal/clock), which clock.Env
+	// names to every process. A harness started with an environment of
+	// beekeeper's choosing does not carry that variable either: its fake
+	// names the clock again (nameClock).
+	ClockSocket = "/work/clock.sock"
 	// HostsRoot is where the execution hosts' roots live in the sandbox.
 	HostsRoot = "/work/hosts"
 )

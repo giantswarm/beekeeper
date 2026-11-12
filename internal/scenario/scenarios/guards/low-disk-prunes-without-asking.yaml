@@ -11,6 +11,10 @@ issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: guards
 tags: [guards, disk, loop]
 timeout: 120s
+control:
+  none: >-
+    states the disk guard main already has; on main it differs only in the
+    clock the watch's second reading comes on, which is no behavior of the guard
 
 given:
   desk:

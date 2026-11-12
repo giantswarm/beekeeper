@@ -60,7 +60,10 @@ type Scenario struct {
 	Timeout Duration `yaml:"timeout"`
 	// Pending names the open issue of a bug the scenario shows: the run
 	// expects it to fail and fails once it passes.
-	Pending string   `yaml:"pending"`
+	Pending string `yaml:"pending"`
+	// Control opts the scenario out of the control (control.go) with the
+	// reason it cannot fail without its pull request's change.
+	Control *Control `yaml:"control"`
 	Given   Given    `yaml:"given"`
 	When    []Step   `yaml:"when"`
 	Then    []Expect `yaml:"then"`
@@ -77,18 +80,18 @@ type Given struct {
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
-	// Clock is the world's clock.
-	Clock Clock `yaml:"clock"`
-	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
-	// that answers gh and the API base variables (docs/scenarios-github.md).
-	// Its repositories get origins like Repositories.
-	GitHub *fakegithub.Given `yaml:"github"`
 	// Harness scripts the workers the fake harnesses run and sets what
 	// their usage probes report.
 	Harness harness.Given `yaml:"harness"`
 	// Hosts are the SSH execution hosts: each gets a root of its own and
 	// an agents.hosts entry of the desk.
 	Hosts []harness.Host `yaml:"hosts"`
+	// Clock is the world's clock.
+	Clock Clock `yaml:"clock"`
+	// GitHub is the scenario's GitHub: a model behind REST and GraphQL
+	// that answers gh and the API base variables (docs/scenarios-github.md).
+	// Its repositories get origins like Repositories.
+	GitHub *fakegithub.Given `yaml:"github"`
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
@@ -389,6 +392,9 @@ func (s *Scenario) Validate() error {
 	}
 	if s.Issue != "" && !issueRE.MatchString(s.Issue) {
 		bad("issue %q: a full issue URL", s.Issue)
+	}
+	if err := s.Control.Validate(); err != nil {
+		bad("%v", err)
 	}
 	if s.Pending != "" && !issueRE.MatchString(s.Pending) {
 		bad("pending %q: the full URL of the open issue", s.Pending)

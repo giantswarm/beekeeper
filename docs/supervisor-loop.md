@@ -186,3 +186,32 @@ candidate version, oldest eligible wait and public PR URLs. Recovery is filed on
 Capacity and budget refusals, stops, red CI and pending review do not add failures.
 Missing observations get one minute for initialization; unreadable observations, or a snapshot
 older than three minutes, report unknown rather than healthy. Retry backoff is independent.
+
+### Pending merge decisions
+
+The loop itself measures every merge decision the planner requests for an approved head. A
+decision that neither merged nor was overtaken (merged, closed or a new head) within 15 minutes
+files one alarm for the guide that names what holds it:
+
+| Cause | What the alarm names |
+| --- | --- |
+| hold | the `hold:<target>` that stops the merge |
+| GitHub budget | the budget under `github.floor`, `merge.resetFirst`, or held loop passes |
+| outage | the default-branch outage that holds its repository |
+| in flight | since when its merge command runs in the merge gate |
+| lane | the pull request whose merge command runs ahead of it in the loop's stream for its lane |
+| merge gate | the gate's own queued or running run, with its lane, phase and PID |
+| merge policy | the repository policy refusal the loop retries |
+| merge queue | the server-side merge queue it waits in |
+| unread | the pull request the loop cannot read, so no pass plans or runs its decision |
+| repair | the failed merge and why the branch repair it requested has no worker yet |
+| failed | the last run's error and, under backoff, when the loop retries |
+| restart | a loop that runs no action while it restarts into a replaced binary |
+| pass | the error that ended the pass before it planned |
+
+The alarm is delivered once per pending head and cause, and no sooner than 15 minutes after
+that head's last alarm: a hold that changes is named again, one that alternates is not repeated.
+A pass that ends before it plans (held GitHub observations, a restart, an error) still measures
+the pending decisions and names what ended it. The waits, the causes already named and the last
+cause read survive a restart of the loop, so a new release neither restarts the 15 minutes nor
+repeats an alarm. `SUPERVISOR STALL ENDED` says when an alarmed decision is no longer pending.
