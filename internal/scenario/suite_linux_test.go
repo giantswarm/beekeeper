@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 )
 
 // The suite's wall-time budget: the run fails above Budget and warns from
@@ -34,13 +36,24 @@ var suiteStarted = time.Now()
 // scenario's driver inside its sandbox; beekeeper itself is the candidate,
 // built once.
 func TestMain(m *testing.M) {
+	// The fake harnesses, units and ssh answer for themselves; every other
+	// fake hands its call to the world.
+	if code, served := harness.Main(); served {
+		os.Exit(code)
+	}
 	if code, served := ServeFake(); served {
 		os.Exit(code)
 	}
 	if len(os.Args) > 2 && os.Args[1] == SandboxFlag {
 		os.Exit(EnterAndDrive(os.Args[2]))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	// The candidate is some hundred megabytes: a run does not leave it in
+	// the temporary directory, which on a desk is memory.
+	if built != "" {
+		_ = os.RemoveAll(filepath.Dir(built))
+	}
+	os.Exit(code)
 }
 
 var (

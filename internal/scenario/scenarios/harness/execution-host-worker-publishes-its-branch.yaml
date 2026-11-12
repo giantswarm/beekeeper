@@ -1,0 +1,89 @@
+name: execution-host-worker-publishes-its-branch
+description: >
+  A worker started on an SSH execution host runs there, in a workspace the
+  host owns, and publishes through its coordinator: its branch and its pull
+  request land in the same origin the desk's own workers push to.
+issue: https://github.com/giantswarm/beekeeper/issues/3791
+flow: harness
+tags: [harness, hosts, claude]
+timeout: 90s
+
+given:
+  repositories:
+    - name: example/app
+  hosts:
+    - name: builder
+  harness:
+    workers:
+      - name: host-worker
+        host: builder
+        turns:
+          - steps:
+              - git: [checkout, --quiet, -b, feature]
+              - write: {path: change.txt, content: "the host worker's change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, "feat: the host worker's change"]
+              - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
+              - beekeeper: [agents, publish, --title, "feat: the host worker's change", --body-file, '${dir}/.beekeeper-scratch/body.md']
+                save: published
+  calls:
+    # The host's gh has a login of its own, and so has the desk's.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    # The repository's default branch, as the coordinator reads it for the
+    # start and for the publication.
+    - program: gh
+      args: [api, repos/example/app, --jq, .default_branch]
+      respond: {stdout: "main\n"}
+    - program: gh
+      args: [api, 'repos/example/app/compare/.*\.\.\.main', --jq, .ahead_by]
+      respond: {stdout: "0\n"}
+    - program: gh
+      args: [repo, view, example/app, --json, defaultBranchRef]
+      respond: {stdout: '{"defaultBranchRef":{"name":"main"}}'}
+    # The execution's branch has no pull request yet.
+    - program: gh
+      args: [pr, list, --repo, example/app, --head, 'beekeeper-execution/.*']
+      respond: {stdout: "[]\n"}
+    - program: gh
+      args: [api, graphql, 'query=.*pullRequests\(states:OPEN.*', 'owner=example', 'name=app']
+      respond:
+        stdout: |
+          {"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+    # The coordinator opens the pull request for the host's worker.
+    - program: gh
+      args: [pr, create]
+      respond: {stdout: "https://github.com/example/app/pull/2\n"}
+
+when:
+  - name: check
+    run: {args: [agents, hosts, check, builder]}
+    expect:
+      - exit: 0
+      - json_path: {path: identity, equals: builder}
+      - json_path: {path: readiness.claude.login, equals: passed}
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, host-worker, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: host-worker, host: builder, outcome: finish}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: start, exit: 0}
+  - {step: start, output: {contains: ["started host-worker: execution", "on builder", "process running"]}}
+  - {step: roster, json_path: {path: '[0].name', equals: host-worker}}
+  - {step: roster, json_path: {path: '[0].execution.host', equals: builder}}
+  - {step: roster, json_path: {path: '[0].reachable', equals: 'SSH reachable; process running'}}
+  - worker: {name: host-worker, host: builder, harness: claude, turns: 1, outcome: finish}
+  # The execution's branch and its one commit are in the origin, pushed by
+  # the coordinator, which also opened the pull request for it.
+  - origin: {repository: example/app, branch: 'beekeeper-execution/[0-9a-f-]+/1', ahead: 1}
+  - origin: {repository: example/app, branch: feature, exists: false}
+  - calls: {program: gh, args: [pr, create, --head, 'beekeeper-execution/[0-9a-f-]+/1'], min: 1, max: 1}
+  - calls: {program: ssh, args: [builder], min: 1}
+  - calls: {program: ssh, args: [coordinator], min: 1}

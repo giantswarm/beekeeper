@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
+	"github.com/giantswarm/beekeeper/internal/scenario/harness"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -37,6 +39,7 @@ const (
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
 	worldSocket  = workDir + "/world.sock"
+	deskIdentity = "scenario"
 	scenarioFile = workDir + "/scenario.yaml"
 	resultFile   = workDir + "/result.json"
 	candidate    = binDir + "/beekeeper"
@@ -58,9 +61,10 @@ func env(extra map[string]string) []string {
 		"BEEKEEPER_LOADAVG":   "0.10 0.10 0.10",
 		WorldEnv:              worldSocket,
 		clock.Env:             clockSocket,
+		harness.SocketEnv:     harness.DefaultSocket,
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_GLOBAL":   "/dev/null",
-		"GIT_ALLOW_PROTOCOL":  "file",
+		"GIT_ALLOW_PROTOCOL":  "file:https",
 		"GIT_TERMINAL_PROMPT": "0",
 		"GIT_AUTHOR_NAME":     "Scenario",
 		"GIT_AUTHOR_EMAIL":    "scenario@example.invalid",
@@ -113,6 +117,8 @@ type driver struct {
 	s     *Scenario
 	world *World
 	clock *clock.Server
+	// fakes is the world of the fake harnesses, units and hosts.
+	fakes *harness.World
 	res   *Result
 	procs map[string]*proc
 	views map[string]View
@@ -123,7 +129,15 @@ type driver struct {
 	githubLog   *os.File
 	boardOwner  string
 	boardNumber int
+	// cfg is the desk's configuration as setup wrote it, orgs its
+	// github.allowedOrgs: the hosts are provisioned against them.
+	cfg  map[string]any
+	orgs []string
 }
+
+// deskCaller names the desk itself to the scenario's GitHub: what a unit
+// of its service manager or a host's coordinator spends.
+const deskCaller = "desk"
 
 // Drive runs the scenario at /work/scenario.yaml inside the sandbox and
 // writes its result to /work/result.json.
@@ -173,13 +187,26 @@ func (d *driver) run() {
 	if err == nil {
 		err = d.startGitHub(&logMu)
 	}
+	if err == nil {
+		err = d.startFakes()
+	}
+	if err == nil {
+		err = d.provisionHosts(ctx)
+	}
 	if err != nil {
+		if d.fakes != nil {
+			_ = d.fakes.Close()
+		}
 		d.res.Harness = err.Error()
 		return
 	}
 	defer func() {
 		for _, name := range slices.Sorted(maps.Keys(d.procs)) {
 			d.procs[name].stop()
+		}
+		_ = d.fakes.Close()
+		for _, f := range d.fakes.Failures() {
+			d.res.Fail("%s", f)
 		}
 		_ = d.world.Close()
 		if d.clock != nil {
@@ -272,25 +299,50 @@ func (d *driver) setup(ctx context.Context) error {
 		d.boardOwner, _ = board["owner"].(string)
 		d.boardNumber, _ = board["project"].(int)
 	}
+	d.cfg, d.orgs = cfg, orgs
 	return nil
+}
+
+// startFakes starts the world of the fake harnesses, units and hosts. Its
+// environment is the desk's with the scenario's GitHub, so a unit or a
+// host's coordinator reaches the same GitHub as the step that started it.
+func (d *driver) startFakes() error {
+	var err error
+	d.fakes, err = harness.NewWorld(harness.Options{
+		Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: d.stepEnv(deskCaller, nil), Artifacts: artifactsDir,
+		Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
+			r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
+			return r.Stdout, r.Stderr, r.Exit, r.Given
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return d.fakes.Serve(harness.DefaultSocket)
+}
+
+// provisionHosts provisions the hosts against the desk's configuration,
+// which then names each with the policy digest its host prepared.
+func (d *driver) provisionHosts(ctx context.Context) error {
+	hosts, err := harness.Provision(ctx, harness.Desk{
+		Candidate: candidate, Fake: binDir + "/" + fakeBinary, Git: binDir + "/git", Config: configFile,
+		Identity: deskIdentity, Orgs: d.orgs, Env: d.stepEnv(deskCaller, nil),
+	}, d.s.Given.Hosts, d.repositories())
+	if err != nil || len(hosts) == 0 {
+		return err
+	}
+	overlay(d.cfg, map[string]any{"agents": map[string]any{"hosts": hosts}})
+	overlay(d.cfg, d.s.Given.Desk.Config)
+	raw, err := yaml.Marshal(d.cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configFile, raw, 0o600)
 }
 
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
-func (d *driver) repositories() []string {
-	var out []string
-	for _, r := range d.s.Given.Repositories {
-		out = append(out, r.Name)
-	}
-	if g := d.s.Given.GitHub; g != nil {
-		for _, name := range g.RepositoryNames() {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
+func (d *driver) repositories() []string { return d.s.repositoryNames() }
 
 // startGitHub builds the scenario's GitHub from given.github over the
 // origins, serves it on a loopback port and makes it answer gh.
@@ -345,7 +397,7 @@ func baseConfig(orgs []string) map[string]any {
 	return map[string]any{
 		"stateDir": stateDir,
 		"leaseDir": workDir + "/leases",
-		"identity": map[string]any{"person": "scenario", "team": "scenario", "host": "scenario"},
+		"identity": map[string]any{"person": "scenario", "team": "scenario", "host": deskIdentity},
 		"github":   map[string]any{"floor": -1, "allowedOrgs": orgs},
 		"guide":    map[string]any{"person": "scenario"},
 		"agents":   map[string]any{"mode": "background", "dir": repoDir, "staleAfter": "-1s"},
@@ -429,6 +481,8 @@ func (d *driver) globals(v View) View {
 	if d.github != nil {
 		v.GitHub = d.github.Check
 	}
+	v.Worker = d.fakes.CheckWorker
+	v.Origin = func(repository, branch string) (bool, int, error) { return originBranch(repository, branch) }
 	v.Process = func(name string) (bool, int, bool) {
 		p, ok := d.procs[name]
 		if !ok {
@@ -481,6 +535,10 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 			err = d.github.RunFault(st.Fault)
 		}
 		if err != nil {
+			sr.Failures = append(sr.Failures, err.Error())
+		}
+	case KindHost:
+		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
 	}
@@ -591,4 +649,37 @@ func (d *driver) waitFor(ctx context.Context, w *WaitFor) []string {
 		case <-time.After(interval):
 		}
 	}
+}
+
+// originBranch reads the branches of a repository's bare origin that match
+// pattern whole: whether one is there, and how many commits the first is
+// ahead of the origin's main.
+func originBranch(repository, pattern string) (exists bool, ahead int, err error) {
+	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
+	if err != nil {
+		return false, 0, err
+	}
+	bare := filepath.Join(originsDir, repository+".git")
+	git := func(args ...string) (string, error) {
+		c := exec.Command(binDir+"/git", append([]string{"--git-dir", bare}, args...)...) //nolint:gosec // real git on the scenario's own origin
+		c.Env = env(nil)
+		out, err := c.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	out, err := git("for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil {
+		return false, 0, err
+	}
+	for _, branch := range strings.Fields(out) {
+		if !re.MatchString(branch) {
+			continue
+		}
+		count, err := git("rev-list", "--count", "refs/heads/main..refs/heads/"+branch)
+		if err != nil {
+			return true, 0, err
+		}
+		_, err = fmt.Sscanf(count, "%d", &ahead)
+		return true, ahead, err
+	}
+	return false, 0, nil
 }
