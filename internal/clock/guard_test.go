@@ -35,6 +35,9 @@ var migrated = []string{
 	// The watch's loops and samples: the supervisor loop owns one, whose
 	// budget reading admits the loop's starts.
 	"cmd/watch.go",
+	// board next: its pick weighs the delivery limit against the loop's
+	// delivery observation, dated on the world's clock.
+	"cmd/board.go",
 }
 
 // clockFuncs are the time package's clock functions, each with what

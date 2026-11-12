@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -272,7 +273,7 @@ pending reviews and fixes; those existing-work routes have no WIP gate.`,
 			if err := a.store.WriteFile(epicSnapshotFile, epics); err != nil {
 				return err
 			}
-			listed := time.Now()
+			listed := clk.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
 				return err
@@ -832,12 +833,12 @@ func claimNext(store state.Store, cands []board.Candidate, sc pickScope, waits s
 			return nil, nil
 		}
 		fresh := sc
-		fresh.wipNow = time.Now
+		fresh.wipNow = clk.Now
 		res = nextFree(st, cands, fresh)
 		if res.Pick == nil {
 			return nil, nil
 		}
-		r := state.Record{Session: servedBy(st, me), Issue: res.Pick.Ref, Waits: strings.Join(strings.Fields(waits), " "), By: me, At: time.Now().UTC()}
+		r := state.Record{Session: servedBy(st, me), Issue: res.Pick.Ref, Waits: strings.Join(strings.Fields(waits), " "), By: me, At: clk.Now().UTC()}
 		st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(me) })
 		st.Records = append(st.Records, r)
 		prev := slices.Clone(st.Deliveries)
