@@ -277,9 +277,8 @@ when:
   Each evaluation then counts for a minute of probation and comes every
   500 ms; the controller exits once it has promoted or rolled back, which
   `process: {name: …, exit: 0}` waits for. A loop that owes the heartbeat
-  runs with `supervisor.loopInterval: 1s`, and with `watch.interval: 2s`
-  its watch names that heartbeat (`release throughput …; candidate <version>`)
-  two seconds after the loop wrote it.
+  runs with `supervisor.loopInterval: 1s` and writes it with every pass:
+  it is there once the loop's log has its first `SUPERVISOR REFILL` line.
 - **Each published release is a commit** of its own on the repository's
   `main`, in the order of `published`: the lookup takes a tag that shares
   its commit with an older release for a stale one.

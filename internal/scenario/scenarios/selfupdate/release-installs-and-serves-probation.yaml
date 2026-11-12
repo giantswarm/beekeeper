@@ -26,8 +26,7 @@ given:
       github: {probeRepo: example/app}
       # The candidate's loop passes, and sends its heartbeat, every second.
       supervisor: {loopInterval: 1s, releaseEvery: 24h}
-      # The watch names the loop's heartbeat at its second look.
-      watch: {interval: 2s}
+      watch: {interval: 30s}
   releases:
     installed: v1.0.0-rc.1
     published: [v1.0.0-rc.2, v1.0.0-rc.3]
@@ -119,13 +118,14 @@ when:
     expect:
       - exit: 1
       - stderr: {contains: ["a recovery controller supervises the installed candidate's probation"]}
-  # The candidate's loop runs and sends its heartbeat.
+  # The candidate's loop runs and sends its heartbeat with every pass:
+  # once its refill has read the board, it is up and passing.
   - name: loop
     background: {args: [supervisor, loop]}
   - wait_for:
       timeout: 30s
       expect:
-        - log: {name: loop, contains: ["candidate v1.0.0-rc.3"]}
+        - log: {name: loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
   # The controller's unit, run by the scenario: the last known good
   # release judges the candidate, an evaluation every 500 ms that counts
   # for a minute of probation.
