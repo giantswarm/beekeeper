@@ -17,12 +17,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// loopIssue is the open issue that has the loop over its budgets today: on an
-// event log four times the size, an idle pass reads several times as much.
-// Idle passes on the desk of record are within their CPU and process budgets
-// since its review-recovery backoff, and on the grown log since the loop
-// folds only the history appended after its last pass.
-const loopIssue = "https://github.com/giantswarm/beekeeper/issues/3657"
+// loopSettle is how long the loop takes in what it has not read yet before a
+// window: its slowest history reader, the throughput check, reads once a
+// minute (throughputCadence), so the history it has not read is read within
+// a minute and a pass. Until then a window measures that one catch-up, not
+// what an idle pass reads.
+const loopSettle = 75 * time.Second
+
+// settle waits until the loop has read what is new.
+func settle(interval time.Duration) {
+	time.Sleep(max(3*interval+10*time.Second, loopSettle))
+}
 
 // Loop budgets per pass of the supervisor loop on the desk of record. An
 // idle pass reads what changed, not the state and the event log again; at the
@@ -124,14 +129,22 @@ func procState(pid int) string {
 }
 
 // window measures the loop over d, per pass of interval, and notes the
-// files it read for kase.
+// files it read for kase and what it read in each pass's time: a one-time
+// catch-up shows as one large value, a pass that reads too much as many.
 func (l *runningLoop) window(t *testing.T, kase string, d time.Duration, interval time.Duration) (cpu, readMiB, writeMiB, children float64) {
 	t.Helper()
 	before, files := l.usage(t), l.files.snapshot()
-	time.Sleep(d)
+	var perPass []string
+	last := before.read
+	for end := time.Now().Add(d); time.Until(end) > 0; {
+		time.Sleep(min(interval, time.Until(end)))
+		u := l.usage(t)
+		perPass = append(perPass, fmt.Sprintf("%.2f", float64(u.read-last)/mib))
+		last = u.read
+	}
 	after := l.usage(t)
 	passes := d.Seconds() / interval.Seconds()
-	rep.note("%s %s: %s", t.Name(), kase, readsBetween(files, l.files.snapshot(), passes, "pass"))
+	rep.note("%s %s: %s; MiB read in each pass's time: %s", t.Name(), kase, readsBetween(files, l.files.snapshot(), passes, "pass"), strings.Join(perPass, " "))
 	return (after.cpu - before.cpu).Seconds() / passes,
 		float64(after.read-before.read) / mib / passes,
 		float64(after.write-before.write) / mib / passes,
@@ -171,7 +184,7 @@ func TestLoopBudgets(t *testing.T) {
 	l := d.startLoop(t)
 	// Startup and the first passes read everything once; budgets are for the
 	// passes after.
-	time.Sleep(3*o.loopInterval + 10*time.Second)
+	settle(o.loopInterval)
 	win := loopWindow()
 
 	cpu, read, write, children := l.window(t, "idle pass", win, o.loopInterval)
@@ -205,9 +218,9 @@ func TestLoopBudgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep.note("%s: event log grown by %d events", t.Name(), len(grow))
-	time.Sleep(3*o.loopInterval + 10*time.Second)
+	settle(o.loopInterval)
 	cpu, read, write, children = l.window(t, "idle pass, 4x event log", win, o.loopInterval)
-	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack, Known: loopIssue}
+	grown := limit{Max: idleRead*loopGrowthFactor + loopGrowthSlack}
 	rep.check(t, "idle pass, 4x event log", "read", read, grown)
 	l.checkCPU(t, "idle pass, 4x event log", cpu, loopGrownCPU, win, o.loopInterval)
 	rep.check(t, "idle pass, 4x event log", "write", write, measured)
