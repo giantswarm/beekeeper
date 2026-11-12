@@ -20,6 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -113,6 +114,12 @@ type driver struct {
 	procs map[string]*proc
 	views map[string]View
 	last  View
+	// github is the scenario's GitHub, nil without given.github; its
+	// board is the desk's.
+	github      *fakegithub.Server
+	githubLog   *os.File
+	boardOwner  string
+	boardNumber int
 }
 
 // Drive runs the scenario at /work/scenario.yaml inside the sandbox and
@@ -157,6 +164,9 @@ func (d *driver) run() {
 	if err == nil {
 		err = d.setup(ctx)
 	}
+	if err == nil {
+		err = d.startGitHub(&logMu)
+	}
 	if err != nil {
 		d.res.Harness = err.Error()
 		return
@@ -168,7 +178,20 @@ func (d *driver) run() {
 		_ = d.world.Close()
 		d.res.Calls = d.world.Calls()
 		for _, c := range d.world.Unanswered() {
+			if c.Reason != "" {
+				d.res.Fail("unanswered call #%d: %s (%s)", c.Seq, c.Line(), c.Reason)
+				continue
+			}
 			d.res.Fail("unanswered call #%d: %s", c.Seq, c.Line())
+		}
+		if d.github != nil {
+			_ = d.github.Close()
+			// A request for what the model lacks is never a guess: it
+			// fails the scenario, like a call nothing answers.
+			for _, c := range d.github.Unsupported() {
+				d.res.Fail("the scenario's GitHub does not model %s (call #%d: %s)", c.Unsupported, c.Seq, c.Line())
+			}
+			_ = d.githubLog.Close()
 		}
 	}()
 	for i, st := range d.s.When {
@@ -212,8 +235,9 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	orgs := []string{"example"}
-	for _, r := range d.s.Given.Repositories {
-		owner, _, _ := strings.Cut(r.Name, "/")
+	repos := d.repositories()
+	for _, name := range repos {
+		owner, _, _ := strings.Cut(name, "/")
 		if !slices.Contains(orgs, owner) {
 			orgs = append(orgs, owner)
 		}
@@ -230,12 +254,79 @@ func (d *driver) setup(ctx context.Context) error {
 	if err := os.WriteFile(filepath.Join(workDir, "worker.txt"), []byte("Work {{.URL}}\n"), 0o600); err != nil {
 		return err
 	}
-	for _, r := range d.s.Given.Repositories {
-		if err := origin(ctx, r.Name); err != nil {
-			return fmt.Errorf("origin %s: %w", r.Name, err)
+	for _, name := range repos {
+		if err := origin(ctx, name); err != nil {
+			return fmt.Errorf("origin %s: %w", name, err)
 		}
 	}
+	if board, ok := cfg["board"].(map[string]any); ok {
+		d.boardOwner, _ = board["owner"].(string)
+		d.boardNumber, _ = board["project"].(int)
+	}
 	return nil
+}
+
+// repositories are the scenario's repositories: given.repositories and
+// given.github's, each once.
+func (d *driver) repositories() []string {
+	var out []string
+	for _, r := range d.s.Given.Repositories {
+		out = append(out, r.Name)
+	}
+	if g := d.s.Given.GitHub; g != nil {
+		for _, name := range g.RepositoryNames() {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// startGitHub builds the scenario's GitHub from given.github over the
+// origins, serves it on a loopback port and makes it answer gh.
+func (d *driver) startGitHub(logMu *sync.Mutex) error {
+	g := d.s.Given.GitHub
+	if g == nil {
+		return nil
+	}
+	log, err := os.Create(filepath.Join(artifactsDir, "github.jsonl"))
+	if err != nil {
+		return err
+	}
+	d.githubLog = log
+	srv, err := fakegithub.New(g, fakegithub.Options{
+		Origins: &fakegithub.Origins{Git: binDir + "/git", Root: originsDir, Env: env(nil)},
+		Log: writerFunc(func(b []byte) (int, error) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			return log.Write(b)
+		}),
+		BoardOwner: d.boardOwner, BoardNumber: d.boardNumber, Repositories: d.repositories(),
+	})
+	if err != nil {
+		return fmt.Errorf("given.github: %w", err)
+	}
+	if err := srv.Listen(); err != nil {
+		return fmt.Errorf("the scenario's GitHub: %w", err)
+	}
+	d.github = srv
+	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
+		res := srv.GH(context.Background(), fakegithub.GHCall{Args: req.Args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
+		return CallResponse{Stdout: res.Stdout, Stderr: res.Stderr, Exit: res.Exit}, res.Handled, res.Reason
+	})
+	return nil
+}
+
+// stepEnv is the environment of a step's candidate: the allowlist, the
+// scenario's GitHub with the step as its caller, and the step's own.
+func (d *driver) stepEnv(caller string, extra map[string]string) []string {
+	vars := map[string]string{}
+	if d.github != nil {
+		maps.Copy(vars, d.github.Env(caller))
+	}
+	maps.Copy(vars, extra)
+	return env(vars)
 }
 
 // baseConfig is the desk every scenario starts from: one person, a
@@ -326,6 +417,9 @@ func (d *driver) globals(v View) View {
 		return verbs, nil
 	}
 	v.Calls = d.world.Count
+	if d.github != nil {
+		v.GitHub = d.github.Check
+	}
 	v.Process = func(name string) (bool, int, bool) {
 		p, ok := d.procs[name]
 		if !ok {
@@ -363,6 +457,19 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		}
 	case KindWaitFor:
 		sr.Failures = append(sr.Failures, d.waitFor(ctx, st.WaitFor)...)
+	case KindGitHub, KindFault:
+		var err error
+		switch {
+		case d.github == nil:
+			err = errors.New("the scenario has no given.github")
+		case sr.Kind == KindGitHub:
+			err = d.github.Run(st.GitHub)
+		default:
+			err = d.github.RunFault(st.Fault)
+		}
+		if err != nil {
+			sr.Failures = append(sr.Failures, err.Error())
+		}
 	}
 	dur := time.Since(started)
 	sr.Duration = dur
@@ -383,7 +490,7 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 func (d *driver) runCandidate(ctx context.Context, i int, st Step) (exit int, stdout, stderr string, err error) {
 	c := exec.CommandContext(ctx, candidate, st.Run.Args...) //nolint:gosec // the candidate with the scenario's arguments
 	c.Dir = repoDir
-	c.Env = env(st.Run.Env)
+	c.Env = d.stepEnv(cmpOr(st.Name, fmt.Sprintf("step-%d", i)), st.Run.Env)
 	c.Stdin = strings.NewReader(st.Run.Stdin)
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
@@ -415,7 +522,7 @@ func (d *driver) start(st Step) error {
 	}
 	c := exec.Command(candidate, st.Background.Args...) //nolint:gosec // the candidate with the scenario's arguments
 	c.Dir = repoDir
-	c.Env = env(st.Background.Env)
+	c.Env = d.stepEnv(st.Name, st.Background.Env)
 	c.Stdin = strings.NewReader(st.Background.Stdin)
 	c.Stdout, c.Stderr = log, log
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -1,0 +1,39 @@
+# The contract of the scenarios' fake gh (docs/scenarios-github.md): the
+# same commands through the fake and through the real gh against the same
+# fake GitHub must print the same and exit the same. On demand, and on pull
+# requests that change the fake. It reaches no GitHub but the test's own
+# server.
+name: scenario-gh-contract
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+    paths:
+      - internal/scenario/fakegithub/**
+      - .github/workflows/scenario-gh-contract.yaml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scenario-gh-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go environment
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27"
+          cache: false
+      - name: The real gh
+        run: gh --version
+      - name: Compare the fake gh with the real gh
+        run: make test-gh-contract
