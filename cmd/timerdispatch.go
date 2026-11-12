@@ -16,6 +16,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -54,7 +55,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
-		tick := time.NewTicker(250 * time.Millisecond)
+		tick := clk.NewTicker(250 * time.Millisecond)
 		defer tick.Stop()
 		for {
 			select {
@@ -73,7 +74,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 		}
 	}()
 	defer func() { cancel(); <-monitorDone }()
-	tick := time.NewTicker(timerTick)
+	tick := clk.NewTicker(timerTick)
 	defer tick.Stop()
 	binary := loopBinary()
 	for {
@@ -94,7 +95,7 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 			return fmt.Errorf("timer state directory changed; reinstall the dispatcher")
 		}
 		current := *a
-		current.cfg, current.now, current.loopNow = cfg, time.Now(), nil
+		current.cfg, current.now, current.loopNow = cfg, clk.Now(), nil
 		github.SetDevctlSkipVersionCheck(!cfg.Hooks.GuardsEnabled())
 		_, err = d.pass(&current)
 		if err != nil {

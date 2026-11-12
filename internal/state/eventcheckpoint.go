@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/clock"
 )
 
 // FollowSnapshot opts a reader into a durable projection. revision must change
@@ -134,7 +136,7 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 	// A checkpoint only shortens the next process's first read. Publishing
 	// one on every appended event rewrites everything kept each time; this
 	// process republishes once enough time or history has passed.
-	if at.anchor != "" && time.Since(at.publishedAt) < checkpointEvery &&
+	if at.anchor != "" && clock.Since(at.publishedAt) < checkpointEvery &&
 		(!os.SameFile(at.publishedFile, at.file) || at.offset-at.publishedOffset < checkpointBytes) {
 		return events, nil
 	}
@@ -156,7 +158,7 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 		// A unique anchor and atomic JSON publication keep concurrent writers'
 		// source/offset pairs consistent. A rotation racing Link only loses
 		// this cache refresh, never audit data or reader progress.
-		source := name + "-" + time.Now().UTC().Format("20060102T150405.000000000")
+		source := name + "-" + clock.Now().UTC().Format("20060102T150405.000000000")
 		anchor := filepath.Join(dir, source)
 		if err := os.Link(f.Name(), anchor); err != nil {
 			return events, nil
@@ -178,7 +180,7 @@ func (s *FileStore) FollowSnapshotContext(ctx context.Context, name, revision st
 		}
 		oldSource := at.anchor
 		at.anchor = source
-		at.publishedAt, at.publishedFile, at.publishedOffset = time.Now(), at.file, at.offset
+		at.publishedAt, at.publishedFile, at.publishedOffset = clock.Now(), at.file, at.offset
 		if oldSource == "" {
 			oldSource = saved.Source
 		}

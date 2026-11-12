@@ -61,7 +61,7 @@ func updateSlowCalls(filename string, source any) ([]token.Position, error) {
 					switch imports[pkg.Name] {
 					case "os/exec", "net/http", "net":
 						bad = true
-					case "time":
+					case "time", "github.com/giantswarm/beekeeper/internal/clock":
 						bad = fn.Sel.Name == "Sleep" || fn.Sel.Name == "After" || fn.Sel.Name == "NewTimer"
 					case "github.com/giantswarm/beekeeper/internal/github":
 						bad = fn.Sel.Name == "RunGH"
@@ -118,7 +118,15 @@ func bad() { store.Update(func(st *State) ([]Event, error) { ` + body + `; retur
 			t.Fatalf("accepted %q: %v, %v", body, positions, err)
 		}
 	}
-	positions, err := updateSlowCalls("pure.go", `package fixture
+	// The core's waits go through internal/clock, which a scenario's world
+	// advances; they are as slow inside a callback.
+	positions, err := updateSlowCalls("clock.go", `package fixture
+import clk "github.com/giantswarm/beekeeper/internal/clock"
+func bad() { store.Update(func(st *State) ([]Event, error) { <-clk.After(1); return nil, nil }) }`)
+	if err != nil || len(positions) == 0 {
+		t.Fatalf("accepted a wait on internal/clock: %v, %v", positions, err)
+	}
+	positions, err = updateSlowCalls("pure.go", `package fixture
 func good() { store.Update(func(st *State) ([]Event, error) { st.Count++; return nil, nil }) }`)
 	if err != nil || len(positions) != 0 {
 		t.Fatalf("pure transition: %v, %v", positions, err)
