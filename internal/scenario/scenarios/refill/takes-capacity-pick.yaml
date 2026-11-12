@@ -1,0 +1,80 @@
+name: takes-capacity-pick
+description: >
+  A refill start takes capacity's pick of harness and model. The desk has
+  two choices, claude first and codex second. Claude's 5-hour window is
+  full, so capacity picks codex, and the worker the refill starts for the
+  Ready item runs on codex, none on claude.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: refill
+tags: [refill, loop, capacity, codex]
+timeout: 90s
+control:
+  none: states the refill behavior main already has; this change only adds the scenario
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      capacity:
+        ceiling: 2
+        providers:
+          claude: {ceiling: 2}
+          codex: {ceiling: 2}
+        choices:
+          - {harness: claude, model: sonnet}
+          - {harness: codex, model: gpt-5.2-codex}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Claude's 5-hour window is full; both are on pace for the week.
+    usage:
+      claude: {session: 100, week: 40}
+      codex: {session: 10, week: 40}
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: capacity
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.claude.room, equals: 0}
+      - json_path: {path: choice.harness, equals: codex}
+      - json_path: {path: choice.model, equals: gpt-5.2-codex}
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start, supervisor.next]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, harness: codex, turns: 1}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - {step: roster, exit: 0}
+  - {step: roster, json_path: {path: '[0].name', equals: app 1}}
+  - worker: {name: app 1, harness: codex, turns: 1}
+  - worker: {name: app 1, harness: claude, turns: 0}
+  - calls: {program: claude, args: [--bg, --remote-control], max: 0}

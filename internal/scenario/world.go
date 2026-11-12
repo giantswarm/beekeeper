@@ -298,7 +298,7 @@ func Ask(socket string, req CallRequest) (CallResponse, error) {
 func ServeFake() (code int, served bool) {
 	socket := os.Getenv(WorldEnv)
 	name := baseName(os.Args[0])
-	if socket == "" || !slices.Contains(Fakes, name) {
+	if socket == "" || !slices.Contains(Fakes, name) && !slices.Contains(strings.Split(os.Getenv(ToolsEnv), ","), name) {
 		return 0, false
 	}
 	req := CallRequest{Program: name, Args: os.Args[1:], Stdin: readStdin(2 * time.Second), Env: map[string]string{}}

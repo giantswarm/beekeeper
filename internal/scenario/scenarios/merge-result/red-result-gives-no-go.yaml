@@ -1,0 +1,141 @@
+name: red-result-gives-no-go
+description: >
+  A red merge result gives no merge. The approved head is green, but its
+  base moved on after the approval, and the tests of base plus head
+  together fail. The gate refuses the merge with the failing test, the pull
+  request stays open, and the loop hands the branch back to its worker for
+  the repair instead of merging.
+issue: https://github.com/giantswarm/beekeeper/issues/3793
+flow: merge-result
+tags: [merge-result, loop, merge, gate]
+timeout: 150s
+control:
+  none: states the merge-result check main already has; this change only adds the scenario
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Headless workers: a continuation is a fresh session's next turn.
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  tools: [go, golangci-lint]
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          # A Go module: the merge result of a Go repository is linted and
+          # tested when its base moved on.
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/go.mod, content: "module example.invalid/app\n\ngo 1.26\n"}
+              - write: {path: app/b.go, content: "package app\n\nvar B = 1\n"}
+              - git: [add, go.mod, b.go]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    - program: golangci-lint
+      args: [run]
+      respond: {stdout: "0 issues.\n"}
+    - program: go
+      args: [test, -short, ./...]
+      respond:
+        stdout: "--- FAIL: TestCombined (0.00s)\n    values_test.go:7: combined result is red\nFAIL\nFAIL\texample.invalid/app\t0.002s\nFAIL\n"
+        exit: 1
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  # The park is the request for the review, the head is green: the reviewer
+  # starts.
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review], not_contains: [session.report-rejected]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - advance: 2s
+  # The base moves on after the approval: the reviewed head no longer
+  # contains it, and its own green checks say nothing about the two
+  # together.
+  - name: base-moves
+    github: {push: {repo: example/app, branch: main, file: a.go, content: "package app\n\nvar A = 2\n"}}
+  - advance: 2s
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: failed
+    run: {args: [log, --verb, merge.failed, --json]}
+    expect:
+      - exit: 0
+      - output: {contains: ["failed go test", "combined result is red", "branch repair requested"]}
+  # The repair is the worker's: a fresh session of it gets the failure.
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 2}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - github: {issue: {repo: example/app, number: 1, state: open}}
+  - calls: {program: go, args: [test, -short, ./...], min: 1}
+  - calls: {program: gh, args: [pr, merge], max: 0}
+  - events: {contains: [merge.authorized, merge.failed, supervisor.stage], not_contains: [merge.finished, supervisor.end]}
+  - worker: {name: app 1, turns: 2}

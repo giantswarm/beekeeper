@@ -121,7 +121,7 @@ func (g *ghRun) dispatch() error {
 		"pr edit": g.prEdit, "pr diff": g.prDiff, "pr update-branch": g.prUpdateBranch,
 		"issue view": g.issueView, "issue list": g.issueList, "issue create": g.issueCreate, "issue close": g.issueClose,
 		"issue reopen": g.issueReopen, "issue comment": g.issueComment, "issue edit": g.issueEdit,
-		"repo view": g.repoView, "label create": g.labelCreate, "label list": g.labelList,
+		"repo view": g.repoView, "label create": g.labelCreate, "label list": g.labelList, "search prs": g.searchPRs,
 		"run list": g.runList, "run view": g.runView, "run rerun": g.runRerun,
 		"release list": g.releaseList, "release view": g.releaseView, "release create": g.releaseCreate,
 		"release delete": g.releaseDelete, "release download": g.releaseDownload, "release upload": g.releaseUpload,
