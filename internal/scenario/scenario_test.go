@@ -25,6 +25,10 @@ then:
 
 // The loader is strict: what muster learned, assertion-free or mistyped
 // scenarios pass vacuously otherwise.
+//
+// control: none: the measure step and the cpu expectation are new, so the
+// merge base does not build this package's tests; the scenario
+// busy-desk-guide-watch-reads-what-changed fails there
 func TestParseRejects(t *testing.T) {
 	if _, err := Parse("valid.yaml", []byte(validScenario)); err != nil {
 		t.Fatalf("the valid scenario: %v", err)
@@ -39,7 +43,7 @@ func TestParseRejects(t *testing.T) {
 		{"no when", "name: x\nflow: smoke\nthen:\n  - calls: {max: 0}\n", "no when"},
 		{"unbounded wait_for", strings.Replace(validScenario, "run: {args: [version]}", "wait_for: {expect: [{calls: {min: 1}}]}", 1), "without a timeout is unbounded"},
 		{"wait_for beyond the scenario", "name: x\nflow: smoke\ntimeout: 5s\nwhen:\n  - wait_for: {timeout: 10s, expect: [{calls: {min: 1}}]}\nthen:\n  - calls: {min: 1}\n", "exceeds the scenario's"},
-		{"two step kinds", strings.Replace(validScenario, "run: {args: [version]}", "run: {args: [version]}\n    stop: x", 1), "exactly one of run, background, stop, wait_for, advance, github, fault and host"},
+		{"two step kinds", strings.Replace(validScenario, "run: {args: [version]}", "run: {args: [version]}\n    stop: x", 1), "exactly one of run, background, stop, wait_for, advance, measure, github, fault and host"},
 		{"expectation without a kind", strings.Replace(validScenario, "exit: 0", "step: version", 1), "exactly one of exit"},
 		{"two expectation kinds", strings.Replace(validScenario, "exit: 0", "{exit: 0, duration: {max: 1s}}", 1), "exactly one of exit"},
 		{"expectation the step does not observe", "name: x\nflow: smoke\nwhen:\n  - {name: b, background: {args: [watch]}}\nthen:\n  - exit: 0\n", "exit is not observed for a background step"},
@@ -72,6 +76,13 @@ func TestParseRejects(t *testing.T) {
 		{"tool that is the builder's kubectl", strings.Replace(validScenario, "when:", "given:\n  tools: [kubectl]\nwhen:", 1), `"kubectl" is on the desk's PATH already`},
 		{"given call of a program that is no tool", strings.Replace(validScenario, "when:", "given:\n  calls: [{program: go, respond: {exit: 0}}]\nwhen:", 1), `program "go" is none of`},
 		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
+		{"measure without for", strings.Replace(validScenario, "run: {args: [version]}", "measure: {}", 1), "measure without for"},
+		{"measure beyond the scenario", "name: x\nflow: smoke\ntimeout: 5s\nwhen:\n  - measure: {for: 10s}\nthen:\n  - calls: {max: 100}\n", "exceeds the scenario's"},
+		{"cpu of no background step", strings.Replace(validScenario, "exit: 0", "cpu: {name: guide, max: 0.1}", 1), `cpu "guide" names no earlier background step`},
+		{"cpu without a max", "name: x\nflow: smoke\nwhen:\n  - {name: b, background: {args: [watch]}}\n  - measure: {for: 1s}\nthen:\n  - cpu: {name: b}\n", "cpu without a positive max"},
+		{"cpu of a run step", "name: x\nflow: smoke\nwhen:\n  - {name: b, background: {args: [watch]}}\n  - run: {args: [version]}\nthen:\n  - cpu: {name: b, max: 0.1}\n", "cpu is not observed for a run step"},
+		{"rewrite too often", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {generate: {agents: 3}, rewrite: 10ms}\nwhen:", 1), "more often than every 100ms"},
+		{"rewrite without workers", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {generate: {records: 3}, rewrite: 1s}\nwhen:", 1), "no generate.agents"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))
@@ -193,10 +204,20 @@ func TestWorldAnswersAndLogsCalls(t *testing.T) {
 
 // One checker reads one view for every step kind: an expectation of what a
 // step kind does not observe fails instead of passing.
+//
+// control: none: the measure step and the cpu expectation are new, so the
+// merge base does not build this package's tests; the scenario
+// busy-desk-guide-watch-reads-what-changed fails there
 func TestCheckOneViewForEveryStepKind(t *testing.T) {
 	exit, out, dur := 0, `{"pick":{"ref":"example/app#1"},"items":[1,2]}`, 2*time.Second
 	run := View{Kind: KindRun, Exit: &exit, Stdout: &out, Duration: &dur}
 	wait := View{Kind: KindWaitFor, Duration: &dur}
+	measure := View{Kind: KindMeasure, Duration: &dur, CPU: func(name string) (float64, error) {
+		if name != "b" {
+			return 0, errors.New("it did not run through the measure step")
+		}
+		return 0.2, nil
+	}}
 	zero, two := 0, 2
 	yes, no := true, false
 	withWorld := run
@@ -232,6 +253,10 @@ func TestCheckOneViewForEveryStepKind(t *testing.T) {
 		{"origin branch that should be missing", Expect{Origin: &OriginExpect{Repository: "example/app", Branch: "work", Exists: &no}}, withWorld, "branch work there true, want false"},
 		{"origin branch ahead", Expect{Origin: &OriginExpect{Repository: "example/app", Branch: "work", Ahead: &zero}}, withWorld, "2 commit(s) ahead of main, want 0"},
 		{"output", Expect{Output: &TextExpect{Contains: []string{"pick"}, NotContains: []string{"error"}, Matches: `^\{"pick"`}}, run, ""},
+		{"cpu of a run", Expect{CPU: &CPUExpect{Name: "b", Max: 0.1}}, run, "cpu is not observed for a run step"},
+		{"cpu within", Expect{CPU: &CPUExpect{Name: "b", Max: 0.25}}, measure, ""},
+		{"cpu over", Expect{CPU: &CPUExpect{Name: "b", Max: 0.1}}, measure, "b used 0.200 of a core, at most 0.1"},
+		{"cpu of a process not measured", Expect{CPU: &CPUExpect{Name: "c", Max: 0.1}}, measure, "did not run through the measure step"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Check(tc.e, tc.v)
