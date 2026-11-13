@@ -59,6 +59,12 @@ type UsageView struct {
 	HighPercent float64      `json:"highPercent,omitempty"`
 	Underused   bool         `json:"underused,omitempty"`
 	Error       string       `json:"error,omitempty"`
+
+	// SourceAt is when the reading's figures were taken; Stale says they are
+	// older than StaleAfter, the reading's maximum age.
+	SourceAt   time.Time     `json:"sourceAt,omitzero"`
+	Stale      bool          `json:"stale,omitempty"`
+	StaleAfter time.Duration `json:"-"`
 }
 
 func ValidateReadingAt(r UsageReading, u config.Usage, now time.Time) error {
@@ -245,9 +251,13 @@ func DeriveUsageViewForStart(r UsageReading, k config.Capacity, kind StartFor, n
 		pace = sdPace(sd)
 	}
 	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
+	staleAfter := k.Usage.EffectiveStaleAfter()
 	return derived, &UsageView{
 		At:          r.At,
 		Fallback:    r.Fallback,
+		SourceAt:    ReadingSource(r),
+		Stale:       ReadingStale(r, staleAfter, now),
+		StaleAfter:  staleAfter,
 		FiveHour:    fh,
 		SevenDay:    sd,
 		Ceiling:     derived.Ceiling,
@@ -298,19 +308,64 @@ func windowsPairLine(fh, sd *UsageWindow, now time.Time) string {
 }
 
 func (u *UsageView) windowsLine(now time.Time) string {
-	return withFallback(windowsPairLine(u.FiveHour, u.SevenDay, now), u.Fallback, u.At, now)
+	return keptNote{Fallback: u.Fallback, At: u.At, SourceAt: u.SourceAt, Stale: u.Stale, StaleAfter: u.StaleAfter}.after(
+		windowsPairLine(u.FiveHour, u.SevenDay, now), now)
 }
 
-func withFallback(s, fallback string, at, now time.Time) string {
+// ReadingSource is when a reading's figures were taken: its source's time,
+// else the time it was read.
+func ReadingSource(r UsageReading) time.Time {
+	if !r.SourceAt.IsZero() {
+		return r.SourceAt
+	}
+	return r.At
+}
+
+// ReadingStale reports whether a reading's figures are older than its
+// maximum age at now. A reading kept after a failed refresh can be.
+func ReadingStale(r UsageReading, staleAfter time.Duration, now time.Time) bool {
+	src := ReadingSource(r)
+	return !src.IsZero() && staleAfter > 0 && now.Sub(src) > staleAfter
+}
+
+// maxFallback bounds a fallback in a view's line: long enough for its cause.
+const maxFallback = 240
+
+// keptNote is what a view says after its figures when its reading was kept
+// after a failed read, or is stale: how old the figures are (against their
+// maximum once stale) and why the reading was kept.
+type keptNote struct {
+	Fallback     string
+	At, SourceAt time.Time
+	Stale        bool
+	StaleAfter   time.Duration
+}
+
+func (n keptNote) after(s string, now time.Time) string {
+	src := n.SourceAt
+	if src.IsZero() {
+		src = n.At
+	}
+	fallback := Cmd.Truncate(n.Fallback, maxFallback)
+	join := func(note string) string {
+		if s == "" {
+			return note
+		}
+		return s + "; " + note
+	}
 	switch {
+	case n.Stale && !src.IsZero():
+		note := fmt.Sprintf("STALE: read %s ago, max %s", Cmd.Dur(now.Sub(src)), Cmd.Dur(n.StaleAfter))
+		if fallback != "" {
+			note += " (" + fallback + ")"
+		}
+		return join(note)
 	case fallback == "":
 		return s
-	case at.IsZero() && s == "":
-		return Cmd.Truncate(fallback, 120)
-	case at.IsZero():
-		return s + "; " + Cmd.Truncate(fallback, 120)
+	case n.At.IsZero():
+		return join(fallback)
 	}
-	return s + fmt.Sprintf("; last good read %s ago (%s)", Cmd.Dur(now.Sub(at)), Cmd.Truncate(fallback, 120))
+	return join(fmt.Sprintf("last good read %s ago (%s)", Cmd.Dur(now.Sub(src)), fallback))
 }
 
 func (u *UsageView) CapacitySuffix(now time.Time) string {

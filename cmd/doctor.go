@@ -158,6 +158,27 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 	return out
 }
 
+// keepReporting turns the removal of an entry whose queued report still
+// waits for the loop into a keep chore naming the report: the loop applies
+// it first (a done report then retires the entry as done), or rejects it with
+// the session still there to wake. An unreadable inbox keeps every entry.
+// removeAgents checks the inbox again under the state lock.
+func keepReporting(chores []chore, messages []state.ReportMessage, receipts map[string]state.ReportReceipt, inboxErr error) []chore {
+	pending := reportsPending(messages, receipts)
+	for i, c := range chores {
+		if c.kind != choreRemove {
+			continue
+		}
+		switch id := pending(c.agent); {
+		case inboxErr != nil:
+			chores[i] = chore{kind: choreKeep, agent: c.agent, why: c.why + ", but the session reports inbox is unreadable: " + inboxErr.Error()}
+		case id != "":
+			chores[i] = chore{kind: choreKeep, agent: c.agent, why: c.why + ", but its report " + reportReferencePrefix + id + " waits for the supervisor loop"}
+		}
+	}
+	return chores
+}
+
 // faultFinding is what the doctor found of one known fault: whether its
 // probe passed, whether it ran the remedy and whether that fixed it.
 type faultFinding struct {
@@ -359,6 +380,8 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return a.cfg.Agents.StaleAfter.Duration <= 0 || last.IsZero() || a.now.Sub(last) < a.cfg.Agents.StaleAfter.Duration
 		})
 	}
+	messages, inboxErr := state.PendingReports(a.store)
+	chores = keepReporting(chores, messages, st.ReportReceipts, inboxErr)
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }
 	run := r.run
 	if run == nil {
@@ -771,6 +794,13 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 	}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		removed = nil
+		// A session queues its reports without the state lock, so the inbox
+		// is read here, after every report published before this commit.
+		messages, err := state.PendingReports(a.store)
+		if err != nil {
+			return nil, err
+		}
+		pending := reportsPending(messages, st.ReportReceipts)
 		var evs []state.Event
 		for _, c := range chores {
 			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool {
@@ -785,6 +815,9 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 				continue
 			}
 			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
+				continue
+			}
+			if pending(st.Agents[i]) != "" {
 				continue
 			}
 			if c.gone {
@@ -826,7 +859,9 @@ line:
   beekeeper started for the finished and the stale ones are archived in
   one steward's turn (the desktop's Archived list brings one back); a
   stale entry kept on purpose (agents keep, or an open timer that wakes it
-  by name) stays, and so does its desktop session;
+  by name) stays, and so does its desktop session; so does an entry whose
+  queued session report (agents idle, park or problem, note add, sessions
+  serve) still waits in the inbox for the supervisor loop to apply it;
 - asks again for an archive that stayed (its CLI ran a turn, no steward
   recorded it) on its later runs while the CLI runs no turn, until the
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;

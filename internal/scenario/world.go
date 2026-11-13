@@ -13,13 +13,18 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 )
 
-// WorldEnv names the world's Unix socket to the fakes.
-const WorldEnv = "BEEKEEPER_SCENARIO_WORLD"
+// WorldEnv names the world's Unix socket to the fakes; DefaultWorldSocket is
+// where it listens in a scenario's sandbox.
+const (
+	WorldEnv           = "BEEKEEPER_SCENARIO_WORLD"
+	DefaultWorldSocket = "/work/world.sock"
+)
 
 // CallRequest is one external call a fake hands to the world.
 type CallRequest struct {
@@ -104,7 +109,13 @@ type World struct {
 	log      io.Writer
 	ln       net.Listener
 	wg       sync.WaitGroup
+	// inFlight counts the calls being answered now: a call enters the log
+	// once it is answered.
+	inFlight atomic.Int64
 }
+
+// InFlight is how many calls the world answers at this moment.
+func (w *World) InFlight() int { return int(w.inFlight.Load()) }
 
 // Handle makes h answer the calls of program that no given call answers.
 func (w *World) Handle(program string, h Handler) {
@@ -144,6 +155,8 @@ func matchArgs(pats []*regexp.Regexp, args []string) bool {
 // matches, else a modeled call with its fake's model, else with the
 // program's handler.
 func (w *World) Answer(req CallRequest) CallResponse {
+	w.inFlight.Add(1)
+	defer w.inFlight.Add(-1)
 	rec := CallRecord{At: time.Now().UTC(), Program: req.Program, Args: req.Args, Dir: req.Dir, Answer: -1}
 	resp := CallResponse{Exit: 1}
 	w.mu.Lock()
@@ -292,14 +305,24 @@ func Ask(socket string, req CallRequest) (CallResponse, error) {
 }
 
 // ServeFake runs this process as the fake named by its argv[0] when the
-// world's socket is in the environment: it hands the call to the world,
+// world's socket is in the environment or at DefaultWorldSocket: it hands
+// the call to the world,
 // prints the answer and returns its exit code. served is false for any
 // other process.
 func ServeFake() (code int, served bool) {
 	socket := os.Getenv(WorldEnv)
 	name := baseName(os.Args[0])
-	if socket == "" || !slices.Contains(Fakes, name) && !slices.Contains(strings.Split(os.Getenv(ToolsEnv), ","), name) {
+	if !slices.Contains(Fakes, name) && !slices.Contains(strings.Split(os.Getenv(ToolsEnv), ","), name) {
 		return 0, false
+	}
+	if socket == "" {
+		// A session of an execution host starts with an environment of
+		// beekeeper's choosing, without WorldEnv: its gh (a park's
+		// reference read) finds the world at its place in the sandbox.
+		if fi, err := os.Stat(DefaultWorldSocket); err != nil || fi.Mode()&os.ModeSocket == 0 {
+			return 0, false
+		}
+		socket = DefaultWorldSocket
 	}
 	req := CallRequest{Program: name, Args: os.Args[1:], Stdin: readStdin(2 * time.Second), Env: map[string]string{}}
 	req.Dir, _ = os.Getwd()

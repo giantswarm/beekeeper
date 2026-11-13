@@ -53,7 +53,7 @@ func TestAddAndShowIssueScoped(t *testing.T) {
 				if strings.Contains(q, "items(") || strings.Contains(q, "fieldValues(") {
 					t.Fatalf("board-wide query: %s", q)
 				}
-				if strings.HasPrefix(q, "query=query") && !strings.Contains(q, "fields(first:50)") && !strings.Contains(q, "issue(number:$n){id projectItems(") {
+				if strings.HasPrefix(q, "query=query") && !strings.Contains(q, "fields(first:50)") && !strings.Contains(q, "issue(number:$n){id state projectItems(") {
 					t.Fatalf("unexpected query: %s", q)
 				}
 			}

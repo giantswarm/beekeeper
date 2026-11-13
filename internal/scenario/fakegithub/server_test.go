@@ -287,6 +287,21 @@ func TestFaults(t *testing.T) {
 			t.Fatalf("call log: %+v, spent %+v", last, s.Spent())
 		}
 	})
+	t.Run("a query too large answered with GitHub's HTML page", func(t *testing.T) {
+		s, _ := build(t, fixture)
+		arm(t, s, "name: too-large\nmatch: {path: graphql, min_fields: 3}\nrespond: {status: 504, content_type: text/html, body: '<html>Unicorn!</html>'}")
+		small := gh(s, "loop", "api", "graphql", "-f", "query={ viewer { login } rateLimit { remaining } }")
+		if small.Exit != 0 || !strings.Contains(small.Stdout, `"login"`) {
+			t.Fatalf("a query of two fields: %+v", small)
+		}
+		large := gh(s, "loop", "api", "graphql", "-f", "query={ a: viewer { login } b: viewer { login } rateLimit { remaining } }")
+		if large.Exit != 1 || !strings.Contains(large.Stdout, "<html>Unicorn!</html>") || !strings.Contains(large.Stderr, "gh: HTTP 504") {
+			t.Fatalf("a query of three fields, two of them aliases of one: %+v", large)
+		}
+		if last := s.Calls()[len(s.Calls())-1]; last.Fault != "too-large" || last.Status != http.StatusGatewayTimeout {
+			t.Fatalf("call log: %+v", last)
+		}
+	})
 	t.Run("outage and delay", func(t *testing.T) {
 		s, _ := build(t, fixture)
 		var waited []time.Duration
@@ -325,6 +340,8 @@ func TestFaults(t *testing.T) {
 			"no HTTP status":    {Respond: FaultRespond{Status: 42}},
 			"the reserved name": {Name: clearAll, Respond: FaultRespond{Status: 500}},
 			"an unknown via":    {Match: FaultMatch{Via: "curl"}, Respond: FaultRespond{Status: 500}},
+			"a type no body":    {Respond: FaultRespond{Status: 504, ContentType: "text/html"}},
+			"negative fields":   {Match: FaultMatch{MinFields: -1}, Respond: FaultRespond{Status: 504}},
 		} {
 			if err := f.Validate(); err == nil {
 				t.Errorf("a fault with %s is valid", name)

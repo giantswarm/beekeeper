@@ -644,7 +644,12 @@ canonical name or an unambiguous part ("up next"), and refuses anything else wit
 values; an issue without an item on the board is added first (`addProjectV2ItemById`, the issue's
 own mutation, never a read of the board's items) and given `board.team` as its Team; issues from any
 accessible repository are added to the configured board regardless of the repository's owner,
-subject to GitHub permissions.
+subject to GitHub permissions. An archived item, which GitHub refuses to update, is restored to the
+board (`unarchiveProjectV2Item`) before the move when its issue is open, and left as it is when the
+issue is closed (`left <issue> archived in <Status>: the issue is closed`, exit 0, nothing written).
+`move --intake` (the supervisor loop's intake) puts the issue in the status only when it has none on
+the board and is not worked on another board; it puts a closed issue nowhere and leaves an archived
+item archived, each a `left …` line that the loop's intake reads as nothing to rank.
 
 A move to the blocked Status says what holds the item: `--by <issue>` records the open issue that
 does as its blocker first (as `board block`), and without it the move is refused unless the item has
@@ -679,6 +684,10 @@ issue's repository, prints the neighbours the move names (`at the top, above <is
 `before <issue>`; `--json` `above`, `below`) and logs `board.rank`; refused (exit 3) for an issue
 that does not exist, another issue with no item on the board (an issue of a repository outside the
 board's organisation, whose `projectItems` name none, included) and an item placed against itself.
+An archived item has no place in board order and GitHub refuses to move it: `rank` leaves it, says
+so in one line (`left <issue> archived on the board …`, `--json` `archived`, `closed`) and exits 0,
+writing and logging nothing. `--unarchive` restores an open issue's item to the board first and
+ranks it (`, restored from the archive`); a closed issue's item stays archived.
 
 `tidy` keeps the board free of finished work without any setup by the person: every closed issue or
 pull request among the team's items (`board.team`; every item without one) whose Status is not Done
@@ -1270,10 +1279,13 @@ included; a note without `--ref` is never closed by the watch: once the session 
 archived (a stopped session is not), `guide watch` names it to the guide as orphaned, to ask or
 close by hand (a role's run, current or relieved, never orphans its notes).
 
-Login notes, and the note the guide asks now, are never overtaken. `note show <id>` prints one
-note's full text, audience, status and retained answer (`--json` returns one object); answered
-file-backed notes require their audit event, and the central store retains closed notes for its
-history period. `note done <id> --overtaken "<why>"` closes one so by hand. `note answer <id>
+Login notes, to-dos (`--kind todo`, the person's own action, whatever happens to its `--ref`),
+reopened notes and the note the guide asks now are never overtaken: an answer, a default or `note
+done` ends them. `note show <id>` prints one note's full text, audience, status and retained answer
+or reason (`--json` returns one object); a closed file-backed note (answered, withdrawn or
+overtaken) is read from its audit event, and the central store retains closed notes for its history
+period. `note reopen <id>` puts a closed note back in the queue from that history; the board item
+it held stays released. `note done <id> --overtaken "<why>"` closes one so by hand. `note answer <id>
 [--choice <n>] [<answer>]` is `beekeeper answer <its first --ref> --note <id>` (below); a note
 without a `--ref` is refused, naming that form.
 

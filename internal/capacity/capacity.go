@@ -209,6 +209,12 @@ type ProviderView struct {
 	// starts on the model.
 	DrainTo string `json:"drainTo,omitempty"`
 
+	// SourceAt is when the reading's figures were taken; Stale says they are
+	// older than StaleAfter, the reading's maximum age, or that the reading
+	// was refused as stale.
+	SourceAt   time.Time     `json:"sourceAt,omitzero"`
+	StaleAfter time.Duration `json:"-"`
+
 	NoPlanWindows       bool `json:"noPlanWindows,omitempty"`
 	SupplementalBuckets bool `json:"-"`
 }
@@ -230,7 +236,7 @@ func (p *ProviderView) FindBucket(name string) *BucketView {
 
 func (p *ProviderView) WindowsSummary(now time.Time) (summary string) {
 	defer func() {
-		summary = withFallback(summary, p.Fallback, p.At, now)
+		summary = keptNote{Fallback: p.Fallback, At: p.At, SourceAt: p.SourceAt, Stale: p.Stale, StaleAfter: p.StaleAfter}.after(summary, now)
 	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
@@ -872,6 +878,9 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 	r := res.Reading
 	pv.At = r.At
 	pv.Fallback = r.Fallback
+	pv.SourceAt = ReadingSource(r)
+	pv.StaleAfter = pCfg.EffectiveStaleAfter()
+	pv.Stale = ReadingStale(r, pv.StaleAfter, now)
 	if r.NoPlanWindows {
 		pv.NoPlanWindows = true
 		pv.Blocks = []string{ClaudeNoPlanWindows}

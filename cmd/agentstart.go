@@ -2111,7 +2111,9 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 // than startsKept, and registers it on the roster under its name, busy with
 // task unless it takes over a stopped entry's open task. A task of its own
 // serving an issue (owner/repo#n, briefIssue) is the session's serve record
-// from the start, so board next never offers that item again.
+// from the start, so board next never offers that item again. The loop's
+// fresh continuation of a parked worker continues that task's delivery
+// (state.ContinueDelivery) rather than starting a new one.
 func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
@@ -2123,13 +2125,18 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 		reg.task, reg.assignedAt = task, s.At
 		ag.Task, ag.AssignedAt = task, s.At
 		if serves != "" {
+			continued := continuedPark(st, s.Name)
 			st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(s.Party) })
 			for _, iss := range strings.Split(serves, ",") {
 				if iss = strings.TrimSpace(iss); iss != "" && !slices.ContainsFunc(st.Records, func(o state.Record) bool {
 					return o.Session.Is(s.Party) && strings.EqualFold(o.Issue, iss)
 				}) {
 					st.Records = append(st.Records, state.Record{Session: s.Party, Issue: iss, By: s.By, At: s.At})
-					st.StartDelivery(iss, ag.Name, "", s.At)
+					if continued != nil {
+						st.ContinueDelivery(iss, ag.Name, parkedPull(continued), s.At)
+					} else {
+						st.StartDelivery(iss, ag.Name, "", s.At)
+					}
 				}
 			}
 		}

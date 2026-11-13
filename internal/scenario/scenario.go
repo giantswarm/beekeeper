@@ -90,6 +90,11 @@ type Given struct {
 	// Hosts are the SSH execution hosts: each gets a root of its own and
 	// an agents.hosts entry of the desk.
 	Hosts []harness.Host `yaml:"hosts"`
+	// Builder is the Kubernetes builder of the desk's run.remote: a fake
+	// kubectl and one builder image.
+	Builder *harness.Builder `yaml:"builder"`
+	// State seeds the desk's state: a generated desk of some size.
+	State *State `yaml:"state"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
 	// Tools are further programs on the desk's PATH (go, golangci-lint):
@@ -330,8 +335,9 @@ var Fakes = []string{"gh", "claude", "codex", "agy", "omp", "ssh", "devctl", "sy
 // serves them beside Fakes.
 const ToolsEnv = "BEEKEEPER_SCENARIO_TOOLS"
 
-// reservedPrograms are the names on the desk's PATH no tool may take.
-var reservedPrograms = []string{"beekeeper", "git", "sh", "real-git", "real-git-core", "git-core", "scenario-fake"}
+// reservedPrograms are the names on the desk's PATH no tool may take: the
+// fake kubectl is given.builder's.
+var reservedPrograms = []string{"beekeeper", "git", "sh", "real-git", "real-git-core", "git-core", "scenario-fake", harness.Kubectl}
 
 // programs are the programs the scenario's world answers: Fakes and
 // given.tools.
@@ -456,7 +462,8 @@ func (s *Scenario) Validate() error {
 			bad("given.calls[%d]: %v", i, err)
 		}
 	}
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, s.repositoryNames()), s.Given.Harness.Validate(s.Given.Hosts)} {
+	repositories := s.repositoryNames()
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts), s.Given.Builder.Validate(), s.Given.State.validate(repositories)} {
 		if err == nil {
 			continue
 		}
@@ -671,8 +678,8 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if c := e.Calls; c != nil {
-		if c.Program != "" && !slices.Contains(s.programs(), c.Program) {
-			bad("calls: program %q is none of %s", c.Program, strings.Join(s.programs(), ", "))
+		if c.Program != "" && !slices.Contains(s.called(), c.Program) {
+			bad("calls: program %q is none of %s", c.Program, strings.Join(s.called(), ", "))
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("calls: %v", err)
@@ -682,6 +689,19 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	return errs
+}
+
+// called are the programs whose calls the world logs: the fakes,
+// given.tools, and with given.builder the fake kubectl and the builder
+// image's tools, each once.
+func (s *Scenario) called() []string {
+	out := s.programs()
+	for _, p := range append([]string{harness.Kubectl}, harness.BuilderTools...) {
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // compileArgs compiles argument patterns, each matching one argument whole

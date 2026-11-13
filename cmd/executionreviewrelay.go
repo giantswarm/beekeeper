@@ -29,7 +29,8 @@ type executionReviewRequest struct {
 // This relay accepts content, never a command or a coordinator file path.
 // The authenticated execution's assigned round supplies every write target.
 func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref execution.Ref, request executionReviewRequest) (string, error) {
-	if _, err := a.executionPublicationLive(st, ref); err != nil {
+	rec, err := a.executionPublicationLive(st, ref)
+	if err != nil {
 		return "", err
 	}
 	_, i := executionRecord(st, ref)
@@ -55,16 +56,18 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 	if err != nil {
 		return "", err
 	}
-	if pull.State != superloop.Open || (request.Body == "" && pull.Head != round.Head) {
+	// The head may have moved only by the reviewer's own published fix.
+	ownFix := rec.Published != nil && rec.Published.Head != "" && pull.Head == rec.Published.Head
+	if pull.State != superloop.Open || (request.Body == "" && pull.Head != round.Head && !ownFix) {
 		return "", refused("assigned pull request head changed or is no longer open")
 	}
 	number := strconv.Itoa(r.N)
 	if request.Body != "" {
 		verdict := superloop.Verdict("COMMENTED", request.Body)
 		reviewedHead := superloop.ReviewedHead(request.Body, "")
-		headOK := reviewedHead == round.Head && pull.Head == round.Head
+		headOK := reviewedHead == round.Head && pull.Head == round.Head || reviewerFixedHead(ctx, round, pull, reviewedHead)
 		if verdict == "" || !headOK {
-			return "", refused("review must begin with Review: approved or Review: changes requested and name the assigned Head reviewed")
+			return "", refused("review must begin with Review: approved or Review: changes requested and name the assigned Head reviewed, or the head of the fix you published")
 		}
 		// Reconcile a lost response before posting again. Only this round's exact
 		// content, commit and time qualify; completion still authenticates its URL.

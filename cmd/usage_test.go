@@ -4232,3 +4232,114 @@ func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 		t.Fatalf("new window tick filed count = %d, want 2", n)
 	}
 }
+
+// A failed Codex account refresh names its cause, a request that may pass is
+// sent again at once, a refusal is not, the kept reading is stale once it is
+// older than its maximum, and the next answer is fresh again.
+func TestCodexRefreshFailureNamesItsCauseAndMarksTheReadingStale(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte("capacity:\n  ceiling: 2\n  providers:\n    codex:\n      ceiling: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := codexProbeRetries
+	codexProbeRetries = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { codexProbeRetries = orig })
+	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
+	replies := filepath.Join(dir, "replies")
+	if err := os.MkdirAll(replies, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The fake app-server answers its n-th request with replies/<n>, else
+	// with replies/ok.
+	script := fmt.Sprintf(`#!/bin/sh
+read -r init
+echo '{"id":1,"result":{}}'
+read -r ready
+read -r request
+n=$(cat %[1]s/count 2>/dev/null || echo 0)
+echo $((n+1)) > %[1]s/count
+if [ -f %[1]s/$n ]; then cat %[1]s/$n; else cat %[1]s/ok; fi
+read -r keepalive
+`, replies)
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
+		t.Fatal(err)
+	}
+	reply := func(name, line string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(replies, name), []byte(line+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requests := func() int {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(replies, "count")) //nolint:gosec // the test's own temporary directory
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	reply("ok", fmt.Sprintf(`{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":10080,"resetsAt":%d}}}}`, now.Add(72*time.Hour).Unix()))
+	reply("1", `{"id":2,"error":{"code":-32603,"message":"failed to fetch codex rate limits: error sending request for url (https://chatgpt.com/backend-api/wham/usage)"}}`)
+	reply("3", `{"id":2,"error":{"code":-32603,"message":"failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; content-type=application/json; body={\"error\":{\"message\":\"account text\",\"code\":\"token_expired\"}}"}}`)
+	p := cfg.Capacity.Providers[codex.Harness]
+	a := &app{cfg: cfg, store: store, now: now}
+	read := func(at time.Time) (capacity.UsageReading, *capacity.ProviderView) {
+		t.Helper()
+		a.now = at
+		r, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), p.Usage)
+		if err != nil {
+			t.Fatalf("reading at %s: %v", at, err)
+		}
+		return r, capacity.BuildSingleProviderView(codex.Harness, p, capacity.ProviderAgents{}, capacity.ProviderReadingResult{Reading: r, OK: true}, at)
+	}
+	if r, pv := read(now); r.Fallback != "" || pv.Stale || requests() != 1 {
+		t.Fatalf("first reading: %+v, stale %t, %d requests", r, pv.Stale, requests())
+	}
+	// A request that went unanswered is sent again and the reading stays fresh.
+	if r, pv := read(now.Add(6 * time.Minute)); r.Fallback != "" || pv.Stale || requests() != 3 {
+		t.Fatalf("retried reading: %+v, stale %t, %d requests", r, pv.Stale, requests())
+	}
+	// A refusal is not sent again: the reading of 20 minutes ago stands, stale.
+	at := now.Add(26 * time.Minute)
+	r, pv := read(at)
+	wantFallback := "account refresh failed: GET https://chatgpt.com/backend-api/wham/usage answered 401 Unauthorized (token_expired); using last Codex reading"
+	if r.Fallback != wantFallback || !pv.Stale || !pv.SourceAt.Equal(now.Add(6*time.Minute)) || r.SevenDay.UsedPercent != 20 || requests() != 4 {
+		t.Fatalf("refused reading: %+v, view %+v, %d requests", r, pv, requests())
+	}
+	if line := pv.Line(at); !strings.Contains(line, "STALE: read 20m ago, max 15m ("+wantFallback+")") || strings.Contains(line, "account text") {
+		t.Fatalf("line: %s", line)
+	}
+	// The watch's report of the kept reading keeps the cause.
+	if got := keptReadingFallback(p.Usage, r.Fallback); got != capacity.UsageUnreadable+wantFallback {
+		t.Fatalf("kept reading's report: %q", got)
+	}
+	// The account answers again: the next refresh is fresh.
+	if r, pv := read(at.Add(time.Second)); r.Fallback != "" || pv.Stale || requests() != 5 {
+		t.Fatalf("recovered reading: %+v, stale %t, %d requests", r, pv.Stale, requests())
+	}
+}
+
+// A request that the timeout ends says so, with the timeout.
+func TestCodexProbeNamesItsTimeout(t *testing.T) {
+	dir, _ := isolateUsageTestEnv(t)
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexec sleep 5\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
+		t.Fatal(err)
+	}
+	_, err := probeCodexAccount(context.Background(), 200*time.Millisecond, dir, "", time.Now())
+	var re *codex.UsageRequestError
+	if !errors.As(err, &re) || !strings.HasPrefix(re.Cause, "no answer within ") {
+		t.Fatalf("timeout: %v", err)
+	}
+}
