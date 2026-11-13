@@ -1203,6 +1203,18 @@ guide work. A multiline report in the filing format of `agents problem --help` (
 URL, a stable title and the complete current description) is placed by the loop instead, its own
 issue's included: see [Filing findings](supervisor-loop.md#filing-findings).
 
+### `beekeeper agents move`
+
+`beekeeper agents move "<why>"`, `agents move --ref <owner/repo#n> "<why>"`, `agents move --ref
+<owner/repo#n> --clear`
+
+Marks a task to stay on the coordinator: its remaining work needs data, devices or commands only
+the coordinator has. No start of it is placed on an execution host again, the loop's nor a hand
+start without `--host`. A worker on an SSH host runs it instead of parking, and a fresh worker
+continues the task on the coordinator; `--ref` marks a task before any start and `--clear` lifts
+the mark, each logged as `agents.move`. See [Tasks that need the
+coordinator](ssh-execution-hosts-operations.md#tasks-that-need-the-coordinator).
+
 ### `beekeeper agents note`
 
 `beekeeper agents note <text>`
