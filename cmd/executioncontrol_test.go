@@ -186,6 +186,7 @@ func TestExecutionCoordinatorRefusesWrongIdentityAndLiveStop(t *testing.T) {
 func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	a, r := executionTestApp(t)
 	const pushed = "2222222222222222222222222222222222222222"
+	const invalidHead = "not-a-commit"
 	pr := sshTestRepository + "#7"
 	branch, repo, prHead := executionBranch(r.Ref), sshTestRepository, loopHead
 	draft := false
@@ -276,10 +277,10 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	if got := park(executionPark{Waits: "no target"}); got != "" || reads != n {
 		t.Fatalf("a park without a target recorded %q", got)
 	}
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: "invalid"}, "workspace HEAD is not a full commit ID"); got != "" || reads != n {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: invalidHead}, "workspace HEAD is not a full commit ID"); got != "" || reads != n {
 		t.Fatalf("an invalid workspace head recorded %q after %d reads", got, reads-n)
 	}
-	prHead = "invalid"
+	prHead = invalidHead
 	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request response has no valid head commit"); got != "" {
 		t.Fatalf("an invalid published head recorded %q", got)
 	}
