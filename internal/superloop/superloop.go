@@ -435,17 +435,23 @@ func Replaced(p Pull, r Review, baseMerged func(Pull, string) bool) bool {
 	return r.Verdict != "" && r.Commit != "" && r.Head != "" && !sameHead(r.Commit, r.Head) && !sameHead(r.Head, p.Head) && (baseMerged == nil || !baseMerged(p, r.Head))
 }
 
-// replaced is Replaced with the input's BaseMerged.
-func (in Input) replaced(p Pull, r Review) bool { return Replaced(p, r, in.BaseMerged) }
+// replaced is Replaced with the input's BaseMerged, except when the loop
+// already acted on r or its head (l.pushed): a verdict the loop acted on
+// judged the head that was current then, and stays the pull request's one
+// desk review once a repair or fix moves the head on.
+func (in Input) replaced(l ledger, p Pull, r Review) bool {
+	return Replaced(p, r, in.BaseMerged) && !l.pushed(p)(r)
+}
 
 // markReplaced marks the reviews of in.Pulls that judged a replaced head
 // (replaced), on copies: the caller's pulls stay as they are.
-func (in Input) markReplaced() Input {
+func (in Input) markReplaced(l ledger) Input {
 	var pulls map[string]Pull
 	for ref, p := range in.Pulls {
+		p.Ref = cmp.Or(p.Ref, ref)
 		var reviews []Review
 		for i, r := range p.Reviews {
-			if r.Replaced || !in.replaced(p, r) {
+			if r.Replaced || !in.replaced(l, p, r) {
 				continue
 			}
 			if reviews == nil {
@@ -753,6 +759,7 @@ func (l ledger) reopen(ref string) {
 	delete(l.goAgent, ref)
 	delete(l.goHead, ref)
 	delete(l.acts, ref)
+	delete(l.actedOn, ref)
 	delete(l.asked, ref)
 	delete(l.overridden, ref)
 }
@@ -967,8 +974,8 @@ func parks(workers []Worker, l ledger, desk Desk) (fresh, stale map[string]bool)
 // Plan is the pass: the actions in, in a stable order, none whose key was
 // taken.
 func Plan(in Input) []Action {
-	in = in.markReplaced()
 	l := newLedger(in.Taken, in.Answers)
+	in = in.markReplaced(l)
 	// Report pairing is local to an agent. Index once instead of walking
 	// the entire retained event history for every completed worker.
 	eventsByAgent := make(map[string][]Event)

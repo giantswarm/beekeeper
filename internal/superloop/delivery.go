@@ -17,8 +17,8 @@ type Delivery = state.Delivery
 // Deliveries derives observations from the same ledger, pulls and workers as
 // Plan. Missing reads retain the previous observation, including terminal state.
 func Deliveries(in Input, prev []Delivery) []Delivery {
-	in = in.markReplaced()
 	l := newLedger(in.Taken, in.Answers)
+	in = in.markReplaced(l)
 	refs := make([]string, 0, len(in.Pulls))
 	for ref := range in.Pulls {
 		refs = append(refs, ref)
