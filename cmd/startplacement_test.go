@@ -42,7 +42,7 @@ func handPlacementTestApp(t *testing.T) (*app, string, *[]string, *[]execution.S
 // repository's default branch, and it says so.
 func TestHandStartIsPlacedOnTheFirstHostThatTakesIt(t *testing.T) {
 	a, brief, looked, reqs := handPlacementTestApp(t)
-	out, err := runAgents(a, agentStartName, "--name", "hand", brief, "--repo", sshTestRepository, "--harness", claudeComm, "--model", bgModel)
+	out, err := runAgents(a, agentStartName, fatalNameOption, "hand", brief, loop.LoopRepoFlag, sshTestRepository, testHarnessFlag, claudeComm, modelFlag, bgModel)
 	if err != nil {
 		t.Fatalf("hand start: %v\n%s", err, out)
 	}
@@ -72,7 +72,7 @@ func TestHandStartPlacementLineLeavesJSONOutAlone(t *testing.T) {
 	var stderr bytes.Buffer
 	c := a.agentsCmd()
 	usageArgs(c)
-	c.SetArgs([]string{agentStartName, "--name", "hand", brief, "--repo", sshTestRepository, "--harness", claudeComm, "--model", bgModel})
+	c.SetArgs([]string{agentStartName, fatalNameOption, "hand", brief, loop.LoopRepoFlag, sshTestRepository, testHarnessFlag, claudeComm, modelFlag, bgModel})
 	c.SetOut(a.out)
 	c.SetErr(&stderr)
 	c.SilenceUsage, c.SilenceErrors = true, true
@@ -173,7 +173,7 @@ func TestHandStartStaysHereAndSaysWhy(t *testing.T) {
 // hosts' reasons when none takes it.
 func TestHandStartWithRepoNoHostTakesIsRefused(t *testing.T) {
 	a, brief, _, _ := handPlacementTestApp(t)
-	_, err := runAgents(a, agentStartName, "--name", "hand", brief, "--repo", handTestUnmapped, "--harness", claudeComm, "--model", bgModel)
+	_, err := runAgents(a, agentStartName, fatalNameOption, "hand", brief, loop.LoopRepoFlag, handTestUnmapped, testHarnessFlag, claudeComm, modelFlag, bgModel)
 	if err == nil || !strings.Contains(err.Error(), "--repo and --ref require an SSH --host: no host takes it") || !strings.Contains(err.Error(), handTestUnmapped+" is not mapped") {
 		t.Fatalf("unmapped --repo: %v", err)
 	}
