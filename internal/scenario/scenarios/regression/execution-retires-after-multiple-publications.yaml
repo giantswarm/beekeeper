@@ -85,4 +85,7 @@ then:
   - events:
       contains: [execution.published, execution.retirement-requested, execution.retired]
       not_contains: [execution.publish-denied]
-  - {step: check, json_path: {path: 'resourceAudit[0].state', equals: retired}}
+  - step: check
+    output:
+      contains: ['"state":"retired"', '"reason":"managed retention"']
+      not_contains: ['"reason":"overdue lifecycle cleanup"']
