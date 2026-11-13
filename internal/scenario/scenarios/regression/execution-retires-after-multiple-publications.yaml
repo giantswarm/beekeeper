@@ -1,0 +1,88 @@
+name: execution-retires-after-multiple-publications
+description: >
+  An execution on an SSH host that publishes more than once leaves one
+  transfer per push in the coordinator's transfer directory. A superseded
+  transfer does not keep the execution marked as holding an unrecovered
+  publication: once the worker finishes its task and watch reconciles the
+  host, the coordinator retires the execution on the host and hosts check
+  reports its resource audit state as retired.
+issue: https://github.com/giantswarm/beekeeper/issues/3746
+flow: harness
+tags: [regression, harness, hosts, claude]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item}
+  hosts:
+    - name: builder
+  harness:
+    workers:
+      - name: host-worker
+        host: builder
+        turns:
+          - steps:
+              - git: [checkout, --quiet, -b, feature]
+              - write: {path: change.txt, content: "initial change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, "feat: initial change"]
+              - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
+              - beekeeper: [agents, publish, --title, "feat: initial change", --body-file, '${dir}/.beekeeper-scratch/body.md']
+              - write: {path: change.txt, content: "initial change\nfollow-up change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, "fix: follow-up change"]
+              - beekeeper: [agents, publish]
+              - beekeeper: [agents, idle, --done, --report, "Published https://github.com/example/app/pull/2.", --problem, none]
+  calls:
+    # The host's gh has a login of its own: its workers read GitHub with it.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, host-worker, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: host-worker, host: builder, outcome: finish}
+  - advance: 2s
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: check
+    run: {args: [agents, hosts, check, builder]}
+    expect:
+      - exit: 0
+
+then:
+  - worker: {name: host-worker, host: builder, harness: claude, turns: 1, outcome: finish}
+  - origin: {repository: example/app, branch: 'beekeeper-execution/[0-9a-f-]+/1', ahead: 2}
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - github: {calls: {operation: createPullRequest, min: 1, max: 1}}
+  - events:
+      contains: [execution.published, execution.retirement-requested, execution.retired]
+      not_contains: [execution.publish-denied]
+  - {step: check, json_path: {path: 'resourceAudit[0].state', equals: retired}}
