@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -406,6 +407,11 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 func mergeCheckHostFailure(out string) bool { return mergeCheckHostDiagnostic(out) != "" }
 
 func mergeCheckHostDiagnostic(out string) string {
+	// The checker's own line names what its environment lacks of what the
+	// repository's CI installs: a check failing there is no branch's finding.
+	if lacks := remotebuild.EnvironmentLacking(out); lacks != "" {
+		return lacks
+	}
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",
 		"cannot allocate memory", "signal: killed",
