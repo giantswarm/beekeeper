@@ -305,3 +305,44 @@ func TestPullStallAlarmsOncePerEpisodeAndSaysItsEnd(t *testing.T) {
 		t.Errorf("a watch without failed tries: %s", r.logged(t, "supervisor.file")[1].Detail)
 	}
 }
+
+// A new listing stands with a poll that read what it listed: a pass takes
+// each listed pull request the watch did not read as unread, so a listing
+// a failed poll committed made every pass carry the desk's whole list.
+func TestPullWatcherKeepsANewListingOnlyWithAPollThatReadIt(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, batch := loop.ReadOpenPulls, loop.ReadLoopPullBatch
+	t.Cleanup(func() { loop.ReadOpenPulls, loop.ReadLoopPullBatch = listed, batch })
+	refs := pullRefs(3)
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return refs, nil }
+	fail := true
+	loop.ReadLoopPullBatch = func(_ context.Context, asked []string, _ map[string]loop.WatchedLoopPull, _ int) (map[string]loop.WatchedLoopPull, error) {
+		if fail {
+			return nil, errors.New("gh: Bad credentials (HTTP 401)")
+		}
+		out := map[string]loop.WatchedLoopPull{}
+		for _, ref := range asked {
+			out[ref] = loop.WatchedLoopPull{Pull: r.pull, At: time.Now()}
+		}
+		return out, nil
+	}
+	w := l.PullWatcher()
+	w.Set(nil, []string{loopDesk}, []string{"o"}, 0, nil)
+	if _, err := w.Poll(t.Context(), l); err == nil {
+		t.Fatal("a failed batch passed")
+	}
+	if v := w.View(); len(v.Open) != 0 || !v.ListedAt.IsZero() {
+		t.Fatalf("a failed poll kept its listing: open %v, listed at %v", v.Open, v.ListedAt)
+	}
+	fail = false
+	if _, err := w.Poll(t.Context(), l); err != nil {
+		t.Fatal(err)
+	}
+	if v := w.View(); !slices.Equal(v.Open, refs) || v.ListedAt.IsZero() || len(v.Pulls) != len(refs) {
+		t.Fatalf("a complete poll's listing: open %v, listed at %v, %d observations", v.Open, v.ListedAt, len(v.Pulls))
+	}
+}

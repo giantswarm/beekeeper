@@ -502,6 +502,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	}
 	before := w.Snapshot
 	before.Pulls, before.Open = maps.Clone(before.Pulls), slices.Clone(before.Open)
+	listed := LoopPullSnapshot{Open: slices.Clone(before.Open), ListedAt: before.ListedAt, Incomplete: before.Incomplete}
 	w.Mu.Unlock()
 	now := clk.Now()
 	// Polling PRs never holds the pass's GraphQL admission lock during
@@ -576,6 +577,11 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	found, faults, err := w.readBatches(ctx, l, query, before.Pulls, floor)
 	for ref, p := range found {
 		before.Pulls[ref] = p
+	}
+	// A new listing stands with a poll that read what it listed: passes
+	// would otherwise take each pull request it found as unread.
+	if err != nil {
+		before.Open, before.ListedAt, before.Incomplete = listed.Open, listed.ListedAt, listed.Incomplete
 	}
 	// Stop watching removed references; keep final observations for active parks.
 	for ref := range before.Pulls {
