@@ -4,6 +4,7 @@ package scenario
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -756,7 +757,14 @@ func LoadDir(root string) ([]*Scenario, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	slices.SortFunc(out, func(a, b *Scenario) int { return strings.Compare(a.Flow+"/"+a.Name, b.Flow+"/"+b.Name) })
+	// Start the longest-timeout scenarios first so a long regression run does
+	// not trail alone at the end of a parallel suite.
+	slices.SortFunc(out, func(a, b *Scenario) int {
+		if c := cmp.Compare(b.Timeout.Duration, a.Timeout.Duration); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Flow+"/"+a.Name, b.Flow+"/"+b.Name)
+	})
 	return out, nil
 }
 

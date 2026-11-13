@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +26,14 @@ type Origins struct {
 	Root string
 	Env  []string
 
-	// conflicts memoizes Conflicts by repository, base and head: commits
-	// never change, and every read of a pull request's mergeable asks.
-	conflicts sync.Map
+	// Commits and comparisons of full commit SHAs never change: memoizing
+	// them by repository and commit SHAs keeps repeated pull-request and
+	// commit reads from starting git.
+	commits     sync.Map
+	logs        sync.Map
+	aheadBehind sync.Map
+	changed     sync.Map
+	conflicts   sync.Map
 }
 
 // Dir is the origin of a repository.
@@ -66,8 +72,48 @@ func (o *Origins) Resolve(r *Repo, ref string) (string, bool) {
 	if ref == "" || strings.HasPrefix(ref, "-") {
 		return "", false
 	}
+	dir := o.Dir(r)
+	if (strings.HasPrefix(ref, "refs/heads/") || strings.HasPrefix(ref, "refs/tags/")) &&
+		!strings.Contains(ref, "..") && !strings.HasSuffix(ref, "/") && !strings.Contains(ref, "\\") {
+		if raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ref))); err == nil { //nolint:gosec // ref under the scenario's own origin
+			if sha := strings.TrimSpace(string(raw)); isSHA(sha) {
+				if strings.HasPrefix(ref, "refs/heads/") {
+					o.commits.LoadOrStore(dir+" "+sha, true)
+					return sha, true
+				}
+				if _, ok := o.commits.Load(dir + " " + sha); ok {
+					return sha, true
+				}
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			packed, perr := os.ReadFile(filepath.Join(dir, "packed-refs")) //nolint:gosec // packed-refs of the scenario's own origin
+			if errors.Is(perr, os.ErrNotExist) {
+				return "", false
+			}
+			if sha, ok := packedRef(packed, ref); ok && strings.HasPrefix(ref, "refs/heads/") {
+				o.commits.LoadOrStore(dir+" "+sha, true)
+				return sha, true
+			}
+			if perr == nil {
+				if _, ok := packedRef(packed, ref); !ok {
+					return "", false
+				}
+			}
+		}
+	}
+	if isSHA(ref) {
+		if _, ok := o.commits.Load(dir + " " + ref); ok {
+			return ref, true
+		}
+	}
 	sha, err := o.git(r, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
-	return sha, err == nil && sha != ""
+	if err != nil || sha == "" {
+		return "", false
+	}
+	if isSHA(sha) {
+		o.commits.LoadOrStore(dir+" "+sha, true)
+	}
+	return sha, true
 }
 
 // Refs are the short names of the refs under prefix ("refs/heads/"),
@@ -112,11 +158,26 @@ const commitFormat = "%H%x1f%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%cI%x1f%s%x1
 
 // CommitInfo reads a commit.
 func (o *Origins) CommitInfo(r *Repo, sha string) (CommitInfo, error) {
+	dir := o.Dir(r)
+	if isSHA(sha) {
+		if v, ok := o.commits.Load(dir + " " + sha); ok {
+			if info, ok := v.(CommitInfo); ok {
+				return info, nil
+			}
+		}
+	}
 	out, err := o.run(r, nil, "", "show", "--no-patch", "--format="+commitFormat, sha+"^{commit}")
 	if err != nil {
 		return CommitInfo{}, err
 	}
-	return parseCommit(out)
+	c, err := parseCommit(out)
+	if err != nil {
+		return CommitInfo{}, err
+	}
+	if isSHA(c.SHA) {
+		o.commits.Store(dir+" "+c.SHA, c)
+	}
+	return c, nil
 }
 
 func parseCommit(raw string) (CommitInfo, error) {
@@ -136,6 +197,14 @@ func parseCommit(raw string) (CommitInfo, error) {
 // Log are the commits reachable from head and not from base, oldest
 // first, at most limit.
 func (o *Origins) Log(r *Repo, base, head string, limit int) ([]CommitInfo, error) {
+	dir := o.Dir(r)
+	cacheable := (base == "" || isSHA(base)) && isSHA(head)
+	key := fmt.Sprintf("%s %s..%s %d", dir, base, head, limit)
+	if cacheable {
+		if cached, ok := o.logs.Load(key); ok {
+			return slices.Clone(cached.([]CommitInfo)), nil
+		}
+	}
 	spec := head
 	if base != "" {
 		spec = base + ".." + head
@@ -153,7 +222,13 @@ func (o *Origins) Log(r *Repo, base, head string, limit int) ([]CommitInfo, erro
 		if err != nil {
 			return nil, err
 		}
+		if isSHA(c.SHA) {
+			o.commits.Store(dir+" "+c.SHA, c)
+		}
 		commits = append(commits, c)
+	}
+	if cacheable {
+		o.logs.Store(key, slices.Clone(commits))
 	}
 	return commits, nil
 }
@@ -161,6 +236,17 @@ func (o *Origins) Log(r *Repo, base, head string, limit int) ([]CommitInfo, erro
 // AheadBehind counts the commits head has beyond base, and base beyond
 // head.
 func (o *Origins) AheadBehind(r *Repo, base, head string) (ahead, behind int, err error) {
+	cacheable := isSHA(base) && isSHA(head)
+	if cacheable && base == head {
+		return 0, 0, nil
+	}
+	key := o.Dir(r) + " " + base + "..." + head
+	if cacheable {
+		if ab, ok := o.aheadBehind.Load(key); ok {
+			pair := ab.([2]int)
+			return pair[0], pair[1], nil
+		}
+	}
 	out, err := o.git(r, "rev-list", "--left-right", "--count", base+"..."+head)
 	if err != nil {
 		return 0, 0, err
@@ -171,6 +257,9 @@ func (o *Origins) AheadBehind(r *Repo, base, head string) (ahead, behind int, er
 	}
 	behind, _ = strconv.Atoi(f[0])
 	ahead, _ = strconv.Atoi(f[1])
+	if cacheable {
+		o.aheadBehind.Store(key, [2]int{ahead, behind})
+	}
 	return ahead, behind, nil
 }
 
@@ -202,6 +291,13 @@ func (o *Origins) Diff(r *Repo, base, head string) (string, error) {
 
 // Changed are the files head changes against its merge base with base.
 func (o *Origins) Changed(r *Repo, base, head string) ([]PullFile, error) {
+	cacheable := isSHA(base) && isSHA(head)
+	key := o.Dir(r) + " " + base + "..." + head
+	if cacheable {
+		if cached, ok := o.changed.Load(key); ok {
+			return slices.Clone(cached.([]PullFile)), nil
+		}
+	}
 	out, err := o.git(r, "diff", "--numstat", base+"..."+head)
 	if err != nil {
 		return nil, err
@@ -215,6 +311,9 @@ func (o *Origins) Changed(r *Repo, base, head string) ([]PullFile, error) {
 		add, _ := strconv.Atoi(f[0])
 		del, _ := strconv.Atoi(f[1])
 		files = append(files, PullFile{Path: f[2], Additions: add, Deletions: del})
+	}
+	if cacheable {
+		o.changed.Store(key, slices.Clone(files))
 	}
 	return files, nil
 }
