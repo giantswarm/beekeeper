@@ -164,6 +164,8 @@ A fault's answer costs nothing and names the fault in the call log.
 when:
   - github: {push: {repo: example/app, branch: fix-1, file: a.txt, content: "a\n"}}
   - github: {check: {repo: example/app, pull: 4, name: build, state: green}}   # or head: <branch|sha>
+  - github: {status: {repo: example/app, head: main, context: "ci/circleci: test", state: failure,
+                      target_url: "https://app.circleci.com/workflow/tag/job/2"}}
   - github: {review: {repo: example/app, pull: 4, state: approved, author: reviewer}}
   - github: {merge: {repo: example/app, pull: 4, method: squash}}
   - github: {close: {repo: example/app, issue: 1}}                             # or pull: 4
@@ -176,8 +178,12 @@ when:
 
 A `github` step is something that happens on GitHub, exactly one action each. `check` sets a check
 run on a named head to `queued`, `pending`, `green` or `red`, and with it the workflow run of that
-commit. `merge` merges as the merge button does, whatever the base's protection says. A `fault`
-step arms a fault (one of the same name is replaced) or clears one.
+commit. `status` reports a commit status on a head (a branch or a commit): a `context` at
+`pending`, `success`, `failure` or `error`, with the run's `target_url`. Each report is kept, as on
+GitHub: the combined status shows a context's newest, the commit's status list all of them, so two
+runs of one job (a branch's and a tag's pipeline) report under one context with targets of their
+own. `merge` merges as the merge button does, whatever the base's protection says. A `fault` step
+arms a fault (one of the same name is replaced) or clears one.
 
 ## Expectations
 

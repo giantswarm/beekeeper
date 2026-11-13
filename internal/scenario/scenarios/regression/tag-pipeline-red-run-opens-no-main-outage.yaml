@@ -1,0 +1,104 @@
+name: tag-pipeline-red-run-opens-no-main-outage
+description: >
+  CircleCI builds a commit on main twice, in the branch's pipeline and in
+  its release tag's, and reports each job of both under one status context;
+  GitHub's combined status keeps only the newest report. Live, the tag
+  pipeline's run of a CPU budget test failed on a loaded runner while the
+  branch pipeline's run of it was still going, and passed there a minute
+  later; the fatal sentinel had already opened a fatal outage of main that
+  held every merge and release of the repository until its repair budget was
+  spent. The sentinel judges a red context by all of its runs on the head: a
+  red run while another still runs is unknown, a red run beside a passed one
+  is no outage, and a job that runs once, the release's push, still opens
+  the outage when it fails.
+issue: https://github.com/giantswarm/beekeeper/issues/3812
+flow: regression
+tags: [regression, fatal, ci, statuses]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      # The sentinel's budget gate reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      fatal: {repositories: [example/app]}
+  github:
+    repositories:
+      - name: example/app
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The desk's managed services are not installed: the sentinel watches none.
+    - program: systemctl
+      args: [is-enabled]
+      respond: {stdout: "disabled\n", exit: 1}
+
+when:
+  # What the sentinel detects is the point; a held start keeps it from
+  # launching a repair of what it detects.
+  - name: hold
+    run: {args: [--as, scenario, hold, set, starts, --reason, the scenario reads what the sentinel detects]}
+    expect:
+      - exit: 0
+  # Both pipelines start on the head of main.
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: test-performance", state: pending,
+               target_url: "https://app.circleci.com/workflow/branch/job/1"}
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: test-performance", state: pending,
+               target_url: "https://app.circleci.com/workflow/tag/job/2"}
+  # The tag pipeline's run fails on a slow moment; the branch's still runs.
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: test-performance", state: failure,
+               target_url: "https://app.circleci.com/workflow/tag/job/2"}
+  - name: tag-red-branch-running
+    run: {args: [fatal, scan]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ["main:example/app: probe unavailable; health unknown"]
+          not_contains: ["fatal detected: main:example/app"]
+  # The branch pipeline's run passes; the tag's failed jobs are run again and
+  # fail again, the newest report of the context.
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: test-performance", state: success,
+               target_url: "https://app.circleci.com/workflow/branch/job/1"}
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: test-performance", state: pending,
+               target_url: "https://app.circleci.com/workflow/tag-rerun/job/3"}
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: test-performance", state: failure,
+               target_url: "https://app.circleci.com/workflow/tag-rerun/job/3"}
+  - name: tag-red-branch-green
+    run: {args: [fatal, scan]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["main:example/app"]}
+  - name: no-outage
+    run: {args: [fatal, status]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["main:example/app"]}
+  # The release's push runs once, in the tag pipeline, and fails.
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: push-to-registries-release", state: pending,
+               target_url: "https://app.circleci.com/workflow/tag-rerun/job/4"}
+  - github:
+      status: {repo: example/app, head: main, context: "ci/circleci: push-to-registries-release", state: failure,
+               target_url: "https://app.circleci.com/workflow/tag-rerun/job/4"}
+  - name: release-red
+    run: {args: [fatal, scan]}
+    expect:
+      - exit: 0
+      - output: {contains: ["fatal detected: main:example/app"]}
+  - name: outage
+    run: {args: [fatal, status]}
+
+then:
+  - exit: 0
+  - output:
+      contains: ['"id":"main:example/app"', '"scope":"default-branch merges and releases in example/app"']
+  - events: {contains: [hold.set, fatal.transition]}
+  - github: {calls: {path: 'repos/example/app/commits/[0-9a-f]+/statuses', min: 2}}

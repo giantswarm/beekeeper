@@ -453,6 +453,57 @@ func TestFatalMainPinsHeadAndDistinguishesRedPendingUnknown(t *testing.T) {
 	}
 }
 
+// TestFatalMainJudgesEveryRunOfARedStatus checks that a red status context is
+// judged by all of its runs on HEAD: CircleCI's branch and tag pipelines
+// report the same job under one context, and the combined status shows only
+// the newest report.
+func TestFatalMainJudgesEveryRunOfARedStatus(t *testing.T) {
+	const (
+		perf     = "ci/circleci: test-performance"
+		release  = "ci/circleci: push-to-registries-release"
+		mainRun  = "https://app.circleci.com/workflow/main/job/1"
+		tagRun   = "https://app.circleci.com/workflow/tag/job/2"
+		redPerf  = `{"sha":"abc","state":"failure","total_count":1,"statuses":[{"context":"` + perf + `","state":"failure","target_url":"` + tagRun + `"}]}`
+		tagRed   = `{"context":"` + perf + `","state":"failure","target_url":"` + tagRun + `"}`
+		tagStart = `{"context":"` + perf + `","state":"pending","target_url":"` + tagRun + `"}`
+	)
+	mainState := func(state string) string {
+		return `{"context":"` + perf + `","state":"` + state + `","target_url":"` + mainRun + `"}`
+	}
+	for _, tc := range []struct {
+		name, status, history string
+		red, unknown          bool
+	}{
+		{"tag run red after the branch run passed", redPerf, "[" + tagRed + "," + mainState("success") + "," + tagStart + "," + mainState("pending") + "]", false, false},
+		{"tag run red while the branch run runs", redPerf, "[" + tagRed + "," + tagStart + "," + mainState("pending") + "]", false, true},
+		{"every run red", redPerf, "[" + tagRed + "," + mainState("failure") + "," + tagStart + "," + mainState("pending") + "]", true, false},
+		{"only run red", `{"sha":"abc","state":"failure","total_count":1,"statuses":[{"context":"` + release + `","state":"failure","target_url":"` + tagRun + `"}]}`, `[{"context":"` + release + `","state":"failure","target_url":"` + tagRun + `"},` + mainState("success") + `]`, true, false},
+		{"history unreadable", redPerf, "malformed status history", true, false},
+		{"another context pending", `{"sha":"abc","state":"failure","total_count":2,"statuses":[{"context":"` + perf + `","state":"failure","target_url":"` + tagRun + `"},{"context":"ci/circleci: go-build","state":"pending"}]}`, "[" + tagRed + "," + mainState("success") + "]", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeFatalRun(t, func(args []string) (string, int) {
+				switch {
+				case args[0] != "gh":
+					return "", 0
+				case strings.Contains(args[2], "/commits/HEAD/status?"):
+					return tc.status, 0
+				case strings.Contains(args[2], "/commits/abc/statuses?"):
+					return tc.history, 0
+				case strings.Contains(args[2], "/commits/abc/check-runs?"):
+					return `{"total_count":0,"check_runs":[]}`, 0
+				}
+				t.Fatal("unexpected call", args)
+				return "", 1
+			})
+			o := fatalMain(t.Context(), "example/tool", "/config.yaml")
+			if o.Failed != tc.red || o.Unknown != tc.unknown {
+				t.Fatalf("%+v", o)
+			}
+		})
+	}
+}
+
 func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 	a, _ := stubApp(t)
 	dir := a.store.Dir()

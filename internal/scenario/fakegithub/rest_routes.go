@@ -384,7 +384,7 @@ func commits() {
 			return nil, err
 		}
 		state := strings.ToUpper(c.str("state"))
-		if !slices.Contains([]string{statusPending, statusSuccess, statusFailure, statusError}, state) {
+		if !slices.Contains(statusStates, state) {
 			return nil, errInvalid("state is not one of error, failure, pending, success")
 		}
 		s := c.m.SetStatus(r, sha, cmpOr(c.str("context"), "default"), state, c.str("description"), c.str("target_url"))

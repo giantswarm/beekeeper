@@ -30,6 +30,9 @@ const (
 	fatalAsFlag            = "--as"
 	fatalBudgetCommand     = "budget"
 	fatalStatusError       = "error"
+	fatalStatusFailure     = "failure"
+	fatalStatusPending     = "pending"
+	fatalStatusSuccess     = "success"
 	fatalInstallationGuard = "guard:installation"
 	fatalDisabledState     = "disabled"
 	fatalEnabledState      = "enabled"
@@ -579,7 +582,9 @@ func fatalStartProblem(now time.Time, x fatal.Incident, repo string) state.Event
 }
 
 // fatalMain checks only completed failing checks on the current default-branch
-// HEAD. Pending CI and unavailable GitHub are never called red or healthy.
+// HEAD. Pending CI and unavailable GitHub are never called red or healthy. A
+// red status context counts as red only when no run of it on HEAD passed or is
+// still running (fatalStatusRuns).
 func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	o := fatal.Observation{ID: "main:" + repo}
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
@@ -606,9 +611,10 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		return o
 	}
 	var status struct {
-		SHA   string `json:"sha"`
-		State string `json:"state"`
-		Total int    `json:"total_count"`
+		SHA      string        `json:"sha"`
+		State    string        `json:"state"`
+		Total    int           `json:"total_count"`
+		Statuses []fatalStatus `json:"statuses"`
 	}
 	if json.Unmarshal([]byte(out), &status) != nil || status.SHA == "" {
 		o.Unknown = true
@@ -616,10 +622,17 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	}
 	if status.Total > 0 {
 		switch status.State {
-		case "failure", fatalStatusError:
+		case fatalStatusFailure, fatalStatusError:
 			o.Failed = true
-			o.Evidence = "https://github.com/" + repo + "/commit/" + status.SHA
-		case "success":
+			// Every context is in the combined status: judge each red one by
+			// all of its runs. A truncated list keeps the combined verdict.
+			if len(status.Statuses) == status.Total {
+				o.Failed, o.Unknown = fatalStatusRuns(ctx, repo, status.SHA, status.Statuses)
+			}
+			if o.Failed {
+				o.Evidence = "https://github.com/" + repo + "/commit/" + status.SHA
+			}
+		case fatalStatusSuccess:
 		default:
 			o.Unknown = true
 		}
@@ -654,10 +667,10 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	}
 	for _, r := range wire.Runs {
 		switch r.Conclusion {
-		case "failure", "cancelled", "timed_out", "startup_failure", "action_required":
+		case fatalStatusFailure, "cancelled", "timed_out", "startup_failure", "action_required":
 			o.Failed = true
 			o.Evidence = r.URL
-		case "success", "neutral", "skipped":
+		case fatalStatusSuccess, "neutral", "skipped":
 		default:
 			o.Unknown = true
 		}
@@ -666,6 +679,67 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		o.Unknown = false
 	}
 	return o
+}
+
+// fatalStatus is one commit status as GitHub lists it.
+type fatalStatus struct {
+	Context   string `json:"context"`
+	State     string `json:"state"`
+	TargetURL string `json:"target_url"`
+}
+
+// fatalStatusRuns judges the red contexts of a combined status by all of
+// their runs on the commit. CircleCI reports a job of every pipeline that
+// builds the commit, the branch's and a tag's, under one context, and the
+// combined status keeps only the newest report, so one slow run of a tag
+// pipeline turns a commit red whose branch pipeline is green. A run is a
+// context's reports with one target (the job's URL), and its newest report is
+// its state. A red context with a passed run is not red, one with a run still
+// pending is unknown, and one whose every run failed is red. Unreadable
+// history keeps the combined status red.
+func fatalStatusRuns(ctx context.Context, repo, sha string, latest []fatalStatus) (failed, unknown bool) {
+	out, _, code, err := fatalRun(ctx, "", []string{"gh", workerGitHubAPIGroup, "repos/" + repo + "/commits/" + sha + "/statuses?per_page=100"})
+	var history []fatalStatus
+	if err != nil || code != 0 || json.Unmarshal([]byte(out), &history) != nil {
+		return true, false
+	}
+	// GitHub lists a commit's statuses newest first: the first report of a
+	// run is its state. A run older than the page is not seen, which leaves
+	// its context red.
+	type run struct{ context, target string }
+	state := map[run]string{}
+	for _, s := range history {
+		k := run{s.Context, s.TargetURL}
+		if _, seen := state[k]; !seen {
+			state[k] = s.State
+		}
+	}
+	for _, s := range latest {
+		switch s.State {
+		case fatalStatusPending:
+			unknown = true
+			continue
+		case fatalStatusFailure, fatalStatusError:
+		default:
+			continue
+		}
+		passed, running := false, false
+		for r, st := range state {
+			if r.context != s.Context {
+				continue
+			}
+			passed = passed || st == fatalStatusSuccess
+			running = running || st == fatalStatusPending
+		}
+		switch {
+		case passed:
+		case running:
+			unknown = true
+		default:
+			failed = true
+		}
+	}
+	return failed, unknown && !failed
 }
 
 // Installation ownership, rather than executable presence, determines whether
