@@ -41,6 +41,9 @@ type View struct {
 	Origin func(repository, branch string) (exists bool, ahead int, err error)
 	// Log reads what a background step has written so far.
 	Log func(name string) (string, error)
+	// CPU is the share of one core a background step's process used itself
+	// during a measure step.
+	CPU func(name string) (float64, error)
 }
 
 // Check checks one expectation against a view.
@@ -162,6 +165,17 @@ func Check(e Expect, v View) error {
 			return missing("log")
 		}
 		return e.Log.check(v.Log)
+	case "cpu":
+		if v.CPU == nil {
+			return missing("cpu")
+		}
+		share, err := v.CPU(e.CPU.Name)
+		if err != nil {
+			return fmt.Errorf("cpu of %s: %w", e.CPU.Name, err)
+		}
+		if share > e.CPU.Max {
+			return fmt.Errorf("%s used %.3f of a core, at most %g", e.CPU.Name, share, e.CPU.Max)
+		}
 	default:
 		return fmt.Errorf("expectation without exactly one kind: %v", e.kinds())
 	}

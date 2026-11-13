@@ -1,16 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
@@ -82,9 +83,9 @@ func (a *app) labRun(op, res string) error {
 	if err != nil {
 		return err
 	}
-	c := exec.Command(exe, append([]string{workerGitHubRunGroup, "--"}, argv...)...) //nolint:gosec // this binary running agentlab with checked arguments
+	c := proc.CommandContext(context.Background(), exe, append([]string{workerGitHubRunGroup, "--"}, argv...)...) //nolint:gosec // this binary running agentlab with checked arguments
 	c.Stdout, c.Stderr = a.out, os.Stderr
-	var exit *exec.ExitError
+	var exit *proc.ExitError
 	if err := c.Run(); errors.As(err, &exit) {
 		return &exitError{code: exit.ExitCode()}
 	} else if err != nil {

@@ -15,7 +15,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
+// A host's capacity --json answer is stdout and then stderr: the
+// diagnostic capacity writes after its document while the desk's state
+// snapshot is older than a pass must not cost the host its starts.
 func TestHostCapacityReasons(t *testing.T) {
+	const stale = "state snapshot is 2m0s old (supervisor pass 30s)\n"
 	for _, tc := range []struct {
 		out  string
 		code int
@@ -23,7 +27,10 @@ func TestHostCapacityReasons(t *testing.T) {
 		want string
 	}{
 		{loopRoomJSON, 0, nil, ""},
+		{loopRoomJSON + "\n" + stale, 0, nil, ""},
 		{`{"room":0,"blocks":["host maxBusy reached"]}`, 0, nil, "host maxBusy reached"},
+		{`{"room":0,"blocks":["host maxBusy reached"]}` + "\n" + stale, 0, nil, "host maxBusy reached"},
+		{stale, 0, nil, "answer is unreadable"},
 		{`{"room":0,"verdict":"no start: provider quota"}`, 0, nil, "provider quota"},
 		{"malformed capacity output", 0, nil, "answer is unreadable"},
 		{"{}", 0, nil, "capacity answer is"},
@@ -68,6 +75,40 @@ func TestProbationKeepsCompatibleHostAdmission(t *testing.T) {
 		if _, err := a.probeExecution(t.Context(), h); err != nil {
 			t.Fatalf("compatible host failed probe: %v", err)
 		}
+	}
+}
+
+// A host pinned to an older release than the coordinator's takes no new
+// start once the coordinator's probation passed: it drains, so the
+// executions on it reach the turn boundary its update waits for, and new
+// starts placed on it cannot keep it busy. It takes starts while its update
+// waits on the coordinator's failed lookup of the release, and again on the
+// coordinator's release.
+func TestAHostBehindTheCoordinatorsReleaseDrains(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	withSettledCoordinator(t, hostNewRelease)
+	h := a.cfg.Agents.Hosts[sshTestSelector]
+	pin := func(p state.HostPin) {
+		t.Helper()
+		p.Selector, p.Identity, p.PolicyDigest = sshTestSelector, h.Identity, h.PolicyDigest
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.HostPins = []state.HostPin{p}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pin(state.HostPin{Version: hostOldRelease})
+	if err := a.admitExecution(sshTestSelector, h); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) || !strings.Contains(err.Error(), hostNewRelease) {
+		t.Fatalf("a host behind the coordinator's release took a start: %v", err)
+	}
+	pin(state.HostPin{Version: hostOldRelease, UpdateError: "looking up release " + hostNewRelease + ": lookup unavailable", UpdateVersion: hostNewRelease, Tried: a.timeNow()})
+	if err := a.admitExecution(sshTestSelector, h); err != nil {
+		t.Fatalf("a host whose update waits on the coordinator's lookup: %v", err)
+	}
+	pin(state.HostPin{Version: hostNewRelease})
+	if err := a.admitExecution(sshTestSelector, h); err != nil {
+		t.Fatalf("a host on the coordinator's release: %v", err)
 	}
 }
 

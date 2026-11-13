@@ -1,0 +1,111 @@
+name: pace-off-lets-the-refill-start-ahead-of-pace
+description: >
+  Claude's week is 77% used while its even pace is 57%, so no worker start
+  fits and the refill starts none for the Ready item, naming the pace. The
+  person has a usage reset in hand and turns claude's pace off for an hour,
+  in their words. capacity then picks claude and shows the override with its
+  reason, capacity pace lists it, and the refill starts the item's worker on
+  claude. Once the hour is over the pace holds again: capacity picks none.
+  Live, the person had no way to let the loop spend a provider's budget ahead
+  of its pace, so with every provider ahead it started no worker at all.
+issue: https://github.com/giantswarm/beekeeper/issues/3821
+flow: refill
+tags: [refill, loop, capacity, usage]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # The week resets in 72 hours: its even pace is 57.1%, and 77% is ahead
+    # of it. The 5-hour window has room.
+    usage:
+      claude: {session: 10, week: 77}
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: ahead
+    run: {args: [capacity, pick, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: pick, equals: none}
+      - output: {contains: [ahead of pace]}
+  - name: held
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ['SUPERVISOR REFILL started 0: no room for a worker', ahead of pace]}
+      - events: {not_contains: [agents.start]}
+  - name: pace-off
+    run:
+      args: [--as, guide, capacity, pace, off, claude, --until, 1h, --reason, 'we have a usage reset left this week']
+    expect:
+      - exit: 0
+      - events: {contains: [capacity.pace.off]}
+  - name: off
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.claude.paceOff.reason, equals: 'we have a usage reset left this week'}
+      - json_path: {path: providers.claude.paceOff.by, equals: guide}
+      - json_path: {path: choice.harness, equals: claude}
+      - json_path: {path: choice.model, equals: sonnet}
+  - name: line
+    run: {args: [capacity]}
+    expect:
+      - exit: 0
+      - output:
+          matches: 'provider claude: .*pace off until .*: we have a usage reset left this week; room for'
+  - name: listed
+    run: {args: [capacity, pace]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ['pace off claude until', 'set by guide', 'we have a usage reset left this week']
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - name: started
+    wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, harness: claude, turns: 1}
+  # The override's hour is over.
+  - name: hour
+    advance: 61m
+  - name: ended
+    run: {args: [capacity, pick, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: pick, equals: none}
+      - json_path: {path: capacity.providers.claude.paceOff, exists: false}
+      - output: {contains: [ahead of pace]}
+
+then:
+  - worker: {name: app 1, harness: claude, turns: 1}
+  - calls: {program: claude, args: [--bg, --remote-control], min: 1, max: 1}

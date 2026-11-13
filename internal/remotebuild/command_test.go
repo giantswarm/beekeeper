@@ -31,7 +31,7 @@ func TestToolchainShellInterpretation(t *testing.T) {
 		{shellBash, "-c", `go test -run "Test[AB].*" ./...`},
 		{shellBash, "-c", `go test -run Test'[AB].*' ./...`},
 		{shellBash, "-c", `go test -run 'Test{A,B}~?' ./...`},
-		{"go", goTest, "-run", "Test[AB].*", "./..."},
+		{"go", goTest, "-run", "Test[AB].*", testPackages},
 	} {
 		if got := Toolchain(argv); got != "go" {
 			t.Errorf("Toolchain(%q) = %q, want go", argv, got)

@@ -3,7 +3,6 @@ package proc
 import (
 	"context"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -31,24 +30,24 @@ func IsBackground(ctx context.Context) bool {
 	return b
 }
 
-// Command is exec.CommandContext for a read the caller can do without: under
-// a Background context it runs through nice (when the machine has it), and
-// a command killed by ctx gives up its pipes after waitDelay.
-func Command(ctx context.Context, name string, arg ...string) *exec.Cmd {
+// Command is CommandContext for a read the caller can do without: under a
+// Background context it runs through nice (when the machine has it), and a
+// command killed by ctx gives up its pipes after waitDelay.
+func Command(ctx context.Context, name string, arg ...string) *Cmd {
 	if IsBackground(ctx) {
-		if nice, err := exec.LookPath("nice"); err == nil {
+		if nice, err := LookPath("nice"); err == nil {
 			arg = append([]string{"-n", Niceness, name}, arg...)
 			name = nice
 		}
 	}
-	c := exec.CommandContext(ctx, name, arg...) // #nosec G204 -- the caller's configured read (kubectl), optionally through nice
+	c := CommandContext(ctx, name, arg...)
 	c.WaitDelay = waitDelay
 	return c
 }
 
 // Kubeconfig makes c read the kubeconfig files as kubectl merges a
 // KUBECONFIG list; none, c keeps the environment's.
-func Kubeconfig(c *exec.Cmd, files []string) {
+func Kubeconfig(c *Cmd, files []string) {
 	if len(files) > 0 {
 		c.Env = append(os.Environ(), "KUBECONFIG="+strings.Join(files, string(os.PathListSeparator)))
 	}

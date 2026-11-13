@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The index's sources are read by beekeeper's own process: the decrypted
@@ -118,7 +119,7 @@ func leaves(v any, path string, fn func(key, value string)) {
 // output. Its error names the exit status and the first stderr line,
 // redacted: a tool may echo what it read.
 func quietRun(ctx context.Context, stdin io.Reader, env []string, name string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // sops and op with the configured sources
+	c := proc.CommandContext(ctx, name, args...) //nolint:gosec // sops and op with the configured sources
 	if env != nil {
 		c.Env = append(os.Environ(), env...)
 	}
@@ -127,7 +128,7 @@ func quietRun(ctx context.Context, stdin io.Reader, env []string, name string, a
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if errors.As(err, &ee) {
 			return nil, fmt.Errorf("exit %d (%s)", ee.ExitCode(), FirstLine(stderr.String()))
 		}

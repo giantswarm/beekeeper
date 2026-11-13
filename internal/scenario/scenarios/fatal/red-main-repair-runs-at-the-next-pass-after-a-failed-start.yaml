@@ -1,0 +1,87 @@
+name: red-main-repair-runs-at-the-next-pass-after-a-failed-start
+description: >
+  The default branch of example/app is red: a check run of its head failed
+  on GitHub. The fatal sentinel's pass detects the outage and starts a repair
+  whose brief names the repository by its URL and the failed check by its
+  GitHub URL; the start takes that as one repository. Its session's CLI does
+  not launch, so the start fails and no repair runs. The sentinel does not
+  wait for a probe of a repair that never started: the pass reports the
+  start's error with the attempt, and the next pass starts the second
+  attempt at once, whose repair session runs. The incident shows that
+  attempt awaiting verification.
+issue: https://github.com/giantswarm/beekeeper/issues/3634
+flow: fatal
+tags: [fatal, repair, harness]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget gate of the main probe reads a repository the scenario's
+      # GitHub has.
+      github: {probeRepo: example/app}
+      fatal:
+        repositories: [example/app]
+        checkouts: {example/app: /work/src/example/app}
+  github:
+    repositories:
+      - name: example/app
+  # The repair works in a worktree of the desk's checkout.
+  checkouts: [example/app]
+  harness:
+    workers:
+      - name: 'fatal repair \d+ 2'
+        harness: claude
+        turns:
+          - reply: repairing the red main
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The managed services are not installed on this desk.
+    - program: systemctl
+      args: [is-enabled]
+      respond: {stdout: "disabled\n", exit: 1}
+    # The head of main: no commit status, one failed check run.
+    - program: gh
+      args: [api, 'repos/example/app/commits/HEAD/status.*']
+      respond: {stdout: '{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","state":"pending","total_count":0}'}
+    - program: gh
+      args: [api, 'repos/example/app/commits/4b825dc642cb6eb9a060e54bf8d69288fbee4904/check-runs.*']
+      respond:
+        stdout: '{"total_count":1,"check_runs":[{"status":"completed","conclusion":"failure","html_url":"https://github.com/example/app/actions/runs/7/job/8"}]}'
+    # The first repair's session does not launch.
+    - program: claude
+      args: [--bg, 'fatal repair \d+ 1']
+      times: 1
+      respond: {stderr: "claude: the session could not be launched\n", exit: 1}
+
+when:
+  - name: first-pass
+    run: {args: [fatal, scan]}
+    expect:
+      - exit: 0
+      - output: {contains: ["fatal detected: main:example/app", "attempt 1/3; repair start failed: exit 1:", "the session could not be launched"]}
+  # The sentinel's next pass.
+  - name: next-pass
+    run: {args: [fatal, scan]}
+    expect:
+      - exit: 0
+      - output: {contains: ["attempt 2/3; repair start exited 0; awaiting probe verification"]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'fatal repair \d+ 2', outcome: finish}
+  - name: status
+    run: {args: [fatal, status]}
+
+then:
+  - worker: {name: 'fatal repair \d+ 2', harness: claude, turns: 1, outcome: finish, running: true}
+  - calls: {program: claude, args: [--bg, 'fatal repair \d+ 1'], min: 1, max: 1}
+  - calls: {program: claude, args: [--bg, 'fatal repair \d+ 2'], min: 1, max: 1}
+  - events: {contains: [fatal.transition, fatal.repair, agents.start]}
+  - {step: status, exit: 0}
+  - {step: status, json_path: {path: 'incidents[0].id', equals: 'main:example/app'}}
+  - {step: status, json_path: {path: 'incidents[0].attempts', equals: 2}}
+  - {step: status, json_path: {path: 'incidents[0].outcome', equals: 'repair start exited 0; awaiting probe verification'}}

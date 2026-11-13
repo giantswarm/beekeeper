@@ -6,11 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,6 +18,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TestMergeCheckUsesExplicitWorktreeAndRemoteLint runs the merge result's
+// lint in the builder, in the checker environment.
+//
+// control: none: the checker environment's command is new, so the base cannot build the test
 func TestMergeCheckUsesExplicitWorktreeAndRemoteLint(t *testing.T) {
 	root := worktree(t)
 	// The coordinator's cwd is deliberately a different repository.
@@ -93,7 +95,7 @@ func TestMergeCheckUsesExplicitWorktreeAndRemoteLint(t *testing.T) {
 				}
 				return
 			}
-			if rc != 0 || snap != "merged source" || !strings.HasPrefix(command, shellCommand([]string{shellBash, "-c", lintShim, "golangci-lint", GolangCILintModule})+" 'run' '--config' '.golangci.yaml'") {
+			if rc != 0 || snap != "merged source" || command != shellCommand(checkerCommand([]string{"golangci-lint", "run", "--config", ".golangci.yaml", testPackages}, nil)) {
 				t.Fatalf("rc=%d snapshot=%q command=%q", rc, snap, command)
 			}
 		})
@@ -116,66 +118,6 @@ func TestBuilderReservesConfiguredScratchSpace(t *testing.T) {
 		if c.Validate() == nil {
 			t.Fatalf("accepted storage %q", storage)
 		}
-	}
-}
-
-// The shim prefers the image's golangci-lint, installs the pinned one into the
-// pod's workspace otherwise, and reports a failed install as exit 125.
-func TestLintShimInstallsPinnedLinterWhenImageLacksIt(t *testing.T) {
-	bash, err := exec.LookPath(shellBash)
-	if err != nil {
-		t.Skip("bash unavailable")
-	}
-	tools := t.TempDir()
-	shim := strings.ReplaceAll(lintShim, "/work/tools", tools)
-	_, version, ok := strings.Cut(GolangCILintModule, "@")
-	if !ok || version == "" {
-		t.Fatal("golangci-lint module must pin a version")
-	}
-	installed := filepath.Join(tools, version, "golangci-lint")
-	lint := "#!/bin/sh\necho \"linted by $0 $* cache=$GOLANGCI_LINT_CACHE\"\n"
-	// The install must not touch the image's GOPATH, which the builder's
-	// non-root user cannot write.
-	install := "#!/bin/sh\n[ \"$*\" = 'install " + GolangCILintModule + "' ] && [ \"$GOPATH\" = '" + filepath.Join(tools, "gopath") + "' ] && [ -z \"$GOFLAGS\" ] || exit 1\nmkdir -p \"$GOBIN\" && printf '%s' '" + lint + "' > \"$GOBIN/golangci-lint\" && chmod 700 \"$GOBIN/golangci-lint\"\n"
-	for _, tc := range []struct {
-		name, image, goScript, want string
-		rc                          int
-	}{
-		{name: "image linter", image: lint, want: "linted by IMAGE/golangci-lint run ./... cache=" + filepath.Join(tools, "lint-cache")},
-		{name: "install", goScript: install, want: "linted by " + installed + " run ./... cache=" + filepath.Join(tools, "lint-cache")},
-		{name: "already installed", want: "linted by " + installed + " run ./... cache=" + filepath.Join(tools, "lint-cache")},
-		{name: "install fails", goScript: "#!/bin/sh\nexit 1\n", want: "installing " + GolangCILintModule + " failed", rc: 125},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.rc != 0 {
-				if err := os.RemoveAll(tools); err != nil {
-					t.Fatal(err)
-				}
-			}
-			image := t.TempDir()
-			for name, script := range map[string]string{"golangci-lint": tc.image, "go": tc.goScript} {
-				if script == "" {
-					continue
-				}
-				if err := os.WriteFile(filepath.Join(image, name), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
-					t.Fatal(err)
-				}
-			}
-			var out bytes.Buffer
-			c := exec.CommandContext(t.Context(), bash, "-c", shim, "golangci-lint", GolangCILintModule, "run", "./...") //nolint:gosec // test-owned shim and fixtures
-			c.Env = []string{"PATH=" + image + ":/usr/bin:/bin", "GOPATH=/read-only-image-gopath", "GOFLAGS=-mod=mod"}
-			c.Stdout, c.Stderr = &out, &out
-			rc := 0
-			var exit *exec.ExitError
-			if err := c.Run(); errors.As(err, &exit) {
-				rc = exit.ExitCode()
-			} else if err != nil {
-				t.Fatal(err)
-			}
-			if rc != tc.rc || !strings.Contains(out.String(), strings.ReplaceAll(tc.want, "IMAGE", image)) {
-				t.Fatalf("rc=%d output=%q", rc, &out)
-			}
-		})
 	}
 }
 

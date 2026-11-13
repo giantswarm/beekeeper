@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/post"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -352,7 +352,7 @@ func probeLogins(ctx context.Context, notes []state.Note) []int {
 func probePasses(ctx context.Context, probe string) bool {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	return exec.CommandContext(pctx, "sh", "-c", probe).Run() == nil //nolint:gosec // the probe its filer gave on this machine
+	return proc.CommandContext(pctx, "sh", "-c", probe).Run() == nil //nolint:gosec // the probe its filer gave on this machine
 }
 
 // closeProbed closes the open login notes among passed and returns their

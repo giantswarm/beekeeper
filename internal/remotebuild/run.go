@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/runrecord"
 )
 
@@ -83,7 +83,7 @@ func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args .
 	if r.Command != nil {
 		return r.Command(ctx, in, out, args...)
 	}
-	c := exec.CommandContext(ctx, "kubectl", args...) //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
+	c := proc.CommandContext(ctx, "kubectl", args...) //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
 	c.Stdin, c.Stdout, c.Stderr = in, out, io.Discard
 	// Credential helpers may outlive kubectl with an inherited output pipe.
 	// Bound draining after exit/cancellation; incomplete output is an error.
@@ -97,31 +97,13 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	return r.try(ctx, argv, Toolchain(argv))
 }
 
-// GolangCILintModule is the golangci-lint a Go image without one gets for
-// merge validation: the version the repository's CI pins.
-const GolangCILintModule = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0"
-
-// lintShim runs the image's golangci-lint, or installs GolangCILintModule into
-// the pod's workspace first. A failed install exits 125, a checker environment
-// failure, so it is never read as lint findings. The builder runs as a
-// non-root user, so an image's GOPATH (where Go keeps its checksum database
-// cache) and the user's cache directory may be read-only: both move into the
-// workspace.
-const lintShim = `export GOPATH=/work/tools/gopath GOLANGCI_LINT_CACHE=${GOLANGCI_LINT_CACHE:-/work/tools/lint-cache}
-lint=golangci-lint
-if ! command -v golangci-lint >/dev/null 2>&1; then
- bin=/work/tools/${1##*@}
- if [ ! -x "$bin/golangci-lint" ]; then
-  printf 'beekeeper run: golangci-lint not in builder image; installing %s\n' "$1" >&2
-  GOBIN=$bin GOFLAGS= go install "$1" || { printf 'beekeeper run: installing %s failed\n' "$1" >&2; exit 125; }
- fi
- lint=$bin/golangci-lint
-fi
-shift
-exec "$lint" "$@"`
-
-// TryMergeCheck also admits read-only golangci-lint in the configured Go image.
-// The coordinator supplies literal arguments and a worktree-relative config.
+// TryMergeCheck runs one merge-result check in the configured Go image: a
+// build tool invocation or read-only golangci-lint, with literal arguments
+// and a worktree-relative config from the coordinator. It runs in the
+// checker environment: CheckerTools on PATH, installed where the image lacks
+// them, and the packages the repository's CI installs (CIPackages of r.Dir)
+// checked in the image, so that an image short of either is the checker's
+// environment fault and never a finding of the check.
 func (r Runner) TryMergeCheck(ctx context.Context, argv []string) (bool, int) {
 	r.RequireRemote = true
 	tool := Toolchain(argv)
@@ -131,10 +113,10 @@ func (r Runner) TryMergeCheck(ctx context.Context, argv []string) (bool, int) {
 				return false, 0
 			}
 		}
-		// An image without golangci-lint still validates: the shim
-		// installs the pinned linter rather than failing every check.
-		argv = append([]string{shellBash, "-c", lintShim, "golangci-lint", GolangCILintModule}, argv[1:]...)
 		tool = "go"
+	}
+	if tool == "go" {
+		argv = checkerCommand(argv, CIPackages(r.Dir))
 	}
 	return r.try(ctx, argv, tool)
 }
@@ -184,7 +166,7 @@ func (r Runner) try(ctx context.Context, argv []string, tool string) (handled bo
 			return fallback("working directory unavailable")
 		}
 	}
-	rootBytes, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel").Output() //nolint:gosec // explicit caller-owned worktree
+	rootBytes, err := proc.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel").Output() //nolint:gosec // explicit caller-owned worktree
 	if err != nil {
 		return fallback("not a git worktree")
 	}

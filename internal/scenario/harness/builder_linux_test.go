@@ -19,23 +19,29 @@ func TestKubeArgsDropTheClusterFlags(t *testing.T) {
 	}
 }
 
+// TestBuilderValidate checks the builder block: the image's tools and the
+// programs the repository's tests call.
+//
+// control: none: builder.testsCall is new, so the base cannot build the test
 func TestBuilderValidate(t *testing.T) {
-	if err := (&Builder{Tools: []string{"go", "golangci-lint"}}).Validate(); err != nil {
+	if err := (&Builder{Tools: []string{"go", "golangci-lint", "jq"}, TestsCall: []string{"jq"}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if err := (*Builder)(nil).Validate(); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		tools []string
-		want  string
+		builder Builder
+		want    string
 	}{
-		{[]string{"cargo"}, `"cargo" is none of go, golangci-lint`},
-		{[]string{"go", "go"}, `"go" twice`},
+		{Builder{Tools: []string{"cargo"}}, `"cargo" is none of go, golangci-lint, jq, gojq`},
+		{Builder{Tools: []string{"go", "go"}}, `"go" twice`},
+		{Builder{TestsCall: []string{"/usr/bin/jq"}}, `builder.testsCall: "/usr/bin/jq" is no program name`},
+		{Builder{TestsCall: []string{"jq", "jq"}}, `builder.testsCall: "jq" twice`},
 	} {
-		err := (&Builder{Tools: tc.tools}).Validate()
+		err := tc.builder.Validate()
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("tools %v: %v, want %q", tc.tools, err, tc.want)
+			t.Fatalf("builder %+v: %v, want %q", tc.builder, err, tc.want)
 		}
 	}
 }

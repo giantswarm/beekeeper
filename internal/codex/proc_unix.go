@@ -3,12 +3,13 @@
 package codex
 
 import (
-	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
-func configureTurnCmd(cmd *exec.Cmd) {
+func configureTurnCmd(cmd *proc.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -19,7 +20,7 @@ func configureTurnCmd(cmd *exec.Cmd) {
 	cmd.WaitDelay = 2 * time.Second
 }
 
-func stopTurnProcessGroup(cmd *exec.Cmd) {
+func stopTurnProcessGroup(cmd *proc.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}

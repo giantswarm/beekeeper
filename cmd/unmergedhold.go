@@ -333,6 +333,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 			return e.By.Name == loop.LoopParty.Name && (e.Verb == loop.LoopClaimVerb || e.Verb == loop.LoopClaimEndVerb)
 		}); err == nil {
 			settled := map[string]bool{}
+			named := briefPulls(brief)
 			for i := len(evs) - 1; i >= 0; i-- {
 				e := evs[i]
 				key, agent, ok := loop.Keyed(e.Detail)
@@ -346,9 +347,17 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 				if settled[key] || !strings.EqualFold(agent, name) {
 					continue
 				}
-				if !strings.HasPrefix(key, "next") && !strings.HasPrefix(key, "fill ") && !strings.HasPrefix(key, "review ") {
-					addRepairPull(e.Subject)
+				if strings.HasPrefix(key, "next") || strings.HasPrefix(key, "fill ") || strings.HasPrefix(key, "review ") {
+					continue
 				}
+				// A pull request whose merge go the loop claimed waits for
+				// its merge, not for a worker: the go exempts only the
+				// repair it starts, whose brief names the pull request,
+				// never a board start of its issue under the same name.
+				if strings.HasPrefix(key, "go ") && !slices.ContainsFunc(named, func(pr string) bool { return strings.EqualFold(pr, e.Subject) }) {
+					continue
+				}
+				addRepairPull(e.Subject)
 			}
 		}
 	}

@@ -651,6 +651,11 @@ func (m *Model) AddPull(r *Repo, s PullSpec) (*Pull, error) {
 	for _, l := range s.Labels {
 		p.Labels = append(p.Labels, m.EnsureLabel(r, l, "", "").Name)
 	}
+	if m.Origins.Has(r) {
+		if err := m.Origins.FollowPull(r, n, s.Head); err != nil {
+			return nil, err
+		}
+	}
 	r.Pulls = append(r.Pulls, p)
 	return p, nil
 }
@@ -980,12 +985,26 @@ func (r *Repo) Rollup(sha string) string {
 	return statusSuccess
 }
 
-// MergeableState is the declared mergeability, MERGEABLE unless declared.
-func (p *Pull) MergeableState() string {
+// MergeableState is the declared mergeability, else CONFLICTING when the
+// head does not merge into its base in the origin without conflicts, else
+// MERGEABLE.
+func (m *Model) MergeableState(p *Pull) string {
 	if p.State != stateOpen {
 		return "UNKNOWN"
 	}
-	return cmpOr(p.Mergeable, "MERGEABLE")
+	if p.Mergeable != "" {
+		return p.Mergeable
+	}
+	if m.Origins.Has(p.Repo) {
+		// One git call for both heads: every read of a pull request asks.
+		heads := m.Origins.Heads(p.Repo, p.Base, p.Head)
+		if base, head := heads[p.Base], cmpOr(heads[p.Head], p.headSHA); base != "" && head != "" {
+			if conflicts, err := m.Origins.Conflicts(p.Repo, base, head); err == nil && conflicts {
+				return "CONFLICTING"
+			}
+		}
+	}
+	return "MERGEABLE"
 }
 
 // MergeStateStatus is the declared merge state, or the one the pull
@@ -1003,7 +1022,7 @@ func (m *Model) MergeStateStatus(p *Pull) string {
 	switch {
 	case p.Draft:
 		return "DRAFT"
-	case p.MergeableState() == "CONFLICTING":
+	case m.MergeableState(p) == "CONFLICTING":
 		return "DIRTY"
 	case protected && prot.RequiredReviews > 0 && p.ReviewDecision() != reviewApproved:
 		return "BLOCKED"
@@ -1335,7 +1354,7 @@ func (m *Model) Merge(p *Pull, s MergeSpec) error {
 	if s.SHA != "" && s.SHA != head {
 		return &apiError{Status: 409, Message: "Head branch was modified. Review and try the merge again."}
 	}
-	if p.MergeableState() == "CONFLICTING" {
+	if m.MergeableState(p) == "CONFLICTING" {
 		return notAllowed("Pull Request is not mergeable")
 	}
 	if prot, ok := p.Repo.Protection(p.Base); ok && !s.Force && (!s.Admin || prot.EnforceAdmins) {
@@ -1387,6 +1406,13 @@ func (m *Model) Merge(p *Pull, s MergeSpec) error {
 // DeleteBranch removes a branch.
 func (m *Model) DeleteBranch(r *Repo, name string) error {
 	if m.Origins.Has(r) {
+		for _, p := range r.Pulls {
+			if p.Head == name {
+				if err := m.Origins.PinPull(r, p.Number); err != nil {
+					return err
+				}
+			}
+		}
 		return m.Origins.DeleteRef(r, "refs/heads/"+name)
 	}
 	if _, ok := r.Branches[name]; !ok {

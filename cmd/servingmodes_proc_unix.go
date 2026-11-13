@@ -3,16 +3,17 @@
 package cmd
 
 import (
-	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // armServeModeSwitch makes the switch command its own process group and ends
 // that whole group when the switch is cancelled: a switcher that runs its
 // work in a child dies with it, and the machine's one-switch lock is never
 // held past the timeout by an orphan.
-func armServeModeSwitch(c *exec.Cmd) {
+func armServeModeSwitch(c *proc.Cmd) {
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cancel = func() error {
 		if c.Process == nil {

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -23,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -120,7 +120,7 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	// No detached maintenance either: it outlives the command and races the
 	// removal of the transfer directory.
 	prefix := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=always", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"}
-	c := exec.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
+	c := proc.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
 	c.Dir = dir
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "GIT_") {
@@ -524,7 +524,17 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if err != nil {
 			return result, err
 		}
-		if result.Head != p.Head || p.Shallow || hasHeadErr != nil {
+		// A workspace whose pinned commit holds the default branch, as a
+		// continuation pinned at its pull request's head can, is up to date:
+		// the base beyond that commit is an empty bundle, and the whole
+		// history the host retries with exceeds the transfer limit in a
+		// large repository.
+		upToDate := false
+		if !p.Shallow && hasHeadErr == nil {
+			_, behindErr := publishGit(ctx, repo, "merge-base", "--is-ancestor", "refs/heads/base", p.Head)
+			upToDate = behindErr == nil
+		}
+		if !upToDate {
 			bundleArgs := []string{"bundle", "create", bundlePath, "refs/heads/base"}
 			if !p.Shallow && hasHeadErr == nil {
 				bundleArgs = append(bundleArgs, "^"+p.Head)
@@ -975,7 +985,15 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			}
 			result, syncErr := fetchSyncBaseBundle(ctx, s, j, workspace, bundlePath, shallow)
 			if syncErr != nil && !shallow {
-				result, syncErr = fetchSyncBaseBundle(ctx, s, j, workspace, bundlePath, true)
+				// The whole history heals a workspace that lacks some of it; a
+				// retry that fails as well, as one over the transfer limit does,
+				// says nothing of why the first attempt failed, so both are told.
+				var retryErr error
+				if result, retryErr = fetchSyncBaseBundle(ctx, s, j, workspace, bundlePath, true); retryErr != nil {
+					syncErr = fmt.Errorf("%w; the retry with the whole history failed too: %w", syncErr, retryErr)
+				} else {
+					syncErr = nil
+				}
 			}
 			if syncErr != nil {
 				return syncErr

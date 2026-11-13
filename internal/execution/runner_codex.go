@@ -8,11 +8,12 @@ import (
 	"io"
 	"net"
 
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // codexTurnFailure is the journal's reason for a turn that failed after its
@@ -273,7 +274,7 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		envVars, _ := json.Marshal([]string{EnvID, EnvCoordinator})
 		args = append([]string{"-c", "mcp_servers.coordinator.command=" + string(command), "-c", "mcp_servers.coordinator.args=" + string(proxyArgs), "-c", "mcp_servers.coordinator.env_vars=" + string(envVars)}, args...)
 	}
-	c := exec.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments
+	c := proc.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments
 	if !strings.HasSuffix(prompt, "\n") {
 		prompt += "\n"
 	}

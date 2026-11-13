@@ -9,6 +9,8 @@ import (
 
 // TestLoopVocabulary keeps the loop's copy of the command's names equal to
 // the command's own: the loop cannot import them.
+//
+// control: none: a name new on both sides does not build on the merge base; the scenario shows the change
 func TestLoopVocabulary(t *testing.T) {
 	own := map[string]any{
 		"ExitError":                        ExitError,
@@ -28,6 +30,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"boardEscalateName":                boardEscalateName,
 		"configFlag":                       configFlag,
 		"continuationQueuedEvent":          continuationQueuedEvent,
+		"defaultEffortFlag":                "--default-effort", // by value: the test builds on the merge base
 		"deliveryBlocked":                  deliveryBlocked,
 		"deliveryExemptOnlyFlag":           deliveryExemptOnlyFlag,
 		"deliveryFlowing":                  deliveryFlowing,
@@ -37,6 +40,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
+		"executionReleasedEvent":           executionReleasedEvent,
 		"gateCmdName":                      gateCmdName,
 		"harnessAuto":                      capacity.HarnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
@@ -56,7 +60,6 @@ func TestLoopVocabulary(t *testing.T) {
 		"reviewedMergeRoute":               reviewedMergeRoute,
 		"runMerge":                         runMerge,
 		"selfUpdateCmdName":                selfUpdateCmdName,
-		"taskKindArg":                      taskKindArg,
 		"taskKindReview":                   capacity.TaskKindReview,
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,

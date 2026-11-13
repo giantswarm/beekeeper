@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const windowsOS = "windows"
@@ -32,16 +33,47 @@ install -m "$mode" -- "$source" "$dir/beekeeper"
 sync "$dir/beekeeper" 2>/dev/null || sync
 mv -f -- "$dir/beekeeper" "$target"
 `
-	out, err := exec.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed command; the arguments are positional
+	out, err := proc.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed command; the arguments are positional
 	if err != nil {
 		return fmt.Errorf("privileged atomic install: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
+// journalError is an update that failed where the recovery journal holds
+// something to inspect: a journal that disagrees with the installation, or
+// the transaction it records (a probation to settle, a replacement or a
+// rollback) refused or interrupted.
+type journalError struct {
+	journal string
+	err     error
+}
+
+func (e *journalError) Error() string { return e.err.Error() }
+func (e *journalError) Unwrap() error { return e.err }
+
+// journalFailed is err, a failure of i's journal or of the transaction it
+// records.
+func (i *installation) journalFailed(err error) error {
+	return &journalError{journal: i.journal(), err: err}
+}
+
+// installFailed says why updating path failed. A failure of the journal's
+// transaction names the journal to inspect. Any other failure stopped before
+// the replacement: the signature, the evidence, the canary or the comparison
+// refused, the journal stays as it was, and a retry is safe.
+func installFailed(path string, err error) error {
+	var je *journalError
+	if errors.As(err, &je) {
+		return fmt.Errorf("updating %s failed (inspect the recovery journal %s before retrying): %w", path, je.journal, err)
+	}
+	return fmt.Errorf("updating %s failed, nothing was replaced (a retry is safe): %w", path, err)
+}
+
 // installRelease holds the recovery lock through verification, canary checks
 // and durable replacement. Download, verification and the journal run as this
 // account; an installation it cannot write takes sudo for the replacement alone.
+// A failure of the journal or its transaction is a *journalError.
 func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string, source selfupdate.Source) error {
 	i, err := openInstallation(ctx, path)
 	if err != nil {
@@ -49,11 +81,11 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	}
 	defer i.close()
 	j, err := i.read()
-	if err != nil {
-		return err
+	if err == nil {
+		err = i.recover(j)
 	}
-	if err := i.recover(j); err != nil {
-		return err
+	if err != nil {
+		return i.journalFailed(err)
 	}
 	canary := optionsFrom(ctx).Canary
 	version := "v" + strings.TrimPrefix(rel.Version(), "v")
@@ -103,6 +135,16 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	if afterCanary != verifiedDigest {
 		return errors.New("verified candidate changed during canary checks")
 	}
+	if err := i.commit(ctx, j, staged, version, verifiedDigest); err != nil {
+		return i.journalFailed(err)
+	}
+	return nil
+}
+
+// commit is the transaction the journal records: it settles a pending
+// probation and replaces the executable with staged, the verified candidate
+// of version, or follows a coordinator back to the recovery target.
+func (i *installation) commit(ctx context.Context, j *Journal, staged, version, verifiedDigest string) error {
 	// A coordinator rollback is an explicit recovery request, not evidence
 	// that this host's candidate passed probation. Only the identical verified
 	// recovery release can end a watched probation this way. Verification of

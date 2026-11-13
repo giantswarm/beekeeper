@@ -195,7 +195,9 @@ func (s Step) kinds() int {
 var (
 	varRE   = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	aliasRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	// releaseRE is a release tag beekeeper pins a host to.
+	releaseRE = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$`)
+	repoRE    = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
 // builtins are the names every step may expand: the session's own.
@@ -210,8 +212,8 @@ func (g *Given) Validate(hosts []Host) error {
 	var errs []error
 	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 	for name := range g.Usage {
-		if name != Claude && name != Codex {
-			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex)", name)
+		if name != Claude && name != Codex && name != Agy {
+			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex, agy)", name)
 		}
 	}
 	for name, u := range g.Usage {
@@ -359,10 +361,15 @@ const (
 	// OlderGo pins a Go on the host that is older than the go.mod of the
 	// repository it serves names.
 	OlderGo = "older-go"
+	// DropsSource answers every call but a start's source upload, whose
+	// connection the host drops: ssh exits 255. The host passes its checks
+	// and never acknowledges a start, as when a start's source bundle
+	// exceeds the transfer limit.
+	DropsSource = "drops-source"
 )
 
 // Faults are an execution host's faults.
-var Faults = []string{Unreachable, HostKeyChanged, MissingTool, OlderGo}
+var Faults = []string{Unreachable, HostKeyChanged, MissingTool, OlderGo, DropsSource}
 
 // Host is an SSH execution host of the scenario: an alias the fake ssh maps
 // to a root of its own under /work/hosts/<name>, with a home, a tool
@@ -385,6 +392,11 @@ type Host struct {
 	Slow  Duration `yaml:"slow"`
 	// Config is laid over the host's own generated configuration.
 	Config map[string]any `yaml:"config"`
+	// Pinned is the release the desk pinned the host to (its hostPins
+	// entry, with the policy digest the host prepared), as an earlier
+	// coordinator's agents hosts update left it: a coordinator on another
+	// release finds the host behind its own.
+	Pinned string `yaml:"pinned"`
 }
 
 // ValidateHosts checks the hosts of a scenario against its repositories.
@@ -412,6 +424,9 @@ func ValidateHosts(hosts []Host, repositories []string) error {
 		if h.MaxBusy < 0 {
 			bad("%s: maxBusy %d", where, h.MaxBusy)
 		}
+		if h.Pinned != "" && !releaseRE.MatchString(h.Pinned) {
+			bad("%s: pinned %q is no release (v<major>.<minor>.<patch>[-rc.<n>])", where, h.Pinned)
+		}
 		for _, r := range h.Repositories {
 			if !repoRE.MatchString(r) || !slices.Contains(repositories, r) {
 				bad("%s: repository %q is none of given.repositories", where, r)
@@ -425,7 +440,7 @@ func ValidateHosts(hosts []Host, repositories []string) error {
 }
 
 // HostStep is the host step of a scenario: it changes one host's faults
-// while the scenario runs.
+// or its policy while the scenario runs.
 type HostStep struct {
 	// Name is the host.
 	Name string `yaml:"name"`
@@ -433,6 +448,11 @@ type HostStep struct {
 	Fault string   `yaml:"fault"`
 	Slow  Duration `yaml:"slow"`
 	Clear bool     `yaml:"clear"`
+	// Config changes the host's policy as an operator does: it is laid
+	// over the host's own configuration, the host's beekeeper prepares its
+	// policy again, and the desk's agents.hosts entry names the digest
+	// prepare printed.
+	Config map[string]any `yaml:"config"`
 }
 
 // Validate checks the step against the scenario's hosts.
@@ -447,13 +467,13 @@ func (h HostStep) Validate(hosts []Host) error {
 		return errors.New("older-go is a host's provisioning: name it in given.hosts")
 	}
 	n := 0
-	for _, set := range []bool{h.Fault != "", h.Slow.Duration > 0, h.Clear} {
+	for _, set := range []bool{h.Fault != "", h.Slow.Duration > 0, len(h.Config) > 0, h.Clear} {
 		if set {
 			n++
 		}
 	}
 	if n == 0 || h.Clear && n > 1 {
-		return errors.New("one of fault, slow and clear (clear alone)")
+		return errors.New("one of fault, slow, config and clear (clear alone)")
 	}
 	return nil
 }

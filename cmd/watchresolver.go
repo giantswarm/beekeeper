@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // watchResolver deliberately queries the same name through the stub and the
@@ -135,5 +136,5 @@ func (systemWatchResolver) lookup(ctx context.Context, server string) error {
 }
 
 func (systemWatchResolver) reset(ctx context.Context) error {
-	return exec.CommandContext(ctx, "busctl", "call", "org.freedesktop.resolve1", "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager", "ResetServerFeatures").Run()
+	return proc.CommandContext(ctx, "busctl", "call", "org.freedesktop.resolve1", "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager", "ResetServerFeatures").Run()
 }

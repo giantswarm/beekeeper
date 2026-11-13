@@ -1,0 +1,147 @@
+name: wait-on-no-person-files-no-missing-note
+description: >
+  Four workers park their deliveries. One waits on a blocker issue, and its words mention a
+  release-note gap. One waits for GitHub's budget reset, with its continuation in an agents
+  note. One waits on the note it filed, which the person then answers. One waits on the
+  person's decision without filing a note. Only the last one is the person's to serve without a
+  note: the loop files DELIVERY WAITING WITHOUT A NOTE for it once, and for none of the others,
+  not even in the pass right after the answer, before any watch resumes that park. Before the fix
+  the loop also filed it for the blocker, the budget reset and the answered note: it read the
+  words "note" and "review" anywhere in a wait as a person's, and an answered note's park as one
+  missing its note.
+issue: https://github.com/giantswarm/beekeeper/issues/3713
+flow: delivery
+tags: [delivery, park, notes, loop]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      capacity: {ceiling: 4, providers: {claude: {ceiling: 4}}}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Restore the MCP login, board: Ready}
+          - {number: 2, title: Close the skills proof, board: Ready}
+          - {number: 3, title: Speed up the builds, board: Ready}
+          - {number: 4, title: Size the build cache, board: Ready}
+          # The blocker of #1, which no worker of the desk delivers.
+          - {number: 5, title: Fix the trace, board: Backlog}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - beekeeper: [agents, park, --on, 'example/app#5', "After the trace fix, verify green consumer CI and finish the release-note gap"]
+      - name: app 2
+        turns:
+          - steps:
+              - beekeeper: [agents, park, "GitHub budget reset for post-merge acceptance; continuation recorded in agents note"]
+      - name: app 3
+        turns:
+          - steps:
+              # The note is queued for the loop; its reference is what the
+              # park waits on.
+              - run:
+                  - sh
+                  - -c
+                  - |
+                    out=$(beekeeper note add --for scenario --ref example/app#3 \
+                      --status-quo "The builds use the free cache, which is full every day by noon." \
+                      --why "The larger cache costs money every month, and what the desk spends is yours to decide." \
+                      --option "Buy it: the cache holds a week of builds for 20 EUR per month" \
+                      --option "Stay free: nothing is spent and the afternoon builds stay slow" \
+                      --recommend 1 --default "keep the free cache" --due 3h \
+                      "May the desk buy the larger build cache for 20 EUR per month?") || exit 1
+                    # "note queued: report:<id>; the supervisor applies it …"
+                    set -- $out
+                    IFS=';'
+                    set -- $3
+                    echo "$1"
+                save: note
+              - beekeeper: [agents, park, --on, '${note}', "the person's answer on the build cache"]
+      - name: app 4
+        turns:
+          - steps:
+              - beekeeper: [agents, park, "the person's decision on the build cache size"]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The refill starts a worker on each Ready item; each parks and ends its turn.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - worker: {name: app 2, outcome: finish}
+        - worker: {name: app 3, outcome: finish}
+        - worker: {name: app 4, outcome: finish}
+  # The pass applies the reports (the note and the four parks), then checks the deliveries.
+  - advance: 2s
+  - name: apply
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [note.add, agents.park]}
+      - output: {contains: ["DELIVERY WAITING WITHOUT A NOTE https://github.com/example/app/issues/4:"]}
+      - output:
+          not_contains:
+            - "WITHOUT A NOTE https://github.com/example/app/issues/1:"
+            - "WITHOUT A NOTE https://github.com/example/app/issues/2:"
+            - "WITHOUT A NOTE https://github.com/example/app/issues/3:"
+  # The person answers the note. Its park settles at a watch's next look.
+  - name: answer
+    run: {args: [--as, scenario, answer, 'example/app#3', --note, '1', "Yes, buy it, but only for three months."]}
+    expect:
+      - exit: 0
+      - output: {contains: ["note #1 answered and closed"]}
+  # The next pass checks the deliveries while that park still waits on the closed note,
+  # and files the person's wait no second time.
+  - advance: 2s
+  - name: answered
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {not_contains: ["WAITING WITHOUT A NOTE"]}
+  - name: filed
+    run: {args: [log, --verb, supervisor.file]}
+
+then:
+  - {step: filed, exit: 0}
+  - {step: filed, output: {contains: ["[delivery missing-note example/app#4]"]}}
+  - step: filed
+    output:
+      not_contains:
+        - "missing-note example/app#1]"
+        - "missing-note example/app#2]"
+        - "missing-note example/app#3]"
