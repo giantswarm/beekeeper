@@ -524,7 +524,13 @@ given:
       fault: unreachable             # optional, see below
       slow: 300ms                    # delay of every ssh call to it
       config: {}                     # laid over the host's own config.yaml
+      pinned: v1.0.0-rc.1            # the release the desk pinned it to
 ```
+
+`pinned` records the host in the desk's state (`hostPins`) as pinned to that release, with the
+policy digest it prepared, as an earlier coordinator's `agents hosts update` left it. A desk on
+another release (`given.releases.installed`) finds the host behind its own; the host still runs
+the candidate.
 
 | Fault | What happens |
 | --- | --- |
@@ -532,6 +538,7 @@ given:
 | `host-key-changed` | `ssh` fails the host key check: exit 255 with OpenSSH's warning |
 | `missing-tool` | the remote shell does not find beekeeper: exit 127 |
 | `older-go` | the host pins Go 1.21.0 while its repository's `go.mod` names 1.26.0 |
+| `drops-source` | the host passes its checks but drops a start's source upload: exit 255 |
 | `slow` | every call is delayed; one slower than `ConnectTimeout` times out with 255 |
 
 The `host` step changes a host's faults while the scenario runs:

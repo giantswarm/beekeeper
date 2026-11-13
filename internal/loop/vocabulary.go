@@ -34,6 +34,7 @@ const (
 	epicOwnerTask                    = "Epic owner: "
 	epicSnapshotFile                 = "epic-delivery.json"
 	excludeFlag                      = "exclude"
+	executionReleasedEvent           = "execution.released"
 	gateCmdName                      = "gate"
 	harnessAuto                      = "auto"
 	hostUpdateCmdName                = "update"
@@ -92,6 +93,7 @@ func Vocabulary() map[string]any {
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
+		"executionReleasedEvent":           executionReleasedEvent,
 		"gateCmdName":                      gateCmdName,
 		"harnessAuto":                      harnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,

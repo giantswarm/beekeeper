@@ -7,19 +7,17 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/board"
-	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const taskEndings = `finish with a merged pull request or --done --no-change "<reason and proof>", use --blocked --by <issue URL|#note>, or agents park on a wake`
 
-// Only the worker owning a delivery may end it. Reviewers serving its PR
-// report their review independently; that does not complete the issue.
+// Only the worker owning a delivery may end it. A review session owns none:
+// it serves the pull request it reviews and reports its review on its own,
+// which neither completes nor blocks the delivery, whoever started it.
 func workerDeliveries(st *state.State, ag state.Agent) []int {
-	// A review session owns no delivery, even one whose ref is the pull
-	// request it reviews (a worker started without an issue).
-	if slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Kind == capacity.TaskKindReview && s.Is(ag.Party) }) {
+	if reviewerSession(st, ag.Party) {
 		return nil
 	}
 	var found []int
@@ -47,9 +45,6 @@ func (a *app) completionOutcomeWith(ctx context.Context, st *state.State, ag sta
 		if len(workerDeliveries(st, ag)) > 0 {
 			return nil, refused("delivery task needs an outcome: %s", taskEndings)
 		}
-		return nil, nil
-	}
-	if !blocked && noChange == "" && slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool { return sameReviewSession(r.Reviewer, ag.Party) }) {
 		return nil, nil
 	}
 	indices := workerDeliveries(st, ag)
