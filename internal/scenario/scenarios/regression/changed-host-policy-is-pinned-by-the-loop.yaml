@@ -21,12 +21,14 @@ given:
       github: {probeRepo: example/app}
       supervisor: {releaseEvery: 24h}
   # Host updates follow a release: a development build updates none. The
-  # host runs the same release, so an update prepares its policy again.
+  # host runs the coordinator's release, so an update prepares its policy
+  # again.
   releases:
     installed: v1.0.0-rc.1
     published: [v1.0.0-rc.1]
   hosts:
     - name: builder
+      pinned: v1.0.0-rc.1
   github:
     repositories:
       - name: example/app
@@ -44,22 +46,14 @@ given:
     - program: gh
       args: [search, prs]
       respond: {stdout: "[]\n"}
-    # The desk's release lookup and the host's gh login.
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
     - program: gh
       args: [auth, token]
       respond: {stdout: "scenario-token\n"}
 
 when:
-  - name: watch
-    run: {args: [watch, --once]}
-    expect:
-      - exit: 0
   # The host is pinned to the policy it prepared.
-  - name: pin
-    run: {args: [agents, hosts, update, builder]}
-    expect:
-      - exit: 0
-      - output: {matches: 'builder runs v1\.0\.0-rc\.1, policy sha256:[0-9a-f]{64} pinned'}
   - name: pinned
     run: {args: [agents, hosts, check, builder]}
     expect:
@@ -75,9 +69,7 @@ when:
     run: {args: [agents, hosts, check, builder]}
     expect:
       - stderr: {contains: ["identity, protocol, harness or policy does not match"]}
-  # Past the pace of host updates, with a fresh reading of the budget.
-  - advance: 11m
-  - name: rewatch
+  - name: watch
     run: {args: [watch, --once]}
     expect:
       - exit: 0
@@ -95,5 +87,4 @@ then:
   - {step: pass, output: {not_contains: ["which the host did not prepare"]}}
   - {step: followed, exit: 0}
   - {step: followed, json_path: {path: identity, equals: builder}}
-  # The host's self-update ran twice: by hand, and by the loop.
-  - calls: {program: ssh, args: [builder, '.*agents hosts self-update.*'], min: 2, max: 2}
+  - calls: {program: ssh, args: [builder, '.*agents hosts self-update.*'], min: 1, max: 1}
