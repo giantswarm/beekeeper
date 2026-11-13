@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -78,14 +79,15 @@ func hostHoldRateReset(held string) (time.Time, bool) {
 
 // UpdateHosts brings every execution host (agents.hosts) to the release
 // this coordinator runs, with agents hosts update, once the coordinator
-// runs a newer one than the host's pin: a host on which executions are in a
-// turn drains first (a parked worker's execution between turns does not hold
-// it back), taking no new start (HostDrains), so it updates at the first
-// pass that finds them between turns; a held host is tried again hourly,
-// and a development build updates none. Nothing is updated while beekeeper
-// stop stands. Each new hold is handed on once as the loop's finding, and
-// so is a host that stays behind for more than one release or for longer
-// than HostBehindBound, with why.
+// runs a newer one than the host's pin or the host's entry names a policy
+// digest the pin does not answer (hostPinPolicyCurrent): a host on which
+// executions are in a turn drains first (a parked worker's execution between
+// turns does not hold it back), taking no new start (HostDrains), so it
+// updates at the first pass that finds them between turns; a held host is
+// tried again hourly, and a development build updates none. Nothing is
+// updated while beekeeper stop stands. Each new hold is handed on once as the
+// loop's finding, and so is a host that stays behind for more than one
+// release or for longer than HostBehindBound, with why.
 func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 	a := l.Host
 	version := Cmd.CoordinatorVersion()
@@ -101,15 +103,16 @@ func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 			return
 		}
 		l.LifecyclePhase(loopPhaseTidy)
+		h := a.Cfg().Agents.Hosts[selector]
 		pin := st.HostPin(selector)
-		if pin != nil && pin.Identity != a.Cfg().Agents.Hosts[selector].Identity {
+		if pin != nil && pin.Identity != h.Identity {
 			pin = nil
 		}
 		if pin != nil && pin.UpdateError != "" && pin.UpdateVersion == version && HostHoldWait(state.HostPin{Held: pin.UpdateError, Tried: pin.Tried}, st.Budget, a.TimeNow()) {
 			continue
 		}
 		switch {
-		case pin != nil && pin.Held == "" && pin.Version == version && a.HostPinToolsCurrent(*pin, a.Cfg().Agents.Hosts[selector]):
+		case pin != nil && pin.Held == "" && pin.Version == version && a.HostPinToolsCurrent(*pin, h) && hostPinPolicyCurrent(*pin, h):
 			continue
 		case pin != nil && pin.Held != "" && pin.HeldVersion == version && HostHoldWait(*pin, st.Budget, a.TimeNow()):
 			continue
@@ -138,6 +141,16 @@ func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 	if err := l.reportHeldHosts(); err != nil {
 		l.SayOnce("host held report", "SUPERVISOR HOST HELD not reported: %v", err)
 	}
+}
+
+// hostPinPolicyCurrent says whether pin answers the policy digest the host's
+// agents.hosts entry h names: none, the pinned one, or the one it named when
+// the host was last pinned. Any other is an operator's change of the host's
+// policy, which makes the host due for an update as a new release does: the
+// update prepares the host's policy again and pins its digest. A digest the
+// host does not prepare, such as a stale deprecated one, is updated for once.
+func hostPinPolicyCurrent(pin state.HostPin, h execution.Host) bool {
+	return h.PolicyDigest == "" || h.PolicyDigest == pin.PolicyDigest || h.PolicyDigest == pin.Configured
 }
 
 // drainingWorkerNames names the workers whose executions hold the host

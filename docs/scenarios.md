@@ -212,7 +212,7 @@ then:
 | `github` | something that happens on [the scenario's GitHub](scenarios-github.md#steps) |
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
 | `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
-| `host` | changes an execution host's faults: `fault`, `slow` or `clear`, see [Execution hosts](#execution-hosts) |
+| `host` | changes an execution host's faults (`fault`, `slow`, `clear`) or policy (`config`), see [Execution hosts](#execution-hosts) |
 
 ### Expectations
 
@@ -544,7 +544,11 @@ the candidate.
 The `host` step changes a host's faults while the scenario runs:
 `host: {name: builder, fault: unreachable}`, `host: {name: builder, slow: 2s}`
 or `host: {name: builder, clear: true}`. `older-go` is part of a host's
-provisioning and only `given.hosts` names it.
+provisioning and only `given.hosts` names it. With `config`, the step changes
+the host's policy as an operator does: `host: {name: builder, config: {agents:
+{execution: {retention: 72h}}}}` lays the map over the host's own
+`config.yaml`, the host's beekeeper prepares its policy again, and the desk's
+`agents.hosts.<name>.policyDigest` names the digest prepare printed.
 
 ### The builder
 
