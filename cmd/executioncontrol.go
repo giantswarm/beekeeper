@@ -573,7 +573,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if v.Finished && v.Text == "" {
 			return "", nil, refused("final report is required")
 		}
-		if m := post.Unlinked(strings.Join(append([]string{v.Text}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
+		// The no-change proof becomes the comment that closes the task's issue.
+		if m := post.Unlinked(strings.Join(append([]string{v.Text, v.NoChange}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
 			return "", nil, refused("report refused: %s", strings.Join(m, "; "))
 		}
 		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
@@ -582,6 +583,12 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		outcomes, err := a.completionOutcome(ctx, st, *ag, v.Finished, v.NoChange, v.Blocked, v.By)
 		if err != nil {
 			return "", nil, err
+		}
+		if v.Finished && strings.TrimSpace(v.NoChange) != "" {
+			// Before clearRecords: the serve records name the task's issues.
+			closed, failed := a.closeNoChangeIssues(ctx, st, *ag, me, v.NoChange)
+			outcomes = append(outcomes, closed...)
+			problems = append(problems, failed...)
 		}
 		problems = freshWorkerProblems(ag, problems)
 		issue := taskIssue(st, *ag)
