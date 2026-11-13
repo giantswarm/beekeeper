@@ -104,15 +104,30 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 // A worker whose SSH execution ended for good keeps its roster entry, and
 // agents wake refuses it on every pass: the rework gives the entry to a fresh
 // fixer, as for a worker off the roster. An execution whose conversation can
-// go on, or that still runs, is woken.
+// go on, or that still runs, is woken, and so is a fresh fixer that took the
+// name since the pass read the roster (two pull requests of one worker in one
+// pass): it is never dropped for the ended execution the pass read.
 func TestReworkReplacesEndedSSHWorker(t *testing.T) {
+	retire := func(r *state.ExecutionRecord) {
+		r.Retirement = &state.ExecutionRetirement{ID: "retirement", Trigger: execution.RetireTriggerCrash}
+	}
 	for _, tc := range []struct {
 		name    string
 		end     func(*state.ExecutionRecord)
+		between func(*state.State)
 		replace bool
 	}{
-		{name: "retired execution", replace: true, end: func(r *state.ExecutionRecord) {
-			r.Retirement = &state.ExecutionRetirement{ID: "retirement", Trigger: execution.RetireTriggerCrash}
+		{name: "retired execution", replace: true, end: retire},
+		{name: "a fresh fixer took the name since the pass read it", end: retire, between: func(st *state.State) {
+			fresh := execution.Ref{Host: paramHost, Execution: "fresh-fixer-execution", Generation: 1}
+			i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+			st.Agents[i].Execution = &fresh
+			st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, Execution: &state.ExecutionRecord{
+				Handle:      execution.Handle{Ref: fresh},
+				Phase:       execution.Running,
+				Request:     execution.StartRequest{Harness: execution.HarnessClaude, Messaging: true},
+				Observation: execution.Observation{ProcessState: execution.Running, Ready: true},
+			}})
 		}},
 		{name: "stopped execution", replace: true, end: func(r *state.ExecutionRecord) {
 			r.StopRequest = &execution.StopRequest{ID: "hand-stop", Reason: "stopped by hand"}
@@ -150,6 +165,14 @@ func TestReworkReplacesEndedSSHWorker(t *testing.T) {
 			st, err := r.a.store.Read()
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.between != nil {
+				if err := r.a.store.Update(func(current *state.State) ([]state.Event, error) {
+					tc.between(current)
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			act := superloop.Action{Kind: superloop.KindRework, Agent: loopWorker, Ref: loopPR, URL: loopURL, Head: loopHead, Key: "rework", Message: "current findings"}
 			if err := l.WakeOrStartFixer(t.Context(), st, act); err != nil {

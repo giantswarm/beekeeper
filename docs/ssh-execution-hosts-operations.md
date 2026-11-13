@@ -689,11 +689,14 @@ superseded. A successful publication marks its transfer recovered. When host
 reconciliation confirms that the worker ended and collects its transcript,
 the watch advances retirement again in that same pass.
 
-A message cannot reach an execution that ended for good: one that is retired, stopped, released
-or never accepted its task. When the loop has work for such a worker on the roster (a review's
-findings, a red check, a conflict, a post-merge step), it does not wake it. It takes the entry off
-the roster, with an `agents.remove` line that names why, and starts a fresh fixer under the same
-name on the pull request's branch, as it does for a worker off the roster.
+A message cannot reach an execution that ended for good: one that is retired, stopped or
+released, whose host holds no journal of it, that never accepted its task, takes no messages, or
+runs a harness with no way back into its conversation. When the loop has work for such a worker on
+the roster (a review's findings, a red check, a conflict, a post-merge step), it does not wake it.
+It takes the entry off the roster, with an `agents.remove` line that names why, and starts a fresh
+fixer under the same name on the pull request's branch, as it does for a worker off the roster. A
+fixer that took the name since the loop's pass read the roster, such as one started for another
+pull request of the same worker, is woken and keeps its entry.
 
 The execution's inventory is in its host journal under `resources`, recorded
 before the resources exist: the worktree, its repository and branch, scratch,
