@@ -24,6 +24,11 @@ given:
       capacity:
         providers: {codex: {ceiling: 2}}
         choices: [{harness: codex, model: gpt-5.2-codex}]
+      # One delivery at a time: the saved review park keeps no claim on the
+      # board item, so without the limit the refill would start the item
+      # again once its worker left the roster. Once the merge ends the
+      # delivery, the review park's session serves the item.
+      delivery: {wipLimit: 1}
   github:
     repositories:
       - name: example/app
@@ -97,12 +102,14 @@ when:
   - advance: 2s
   - name: ci-green
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
-  # The worker leaves the roster for the review; its review park stays.
+  # The worker leaves the roster for the review; its review park stays, and
+  # the refill does not start the item again.
   - name: review
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
       - events: {contains: [agents.park, agents.remove, supervisor.review]}
+      - output: {not_contains: ['"app 1" started on']}
   - name: removed
     run: {args: [log, --verb, agents.remove, --json]}
     expect:
@@ -117,6 +124,7 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
+      - output: {not_contains: ['"app 1" started on']}
   - wait_for:
       timeout: 15s
       expect:
@@ -134,7 +142,8 @@ when:
     expect:
       - exit: 0
       - output: {contains: ["post-merge work requested"]}
-  # Its agents idle --done ran with exit 0: a refused one fails its turn.
+  # Its agents idle --done ran with exit 0: the command checks the outcome
+  # before it queues the report, and a refused one fails its turn.
   - wait_for:
       timeout: 15s
       expect:

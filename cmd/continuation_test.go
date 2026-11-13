@@ -476,9 +476,15 @@ func TestReviewParkContinuationKeepsTheMergedPullOfItsDelivery(t *testing.T) {
 				case args[0] == loop.LoopCapacity:
 					return loopRoomJSON, 0
 				case len(args) > 3 && args[0] == agentsName && args[1] == agentStartName:
-					// The start registers its session as agents start does.
+					// The start reads its brief file and registers its
+					// session as agents start does.
+					brief, err := readBrief(args[3])
+					if err != nil {
+						startErr = err
+						break
+					}
 					startErr = r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-						_, err := recordStart(st, state.Start{Party: next, At: now}, briefTask(args[3]), strings.Join(briefIssues(args[3]), ","), func(p state.Party) bool { return p.Is(next) })
+						_, err := recordStart(st, state.Start{Party: next, At: now}, briefTask(brief), strings.Join(briefIssues(brief), ","), func(p state.Party) bool { return p.Is(next) })
 						return nil, err
 					})
 				}
