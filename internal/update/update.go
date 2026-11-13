@@ -208,7 +208,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
 	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
-		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
+		return res, installFailed(res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s to %s.\n", res.Path, res.Latest)
@@ -321,7 +321,7 @@ func selectVersion(ctx context.Context, w io.Writer, version string, checkOnly b
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
 	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
-		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
+		return res, installFailed(res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s from %s to %s.\n", res.Path, res.Current, version)

@@ -1,0 +1,93 @@
+name: park-reason-may-say-held
+description: >
+  A worker parks on an issue with a reason in its own words, which happen to
+  say "held" (the editor's held-still source). --on alone says what a park
+  waits on: the loop records the park on the issue, and the issue's close
+  settles it. Before the fix the park inferred a hold wait from the reason's
+  words and refused the issue ("does not settle a hold wait") though nothing
+  was held.
+issue: https://github.com/giantswarm/beekeeper/issues/3741
+flow: regression
+tags: [regression, park]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Cut the opening sequence, board: Ready}
+          # What the worker waits on: no hold exists on the desk.
+          - {number: 2, title: The editor delivers the opening shot's source}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - beekeeper: [agents, park, --on, 'example/app#2', "the editor's held-still source for the opening shot"]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The refill starts a worker on the Ready item; it parks on the issue.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+  # The next pass applies the worker's park.
+  - advance: 2s
+  - name: apply
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park]}
+  - name: parked
+    run: {args: [agents, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: '[0].name', equals: app 1}
+      - json_path: {path: '[0].park.on', equals: 'example/app#2'}
+      - json_path: {path: '[0].park.refKind', equals: Issue}
+      - json_path: {path: '[0].park.waits', equals: "the editor's held-still source for the opening shot"}
+  # The issue closes: the watch's next reading of it, five minutes after
+  # the last, settles the park on it.
+  - github: {close: {repo: example/app, issue: 2}}
+  - advance: 6m
+  - name: settle
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.resumable]}
+
+then:
+  - events: {contains: [agents.start, agents.park, agents.resumable], not_contains: [session.report-rejected]}
+  - {step: settle, output: {contains: ['AGENT RESUMABLE "app 1": parked on example/app#2']}}
+  - worker: {name: app 1, turns: 1, outcome: finish}

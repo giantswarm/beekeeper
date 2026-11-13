@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -397,7 +397,7 @@ func (a *app) vaultSigninFailed(exe string, cause secret.SigninCause, tries int,
 // runSignin runs secret.signinCommand and reads the session it prints, as op
 // signin prints it, into memory; its other output goes to the journal.
 func runSignin(ctx context.Context, argv []string) (string, string, error) {
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the configured sign-in
+	c := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the configured sign-in
 	var out bytes.Buffer
 	var stderr strings.Builder
 	c.Env = withoutVaultEnv(os.Environ())
@@ -455,7 +455,7 @@ func tendVault(ctx context.Context, v *vaultBroker, now, touched time.Time, touc
 func opVault(ctx context.Context, env string, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	op := exec.CommandContext(ctx, "op", args...) //nolint:gosec // the broker's own op call
+	op := proc.CommandContext(ctx, "op", args...) //nolint:gosec // the broker's own op call
 	var stderr strings.Builder
 	op.Env = append(withoutVaultEnv(os.Environ()), env)
 	op.Stderr = &stderr

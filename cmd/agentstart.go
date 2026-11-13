@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -217,8 +216,9 @@ A worker start requires --dir to name exactly one main repository checkout
 and --branch to name a new branch. Parent folders and linked worktrees are
 refused with the available checkout paths. The session starts in the checkout
 so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
-created from the freshly fetched origin default branch. A --review start
-instead requires a pull request URL in its brief and creates a detached
+created from the freshly fetched origin default branch, with origin/<branch>
+as the branch's upstream, so a push never goes to the default branch. A
+--review start instead requires a pull request URL in its brief and creates a detached
 <state>/worktrees/<repo>/review-<number>-<unique-id>. Old review worktrees
 are preserved; each review start gets its own detached checkout.
 A brief spanning repositories must be split into one task per repository.
@@ -714,7 +714,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
+				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s, effort %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(level, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
 			}
 		},
 	}
@@ -740,6 +740,8 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
+	c.Flags().StringVar(&a.startDefaultEffort, defaultEffortFlag[2:], "", "the effort when no --effort, rule, choice or continued session gives one: the loop's supervisor.effort")
+	_ = c.Flags().MarkHidden(defaultEffortFlag[2:])
 	addTimerFlags(c)
 	return c
 }
@@ -798,7 +800,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		bin, err := exec.LookPath(agy.Comm)
+		bin, err := proc.LookPath(agy.Comm)
 		if err != nil {
 			return err
 		}
@@ -834,7 +836,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if _, err := a.codexModel(model); err != nil {
 			return err
 		}
-		_, err = exec.LookPath(codex.Comm)
+		_, err = proc.LookPath(codex.Comm)
 		return err
 	default:
 		resolvedDir, err := a.agentDir(dir, "")
@@ -844,7 +846,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		_, err = exec.LookPath(claudeComm)
+		_, err = proc.LookPath(claudeComm)
 		return err
 	}
 }
@@ -1031,7 +1033,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -2119,7 +2121,9 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 // serving an issue (owner/repo#n, briefIssue) is the session's serve record
 // from the start, so board next never offers that item again. The loop's
 // fresh continuation of a parked worker continues that task's delivery
-// (state.ContinueDelivery) rather than starting a new one.
+// (state.ContinueDelivery) rather than starting a new one. A review start
+// serves the pull request it reviews and starts no delivery: a reviewer
+// never owns the delivery of what it reviews.
 func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
@@ -2138,6 +2142,9 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 					return o.Session.Is(s.Party) && strings.EqualFold(o.Issue, iss)
 				}) {
 					st.Records = append(st.Records, state.Record{Session: s.Party, Issue: iss, By: s.By, At: s.At})
+					if s.Kind == capacity.TaskKindReview {
+						continue
+					}
 					if continued != nil {
 						st.ContinueDelivery(iss, ag.Name, parkedPull(continued), s.At)
 					} else {
@@ -2512,7 +2519,7 @@ func devBuild() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	onPath, err := exec.LookPath("beekeeper")
+	onPath, err := proc.LookPath("beekeeper")
 	if err == nil {
 		if a, err1 := os.Stat(self); err1 == nil {
 			if b, err2 := os.Stat(onPath); err2 == nil && os.SameFile(a, b) {

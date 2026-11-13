@@ -314,9 +314,6 @@ func (a *app) idleDeliveryPullStates(ctx context.Context, st *state.State, by st
 		return nil, nil
 	}
 	ag := st.Agents[i]
-	if slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool { return sameReviewSession(r.Reviewer, ag.Party) }) {
-		return nil, nil
-	}
 	var refs []github.PR
 	for _, idx := range workerDeliveries(st, ag) {
 		d := st.Deliveries[idx]

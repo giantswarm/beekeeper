@@ -352,6 +352,7 @@ completion is refused under --as.`,
 					return nil, err
 				}
 				found = freshWorkerProblems(ag, found)
+				issue := taskIssue(st, *ag)
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished || blocked
@@ -364,6 +365,9 @@ completion is refused under --as.`,
 					for _, r := range clearRecords(st, ag.Party) {
 						evs = append(evs, event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r)))
 					}
+				}
+				if finished && !blocked {
+					evs = append(evs, retireTaskParks(st, me, *ag, issue, a.now)...)
 				}
 				if report != "" || len(found) > 0 {
 					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found, TellTo: reviewStarter(st, *ag, report)})

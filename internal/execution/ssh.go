@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Endpoint names an operator-provisioned SSH route, never shell source.
@@ -161,7 +162,7 @@ func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error
 	if len(argv) < 2 {
 		return nil, errors.New("missing SSH command")
 	}
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed SSH executable and validated argument vector
+	c := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed SSH executable and validated argument vector
 	c.WaitDelay = commandDrainWait
 	c.Stdin = bytes.NewReader(stdin)
 	out := &boundedBuffer{limit: MaxWire}

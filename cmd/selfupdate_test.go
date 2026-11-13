@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
@@ -402,5 +404,98 @@ func TestProbationHealthClassifiesCanaryFailures(t *testing.T) {
 	runCanaryCheck = func(context.Context, string, ...string) (string, error) { return "ok", nil }
 	if err := probationHealth(context.Background(), "", "candidate"); err != nil {
 		t.Fatalf("healthy candidate: %v", err)
+	}
+}
+
+// A loaded host slows every binary: a check of the candidate that runs out of
+// its minute is run by the running release, within five minutes, and then by
+// the candidate again, within twice the running release's time and a minute
+// at least. The candidate passes and the update says why it waited; a fixed
+// minute refused it (https://github.com/giantswarm/beekeeper/issues/3852).
+func TestCanaryRunsACheckThatRanOutOfTimeAgain(t *testing.T) {
+	running, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := runCanaryCheck
+	t.Cleanup(func() { runCanaryCheck = prev })
+	status := []string{supervisorName, executionStatus}
+	var runs []string
+	var within []time.Duration
+	runCanaryCheck = func(ctx context.Context, path string, args ...string) (string, error) {
+		if !slices.Equal(args, status) {
+			return "ok", nil
+		}
+		runs = append(runs, path)
+		if at, ok := ctx.Deadline(); ok {
+			within = append(within, time.Until(at))
+		}
+		if len(runs) == 1 {
+			return "", fmt.Errorf("%w: signal: killed", context.DeadlineExceeded)
+		}
+		return "ok", nil
+	}
+	var out bytes.Buffer
+	if err := (&app{}).canaryRelease(context.Background(), &out, testCandidateBinary, "v1.5.0"); err != nil {
+		t.Fatalf("a candidate that ran out of time on a slow check was refused: %v\n%s", err, out.String())
+	}
+	if want := []string{testCandidateBinary, running, testCandidateBinary}; !slices.Equal(runs, want) {
+		t.Fatalf("supervisor status ran on %v, want %v", runs, want)
+	}
+	near := func(got, want time.Duration) bool { return got > want-5*time.Second && got <= want }
+	if len(within) != 3 || !near(within[0], time.Minute) || !near(within[1], 5*time.Minute) || !near(within[2], time.Minute) {
+		t.Fatalf("deadlines %v, want a minute, five minutes and a minute", within)
+	}
+	if want := "Canary supervisor status ran out of its 1m0s deadline; the running release's same check took "; !strings.Contains(out.String(), want) {
+		t.Fatalf("output %q, want %q", out.String(), want)
+	}
+}
+
+// A version probe that runs out of its minute while the running release's own
+// probe does not pass either judges the host, not the candidate: probation
+// stays pending and the release is not skipped. A candidate that runs out of
+// time again where the running release answered fails the probe as a broken
+// one did before: it is skipped and its probation fails.
+func TestCanaryTimeoutOnABusyHostJudgesTheHost(t *testing.T) {
+	running, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{store: store}
+	prev := runCanaryCheck
+	t.Cleanup(func() { runCanaryCheck = prev })
+	runningAnswers := false
+	runCanaryCheck = func(_ context.Context, path string, args ...string) (string, error) {
+		if !slices.Equal(args, []string{hostVersionFlag}) {
+			return "ok", nil
+		}
+		if path == running && runningAnswers {
+			return "beekeeper v1.4.0", nil
+		}
+		return "", fmt.Errorf("%w: signal: killed", context.DeadlineExceeded)
+	}
+
+	err = probationHealth(context.Background(), "", testCandidateBinary)
+	if !errors.Is(err, update.ErrHealthUnproven) || !strings.Contains(err.Error(), "the host is too busy") {
+		t.Fatalf("busy host: probation = %v, want unproven, the host too busy", err)
+	}
+	if err := a.canaryRelease(context.Background(), io.Discard, testCandidateBinary, "v1.5.0"); err == nil {
+		t.Fatal("busy host: the candidate passed a check nothing passed")
+	}
+	if a.isSkippedRelease("v1.5.0") {
+		t.Fatal("busy host: the release was skipped")
+	}
+
+	runningAnswers = true
+	err = probationHealth(context.Background(), "", testCandidateBinary)
+	if err == nil || errors.Is(err, update.ErrHealthUnproven) || !strings.Contains(err.Error(), "on its second run") {
+		t.Fatalf("hung candidate: probation = %v, want a failed version probe", err)
+	}
+	if err := a.canaryRelease(context.Background(), io.Discard, testCandidateBinary, "v1.5.1"); err == nil || !a.isSkippedRelease("v1.5.1") {
+		t.Fatalf("hung candidate: canary = %v, skipped = %v", err, a.isSkippedRelease("v1.5.1"))
 	}
 }

@@ -6,8 +6,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // BotStatus reads only the public certificate emitted by tbot. It never reads
@@ -37,7 +38,7 @@ func BotStatus(certificate string) (Profile, error) {
 
 // BotRunning checks supervision without exposing logs, tokens or diagnostics.
 func BotRunning(ctx context.Context) error {
-	if err := exec.CommandContext(ctx, "systemctl", "--user", "is-active", "--quiet", "beekeeper-teleport.service").Run(); err != nil {
+	if err := proc.CommandContext(ctx, "systemctl", "--user", "is-active", "--quiet", "beekeeper-teleport.service").Run(); err != nil {
 		return errors.New("tbot user service is not active; inspect beekeeper-teleport.service")
 	}
 	return nil

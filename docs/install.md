@@ -12,7 +12,9 @@ PATH entries so it can find GitHub and worker CLIs outside the service
 manager's default PATH; rerun install after changing tool directories.
 Later installs update its definition;
 a replaced binary is re-executed at the loop's next quiet pass, after
-pending timer actions finish. `beekeeper uninstall` removes the service
+pending timer actions finish, or once its claims in flight have held it for
+`supervisor.restartWait` (10m), with the merge decisions running meanwhile
+([the supervisor loop](supervisor-loop.md#a-new-release)). `beekeeper uninstall` removes the service
 recorded in `install.json`. While it is down the standby watch restarts
 its systemd service on Linux (on macOS launchd restarts a failed loop
 itself); no session ever stands in for it.

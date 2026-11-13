@@ -228,7 +228,7 @@ func defineIssues() {
 		"headRepositoryOwner": func(x *gqlExec, p *Pull, _ args) any { return x.m.Account(p.Repo.Owner, "") },
 		"isCrossRepository":   func(_ *gqlExec, _ *Pull, _ args) any { return false },
 		"maintainerCanModify": func(_ *gqlExec, _ *Pull, _ args) any { return false },
-		"mergeable":           func(_ *gqlExec, p *Pull, _ args) any { return p.MergeableState() },
+		"mergeable":           func(x *gqlExec, p *Pull, _ args) any { return x.m.MergeableState(p) },
 		"mergeStateStatus":    func(x *gqlExec, p *Pull, _ args) any { return x.m.MergeStateStatus(p) },
 		"reviewDecision": func(_ *gqlExec, p *Pull, _ args) any {
 			if d := p.ReviewDecision(); d != "" {

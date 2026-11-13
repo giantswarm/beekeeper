@@ -1,9 +1,9 @@
 package guard
 
 import (
+	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // syncCapper runs the command uncapped, safe for runs in parallel.
@@ -21,8 +22,8 @@ func (syncCapper) Capped() bool                          { return false }
 func (syncCapper) Adopt(int, string, platform.Cap) error { return nil }
 func (syncCapper) CapSlot(platform.Cap) error            { return nil }
 func (syncCapper) Reap(string) ([]int, error)            { return nil, nil }
-func (syncCapper) Command(_ string, _ platform.Cap, argv []string) (*exec.Cmd, error) {
-	return exec.Command(argv[0], argv[1:]...), nil //nolint:gosec // the test's own command
+func (syncCapper) Command(_ string, _ platform.Cap, argv []string) (*proc.Cmd, error) {
+	return proc.CommandContext(context.Background(), argv[0], argv[1:]...), nil //nolint:gosec // the test's own command
 }
 
 // fastPoll shortens the waiters' poll for a test.

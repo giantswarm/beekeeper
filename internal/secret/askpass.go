@@ -9,11 +9,12 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // AskpassArgs are the arguments after the binary that make beekeeper the
@@ -143,7 +144,7 @@ func askpassGit(ctx context.Context, v, user, ref string, argv []string) (int, s
 	if err := gitCredentialFree(ctx, argv); err != nil {
 		return 0, "", err
 	}
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // an allow-listed git operation
+	c := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // an allow-listed git operation
 	c.Env = gitEnv(os.Environ(), helper)
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
@@ -157,7 +158,7 @@ func askpassGit(ctx context.Context, v, user, ref string, argv []string) (int, s
 	}()
 	code := 0
 	if err := c.Wait(); err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if !errors.As(err, &ee) {
 			return 0, "", err
 		}
@@ -177,7 +178,7 @@ func gitCredentialFree(ctx context.Context, argv []string) error {
 		return nil
 	}
 	q := append(slices.Clone(argv[:op]), "config", "--local", "--includes", "--get-regexp", `^credential\.`)
-	c := exec.CommandContext(ctx, q[0], q[1:]...) //nolint:gosec // git config, read only
+	c := proc.CommandContext(ctx, q[0], q[1:]...) //nolint:gosec // git config, read only
 	c.Env = gitEnv(os.Environ(), "")
 	out, err := c.Output()
 	if err == nil && len(bytes.TrimSpace(out)) > 0 {

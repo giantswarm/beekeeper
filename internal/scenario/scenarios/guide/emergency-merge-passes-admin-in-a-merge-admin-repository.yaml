@@ -1,0 +1,90 @@
+name: emergency-merge-passes-admin-in-a-merge-admin-repository
+description: >
+  The guide holds the person's emergency grant and merges two pull requests
+  a desk review approved at their heads, both green. Each base requires a
+  GitHub approval, which the desk's own review, a comment of the same login,
+  cannot give: GitHub keeps both at REVIEW_REQUIRED and BLOCKED. example/app
+  is a repository of merge.admin, which the desk merges with --admin after
+  its approved review: its emergency merge passes --admin at the reviewed
+  head, as the loop's own merge does, and merges; the desk's log records it
+  as an admin merge with the person's words. example/lib is none: its
+  emergency merge stays the plain merge, which its base's policy refuses,
+  and the pull request stays open.
+issue: https://github.com/giantswarm/beekeeper/issues/3691
+flow: guide
+tags: [guide, emergency, merge, admin]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      merge: {admin: [example/app]}
+  github:
+    repositories:
+      - name: example/app
+        protection:
+          - {branch: main, required_reviews: 1, required_checks: [build]}
+        pulls:
+          - number: 1
+            title: "fix: the app's change"
+            head: app-fix
+            reviews: [{author: desk, state: commented, body: "Desk review (opus): approved"}]
+            checks: [{name: build, state: green}]
+      - name: example/lib
+        protection:
+          - {branch: main, required_reviews: 1, required_checks: [build]}
+        pulls:
+          - number: 1
+            title: "fix: the lib's change"
+            head: lib-fix
+            reviews: [{author: desk, state: commented, body: "Desk review (opus): approved"}]
+            checks: [{name: build, state: green}]
+  harness:
+    workers:
+      # The guide's run takes the role, enables the person's grant and
+      # merges both pull requests.
+      - name: Guide run 1
+        harness: claude
+        turns:
+          - steps:
+              - beekeeper: [guide, start]
+              - beekeeper: [emergency, 'on', --reason, 'Merge the approved pull requests now.', --until, 1h]
+              - beekeeper: [emergency, merge, example/lib, '1']
+                exit: 1
+              - beekeeper: [emergency, merge, example/app, '1']
+            outcome: finish
+
+when:
+  # The person starts the guide's next run from a terminal.
+  - name: start
+    run: {args: [--as, scenario, guide, start, --new]}
+    expect:
+      - exit: 0
+      - output: {contains: ['started "Guide run 1"']}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: Guide run 1, turns: 1, outcome: finish}
+  - name: actions
+    run: {args: [log, --verb, emergency.action]}
+    expect:
+      - exit: 0
+
+then:
+  # example/app merged with --admin at its reviewed head.
+  - github: {pull: {repo: example/app, number: 1, state: merged, merged_into: main}}
+  - calls: {program: gh, args: [pr, merge, '1', --repo, example/app, --squash, --admin, --match-head-commit, '[0-9a-f]{40}'], min: 1, max: 1}
+  # example/lib kept the plain merge, which its base's policy refused.
+  - github: {pull: {repo: example/lib, number: 1, state: open}}
+  - calls: {program: gh, args: [pr, merge, '1', --repo, example/lib, --squash, --match-head-commit, '[0-9a-f]{40}'], min: 1, max: 1}
+  - calls: {program: gh, args: [pr, merge, --repo, example/lib, --admin], max: 0}
+  # Each attempt is logged with the person's words; only example/app's as an
+  # admin merge.
+  - step: actions
+    output:
+      contains:
+        - admin merge https://github.com/example/app/pull/1 at
+        - merge https://github.com/example/lib/pull/1 at
+        - Merge the approved pull requests now.
+      not_contains: [admin merge https://github.com/example/lib/pull/1]
+  - events: {contains: [emergency.on, emergency.action, emergency.result]}

@@ -83,6 +83,7 @@ func TestParseRejects(t *testing.T) {
 		{"cpu of a run step", "name: x\nflow: smoke\nwhen:\n  - {name: b, background: {args: [watch]}}\n  - run: {args: [version]}\nthen:\n  - cpu: {name: b, max: 0.1}\n", "cpu is not observed for a run step"},
 		{"rewrite too often", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {generate: {agents: 3}, rewrite: 10ms}\nwhen:", 1), "more often than every 100ms"},
 		{"rewrite without workers", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {generate: {records: 3}, rewrite: 1s}\nwhen:", 1), "no generate.agents"},
+		{"checkout of no repository", strings.Replace(validScenario, "when:", "given:\n  checkouts: [example/app]\nwhen:", 1), `given.checkouts: "example/app" is no repository of the scenario`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))

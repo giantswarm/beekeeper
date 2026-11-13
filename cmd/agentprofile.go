@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -56,7 +56,7 @@ type installedPlugin struct {
 // listPlugins lists every plugin Claude Code has installed, of any
 // marketplace and scope; tests replace it.
 var listPlugins = func(ctx context.Context) ([]installedPlugin, error) {
-	out, err := exec.CommandContext(ctx, "claude", "plugin", "list", "--json").Output()
+	out, err := proc.CommandContext(ctx, "claude", "plugin", "list", "--json").Output()
 	if err != nil {
 		return nil, fmt.Errorf("listing Claude Code's plugins (claude plugin list --json): %w", err)
 	}

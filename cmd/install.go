@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -214,7 +213,7 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 
 // hasAgy reports whether the agy CLI is installed on PATH.
 func hasAgy() bool {
-	_, err := exec.LookPath("agy")
+	_, err := proc.LookPath("agy")
 	return err == nil
 }
 
@@ -243,7 +242,7 @@ func agyConfigPath(home, name string, agyInstalled bool) string {
 
 // hasCodex reports whether the codex CLI is installed on PATH.
 func hasCodex() bool {
-	_, err := exec.LookPath("codex")
+	_, err := proc.LookPath("codex")
 	return err == nil
 }
 
@@ -296,7 +295,7 @@ func codexConfigPath(home, name string, codexInstalled bool, cfg ...config.Codex
 
 // runCommand runs one service manager command, its output in the error.
 func runCommand(ctx context.Context, argv []string) error {
-	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // the platform's own service manager commands
+	out, err := proc.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // the platform's own service manager commands
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

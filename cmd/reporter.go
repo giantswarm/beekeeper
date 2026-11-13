@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -201,7 +200,7 @@ func (w *watcher) launchReport(unit, id, name, prompt string) error {
 		return err
 	}
 
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return err
 	}

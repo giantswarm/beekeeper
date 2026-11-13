@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -39,6 +40,37 @@ func (d *driver) seedState() error {
 	}
 	if err := generateEvents(filepath.Join(stateDir, "events.jsonl"), now, gen); err != nil {
 		return fmt.Errorf("given.state: %w", err)
+	}
+	return nil
+}
+
+// seedHostPins records the release each of given.hosts is pinned to
+// (pinned), with the policy digest its provisioning prepared (entries, the
+// desk's agents.hosts), as the coordinator's agents hosts update records a
+// host it brought to a release.
+func (d *driver) seedHostPins(entries map[string]any) error {
+	var pins []state.HostPin
+	for _, h := range d.s.Given.Hosts {
+		if h.Pinned == "" {
+			continue
+		}
+		entry, _ := entries[h.Name].(map[string]any)
+		digest, _ := entry["policyDigest"].(string)
+		identity, _ := entry["identity"].(string)
+		pins = append(pins, state.HostPin{Selector: h.Name, Identity: execution.HostID(identity), Version: h.Pinned, PolicyDigest: digest, PinnedAt: d.clock.Now().UTC()})
+	}
+	if len(pins) == 0 {
+		return nil
+	}
+	store, err := state.OpenVersion(stateDir, "")
+	if err != nil {
+		return err
+	}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.HostPins = append(st.HostPins, pins...)
+		return nil, nil
+	}); err != nil {
+		return fmt.Errorf("given.hosts pinned: %w", err)
 	}
 	return nil
 }

@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -65,7 +65,7 @@ func Probe(parentCtx context.Context, binary, server, scratch string) error {
 	defer api.Close()
 	p.env = append(p.env, "BEEKEEPER_GITHUB_API="+api.URL)
 	for range 2 {
-		c := exec.CommandContext(ctx, binary, "supervisor", "loop", "--once") //nolint:gosec // the installed candidate under probation
+		c := proc.CommandContext(ctx, binary, "supervisor", "loop", "--once") //nolint:gosec // the installed candidate under probation
 		c.Env, c.Dir = p.env, dir
 		if out, err := c.CombinedOutput(); err != nil {
 			// A canceled caller says nothing about the candidate; a candidate
@@ -91,7 +91,7 @@ func CandidateProbe(ctx context.Context, binary, server, scratch string) error {
 	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout+5*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, binary, "self-update", installationProbeFlag) //nolint:gosec // verified candidate
+	c := proc.CommandContext(ctx, binary, "self-update", installationProbeFlag) //nolint:gosec // verified candidate
 	out, err := c.CombinedOutput()
 	if err == nil {
 		return nil
@@ -99,7 +99,7 @@ func CandidateProbe(ctx context.Context, binary, server, scratch string) error {
 	if parentCtx.Err() != nil {
 		return fmt.Errorf("%w: %w", ErrInconclusive, parentCtx.Err())
 	}
-	var exit *exec.ExitError
+	var exit *proc.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 75 {
 		return fmt.Errorf("%w: %s", ErrInconclusive, tail(out))
 	}
@@ -138,7 +138,7 @@ type probe struct {
 func (p *probe) path(name string) string { return filepath.Join(p.dir, name) }
 
 func (p *probe) run(cwd string, args ...string) (string, error) {
-	c := exec.CommandContext(p.ctx, p.git, args...) //nolint:gosec // this machine's git on a scratch repository
+	c := proc.CommandContext(p.ctx, p.git, args...) //nolint:gosec // this machine's git on a scratch repository
 	c.Dir, c.Env = p.path(cwd), p.env
 	out, err := c.CombinedOutput()
 	if err != nil {
@@ -159,7 +159,7 @@ func (p *probe) runAll(cwd string, steps ...[]string) error {
 // prepare builds the origin, one reviewed change, the configuration and the
 // state, as the integration test's no-checkout scenario does.
 func (p *probe) prepare(server string) (err error) {
-	if p.git, err = exec.LookPath(gitCmd); err != nil {
+	if p.git, err = proc.LookPath(gitCmd); err != nil {
 		return err
 	}
 	for _, d := range []string{"bin", serverDir} {

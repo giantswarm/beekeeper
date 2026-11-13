@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"slices"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -22,7 +21,7 @@ func DesktopWindowActive(ctx context.Context) (bool, error) {
 	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") == "" {
 		return false, nil
 	}
-	out, err := exec.CommandContext(ctx, "hyprctl", "-j", "activewindow").Output()
+	out, err := proc.CommandContext(ctx, "hyprctl", "-j", "activewindow").Output()
 	if err != nil {
 		return false, err
 	}
