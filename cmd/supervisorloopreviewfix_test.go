@@ -318,8 +318,18 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 				if call != nil || !strings.Contains(r.out.String(), "SUPERVISOR MERGE POLICY REFUSED") || !strings.Contains(r.out.String(), reason) {
 					t.Fatalf("policy refusal requested repair or lost its reason: %v\n%s", r.calls, r.out)
 				}
-			} else if call == nil || !strings.Contains(call[3], reason) {
-				t.Fatalf("gate diagnostics hid the mutation result: %v\n%s", r.calls, r.out)
+			} else {
+				if call != nil {
+					t.Fatalf("conflict returned to the author: %v", call)
+				}
+				start := r.called(agentsName, agentStartName, loopReviewer)
+				if start == nil {
+					t.Fatalf("no reviewer repair turn: %v\n%s", r.calls, r.out)
+				}
+				brief, err := os.ReadFile(start[3])
+				if err != nil || !strings.Contains(string(brief), reason) {
+					t.Fatalf("reviewer repair lost the gate diagnostic: %v: %s", err, brief)
+				}
 			}
 		})
 	}
@@ -374,7 +384,11 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 				t.Fatalf("fixer brief missing branch or findings:\n%s", briefText)
 			}
 
-			// Pass 3: the fixer pushes loopFixed and parks for desk review; it ends and R2 starts.
+			// Pass 3: the fixer pushes loopFixed and parks for desk review; it
+			// ends, and the loop merges the fixed head through the gate
+			// (--reviewed-head) with no worker waiting: the pull request had its
+			// one review, whatever supervisor.reviewRounds says, and no second
+			// round starts (https://github.com/giantswarm/beekeeper/issues/3861).
 			r.pull.Head = loopFixed
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				party := state.Party{Name: loopWorker, Session: "worker-session-2"}
@@ -388,16 +402,11 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 			if r.called(agentsName, loop.LoopRemove, loopWorker) == nil {
 				t.Fatalf("fixer worker was not ended on review park: %v\n%s", r.calls, r.out)
 			}
-			reviewer2 := superloop.ReviewerName(loopPR, 2)
-			if r.called(agentsName, agentStartName, reviewer2) == nil {
-				t.Fatalf("second review round did not start: %v\n%s", r.calls, r.out)
+			if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 2)) != nil {
+				t.Fatalf("a second review round started: %v\n%s", r.calls, r.out)
 			}
-
-			// Pass 4: R2 approves; the loop merges through gate (--reviewed-head) with no worker waiting.
-			r.verdict("R2", loopFixed, superloop.Approved, "")
-			r.pass(t)
 			if r.called(gateCmdName) == nil || r.lastMerged != loopFixed {
-				t.Fatalf("approved second round did not merge: %v\n%s", r.calls, r.out)
+				t.Fatalf("the fixed head did not merge: %v\n%s", r.calls, r.out)
 			}
 		})
 	}
@@ -489,8 +498,9 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 		t.Fatalf("plain fixer park lost original Serves or PostMerge: %+v", st.ReviewParks)
 	}
 
-	// Pass 4: R2 approves and merges. The continuation waits for local
-	// room even though the execution host has room.
+	// Pass 4: the fixed head merges on the loop's go (a later approval of
+	// it changes nothing). The continuation waits for local room even
+	// though the execution host has room.
 	r.verdict("R2", loopFixed, superloop.Approved, "")
 	r.pass(t)
 	r.pull.State = superloop.Merged

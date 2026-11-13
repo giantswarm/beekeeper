@@ -129,8 +129,15 @@ parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
    `given.repositories` and of `given.github`'s repositories under
-   `/work/origins/<owner>/<name>.git`, and a root for each of
-   `given.hosts` (see [Execution hosts](#execution-hosts)).
+   `/work/origins/<owner>/<name>.git`, a clone of each of
+   `given.checkouts` at `/work/src/<owner>/<name>` (its origin the
+   repository's GitHub URL, `/work/src` in `agents.roots`, so a start's
+   `--dir` may name it), and a root for each of
+   `given.hosts` (see [Execution hosts](#execution-hosts)). A repository
+   with `checkout` also gets a person's main checkout, cloned under its
+   GitHub URL to `/work/checkouts/<owner>/<name>` with the Git
+   configuration `checkout.config` names; `agents.roots` then holds
+   `/work/checkouts` too, so a hand start's `--dir` may name it.
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -140,6 +147,9 @@ parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
    scenario**. With `given.github`, `gh` and the GitHub API are answered
    by a model instead: see [The scenario's GitHub](scenarios-github.md).
+   So is the `gh` that `devctl auth exec -- gh …` runs (the reviewed merge
+   of a `merge.devctlOwners` repository); every other `devctl` call is a
+   `given.calls` entry's to answer.
    Beside it the world serves its clock (see [The clock](#the-clock)),
    which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
@@ -169,6 +179,9 @@ given:
       capacity: {ceiling: 4}
   repositories:
     - name: example/app
+      checkout:                      # optional: /work/checkouts/example/app
+        config: {push.default: upstream}   # git config in the checkout
+  checkouts: [example/app]           # cloned on the desk at /work/src/example/app
   calls:
     - program: gh
       # Every pattern must match one argument whole (a regular expression;
@@ -176,6 +189,9 @@ given:
       args: [api, graphql, 'query=.*items\(first:80.*']
       respond: {stdout: '{"data": …}', stderr: '', exit: 0}
       times: 1                       # answer at most once; default always
+    - program: devctl
+      args: [release, wait]
+      respond: {stdout: '{"verdict": "available"}', delay: 25s}  # real time, at most 50s
   clock:
     start: "2026-11-12T09:00:00Z"   # the world's time at the start; default now
   tools: [go, golangci-lint]         # further programs on PATH, answered by given.calls only
@@ -433,7 +449,8 @@ over a model, so a scenario can override any call.
   `--version` and `login status` answer a host's probes.
 - **`agy`**: `--input-format stream-json --output-format stream-json` under
   `agy-run`, with `init` naming the conversation, a `user_input` step per
-  message and `result`. Also `models` and `--version`.
+  message and `result`. Also `models`, `--version` and the usage probe
+  `-p /usage` (`harness.usage.agy`, the Gemini models' bucket).
 - **`omp`**: `--mode rpc` with its standard input on its inbox, one turn per
   `steer` command. Also `models --json` and `--version`.
 - **`systemd-run`, `systemctl`**: the user's service manager. The world runs
@@ -478,6 +495,7 @@ given:
   harness:
     usage:                           # what a harness's usage probe reports
       claude: {session: 40, week: 20}  # percent of the 5-hour and 7-day windows
+      agy: {session: 10, week: 5}      # the Gemini models' windows
       codex:
         session: 10
         week: 5
@@ -552,7 +570,13 @@ given:
       fault: unreachable             # optional, see below
       slow: 300ms                    # delay of every ssh call to it
       config: {}                     # laid over the host's own config.yaml
+      pinned: v1.0.0-rc.1            # the release the desk pinned it to
 ```
+
+`pinned` records the host in the desk's state (`hostPins`) as pinned to that release, with the
+policy digest it prepared, as an earlier coordinator's `agents hosts update` left it. A desk on
+another release (`given.releases.installed`) finds the host behind its own; the host still runs
+the candidate.
 
 | Fault | What happens |
 | --- | --- |

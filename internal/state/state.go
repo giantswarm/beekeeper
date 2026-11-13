@@ -1505,11 +1505,13 @@ type HostPin struct {
 	// Reported says the supervisor loop handed the hold on as its finding.
 	Reported bool `json:"reported,omitempty"`
 	// Behind is the first coordinator release the host did not follow
-	// while it drained or waited; BehindReported says the supervisor loop
-	// handed on, once, that it stayed behind for more than that release.
-	// The next successful update clears both.
-	Behind         string `json:"behind,omitempty"`
-	BehindReported bool   `json:"behindReported,omitempty"`
+	// while it drained or waited, since BehindSince; BehindReported says
+	// the supervisor loop handed on, once, that it stayed behind for more
+	// than that release or past its bound. The next successful update
+	// clears them.
+	Behind         string    `json:"behind,omitempty"`
+	BehindSince    time.Time `json:"behindSince,omitzero"`
+	BehindReported bool      `json:"behindReported,omitempty"`
 
 	rest rest
 }

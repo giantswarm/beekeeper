@@ -79,6 +79,38 @@ retain their own admission. Supervisor status names the scan hold.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+## One desk review per pull request
+
+A pull request gets one desk review
+([#3861](https://github.com/giantswarm/beekeeper/issues/3861)). The loop starts it once the
+head its worker parked on is green. Once any round gave a verdict, no review starts again
+for that pull request, whatever head comes next: not by the loop, not by `agents review` by
+hand (it refuses with exit 3), not after a continuation; `supervisor.reviewRounds` adds no
+rounds. A running reviewer holds the pull request even if its head moves before the verdict.
+A second round starts only when the first ended without any verdict, since the one review
+has still to come.
+
+- **The reviewer fixes its findings.** It pushes one commit to the branch and approves the
+  head it pushed, without waiting for its CI. A red check on that head returns to the reviewer
+  for a repair turn; once it is green the loop gives it the merge go and merges it.
+  The approval stays the pull request's review when the head moves on later.
+- **Findings the reviewer cannot fix** go to the worker word for word. Its green fix, parked
+  on, gets the merge go without a second review.
+- **Nobody updates the branch.** No worker, fixer, reviewer or the loop merges the base into
+  an approved or green branch or rebases it to make it current: that only runs CI again.
+  The loop merges the approved head as it is, and the merge-result check of base plus head
+  is the gate. A real conflict returns to the reviewer for one repair, without another
+  review verdict. A red merge result goes back to the worker as a finding. The repaired
+  head merges on the same approval, and other pull requests keep merging meanwhile.
+
+The behavioral scenarios `delivery/board-item-to-merged-and-done`,
+`delivery/moved-head-keeps-its-active-reviewer`,
+`delivery/push-after-approval-merges-without-a-second-review`,
+`delivery/reviewer-fixes-and-the-loop-merges`, `merge-result/approved-head-merges-as-is-after-main-moved`,
+`merge-result/a-real-conflict-is-repaired-once` and
+`merge-result/red-result-hands-back-while-others-merge` hold these rules
+([#3862](https://github.com/giantswarm/beekeeper/issues/3862)).
+
 ## Outages and emergencies
 
 `beekeeper fatal status` reports each outage's scope. A red repository default
@@ -89,6 +121,14 @@ keeps its exception through review and worker handoffs, but still requires green
 CI and merge-result validation, independent review, and the normal stop and hold
 checks. Infrastructure outages retain the global ordinary-start barrier. A
 successful probe clears only its own outage; an unreadable probe clears none.
+
+The fatal sentinel (`beekeeper fatal scan`, once a minute) starts one repair
+session per outage at a time, at most three per outage, ten minutes apart. A
+repair start that fails runs no repair: the incident keeps its error
+(`startError` and the outcome in `fatal status`, the `fatal.repair` event and
+the sentinel's journal), and the next pass starts the next attempt without the
+ten minutes. When the last start fails, the guide gets a GUIDE PROBLEM with that
+error, and the sentinel starts no further repair of the outage.
 
 On the person's explicit emergency authorization, the current guide can run `beekeeper emergency on --reason
 "<their verbatim words>" --until 30m`, then `beekeeper emergency merge owner/repo 123`. The merge
@@ -119,9 +159,11 @@ is in `supervisor.ownership.bots`. The sweep then lists the bot's open pull
 requests in the repositories the desk owns (no `team`, the team's own by its
 team files, or `supervisor.ownership.review`; never `never`): one without a
 live owner for 15 minutes gets the loop's review, on approval its go, and the
-gated merge follows as for the desk's own. A head the bot moves (a rebase after
-another merge) gets a new review. A worker's park on one requests the same
-review at once.
+gated merge follows as for the desk's own. A head the bot moves after the
+approval keeps it when it only rebases onto the base or merges it; any other
+change gets a worker that takes it over and parks for the go, never a second
+review ([one desk review per pull request](#one-desk-review-per-pull-request)). A worker's park on one
+requests the same review at once.
 
 Independently, `beekeeper emergency auto-install pause --reason "<their words>"`
 pauses the loop's release installation without stopping reviews, merges or
@@ -234,7 +276,7 @@ files one alarm for the guide that names what holds it:
 | unread | the pull request the loop cannot read, so no pass plans or runs its decision |
 | repair | the failed merge and why the branch repair it requested has no worker yet |
 | failed | the last run's error and, under backoff, when the loop retries |
-| restart | a loop that runs no action while it restarts into a replaced binary |
+| restart | a fenced loop that runs no action while it restarts into a replaced binary |
 | pass | the error that ended the pass before it planned |
 
 The alarm is delivered once per pending head and cause, and no sooner than 15 minutes after
@@ -243,6 +285,23 @@ A pass that ends before it plans (held GitHub observations, a restart, an error)
 the pending decisions and names what ended it. The waits, the causes already named and the last
 cause read survive a restart of the loop, so a new release neither restarts the 15 minutes nor
 repeats an alarm. `SUPERVISOR STALL ENDED` says when an alarmed decision is no longer pending.
+
+## A new release
+
+A release installed over the loop's binary is re-executed at the next quiet point: no claim in
+flight (a merge, a review or worker start, a refill, intake, retirement). While claims are in
+flight the loop says `SUPERVISOR LOOP restart held: claims are in flight (<claims>)` once, with
+the time it re-executes at the latest, and its passes go on: they observe, plan and run the merge
+decisions, and skip their housekeeping (reports, timers, alerts, wakes, recoveries) and every
+other action, which wait for the new binary. A merge's claim ends when GitHub reports the merge:
+its gate leaves the release wait to its merge-child (`--until-merged`, [the merge
+gate](merge-gate.md)), and the loop tracks the delivery's release on its own.
+
+`supervisor.restartWait` (default `10m`) bounds the wait. Past it, or once the installed release
+refuses a save of the old binary, the loop says `SUPERVISOR LOOP restart waited …`, cancels the
+actions in flight and re-executes; the new binary reconciles their claims, and a merge's gate and
+merge-child run on outside the loop. A loop whose state writes are fenced after a binary recovery
+re-executes at once.
 
 ## Filing findings
 

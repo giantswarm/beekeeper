@@ -9,6 +9,15 @@ local integrity record, not a replacement for release signature verification
 or the trusted release evidence gate tracked in
 https://github.com/giantswarm/beekeeper/issues/2257.
 
+An executable directory this account cannot write keeps its recovery directory in this account's
+state instead: `$XDG_STATE_HOME/beekeeper/update/<hash>/`, the hash the first 16 bytes of the
+SHA-256 of the executable's path, in hexadecimal. A recovery directory already there keeps its
+place. A failed update names the journal, `journal.json` in the recovery directory, when the
+failure is the journal's: it disagrees with the installed binary, or its transaction (settling a
+probation, a replacement, a rollback) was refused or interrupted. A refusal before the
+replacement (the signature, the release evidence, the canary checks, the dry-run comparison)
+leaves the journal as it was: it says that nothing was replaced and that a retry is safe.
+
 The journal records the displaced version and digest, previous verified recovery
 target, candidate version and digest, UTC installation time, probation phase,
 and durable quarantine reasons. Writes sync their temporary file before rename
@@ -27,6 +36,21 @@ preserving both the candidate and the active previous recovery target.
 | Rolling back | Candidate or previous digest | Retry rollback with live state guard |
 | Rolled back | Previous digest | Idempotent success; failed candidate stays quarantined |
 | Any phase | Unexpected digest or modified recovery bytes | Refuse without replacing the executable |
+
+## Canary checks
+
+Before it replaces the binary, `beekeeper self-update` runs the staged candidate's
+`version`, `budget --gate`, `supervisor status` and `capacity` with the live configuration;
+probation repeats them on the installed candidate. Each check has a minute of the desk's
+clock. A loaded host slows every binary, so a check that runs out of that minute is not
+yet a failed one: the running release runs the same check, within five minutes, and the
+candidate runs it again within twice the running release's time, a minute at least and
+five at most. The update says so (`Canary supervisor status ran out of its 1m0s deadline;
+the running release's same check took 36s, so it runs again within 1m12s.`). A candidate
+that runs out of that second deadline too, or fails the check, fails it as any failure
+does. When the running release's own run does not pass either, the host is judged, not
+the candidate: the update is refused and retried later, the release is never skipped and
+probation stays pending.
 
 ## Automatic recovery
 

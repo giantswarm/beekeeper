@@ -195,7 +195,9 @@ func (s Step) kinds() int {
 var (
 	varRE   = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	aliasRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	// releaseRE is a release tag beekeeper pins a host to.
+	releaseRE = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$`)
+	repoRE    = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
 // builtins are the names every step may expand: the session's own.
@@ -210,8 +212,8 @@ func (g *Given) Validate(hosts []Host) error {
 	var errs []error
 	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 	for name := range g.Usage {
-		if name != Claude && name != Codex {
-			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex)", name)
+		if name != Claude && name != Codex && name != Agy {
+			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex, agy)", name)
 		}
 	}
 	for name, u := range g.Usage {
@@ -390,6 +392,11 @@ type Host struct {
 	Slow  Duration `yaml:"slow"`
 	// Config is laid over the host's own generated configuration.
 	Config map[string]any `yaml:"config"`
+	// Pinned is the release the desk pinned the host to (its hostPins
+	// entry, with the policy digest the host prepared), as an earlier
+	// coordinator's agents hosts update left it: a coordinator on another
+	// release finds the host behind its own.
+	Pinned string `yaml:"pinned"`
 }
 
 // ValidateHosts checks the hosts of a scenario against its repositories.
@@ -416,6 +423,9 @@ func ValidateHosts(hosts []Host, repositories []string) error {
 		}
 		if h.MaxBusy < 0 {
 			bad("%s: maxBusy %d", where, h.MaxBusy)
+		}
+		if h.Pinned != "" && !releaseRE.MatchString(h.Pinned) {
+			bad("%s: pinned %q is no release (v<major>.<minor>.<patch>[-rc.<n>])", where, h.Pinned)
 		}
 		for _, r := range h.Repositories {
 			if !repoRE.MatchString(r) || !slices.Contains(repositories, r) {

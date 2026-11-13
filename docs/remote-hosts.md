@@ -14,11 +14,15 @@ reconcile with `agents hosts sync`.
 Hosts follow the coordinator's release: `agents hosts update` installs it there, verified, and pins
 the prepared policy digest in beekeeper's state, which the supervisor loop does after each
 coordinator update settles probation. Compatible older hosts keep taking starts during probation or
-release lookup failures; failed installations or policy checks still hold the host. With
+release lookup failures; failed installations or policy checks still hold the host. After
+probation an older host drains: it takes no new start until it updated, so its executions reach
+the turn boundary the update waits for, and one behind for over an hour is reported once. With
 `supervisor.hosts`, workers prefer the first host with room by default and fall back to the
-coordinator within its ordinary capacity guards. Starts by hand without `--host` (`agents start`,
-`emergency start`) are placed the same way and say where they went; `--host local` keeps one on the
-coordinator.
+coordinator within its ordinary capacity guards. While the coordinator's own pick is behind its
+weekly pace and the coordinator has room, the loop leaves a start to it rather than to a host whose
+pick spends another provider. Starts by hand without `--host` (`agents start`, `emergency start`)
+are placed on the first host with room, on that host's pick, and say where they went; `--host local`
+keeps one on the coordinator.
 
 Explicit `supervisor.hostsFirst: false` retains local-first placement. `capacity` and `supervisor
 status` show dated per-host placement reasons. Reviewers follow the same host preferences, including

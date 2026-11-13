@@ -36,6 +36,8 @@ const (
 	repoDir      = workDir + "/repo"
 	stateDir     = workDir + "/state"
 	originsDir   = workDir + "/origins"
+	srcDir       = workDir + "/src"
+	checkoutsDir = workDir + "/checkouts"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
 	worldSocket  = DefaultWorldSocket
@@ -288,6 +290,10 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	cfg := baseConfig(orgs)
+	if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+		// A hand start's --dir is agents.dir or a checkout under agents.roots.
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": []any{checkoutsDir}}})
+	}
 	if b := d.s.Given.Builder; b != nil {
 		// The desk's remote builds go to the scenario's builder, through
 		// the fake kubectl on its PATH.
@@ -299,6 +305,14 @@ func (d *driver) setup(ctx context.Context) error {
 			return err
 		}
 		overlay(cfg, map[string]any{"run": map[string]any{"remote": remote}})
+	}
+	if len(d.s.Given.Checkouts) > 0 {
+		// A session's --dir must be a checkout under agents.dir or agents.roots.
+		roots := []any{srcDir}
+		if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+			roots = append(roots, checkoutsDir)
+		}
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": roots}})
 	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
@@ -329,6 +343,19 @@ func (d *driver) setup(ctx context.Context) error {
 	for _, name := range repos {
 		if err := origin(ctx, name); err != nil {
 			return fmt.Errorf("origin %s: %w", name, err)
+		}
+	}
+	for _, name := range d.s.Given.Checkouts {
+		if err := sourceCheckout(ctx, name); err != nil {
+			return fmt.Errorf("checkout %s: %w", name, err)
+		}
+	}
+	for _, r := range d.s.Given.Repositories {
+		if r.Checkout == nil {
+			continue
+		}
+		if err := checkout(ctx, r.Name, r.Checkout.Config); err != nil {
+			return fmt.Errorf("checkout %s: %w", r.Name, err)
 		}
 	}
 	if board, ok := cfg["board"].(map[string]any); ok {
@@ -413,7 +440,10 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, raw, 0o600)
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		return err
+	}
+	return d.seedHostPins(hosts)
 }
 
 // repositories are the scenario's repositories: given.repositories and
@@ -451,11 +481,34 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 		return fmt.Errorf("the scenario's GitHub: %w", err)
 	}
 	d.github = srv
-	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
-		res := srv.GH(context.Background(), fakegithub.GHCall{Args: req.Args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
+	gh := func(args []string, req CallRequest) (CallResponse, bool, string) {
+		res := srv.GH(context.Background(), fakegithub.GHCall{Args: args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
 		return CallResponse{Stdout: res.Stdout, Stderr: res.Stderr, Exit: res.Exit}, res.Handled, res.Reason
+	}
+	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
+		return gh(req.Args, req)
+	})
+	// devctl auth exec runs its command as devctl's GitHub login: the gh it
+	// runs (the reviewed merge of a merge.devctlOwners repository) reaches
+	// the scenario's GitHub. Every other devctl call is the scenario's to
+	// answer.
+	d.world.Handle("devctl", func(req CallRequest) (CallResponse, bool, string) {
+		args, ok := devctlExecsGH(req.Args)
+		if !ok {
+			return CallResponse{}, false, ""
+		}
+		return gh(args, req)
 	})
 	return nil
+}
+
+// devctlExecsGH is the gh arguments of `devctl auth exec -- gh <args>`,
+// false for any other devctl call.
+func devctlExecsGH(args []string) ([]string, bool) {
+	if len(args) < 4 || args[0] != "auth" || args[1] != "exec" || args[2] != "--" || filepath.Base(args[3]) != "gh" {
+		return nil, false
+	}
+	return args[4:], true
 }
 
 // stepEnv is the environment of a step's candidate: the allowlist, the
@@ -518,6 +571,21 @@ func overlay(dst, src map[string]any) {
 	}
 }
 
+// sourceCheckout clones owner/name onto the desk under srcDir. It names its
+// origin as GitHub does; the scenario's git leads that URL to the origin.
+func sourceCheckout(ctx context.Context, name string) error {
+	dst := filepath.Join(srcDir, name)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	c := exec.CommandContext(ctx, binDir+"/git", "clone", "--quiet", "https://github.com/"+name+".git", dst) //nolint:gosec // real git on the scenario's own paths
+	c.Env = env(nil)
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone: %w: %s", err, out)
+	}
+	return nil
+}
+
 // origin creates the bare origin of owner/name with one commit on main.
 func origin(ctx context.Context, name string) error {
 	bare := filepath.Join(originsDir, name+".git")
@@ -533,6 +601,25 @@ func origin(ctx context.Context, name string) error {
 		{"-C", seed, "push", bare, "main"},
 	} {
 		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // real git on the scenario's own paths
+		c.Env = env(nil)
+		if out, err := c.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return nil
+}
+
+// checkout clones the origin of owner/name under its GitHub URL to
+// /work/checkouts/<owner>/<name>, as a person's main checkout is, and sets
+// the checkout's own Git configuration.
+func checkout(ctx context.Context, name string, config map[string]string) error {
+	dir := filepath.Join(checkoutsDir, name)
+	cmds := [][]string{{"clone", "--quiet", harness.GitHub + name + ".git", dir}}
+	for _, key := range slices.Sorted(maps.Keys(config)) {
+		cmds = append(cmds, []string{"-C", dir, "config", key, config[key]})
+	}
+	for _, args := range cmds {
+		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // the scenario's git on its own paths
 		c.Env = env(nil)
 		if out, err := c.CombinedOutput(); err != nil {
 			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
