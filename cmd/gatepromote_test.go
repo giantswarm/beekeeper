@@ -109,8 +109,8 @@ func stubCandidate(t *testing.T, newest *string) *int {
 // budget, queued for candidateA, and the queued run that waits for it.
 func promotePlace(t *testing.T) (*app, *gateRun) {
 	t.Helper()
-	me, gate := state.Party{Session: "s1", Name: ownerName}, sleeper(t)
-	a := queueApp(t, state.Merge{Repo: scratchRepo, Lane: scratchRepo, By: me, PID: gate, Phase: state.Waiting,
+	me, gatePID := state.Party{Session: "s1", Name: ownerName}, sleeper(t)
+	a := queueApp(t, state.Merge{Repo: scratchRepo, Lane: scratchRepo, By: me, PID: gatePID, Phase: state.Waiting,
 		Joined: time.Now(), Seen: time.Now(), Candidate: candidateA})
 	// The machine's own devctl processes count against the cap.
 	a.cfg.Merge.BudgetFresh, a.cfg.Merge.Cap = config.Duration{Duration: time.Hour}, 1000
@@ -120,8 +120,8 @@ func promotePlace(t *testing.T) (*app, *gateRun) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &gateRun{app: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: a.cfg.LaneOf(scratchRepo),
-		me: me, pid: os.Getpid(), queued: true, placed: true, from: gate}
+	return a, &gateRun{a: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: a.cfg.LaneOf(scratchRepo),
+		me: me, pid: os.Getpid(), queued: true, placed: true, from: gatePID}
 }
 
 // A pinned promotion behind a busy lane waits on in a run of its own (exit
@@ -431,7 +431,7 @@ func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 
 	a, g := promotePlace(t)
 	setHold(t, a, hold)
-	other := &gateRun{app: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: g.lane,
+	other := &gateRun{a: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: g.lane,
 		me: state.Party{Session: "s2", Name: aheadName}, pid: os.Getpid()}
 	var err error
 	stderr := gateStderr(t, func() { _, err = other.step() })

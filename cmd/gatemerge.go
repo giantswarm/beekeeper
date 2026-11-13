@@ -193,7 +193,7 @@ func (l liveBinary) Exec(env ...string) error { return l.b.Exec(env...) }
 // mergeFiles is the base of the merge's files (mergeBase), its directory
 // created.
 func (g *gateRun) mergeFiles() (string, error) {
-	base := mergeBase(g.store.Dir(), g.repo, g.pr)
+	base := mergeBase(g.a.store.Dir(), g.repo, g.pr)
 	return base, os.MkdirAll(filepath.Dir(base), 0o700)
 }
 

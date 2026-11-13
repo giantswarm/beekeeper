@@ -83,7 +83,7 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	a := spentLane(t)
 	reset := a.now.Add(time.Second)
 	asked := stubSpentRead(t, func() time.Time { return a.now }, reset, true)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	why, err := g.step()
 	if err != nil || !strings.Contains(why, "until the GitHub budget's reset") || !strings.Contains(why, "keeps its place in lane o/r") {
@@ -121,7 +121,7 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	a := spentLane(t)
 	reset := a.now.Add(time.Second)
 	stubSpentRead(t, func() time.Time { return a.now }, reset, false)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	if _, err := g.step(); Code(err) != ExitGateRefused {
 		t.Fatalf("step: exit %d (%v), want refused", Code(err), err)
@@ -135,7 +135,7 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	}
 
 	a.now = reset.Add(time.Millisecond)
-	g = &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+	g = &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid()}
 	if why, err := g.step(); why != "" || err != nil {
 		t.Fatalf("the same command again: %q, %v; want it to rejoin at its old position and merge", why, err)
@@ -155,10 +155,10 @@ func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 	}
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
-	g.now = time.Now()
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].Joined = g.now.Add(-time.Minute)
-		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, Joined: g.now.Add(-time.Minute)})
+	g.a.now = time.Now()
+	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].Joined = g.a.now.Add(-time.Minute)
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, Joined: g.a.now.Add(-time.Minute)})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -176,13 +176,13 @@ func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 		t.Errorf("the base branch was read %d times for two places of the pass, want twice", reads)
 	}
 
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Waiting, Joined: g.now.Add(time.Minute)}}
+	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Waiting, Joined: g.a.now.Add(time.Minute)}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g.now = g.now.Add(2 * time.Minute)
+	g.a.now = g.a.now.Add(2 * time.Minute)
 	readFor(9)
 	if reads != 3 {
 		t.Errorf("a new pass read the base branch %d times in all, want a third read", reads)

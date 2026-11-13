@@ -38,7 +38,7 @@ func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 	// caller's deadline allows; a short one keeps the test fast.
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	g := &gateRun{app: a, ctx: ctx}
+	g := &gateRun{a: a, ctx: ctx}
 	start := time.Now()
 	b, err := g.gateBudget()
 	if err != nil || b.Remaining != 4800 {
@@ -75,7 +75,7 @@ func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 	}
 	holdStateLock(t, a)
 	a.now = now
-	g := &gateRun{app: a, ctx: t.Context()}
+	g := &gateRun{a: a, ctx: t.Context()}
 	b, err := g.gateBudget()
 	if err != nil || b.Remaining != 4321 || *queries != 0 {
 		t.Fatalf("merge gate: budget %+v, %v after %d GraphQL queries, want the saved reading", b, err, *queries)
@@ -91,7 +91,7 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 	holdStateLock(t, a)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	g := &gateRun{app: a, ctx: ctx}
+	g := &gateRun{a: a, ctx: ctx}
 	if b, err := g.gateBudget(); err == nil {
 		t.Fatalf("merge gate passed a refused GraphQL budget: %+v", b)
 	}

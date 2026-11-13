@@ -120,7 +120,7 @@ func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
 					base := mergeBase(a.store.Dir(), scratchRepo, 7)
 					doc := []byte(`{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v1.2.3"}}`)
 					if producer == gateCmdName {
-						g := &gateRun{app: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
+						g := &gateRun{a: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
 							lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
 						if err := g.record(base, childRun{doc: doc}); err != nil {
 							t.Fatal(err)
@@ -255,7 +255,7 @@ func TestMergeRecordersKeepResultsWhenHistoryFails(t *testing.T) {
 			store := a.store
 			a.store = unreadMergeHistory{store}
 			if producer == gateCmdName {
-				g := &gateRun{app: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
+				g := &gateRun{a: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
 					lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
 				if err := g.record(base, childRun{doc: doc}); err == nil {
 					t.Fatal("recording failure was hidden")

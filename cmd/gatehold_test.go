@@ -36,7 +36,7 @@ func heldApp(t *testing.T, merges ...state.Merge) *app {
 
 // placedGate is the queued run of o/r#pr, which has its place in the lane.
 func placedGate(a *app, pr int, pid int) *gateRun {
-	return &gateRun{app: a, ctx: context.Background(), argv: prArgv(pr), repo: scratchRepo, pr: pr,
+	return &gateRun{a: a, ctx: context.Background(), argv: prArgv(pr), repo: scratchRepo, pr: pr,
 		lane: a.cfg.LaneOf(scratchRepo), me: state.Party{Session: "s1", Name: ownerName}, pid: pid, queued: true, placed: true}
 }
 

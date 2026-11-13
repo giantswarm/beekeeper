@@ -35,7 +35,7 @@ the reviews let through. Nothing queues, merges or reaches the state.`,
 // gateCheck runs the gate's reviews read for repo#n, its refusal the gate's
 // line and exit code.
 func (a *app) gateCheck(ctx context.Context, repo string, n int) error {
-	g := &gateRun{app: a, ctx: ctx, repo: repo, pr: n}
+	g := &gateRun{a: a, ctx: ctx, repo: repo, pr: n}
 	if err := g.checkReviews(gateRefusedWith); err != nil {
 		return err
 	}

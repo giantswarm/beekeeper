@@ -84,7 +84,7 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 			i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repoMgr })
 			argv := promoteArgv()
 			argv[len(argv)-1] = repoMgr
-			next := &gateRun{app: a, ctx: context.Background(), argv: argv, repo: repoMgr,
+			next := &gateRun{a: a, ctx: context.Background(), argv: argv, repo: repoMgr,
 				lane: a.cfg.LaneOf(repoMgr), me: st.Merges[i].By, pid: os.Getpid(), queued: true, placed: true, from: st.Merges[i].PID}
 
 			endDevctl(t, a, platMgr, 548, c.doc, c.rc)

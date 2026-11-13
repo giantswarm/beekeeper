@@ -66,7 +66,7 @@ func TestAMergeQueuedUnderTheFloorRunsFirstAtTheReset(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a, reset := resetApp(t)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	if why, err := g.step(); err != nil || !strings.Contains(why, "under the floor 100 until the reset") {
 		t.Fatalf("step: %q, %v; want a wait for the reset", why, err)
@@ -118,7 +118,7 @@ func TestTheOldestMergeQueuedForTheResetGoesFirst(t *testing.T) {
 	a.cfg.Merge.ResetFirst = config.Duration{Duration: 5 * time.Minute}
 	a.cfg.Merge.Cap = 2
 	hostDevctls(t, 10)
-	g := &gateRun{app: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), me: me.By, pid: os.Getpid()}
+	g := &gateRun{a: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), me: me.By, pid: os.Getpid()}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestMergeBelowItsReserveStillWaitsForReset(t *testing.T) {
 	a, _ := resetApp(t)
 	a.cfg.GitHub.Floor = 2500
 	setBudget(t, a, mergeBudgetReserve-1)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	if why, err := g.step(); err != nil || !strings.Contains(why, "until the reset") {
 		t.Fatalf("step: %q, %v; want reset wait", why, err)

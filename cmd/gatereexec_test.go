@@ -124,7 +124,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 		// The re-executed gate: the same process, arguments and stdio.
 		t.Setenv(gateRunningEnv, fmt.Sprintf("%d:%d", pid, run.offset))
 		stdout := capture(t, &os.Stdout)
-		err := g.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
+		err := g.a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -219,24 +219,24 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 			}
 			self := filepath.Join(dir, "bin", "beekeeper")
 			copyTestBinary(t, self)
-			gate := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
-			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
+			gateCmd := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
+			gateCmd.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
 				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gateRunningEnv, pid))
 			var stdout strings.Builder
-			gate.Stdout = &stdout
+			gateCmd.Stdout = &stdout
 			stderr := &lines{}
-			gate.Stderr = stderr
-			if err := gate.Start(); err != nil {
+			gateCmd.Stderr = stderr
+			if err := gateCmd.Start(); err != nil {
 				t.Fatal(err)
 			}
 			exited := make(chan error, 1)
-			go func() { exited <- gate.Wait() }()
+			go func() { exited <- gateCmd.Wait() }()
 			t.Cleanup(func() {
 				_ = os.WriteFile(proceed, nil, 0o600)
-				_ = gate.Process.Kill()
+				_ = gateCmd.Process.Kill()
 			})
 			err = store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: gate.Process.Pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
+				st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: gateCmd.Process.Pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
 				return nil, nil
 			})
 			if err != nil {
@@ -263,7 +263,7 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 				t.Fatalf("the gate did not end\n%s", stderr)
 			}
 			said := stderr.String()
-			if rc := gate.ProcessState.ExitCode(); rc != c.rc {
+			if rc := gateCmd.ProcessState.ExitCode(); rc != c.rc {
 				t.Fatalf("the gate exited %d, want devctl's %d\n%s", rc, c.rc, said)
 			}
 			if strings.TrimSpace(stdout.String()) != c.doc {
@@ -359,7 +359,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
+	if g.a.store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
 	stderr := capture(t, &os.Stderr)
@@ -394,7 +394,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 		t.Errorf("stale-writer event %q", d)
 	}
 
-	w := &app{cfg: g.cfg, store: newer, now: time.Now()}
+	w := &app{cfg: g.a.cfg, store: newer, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)

@@ -59,11 +59,11 @@ func (g *gateRun) overlaps() bool {
 // lanePending says what the merge's lane waits for before its next merge
 // lands, "" when nothing (merge.Lane.Unsettled without the overlap).
 func (g *gateRun) lanePending() string {
-	st, err := g.store.Read()
+	st, err := g.a.store.Read()
 	if err != nil {
 		return fmt.Sprintf("the state does not load (%v)", err)
 	}
-	return merge.Queue(st, g.lane.Name).Unsettled(clk.Now(), g.cfg.Merge.Settle.Duration, false, proc.Alive)
+	return merge.Queue(st, g.lane.Name).Unsettled(clk.Now(), g.a.cfg.Merge.Settle.Duration, false, proc.Alive)
 }
 
 // awaitReleases runs before the merge's devctl in a lane without an
@@ -97,7 +97,7 @@ func (g *gateRun) awaitReleases() error {
 		cancel() // the warm-up ends with the wait: nothing outlives it
 		<-warmed
 	}()
-	wait := releasesWait(g.cfg.Merge.Settle.Duration)
+	wait := releasesWait(g.a.cfg.Merge.Settle.Duration)
 	deadline := clk.Now().Add(wait)
 	tick := clk.NewTicker(releasesPoll)
 	defer tick.Stop()
@@ -139,7 +139,7 @@ func (g *gateRun) awaitReleases() error {
 // since lets another pull request through first (merge.Preempts), a
 // refusal when its place left the lane.
 func (g *gateRun) stillRunning() error {
-	st, err := g.store.Read()
+	st, err := g.a.store.Read()
 	if err != nil {
 		return nil // the next read decides; devctl's start reads it again
 	}
@@ -170,7 +170,7 @@ func (g *gateRun) stopWaiting(s os.Signal) error {
 	if sig, ok := s.(syscall.Signal); ok {
 		code, how = 128+int(sig), sig.String()
 	}
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := g.mine(st, state.Running); i >= 0 {
 			st.Merges = slices.Delete(st.Merges, i, i+1)
 		}
@@ -183,7 +183,7 @@ func (g *gateRun) stopWaiting(s os.Signal) error {
 // warmUp waits for the existing head's CI within the configured timeout.
 // It never updates the branch; the merge judges the wait's outcome.
 func (g *gateRun) warmUp(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.TimeoutFor(g.repo))
+	ctx, cancel := context.WithTimeout(ctx, g.a.cfg.Merge.TimeoutFor(g.repo))
 	defer cancel()
 	prWarmWait(ctx, g.repo, g.pr)
 }
@@ -223,7 +223,7 @@ func (g *gateRun) confirmRelease(out *merge.Outcome, rc int) (string, int) {
 		line = fmt.Sprintf("%s merged and released %s, its tag pipeline green; lane %s is free", g.key(), o.Release, g.lane.Name)
 	}
 	now := clk.Now().UTC()
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling && m.Releasing
 		})

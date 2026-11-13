@@ -40,7 +40,7 @@ func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
+			g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
 			if tc.handoff {
 				g.from, g.queued = pid, true
 				if why, err := g.step(); err != nil || why == "" || *asked != 0 {
@@ -77,7 +77,7 @@ func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
+	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
 	if why, err := g.step(); err != nil || why == "" || !g.passive {
 		t.Fatalf("not waiting behind predecessor: %q, %v", why, err)
 	}
@@ -147,7 +147,7 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7,
+			g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7,
 				lane: a.cfg.LaneOf(scratchRepo), pid: parent, placed: true}
 			before, err := a.store.Read()
 			if err != nil {
@@ -194,7 +194,7 @@ func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := &gateRun{app: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true, queued: true}
+	g := &gateRun{a: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true, queued: true}
 	for _, cap := range []int{5, 12} {
 		raw := fmt.Sprintf("merge:\n  cap: %d\nlanes:\n  - name: %s\n    repositories: [%s, o/other]\n", cap, "shared", scratchRepo)
 		if err := os.WriteFile(a.loadedCfg, []byte(raw), 0o600); err != nil {
@@ -203,8 +203,8 @@ func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 		if why, err := g.step(); err != nil || why == "" || !g.passive {
 			t.Fatalf("poll: %q, %v", why, err)
 		}
-		if g.cfg.Merge.Cap != cap || len(g.lane.Repositories) != 2 {
-			t.Fatalf("stale settings: cap %d, lane %+v", g.cfg.Merge.Cap, g.lane)
+		if g.a.cfg.Merge.Cap != cap || len(g.lane.Repositories) != 2 {
+			t.Fatalf("stale settings: cap %d, lane %+v", g.a.cfg.Merge.Cap, g.lane)
 		}
 	}
 }

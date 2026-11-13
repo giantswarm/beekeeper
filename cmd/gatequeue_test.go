@@ -339,7 +339,7 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 		t.Errorf("queued event %q", d)
 	}
 	// The queued run waits under the floor instead of refusing.
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
 		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
 	if why, err := g.step(); err != nil || !strings.Contains(why, "under the floor") {
 		t.Errorf("queued run: %q, %v; want a wait for the reset", why, err)

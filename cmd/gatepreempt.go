@@ -62,7 +62,7 @@ func (g *gateRun) watchPreempt() (stop func() (state.Hold, bool)) {
 
 // preemptChild ends the running merge's devctl when a hold preempts it.
 func (g *gateRun) preemptChild() (state.Hold, bool) {
-	st, err := g.store.Read()
+	st, err := g.a.store.Read()
 	if err != nil {
 		return state.Hold{}, false
 	}
@@ -72,7 +72,7 @@ func (g *gateRun) preemptChild() (state.Hold, bool) {
 	}
 	m := st.Merges[i]
 	h, ok := merge.Preempts(st, clk.Now(), m, g.lane)
-	if !ok || m.Child == 0 || readPID(mergeBase(g.store.Dir(), g.repo, g.pr)) != m.Child {
+	if !ok || m.Child == 0 || readPID(mergeBase(g.a.store.Dir(), g.repo, g.pr)) != m.Child {
 		return state.Hold{}, false
 	}
 	gateLine("%s (%s) by %q lets %s through first: ending %s's devctl (pid %d) before it merges; it keeps its place in lane %s",
@@ -99,7 +99,7 @@ func (g *gateRun) requeue(base string, h state.Hold) error {
 // letting another pull request through first; when says where its run was.
 func (g *gateRun) toWaiting(h state.Hold, when string) error {
 	why := fmt.Sprintf("held in lane %s (%s) by %q: %s goes first; %s keeps its place", g.lane.Name, holdTarget(h), h.By.Name, h.Except, g.key())
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
 		if i < 0 {
 			return nil, nil

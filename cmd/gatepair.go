@@ -33,12 +33,12 @@ func (g *gateRun) declarePair(arg string) error {
 		return gateRefused("%s %s names the merge itself: nothing merged, name the pull request it lands with", merge.PairFlag, arg)
 	}
 	var taken string
-	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-		prunePairs(st, g.now, g.cfg.Merge.SeedTTL.Duration)
+	err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		prunePairs(st, g.a.now, g.a.cfg.Merge.SeedTTL.Duration)
 		for _, key := range []string{g.key(), sib} {
 			if i := st.PairOf(key); i >= 0 && !samePair(st.Pairs[i], g.key(), sib) {
 				p := st.Pairs[i]
-				taken = fmt.Sprintf("%s lands with %s already (declared by %q at %s)", key, p.Sibling(key), p.By.Name, clock(g.now, p.At))
+				taken = fmt.Sprintf("%s lands with %s already (declared by %q at %s)", key, p.Sibling(key), p.By.Name, clock(g.a.now, p.At))
 				return nil, nil
 			}
 		}
@@ -48,14 +48,14 @@ func (g *gateRun) declarePair(arg string) error {
 			}
 			st.Pairs = slices.Delete(st.Pairs, i, i+1)
 		}
-		st.Pairs = append(st.Pairs, state.Pair{Keys: []string{g.key(), sib}, By: g.me, At: g.now.UTC()})
+		st.Pairs = append(st.Pairs, state.Pair{Keys: []string{g.key(), sib}, By: g.me, At: g.a.now.UTC()})
 		return []state.Event{event(g.me, "merge.paired", "%s lands with %s", g.key(), sib)}, nil
 	})
 	switch {
 	case err != nil:
 		return g.stateRefused(err)
 	case taken != "":
-		_ = g.store.Log(event(g.me, "merge.refused", "%s: %s", g.key(), taken))
+		_ = g.a.store.Log(event(g.me, "merge.refused", "%s: %s", g.key(), taken))
 		return gateRefused("%s: nothing merged; a merge lands with one other at most", taken)
 	}
 	return nil
@@ -122,7 +122,7 @@ func (g *gateRun) pairTurn(st *state.State) (why string, need int) {
 	if p.Ready == nil {
 		p.Ready = map[string]time.Time{}
 	}
-	p.Ready[g.key()] = g.now.UTC()
+	p.Ready[g.key()] = g.a.now.UTC()
 	j := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Key() == sib && m.Phase == state.Waiting })
 	switch {
 	case j < 0:
@@ -131,7 +131,7 @@ func (g *gateRun) pairTurn(st *state.State) (why string, need int) {
 	case !proc.Alive(st.Merges[j].PID):
 		return fmt.Sprintf("next in lane %s, it lands with %s, queued in lane %s, whose merge is not in the gate: both start once it is next there",
 			g.lane.Name, sib, st.Merges[j].Lane), 0
-	case g.now.Sub(p.Ready[sib]) > pairFresh:
+	case g.a.now.Sub(p.Ready[sib]) > pairFresh:
 		return fmt.Sprintf("next in lane %s, it lands with %s, not next in lane %s yet: both start once it is",
 			g.lane.Name, sib, st.Merges[j].Lane), 0
 	}

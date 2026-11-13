@@ -213,7 +213,7 @@ func (p *person) gate(pr int) *gateRun {
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	g := &gateRun{app: a, ctx: context.Background(), repo: backstage, pr: pr, lane: a.cfg.LaneOf(backstage), me: me}
+	g := &gateRun{a: a, ctx: context.Background(), repo: backstage, pr: pr, lane: a.cfg.LaneOf(backstage), me: me}
 	g.central = a.cfg.CentralLane(g.lane)
 	return g
 }
@@ -260,7 +260,7 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	if why := turn(second); why == "" {
 		t.Error("the second's turn came while the first settles")
 	}
-	ana.gate(1).leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.me}}, "rolled")
+	ana.gate(1).a.leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.me}}, "rolled")
 	if why := turn(second); why != "" {
 		t.Errorf("the second waits after the first rolled: %s", why)
 	}

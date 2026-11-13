@@ -573,7 +573,7 @@ func (a *app) mergeWaitReason(st *state.State, m state.Merge) string {
 	if !proc.Alive(m.PID) {
 		return "gate not running; waiting for arrival"
 	}
-	g := &gateRun{app: a, repo: m.Repo, pr: m.PR, lane: lane, me: m.By}
+	g := &gateRun{a: a, repo: m.Repo, pr: m.PR, lane: lane, me: m.By}
 	need := 1
 	if i := st.PairOf(m.Key()); i >= 0 {
 		p := st.Pairs[i]

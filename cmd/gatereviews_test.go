@@ -105,7 +105,7 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v)", Code(err), err)
 	}
-	st, err := g.store.Read()
+	st, err := g.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 	mergeAuthority = gateMergeHeadAuthority
 
 	g := &gateRun{
-		app:  r.a,
+		a:    r.a,
 		ctx:  t.Context(),
 		repo: loopMergeRepo,
 		pr:   7,
@@ -207,7 +207,7 @@ func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
 	r.pull.Head = loopFixed
 	mergeAuthority = gateMergeHeadAuthority
-	g := &gateRun{app: r.a, ctx: t.Context(), repo: loopMergeRepo, pr: 7, lane: r.a.cfg.LaneOf(loopMergeRepo),
+	g := &gateRun{a: r.a, ctx: t.Context(), repo: loopMergeRepo, pr: 7, lane: r.a.cfg.LaneOf(loopMergeRepo),
 		me: loop.LoopParty, pid: os.Getpid(), reviewedHead: loopFixed,
 		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
 	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {

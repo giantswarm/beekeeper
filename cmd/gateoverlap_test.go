@@ -123,7 +123,7 @@ func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerd
 		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 		stubReleaseWait(t, `{"verdict":"timeout","reason":"no tag within 30m"}`)
 		g := runningMerge(t, scratchRepo, localLane)
-		g.cfg.Merge.Settle.Duration = time.Hour
+		g.a.cfg.Merge.Settle.Duration = time.Hour
 		var err error
 		_ = gateStderr(t, func() { err = startMerge(t, g) })
 		if Code(err) != devctlUnconfirmed {
@@ -161,8 +161,8 @@ func nextBesideARelease(t *testing.T, warmed func(g *gateRun)) *gateRun {
 	stubGitHub(t, github.Open, "")
 	g := runningMerge(t, scratchRepo, localLane)
 	g.pr, g.argv = 8, mergeArgv(scratchRepo)
-	g.cfg.Merge.CITimeout.Duration = time.Minute
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	g.a.cfg.Merge.CITimeout.Duration = time.Minute
+	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			{Repo: scratchRepo, PR: 7, Lane: localLane.Name, PID: os.Getpid(), Phase: state.Settling, Releasing: true, Finished: time.Now()},
 			{Repo: scratchRepo, PR: 8, Lane: localLane.Name, By: g.me, PID: os.Getpid(), Phase: state.Running, Started: time.Now()},
@@ -180,7 +180,7 @@ func nextBesideARelease(t *testing.T, warmed func(g *gateRun)) *gateRun {
 // releaseKnown takes o/r#7's releasing place out of the lane, as its gate
 // does once the release is confirmed.
 func releaseKnown(g *gateRun) {
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 })
 		return nil, nil
 	})
@@ -253,7 +253,7 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 	})
 	t.Run("taken out of the lane", func(t *testing.T) {
 		g := nextBesideARelease(t, func(g *gateRun) {
-			_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+			_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == 8 })
 				return nil, nil
 			})
@@ -271,7 +271,7 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 // before its devctl starts.
 func TestAHoldDuringTheReleaseWaitPutsTheMergeBackToWaiting(t *testing.T) {
 	g := nextBesideARelease(t, func(g *gateRun) {
-		_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Holds = append(st.Holds, state.Hold{Target: merge.LanePrefix + localLane.Name, Except: scratchRepo + "#9", By: state.Party{Name: supervisorName},
 				At: time.Now().UTC(), Reason: "the fix first"})
 			return nil, nil
@@ -385,8 +385,8 @@ func TestLanePaceIsTheMedianOfItsLatestPlaces(t *testing.T) {
 func TestWarmUpUsesRepositoryCITimeout(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
 	g.argv = mergeArgv(scratchRepo)
-	g.cfg.Merge.CITimeout.Duration = time.Hour
-	g.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: 3 * time.Hour}}
+	g.a.cfg.Merge.CITimeout.Duration = time.Hour
+	g.a.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: 3 * time.Hour}}
 	wasWait := prWarmWait
 	t.Cleanup(func() { prWarmWait = wasWait })
 	called := false

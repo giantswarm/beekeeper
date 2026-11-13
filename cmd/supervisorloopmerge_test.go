@@ -294,7 +294,7 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 			t.Fatalf("missing %s in %v", flag, argv)
 		}
 	}
-	g := gateRun{app: r.a, repo: loopMergeRepo, pr: 7, reviewedHead: loopHead, argv: []string{"devctl", "pr", superloop.KindMerge, loopMergeRepo, "7"}}
+	g := gateRun{a: r.a, repo: loopMergeRepo, pr: 7, reviewedHead: loopHead, argv: []string{"devctl", "pr", superloop.KindMerge, loopMergeRepo, "7"}}
 	pinned, err := g.mergeArgv()
 	if err != nil || !slices.Contains(pinned, "--head") || !slices.Contains(pinned, loopHead) {
 		t.Fatalf("gate lost its pin: %v %v", pinned, err)

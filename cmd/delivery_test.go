@@ -427,7 +427,7 @@ func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 	releaseWait = func(context.Context, string, ...string) []byte {
 		return []byte(`{"verdict":"available","tag":"v2.3.4-rc.1"}`)
 	}
-	g := &gateRun{ctx: t.Context(), app: a, repo: deliveryFixtureRepo, pr: 20, lane: config.Lane{Name: "delivery-lane"}}
+	g := &gateRun{ctx: t.Context(), a: a, repo: deliveryFixtureRepo, pr: 20, lane: config.Lane{Name: "delivery-lane"}}
 	out := merge.Outcome{Merged: true}
 	_, code := g.confirmRelease(&out, 0)
 	if code != 0 {

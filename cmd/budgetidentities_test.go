@@ -98,7 +98,7 @@ func TestBudgetNamesIdentitiesAndNeverReusesAnotherWindow(t *testing.T) {
 	if queries["gh"] != 1 || queries[github.IdentityApp] != 1 {
 		t.Fatalf("cache not per identity: %v", queries)
 	}
-	g := &gateRun{app: a, ctx: context.Background()}
+	g := &gateRun{a: a, ctx: context.Background()}
 	minimum, err := g.gateBudget()
 	if err != nil || minimum.Identity != "gh" || minimum.Remaining != 1941 || !minimum.Reset.Equal(resetGH.Truncate(time.Second)) {
 		t.Fatalf("merge gate ignored low GraphQL: %+v, %v", minimum, err)

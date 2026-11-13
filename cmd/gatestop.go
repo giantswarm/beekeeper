@@ -158,11 +158,11 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 func stopOutcome(s stopped) string {
 	m := s.merge
 	if s.waiting {
-		gate := fmt.Sprintf("its gate (pid %d) is interrupted", m.PID)
+		gateStatus := fmt.Sprintf("its gate (pid %d) is interrupted", m.PID)
 		if !waitGone(m.PID, stopWait) {
-			gate = fmt.Sprintf("its gate (pid %d) is interrupted and still runs after %s", m.PID, stopWait)
+			gateStatus = fmt.Sprintf("its gate (pid %d) is interrupted and still runs after %s", m.PID, stopWait)
 		}
-		return fmt.Sprintf("%s cancelled while it waited for lane %s's release, before its devctl started: %s, nothing merged; it leaves the lane", m.Key(), m.Lane, gate)
+		return fmt.Sprintf("%s cancelled while it waited for lane %s's release, before its devctl started: %s, nothing merged; it leaves the lane", m.Key(), m.Lane, gateStatus)
 	}
 	devctl := fmt.Sprintf("its devctl (merge-child pid %d) is ended", m.Child)
 	if !s.end {

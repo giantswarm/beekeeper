@@ -74,9 +74,9 @@ func pidIn(t *testing.T, file string) int {
 // caller go away (SIGHUP) returns at once, the run's files left to its
 // merge-child.
 func TestAWaitEndsWithItsCaller(t *testing.T) {
-	gate, stopGate := fakeGate(t)
+	gatePID, stopGate := fakeGate(t)
 	argv := strings.Fields("devctl release wait o/r v1.2.3")
-	base, devpid := childOf(t, "release-wait-o_r-v1.2.3-1", childSpec{Argv: argv, Owner: state.Party{Session: "s1", Name: ownerName}, Gate: gate, WithCaller: true})
+	base, devpid := childOf(t, "release-wait-o_r-v1.2.3-1", childSpec{Argv: argv, Owner: state.Party{Session: "s1", Name: ownerName}, Gate: gatePID, WithCaller: true})
 	fakeDevctl(t, `echo $$ >`+devpid+`; echo "waiting for tag v1.2.3 to exist" >&2; exec sleep 60`)
 	done := make(chan childResult, 1)
 	go func() { done <- mergeChild(base) }()
@@ -132,8 +132,8 @@ func TestARunLeftToRunOnOutlivesItsGate(t *testing.T) {
 		{name: "release-wait-o_r-v1.2.3-1", spec: childSpec{Argv: strings.Fields("devctl release wait o/r v1.2.3"), Owner: owner, WithCaller: true}, left: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			gate, stopGate := fakeGate(t)
-			c.spec.Gate = gate
+			gatePID, stopGate := fakeGate(t)
+			c.spec.Gate = gatePID
 			base, devpid := childOf(t, c.name, c.spec)
 			if c.left {
 				if err := os.WriteFile(base+leftExt, nil, 0o600); err != nil {

@@ -147,7 +147,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 			}
 			// The queued gate receives everything after -- unchanged. At its
 			// turn it must still launch devctl with the rebase merge method.
-			g := &gateRun{app: a, argv: spec.Command, repo: scratchRepo, pr: 7,
+			g := &gateRun{a: a, argv: spec.Command, repo: scratchRepo, pr: 7,
 				release: &github.BaseRelease{Base: mainBranch, Auto: true}}
 			run, err := g.mergeArgv()
 			want := merge.NoReleaseWait(append(slices.Clone(argv), "--progress")) // the lane confirms the release itself
@@ -354,7 +354,7 @@ func TestGateRepositoryMergeMethod(t *testing.T) {
 			if got := slices.Contains(spec.Argv, "--rebase"); got != want {
 				t.Errorf("queued child %v: rebase = %v, want %v", spec.Argv, got, want)
 			}
-			g := &gateRun{app: a, repo: scratchRepo, pr: 7, argv: spec.Command}
+			g := &gateRun{a: a, repo: scratchRepo, pr: 7, argv: spec.Command}
 			child, err := g.mergeArgv()
 			if err != nil {
 				t.Fatal(err)

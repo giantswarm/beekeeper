@@ -65,9 +65,9 @@ func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.
 					t.Cleanup(stop)
 					return c, stop
 				}
-				gate, stopGate := start()
+				gateProc, stopGate := start()
 				runner, stopRunner := start()
-				m := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: four, PID: gate.Process.Pid, Child: runner.Process.Pid, Phase: state.Running, Started: a.now, Joined: a.now, Seen: a.now}
+				m := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: four, PID: gateProc.Process.Pid, Child: runner.Process.Pid, Phase: state.Running, Started: a.now, Joined: a.now, Seen: a.now}
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 					st.Merges = []state.Merge{m, {Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, PID: os.Getpid(), Joined: a.now, Seen: a.now}}
 					return nil, nil

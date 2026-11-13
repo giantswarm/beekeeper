@@ -33,7 +33,7 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	g := runningMerge(t, scratchRepo, lane)
 	owner := state.Party{Session: "s1", Name: ownerName}
 	g.me = owner
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].By = owner
 		st.Agents = []state.Agent{{Party: owner}}
 		return nil, nil
@@ -43,7 +43,7 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	if err := g.runMerge(); Code(err) != 1 {
 		t.Fatalf("exit %d, want devctl's 1", Code(err))
 	}
-	base := mergeBase(g.store.Dir(), g.repo, g.pr)
+	base := mergeBase(g.a.store.Dir(), g.repo, g.pr)
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err == nil {
 		t.Fatal("a red merge left the heard marker: its merge-child wakes nobody")
 	}
@@ -68,15 +68,15 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { wakeOwner = was })
-	g.tellOwner(context.Background(), childResult{spec: childSpec{Argv: g.argv, Owner: owner}, base: base, rc: 1, doc: []byte(redDoc)})
+	g.a.tellOwner(context.Background(), childResult{spec: childSpec{Argv: g.argv, Owner: owner}, base: base, rc: 1, doc: []byte(redDoc)})
 	want := "beekeeper gate → s1: devctl pr merge o/r 7 exit 1: " + redReason
 	if len(woke) != 1 || woke[0] != want {
 		t.Errorf("woke %q, want %q", woke, want)
 	}
 
 	var out bytes.Buffer
-	g.out = &out
-	g.printLanes(g.laneViews(st))
+	g.a.out = &out
+	g.a.printLanes(g.a.laneViews(st))
 	if want := `failed o/r#7 by "worker" at`; !strings.Contains(out.String(), want) ||
 		!strings.Contains(out.String(), "nothing merged, exit 1: "+redReason+"; shown until its next attempt") {
 		t.Errorf("lanes:\n%s", out.String())
@@ -112,7 +112,7 @@ func TestAGreenMergeIsHeardAndLeavesNoFailedAttempt(t *testing.T) {
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubGitHub(t, "", "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Failed = []state.Failed{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Exit: 1, Reason: "red"}}
 		return nil, nil
 	}); err != nil {
@@ -121,7 +121,7 @@ func TestAGreenMergeIsHeardAndLeavesNoFailedAttempt(t *testing.T) {
 	if err := g.runMerge(); err != nil {
 		t.Fatalf("exit %d: %v", Code(err), err)
 	}
-	base := mergeBase(g.store.Dir(), g.repo, g.pr)
+	base := mergeBase(g.a.store.Dir(), g.repo, g.pr)
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err != nil {
 		t.Errorf("no heard marker: %v", err)
 	}

@@ -105,7 +105,7 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repo })
 		argv := promoteArgv()
 		argv[len(argv)-1] = repo
-		return &gateRun{app: a, ctx: context.Background(), argv: argv, repo: repo,
+		return &gateRun{a: a, ctx: context.Background(), argv: argv, repo: repo,
 			lane: a.cfg.LaneOf(repo), me: st.Merges[i].By, pid: os.Getpid(), queued: true, placed: true, from: st.Merges[i].PID}
 	}
 
@@ -195,7 +195,7 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 				t.Fatal("the watch settled a release unknown before the settle rule")
 			}
 
-			g.now = a.now.Add(6 * time.Minute)
+			g.a.now = a.now.Add(6 * time.Minute)
 			if why, err := g.step(); err != nil || why != "" {
 				t.Fatalf("after the settle: %q, %v", why, err)
 			}
@@ -234,7 +234,7 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	endDevctl(t, a, scratchRepo, 889, "", "143")
 
 	until := mergedAt.Add(settle)
-	g.now = until.Add(-time.Second)
+	g.a.now = until.Add(-time.Second)
 	why, err := g.step()
 	if err != nil || why != "next in lane o/r, o/r#889's release is unknown: the lane settles until "+until.Local().Format("15:04") {
 		t.Fatalf("before mergedAt plus settle: %q, %v", why, err)
@@ -246,7 +246,7 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	}
 
 	// Past mergedAt plus settle, still well before the record time plus settle.
-	g.now = until.Add(time.Second)
+	g.a.now = until.Add(time.Second)
 	if why, err := g.step(); err != nil || why != "" {
 		t.Fatalf("after mergedAt plus settle: %q, %v", why, err)
 	}

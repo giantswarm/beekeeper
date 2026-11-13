@@ -71,7 +71,7 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err == nil {
 		t.Error("the heard marker is left: the owner would not be woken")
 	}
-	st, _ := g.store.Read()
+	st, _ := g.a.store.Read()
 	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 && m.Phase == state.Running && m.Child == pid }); i < 0 {
 		t.Fatalf("the merge does not run on in its lane: %+v", st.Merges)
 	}
@@ -85,13 +85,13 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 		}
 	}
 	// The gate's process is gone, as the watch sees it once the call ended.
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PID = deadPID(t)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w := &app{cfg: g.cfg, store: g.store, now: time.Now()}
+	w := &app{cfg: g.a.cfg, store: g.a.store, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)
@@ -111,24 +111,24 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	owner := state.Party{Session: "s1", Name: ownerName}
 	left := func(t *testing.T) (*app, string) {
 		t.Helper()
-		g, gate := runningMerge(t, scratchRepo, lane), deadPID(t)
-		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Merges[0].PID, st.Merges[0].By = gate, owner
+		g, gatePID := runningMerge(t, scratchRepo, lane), deadPID(t)
+		if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Merges[0].PID, st.Merges[0].By = gatePID, owner
 			st.Agents = []state.Agent{{Party: owner}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		base := mergeBase(g.store.Dir(), scratchRepo, 7)
+		base := mergeBase(g.a.store.Dir(), scratchRepo, 7)
 		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		spec := childSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gate}
+		spec := childSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gatePID}
 		raw, _ := json.Marshal(spec)
 		if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		return g.app, base
+		return g.a, base
 	}
 
 	a, base := left(t)
@@ -149,7 +149,7 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	if st, _ := a.store.Read(); len(st.Merges) != 0 {
 		t.Errorf("merges left: %+v", st.Merges)
 	}
-	if d := lastEvent(t, &gateRun{app: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, &gateRun{a: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 		t.Errorf("merged event %q", d)
 	}
 	if _, err := os.Stat(base + ".rc"); err == nil {

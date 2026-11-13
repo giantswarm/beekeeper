@@ -56,7 +56,7 @@ func staleMerge(st *state.State, m state.Merge) string {
 // happen outside the lock; the exact owner and phase are checked again when
 // claiming it so concurrent retries cannot both take it over.
 func (g *gateRun) takeover() (bool, error) {
-	st, err := g.store.Read()
+	st, err := g.a.store.Read()
 	if err != nil {
 		return false, err
 	}
@@ -69,7 +69,7 @@ func (g *gateRun) takeover() (bool, error) {
 		return false, nil
 	}
 	old := st.Merges[i]
-	if old.Phase == state.Waiting && old.PID == g.pid && g.now.Sub(old.Checked) < outsideCheck {
+	if old.Phase == state.Waiting && old.PID == g.pid && g.a.now.Sub(old.Checked) < outsideCheck {
 		return false, nil
 	}
 	why := staleMerge(st, old)
@@ -83,9 +83,9 @@ func (g *gateRun) takeover() (bool, error) {
 	}
 	if why == "" {
 		if readErr == nil && old.Phase == state.Waiting {
-			err = g.store.Update(func(st *state.State) ([]state.Event, error) {
+			err = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				if i := g.mine(st, state.Waiting); i >= 0 && st.Merges[i].PID == old.PID {
-					st.Merges[i].Checked = g.now.UTC()
+					st.Merges[i].Checked = g.a.now.UTC()
 				}
 				return nil, nil
 			})
@@ -97,7 +97,7 @@ func (g *gateRun) takeover() (bool, error) {
 		return false, g.refuseWith(ExitGateUnread, "%s has a stale place (%s), but GitHub does not answer (%v): retry once it answers", g.key(), why, readErr)
 	}
 	if p.State != github.Merged && proc.Alive(old.Child) {
-		base := mergeBase(g.store.Dir(), old.Repo, old.PR)
+		base := mergeBase(g.a.store.Dir(), old.Repo, old.PR)
 		if readPID(base) != old.Child {
 			return false, g.refuse("%s has a stale gate but its merge-child cannot be verified", g.key())
 		}
@@ -114,7 +114,7 @@ func (g *gateRun) takeover() (bool, error) {
 		}
 	}
 	claimed := false
-	err = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Key() == old.Key() && m.PID == old.PID && m.Child == old.Child && m.Phase == old.Phase &&
 				m.Version == old.Version && m.Started.Equal(old.Started) && m.Joined.Equal(old.Joined)
@@ -130,10 +130,10 @@ func (g *gateRun) takeover() (bool, error) {
 		m.PID, m.Child, m.By, m.Version = g.pid, 0, g.me, project.Version()
 		m.Run, m.Output = g.queuedRun(), g.output
 		if p.State == github.Merged {
-			m.Phase, m.Finished, m.Exit = state.Settling, merge.Judged(p).SettlesFrom(g.now.UTC()), 0
+			m.Phase, m.Finished, m.Exit = state.Settling, merge.Judged(p).SettlesFrom(g.a.now.UTC()), 0
 			m.Release, m.ReleaseFailed, m.Releasing = "", false, true
 		} else {
-			m.Phase, m.Started, m.Seen = state.Waiting, time.Time{}, g.now.UTC()
+			m.Phase, m.Started, m.Seen = state.Waiting, time.Time{}, g.a.now.UTC()
 		}
 		claimed, g.placed = true, true
 		return []state.Event{event(g.me, "merge.takeover", "%s: old pid %d, %s", g.key(), old.PID, why)}, nil
@@ -165,7 +165,7 @@ func (g *gateRun) recordTakenMerge(p github.Pull, handCut string) error {
 	} else {
 		out.NoRelease, out.Unconfirmed = true, false
 	}
-	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Settling)
 		if i < 0 {
 			return nil, fmt.Errorf("%s lost its takeover place before its outcome was recorded", g.key())

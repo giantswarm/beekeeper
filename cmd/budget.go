@@ -25,7 +25,7 @@ type poller struct {
 }
 
 func (a *app) budgetCmd() *cobra.Command {
-	var gate bool
+	var gateFlag bool
 	var floor int
 	var buckets []string
 	c := &cobra.Command{
@@ -95,15 +95,15 @@ unread core budget:
 			ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 			defer cancel()
 			if a.managedExecutionID() != "" {
-				return a.remoteGitHubBudget(ctx, workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
+				return a.remoteGitHubBudget(ctx, workerBudgetRequest{Gate: gateFlag, Buckets: buckets, JSON: a.json})
 			}
 			if floor > 0 {
 				a.cfg.GitHub.Floor = floor
 			}
-			if err := checkBuckets(gate, buckets); err != nil {
+			if err := checkBuckets(gateFlag, buckets); err != nil {
 				return err
 			}
-			if gate {
+			if gateFlag {
 				ctx = context.WithValue(ctx, budgetGateKey{}, true)
 			}
 			b, err := readBudget(a, ctx)
@@ -118,7 +118,7 @@ unread core budget:
 				}
 				return err
 			}
-			if !gate || len(buckets) > 0 {
+			if !gateFlag || len(buckets) > 0 {
 				b.Search = probeSearch(ctx)
 			}
 			st, err := a.store.Peek()
@@ -127,7 +127,7 @@ unread core budget:
 			}
 			var pollers []poller
 			var callersErr error
-			if !gate {
+			if !gateFlag {
 				sessions, t, err := a.sessions()
 				callersErr = err
 				if err == nil {
@@ -136,7 +136,7 @@ unread core budget:
 			}
 			var callers, restCallers []githubCaller
 			var callsErr, restErr error
-			if !gate {
+			if !gateFlag {
 				callers, callsErr = githubWindowCallers(a, b.GraphQL)
 				restCallers, restErr = githubResourceCallers(a, b.Reset, verbGitHubRESTCall)
 			}
@@ -245,28 +245,28 @@ unread core budget:
 					_ = w.Flush()
 				}
 			}
-			if gate && held {
+			if gateFlag && held {
 				return refused("GitHub is held: %s", hold.Reason)
 			}
-			if gate && b.GraphQL.Blocks(a.now) {
+			if gateFlag && b.GraphQL.Blocks(a.now) {
 				return refused("GitHub refuses GraphQL calls: %s", graphqlText(a, b.GraphQL))
 			}
-			if gate && b.GraphQL != nil && b.GraphQL.Remaining < a.cfg.GitHub.Floor {
+			if gateFlag && b.GraphQL != nil && b.GraphQL.Remaining < a.cfg.GitHub.Floor {
 				return refused("GraphQL identity %s budget %d is under the floor %d: wait for its reset at %s", b.GraphQL.Identity, b.GraphQL.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.GraphQL.Reset))
 			}
-			if gate && b.Remaining < a.cfg.GitHub.Floor {
+			if gateFlag && b.Remaining < a.cfg.GitHub.Floor {
 				return refused("GitHub budget %d is under the floor %d: wait for the reset at %s", b.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.Reset))
 			}
-			if gate && firstLine != "" {
+			if gateFlag && firstLine != "" {
 				return refused("%s", firstLine)
 			}
-			if gate {
+			if gateFlag {
 				return gateBuckets(a, b.Search, buckets)
 			}
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
+	c.Flags().BoolVar(&gateFlag, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
 	c.Flags().IntVar(&floor, "floor", 0, "the floor for this call (default github.floor)")
 	c.Flags().StringSliceVar(&buckets, "bucket", nil, "with --gate, also exit 3 while this search bucket is spent (repeatable or comma-separated: "+strings.Join(searchBuckets, ", ")+")")
 	return c
