@@ -440,6 +440,9 @@ type PullExpect struct {
 	// MergedInto says its merge commit is the head of that branch.
 	MergedInto string `yaml:"merged_into"`
 	Comments   *Range `yaml:"comments"`
+	// Ahead is how many commits the head of an open pull request has
+	// beyond its base: what its branch adds, read from the origin.
+	Ahead *int `yaml:"ahead"`
 }
 
 // IssueExpect checks an issue.
@@ -518,7 +521,10 @@ func (e *Expect) Validate() error {
 		if p.ReviewDecision != "" && !slices.Contains([]string{"none", "approved", "changes_requested", "review_required"}, p.ReviewDecision) {
 			errs = append(errs, fmt.Errorf("pull: review_decision %q is none of none, approved, changes_requested, review_required", p.ReviewDecision))
 		}
-		if p.State == "" && p.Draft == nil && p.Labels == nil && p.Checks == "" && p.ReviewDecision == "" && p.MergedInto == "" && p.Comments == nil {
+		if p.Ahead != nil && (*p.Ahead < 0 || (p.State != "" && p.State != "open")) {
+			errs = append(errs, errors.New("pull: ahead counts the commits of an open pull request, at least 0"))
+		}
+		if p.State == "" && p.Draft == nil && p.Labels == nil && p.Checks == "" && p.ReviewDecision == "" && p.MergedInto == "" && p.Comments == nil && p.Ahead == nil {
 			errs = append(errs, errors.New("pull without a fact to check"))
 		}
 	case "issue":
@@ -708,6 +714,21 @@ func (m *Model) checkPull(want *PullExpect) error {
 	if want.Comments != nil {
 		if err := want.Comments.check(p.Ref()+" comments", len(p.Comments)); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if want.Ahead != nil {
+		switch {
+		case p.State != stateOpen:
+			bad("state %s, ahead is an open pull request's", strings.ToLower(p.State))
+		case !m.Origins.Has(p.Repo):
+			bad("ahead: %s has no origin", want.Repo)
+		default:
+			ahead, _, err := m.Origins.AheadBehind(p.Repo, m.BaseSHA(p), m.HeadSHA(p))
+			if err != nil {
+				bad("ahead: %v", err)
+			} else if ahead != *want.Ahead {
+				bad("head %d commit(s) ahead of %s, want %d", ahead, p.Base, *want.Ahead)
+			}
 		}
 	}
 	return errors.Join(errs...)

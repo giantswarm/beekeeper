@@ -1,0 +1,152 @@
+name: loop-hour-leaves-the-graphql-budget-above-the-floor
+description: >
+  One hour of loop passes on a desk with open pull requests in eight
+  repositories. For three of them GitHub answers the pull request listing
+  with 404 for the whole hour: the desk's login lost them. The loop keeps
+  a failed inventory for five minutes like a successful one, so it asks
+  for each of the three again twelve times in the hour, not at every pass,
+  and its own GraphQL spend (the budget readings around each inventory)
+  leaves the budget above github.floor. At the end of the hour a board
+  item that became free still gets its worker. Live, every idle pass
+  repeated the failed reads and their budget readings, the budget fell
+  under the floor in most hours, and starts were held until the hourly
+  reset.
+issue: https://github.com/giantswarm/beekeeper/issues/3769
+flow: regression
+tags: [regression, loop, github, budget, clock]
+timeout: 300s
+
+# The bug's fix is on main already, so the scenario passes on this change's
+# base. Its control is a run on the code before the fix, linked on the pull
+# request that added the scenario.
+control:
+  none: >-
+    the fix https://github.com/giantswarm/beekeeper/pull/3782 is on main
+    already; the run that fails on the code before it is linked on the pull
+    request that adds this scenario
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {floor: 1000, probeRepo: example/app}
+      # An empty board is read again after one to four minutes.
+      supervisor: {fillRetryEvery: 1m}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The item that becomes free after the hour, board: Ready, blocked_by: [2]}
+          - {number: 2, title: What the item waits for}
+      - name: example/svc-01
+        issues:
+          - {number: 1, title: Work in svc-01}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-01", head: work-01, author: desk, body: "Closes #1"}
+      - name: example/svc-02
+        issues:
+          - {number: 1, title: Work in svc-02}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-02", head: work-02, author: desk, body: "Closes #1"}
+      - name: example/svc-03
+        issues:
+          - {number: 1, title: Work in svc-03}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-03", head: work-03, author: desk, body: "Closes #1"}
+      - name: example/svc-04
+        issues:
+          - {number: 1, title: Work in svc-04}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-04", head: work-04, author: desk, body: "Closes #1"}
+      - name: example/svc-05
+        issues:
+          - {number: 1, title: Work in svc-05}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-05", head: work-05, author: desk, body: "Closes #1"}
+      - name: example/svc-06
+        issues:
+          - {number: 1, title: Work in svc-06}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-06", head: work-06, author: desk, body: "Closes #1"}
+      - name: example/svc-07
+        issues:
+          - {number: 1, title: Work in svc-07}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-07", head: work-07, author: desk, body: "Closes #1"}
+      - name: example/svc-08
+        issues:
+          - {number: 1, title: Work in svc-08}
+        pulls:
+          - {number: 2, title: "An open pull request in svc-08", head: work-08, author: desk, body: "Closes #1"}
+    budgets:
+      # The desk's other callers have spent 2000 points of this window,
+      # which lasts for the whole scenario.
+      graphql: {remaining: 3000, reset_in: 2h}
+    faults:
+      # Not found is no answer the desk tries again at once, as it does
+      # after a 502.
+      - name: unlisted
+        match: {path: 'repos/example/svc-0[1-3]/pulls'}
+        respond: {status: 404}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    # The desk's open pull requests, one in each of the eight repositories.
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: '[{"number":2,"repository":{"name":"svc-01","nameWithOwner":"example/svc-01"}},{"number":2,"repository":{"name":"svc-02","nameWithOwner":"example/svc-02"}},{"number":2,"repository":{"name":"svc-03","nameWithOwner":"example/svc-03"}},{"number":2,"repository":{"name":"svc-04","nameWithOwner":"example/svc-04"}},{"number":2,"repository":{"name":"svc-05","nameWithOwner":"example/svc-05"}},{"number":2,"repository":{"name":"svc-06","nameWithOwner":"example/svc-06"}},{"number":2,"repository":{"name":"svc-07","nameWithOwner":"example/svc-07"}},{"number":2,"repository":{"name":"svc-08","nameWithOwner":"example/svc-08"}}]'}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - name: admitted
+    wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  # 09:00 to 10:00 in steps a little over the pass interval of 30 seconds,
+  # so that every step brings a pass and a budget reading of the loop's
+  # watch (at most one every 30 seconds); each step waits until the work
+  # the last one woke is done.
+  - name: hour
+    advance:
+      by: 1h
+      step: 35s
+      quiet: 100ms
+    expect:
+      - process: {name: loop, running: true}
+      # Twelve refreshes of the three repositories, not a read at every one
+      # of some hundred passes.
+      - github: {calls: {path: 'repos/example/svc-0[1-3]/pulls', caller: loop, fault: unlisted, min: 3, max: 60}}
+      # Some 600 points with the budget readings of every pass; the failed
+      # reads of every pass cost that again and half as much on top.
+      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 900}}}
+      - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
+  # 10:00: an item becomes free. Starts are not held: the refill's next
+  # read of the board finds it and the item gets its worker.
+  - name: free
+    github: {close: {repo: example/app, issue: 2}}
+  - name: next-read
+    advance:
+      by: 5m
+      step: 35s
+      quiet: 100ms
+  - name: started
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 1}
+  - stop: loop
+
+then:
+  # The hour's real time: some 100 passes of the loop, each waited for
+  # until the desk rests. A pass makes the same calls on every run; its real
+  # time is the CI machine's: a median of 0.7 to 1.4 s on a medium machine,
+  # by what the scenario that runs beside it does.
+  - {step: hour, duration: {max: 240s}}
+  - worker: {name: app 1, turns: 1}
+  - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
