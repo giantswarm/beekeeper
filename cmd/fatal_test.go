@@ -327,6 +327,9 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				if !slices.Contains(args, fatalBranchOption) || !slices.Contains(args, fatalDirOption) {
 					t.Fatal("repair must use a managed repository worktree")
 				}
+				if i := slices.Index(args, fatalHostOption); i < 0 || i+1 >= len(args) || args[i+1] != executionLocal {
+					t.Fatalf("repair must stay on this machine (--host local): %v", args)
+				}
 				q, err := fatal.Read(dir)
 				if err != nil || len(q.Incidents) != 1 || q.Incidents[0].Owner == "" {
 					t.Fatal("launch before durable owner", err)

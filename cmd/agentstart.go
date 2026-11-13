@@ -153,6 +153,17 @@ execution host still enforces memory, swap, load, disk, build slots (with
 --builds) and maxBusy during admission, so remote preparation can still be
 refused. Authentication, identity, version and policy checks remain required.
 
+A start without --host is placed as the supervisor loop places its own
+(supervisor.hostsFirst, the default, with supervisor.hosts): on the first host
+that maps the start's repository, offers its harness and has room for it
+(capacity --host), pinned to --ref, else to the repository's default branch.
+The repository is --repo, else the origin of the checkout --dir names, else
+the one the brief names, else the origin of agents.dir or the current
+directory. The host's own workspace takes the place of --dir and --branch.
+A start no host takes runs here and says why on its first line; with --repo
+or --ref it is refused instead. Reviews, timers' starts, --desktop and a
+--mode other than headless stay here; so does every start with --host local.
+
 A seed turn creates the session: "claude -p" under a session id beekeeper
 chooses, without tools, with the brief as its first prompt, in a transient
 user unit (beekeeper-agent-<id>, its output in journalctl --user -u <unit>);
@@ -360,6 +371,34 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			kind := capacity.StartKind(review, ofSelfHosted)
+			if host == "" {
+				// supervisor.hostsFirst places a start without --host as the
+				// loop places its own; --host local keeps one here.
+				byTimer := os.Getenv(envTimerID) != "" || cmd.Flags().Changed(flagTimerID)
+				p := a.placeHandStart(cmd.Context(), handStart{brief: a.placementBrief(briefFile), repository: repository, ref: gitRef, dir: dir, harness: harness, model: model, mode: mode, review: review || ofSelfHosted, desktop: desktop, builds: builds, byTimer: byTimer, kind: kind, exclude: exclude})
+				// With --json the start's answer is the JSON on stdout alone.
+				say := a.out
+				if a.json {
+					say = cmd.ErrOrStderr()
+				}
+				switch {
+				case p.Host != "":
+					line := fmt.Sprintf("placed on %s by supervisor.hostsFirst: %s at %s; --host local starts it on this machine", p.Host, p.Repository, p.Ref)
+					if branch != "" || dir != "" {
+						line += "; the host's own workspace takes the place of --dir and --branch"
+					}
+					if _, err := fmt.Fprintln(say, line); err != nil {
+						return err
+					}
+					host, repository, gitRef, dir = p.Host, p.Repository, p.Ref, ""
+				case p.Local != "" && (repository != "" || gitRef != ""):
+					return usageErr("--repo and --ref require an SSH --host: %s", p.Local)
+				case p.Local != "":
+					if _, err := fmt.Fprintf(say, "on this machine: %s\n", p.Local); err != nil {
+						return err
+					}
+				}
+			}
 			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
 				if harness == capacity.HarnessAuto {
@@ -684,9 +723,9 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
 	c.Flags().StringVar(&effortLevel, "effort", "", "session effort: low, medium, high, xhigh, max (default: task kind, else harness default)")
-	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
+	c.Flags().StringVar(&host, "host", "", "execution host selector; local keeps the start here; empty: placed by supervisor.hostsFirst")
 	c.Flags().StringVar(&branch, "branch", "", "new worker branch, created from the freshly fetched origin default branch")
-	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
+	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host; without --host: placed on one that maps it")
 	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
