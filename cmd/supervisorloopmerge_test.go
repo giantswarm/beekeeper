@@ -364,8 +364,8 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 	}{
 		{name: "without_repark", mergeable: loop.MergeableConflicting, repark: false, wantGates: 1, repairer: loopReviewer},
 		{name: "with_repark", mergeable: loop.MergeableConflicting, repark: true, wantGates: 1, repairer: loopReviewer},
-		{name: "gate_conflict_while_full", mergeable: loop.MergeableUnknown, repark: true, wantGates: 2, failure: github.SquashNotApplicable, repairer: loopWorker},
-		{name: "gate_red_while_full", mergeable: loop.MergeableUnknown, repark: true, wantGates: 2, failure: github.SquashRed, repairer: loopWorker},
+		{name: "gate_conflict_while_full", mergeable: mergeableUnknown, repark: true, wantGates: 2, failure: github.SquashNotApplicable, repairer: loopWorker},
+		{name: "gate_red_while_full", mergeable: mergeableUnknown, repark: true, wantGates: 2, failure: github.SquashRed, repairer: loopWorker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)

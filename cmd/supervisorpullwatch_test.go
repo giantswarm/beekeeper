@@ -18,6 +18,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+// mergeableUnknown is GitHub's mergeability while it is still computing it.
+// The tests keep their own copy so they also build on a merge base that
+// lacks loop.MergeableUnknown (Go-test control).
+const mergeableUnknown = "UNKNOWN"
+
 const watchFixtureUpdated = "2026-01-01T00:00:00Z"
 
 // Fake the actual GraphQL transport, including its connection shape, rather
@@ -211,7 +216,7 @@ func TestPullWatcherStopsWaitingForMergeabilityThatNeverComes(t *testing.T) {
 			w.Set([]string{loopPR}, nil, nil, 0, nil)
 			w.Snapshot.ListedAt = time.Now()
 			p := r.pull
-			p.Mergeable, p.Updated = loop.MergeableUnknown, time.Now().Add(-tc.updated)
+			p.Mergeable, p.Updated = mergeableUnknown, time.Now().Add(-tc.updated)
 			old := loop.ReadLoopPullBatch
 			t.Cleanup(func() { loop.ReadLoopPullBatch = old })
 			loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {
