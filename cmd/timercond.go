@@ -95,6 +95,16 @@ func notHeld(t state.Timer) string {
 	return "could not be read"
 }
 
+// notHeldSince says how long t's condition has not held, for its TIMER
+// STUCK line: a probe that could not run since Failing was not seen to hold,
+// which says nothing of its condition.
+func notHeldSince(now time.Time, t state.Timer) string {
+	if t.Failing.IsZero() {
+		return "has not held since " + clock(now, t.Since)
+	}
+	return fmt.Sprintf("has not been seen to hold since %s, could not run since %s", clock(now, t.Since), clock(now, t.Failing))
+}
+
 // timerProbeKey keys the guide's report of t's checks whose probe could not
 // run, by the first of them.
 func timerProbeKey(t state.Timer) string {
@@ -263,7 +273,9 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 			}
 			if !t.Failing.IsZero() {
 				evs = append(evs, timerProbeRecovered(t, now))
-				t.Failing = time.Time{}
+				// A wake not delivered re-arms the timer from its firing
+				// (rearmTimerInState): its probe ran there too.
+				t.Failing, f.t.Failing = time.Time{}, time.Time{}
 			}
 		case over && t.Expire:
 			changed = true
@@ -295,7 +307,7 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 				}
 				if !t.Stuck && now.Sub(t.Since) >= timerStuckAfter {
 					t.Stuck = true
-					lines = append(lines, fmt.Sprintf("TIMER STUCK: #%d, %s has not held since %s%s; it keeps waiting: %s", t.ID, timerCond(t), clock(now, t.Since), lastFound(t), truncate(t.What, 200)))
+					lines = append(lines, fmt.Sprintf("TIMER STUCK: #%d, %s %s%s; it keeps waiting: %s", t.ID, timerCond(t), notHeldSince(now, t), lastFound(t), truncate(t.What, 200)))
 					evs = append(evs, event(watchParty, "timer.stuck", "#%d %s since %s: %s", t.ID, timerCond(t), t.Since.Format(time.RFC3339), t.Reason))
 				}
 			}

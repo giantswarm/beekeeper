@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +130,59 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	_, _, fires, _ := settleTimers(st, map[int]checkResult{3284: cannot}, relayNow.Add(50*time.Minute))
 	if len(fires) != 1 || !strings.Contains(fires[0].reason, "could not run ("+sshUnresolvedSays+")") || strings.Contains(fires[0].reason, "did not hold") {
 		t.Fatalf("timed out: %+v", fires)
+	}
+}
+
+// A probe that holds after checks that could not run fires and closes the
+// guide's report. A wake not delivered re-arms the timer from its firing,
+// which must not bring the failure back: timer list says nothing of a probe
+// that ran.
+func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
+	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
+	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, Every: 10 * time.Minute,
+		Wake: "app deploy", What: "the link is up: resume the deploy"}}}
+	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
+	if len(st.Timers) != 1 || st.Timers[0].Failing.IsZero() {
+		t.Fatalf("a probe that could not run: %+v", st.Timers)
+	}
+	heldAt := relayNow.Add(10 * time.Minute)
+	_, evs, fires, _ := settleTimers(st, map[int]checkResult{3284: {holds: true}}, heldAt)
+	recovered := slices.ContainsFunc(evs, func(e state.Event) bool {
+		return e.Verb == loop.LoopFileVerb && strings.Contains(e.Detail, loop.FileReportSeparator+"RECOVERED: ")
+	})
+	if len(fires) != 1 || len(st.Timers) != 0 || !recovered {
+		t.Fatalf("held: fires %+v, open %+v, events %+v", fires, st.Timers, evs)
+	}
+	rearmTimerInState(st, fires[0], "wake not delivered; retrying", heldAt)
+	if len(st.Timers) != 1 || !st.Timers[0].Failing.IsZero() {
+		t.Fatalf("re-armed after the probe held: %+v", st.Timers)
+	}
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	if err := w.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.timerList(false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "could not run") {
+		t.Fatalf("timer list after the probe held: %q", out.String())
+	}
+}
+
+// A probe that could not run for a day is stuck without its condition said
+// false: it has not been seen to hold, and could not run since when.
+func TestProbeThatCannotRunForADayIsNotSaidFalse(t *testing.T) {
+	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
+	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, What: "the link is up: resume the deploy"}}}
+	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
+	day := relayNow.Add(timerStuckAfter)
+	lines, _, fires, _ := settleTimers(st, map[int]checkResult{3284: cannot}, day)
+	if len(fires) != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "TIMER STUCK: #3284, probe `") ||
+		!strings.Contains(lines[0], "has not been seen to hold since Sep 25 02:00, could not run since Sep 25 02:00 ("+sshUnresolvedSays+")") ||
+		strings.Contains(lines[0], "has not held") {
+		t.Fatalf("after a day: %q", lines)
+	}
+	if s := lastCheck(day, st.Timers[0]); !strings.HasPrefix(s, "not seen to hold since Sep 25 02:00; checked") {
+		t.Errorf("list: %q", s)
 	}
 }

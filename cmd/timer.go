@@ -231,8 +231,9 @@ func (a *app) printTimers(timers []state.Timer, verbose bool) {
 		}
 		_, _ = fmt.Fprintf(a.out, "#%d [%s, set by %s] %s\n", t.ID, when, t.By.Name, t.What)
 		// A probe that could not run is said without -v: its timer waits
-		// on a condition nobody can see.
-		if (verbose && t.Conditional()) || (t.Probe != "" && t.Unreadable) {
+		// on a condition nobody can see. Failing, not Unreadable: a
+		// probe that held keeps the reason of its last failed check.
+		if (verbose && t.Conditional()) || !t.Failing.IsZero() {
 			_, _ = fmt.Fprintf(a.out, "    %s\n", lastCheck(a.now, t))
 		}
 	}
@@ -240,6 +241,9 @@ func (a *app) printTimers(timers []state.Timer, verbose bool) {
 
 // lastCheck says what t's last check found.
 func lastCheck(now time.Time, t state.Timer) string {
+	if t.Stuck && !t.Failing.IsZero() {
+		return fmt.Sprintf("not seen to hold since %s; %s", clock(now, t.Since), lastCheckOnly(now, t))
+	}
 	if t.Stuck {
 		return fmt.Sprintf("not held since %s; %s", clock(now, t.Since), lastCheckOnly(now, t))
 	}

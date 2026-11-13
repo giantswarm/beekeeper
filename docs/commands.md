@@ -1390,7 +1390,8 @@ hostname`, `Name or service not known`, `no such host`, …), or it spends its 1
 check is a `TIMER UNREADABLE` line (`… could not run (<error>)`), and the guide hears of it once
 for the checks in a row that fail so: a `TIMER PROBE FAILED` report with the error, which its feed
 says as `GUIDE PROBLEM` and which the next clean check closes (`RECOVERED`). `timer list` shows such
-a probe's error and since when without `-v`, and so does a handover.
+a probe's error and since when without `-v`, and so does a handover. Its `TIMER STUCK` line says its
+condition has not been seen to hold, not that it has not held.
 
 `--wake <agent>` wakes the agent with the timer's text (as `agents wake`; `TIMER WAKE FAILED` when
 it cannot), `--run "<command>"` runs a command, its output in `timers/<id>.log` of the state
