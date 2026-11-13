@@ -108,6 +108,7 @@ type Command struct {
 	ErrGone                    func() error
 	EscapedLine                func(s string) string
 	Event                      func(by state.Party, verb string, format string, a ...any) state.Event
+	ExecutionCannotContinue    func(r *state.ExecutionRecord) string
 	ExecutionRecord            func(st *state.State, ref execution.Ref) (*state.ExecutionRecord, int)
 	FreshPark                  func(st *state.State, ag state.Agent) bool
 	FreshSessions              func(p0 Host) ([]*claude.Session, *proc.Table, error)
