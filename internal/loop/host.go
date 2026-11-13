@@ -114,7 +114,6 @@ type Command struct {
 	HeldBy                     func(notes []state.Note, ref string, except int) (*state.Note, *state.ItemHold)
 	HostExecutions             func(st *state.State, selector string) int
 	IncidentExempt             func(st *state.State, now time.Time, refs ...string) bool
-	InheritReviewParkOnAgent   func(st *state.State, ag *state.Agent, rp state.ReviewPark, now time.Time)
 	IsDeskReviewWait           func(waits string) bool
 	IssueURL                   func(ref string) string
 	LoopBroker                 func(ctx context.Context) (string, error)
@@ -161,6 +160,7 @@ type Command struct {
 	ShortDur                   func(d time.Duration) string
 	ShortSHA                   func(sha string) string
 	StopMerges                 func(store state.Store, by state.Party, pick func(state.Merge) bool, keepSeeded bool, how func(state.Merge) string) ([]string, error)
+	TakeOverReviewPark         func(a Host, st *state.State, rp state.ReviewPark, name string) ([]state.Event, error)
 	Truncate                   func(s string, n int) string
 	Unactivated                func(r *state.ExecutionRecord) bool
 	UnmergedHoldReason         func(repo string, recent []UnmergedPull, limit int, window time.Duration) string
