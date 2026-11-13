@@ -32,7 +32,6 @@ const (
 	litNamespace           = "namespace"
 	litNamespaceA          = "namespace-a"
 	litNow                 = "now"
-	litOnHoldTarget        = "--on hold:<target>"
 	litOperator            = "operator"
 	litPlain               = "plain"
 	litPodrestarting       = "PodRestarting"
