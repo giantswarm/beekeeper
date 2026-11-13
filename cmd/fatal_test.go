@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
@@ -36,37 +37,42 @@ func TestFatalRecoveryStartsAfterObservationBudgetExpires(t *testing.T) {
 	oldTimeout, oldRun := fatalObservationTimeout, fatalRun
 	fatalObservationTimeout = 30 * time.Millisecond
 	t.Cleanup(func() { fatalObservationTimeout, fatalRun = oldTimeout, oldRun })
-	restarts, slow := 0, 0
-	fatalRun = func(ctx context.Context, _ string, args []string) (string, string, int, error) {
-		if args[0] == "slow-probe" {
-			slow++
-			<-ctx.Done()
-			return "", "", 0, ctx.Err()
-		}
-		if slices.Contains(args, "is-enabled") {
-			return fatalEnabledState, "", 0, nil
-		}
-		if slices.Contains(args, "is-active") {
-			code := 3
-			if restarts > 0 {
-				code = 0
+	// The observation deadline runs on the bubble's clock, which advances
+	// only while a slow probe blocks: configuration I/O and a loaded runner
+	// cannot expire the budget before the service probes see the outage.
+	synctest.Test(t, func(t *testing.T) {
+		restarts, slow := 0, 0
+		fatalRun = func(ctx context.Context, _ string, args []string) (string, string, int, error) {
+			if args[0] == "slow-probe" {
+				slow++
+				<-ctx.Done()
+				return "", "", 0, ctx.Err()
 			}
-			return "", "", code, nil
-		}
-		if slices.Contains(args, "start") {
-			if ctx.Err() != nil {
-				t.Fatal("recovery inherited exhausted observation context")
+			if slices.Contains(args, "is-enabled") {
+				return fatalEnabledState, "", 0, nil
 			}
-			restarts++
+			if slices.Contains(args, "is-active") {
+				code := 3
+				if restarts > 0 {
+					code = 0
+				}
+				return "", "", code, nil
+			}
+			if slices.Contains(args, "start") {
+				if ctx.Err() != nil {
+					t.Fatal("recovery inherited exhausted observation context")
+				}
+				restarts++
+			}
+			return "", "", 0, nil
 		}
-		return "", "", 0, nil
-	}
-	if err := a.fatalScan(t.Context(), dir); err != nil {
-		t.Fatal(err)
-	}
-	if slow != 16 || restarts != 1 {
-		t.Fatalf("%d slow probes, %d restarts", slow, restarts)
-	}
+		if err := a.fatalScan(t.Context(), dir); err != nil {
+			t.Fatal(err)
+		}
+		if slow != 16 || restarts != 1 {
+			t.Fatalf("%d slow probes, %d restarts", slow, restarts)
+		}
+	})
 }
 
 func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {

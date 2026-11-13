@@ -29,14 +29,14 @@ type mergeLintIssue struct {
 // the exact fetched base, not the PR's merge base or a subsequently moved ref.
 // Both scans use the same runner/toolchain. A baseline that cannot be read is a
 // checker failure, never evidence that the PR needs repair.
-func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []string, run mergeCheckCommand, local bool) (string, error) {
+func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []string, run mergeCheckCommand, local bool) ([]mergeLintIssue, error) {
 	merged, err := readMergeLintIssues(ctx, dir, args, run)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	baseline, err := os.MkdirTemp(filepath.Dir(dir), "lint-base-*")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -45,7 +45,7 @@ func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []st
 		_ = os.RemoveAll(baseline) //nolint:gosec // owned temporary baseline worktree
 	}()
 	if _, err := runGit(ctx, dir, "worktree", loop.LoopAdd, "--detach", baseline, baseSHA); err != nil {
-		return "", fmt.Errorf("creating lint baseline: %w", err)
+		return nil, fmt.Errorf("creating lint baseline: %w", err)
 	}
 	// Each tree supplies its own repository policy; config changes in the PR
 	// must still expose newly enabled findings.
@@ -69,7 +69,7 @@ func reviewedLintRegressions(ctx context.Context, dir, baseSHA string, args []st
 	}
 	base, err := readMergeLintIssues(ctx, baseline, baseArgs, run)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	return newMergeLintIssues(merged, base), nil
 }
@@ -106,7 +106,7 @@ func readMergeLintIssues(ctx context.Context, dir string, args []string, run mer
 	return nil, fmt.Errorf("lint did not return a JSON findings report: %s", summarizeMergeCheckOutput(out))
 }
 
-func newMergeLintIssues(merged, base []mergeLintIssue) string {
+func newMergeLintIssues(merged, base []mergeLintIssue) []mergeLintIssue {
 	// Line numbers move when unrelated code is inserted. Match by file, linter,
 	// diagnostic and source instead, counting occurrences so an added duplicate
 	// is still a regression. Never filter to changed lines: dependencies can
@@ -118,13 +118,21 @@ func newMergeLintIssues(merged, base []mergeLintIssue) string {
 	for _, issue := range base {
 		counts[key(issue)]++
 	}
-	var findings []string
+	var fresh []mergeLintIssue
 	for _, issue := range merged {
 		k := key(issue)
 		if counts[k] > 0 {
 			counts[k]--
 			continue
 		}
+		fresh = append(fresh, issue)
+	}
+	return fresh
+}
+
+func formatMergeLintIssues(issues []mergeLintIssue) string {
+	findings := make([]string, 0, len(issues))
+	for _, issue := range issues {
 		findings = append(findings, fmt.Sprintf("%s:%d:%d: %s (%s)", issue.Pos.Filename, issue.Pos.Line, issue.Pos.Column, issue.Text, issue.FromLinter))
 	}
 	return strings.Join(findings, "\n")

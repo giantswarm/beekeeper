@@ -231,12 +231,11 @@ func handToSuccessor(st *state.State, leases lease.Dir, prev state.Party, next s
 		}
 	}
 	for k := range st.Timers {
-		t := &st.Timers[k]
-		if t.Wake == prev.Name && prev.Name != "" || t.Wake == prev.Session && prev.Session != "" || t.Wake == prev.HostSession && prev.HostSession != "" {
+		if t := &st.Timers[k]; wakesAgent(*t, state.Agent{Party: prev}) {
 			t.Wake = next.Name
 		}
 		// A timer prev set is next's own: its probe settles next's park.
-		if t.By.Is(prev) {
+		if t := &st.Timers[k]; t.By.Is(prev) {
 			t.By = next.Party
 		}
 	}

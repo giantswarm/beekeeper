@@ -411,6 +411,21 @@ func (c *ChoiceView) Summary() string {
 	return noProblems
 }
 
+// BehindPace is how many points the pick's 7-day usage is behind its even
+// weekly pace, and whether it is behind: false for no pick, a self-hosted
+// pick, or one on or ahead of its pace.
+func (c *ChoiceView) BehindPace() (float64, bool) {
+	if c == nil || c.Harness == "" {
+		return 0, false
+	}
+	for _, cand := range c.Candidates {
+		if cand.OK && cand.Harness == c.Harness && cand.Model == c.Model && cand.Provider == c.Provider && cand.BehindPace != nil {
+			return *cand.BehindPace, *cand.BehindPace > 0
+		}
+	}
+	return 0, false
+}
+
 // AgentCount sorts the roster: busy with a task, parked (kept on purpose, a
 // timer wakes it, or it waits on its person), waiting in a wait of its own
 // and idle. Only busy agents hold a slot. The supervisor, the guide, a

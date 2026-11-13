@@ -73,3 +73,77 @@ func TestSupersededPublicationTransferDoesNotHoldRetirement(t *testing.T) {
 		t.Fatal("a transfer newer than the recovered one was not detected")
 	}
 }
+
+// Publishing twice in the same turn leaves the second bundle as the newest
+// recovered transfer without a separate recovery pass, and the first watch
+// sync after completion retires the execution on its host.
+func TestExecutionRetiresOnHostAfterMultiplePublications(t *testing.T) {
+	rig := newPublicationRig(t)
+	ctx := context.Background()
+
+	firstHead := rig.commit(t, "pr.txt", "first publication\n")
+	firstPub := rig.publication(t, firstHead)
+	var firstResult executionPublicationResult
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, firstPub, &firstResult, false); err != nil {
+		t.Fatal(err)
+	}
+
+	secondHead := rig.commit(t, "pr.txt", "second publication\n")
+	secondPub := rig.publication(t, secondHead)
+	secondPub.Title, secondPub.Body = "", ""
+	var secondResult executionPublicationResult
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, secondPub, &secondResult, false); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := rig.a.publicationTransferDir(rig.request.Ref)
+	if got, want := newestPublicationTransfer(dir), strings.TrimPrefix(secondPub.BundleDigest, "sha256:"); got != want {
+		t.Fatalf("newest transfer after second publication = %q, want %q", got, want)
+	}
+
+	st, err := rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := st.Starts[0].Execution
+	if rec.RecoveredTransfer != secondPub.BundleDigest {
+		t.Fatalf("recovered transfer = %q, want %q", rec.RecoveredTransfer, secondPub.BundleDigest)
+	}
+	if rig.a.hasUnrecoveredPublication(rec) {
+		t.Fatal("completed second publication left the execution marked unrecovered")
+	}
+
+	handle := rec.Handle
+	fake := &retireTransport{testExecutionTransport: &testExecutionTransport{
+		sync: func(context.Context, execution.Ref) (execution.ControlResult, error) {
+			return execution.ControlResult{}, nil
+		},
+		inspect: func(context.Context, execution.Ref) (execution.Observation, error) {
+			return execution.Observation{Handle: handle, ProcessState: execution.Exited, Reachability: execution.Reachable, Ready: true}, nil
+		},
+		logs: func(context.Context, execution.Ref, execution.LogRequest) (execution.LogPage, error) {
+			return execution.LogPage{Data: []byte("turn finished\n"), Next: "14"}, nil
+		},
+	}}
+	rig.a.executionTransport = func(execution.Host) execution.Transport { return fake }
+
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Done = true
+		st.Starts[0].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &watcher{app: rig.a}
+	st = w.syncExecutions(ctx, st)
+	if len(fake.requests) != 1 || fake.requests[0].Trigger != execution.RetireTriggerReport {
+		t.Fatalf("host retire requests after syncExecutions = %+v, want 1 report retirement", fake.requests)
+	}
+	if !st.Starts[0].Execution.Retirement.Finished() {
+		t.Fatalf("retirement after syncExecutions = %+v, want finished", st.Starts[0].Execution.Retirement)
+	}
+}

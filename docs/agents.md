@@ -73,7 +73,9 @@ organisation folders and linked worktrees are refused with accepted checkout
 paths. The session launches in the checkout to load its repository instructions,
 then works in `<stateDir>/worktrees/<repo>/<branch>`, created from the freshly
 fetched origin default branch (`agents.worktreesDir` overrides the worktree
-place). Review starts require a PR URL in the brief and
+place). The branch's upstream is `origin/<branch>`, never the default branch, so
+`git push` and `git push -u origin <branch>` create the branch on origin whatever
+the checkout's `push.default`. Review starts require a PR URL in the brief and
 use a detached `<stateDir>/worktrees/<repo>/review-<number>` instead. Existing
 worktree destinations are refused. The prompt forbids commits, stashes and
 checkouts in the main checkout. Split tasks spanning repositories into one task
