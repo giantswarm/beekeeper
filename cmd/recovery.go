@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -140,7 +139,7 @@ func (a *app) startRecovery(artifact, target string) error {
 			return nil
 		}
 	}
-	c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the verified recovery binary
+	c := proc.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // the verified recovery binary
 	platform.Detach(c)
 	if err := c.Start(); err != nil {
 		return err

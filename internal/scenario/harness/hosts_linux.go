@@ -358,24 +358,60 @@ func provision(ctx context.Context, desk Desk, h Host, repositories []string, ke
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
 		return nil, err
 	}
-	beekeeper := filepath.Join(root, "bin", "beekeeper")
-	bundle, err := run(ctx, env, filepath.Join(root, "home"), beekeeper, "--config", config, "agents", "hosts", "bundle")
+	digest, err := prepare(ctx, env, root)
 	if err != nil {
-		return nil, fmt.Errorf("hosts bundle: %w", err)
+		return nil, err
+	}
+	return map[string]any{
+		"ssh": h.Name, "executable": filepath.Join(root, "bin", "beekeeper"), "config": config, "identity": h.Name,
+		"workspaceRoot": workspaces, "repositories": sources, "harnesses": toAny(harnesses),
+		"policyDigest": digest, "maxBusy": maxBusy,
+	}, nil
+}
+
+// Reconfigure changes the policy of the provisioned host name as an
+// operator does: over is laid over the host's own configuration, and the
+// host's beekeeper prepares its policy again. It returns the digest prepare
+// printed, which the operator names in the desk's agents.hosts entry.
+func Reconfigure(ctx context.Context, desk Desk, name string, over map[string]any) (string, error) {
+	root := HostRoot(name)
+	config := filepath.Join(root, "config.yaml")
+	raw, err := os.ReadFile(config) //nolint:gosec // the host's own configuration in the sandbox
+	if err != nil {
+		return "", err
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return "", fmt.Errorf("host %s configuration: %w", name, err)
+	}
+	overlay(cfg, over)
+	if raw, err = yaml.Marshal(cfg); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
+		return "", err
+	}
+	return prepare(ctx, HostEnv(desk.Env, name), root)
+}
+
+// prepare exports the policy bundle of the host at root and installs it
+// with the host's beekeeper, as an operator does, and returns the digest
+// prepare printed.
+func prepare(ctx context.Context, env []string, root string) (string, error) {
+	beekeeper, config, home := filepath.Join(root, "bin", "beekeeper"), filepath.Join(root, "config.yaml"), filepath.Join(root, "home")
+	bundle, err := run(ctx, env, home, beekeeper, "--config", config, "agents", "hosts", "bundle")
+	if err != nil {
+		return "", fmt.Errorf("hosts bundle: %w", err)
 	}
 	bundleFile := filepath.Join(root, "policy.json")
 	if err := os.WriteFile(bundleFile, []byte(bundle), 0o600); err != nil {
-		return nil, err
+		return "", err
 	}
-	digest, err := run(ctx, env, filepath.Join(root, "home"), beekeeper, "--config", config, "agents", "hosts", "prepare", "--bundle", bundleFile)
+	digest, err := run(ctx, env, home, beekeeper, "--config", config, "agents", "hosts", "prepare", "--bundle", bundleFile)
 	if err != nil {
-		return nil, fmt.Errorf("hosts prepare: %w", err)
+		return "", fmt.Errorf("hosts prepare: %w", err)
 	}
-	return map[string]any{
-		"ssh": h.Name, "executable": beekeeper, "config": config, "identity": h.Name,
-		"workspaceRoot": workspaces, "repositories": sources, "harnesses": toAny(harnesses),
-		"policyDigest": strings.TrimSpace(digest), "maxBusy": maxBusy,
-	}, nil
+	return strings.TrimSpace(digest), nil
 }
 
 func toAny(xs []string) []any {

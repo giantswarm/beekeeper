@@ -20,7 +20,7 @@ func TestCommandNicesBackgroundReads(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		read = "cut -d' ' -f19 /proc/self/stat"
 	}
-	nice := func(ctx context.Context) (int, *exec.Cmd) {
+	nice := func(ctx context.Context) (int, *Cmd) {
 		c := Command(ctx, "sh", "-c", read)
 		out, err := c.Output()
 		if err != nil {

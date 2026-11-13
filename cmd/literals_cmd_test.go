@@ -38,6 +38,7 @@ const (
 	litPrune               = "prune"
 	litReviewer            = "reviewer"
 	litShared              = "shared"
+	litShort               = "short"
 	litSmall               = "small"
 	litSquashed            = "squashed"
 	litStaged              = "staged"

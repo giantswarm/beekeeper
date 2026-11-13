@@ -212,6 +212,7 @@ type (
 	plainTimer             Timer
 	plainOverride          Override
 	plainOverrideKey       OverrideKey
+	plainPaceOff           PaceOff
 	plainRecord            Record
 	plainClaim             Claim
 	plainAlertOwner        AlertOwner
@@ -303,6 +304,8 @@ func (v *OverrideKey) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainOverrideKey)(v), &v.rest)
 }
 func (v OverrideKey) MarshalJSON() ([]byte, error) { return encodeKeeping(plainOverrideKey(v), v.rest) }
+func (v *PaceOff) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainPaceOff)(v), &v.rest) }
+func (v PaceOff) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPaceOff(v), v.rest) }
 func (v *Record) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainRecord)(v), &v.rest) }
 func (v Record) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainRecord(v), v.rest) }
 func (v *Claim) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*plainClaim)(v), &v.rest) }

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
@@ -255,7 +255,7 @@ func sameExecutable(candidatePath string) (bool, error) {
 func candidateIdentity(ctx context.Context, candidatePath, dir string, env []string) (string, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	c := exec.CommandContext(cctx, candidatePath, "version") //nolint:gosec // verified staged candidate binary
+	c := proc.CommandContext(cctx, candidatePath, "version") //nolint:gosec // verified staged candidate binary
 	c.Dir = dir
 	c.Env = env
 	out, err := c.CombinedOutput()
@@ -315,7 +315,7 @@ func runRecordedCanary(ctx context.Context, candidatePath string, cfg CanaryConf
 
 	var logs strings.Builder
 	runCandidate := func(dir string, args ...string) error {
-		c := exec.CommandContext(ctx, candidatePath, args...) //nolint:gosec // staged candidate under canary
+		c := proc.CommandContext(ctx, candidatePath, args...) //nolint:gosec // staged candidate under canary
 		c.Env, c.Dir = p.env, dir
 		out, err := c.CombinedOutput()
 		fmt.Fprintf(&logs, "[%s] %s\n", strings.Join(args, " "), strings.TrimSpace(string(out)))
@@ -358,7 +358,7 @@ func runRecordedCanary(ctx context.Context, candidatePath string, cfg CanaryConf
 }
 
 func (p *probe) prepareCanary(server, scenario string) (err error) {
-	if p.git, err = exec.LookPath(gitCmd); err != nil {
+	if p.git, err = proc.LookPath(gitCmd); err != nil {
 		return err
 	}
 	checkout := filepath.Join("checkouts", "project")
@@ -632,11 +632,11 @@ func writeIsolatedGitAuth(dir, binDir string, env []string) ([]string, error) {
 }
 
 func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest string, cfg CanaryConfig, runID string) (mergeOID string, retErr error) {
-	ghBin, err := exec.LookPath(ghCmd)
+	ghBin, err := proc.LookPath(ghCmd)
 	if err != nil {
 		return "", fmt.Errorf("locating gh CLI for sandbox canary: %w", err)
 	}
-	gitBin, err := exec.LookPath(gitCmd)
+	gitBin, err := proc.LookPath(gitCmd)
 	if err != nil {
 		return "", fmt.Errorf("locating git CLI for sandbox canary: %w", err)
 	}
@@ -763,7 +763,7 @@ exec "$(dirname "$0")/real-gh" "$@"
 	}()
 
 	runCmdWithEnv := func(workDir string, cmdEnv []string, bin string, args ...string) (string, error) {
-		c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // isolated sandbox command
+		c := proc.CommandContext(ctx, bin, args...) //nolint:gosec // isolated sandbox command
 		c.Dir = workDir
 		c.Env = cmdEnv
 		out, cerr := c.CombinedOutput()
@@ -1042,10 +1042,10 @@ func serveCanaryGit() int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, os.Getenv("CANARY_REAL_GIT"), args...) //nolint:gosec // isolated sandbox git wrapper
+	c := proc.CommandContext(ctx, os.Getenv("CANARY_REAL_GIT"), args...) //nolint:gosec // isolated sandbox git wrapper
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if errors.As(err, &ee) {
 			return ee.ExitCode()
 		}
@@ -1161,7 +1161,7 @@ func runCanaryWorkerPublish(sandboxDir, workerName, workerSession string) error 
 	ghBin := filepath.Join(binDir, ghCmd)
 
 	run := func(bin string, a ...string) (string, error) {
-		c := exec.CommandContext(ctx, bin, a...) //nolint:gosec // isolated sandbox worker command
+		c := proc.CommandContext(ctx, bin, a...) //nolint:gosec // isolated sandbox worker command
 		c.Dir = checkout
 		c.Env = os.Environ()
 		out, err := c.CombinedOutput()
@@ -1236,7 +1236,7 @@ func runCanaryReviewerTurn(sandboxDir, reviewerName, reviewerSession string) err
 	repo := os.Getenv("CANARY_REPO")
 	ghBin := filepath.Join(sandboxDir, "bin", ghCmd)
 	body := "Desk review (opus): approved\nHead reviewed: `" + prMeta.HeadSHA + "`"
-	c := exec.CommandContext(ctx, ghBin, "pr", "review", strconv.Itoa(prMeta.PRNum), "--repo", repo, "--comment", "--body", body) //nolint:gosec // isolated sandbox reviewer command
+	c := proc.CommandContext(ctx, ghBin, "pr", "review", strconv.Itoa(prMeta.PRNum), "--repo", repo, "--comment", "--body", body) //nolint:gosec // isolated sandbox reviewer command
 	c.Dir = sandboxDir
 	c.Env = os.Environ()
 	if out, err := c.CombinedOutput(); err != nil {
@@ -1299,7 +1299,7 @@ func cleanupSandboxRunWithEnv(ctx context.Context, ghBin string, env []string, r
 	}
 
 	runGH := func(args ...string) ([]byte, error) {
-		c := exec.CommandContext(ctx, ghBin, args...) //nolint:gosec // allowlisted sandbox cleanup
+		c := proc.CommandContext(ctx, ghBin, args...) //nolint:gosec // allowlisted sandbox cleanup
 		c.Env = env
 		return c.CombinedOutput()
 	}

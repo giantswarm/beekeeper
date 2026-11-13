@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -1015,7 +1014,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
+	c := proc.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
 	c.Env = devctlCommandEnv("")
 	c.Stderr = &stderr
 	out, err := c.Output()
@@ -1026,7 +1025,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 		err = errors.New("no document")
 	}
 	// CommandContext reports a killed process rather than its deadline. Keep
-	// both causes, and use our buffer even when exec.ExitError has no Stderr.
+	// both causes, and use our buffer even when proc.ExitError has no Stderr.
 	if cause := ctx.Err(); cause != nil {
 		err = fmt.Errorf("%w (%w)", err, cause)
 	}
@@ -2887,7 +2886,7 @@ func (a *app) installTool(ctx context.Context, by state.Party, verb, what string
 func toolUpdate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
+	c := proc.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
 	c.Env = devctlCommandEnv("")
 	out, err := c.CombinedOutput()
 	if err != nil {
@@ -2900,7 +2899,7 @@ func toolUpdate(ctx context.Context) error {
 func toolVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
+	c := proc.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
 	c.Env = devctlCommandEnv("")
 	out, err := c.Output()
 	if err != nil {
@@ -2919,7 +2918,7 @@ func toolVersion(ctx context.Context) string {
 func toolAcceptsRed(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
+	c := proc.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
 	c.Env = devctlCommandEnv("")
 	out, _ := c.Output()
 	return strings.Contains(string(out), merge.AcceptRedFlag)
@@ -2991,12 +2990,12 @@ func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
 	started := clk.Now()
-	path, err := exec.LookPath(argv[0])
+	path, err := proc.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
 		return guard.ExitNotFound
 	}
-	c := exec.Command(path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
+	c := proc.CommandContext(context.Background(), path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
 	c.Env = devctlCommandEnv("")
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, out, os.Stderr
 	sig := make(chan os.Signal, 1)
@@ -3017,7 +3016,7 @@ func runChild(argv []string, out io.Writer) int {
 
 // childExit preserves signal deaths as shell exit codes and reports how long
 // the command ran, including when a caller or the watch stopped it.
-func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
+func childExit(ps *proc.ProcessState, errs io.Writer, started time.Time) int {
 	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), clk.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())

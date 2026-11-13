@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -103,7 +102,7 @@ const syncPluginsFlag = "sync-plugins"
 // runInstalled runs the binary at path with args, its output to w; the
 // tests replace it.
 var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...string) error {
-	c := exec.CommandContext(ctx, path, args...) //nolint:gosec // the binary this update installed
+	c := proc.CommandContext(ctx, path, args...) //nolint:gosec // the binary this update installed
 	c.Stdout, c.Stderr = w, w
 	return c.Run()
 }

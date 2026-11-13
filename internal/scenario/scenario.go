@@ -113,6 +113,16 @@ type Given struct {
 	// Tools are further programs on the desk's PATH (go, golangci-lint):
 	// fakes like Fakes, which only given.calls answer.
 	Tools []string `yaml:"tools"`
+	// Files are written under /work before the desk starts: a brief a
+	// start by hand reads.
+	Files []File `yaml:"files"`
+}
+
+// File is a file of the scenario's /work: Path relative to it, and its
+// Content.
+type File struct {
+	Path    string `yaml:"path"`
+	Content string `yaml:"content"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -494,6 +504,14 @@ func (s *Scenario) Validate() error {
 			bad("given.tools[%d]: %q is on the desk's PATH already", i, tool)
 		case slices.Index(s.Given.Tools, tool) != i:
 			bad("given.tools[%d]: %q is named twice", i, tool)
+		}
+	}
+	for i, f := range s.Given.Files {
+		switch {
+		case !filepath.IsLocal(f.Path):
+			bad("given.files[%d]: path %q is not relative to /work", i, f.Path)
+		case slices.ContainsFunc(s.Given.Files[:i], func(o File) bool { return filepath.Clean(o.Path) == filepath.Clean(f.Path) }):
+			bad("given.files[%d]: %q is named twice", i, f.Path)
 		}
 	}
 	for i, c := range s.Given.Calls {

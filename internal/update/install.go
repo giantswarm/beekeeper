@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const windowsOS = "windows"
@@ -32,7 +33,7 @@ install -m "$mode" -- "$source" "$dir/beekeeper"
 sync "$dir/beekeeper" 2>/dev/null || sync
 mv -f -- "$dir/beekeeper" "$target"
 `
-	out, err := exec.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed command; the arguments are positional
+	out, err := proc.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed command; the arguments are positional
 	if err != nil {
 		return fmt.Errorf("privileged atomic install: %w: %s", err, strings.TrimSpace(string(out)))
 	}

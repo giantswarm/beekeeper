@@ -1,10 +1,10 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const (
@@ -66,12 +67,12 @@ func TestLintTimeoutSlotlessClasses(t *testing.T) {
 
 type deadlineCapper struct {
 	fakeCapper
-	command *exec.Cmd
+	command *proc.Cmd
 	stopped bool
 }
 
-func (f *deadlineCapper) Command(_ string, _ platform.Cap, argv []string) (*exec.Cmd, error) {
-	f.command = exec.Command(argv[0], argv[1:]...) //nolint:gosec // argv contains only this test suite's owned fixture commands
+func (f *deadlineCapper) Command(_ string, _ platform.Cap, argv []string) (*proc.Cmd, error) {
+	f.command = proc.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // argv contains only this test suite's owned fixture commands
 	return f.command, nil
 }
 func (f *deadlineCapper) Reap(string) ([]int, error) {

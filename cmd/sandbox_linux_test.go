@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -54,7 +54,7 @@ func startRequester(t *testing.T, dir string, env []string) int {
 	t.Helper()
 	// a shell that says when it runs and stays the process (no tail exec):
 	// Start returns before the child's environment is in place
-	requester := exec.Command("/bin/sh", "-c", "echo ready; /bin/sleep 5; true")
+	requester := proc.CommandContext(context.Background(), "/bin/sh", "-c", "echo ready; /bin/sleep 5; true")
 	requester.Dir, requester.Env = dir, env
 	ready, err := requester.StdoutPipe()
 	if err != nil {
@@ -72,7 +72,7 @@ func startRequester(t *testing.T, dir string, env []string) int {
 
 func TestBrokeredCallActsOnTheRequesterCheckout(t *testing.T) {
 	skipWithoutOwnProc(t)
-	if _, err := exec.LookPath("git"); err != nil {
+	if _, err := proc.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
 	checkout := gitCheckout(t, "https://git.example/caller.git")
@@ -239,7 +239,7 @@ func TestBrokeredStartKeepsTheScratchState(t *testing.T) {
 	// scratch state; the requester's names its own, which stay its own
 	t.Setenv("BEEKEEPER_CONFIG", "/host/config.yaml")
 	t.Setenv(stateFromEnv, "/broker/leaked.yaml")
-	requester := exec.Command("/bin/sh", "-c", "echo ready; /bin/sleep 5; true")
+	requester := proc.CommandContext(context.Background(), "/bin/sh", "-c", "echo ready; /bin/sleep 5; true")
 	requester.Env = []string{"CLAUDE_CODE_SESSION_ID=s-1", "BEEKEEPER_CONFIG=/requester/config.yaml", stateFromEnv + "=/requester/leaked.yaml", "PATH=/usr/bin:/bin"}
 	ready, err := requester.StdoutPipe()
 	if err != nil {

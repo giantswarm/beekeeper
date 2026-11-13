@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,11 +114,11 @@ func (e toolExitError) Unwrap() error { return e.error }
 // directories (proc.LookPath): the sandbox broker's calls run with the
 // service manager's PATH, without the directory kind lives in.
 func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	path, err := proc.LookPath(name)
+	path, err := proc.LookTool(name)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	c := exec.CommandContext(ctx, path, args...) //nolint:gosec // sops, op and kind, beekeeper's own calls
+	c := proc.CommandContext(ctx, path, args...) //nolint:gosec // sops, op and kind, beekeeper's own calls
 	c.Dir = dir
 	if env != nil {
 		c.Env = append(os.Environ(), env...)
@@ -129,7 +128,7 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if errors.As(err, &ee) {
 			return nil, toolExitError{err, fmt.Sprintf("%s: exit %d (%s)", name, ee.ExitCode(), guard.Message(stderr.String()))}
 		}

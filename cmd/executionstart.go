@@ -252,14 +252,14 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if o.Review {
 			s.Kind = capacity.TaskKindReview
 		}
-		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
+		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }, briefServedPulls(brief, issues)...); err != nil {
 			return nil, err
 		}
 		ref := r.Ref
 		current.Agents[len(current.Agents)-1].Execution = &ref
 		events := []state.Event{
 			event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider),
-			event(by, verbStart, "%s: kind %s, host %s, harness %s, model %s; %s", name, a.selectionKind, host.Identity, r.Harness, r.Model, cmp.Or(startDecision(verdict), "explicit selection or configured default")),
+			event(by, verbStart, "%s: kind %s, host %s, harness %s, model %s, effort %s; %s", name, a.selectionKind, host.Identity, r.Harness, r.Model, cmp.Or(r.Effort, harnessDefaultModel), cmp.Or(startDecision(verdict), "explicit selection or configured default")),
 		}
 		if over != "" {
 			events = append(events, event(by, verbStart, "%s: started over %s (--force)", name, over))
@@ -307,6 +307,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &capacity.Headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
 	counts := countAgents(st, sessions, a.now, a.cfg)
+	withPaceOffs(readings, st, a.now)
 	var v *capacity.View
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		choicesCap := k

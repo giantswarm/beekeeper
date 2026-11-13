@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Match the versions used by make test-envtest.
@@ -64,7 +65,7 @@ func Ensure(ctx context.Context, stateDir string) (string, error) {
 		}
 		return assets, nil
 	}
-	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", dir, "-p", "path", version) // #nosec G204 -- fixed tool and flags; absolute state directory is one argument, never shell input
+	cmd := proc.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", dir, "-p", "path", version) // #nosec G204 -- fixed tool and flags; absolute state directory is one argument, never shell input
 	// Provision independently of the target repository's module/workspace settings.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")

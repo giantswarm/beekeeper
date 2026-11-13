@@ -21,8 +21,11 @@ substitute for validation; green PR-head checks alone are insufficient.
 For Go modules it runs configured lint and `go test -short ./...`, including
 unchanged tests and reverse dependents even for dependency-only changes.
 With `run.remote.enabled`, both commands use the configured Go builder image,
-never a local fallback; an image without `golangci-lint` gets the pinned one
-installed into the builder's workspace first. Otherwise local
+never a local fallback, in its checker environment: the tools of one list
+(`golangci-lint`, `jq`) an image lacks are installed into the builder's
+workspace first, and a check that fails while the image lacks a package the
+repository's CI installs is an environment failure naming it
+([Remote build slots](remote-builds.md)). Otherwise local
 checks require load below the CPU count and at least 8 GiB free on the check
 filesystem. Their scratch files and caches are isolated under the state directory.
 An environment failure (quota, clone, missing tools, transport or timeout) records
@@ -1114,9 +1117,11 @@ or instead of its model; the first matching rule (same `match` and `kind`
 semantics as the model) with a nonempty effort selects it. Rules without an
 effort are skipped for effort, so model-only and effort-only rules compose.
 `agents start --effort <level>` overrides the rules, independently of
-`--model`. Without either, no effort option is sent and the harness keeps
-its own default. The `agents.start` event names the effort, or
-`harness default`.
+`--model`. After the rules come the capacity choice's effort, the effort of
+the session a start continues and the loop's `supervisor.effort`; the order
+is in [guide.md](guide.md), beside the choices' `effort`. Without any, no
+effort option is sent and the harness keeps its own default. The
+`agents.start` events name the effort, or `harness default`.
 
 ```yaml
 agents:
@@ -1140,8 +1145,11 @@ Background starts keep Remote Control. Start records persist effort for
 wakes and handovers; no user settings file is changed.
 
 `guide.effort` selects the guide's session effort, ahead of the rules. The
-supervisor is a loop, so `supervisor.effort` is the default it passes to the
-sessions it starts; a matching rule's effort wins over it. Both are optional.
+supervisor is a loop, so `supervisor.effort` is the last default of the
+sessions it starts: a matching rule, the choice's effort and the continued
+session's effort win over it, and agy gets none. The loop passes it to each
+start as `--default-effort`, the last step of the start's order, never as
+`--effort`. Both are optional.
 
 ### Owned issue monitor
 

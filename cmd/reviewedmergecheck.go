@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -277,7 +277,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 	// Whole-module checks include unchanged tests, reverse dependents and
 	// dependency-only changes. Filename correspondence cannot prove coverage.
 	pkgs := []string{"./..."}
-	if _, err := exec.LookPath(mergeLintCommand); local && err != nil {
+	if _, err := proc.LookPath(mergeLintCommand); local && err != nil {
 		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
 	}
 	// Never approximate a repository's linter policy with a separate check or
@@ -379,7 +379,7 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 	ctx, cancel := context.WithTimeout(ctx, mergeCheckTimeout)
 	defer cancel()
 	var buf bytes.Buffer
-	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
+	c := proc.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
 	c.Dir = dir
 	// Git diagnostics and tests must not inherit the desk's language.
 	c.Env = append(append(os.Environ(), "LC_ALL=C", "LANGUAGE=C"), env...)
@@ -391,7 +391,7 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 		err = fmt.Errorf("%w: %s after %s", errMergeCheckTimeout, name, mergeCheckTimeout)
 	}
 	if err != nil {
-		var exit *exec.ExitError
+		var exit *proc.ExitError
 		// Starting a missing/unusable tool, cancellation and a killed process
 		// describe this checker, not a defect in the reviewed branch.
 		if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() < 0 || mergeCheckHostFailure(buf.String()) {
@@ -406,6 +406,11 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 func mergeCheckHostFailure(out string) bool { return mergeCheckHostDiagnostic(out) != "" }
 
 func mergeCheckHostDiagnostic(out string) string {
+	// The checker's own line names what its environment lacks of what the
+	// repository's CI installs: a check failing there is no branch's finding.
+	if lacks := remotebuild.EnvironmentLacking(out); lacks != "" {
+		return lacks
+	}
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",
 		"cannot allocate memory", "signal: killed",

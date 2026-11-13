@@ -90,18 +90,12 @@ func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg := selfupdate.GitHubConfig{APIToken: token}
-	opts := []github.ClientOptionsFunc{github.WithAuthToken(token)}
-	// Only a scenario build names another API than GitHub's (apiBase).
-	if base := apiBase(); base != "" {
-		cfg.EnterpriseBaseURL = base
-		opts = append(opts, github.WithEnterpriseURLs(base, base))
-	}
+	cfg := selfupdate.GitHubConfig{APIToken: token, EnterpriseBaseURL: apiBase()}
 	source, err := selfupdate.NewGitHubSource(cfg)
 	if err != nil {
 		return nil, err
 	}
-	client, err := github.NewClient(opts...)
+	client, err := apiClient(token)
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +106,16 @@ func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
 		current:     currentVersion(),
 		commit:      currentCommit(),
 	}, nil
+}
+
+// apiClient is the client of the release lookups, authenticated with token.
+// Only a scenario build names another API than GitHub's (apiBase).
+func apiClient(token string) (*github.Client, error) {
+	opts := []github.ClientOptionsFunc{github.WithAuthToken(token)}
+	if base := apiBase(); base != "" {
+		opts = append(opts, github.WithEnterpriseURLs(base, base))
+	}
+	return github.NewClient(opts...)
 }
 
 // tagSource lists exactly one release, the tag's, signed binary or not: the
