@@ -175,8 +175,13 @@ func reviewRound(st *state.State, p superloop.Pull) (int, error) {
 	once := func(verdict, head string) error {
 		return refused("%s had its one desk review, %s at head %s: no second review starts; the loop merges after the fixes", p.Ref, verdict, shortSHA(head))
 	}
+	// Every desk verdict refuses, one of a head its author replaced
+	// (superloop.Replaced) too: this command reads no loop ledger, which
+	// alone tells a replaced head from a verdict the loop acted on or one
+	// that raced its reviewer's own push. The loop starts the round after a
+	// replaced head's review itself.
 	for _, r := range p.Reviews {
-		if r.Verdict != "" && !superloop.Replaced(p, r, nil) {
+		if r.Verdict != "" {
 			return 0, once(r.Verdict, cmp.Or(r.Head, r.Commit))
 		}
 	}

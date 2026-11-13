@@ -1329,6 +1329,28 @@ func TestAReviewOfALaterRoundsHeadIsThatRoundsVerdict(t *testing.T) {
 	}
 }
 
+// A review GitHub attached to a head that only brought the base into the
+// judged one judged no replaced head when it came: once a repair moves the
+// head on with a change of its own, it stays the pull request's one review,
+// which gives the go, and no second round starts.
+// https://github.com/giantswarm/beekeeper/issues/3843
+func TestAReviewOnABaseMergeStaysTheVerdictPastIt(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	merged := func(p Pull, from string) bool { return from == head1 && p.Head == head2 }
+	approval := Review{ID: "R1", Head: head1, Commit: head2, Verdict: Approved, At: t1}
+	in := Input{Workers: parkedOn(head3, t1.Add(time.Hour)), Pulls: pull(head3, true, approval), Rounds: 1, Taken: tk, BaseMerged: merged}
+	got := Plan(in)
+	if g := only(t, got, KindGo); g.Head != head3 || !strings.Contains(g.Message, "without a second review") {
+		t.Errorf("go = %+v", g)
+	}
+	// Posted on a head with a change of the author's past the judged one,
+	// the same review is no verdict: the head handed over gets round 2.
+	in.BaseMerged = nil
+	if r := only(t, Plan(in), KindReview); r.Head != head3 || r.Round != 2 {
+		t.Errorf("review of a replaced head: %+v", r)
+	}
+}
+
 // A reviewer that left the roster without a verdict, and without a done (its
 // remote start failed), holds the parked head no longer: OrphanWait after its
 // round opened, the same head gets the next round under a key of its own,

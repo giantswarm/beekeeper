@@ -936,6 +936,26 @@ func TestMergeHeadAuthorityTrustsOnlyDeskAndMemberVerdicts(t *testing.T) {
 	}
 }
 
+// A superseded reviewer's late request for changes on the head it was
+// given, posted after its author replaced that head, is no verdict at the
+// gate either: the next round's approval of the current head still
+// authorizes the merge. Posted before the push, it holds the merge.
+// https://github.com/giantswarm/beekeeper/issues/3843
+func TestMergeHeadAuthorityIgnoresAReviewOfAReplacedHead(t *testing.T) {
+	r := newLoopRig(t)
+	p := superloop.Pull{Ref: loopPR, Head: loopFixed, Reviews: []superloop.Review{
+		{ID: "R2", Author: loopDesk, Head: loopFixed, Commit: loopFixed, Verdict: superloop.Approved, Body: loopApproved, At: time.Now().Add(-time.Minute)},
+		{ID: "R1", Author: loopDesk, Head: loopHead, Commit: loopFixed, Verdict: superloop.ChangesRequested, Body: "Review: changes requested", At: time.Now()},
+	}}
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why != "" {
+		t.Fatalf("approval past a replaced head's review: %q, %v; want authorized", why, err)
+	}
+	p.Reviews[1].Commit = loopHead
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why == "" {
+		t.Fatalf("changes requested before the push: %q, %v; want a refusal", why, err)
+	}
+}
+
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
 // an issued execution merge grant names its head after " at ", behind a
 // grant id whose first group is hex too; the grant is logged without a

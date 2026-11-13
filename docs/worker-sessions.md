@@ -248,15 +248,19 @@ forwarded; the watch resumes them when the pull request merges or closes. If
 publication could not be verified, request review in one shell call:
 `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`.
 
-The park hands over the head it verified, and a head that only merges the base into it. A head
-its author pushes past the park is still being worked on: it gets no review round and no merge
-go until the author parks on it, and the loop says so once in a `supervisor.leave` line. A head
-the author moves past a running round's ends that round without a verdict: a review its reviewer
-posts afterwards on the round's head (GitHub attaches it to the newer head) is no verdict, its
-findings reach nobody and are not the next round's previous findings. The next round starts on
-the new head as soon as its author has parked on it, without waiting for the old reviewer, which
-the loop takes off the roster once its turn ends. Only the last of the two rounds a pull request
-gets still waits for its reviewer's done.
+The park hands over the head it verified, and a head that only merges the base into it. A head its
+author pushes past the park is still being worked on: it gets no review round and no merge go until
+the author parks on it, and the loop says so once in a `supervisor.leave` line. A head the author
+moves past a running round's ends that round without a verdict: a review its reviewer posts
+afterwards on the round's head (GitHub attaches it to the newer head) is no verdict, its findings
+reach nobody and are not the next round's previous findings. The merge reads it the same way:
+posted after the next round's approval, it holds no merge go. A review GitHub attaches to a head
+that only merges the base into the round's head is still the round's verdict, also once a later
+head carries a change. The next round starts on the new head as soon as its author has parked on
+it, without waiting for the old reviewer, which the loop takes off the roster once its turn ends.
+Only the last of the two rounds a pull request gets still waits for its reviewer's done.
+`beekeeper agents review` still refuses once any desk verdict is on the pull request: only the loop
+starts the round after a replaced head's review.
 
 ## Parking
 

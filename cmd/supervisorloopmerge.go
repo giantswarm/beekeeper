@@ -347,9 +347,18 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	if err != nil {
 		return "", false, err
 	}
+	// A review of a head its author had replaced is no verdict
+	// (loop.MarkReplaced): neither the latest review nor a request for
+	// changes a go must come after.
+	trusted := p
+	trusted.Reviews = reviews
+	reviews = loop.MarkReplaced(ctx, trusted).Reviews
 	var latest *superloop.Review
 	for i := range reviews {
 		r := &reviews[i]
+		if r.Replaced {
+			continue
+		}
 		if latest == nil || !r.At.Before(latest.At) {
 			latest = r
 		}
@@ -441,7 +450,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	}
 	goes = slices.DeleteFunc(goes, func(g goRecord) bool {
 		return g.head == "" || slices.ContainsFunc(reviews, func(r superloop.Review) bool {
-			if r.Verdict != superloop.ChangesRequested {
+			if r.Verdict != superloop.ChangesRequested || r.Replaced {
 				return false
 			}
 			revHead := cmp.Or(r.Head, r.Commit)

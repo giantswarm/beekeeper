@@ -205,7 +205,7 @@ func (r *recorder) value(v reflect.Value, field string) any {
 			}
 		case "Ref", "On", "ParkedOn", "Serves", "From", "Closes", "Absorbs", "Issues", "Mentions", "OpenPulls", "Review", "Never", "Admin", "Pulls":
 			return r.ref(s)
-		case "Name", "Agent", "AgentName", "Session", "HostSession", "Author", "Authors", "Bots", "By", "For", "Person", "Orgs", "DevctlOwners", "Team", "Head", "Heads", "DroppedHeads", "ParkedHead", "ReviewHead", "Commit", "MergeCommit", "ID":
+		case "Name", "Agent", "AgentName", "Session", "HostSession", "Author", "Authors", "Bots", "By", "For", "Person", "Orgs", "DevctlOwners", "Team", "Head", "Heads", "DroppedHeads", "ParkedHead", "ReviewHead", "PullHead", "Commit", "MergeCommit", "ID":
 			return r.token(s)
 		case "State", "Kind", "Verb", "Verdict", "Mergeable", "MergeState", "ReviewDecision", "RefKind", "MergeMethods":
 			if slices.Contains([]string{"open", "base-merged", "nits-checked", "OPEN", "CLOSED", "MERGED", "APPROVED", "REVIEW_REQUIRED", "CHANGES_REQUESTED", "CONFLICTING", "DIRTY", "CLEAN", "MERGEABLE", "UNKNOWN", "approved", "changes requested", "review-queued", "fixing", "reviewing", "merging", "pull", "issue", "squash", "merge", "rebase"}, s) || slices.Contains(Verbs(), s) || slices.Contains([]string{VerbDone, VerbIdle, VerbReport, VerbProblem, VerbPark}, s) {

@@ -427,12 +427,21 @@ func (in Input) baseMerged(p Pull, approved string) bool {
 
 // Replaced reports whether r, a review of p, judged a head its author had
 // replaced when r came: GitHub attached r to another head than the one its
-// "Head reviewed:" line names, and p's head carries a change past the judged
-// one. Its round ended when the head moved, without a verdict. A head that
-// only brings the base into the judged one (baseMerged; nil: none does) is
-// still that head.
+// "Head reviewed:" line names, that head carried a change past the judged
+// one, and so does p's head. Its round ended when the head moved, without a
+// verdict. A head that only brings the base into the judged one (baseMerged;
+// nil: none does) is still that head: a review GitHub attached to such a head
+// stays a verdict also once a later head carries a change of its own.
 func Replaced(p Pull, r Review, baseMerged func(Pull, string) bool) bool {
-	return r.Verdict != "" && r.Commit != "" && r.Head != "" && !sameHead(r.Commit, r.Head) && !sameHead(r.Head, p.Head) && (baseMerged == nil || !baseMerged(p, r.Head))
+	if r.Verdict == "" || r.Commit == "" || r.Head == "" || sameHead(r.Commit, r.Head) || sameHead(r.Head, p.Head) {
+		return false
+	}
+	if baseMerged == nil {
+		return true
+	}
+	then := p
+	then.Head = r.Commit
+	return !baseMerged(then, r.Head) && (sameHead(r.Commit, p.Head) || !baseMerged(p, r.Head))
 }
 
 // replaced is Replaced with the input's BaseMerged, except when the loop
@@ -440,7 +449,7 @@ func Replaced(p Pull, r Review, baseMerged func(Pull, string) bool) bool {
 // judged the head that was current then, and stays the pull request's one
 // desk review once a repair or fix moves the head on.
 func (in Input) replaced(l ledger, p Pull, r Review) bool {
-	return Replaced(p, r, in.BaseMerged) && !l.pushed(p)(r)
+	return !l.pushed(p)(r) && Replaced(p, r, in.BaseMerged)
 }
 
 // markReplaced marks the reviews of in.Pulls that judged a replaced head
