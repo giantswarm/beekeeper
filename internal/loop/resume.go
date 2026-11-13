@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -54,7 +55,7 @@ func (l *Loop) RecoverQuota(ctx context.Context, st *state.State) error {
 			continue
 		}
 		startID := Cmd.AgyAgentStartID(ag)
-		_, model := Cmd.AgentHarnessModel(st, nil, ag)
+		_, model := capacity.AgentHarnessModel(st, nil, ag)
 		l.Host.RecordAgyQuotaExhaustedForID(startID, model, qerr, l.Host.Now())
 		if l.StartsHeld {
 			l.SayOnce("quota held "+startID, "SUPERVISOR QUOTA %s: %s; slot freed, starts are held: %s waits for its re-queue", ag.Name, qerr.Error(), target)

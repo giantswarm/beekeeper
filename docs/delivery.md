@@ -136,7 +136,12 @@ A delivery records the worker's outcome and its evidence independently of
 its release step. A worker finishes with one of these commands:
 
 - `agents idle --done --report "..." --problem none`: each owned delivery
-  must have a linked pull request that GitHub confirms is merged.
+  must have a linked pull request that GitHub confirms is merged. The fresh
+  session the loop starts for a parked worker's task (its post-merge work, for
+  one) continues that task's delivery: a delivery still active or ended merged
+  keeps its pull requests and outcome, and the pull request the worker parked
+  on joins them, also when it only says "Part of" the issue. Its own
+  `--done` then rests on that merge without a park of its own.
 - `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
   explicitly explain an already fixed issue, an operation with its proof, or
   an answer recorded on the issue. This counts as no change, not a release.
