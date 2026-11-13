@@ -82,8 +82,11 @@ extending its expiry. The original words and issuer remain recorded.
 
 Use emergency merge <owner/repo> <number> for an approved open pull request:
 it bypasses desk review and the merge lane, using the repository's configured merge method with
-an exact head match. GitHub branch protection still applies. Every attempted
-action and its result is logged with the person's words.
+an exact head match. GitHub branch protection still applies, except in a
+repository of merge.admin: there, as in the loop's own merge, a head that is
+green, mergeable and not behind its base merges with --admin past the base's
+review requirement, unless the base has a merge queue. Every attempted action
+and its result is logged with the person's words.
 
 With --admin --head <sha> the current guide can act on the person's general
 merge order without asking them to name each pull request. The guide must
@@ -172,53 +175,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if admin {
 				return a.emergencyAdminMerge(cmd.Context(), args[0], n, adminHead)
 			}
-			raw, err := github.RunGH(cmd.Context(), "pr", emergencyViewCommand, strconv.Itoa(n), "--repo", args[0], "--json", "state,isDraft,reviewDecision,headRefOid")
-			if err != nil {
-				return err
-			}
-			var pr struct {
-				State, ReviewDecision, HeadRefOid string
-				IsDraft                           bool
-			}
-			if err = json.Unmarshal(raw, &pr); err != nil {
-				return err
-			}
-			if pr.State != emergencyOpenState || pr.IsDraft || pr.HeadRefOid == "" {
-				return refused("emergency merge requires an approved, open, non-draft pull request")
-			}
-			if pr.ReviewDecision != emergencyApproved {
-				// A same-account desk review is COMMENTED on GitHub. Read
-				// its trusted exact-head verdict instead of requiring a native
-				// approval. Branch protection still applies without --admin.
-				p, err := loop.ReadLoopPull(cmd.Context(), fmt.Sprintf("%s#%d", args[0], n))
-				if err != nil {
-					return err
-				}
-				if p.State != superloop.Open || p.Draft || !p.Green || !loop.SameCommit(p.Head, pr.HeadRefOid) {
-					return refused("emergency merge requires a green, open, non-draft pull request at the reviewed head")
-				}
-				reviews, err := a.trustedReviews(cmd.Context(), p)
-				if err != nil {
-					return err
-				}
-				var latest *superloop.Review
-				for i := range reviews {
-					if latest == nil || !reviews[i].At.Before(latest.At) {
-						latest = &reviews[i]
-					}
-				}
-				if latest == nil || latest.Verdict != superloop.Approved || !loop.SameCommit(cmp.Or(latest.Head, latest.Commit), pr.HeadRefOid) {
-					return refused("emergency merge requires an approved desk review of the exact head")
-				}
-			}
-			if err := a.emergencyMergePolicy(args[0], n); err != nil {
-				return err
-			}
-			if _, err := a.emergencyAction(fmt.Sprintf("merge https://github.com/%s/pull/%d at %s", args[0], n, pr.HeadRefOid)); err != nil {
-				return err
-			}
-			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--"+cmp.Or(a.cfg.Merge.Methods[args[0]], mergeMethodSquash), "--match-head-commit", pr.HeadRefOid)
-			return err
+			return a.emergencyApprovedMerge(cmd.Context(), args[0], n)
 		})
 	}}
 	merge.Flags().BoolVar(&admin, "admin", false, "merge with REVIEW_REQUIRED or an unset review decision under the current guide's bounded emergency grant")
@@ -316,6 +273,90 @@ func emergencyCommandText(cmd *cobra.Command, args []string) string {
 	text := cmd.CommandPath() + " " + strings.Join(args, " ")
 	cmd.Flags().Visit(func(f *pflag.Flag) { text += fmt.Sprintf(" --%s=%q", f.Name, f.Value.String()) })
 	return text
+}
+
+// emergencyApprovedMerge merges an open pull request approved at its head:
+// by GitHub, or by a trusted desk review of that exact head. A same-account
+// desk review is COMMENTED on GitHub, so its exact-head verdict stands in for
+// a native approval. In a repository of merge.admin, where the base's ruleset
+// requires a GitHub approval that review cannot give, the merge passes --admin
+// as the loop's own merge does (emergencyDeskAdmin); elsewhere the base's
+// protection still applies.
+func (a *app) emergencyApprovedMerge(ctx context.Context, repo string, number int) error {
+	raw, err := github.RunGH(ctx, "pr", emergencyViewCommand, strconv.Itoa(number), "--repo", repo, "--json", "state,isDraft,reviewDecision,headRefOid")
+	if err != nil {
+		return err
+	}
+	var pr struct {
+		State, ReviewDecision, HeadRefOid string
+		IsDraft                           bool
+	}
+	if err = json.Unmarshal(raw, &pr); err != nil {
+		return err
+	}
+	if pr.State != emergencyOpenState || pr.IsDraft || pr.HeadRefOid == "" {
+		return refused("emergency merge requires an approved, open, non-draft pull request")
+	}
+	admin := a.cfg.Merge.AdminMerge(repo)
+	if pr.ReviewDecision != emergencyApproved || admin {
+		p, err := loop.ReadLoopPull(ctx, fmt.Sprintf("%s#%d", repo, number))
+		if err != nil {
+			return err
+		}
+		if p.State != superloop.Open || p.Draft || !p.Green || !loop.SameCommit(p.Head, pr.HeadRefOid) {
+			return refused("emergency merge requires a green, open, non-draft pull request at the reviewed head")
+		}
+		if pr.ReviewDecision != emergencyApproved {
+			reviews, err := a.trustedReviews(ctx, p)
+			if err != nil {
+				return err
+			}
+			var latest *superloop.Review
+			for i := range reviews {
+				if latest == nil || !reviews[i].At.Before(latest.At) {
+					latest = &reviews[i]
+				}
+			}
+			if latest == nil || latest.Verdict != superloop.Approved || !loop.SameCommit(cmp.Or(latest.Head, latest.Commit), pr.HeadRefOid) {
+				return refused("emergency merge requires an approved desk review of the exact head")
+			}
+		}
+		if admin {
+			if admin, err = emergencyDeskAdmin(ctx, p); err != nil {
+				return err
+			}
+		}
+	}
+	if err := a.emergencyMergePolicy(repo, number); err != nil {
+		return err
+	}
+	verb := gitMerge
+	argv := []string{"pr", gitMerge, strconv.Itoa(number), "--repo", repo, "--" + cmp.Or(a.cfg.Merge.Methods[repo], mergeMethodSquash)}
+	if admin {
+		verb = "admin " + gitMerge
+		argv = append(argv, "--admin")
+	}
+	if _, err := a.emergencyAction(fmt.Sprintf("%s https://github.com/%s/pull/%d at %s", verb, repo, number, pr.HeadRefOid)); err != nil {
+		return err
+	}
+	_, err = github.RunGH(ctx, append(argv, "--match-head-commit", pr.HeadRefOid)...)
+	return err
+}
+
+// emergencyDeskAdmin says whether the emergency merge of p, a pull request of
+// a merge.admin repository, passes --admin as the loop's merge does. --admin
+// waives every rule of the base, not only the review requirement, so p must
+// be mergeable now and not behind its base (adminMergeBlock). A base with a
+// merge queue takes the plain merge: --admin would skip the queue's retest.
+func emergencyDeskAdmin(ctx context.Context, p superloop.Pull) (bool, error) {
+	if why := adminMergeBlock(p); why != "" {
+		return false, refused("admin merge of %s: %s", p.Ref, why)
+	}
+	queue, err := readReviewedMergeQueue(ctx, p)
+	if err != nil {
+		return false, err
+	}
+	return !queue, nil
 }
 
 // emergencyAdminMerge applies the current guide's bounded emergency grant

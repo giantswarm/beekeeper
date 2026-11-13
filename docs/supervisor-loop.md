@@ -92,11 +92,14 @@ successful probe clears only its own outage; an unreadable probe clears none.
 
 On the person's explicit emergency authorization, the current guide can run `beekeeper emergency on --reason
 "<their verbatim words>" --until 30m`, then `beekeeper emergency merge owner/repo 123`. The merge
-requires GitHub approval and matches the observed head; it bypasses desk review and the merge lane
-while GitHub branch protection still applies. `emergency merge owner/repo 123 --admin --head <sha>`
-is the person's exception for a pull request GitHub keeps at REVIEW_REQUIRED or with an unset review
-decision (no GitHub review required): the current guide interprets the verbatim authorization,
-including a general merge order, and selects one PR and head per invocation.
+requires GitHub's approval or an approved desk review of the observed head and matches that head; it
+bypasses the merge lane. GitHub branch protection still applies, except in a repository of
+`merge.admin`: there it passes `--admin`, as the loop's own merge does, once that head is green,
+mergeable and not behind its base, unless the base has a merge queue.
+`emergency merge owner/repo 123 --admin --head <sha>` is the person's exception for a pull request
+GitHub keeps at REVIEW_REQUIRED or with an unset review decision (no GitHub review required): the
+current guide interprets the verbatim authorization, including a general merge order, and selects
+one PR and head per invocation.
 
 It must be green, mergeable and up to date with its base at that exact head, with an approved desk
 review or the loop's go. It reads the base's effective rules and requires every required context on
