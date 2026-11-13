@@ -480,9 +480,14 @@ type Note struct {
 	// Refs are the issues and pull requests (owner/repo#n) the note asks
 	// about: once every one is closed or merged, the watch closes the note
 	// as overtaken, unless a closing keyword closed one and the note's
-	// worker has not ended its task (Kept). Without refs the note is linked
-	// to its filing session, and closes once that session is archived.
+	// worker has not ended its task (Kept). A to-do's refs and a reopened
+	// note's never close it. Without refs the note is linked to its filing
+	// session, and closes once that session is archived.
 	Refs []string `json:"refs,omitempty"`
+	// Reopened is when note reopen put the note back in the queue after it
+	// closed: from then on its refs no longer overtake it, and only its
+	// answer, its default or a close by hand ends it.
+	Reopened time.Time `json:"reopened,omitzero"`
 	// TaskEnded is when the worker that filed the note reported its task
 	// over (agents idle): from then on its settled refs overtake the note,
 	// a closing keyword's close included. Zero for a note no worker filed
