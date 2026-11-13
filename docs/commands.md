@@ -1270,10 +1270,13 @@ included; a note without `--ref` is never closed by the watch: once the session 
 archived (a stopped session is not), `guide watch` names it to the guide as orphaned, to ask or
 close by hand (a role's run, current or relieved, never orphans its notes).
 
-Login notes, and the note the guide asks now, are never overtaken. `note show <id>` prints one
-note's full text, audience, status and retained answer (`--json` returns one object); answered
-file-backed notes require their audit event, and the central store retains closed notes for its
-history period. `note done <id> --overtaken "<why>"` closes one so by hand. `note answer <id>
+Login notes, to-dos (`--kind todo`, the person's own action, whatever happens to its `--ref`),
+reopened notes and the note the guide asks now are never overtaken: an answer, a default or `note
+done` ends them. `note show <id>` prints one note's full text, audience, status and retained answer
+or reason (`--json` returns one object); a closed file-backed note (answered, withdrawn or
+overtaken) is read from its audit event, and the central store retains closed notes for its history
+period. `note reopen <id>` puts a closed note back in the queue from that history; the board item
+it held stays released. `note done <id> --overtaken "<why>"` closes one so by hand. `note answer <id>
 [--choice <n>] [<answer>]` is `beekeeper answer <its first --ref> --note <id>` (below); a note
 without a `--ref` is refused, naming that form.
 

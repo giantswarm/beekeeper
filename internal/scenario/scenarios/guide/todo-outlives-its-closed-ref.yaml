@@ -1,0 +1,138 @@
+name: todo-outlives-its-closed-ref
+description: >
+  The person has two notes in their queue, each naming the issue it is
+  about: a to-do (rotate the registry's leaked robot password) and a
+  decision (the registry's region). Both issues close. The watch closes the
+  decision as overtaken, since its thread settled it, but the to-do stays in
+  the person's queue: closing the deploy issue rotates no password, and
+  only the person's answer or a close by hand ends their to-do. The
+  overtaken decision stays in the desk's history, so note reopen puts it
+  back in the queue, where its closed issue no longer overtakes it.
+issue: https://github.com/giantswarm/beekeeper/issues/3848
+flow: guide
+tags: [guide, notes, todo, overtaken, loop]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Deploy the registry}
+          - {number: 2, title: Choose the registry's region}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: todo
+    run:
+      args: [--as, scenario, note, add, --for, scenario, --kind, todo, --ref, example/app#1,
+        "Rotate the leaked registry robot password"]
+    expect:
+      - exit: 0
+  - name: decision
+    run:
+      args:
+        - --as
+        - scenario
+        - note
+        - add
+        - --for
+        - scenario
+        - --ref
+        - example/app#2
+        - --status-quo
+        - The registry runs in one region; the builders pull from two.
+        - --why
+        - Where it runs sets what every pull costs, which is yours to decide.
+        - --option
+        - "Frankfurt: next to the builders, at the higher price"
+        - --option
+        - "Dublin: cheaper storage, slower pulls for the builders"
+        - --recommend
+        - "1"
+        - --default
+        - run the registry in Frankfurt
+        - --due
+        - 3h
+        - Which region should the registry run in?
+    expect:
+      - exit: 0
+  # The loop's passes apply both notes.
+  - name: apply
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [note.add]}
+  - name: filed
+    run: {args: [note]}
+    expect:
+      - output: {contains: ["Rotate the leaked registry robot password", "Which region should the registry run in?"]}
+  # Both issues close; the watch reads them on its next passes.
+  - github: {close: {repo: example/app, issue: 1}}
+  - github: {close: {repo: example/app, issue: 2}}
+  - name: settle
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [note.overtaken]}
+  - name: queue
+    run: {args: [guide, queue, --json]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ["Rotate the leaked registry robot password"]
+          not_contains: ["Which region should the registry run in?"]
+  # The decision the overtaken rule closed is in the history.
+  - name: reopen
+    run: {args: [--as, scenario, note, reopen, "2"]}
+    expect:
+      - exit: 0
+      - output: {contains: ["note #2 reopened"]}
+  # Further passes: its closed issue no longer overtakes it.
+  - name: later
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - name: open
+    run: {args: [note]}
+    expect:
+      - output: {contains: ["Rotate the leaked registry robot password", "Which region should the registry run in?"]}
+  - name: overtaken
+    run: {args: [log, --verb, note.overtaken, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: ., len: 1}
+  - stop: loop
+
+then:
+  - events: {contains: [note.add, note.overtaken, note.reopened]}
+  # The one overtaken note is the decision, once; the to-do never.
+  - {step: overtaken, output: {contains: ['"#2 overtaken: example/app#2 closed; the note: Which region'], not_contains: ['#1 overtaken']}}
