@@ -3766,13 +3766,41 @@ func (l *Loop) Brief(file, def, key string, d BriefData) (string, error) {
 			}
 		}
 	}
-	dir := filepath.Join(l.Host.Store().Dir(), "supervisor-loop")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	path := l.briefPath(key)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, briefName.ReplaceAllString(key, "-")+".md")
 	return path, os.WriteFile(path, b.Bytes(), 0o600)
 }
+
+// briefPath is the file of key's brief under the state's directory.
+func (l *Loop) briefPath(key string) string {
+	return filepath.Join(l.Host.Store().Dir(), "supervisor-loop", briefFile(key))
+}
+
+// briefFile is the file name of key's brief: the key with what a file name
+// may not keep replaced. A name longer than briefFileMax keeps its start
+// (a red wake's repository, number, head and park time) and ends in a hash
+// of the whole key instead of the rest (the red checks' names, which the
+// brief holds), so it stays within the file system's 255 bytes and two keys
+// that share the start keep files of their own.
+func briefFile(key string) string {
+	name := briefName.ReplaceAllString(key, "-")
+	if len(name) > briefFileMax {
+		sum := sha256.Sum256([]byte(key))
+		hash := hex.EncodeToString(sum[:])[:briefHashLen]
+		name = name[:briefFileMax-len(hash)-1] + "-" + hash
+	}
+	return name + ".md"
+}
+
+const (
+	// briefFileMax bounds a brief's file name before its extension, well
+	// below the 255 bytes of a file name.
+	briefFileMax = 160
+	// briefHashLen is the length of the hash a bounded name ends in.
+	briefHashLen = 16
+)
 
 // briefName is what a key may not keep in a file name.
 var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
