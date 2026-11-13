@@ -21,6 +21,8 @@ const (
 	carrierDownSays   = "exit status 1: carrier 0"
 )
 
+const probeResumeDeploy = "the link is up: resume the deploy"
+
 // A probe that could not run says nothing of its condition: ssh's own exit
 // 255, a host name that did not resolve, a command not found or not
 // executable. Only a probe that ran and exits non-zero is "not yet", a
@@ -61,7 +63,7 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(ctx, sshUnresolved))
 	clean := checkOf(state.Timer{Probe: carrierDown}).result(probeOutput(ctx, carrierDown))
 	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, Every: 10 * time.Minute,
-		Wake: "app deploy", What: "the link is up: resume the deploy"}}}
+		Wake: "app deploy", What: probeResumeDeploy}}}
 	var reports []state.Event
 	settle := func(n int, r checkResult) []string {
 		t.Helper()
@@ -140,7 +142,7 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
 	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, Every: 10 * time.Minute,
-		Wake: "app deploy", What: "the link is up: resume the deploy"}}}
+		Wake: "app deploy", What: probeResumeDeploy}}}
 	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
 	if len(st.Timers) != 1 || st.Timers[0].Failing.IsZero() {
 		t.Fatalf("a probe that could not run: %+v", st.Timers)
@@ -173,7 +175,7 @@ func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 // false: it has not been seen to hold, and could not run since when.
 func TestProbeThatCannotRunForADayIsNotSaidFalse(t *testing.T) {
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
-	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, What: "the link is up: resume the deploy"}}}
+	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, What: probeResumeDeploy}}}
 	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
 	day := relayNow.Add(timerStuckAfter)
 	lines, _, fires, _ := settleTimers(st, map[int]checkResult{3284: cannot}, day)
