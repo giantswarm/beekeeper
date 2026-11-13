@@ -25,8 +25,10 @@ executor (Docker's seccomp profile refuses the namespaces), in two parallel
 containers: each runs one shard, the scenarios whose FNV-1a hash of
 `<flow>/<name>` modulo 2 is its index, so every scenario runs in exactly one
 and adding a scenario moves no other. Each shard fails when its wall time
-exceeds 10 minutes and warns from 8. Each container's artifacts
-hold `report.txt`, `report.json` (every scenario, step and duration, and the
+exceeds 10 minutes and warns from 8. When a shard nears the warning, the suite grows by a
+container: raise the job's `parallelism` in `.circleci/custom.yml`. The shards follow the container
+count (`CIRCLE_NODE_TOTAL`), so the scenarios are split anew without a code change. Each
+container's artifacts hold `report.txt`, `report.json` (every scenario, step and duration, and the
 suite's wall time), `junit/scenarios.xml` (one case per step) and each
 scenario's own artifacts under `<flow>/<name>/`: the world's call log
 (`calls.jsonl`), every step's output, background logs and the driver's log.
@@ -66,7 +68,8 @@ the merge base does not build.
 ### Go tests
 
 A fix whose regression test is a Go test, not a scenario, needs the same proof. The same step
-(`internal/testcontrol`) takes the `Test…` functions the pull request adds or changes in any
+(`internal/testcontrol`), in the job's first container (shard 0) only, so it runs once per pull
+request, takes the `Test…` functions the pull request adds or changes in any
 `_test.go`, applies the pull request's test files (its `_test.go` files and the files under
 `testdata/`, as it adds, changes or deletes them) to a checkout of the merge base, and runs those
 tests there with `go test`. The ones that fail on the base run again on the pull request's code,
@@ -101,15 +104,16 @@ and Go tests passes both parts.
   new and changed test opts out or is not run, and fails on a control paragraph it cannot read.
 
 The step passes at once, without a build, on a branch that adds or changes neither a scenario nor
-a `_test.go` file, on `main` and on tags. The job's artifacts hold its log (`control.log`), the
-scenarios' report (`control/report.txt` and `control/report.json`: every scenario with its change,
-verdict, first failures on the base and opt-out reason) with each run's artifacts under
-`control/<flow>/<name>/`, and the Go tests' report (`go-control/report.txt` and
-`go-control/report.json`: every test with its change, tags, run on the base and on the change,
-first failures or build errors and opt-out reason) with each `go test` run's command, events and
-stderr under `go-control/runs/`. A pull request that changes the Go-test control first runs it on
-the clock fix of https://github.com/giantswarm/beekeeper/pull/3832, whose regression test must
-fail on the fix's parent (`go-control-history/`). To run the step on a branch:
+a `_test.go` file, on `main` and on tags. Each container's artifacts hold its log (`control.log`)
+and the report of its shard's scenarios (`control/report.txt` and `control/report.json`: every
+scenario with its change, verdict, first failures on the base and opt-out reason) with each run's
+artifacts under `control/<flow>/<name>/`. The first container's (shard 0) also hold the Go tests'
+report (`go-control/report.txt` and `go-control/report.json`: every test with its change, tags,
+run on the base and on the change, first failures or build errors and opt-out reason) with each
+`go test` run's command, events and stderr under `go-control/runs/`. A pull request that changes
+the Go-test control first runs it on the clock fix of
+https://github.com/giantswarm/beekeeper/pull/3832, whose regression test must fail on the fix's
+parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
 `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
 
 ## How a scenario runs
