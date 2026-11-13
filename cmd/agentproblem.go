@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	findingreport "github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -21,7 +22,17 @@ func (a *app) agentProblemCmd() *cobra.Command {
 supervisor's watch. Name what broke, the evidence and the owning repository;
 use full issue and pull request URLs. The worker keeps its task and park.
 Repeating the same finding, including with idle --problem, records and
-delivers it once per worker assignment.`,
+delivers it once per worker assignment.
+
+For automatic filing, pass one multiline argument:
+  <owner/repo or full existing issue URL>: <stable title>
+
+  <complete current issue description>
+
+The loop matches the open issue by URL or unique title. A known finding adds
+nothing; new facts replace its description, never a comment. A new finding
+creates one issue in Backlog. Keep relevant facts and acceptance criteria in
+the replacement description. Ambiguous reports go to the guide.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if a.managedExecutionID() != "" {
@@ -51,7 +62,7 @@ delivers it once per worker assignment.`,
 }
 
 func (a *app) recordWorkerProblem(st *state.State, ag *state.Agent, me state.Party, finding string) ([]state.Event, error) {
-	finding = oneLine(finding)
+	finding = normalizeFinding(finding)
 	if finding == "" || strings.EqualFold(finding, noProblems) {
 		return nil, refused("problem requires a finding with evidence and owning repository")
 	}
@@ -83,7 +94,7 @@ func freshWorkerProblems(ag *state.Agent, findings []string) []string {
 	}
 	var fresh []string
 	for _, finding := range findings {
-		finding = oneLine(finding)
+		finding = normalizeFinding(finding)
 		if !slices.Contains(previous.Findings, finding) {
 			previous.Findings = append(previous.Findings, finding)
 			fresh = append(fresh, finding)
@@ -93,4 +104,13 @@ func freshWorkerProblems(ag *state.Agent, findings []string) []string {
 		ag.ReportedProblems = previous
 	}
 	return fresh
+}
+
+// A placeable report carries a complete Markdown description. Ordinary
+// progress messages retain their historical single-line representation.
+func normalizeFinding(text string) string {
+	if _, ok := findingreport.Parse(text); ok {
+		return strings.TrimSpace(text)
+	}
+	return oneLine(text)
 }

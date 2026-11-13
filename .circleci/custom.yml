@@ -34,6 +34,10 @@
 # (.circleci/scenario-control.sh) builds the pull request's merge base and
 # runs only the scenarios the pull request adds or changes against it: each
 # must fail there on an assertion, or opt out with control: {none: <reason>}.
+# The same step runs the Test functions the pull request adds or changes in
+# any _test.go against the merge base's code with its test files applied
+# (internal/testcontrol): at least one must fail there and pass on the pull
+# request's code, or each opts out with a control: none: <reason> paragraph.
 version: 2.1
 
 jobs:
@@ -107,14 +111,14 @@ jobs:
           mkdir -p /tmp/scenarios
           timeout 14m make test-scenarios 2>&1 | tee /tmp/scenarios/go-test.log
     - run:
-        name: scenario-control (the pull request's new and changed scenarios fail on its merge base)
+        name: scenario-control (the pull request's new and changed scenarios and Go tests fail on its merge base)
         # Also after a red suite, so one round reports both.
         when: always
         no_output_timeout: 12m
         command: |
           set -o pipefail
           mkdir -p /tmp/scenarios
-          timeout 14m bash .circleci/scenario-control.sh 2>&1 | tee /tmp/scenarios/control.log
+          timeout 25m bash .circleci/scenario-control.sh 2>&1 | tee /tmp/scenarios/control.log
     - store_test_results:
         path: /tmp/scenarios/junit
     - store_artifacts:
