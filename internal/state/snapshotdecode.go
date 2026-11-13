@@ -171,7 +171,9 @@ func decodeSplit(raw []byte, prev *snapshotElements) (*State, *snapshotElements,
 				v = p.Elem()
 			}
 			slice.Index(n).Set(v)
-			kept[h] = append(kept[h], decodedElement{raw: b, v: v})
+			// The next decode takes the element from this snapshot's array,
+			// which then holds the only copy.
+			kept[h] = append(kept[h], decodedElement{raw: b, v: slice.Index(n)})
 		}
 		sv.Field(f.index).Set(slice)
 		next.fields[a.field] = kept
