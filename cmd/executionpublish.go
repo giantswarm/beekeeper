@@ -80,8 +80,8 @@ func executionBranch(ref execution.Ref) string {
 
 func executionOwnedBranch(r *state.ExecutionRecord) string {
 	if r != nil {
-		if r.Request.GitHub {
-			return execution.GitHubBranch(r.Handle.Ref)
+		if r.Request.PublicationBranch != "" {
+			return r.Request.PublicationBranch
 		}
 		return executionBranch(r.Handle.Ref)
 	}
@@ -606,8 +606,16 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			return result, refused("%s", reason)
 		}
 		// Reconcile a lost create response by the exact owned branch. An existing
-		// PR takes only the title and body this publication names.
-		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
+		// PR takes only the title and body this publication names. A
+		// continuation's PR is the one it was assigned, read by its number: it
+		// is never created, and never another PR of the same branch.
+		var pulls []publicationPull
+		var listErr error
+		if r.Request.PublicationPR != "" {
+			pulls, listErr = assignedContinuationPull(ctx, r.Request.Repository, r.Request.PublicationPR, result.Branch)
+		} else {
+			pulls, listErr = ownedPulls(ctx, r.Request.Repository, result.Branch)
+		}
 		if listErr != nil {
 			return result, listErr
 		}

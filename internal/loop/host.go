@@ -91,6 +91,7 @@ type Command struct {
 	ClassifyDelivery           func(st *state.State, d state.Delivery, now time.Time, p any) DeliveryFlow
 	ClearRecords               func(st *state.State, p state.Party) []state.Record
 	Clock                      func(now time.Time, t time.Time) string
+	CloseSupersededPulls       func(ctx context.Context, st *state.State, merged superloop.Pull) ([]string, error)
 	Code                       func(err error) int
 	ContinuationName           func(ag state.Agent) string
 	CoordinatorHostUpdateReady func(version string) error
