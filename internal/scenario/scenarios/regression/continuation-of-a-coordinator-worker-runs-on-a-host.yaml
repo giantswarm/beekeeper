@@ -98,6 +98,13 @@ when:
       expect:
         - worker: {name: app 1, host: local, outcome: finish}
         - github: {pull: {repo: example/app, number: 2, state: open}}
+  # The loop's next pass applies the worker's park from its inbox.
+  - advance: 2s
+  - name: parked
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park]}
   - host: {name: builder, clear: true}
   - advance: 2s
   # The parked worker is woken: its task goes to a fresh continuation.
