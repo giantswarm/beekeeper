@@ -1457,6 +1457,9 @@ type State struct {
 	HostIdleSince       time.Time                `json:"hostIdleSince,omitzero"`
 	HostLastRemoteStart time.Time                `json:"hostLastRemoteStart,omitzero"`
 	HostIdleReported    bool                     `json:"hostIdleReported,omitempty"`
+	// LocalTasks are the tasks whose starts stay on the coordinator (agents
+	// move): no supervisor.hosts placement takes them to an execution host.
+	LocalTasks []LocalTask `json:"localTasks,omitempty"`
 	// TranscriptGrants are the guide's expiring grants of wider transcript
 	// access to workers.
 	TranscriptGrants []TranscriptGrant `json:"transcriptGrants,omitempty"`
@@ -1501,6 +1504,60 @@ type TranscriptRequest struct {
 	At      time.Time `json:"at"`
 
 	rest rest
+}
+
+// LocalTask is a task whose remaining work needs what only the coordinator
+// has (data, devices, commands): every start of it, the loop's and a hand
+// start without --host, runs on the coordinator. A worker on an execution
+// host asks for it with agents move, the desk marks one with agents move
+// --ref.
+type LocalTask struct {
+	// Ref is the task's issue or pull request, owner/repo#n.
+	Ref string    `json:"ref"`
+	Why string    `json:"why"`
+	By  Party     `json:"by"`
+	At  time.Time `json:"at"`
+
+	rest rest
+}
+
+// LocalTaskFor is the mark of the first of refs (owner/repo#n, any case)
+// that stays on the coordinator.
+func (st *State) LocalTaskFor(refs ...string) (LocalTask, bool) {
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		for _, t := range st.LocalTasks {
+			if strings.EqualFold(t.Ref, ref) {
+				return t, true
+			}
+		}
+	}
+	return LocalTask{}, false
+}
+
+// MarkLocal records that ref stays on the coordinator, replacing an older
+// mark of it, and reports whether the mark is new.
+func (st *State) MarkLocal(t LocalTask) bool {
+	for i := range st.LocalTasks {
+		if strings.EqualFold(st.LocalTasks[i].Ref, t.Ref) {
+			st.LocalTasks[i] = t
+			return false
+		}
+	}
+	st.LocalTasks = append(st.LocalTasks, t)
+	return true
+}
+
+// UnmarkLocal lifts ref's mark and reports whether it had one.
+func (st *State) UnmarkLocal(ref string) bool {
+	n := len(st.LocalTasks)
+	st.LocalTasks = slices.DeleteFunc(st.LocalTasks, func(t LocalTask) bool { return strings.EqualFold(t.Ref, ref) })
+	if len(st.LocalTasks) == 0 {
+		st.LocalTasks = nil
+	}
+	return len(st.LocalTasks) != n
 }
 
 // HostPlacement is the last dated placement decision for a configured host.

@@ -3583,35 +3583,29 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 	}
 	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", RepoName(r.Repo), r.N))
 	var place startHost
+	var here string
 	var err error
 	if act.Kind == superloop.KindEnd {
 		// Terminal continuations can need the live desk checkout and host
 		// policy sync. Execution hosts only have prepared workspaces, so
 		// keep this work on the coordinator even under hostsFirst.
-		flags := startFlags(false, false)
-		if model := l.Host.RuleModel(name, workerRole); model != "" {
-			flags = append(flags, modelFlag, model)
-		}
-		out, code, readErr := BeekeeperRun(ctx, l.As(append([]string{LoopCapacity}, flags...)...)...)
-		var capacity struct {
-			Room int `json:"room"`
-		}
-		if readErr != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
-			err = ErrLoopLater
-		}
+		place, err = l.localPlacement(ctx, name)
 	} else {
-		place, err = l.startPlacement(ctx, name, r.Repo, false, false)
+		place, here, err = l.taskPlacement(ctx, st, name, r.Repo, act.Ref, rp.Serves)
 	}
 	if err != nil {
 		if errors.Is(err, ErrLoopLater) {
 			where := "on any host"
-			if act.Kind == superloop.KindEnd {
+			if act.Kind == superloop.KindEnd || here != "" {
 				where = "on the coordinator"
 			}
 			l.SayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
 			return fmt.Errorf("no room for a worker start yet %s (beekeeper capacity and the SUPERVISOR HOST WAITS lines name the limit): %w", where, ErrLoopLater)
 		}
 		return err
+	}
+	if here != "" {
+		l.SayOnce("here "+act.Key, "SUPERVISOR FIXER STAYS HERE %s: %s", act.URL, here)
 	}
 	tmpl := defaultFixerBrief
 	if act.Kind == superloop.KindGo {
@@ -4513,13 +4507,24 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 	if err := l.Host.FatalAdmission(name, false); err != nil {
 		return "", fmt.Errorf("fatal admission: %v: %w", err, ErrLoopLater)
 	}
-	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return "", err
+	}
+	place, here, err := l.taskPlacement(ctx, st, name, r.Repo, next.Ref)
 	if err != nil {
 		if errors.Is(err, ErrLoopLater) {
-			l.SayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
-			return "", fmt.Errorf("no room for a start on any host: %w", ErrLoopLater)
+			where := "on any host"
+			if here != "" {
+				where = "on the coordinator, where " + here
+			}
+			l.SayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet %s", next.URL, where)
+			return "", fmt.Errorf("no room for a start %s: %w", where, ErrLoopLater)
 		}
 		return "", err
+	}
+	if here != "" {
+		l.SayOnce("here "+next.Ref, "SUPERVISOR NEXT STAYS HERE %s: %s", next.URL, here)
 	}
 	brief, err := l.Brief(k.WorkerBrief, "", "next "+next.Ref, BriefData{URL: next.URL, Repo: r.Repo, Number: r.N})
 	if err != nil {

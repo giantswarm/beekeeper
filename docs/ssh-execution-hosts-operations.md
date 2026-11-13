@@ -690,6 +690,32 @@ the workspace, its execution-owned Git repository and source bundle. Recover
 unpublished commits and local edits at the workspace path printed by `inspect`;
 stopping and repeating a stop do not authorize deletion.
 
+#### Tasks that need the coordinator
+
+A task whose remaining work needs data, devices or commands only the coordinator has, such as a
+proof on production data that lives there, is marked to stay on the coordinator with `beekeeper
+agents move`. No start of a marked task is placed on a host again: the loop's board start, fresh
+continuation, fixer and quota restart run here, with a `SUPERVISOR NEXT STAYS HERE`, `SUPERVISOR
+CONTINUATION STAYS HERE`, `SUPERVISOR FIXER STAYS HERE` or `SUPERVISOR QUOTA … STAYS HERE` line
+naming the task and the reason, once the coordinator's capacity has room; a hand start without
+`--host` whose brief names it stays here too. Reviewers are placed as before.
+
+```sh
+beekeeper agents move "the timing proof needs the production projects on the coordinator"
+beekeeper agents move --ref example/app#12 "the 300-clip proof needs the production projects"
+beekeeper agents move --ref example/app#12 --clear
+```
+
+A worker on a host that finds itself on the wrong machine runs the first form from its workspace
+instead of parking. The coordinator marks its task (the issue it serves and the pull requests it
+waits on, asked a desk review of or published, those of the execution's repository only; a host's
+worker never marks another repository's), records `agents.move`, and queues the task for a fresh
+worker, which the loop's next pass starts on the coordinator. That worker continues from what is
+published, never from the host's workspace, so the worker publishes first (`agents publish`),
+then moves and ends its turn; the fresh worker's brief names the branch, head and pull request
+it published. A worker on the coordinator marks its task the same way and keeps working. `--ref`
+marks a task before any start, the desk's own word; `--clear` lifts the mark.
+
 ### Retirement
 
 The coordinator ends what an execution left through one resumable retirement.

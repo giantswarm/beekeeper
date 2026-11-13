@@ -229,7 +229,17 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 			return err
 		}
 	}
-	place, err := l.startPlacement(ctx, ag.Name, r.Repo, review != nil, review != nil && review.selfHosted)
+	var place startHost
+	var err error
+	if review != nil {
+		place, err = l.startPlacement(ctx, ag.Name, r.Repo, true, review.selfHosted)
+	} else {
+		var here string
+		place, here, err = l.taskPlacement(ctx, st, ag.Name, r.Repo, ref, LoopServes(st, ag), LoopTaskServes(ag, ref))
+		if err == nil && here != "" {
+			l.SayOnce("quota here "+ag.Name, "SUPERVISOR QUOTA %s STAYS HERE: %s", ag.Name, here)
+		}
+	}
 	if err != nil {
 		return err
 	}

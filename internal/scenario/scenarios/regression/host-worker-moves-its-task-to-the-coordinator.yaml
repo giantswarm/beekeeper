@@ -1,0 +1,102 @@
+name: host-worker-moves-its-task-to-the-coordinator
+description: >
+  The loop starts a task's worker on the execution host that maps its
+  repository (supervisor.hostsFirst). The task's remaining step needs data
+  only the coordinator has, so the worker asks for a move (agents move)
+  instead of parking: the coordinator marks the task and queues it for a
+  fresh worker, which the loop's next pass starts on the coordinator,
+  saying why. Live, the loop placed such a task on the host five times over,
+  and each worker there could only report that it cannot finish.
+issue: https://github.com/giantswarm/beekeeper/issues/3900
+flow: regression
+tags: [regression, hosts, continuation, placement]
+timeout: 150s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # The fresh worker the move hands the task to.
+      - name: 'app 1 next-[0-9a-f]+'
+        host: local
+        turns:
+          - reply: continuing the task where its data is
+      # The task's first worker, on the host: it cannot finish there.
+      - name: app 1
+        host: builder
+        turns:
+          - steps:
+              - beekeeper: [agents, move, the timing proof needs the production projects only the coordinator has]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The host maps the repository and has room: the refill starts the
+  # task's worker there.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, outcome: finish}
+        - events: {contains: [agents.move]}
+  - advance: 2s
+  # The move queued the task for a fresh worker: the next pass starts it on
+  # the coordinator, not on the host that still has room.
+  - name: continue
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR CONTINUATION STAYS HERE app 1: its task example/app#1 needs the coordinator (agents move)"]}
+      - events: {contains: [agents.continuation]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app 1 next-[0-9a-f]+', host: local, outcome: finish}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - worker: {name: app 1, host: builder, harness: claude, turns: 1, outcome: finish}
+  - worker: {name: 'app 1 next-[0-9a-f]+', host: local, harness: claude, turns: 1, outcome: finish}
+  # The fresh worker holds the task; the host's worker left the roster.
+  - {step: roster, json_path: {path: '.', len: 1}}
+  - {step: roster, json_path: {path: '[0].execution', exists: false}}
+  - events: {contains: [agents.continuation-queued]}

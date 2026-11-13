@@ -37,6 +37,10 @@ const (
 	workerGitHubLimitsPrompt = "Merges stay on the coordinator. Never expose credential environment values.\n"
 )
 
+// workerMovePrompt tells a host's worker how it hands back a task whose
+// remaining work only the coordinator can do.
+const workerMovePrompt = "\nWrong machine: when the task's remaining work needs data, devices or commands only the coordinator has, publish what you have, then run `beekeeper agents move \"<why>\"` instead of parking and end your turn; a fresh worker continues it on the coordinator.\n"
+
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
 	if err := a.checkRepositoryVisibility(ctx, o.Repository); err != nil {
 		return err
@@ -202,6 +206,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		prompt += "\n\n" + workerGitHubAccessPrompt + "Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. " + workerGitHubLimitsPrompt
 	} else {
 		prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
+	}
+
+	if !o.Review {
+		prompt += workerMovePrompt
 	}
 
 	r := execution.StartRequest{BundleDigest: bundleDigest, GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Effort: o.Effort, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
