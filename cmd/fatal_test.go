@@ -527,8 +527,11 @@ func TestFatalFailedRepairStartRetriesAtTheNextPass(t *testing.T) {
 		if !strings.Contains(x.Outcome, "exit 2: choice: claude/sonnet | "+why) {
 			t.Fatalf("pass %d: the start's error is not on the incident: %q", pass, x.Outcome)
 		}
-		if pass <= 3 && !strings.Contains(out.String(), fmt.Sprintf("attempt %d/3; repair start failed: exit 2", pass)) {
+		if pass <= 3 && (!strings.Contains(out.String(), fmt.Sprintf("attempt %d/3; ", pass)) || !strings.Contains(out.String(), "repair start failed: exit 2: ")) {
 			t.Fatalf("pass %d: the journal lacks the failed start: %q", pass, out.String())
+		}
+		if pass == 3 && !strings.Contains(x.Outcome, "repair budget exhausted") {
+			t.Fatalf("the last failed start does not end the budget: %q", x.Outcome)
 		}
 	}
 	if !slices.Equal(owners, []string{owners[0], strings.TrimSuffix(owners[0], " 1") + " 2", strings.TrimSuffix(owners[0], " 1") + " 3"}) {
