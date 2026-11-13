@@ -16,6 +16,8 @@ import (
 // on every call would cost seconds with thirty sessions. Since is the
 // window's first entry; Whole says the window is the whole transcript.
 type Activity struct {
+	// LastTool identifies the latest tool call in the window without keeping its arguments.
+	LastTool string    `json:"lastTool,omitempty"`
 	Since    time.Time `json:"since,omitzero"`
 	Whole    bool      `json:"whole"`
 	Total    Counts    `json:"total"`
@@ -306,6 +308,7 @@ func (a *Activity) assistant(e activityEntry, blocks []activityBlock, spans []*s
 		}
 		call, github := describeCall(b)
 		calls[b.ID] = call
+		a.LastTool = b.ID
 		for _, s := range spans {
 			s.c.ToolCalls++
 			if github {

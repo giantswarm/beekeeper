@@ -114,6 +114,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		return refused("execution host lacks the per-worker GitHub adapter; update and check the host before starting")
 	}
 	task := strings.TrimSpace(o.Task)
+	if err := a.validateProgressTask(brief); err != nil {
+		return err
+	}
 	if task == "" {
 		task = briefTask(brief)
 	}
@@ -316,6 +319,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	h := &capacity.Headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
 	counts := countAgents(st, sessions, a.now, a.cfg)
 	withPaceOffs(readings, st, a.now)
+	a.withProgressPace(readings)
 	var v *capacity.View
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		choicesCap := k

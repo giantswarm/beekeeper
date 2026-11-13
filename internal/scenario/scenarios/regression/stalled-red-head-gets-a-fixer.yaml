@@ -1,0 +1,106 @@
+name: stalled-red-head-gets-a-fixer
+description: >
+  The top In Progress worker publishes and parks. Its head turns red after
+  its execution retires, while pace holds every ordinary fixer start. With
+  no progress for 30 minutes, the loop starts one fixer on the execution
+  host. The fixer publishes to the existing pull request and parks again.
+  One check finishing while another stays red resets the progress clock.
+issue: https://github.com/giantswarm/beekeeper/issues/4003
+flow: regression
+tags: [regression, loop, progress, hosts, ci]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+      board:
+        order: [{name: progress, status: [In Progress]}]
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: 'P1: Repair red delivery', board: In Progress}
+  harness:
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        host: builder
+        turns:
+          - steps:
+              - write: {path: change.txt, content: "the change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, 'feat: the change']
+              - write: {path: .beekeeper-scratch/body.md, content: "Part of https://github.com/example/app/issues/1\n"}
+              - beekeeper: [agents, publish, --title, 'feat: the change', --body-file, '${dir}/.beekeeper-scratch/body.md']
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+            usage: {session: 10, week: 77}
+      - name: 'Fix stalled example app#2'
+        host: builder
+        turns:
+          - steps:
+              - write: {path: fix.txt, content: "the CI fix\n"}
+              - git: [add, fix.txt]
+              - git: [commit, --quiet, -m, 'fix: the red check']
+              - beekeeper: [agents, publish]
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ''}
+
+when:
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 40s
+      expect:
+        - worker: {name: app 1, host: builder, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.remove]}
+  - github: {check: {repo: example/app, pull: 2, name: build, state: red}}
+  - github: {check: {repo: example/app, pull: 2, name: lint, state: pending}}
+  - advance: 2s
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - worker: {name: 'Fix stalled example app#2', turns: 0}
+  - advance: 29m
+  - github: {check: {repo: example/app, pull: 2, name: lint, state: green}}
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - worker: {name: 'Fix stalled example app#2', turns: 0}
+  - advance: 1m
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - worker: {name: 'Fix stalled example app#2', turns: 0}
+  - advance: 29m
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.board-progress]}
+  - wait_for:
+      timeout: 40s
+      expect:
+        - worker: {name: 'Fix stalled example app#2', host: builder, turns: 1, outcome: finish}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - github: {calls: {operation: createPullRequest, min: 1, max: 1}}
+  - events: {not_contains: [execution.publish-denied, capacity.pace.off]}

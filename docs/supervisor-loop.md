@@ -3,6 +3,23 @@
 The supervisor loop is the desk's supervisor. It is a user service, not a session: it fills
 the desk from the board, watches pull requests and outages, and routes alerts.
 
+## Recovering stalled board work
+
+The loop observes the first five actionable **In Progress** items in the configured board order,
+putting items titled `P1:` or labelled `P1` / `priority/p1` first. It saves PR heads, each check's
+conclusion, review assignments and verdicts, and serving workers' latest tool-call activity in
+`supervisor-board-progress.json`. A loop restart retains the elapsed time. Board membership is
+refreshed every minute; unread board, PR or process observations never authorize recovery.
+
+After 30 minutes without a changed signal, the next pass uses the existing recovery paths: a
+fresh continuation for a dead worker, a fixer for a red head without a live fixer, or the missing
+assignment of a supervisor-started SSH reviewer at its pinned head. An unstaffed item can start
+despite subscription pace. That pace exception applies only to commands for that item, expires
+with its observation, and never changes the provider's global settings. Weekly and session caps,
+machine limits, WIP admission, repository holds, explicit waits and the person's stop still apply.
+A live but quiet process is reported rather than replaced. Only unresolved causes reach the guide;
+successful actions are recorded as `supervisor.board-progress`. Up Next work keeps normal admission.
+
 ## Filling the desk
 
 With `supervisor.workerBrief` configured, refill runs on its own `supervisor.loopInterval` cadence,

@@ -74,6 +74,7 @@ func init() {
 		LoopFireTimers:             loopFireTimers,
 		LoopInTurn:                 func(a loop.Host, p state.Party) bool { return loopInTurn(asApp(a), p) },
 		LoopRecoverUnfinishedTurns: loopRecoverUnfinishedTurns,
+		LoopBoardProgress:          loopBoardProgress,
 		LoopResumable:              func(a loop.Host, st *state.State, ag state.Agent) bool { return loopResumable(asApp(a), st, ag) },
 		LoopResumePark: func(a loop.Host, ctx context.Context, by state.Party, q string) error {
 			return loopResumePark(asApp(a), ctx, by, q)

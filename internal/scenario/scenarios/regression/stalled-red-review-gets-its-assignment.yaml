@@ -1,0 +1,107 @@
+name: stalled-red-review-gets-its-assignment
+description: >
+  A supervisor-started SSH reviewer has a pinned PR head but no assignment
+  because CI is red. Its first review command is refused. After 30 minutes
+  without a tool call, head, check or review change, the loop reconstructs
+  the assignment from that supervisor start. It starts no competing reviewer
+  or fixer, and repeating the pass does not create another assignment.
+issue: https://github.com/giantswarm/beekeeper/issues/4003
+flow: regression
+tags: [regression, loop, progress, hosts, review]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      board:
+        order: [{name: progress, status: [In Progress]}]
+  hosts:
+    - name: builder
+  files:
+    - path: review.txt
+      content: "Review and repair https://github.com/example/app/pull/2 for https://github.com/example/app/issues/1\n"
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: 'P1: Finish review', board: In Progress}
+  harness:
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, 'feat: the change']
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --head, app-1, --title, 'feat: the change', --body, 'Closes https://github.com/example/app/issues/1']
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+            usage: {session: 10, week: 77}
+      - name: Review app 2 r1
+        host: builder
+        turns:
+          - steps:
+              - beekeeper: [agents, review]
+                exit: 3
+            outcome: hang
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ''}
+
+when:
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 20s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+  - advance: 2s
+  - run: {args: [supervisor, loop, --once]}
+  - github: {check: {repo: example/app, pull: 2, name: build, state: red}}
+  - run:
+      args: [--as, supervisor loop, agents, start, Review app 2 r1, /work/review.txt, --host, builder, --repo, example/app, --ref, app-1, --review]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: Review app 2 r1, host: builder, outcome: hang}
+  - advance: 2s
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - events: {not_contains: [execution.review-assigned]}
+  - advance: 29m
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - events: {not_contains: [execution.review-assigned]}
+  - advance: 1m
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [execution.review-assigned, supervisor.board-progress]}
+  - run: {args: [supervisor, loop, --once]}
+
+then:
+  - worker: {name: Review app 2 r1, host: builder, turns: 1, running: true}
+  - worker: {name: 'Fix stalled example app#2', turns: 0}
+  - github: {pull: {repo: example/app, number: 2, state: open, checks: red}}
+  - calls: {program: ssh, args: [.*], min: 1}
