@@ -39,6 +39,7 @@ const (
 	hostFixtureSource        = "/srv/source"
 	hostFixtureDraining      = "host-c"
 	hostDrainsWord           = "drains"
+	hostInTurnWord           = "in a turn"
 	hostFixtureCommand       = "hosts"
 	hostFixtureCoordinator   = "coordinator.example"
 	hostFixtureWorker        = "remote-worker"
@@ -452,7 +453,7 @@ func TestHostsUpdateGoesAheadUnderAParkedWorkerBetweenTurns(t *testing.T) {
 		o    execution.Observation
 		park *state.Park
 	}{
-		"in a turn":              {inTurn, &state.Park{}},
+		hostInTurnWord:           {inTurn, &state.Park{}},
 		"a wake waits":           {queued, &state.Park{}},
 		"between turns, no park": {between, nil},
 	} {
@@ -540,7 +541,7 @@ func TestSupervisorLoopReportsAHostBehindForMoreThanOneRelease(t *testing.T) {
 	pass()
 	pass()
 	findings := behind()
-	if len(findings) != 1 || !strings.Contains(findings[0].Detail, hostFixtureWorker) || !strings.Contains(findings[0].Detail, hostNewRelease) || !strings.Contains(findings[0].Detail, "v0.7.0") || !strings.Contains(findings[0].Detail, "in a turn") {
+	if len(findings) != 1 || !strings.Contains(findings[0].Detail, hostFixtureWorker) || !strings.Contains(findings[0].Detail, hostNewRelease) || !strings.Contains(findings[0].Detail, "v0.7.0") || !strings.Contains(findings[0].Detail, hostInTurnWord) {
 		t.Fatalf("behind findings %+v", findings)
 	}
 	if strings.Count(r.out.String(), "SUPERVISOR HOST BEHIND") != 1 {
@@ -602,7 +603,7 @@ func TestSupervisorLoopReportsAHostBehindPastTheBound(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("behind findings %+v, want one", findings)
 	}
-	for _, want := range []string{hostFixtureWorker, hostOldRelease, hostNewRelease, "for 1h1m", "in a turn", "takes no new start"} {
+	for _, want := range []string{hostFixtureWorker, hostOldRelease, hostNewRelease, "for 1h1m", hostInTurnWord, "takes no new start"} {
 		if !strings.Contains(findings[0].Detail, want) {
 			t.Errorf("the finding does not say %q: %s", want, findings[0].Detail)
 		}
