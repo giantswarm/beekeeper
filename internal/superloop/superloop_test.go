@@ -17,6 +17,7 @@ const (
 	head3         = "3333333333333333333333333333333333333333"
 	worker        = "worker one"
 	release       = "v1.2.0"
+	reviewChanges = "fix x"
 	// guidePerson is the guide's person.
 	guidePerson = "pat"
 	// deskAuthor is the login the desk opens its pull requests as.
@@ -288,10 +289,10 @@ func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
 // them, and its fixes count only after it parked again and a review
 // approves the fixed head.
 func TestFindingsAreForwardedAfterTheHeadMoved(t *testing.T) {
-	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: reviewChanges, At: t1}
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
 	in := Input{Workers: parked(t0), Pulls: pull(head2, true, changes), Rounds: 1, Taken: taken(t, t0, started)}
-	if a := only(t, Plan(in), KindForward); !strings.HasSuffix(a.Message, "fix x") {
+	if a := only(t, Plan(in), KindForward); !strings.HasSuffix(a.Message, reviewChanges) {
 		t.Errorf("forward = %+v", a)
 	}
 	fwd := Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker}
@@ -1019,9 +1020,9 @@ func TestAHeadPushedDuringTheRoundCannotBeApproved(t *testing.T) {
 		t.Errorf("a running round got %+v", got)
 	}
 	// Findings on the pushed head go to the worker and count as round 1's.
-	changes := Review{ID: "R1", Head: head2, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	changes := Review{ID: "R1", Head: head2, Verdict: ChangesRequested, Body: reviewChanges, At: t1}
 	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head2, true, changes), Rounds: 2, Taken: tk}
-	if a := only(t, Plan(in), KindForward); !strings.Contains(a.Message, "changes on head "+head2) || !strings.HasSuffix(a.Message, "fix x") {
+	if a := only(t, Plan(in), KindForward); !strings.Contains(a.Message, "changes on head "+head2) || !strings.HasSuffix(a.Message, reviewChanges) {
 		t.Errorf("forward = %+v", a)
 	}
 	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Minute), Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})...)
@@ -1178,7 +1179,7 @@ func TestAGoneReviewersHeadGetsTheNextRound(t *testing.T) {
 		t.Errorf("leave = %+v", l)
 	}
 	// When round 2 asks for changes on head1, only round 2's cycle counts.
-	r2 := Review{ID: "R2", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: in.Now}
+	r2 := Review{ID: "R2", Head: head1, Verdict: ChangesRequested, Body: reviewChanges, At: in.Now}
 	in.Pulls = pull(head2, true, r2)
 	in.Rounds = 2
 	in.Taken = append(in.Taken, taken(t, in.Now, Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
