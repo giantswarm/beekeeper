@@ -210,3 +210,9 @@ func isNonRepoSlashToken(owner, name string, checkPrefixes map[string]bool) bool
 	}
 	return false
 }
+
+// A final report can contain several findings at the same timestamp.
+func findingKey(e Event) string {
+	sum := sha256.Sum256([]byte(problemText(e)))
+	return fmt.Sprintf("%s %x", eventKey(KindFile, e), sum)
+}

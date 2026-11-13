@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
@@ -1044,6 +1045,11 @@ func Plan(in Input) []Action {
 	// (or forwards in this pass): the worker has it in the review, word for
 	// word.
 	forwarded := func(e Event) bool {
+		// A complete current description explicitly asks for filing, even
+		// when some of its words also occur in a forwarded review.
+		if _, ok := findings.Parse(problemText(e)); ok {
+			return false
+		}
 		for ref, rs := range l.rounds {
 			p, tracked := in.Pulls[ref]
 			for i, rd := range rs {
@@ -1123,6 +1129,16 @@ func Plan(in Input) []Action {
 		return ""
 	}
 	progress := func(e Event) bool {
+		// An explicit current finding is placed even when it names the
+		// worker's own issue, and individually before a done report settles.
+		if _, ok := findings.Parse(problemText(e)); ok {
+			key := findingKey(e)
+			if !l.has(key) {
+				ev := e
+				add(Action{Key: key, Kind: KindFile, Agent: e.Agent, Event: &ev, Message: problemText(e)})
+			}
+			return true
+		}
 		key := progressKey(e)
 		if l.has(key) || l.has(eventKey(KindProgress, e)) {
 			return true
@@ -1160,6 +1176,13 @@ func Plan(in Input) []Action {
 				fk := eventKey(KindFile, e)
 				if len(unfiled) > 0 && !l.has(fk) {
 					add(Action{Key: fk, Kind: KindFile, Agent: e.Agent, Event: &ev, Message: strings.Join(unfiled, "\n")})
+					continue
+				}
+				pendingFinding := slices.ContainsFunc(eventsByAgent[e.Agent], func(p Event) bool {
+					_, explicit := findings.Parse(problemText(p))
+					return p.Verb == VerbProblem && near(p, e) && explicit && !l.has(findingKey(p))
+				})
+				if pendingFinding {
 					continue
 				}
 				a := Action{Key: dk, Kind: KindDone, Agent: e.Agent, Event: &ev}

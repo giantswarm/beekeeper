@@ -33,6 +33,7 @@ import (
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -2304,6 +2305,11 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
 		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
+		if act.Kind == superloop.KindFile {
+			// One inventory/write stream prevents two reporters creating the
+			// same issue, and serializes the durable receipt store.
+			key = "transition:findings"
+		}
 		if act.Kind == superloop.KindEnd {
 			if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok && by != "" {
 				key = "transition:" + strings.TrimSpace(by)
@@ -4559,9 +4565,31 @@ func unclassifiedParkMessage(e superloop.Event) string {
 // file transitions only summarized delivery to a note and must not be replayed.
 const FileReportSeparator = "; file in the owning repositories:\n"
 
-// toFile leaves the full finding in the settled transition's event. The
-// guide's feed reads that event once; no decision or thread is needed.
-func (l *Loop) toFile(_ context.Context, st *state.State, act superloop.Action) (string, error) {
+// toFile places current findings itself. Only an unplaceable report keeps
+// the separator the guide consumes; successful placement creates no guide work.
+// Only an action carrying one agents.problem is a report: a done's action
+// joins its unfiled one-line findings, which would otherwise parse as one
+// finding titled by the first and described by the rest.
+func (l *Loop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if report, ok := findings.Parse(act.Message); ok && act.Event != nil && act.Event.Verb == superloop.VerbProblem {
+		if _, why := (superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Never: l.Host.Cfg().Supervisor.Ownership.Never}).Unread(report.Repo + "#1"); why == "" && l.Host.Cfg().Board.Owner != "" && l.Host.Cfg().Board.Project > 0 {
+			url, err := l.placeFinding(ctx, report)
+			if err != nil && !errors.Is(err, findings.ErrUnplaced) {
+				return "", err
+			}
+			if err == nil {
+				ref, ok := Cmd.ParseRef(url)
+				if !ok {
+					return "", fmt.Errorf("finding returned invalid issue URL %q", url)
+				}
+				intake := superloop.Action{Kind: superloop.KindIntake, Key: act.Key + " intake", Ref: Cmd.RefName(ref), URL: url, Agent: act.Agent}
+				if _, err := l.intakeIssue(ctx, st, intake); err != nil {
+					return "", err
+				}
+				return "finding placed: " + url, nil
+			}
+		}
+	}
 	e := *act.Event
 	from := ""
 	if ref := AgentRef(st, e.Agent); ref != "" && !strings.Contains(act.Message, ref) {
