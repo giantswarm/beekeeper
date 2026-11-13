@@ -63,7 +63,7 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 		{
 			name:  "image tools",
 			image: map[string]string{"golangci-lint": lint, "jq": jq, "go": fails},
-			argv:  []string{"golangci-lint", "run", "./..."},
+			argv:  []string{"golangci-lint", "run", testPackages},
 			want:  []string{"linted by IMAGE/golangci-lint run ./... cache=TOOLS/lint-cache"},
 			not:   []string{"installing", EnvironmentLacks},
 		},
@@ -80,14 +80,14 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 		{
 			name:  "already installed",
 			image: map[string]string{"go": fails},
-			argv:  []string{"golangci-lint", "run", "./..."},
+			argv:  []string{"golangci-lint", "run", testPackages},
 			want:  []string{"golangci-lint by TOOLS/" + version(GolangCILintModule) + "/golangci-lint run ./... cache=TOOLS/lint-cache"},
 			not:   []string{"installing"},
 		},
 		{
 			name:  "install fails",
 			image: map[string]string{"go": fails},
-			argv:  []string{"golangci-lint", "run", "./..."},
+			argv:  []string{"golangci-lint", "run", testPackages},
 			fresh: true,
 			rc:    125,
 			want:  []string{"installing " + GolangCILintModule + " failed"},
