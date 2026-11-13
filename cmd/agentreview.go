@@ -175,6 +175,11 @@ func reviewRound(st *state.State, p superloop.Pull) (int, error) {
 	once := func(verdict, head string) error {
 		return refused("%s had its one desk review, %s at head %s: no second review starts; the loop merges after the fixes", p.Ref, verdict, shortSHA(head))
 	}
+	// Every desk verdict refuses, one of a head its author replaced
+	// (superloop.Replaced) too: this command reads no loop ledger, which
+	// alone tells a replaced head from a verdict the loop acted on or one
+	// that raced its reviewer's own push. The loop starts the round after a
+	// replaced head's review itself.
 	for _, r := range p.Reviews {
 		if r.Verdict != "" {
 			return 0, once(r.Verdict, cmp.Or(r.Head, r.Commit))
@@ -384,15 +389,27 @@ func (a *app) reserveReview(act superloop.Action) error {
 		return err
 	}
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		released := releaseGoneReviews(st, act.Ref, live, a.timeNow().UTC())
+		now := a.timeNow().UTC()
+		released := releaseGoneReviews(st, act.Ref, live, now)
+		replaced := reviewHeadHandedOver(st, act.Ref, act.Head)
 		for _, request := range st.ReviewRequests {
-			if reviewRequestActive(st, request) && strings.EqualFold(request.Ref, act.Ref) {
+			if reviewRequestActive(st, request) && strings.EqualFold(request.Ref, act.Ref) && (!replaced || request.Head == act.Head || request.Round == act.Round) {
 				return nil, refused("%s already requested this head or review round", act.Ref)
 			}
 		}
-		for _, round := range st.DeskReviews {
-			if strings.EqualFold(round.Ref, act.Ref) && (round.Released.IsZero() || round.Result != nil) {
+		for i := range st.DeskReviews {
+			round := &st.DeskReviews[i]
+			if !strings.EqualFold(round.Ref, act.Ref) {
+				continue
+			}
+			if round.Result != nil {
 				return nil, refused("%s already assigned its one review", act.Ref)
+			}
+			if round.Released.IsZero() && (!replaced || round.Head == act.Head || round.Round == act.Round) {
+				return nil, refused("%s already assigned its one review", act.Ref)
+			}
+			if round.Released.IsZero() {
+				round.Released = now
 			}
 		}
 		st.ReviewRequests = slices.DeleteFunc(st.ReviewRequests, func(r state.ReviewRequest) bool {
@@ -400,6 +417,18 @@ func (a *app) reserveReview(act superloop.Action) error {
 		})
 		st.ReviewRequests = append(st.ReviewRequests, state.ReviewRequest{Ref: act.Ref, Head: act.Head, Round: act.Round, PID: os.Getpid()})
 		return released, nil
+	})
+}
+
+func reviewHeadHandedOver(st *state.State, ref, head string) bool {
+	if head == "" {
+		return false
+	}
+	if rp, ok := st.ReviewParkFor(ref); ok && rp.ReviewHead == head {
+		return true
+	}
+	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Park != nil && strings.EqualFold(ag.Park.On, ref) && ag.Park.ReviewHead == head
 	})
 }
 

@@ -101,7 +101,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	if err := EnsureCombinedPullCloses(ctx, st, &p); err != nil {
 		return "", err
 	}
-	if LatestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
+	if m := MarkReplaced(ctx, p); LatestReviewRequestsChanges(m) || reviewOvertookDecision(m, act) {
 		return "", Cmd.Refused("a review requested changes; new supervisor approval required")
 	}
 	repair := func(code int, reason string) (string, error) {
@@ -296,7 +296,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", Cmd.Refused("merge head moved or current CI is not green")
 	}
-	if LatestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
+	if m := MarkReplaced(ctx, p); LatestReviewRequestsChanges(m) || reviewOvertookDecision(m, act) {
 		return "", Cmd.Refused("a review requested changes; new supervisor approval required")
 	}
 	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
@@ -984,13 +984,41 @@ func (l *Loop) moveServedDone(ctx context.Context, serves, ref string) error {
 
 const MergeableConflicting = "CONFLICTING"
 
+// MarkReplaced is p with its reviews of a head their author had replaced
+// when they came (superloop.Replaced) marked, as the planner reads them: no
+// verdict, neither for a merge nor against one. A superseded reviewer's late
+// request for changes on the head it was given holds no go the next round's
+// verdict earned. A base merge that cannot be read keeps the review standing.
+// The reviews of the p passed in stay as they are.
+func MarkReplaced(ctx context.Context, p superloop.Pull) superloop.Pull {
+	covers := func(q superloop.Pull, judged string) bool {
+		ok, err := ReadBaseMerge(ctx, q, judged)
+		return err != nil || ok
+	}
+	var reviews []superloop.Review
+	for i, r := range p.Reviews {
+		if r.Replaced || !superloop.Replaced(p, r, covers) {
+			continue
+		}
+		if reviews == nil {
+			reviews = slices.Clone(p.Reviews)
+		}
+		reviews[i].Replaced = true
+	}
+	if reviews != nil {
+		p.Reviews = reviews
+	}
+	return p
+}
+
 // reviewOvertookDecision prevents a fresh exact-head authorization from
 // concealing a change request that arrived after the planner's review snapshot.
+// A review of a replaced head (MarkReplaced) overtakes nothing.
 func reviewOvertookDecision(p superloop.Pull, act superloop.Action) bool {
 	var latest *superloop.Review
 	for i := range p.Reviews {
 		r := &p.Reviews[i]
-		if r.Verdict != "" && (latest == nil || !r.At.Before(latest.At)) {
+		if r.Verdict != "" && !r.Replaced && (latest == nil || !r.At.Before(latest.At)) {
 			latest = r
 		}
 	}
@@ -1001,12 +1029,13 @@ func reviewOvertookDecision(p superloop.Pull, act superloop.Action) bool {
 // LatestReviewRequestsChanges reports whether the latest review verdict on p
 // requests changes on its current head, overriding any earlier approval.
 // A different head still needs the loop's exact-head decision; the executor's
-// authority check rejects any go overtaken by a later change request.
+// authority check rejects any go overtaken by a later change request. A
+// review of a replaced head (MarkReplaced) is no verdict.
 func LatestReviewRequestsChanges(p superloop.Pull) bool {
 	var latest superloop.Review
 	var found bool
 	for _, r := range p.Reviews {
-		if r.Verdict == "" {
+		if r.Verdict == "" || r.Replaced {
 			continue
 		}
 		if !found || r.At.IsZero() || latest.At.IsZero() || !r.At.Before(latest.At) {

@@ -12,6 +12,9 @@ import (
 const deliveryDropReason = "manual end"
 
 const deliveryFirstHead = "aaa"
+
+// deliverySecondHead is the head a push after deliveryFirstHead makes.
+const deliverySecondHead = "bbb"
 const deliveryDeskAuthor = "desk"
 const deliveryCombinedPR = "o/r#30"
 
@@ -78,17 +81,17 @@ func TestDeliveryLifecycle(t *testing.T) {
 		}},
 		{"fix pushed", state.DeliveryCI, func() {
 			p := in.Pulls[deliveryPR]
-			p.Head = "bbb"
+			p.Head = deliverySecondHead
 			p.Green = false
 			in.Pulls[deliveryPR] = p
-			in.Workers[0].ParkedHead = "bbb"
+			in.Workers[0].ParkedHead = deliverySecondHead
 		}},
 		{"fix green", state.DeliveryReviewQueued, func() { p := in.Pulls[deliveryPR]; p.Green = true; in.Pulls[deliveryPR] = p }},
 		{"second round", state.DeliveryReviewing, func() {
-			in.Taken = append(in.Taken, Taken{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, "bbb"), At: in.Now})
+			in.Taken = append(in.Taken, Taken{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliverySecondHead), At: in.Now})
 		}},
 		{"approved lane", state.DeliveryMerging, func() {
-			in.Taken = append(in.Taken, Taken{Kind: KindGo, Ref: deliveryPR, Key: goKey(deliveryPR, "bbb"), At: in.Now})
+			in.Taken = append(in.Taken, Taken{Kind: KindGo, Ref: deliveryPR, Key: goKey(deliveryPR, deliverySecondHead), At: in.Now})
 		}},
 		{"merged", state.DeliveryReleasing, func() { p := in.Pulls[deliveryPR]; p.State = Merged; in.Pulls[deliveryPR] = p }},
 	}
@@ -107,6 +110,34 @@ func TestDeliveryLifecycle(t *testing.T) {
 		})
 	}
 }
+
+// A head its author moved past a running round's ends that round: the
+// delivery is implementing until the author parks on the new head, then
+// queued for its review.
+// https://github.com/giantswarm/beekeeper/issues/3843
+func TestDeliveryOfAHeadMovedDuringItsRound(t *testing.T) {
+	in := deliveryInput()
+	in.Workers[0].ReviewRequested = true
+	in.Workers[0].ParkedAt = in.Now
+	p := in.Pulls[deliveryPR]
+	p.Green = true
+	in.Pulls[deliveryPR] = p
+	in.Taken = []Taken{{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliveryFirstHead), At: in.Now}}
+	step := func(want string) {
+		t.Helper()
+		in.Now = in.Now.Add(time.Minute)
+		if got := Deliveries(in, nil); len(got) != 1 || got[0].Step != want {
+			t.Fatalf("got %+v, want %s", got, want)
+		}
+	}
+	step(state.DeliveryReviewing)
+	p.Head = deliverySecondHead
+	in.Pulls[deliveryPR] = p
+	step(state.DeliveryImplementing)
+	in.Workers[0].ParkedHead = deliverySecondHead
+	step(state.DeliveryReviewQueued)
+}
+
 func TestDeliveryBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
