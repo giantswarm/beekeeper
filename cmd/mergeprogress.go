@@ -117,6 +117,14 @@ func readMergeProgress(base string) *mergeProgress {
 	return &p
 }
 
+// awaitsRelease says the run at base merged and now awaits its release: its
+// phase is a release wait, which follows only a merge (devctl's own, or the
+// reviewed merge's "release: waiting" line).
+func awaitsRelease(base string) bool {
+	p := readMergeProgress(base)
+	return p != nil && strings.HasPrefix(p.Phase, "release wait:")
+}
+
 // silentMerge waits a full phase timeout since the last byte from devctl.
 // Old children without phase records use the log's last write as a fallback.
 func silentMerge(base string, started, now time.Time, fallback time.Duration) bool {

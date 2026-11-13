@@ -276,7 +276,7 @@ files one alarm for the guide that names what holds it:
 | unread | the pull request the loop cannot read, so no pass plans or runs its decision |
 | repair | the failed merge and why the branch repair it requested has no worker yet |
 | failed | the last run's error and, under backoff, when the loop retries |
-| restart | a loop that runs no action while it restarts into a replaced binary |
+| restart | a fenced loop that runs no action while it restarts into a replaced binary |
 | pass | the error that ended the pass before it planned |
 
 The alarm is delivered once per pending head and cause, and no sooner than 15 minutes after
@@ -285,6 +285,23 @@ A pass that ends before it plans (held GitHub observations, a restart, an error)
 the pending decisions and names what ended it. The waits, the causes already named and the last
 cause read survive a restart of the loop, so a new release neither restarts the 15 minutes nor
 repeats an alarm. `SUPERVISOR STALL ENDED` says when an alarmed decision is no longer pending.
+
+## A new release
+
+A release installed over the loop's binary is re-executed at the next quiet point: no claim in
+flight (a merge, a review or worker start, a refill, intake, retirement). While claims are in
+flight the loop says `SUPERVISOR LOOP restart held: claims are in flight (<claims>)` once, with
+the time it re-executes at the latest, and its passes go on: they observe, plan and run the merge
+decisions, and skip their housekeeping (reports, timers, alerts, wakes, recoveries) and every
+other action, which wait for the new binary. A merge's claim ends when GitHub reports the merge:
+its gate leaves the release wait to its merge-child (`--until-merged`, [the merge
+gate](merge-gate.md)), and the loop tracks the delivery's release on its own.
+
+`supervisor.restartWait` (default `10m`) bounds the wait. Past it, or once the installed release
+refuses a save of the old binary, the loop says `SUPERVISOR LOOP restart waited …`, cancels the
+actions in flight and re-executes; the new binary reconciles their claims, and a merge's gate and
+merge-child run on outside the loop. A loop whose state writes are fenced after a binary recovery
+re-executes at once.
 
 ## Filing findings
 

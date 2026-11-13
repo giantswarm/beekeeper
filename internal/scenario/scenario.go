@@ -144,12 +144,18 @@ type Call struct {
 	Times   int      `yaml:"times"`
 }
 
-// Response is what a fake prints and exits with.
+// Response is what a fake prints and exits with, Delay later in real time
+// (a slow command: devctl waiting for a release), at most MaxCallDelay.
 type Response struct {
-	Stdout string `yaml:"stdout"`
-	Stderr string `yaml:"stderr"`
-	Exit   int    `yaml:"exit"`
+	Stdout string   `yaml:"stdout"`
+	Stderr string   `yaml:"stderr"`
+	Exit   int      `yaml:"exit"`
+	Delay  Duration `yaml:"delay"`
 }
+
+// MaxCallDelay bounds a given call's delay below the minute a fake waits
+// for the world's answer.
+const MaxCallDelay = 50 * time.Second
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
 // advance, github, fault and host, with optional expectations of its own
@@ -488,6 +494,9 @@ func (s *Scenario) Validate() error {
 		}
 		if c.Times < 0 {
 			bad("given.calls[%d]: times %d", i, c.Times)
+		}
+		if c.Respond.Delay.Duration > MaxCallDelay {
+			bad("given.calls[%d]: delay %s is over %s, the fake's wait for an answer", i, c.Respond.Delay, MaxCallDelay)
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("given.calls[%d]: %v", i, err)

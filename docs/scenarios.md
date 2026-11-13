@@ -147,6 +147,9 @@ parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
    [the fake machines](#the-fake-machines)) gets exit 1 and **fails the
    scenario**. With `given.github`, `gh` and the GitHub API are answered
    by a model instead: see [The scenario's GitHub](scenarios-github.md).
+   So is the `gh` that `devctl auth exec -- gh …` runs (the reviewed merge
+   of a `merge.devctlOwners` repository); every other `devctl` call is a
+   `given.calls` entry's to answer.
    Beside it the world serves its clock (see [The clock](#the-clock)),
    which every process reads.
 5. It runs the `when` steps, checks each step's inline `expect`, then the
@@ -186,6 +189,9 @@ given:
       args: [api, graphql, 'query=.*items\(first:80.*']
       respond: {stdout: '{"data": …}', stderr: '', exit: 0}
       times: 1                       # answer at most once; default always
+    - program: devctl
+      args: [release, wait]
+      respond: {stdout: '{"verdict": "available"}', delay: 25s}  # real time, at most 50s
   clock:
     start: "2026-11-12T09:00:00Z"   # the world's time at the start; default now
   tools: [go, golangci-lint]         # further programs on PATH, answered by given.calls only

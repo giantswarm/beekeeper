@@ -90,6 +90,10 @@ type Supervisor struct {
 	// files for the guide's person (24h).
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
+	// RestartWait bounds how long the loop's restart into a replaced binary
+	// waits for its claims in flight (10m), its passes running the merge
+	// decisions meanwhile; past it the loop re-executes with them in flight.
+	RestartWait Duration `yaml:"restartWait"`
 	// PostMergeWindow bounds inactivity while awaiting a post-merge report (2h).
 	PostMergeWindow Duration `yaml:"postMergeWindow"`
 	NoteDue         Duration `yaml:"noteDue"`
@@ -119,6 +123,8 @@ const (
 	DefaultUnmergedWindow = 7 * 24 * time.Hour
 	// DefaultReserveFor is supervisor.reserveFor when unset.
 	DefaultReserveFor = time.Hour
+	// DefaultRestartWait is supervisor.restartWait when unset.
+	DefaultRestartWait = 10 * time.Minute
 )
 
 // DefaultTeamFiles is supervisor.ownership.teamFiles unless the

@@ -38,6 +38,10 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	if !wait || doc.MergeCommitSha == "" {
 		return result
 	}
+	// The line marks the merge's release wait (mergeProgress), which a
+	// gate called --until-merged leaves to this child.
+	_, _ = fmt.Fprintf(os.Stderr, "release: waiting for the release of %s#%d, merged as %s (%s release wait %s --pr %d)\n",
+		doc.Repo, doc.Number, shortSHA(doc.MergeCommitSha), merge.Tool, doc.Repo, doc.Number)
 	ctx, cancel := context.WithTimeout(ctx, releasePRWait)
 	defer cancel()
 	raw, err := waitReviewedRelease(ctx, doc.Repo, doc.Number)
