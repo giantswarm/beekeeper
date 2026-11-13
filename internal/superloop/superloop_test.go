@@ -1178,7 +1178,7 @@ func TestAGoneReviewersHeadGetsTheNextRound(t *testing.T) {
 		t.Errorf("leave = %+v", l)
 	}
 	// When round 2 asks for changes on head1, only round 2's cycle counts.
-	r2 := Review{ID: "R2", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: in.Now}
+	r2 := Review{ID: "R2", Head: head1, Verdict: ChangesRequested, Body: "fix the retry", At: in.Now}
 	in.Pulls = pull(head2, true, r2)
 	in.Rounds = 2
 	in.Taken = append(in.Taken, taken(t, in.Now, Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
