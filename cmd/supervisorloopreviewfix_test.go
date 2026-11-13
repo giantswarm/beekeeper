@@ -111,20 +111,20 @@ func TestReworkReplacesEndedSSHWorker(t *testing.T) {
 		end     func(*state.ExecutionRecord)
 		replace bool
 	}{
-		{name: "retired", replace: true, end: func(r *state.ExecutionRecord) {
+		{name: "retired execution", replace: true, end: func(r *state.ExecutionRecord) {
 			r.Retirement = &state.ExecutionRetirement{ID: "retirement", Trigger: execution.RetireTriggerCrash}
 		}},
-		{name: "stopped", replace: true, end: func(r *state.ExecutionRecord) {
+		{name: "stopped execution", replace: true, end: func(r *state.ExecutionRecord) {
 			r.StopRequest = &execution.StopRequest{ID: "stop", Reason: "stopped by hand"}
 			r.Observation.StopAcknowledged = true
 		}},
-		{name: "released", replace: true, end: func(r *state.ExecutionRecord) { r.ReleasedAt = time.Now() }},
+		{name: "released reservation", replace: true, end: func(r *state.ExecutionRecord) { r.ReleasedAt = time.Now() }},
 		{name: "ended, its conversation goes on", end: func(*state.ExecutionRecord) {}},
-		{name: "running", end: func(r *state.ExecutionRecord) { r.Observation.ProcessState = execution.Running }},
+		{name: "execution still running", end: func(r *state.ExecutionRecord) { r.Observation.ProcessState = execution.Running }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
-			ref := execution.Ref{Host: paramHost, Execution: "ended-worker", Generation: 1}
+			ref := execution.Ref{Host: paramHost, Execution: "retired-fixer-execution", Generation: 1}
 			party := state.Party{Name: loopWorker}
 			rec := &state.ExecutionRecord{
 				Handle:      execution.Handle{Ref: ref},
@@ -141,7 +141,7 @@ func TestReworkReplacesEndedSSHWorker(t *testing.T) {
 				t.Fatal(err)
 			}
 			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
-				return superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Branch: "fix"}, nil
+				return superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Branch: testFixWord}, nil
 			}
 			l, err := r.a.newSupervisorLoop(false)
 			if err != nil {
