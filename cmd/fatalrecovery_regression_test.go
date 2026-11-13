@@ -177,11 +177,6 @@ func testFatalConfiguredHarnessAdmission(t *testing.T, unknown bool, healthyAlte
 	if err := os.WriteFile(source, []byte(fmt.Sprintf("stateDir: %q\ncapacity:\n  providers: {claude: {}, agy: {}}\n  choices: [{harness: claude, model: test}, {harness: agy, model: test}]\nfatal:\n  repositories: []\n  checks: [{name: failed, probe: [unavailable-probe]}]\n", dir)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	q := fatal.Queue{}
-	q.Observe(fatal.Observation{ID: "check:failed", Failed: true}, time.Now().Add(-time.Hour))
-	if err := q.Save(dir); err != nil {
-		t.Fatal(err)
-	}
 	oldTimeout, oldRun, oldStart := fatalObservationTimeout, fatalRun, loop.BeekeeperRun
 	fatalObservationTimeout = 20 * time.Millisecond
 	defer func() { fatalObservationTimeout, fatalRun, loop.BeekeeperRun = oldTimeout, oldRun, oldStart }()
@@ -200,15 +195,26 @@ func testFatalConfiguredHarnessAdmission(t *testing.T, unknown bool, healthyAlte
 	}
 	starts := 0
 	loop.BeekeeperRun = func(context.Context, ...string) (string, int, error) { starts++; return "", 1, nil }
-	if err := a.fatalScan(t.Context(), dir); err != nil {
-		t.Fatal(err)
-	}
-	q, err := fatal.Read(dir)
 	wantStarts := 0
 	if healthyAlternate {
 		wantStarts = 1
 	}
-	if err != nil || starts != wantStarts || (!healthyAlternate && (q.Incidents[0].Attempts != 0 || q.Incidents[0].Owner != "")) {
-		t.Fatalf("unknown harness consumed a repair attempt: starts=%d queue=%+v error=%v", starts, q, err)
-	}
+	// The observation deadline and the incident's age run on the bubble's
+	// clock, which advances only while every probe blocks: configuration I/O
+	// and a loaded runner cannot expire the budget before the healthy
+	// alternate's preflight returns.
+	synctest.Test(t, func(t *testing.T) {
+		q := fatal.Queue{}
+		q.Observe(fatal.Observation{ID: "check:failed", Failed: true}, time.Now().Add(-time.Hour))
+		if err := q.Save(dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.fatalScan(t.Context(), dir); err != nil {
+			t.Fatal(err)
+		}
+		q, err := fatal.Read(dir)
+		if err != nil || starts != wantStarts || (!healthyAlternate && (q.Incidents[0].Attempts != 0 || q.Incidents[0].Owner != "")) {
+			t.Fatalf("repair starts=%d, want %d (an unknown or failed harness consumes no attempt): queue=%+v error=%v", starts, wantStarts, q, err)
+		}
+	})
 }
