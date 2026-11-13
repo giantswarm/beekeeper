@@ -76,3 +76,39 @@ func TestStartDeliveryForLinkedPullKeepsIssueDeliveries(t *testing.T) {
 		}
 	}
 }
+
+func TestContinueDeliveryKeepsTheTasksDelivery(t *testing.T) {
+	started := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	at := started.Add(3 * time.Hour)
+	const issue, pull = "o/r#1", "o/r#2"
+	for _, tc := range []struct {
+		name  string
+		prev  []Delivery
+		pull  string
+		want  Delivery
+		fresh bool
+	}{
+		{name: "merged and released", pull: pull,
+			prev: []Delivery{{Ref: issue, Pulls: []string{pull}, Step: DeliveryDone, Outcome: OutcomeMerged, Evidence: "merged", Agent: "old", Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryDone, Outcome: OutcomeMerged, Evidence: "merged", Agent: "next", Started: started}},
+		{name: "merged without the parked pull", pull: pull,
+			prev: []Delivery{{Ref: issue, Pulls: []string{"o/r#3"}, Step: DeliveryDone, Outcome: OutcomeMerged, Agent: "old", Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull, "o/r#3"}, Step: DeliveryDone, Outcome: OutcomeMerged, Agent: "next", Started: started}},
+		{name: "still in review", pull: "O/R#2",
+			prev: []Delivery{{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Agent: "old", Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Agent: "next", Started: started}},
+		{name: "ended without a change", pull: pull, fresh: true,
+			prev: []Delivery{{Ref: issue, Pulls: []string{"o/r#3"}, Step: DeliveryDone, Outcome: OutcomeNoChange, Agent: "old", Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryImplementing, Agent: "next", Started: at, Since: at}},
+		{name: "none yet", fresh: true,
+			want: Delivery{Ref: issue, Pulls: []string{}, Step: DeliveryImplementing, Agent: "next", Started: at, Since: at}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &State{Deliveries: tc.prev}
+			st.ContinueDelivery("O/R#1", "next", tc.pull, at)
+			if len(st.Deliveries) != 1 || !reflect.DeepEqual(st.Deliveries[0], tc.want) {
+				t.Fatalf("got %+v, want %+v", st.Deliveries, tc.want)
+			}
+		})
+	}
+}

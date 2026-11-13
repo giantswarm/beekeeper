@@ -380,3 +380,73 @@ func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 		})
 	}
 }
+
+// The loop's fresh continuation of a worker parked on a merged pull request
+// that only says "Part of" its issue continues the task's delivery: its
+// start keeps the merged pull, and its idle --done is accepted.
+func TestContinuationStartKeepsTheMergedPullOfItsDelivery(t *testing.T) {
+	const issue, pull = "example/app#1", "example/app#2"
+	work := "prove the release"
+	for _, tc := range []struct {
+		name     string
+		pulls    []string
+		next     func(prev state.Agent) string
+		accepted bool
+	}{
+		{name: "continuation of a released merge", pulls: []string{pull}, next: continuationName, accepted: true},
+		{name: "continuation whose delivery lacks the parked pull", next: continuationName, accepted: true},
+		{name: "another start of the issue", pulls: []string{pull}, next: func(state.Agent) string { return "app 1 again" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := stubApp(t)
+			parked := a.now.Add(-time.Hour)
+			prev := state.Agent{Party: state.Party{Session: continuationOldSession, Name: "app 1"}, Task: "Work https://github.com/example/app/issues/1", AssignedAt: parked.Add(-time.Hour),
+				Park: &state.Park{On: pull, RefKind: github.RefPullRequest, ReviewHead: "abc123", PostMerge: &work, At: parked, Continuing: true}}
+			st := &state.State{
+				Agents:  []state.Agent{prev},
+				Records: []state.Record{{Session: prev.Party, Issue: issue, At: prev.AssignedAt}},
+				Deliveries: []state.Delivery{{Ref: issue, Pulls: slices.Clone(tc.pulls), Step: state.DeliveryDone, Outcome: state.OutcomeMerged,
+					Evidence: "https://github.com/example/app/pull/2", Agent: prev.Name, Started: prev.AssignedAt, Since: parked}},
+			}
+			next := state.Party{Session: continuationNewSession, Name: tc.next(prev)}
+			if _, err := recordStart(st, state.Start{Party: next, At: a.now}, "Continue the existing task", issue, func(p state.Party) bool { return p.Is(next) }); err != nil {
+				t.Fatal(err)
+			}
+			ag := st.Agents[len(st.Agents)-1]
+			lookup := func(context.Context, []github.PR) (map[github.PR]github.RefState, error) {
+				return map[github.PR]github.RefState{}, nil
+			}
+			_, err := a.completionOutcomeWith(t.Context(), st, ag, true, "", false, "", lookup)
+			d := st.Deliveries[0]
+			if !tc.accepted {
+				if err == nil || len(d.Pulls) != 0 || d.Step != state.DeliveryImplementing {
+					t.Fatalf("a start that continues nothing kept the ended delivery: %+v, %v", d, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("continuation's idle --done refused: %v (delivery %+v)", err, d)
+			}
+			if !slices.Equal(d.Pulls, []string{pull}) || d.Step != state.DeliveryDone || d.Outcome != state.OutcomeMerged || d.Agent != next.Name || !d.Started.Equal(prev.AssignedAt) {
+				t.Fatalf("continuation lost its delivery: %+v", d)
+			}
+		})
+	}
+}
+
+func TestParkedPullNamesOnlyAPullRequest(t *testing.T) {
+	for _, tc := range []struct {
+		park *state.Park
+		want string
+	}{
+		{park: &state.Park{On: "example/app#2", RefKind: github.RefPullRequest}, want: "example/app#2"},
+		{park: &state.Park{On: "https://github.com/example/app/pull/2", ReviewHead: "abc123"}, want: "example/app#2"},
+		{park: &state.Park{On: "example/app#1", RefKind: github.RefIssue}},
+		{park: &state.Park{On: "#7"}},
+		{},
+	} {
+		if got := parkedPull(tc.park); got != tc.want {
+			t.Errorf("parkedPull(%+v) = %q, want %q", tc.park, got, tc.want)
+		}
+	}
+}
