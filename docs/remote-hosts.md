@@ -16,10 +16,11 @@ the prepared policy digest in beekeeper's state, which the supervisor loop does 
 coordinator update settles probation. Compatible older hosts keep taking starts during probation or
 release lookup failures; failed installations or policy checks still hold the host. With
 `supervisor.hosts`, workers prefer the first host with room by default and fall back to the
-coordinator within its ordinary capacity guards. A host whose pick spends another provider than the
-coordinator's leaves the start to the coordinator while that pick is behind its weekly pace. Starts by hand without `--host` (`agents start`,
-`emergency start`) are placed the same way and say where they went; `--host local` keeps one on the
-coordinator.
+coordinator within its ordinary capacity guards. While the coordinator's own pick is behind its
+weekly pace and the coordinator has room, the loop leaves a start to it rather than to a host whose
+pick spends another provider. Starts by hand without `--host` (`agents start`, `emergency start`)
+are placed on the first host with room, on that host's pick, and say where they went; `--host local`
+keeps one on the coordinator.
 
 Explicit `supervisor.hostsFirst: false` retains local-first placement. `capacity` and `supervisor
 status` show dated per-host placement reasons. Reviewers follow the same host preferences, including
