@@ -1045,6 +1045,11 @@ func Plan(in Input) []Action {
 	// (or forwards in this pass): the worker has it in the review, word for
 	// word.
 	forwarded := func(e Event) bool {
+		// A complete current description explicitly asks for filing, even
+		// when some of its words also occur in a forwarded review.
+		if _, ok := findings.Parse(problemText(e)); ok {
+			return false
+		}
 		for ref, rs := range l.rounds {
 			p, tracked := in.Pulls[ref]
 			for i, rd := range rs {

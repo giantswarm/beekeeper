@@ -8,6 +8,13 @@ import (
 	"testing"
 )
 
+const (
+	findingTitle = "Queue stalls"
+	findingBody  = "Facts"
+	findingURL   = "https://github.com/example/app/issues/2"
+	apiCommand   = "api"
+)
+
 func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
@@ -26,8 +33,8 @@ func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
 				}
 				return []byte(`{}`), nil
 			}
-			url, err := Place(context.Background(), gh, Report{Repo: "example/app", Title: "Queue stalls", Body: tc.body})
-			if err != nil || url != "https://github.com/example/app/issues/2" {
+			url, err := Place(context.Background(), gh, Report{Repo: "example/app", Title: findingTitle, Body: tc.body})
+			if err != nil || url != findingURL {
 				t.Fatalf("%s: %v", url, err)
 			}
 			want := 1
@@ -37,10 +44,10 @@ func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
 			if len(calls) != want {
 				t.Fatalf("calls: %v", calls)
 			}
-			if !reflect.DeepEqual(calls[0], []string{"api", "repos/example/app/issues?state=open&per_page=100", "--paginate", "--slurp"}) {
+			if !reflect.DeepEqual(calls[0], []string{apiCommand, "repos/example/app/issues?state=open&per_page=100", "--paginate", "--slurp"}) {
 				t.Fatal(calls[0])
 			}
-			if tc.wantWrite && !reflect.DeepEqual(calls[1], []string{"api", "repos/example/app/issues/2", "--method", "PATCH", "-f", "body=" + tc.body}) {
+			if tc.wantWrite && !reflect.DeepEqual(calls[1], []string{apiCommand, "repos/example/app/issues/2", "--method", "PATCH", "-f", "body=" + tc.body}) {
 				t.Fatal(calls[1])
 			}
 		})
@@ -50,12 +57,12 @@ func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
 func TestPlaceNeverCreatesOnUnreadOrAmbiguousInventory(t *testing.T) {
 	for _, raw := range []string{`broken`, `null`, `[]`, `[null]`, `[[{"number":1,"title":"Queue stalls"},{"number":2,"title":"Queue stalls"}]]`} {
 		count := 0
-		_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { count++; return []byte(raw), nil }, Report{Repo: "example/app", Title: "Queue stalls", Body: "Facts"})
+		_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { count++; return []byte(raw), nil }, Report{Repo: "example/app", Title: findingTitle, Body: findingBody})
 		if err == nil || count != 1 {
 			t.Fatalf("%q: calls=%d error=%v", raw, count, err)
 		}
 	}
-	_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { return []byte(`[[]]`), nil }, Report{Repo: "example/app", Number: 9, Title: "Queue stalls", Body: "Facts"})
+	_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { return []byte(`[[]]`), nil }, Report{Repo: "example/app", Number: 9, Title: findingTitle, Body: findingBody})
 	if !errors.Is(err, ErrUnplaced) {
 		t.Fatal(err)
 	}
@@ -68,12 +75,12 @@ func TestPlaceCreatesOneIssueAndIgnoresPulls(t *testing.T) {
 		if calls == 1 {
 			return []byte(`[[{"number":1,"title":"Queue stalls","pull_request":{}}]]`), nil
 		}
-		if !reflect.DeepEqual(args, []string{"api", "repos/example/app/issues", "--method", "POST", "-f", "title=Queue stalls", "-f", "body=Facts"}) {
+		if !reflect.DeepEqual(args, []string{apiCommand, "repos/example/app/issues", "--method", "POST", "-f", "title=Queue stalls", "-f", "body=Facts"}) {
 			t.Fatal(args)
 		}
 		return []byte(`{"number":2}`), nil
-	}, Report{Repo: "example/app", Title: "Queue stalls", Body: "Facts"})
-	if err != nil || calls != 2 || url != "https://github.com/example/app/issues/2" {
+	}, Report{Repo: "example/app", Title: findingTitle, Body: findingBody})
+	if err != nil || calls != 2 || url != findingURL {
 		t.Fatalf("%s %v calls=%d", url, err, calls)
 	}
 }
@@ -81,7 +88,7 @@ func TestPlaceCreatesOneIssueAndIgnoresPulls(t *testing.T) {
 func TestParseRequiresExplicitOwnerAndCurrentDescription(t *testing.T) {
 	for _, text := range []string{"example/app: Queue stalls\n\nFacts", "https://github.com/example/app/issues/2: Queue stalls\n\nFacts"} {
 		r, ok := Parse(text)
-		if !ok || r.Repo != "example/app" || r.Body != "Facts" || r.Title != "Queue stalls" {
+		if !ok || r.Repo != "example/app" || r.Body != findingBody || r.Title != findingTitle {
 			t.Fatalf("%+v %v", r, ok)
 		}
 		if strings.Contains(text, "issues/2") && r.Number != 2 {
@@ -109,12 +116,12 @@ func TestPlacementRetryRecoversAnIssueWhoseCreateResponseWasLost(t *testing.T) {
 		}
 		return []byte(`[[]]`), nil
 	}
-	report := Report{Repo: "example/app", Title: "Queue stalls", Body: "Facts"}
+	report := Report{Repo: "example/app", Title: findingTitle, Body: findingBody}
 	if _, err := Place(context.Background(), gh, report); err == nil {
 		t.Fatal("lost response was ignored")
 	}
 	url, err := Place(context.Background(), gh, report)
-	if err != nil || posts != 1 || url != "https://github.com/example/app/issues/2" {
+	if err != nil || posts != 1 || url != findingURL {
 		t.Fatalf("retry: %s %v, creates=%d", url, err, posts)
 	}
 }

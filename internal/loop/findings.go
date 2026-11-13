@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/findings"
@@ -15,7 +16,7 @@ import (
 // description over newer facts. Keep identities rather than report text.
 func (l *Loop) placeFinding(ctx context.Context, report findings.Report) (string, error) {
 	const receiptsFile = "supervisor-findings.json"
-	receipts := map[string]string{}
+	receipts := map[string][]string{}
 	if _, err := l.Host.Store().ReadFile(receiptsFile, &receipts); err != nil {
 		return "", err
 	}
@@ -24,8 +25,17 @@ func (l *Loop) placeFinding(ctx context.Context, report findings.Report) (string
 		return "", err
 	}
 	key := fmt.Sprintf("%x", sha256.Sum256(raw))
-	if url := receipts[key]; url != "" {
-		return url, nil
+	if urls := receipts[key]; len(urls) > 0 {
+		if report.Number > 0 {
+			target := fmt.Sprintf("https://github.com/%s/issues/%d", report.Repo, report.Number)
+			if slices.Contains(urls, target) {
+				return target, nil
+			}
+		} else if len(urls) == 1 {
+			return urls[0], nil
+		} else {
+			return "", fmt.Errorf("%w: identical reports name multiple issues", findings.ErrUnplaced)
+		}
 	}
 	var url string
 	err = l.Host.LoopGitHub(ctx, "file finding", func() error {
@@ -36,7 +46,7 @@ func (l *Loop) placeFinding(ctx context.Context, report findings.Report) (string
 	if err != nil {
 		return "", err
 	}
-	receipts[key] = url
+	receipts[key] = append(receipts[key], url)
 	if err := l.Host.Store().WriteFile(receiptsFile, receipts); err != nil {
 		return "", err
 	}

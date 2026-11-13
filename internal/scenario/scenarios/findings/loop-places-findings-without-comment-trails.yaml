@@ -22,6 +22,12 @@ given:
             title: Queue stalls
             body: The queue stalls.
             board: Backlog
+  harness:
+    workers:
+      - name: reporter
+        turns: [{outcome: finish}]
+      - name: observer
+        turns: [{outcome: finish}]
   calls:
     - program: devctl
       args: [auth, status]
@@ -34,10 +40,12 @@ when:
     expect: [{exit: 0}]
   - run: {args: [supervisor, loop, --once]}
     expect: [{exit: 0}]
-  - run: {args: [--as, reporter, agents, register, reporter]}
+  - run:
+      args: [--as, supervisor loop, agents, start, reporter, /work/worker.txt, --harness, claude, --model, sonnet, --task, Investigate queue findings]
     expect: [{exit: 0}]
-  - run: {args: [--as, supervisor loop, agents, assign, reporter, Investigate queue findings]}
-    expect: [{exit: 0}]
+  - wait_for:
+      timeout: 15s
+      expect: [{worker: {name: reporter, outcome: finish}}]
   - advance: 1s
   - run:
       args: [--as, reporter, agents, problem, "example/app: Queue stalls\n\nThe queue stalls."]
@@ -62,10 +70,12 @@ when:
   - run: {args: [supervisor, loop, --once]}
     expect: [{exit: 0}]
   # A different assignment repeats both reports after each loop process exited.
-  - run: {args: [--as, observer, agents, register, observer]}
+  - run:
+      args: [--as, supervisor loop, agents, start, observer, /work/worker.txt, --harness, claude, --model, sonnet, --task, Check reported findings]
     expect: [{exit: 0}]
-  - run: {args: [--as, supervisor loop, agents, assign, observer, Check reported findings]}
-    expect: [{exit: 0}]
+  - wait_for:
+      timeout: 15s
+      expect: [{worker: {name: observer, outcome: finish}}]
   - advance: 1s
   - run:
       args: [--as, observer, agents, problem, "example/app: Queue stalls\n\nThe queue stalls."]
