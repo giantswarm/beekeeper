@@ -36,8 +36,8 @@ state and head), the standing instructions (standing.md in the state directory,
 in full),
 open notes with their defaults, the decisions answered
 within 72 hours, timers, the configuration overrides in effect (config set
---until) with their reasons and ends, what the alert watch reads and the latest
-events. Everything comes from the state and the machine, so a reader acts
+--until) with their reasons and ends, the pace overrides in effect (capacity
+pace off), what the alert watch reads and the latest events. Everything comes from the state and the machine, so a reader acts
 on it instead of a prose brief.
 
 It shows what a reader acts on first: the notes the
@@ -80,6 +80,7 @@ complete.`,
 			}
 			agents := a.agentViews(v.st, v.raw)
 			holds := a.activeHolds(v.st)
+			paceOffs := activePaceOffs(v.st, a.now)
 			al, err := a.alertsHandover(cmd.Context())
 			if err != nil {
 				return err
@@ -103,9 +104,10 @@ complete.`,
 					Answered   []answered       `json:"answered"`
 					Timers     []state.Timer    `json:"timers"`
 					Overrides  []state.Override `json:"overrides"`
+					PaceOffs   []state.PaceOff  `json:"paceOffs"`
 					Alerts     *alertsView      `json:"alerts"`
 					Events     []state.Event    `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, bv, ep, v.st.Notes, ans.All, v.st.Timers, v.st.Overrides, al, evs})
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, bv, ep, v.st.Notes, ans.All, v.st.Timers, v.st.Overrides, paceOffs, al, evs})
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
@@ -140,6 +142,7 @@ complete.`,
 				{"answers", "Answers", func(all bool) { a.printAnswers(ans, all) }},
 				{"timers", "Timers", func(bool) { a.printTimers(v.st.Timers, false) }},
 				{"overrides", "Configuration overrides", func(bool) { a.printOverrides(v.st.Overrides) }},
+				{"pace", "Pace overrides", func(bool) { a.printPaceOffs(paceOffs) }},
 				{"alerts", "Alerts", func(bool) { a.printAlerts(al) }},
 				{"events", "Latest events", func(bool) {
 					for _, e := range evs {
@@ -190,7 +193,7 @@ complete.`,
 }
 
 // handoverSections names the sections --section takes, in their order.
-const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, board-holds, epics, standing, notes, answers, timers, overrides, alerts, events"
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, board-holds, epics, standing, notes, answers, timers, overrides, pace, alerts, events"
 
 // epicsView is the board's epics in planning and past their go with their
 // plans, or why they were not read; nil without a board.

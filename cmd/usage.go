@@ -1588,6 +1588,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
+	withPaceOffs(readings, st, w.now)
 	v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, k, readings, h, false, nil, capacity.ForWorker, w.now), w.app, st)
 
 	var parts []string

@@ -400,6 +400,7 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			SlotsFree:        1,
 			MaxLabs:          1,
 		}
+		withPaceOffs(readings, st, target.now)
 		v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, capacity.StartKind(f.review, f.ofSelfHosted), target.now), &target, st)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {

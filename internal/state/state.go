@@ -696,6 +696,30 @@ type OverrideKey struct {
 	rest rest
 }
 
+// PaceOff is the person's word that worker starts on a subscription provider
+// may run ahead of its 7-day pace (capacity pace off), such as a usage reset
+// in hand: until Until, and only within the 7-day window current at At. The
+// window's caps and the 5-hour window still bound the starts.
+type PaceOff struct {
+	Provider string    `json:"provider"`
+	Until    time.Time `json:"until"`
+	Reason   string    `json:"reason"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+
+	rest rest
+}
+
+// PaceOff is the pace override of provider in effect at now, nil for none.
+func (st *State) PaceOff(provider string, now time.Time) *PaceOff {
+	for i := range st.PaceOffs {
+		if p := &st.PaceOffs[i]; strings.EqualFold(p.Provider, provider) && now.Before(p.Until) {
+			return p
+		}
+	}
+	return nil
+}
+
 // Looked reports whether someone has to look at the timer by now: a plain
 // timer whose time has come. An auto timer is the watch's to act on.
 func (t Timer) Looked(now time.Time) bool { return !t.Auto() && !t.Due.After(now) }
@@ -1342,6 +1366,9 @@ type State struct {
 	// set --until).
 	Overrides    []Override `json:"overrides,omitempty"`
 	NextOverride int        `json:"nextOverride,omitempty"`
+	// PaceOffs are the providers whose worker starts may run ahead of their
+	// 7-day pace for a while (capacity pace off).
+	PaceOffs []PaceOff `json:"paceOffs,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
 	// Claims are the records this desk published on GitHub as claims
