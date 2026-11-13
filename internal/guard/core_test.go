@@ -61,6 +61,55 @@ func TestCoreCommandOptIn(t *testing.T) {
 	}
 }
 
+// The wrapper lowers a soft core limit that is above zero, as a container
+// with unlimited core limits starts with, under each POSIX shell the machine
+// has: dash applies only the last of -S and -H
+// (https://github.com/giantswarm/beekeeper/issues/3863).
+func TestCoreCommandLowersARaisedSoftLimitInEachShell(t *testing.T) {
+	var inherited syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_CORE, &inherited); err != nil {
+		t.Fatal(err)
+	}
+	if inherited.Max == 0 {
+		t.Skip("the hard core limit is 0: no soft limit can start above zero")
+	}
+	var shells []string
+	seen := map[string]bool{}
+	for _, name := range []string{"sh", "dash", "bash"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		// Run the shell by the name found: a multi-call binary dispatches on it.
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			resolved = path
+		}
+		if !seen[resolved] {
+			seen[resolved] = true
+			shells = append(shells, path)
+		}
+	}
+	if len(shells) == 0 {
+		t.Skip("no POSIX shell on PATH")
+	}
+	for _, shell := range shells {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			wrapped := coreCommand([]string{shell, "-c", "ulimit -S -c; ulimit -H -c"}, false)
+			wrapped[0] = shell
+			raise := []string{shell, "-c", `ulimit -S -c "$(ulimit -H -c)" || exit 99; exec "$@"`, "raise"}
+			argv := slices.Concat(raise, wrapped)
+			out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // owned test command
+			if err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			if string(out) != "0\n0\n" {
+				t.Fatalf("limits after the wrapper %q, want soft and hard 0", out)
+			}
+		})
+	}
+}
+
 func TestCoreCommandPreservesLimitsAndArguments(t *testing.T) {
 	var inherited syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_CORE, &inherited); err != nil {

@@ -59,7 +59,9 @@ func Main() (code int, served bool) {
 		return gitRemote(), true
 	}
 	hostTool := name == "go" || name == "gh"
-	if !slices.Contains(Programs, name) && !hostTool {
+	// The builder's kubectl on the desk, and the image's tools in its pod.
+	builderTool := name == Kubectl || inBuilder() && slices.Contains(BuilderTools, name)
+	if !slices.Contains(Programs, name) && !hostTool && !builderTool {
 		return 0, false
 	}
 	socket := socketPath()
@@ -133,8 +135,10 @@ func (c *client) run() int {
 	case "ssh":
 		modeled = true
 	case "go":
-		modeled = len(c.args) == 1 && c.args[0] == "version"
+		modeled = inBuilder() || len(c.args) == 1 && c.args[0] == "version"
 	case "gh":
+		modeled = true
+	case Kubectl, "golangci-lint":
 		modeled = true
 	}
 	stdin := ""
@@ -171,10 +175,17 @@ func (c *client) run() int {
 	case "ssh":
 		return ssh(c)
 	case "go":
+		if inBuilder() {
+			return builderGo(c)
+		}
 		fmt.Printf("go version go%s linux/amd64\n", toolVersion(c.exe))
 		return 0
 	case "gh":
 		return hostGh(c)
+	case Kubectl:
+		return kubectl(c)
+	case "golangci-lint":
+		return builderLint(c)
 	}
 	return 1
 }

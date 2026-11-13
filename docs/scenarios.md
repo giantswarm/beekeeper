@@ -226,7 +226,9 @@ count only the calls since that step. With `quiet`, each step first waits
 until the desk has been quiet that long: no process armed a timer on the
 clock and no fake was called. The work the last step woke is then done and
 waits on the clock again, so the step reaches it; without `quiet`, a timer
-armed a moment after a step would wait for the next one. Each step goes to
+armed a moment after a step would wait for the next one. `quiet` is at most
+5 s; a desk that does not rest that long within 30 s fails the step, which
+names how long ago it was last busy. Each step goes to
 the scenario's `clock.jsonl` artifact: the world's time, the processes that
 acknowledged it, how many timers fired, how long it took and how long it
 waited for quiet.
@@ -475,3 +477,56 @@ The `host` step changes a host's faults while the scenario runs:
 `host: {name: builder, fault: unreachable}`, `host: {name: builder, slow: 2s}`
 or `host: {name: builder, clear: true}`. `older-go` is part of a host's
 provisioning and only `given.hosts` names it.
+
+### The builder
+
+`given.builder` gives the desk the Kubernetes builder of its remote builds
+([Remote build slots](remote-builds.md)) without a cluster. The driver sets
+the desk's `run.remote` and puts a fake `kubectl` on its `PATH`.
+
+```yaml
+given:
+  builder:
+    tools: [go]                      # the Go image's toolchain: go, golangci-lint
+```
+
+- **`kubectl`** keeps the Jobs the desk creates and answers `get`, `create`,
+  `wait` and `delete` from them. `exec` runs its command in place, under the
+  Job's container environment and the image's `PATH`, so the desk's own
+  upload, launch and follow scripts run as they are. A pod's `/work` is the
+  sandbox's: one builder runs at a time, and deleting its Job empties it.
+- **The image** is `/work/builder/bin`: the system's shell and coreutils,
+  and a fake for each of `tools`. An image without `golangci-lint` is one
+  the desk's merge validation installs the linter into.
+- **`go`** in the pod passes every build, vet and test. `go install` puts
+  the fake of the tool it names into `GOBIN`, as the real one puts the
+  tool there. **`golangci-lint`** reports no findings.
+
+Every call of `kubectl`, `go` and `golangci-lint` is in the world's call
+log, so `calls` expectations may name them. The image's tools are the
+pod's, apart from `given.tools` on the desk's `PATH`, and no tool there may
+be named `kubectl`.
+
+### A generated desk
+
+`given.state` seeds the desk's state before the first step. `generate` fills
+it like a coordinator's that has worked for weeks, at rest: idle workers on
+the roster, serve records of sessions that ended, deliveries in flight (each
+with a pull request under review), finished workers' reports and an event
+log. Every command reads all of it, which is what a large desk costs.
+
+```yaml
+given:
+  state:
+    generate:
+      repository: example/app        # default: the scenario's first
+      agents: 120                    # idle workers, each with its start
+      records: 1500                  # serve records of ended sessions
+      deliveries: 1200               # deliveries in flight
+      reports: 3000                  # reports, about a kibibyte each
+      events: 20000                  # events, about 400 bytes each
+```
+
+The issues and pull requests it names (numbers from 10000 on) are not on the
+scenario's GitHub. A scenario that runs a loop on a generated desk sees that
+loop read them and find nothing.

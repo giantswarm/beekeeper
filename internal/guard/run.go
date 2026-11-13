@@ -1222,5 +1222,11 @@ func coreCommand(argv []string, core bool) []string {
 	if core {
 		return argv
 	}
-	return append([]string{"sh", "-c", "ulimit -S -H -c 0 || exit 1; exec \"$@\"", "beekeeper-run"}, argv...)
+	return append([]string{"sh", "-c", coreProgram, "beekeeper-run"}, argv...)
 }
+
+// coreProgram lowers the soft limit before the hard one. dash, the sh of
+// Debian and Ubuntu, applies only the last of -S and -H: one ulimit with
+// both would lower only the hard limit and fail while the soft one is above
+// it.
+const coreProgram = `ulimit -S -c 0 && ulimit -H -c 0 || exit 1; exec "$@"`
