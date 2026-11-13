@@ -1,0 +1,115 @@
+name: ssh-review-park-explains-unpublished-head
+description: >
+  An SSH worker parks for desk review with a commit it has not published.
+  Both text and JSON explain why the coordinator recorded only a plain
+  wait. Publishing that commit and parking again records review authority;
+  once CI is green the supervisor starts the review without a hand start.
+issue: https://github.com/giantswarm/beekeeper/issues/3575
+flow: regression
+tags: [regression, hosts, park, review]
+timeout: 150s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The task}
+  harness:
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: host-worker
+        host: builder
+        turns:
+          - steps:
+              - write: {path: change.txt, content: "the published change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, "feat: the change"]
+              - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
+              - beekeeper: [agents, publish, --title, "feat: the change", --body-file, '${dir}/.beekeeper-scratch/body.md']
+              - write: {path: change.txt, content: "the unpublished correction\n"}
+              - git: [commit, --quiet, -am, "fix: the correction"]
+              - beekeeper: [agents, park, --on, 'example/app#2', desk review]
+                save: plain
+              - beekeeper: [--json, agents, park, --on, 'example/app#2', desk review]
+                save: json
+              # Keep both command responses on the coordinator so the
+              # scenario asserts their contents outside the worker.
+              - beekeeper: [agents, note, "Text: ${plain}\nJSON: ${json}"]
+              - beekeeper: [agents, publish]
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+      - name: 'Review app 2 r1'
+        turns:
+          - outcome: hang
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+
+when:
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The loop must have started before the worker hands its head over.
+  - name: first
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 2s
+  - name: worker
+    run:
+      args: [--as, supervisor loop, agents, start, host-worker, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 40s
+      expect:
+        - worker: {name: host-worker, host: builder, turns: 1, outcome: finish}
+  - name: diagnostics
+    run: {args: [log, --verb, agents.note]}
+    expect:
+      - output:
+          contains:
+            - 'Text: park recorded on coordinator; plain wait recorded'
+            - 'verification reason: published HEAD does not match the workspace HEAD'
+            - 'JSON: {'
+            - '"message": "park recorded on coordinator; plain wait recorded'
+          # The JSON message contains the same diagnostic as plain text.
+          matches: '(?s)JSON:.*"message":.*verification reason: published HEAD does not match the workspace HEAD'
+  - advance: 2s
+  - name: parked
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park], not_contains: [supervisor.review]}
+  - name: green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - advance: 2s
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 40s
+      expect:
+        - worker: {name: 'Review app 2 r1', turns: 1, outcome: hang}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: open, ahead: 2}}
+  - github: {calls: {operation: createPullRequest, min: 1, max: 1}}
+  - events:
+      contains: [execution.published, agents.park, supervisor.review]
+      not_contains: [execution.publish-denied, session.report-rejected]

@@ -199,7 +199,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		}
 		return fmt.Appendf(nil, `{"draft":%t,"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, draft, branch, prHead, repo), nil
 	}
-	park := func(p executionPark) string {
+	park := func(p executionPark, reasons ...string) string {
 		t.Helper()
 		var line string
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -221,6 +221,14 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		if !strings.Contains(line, parkReviewMode(got)) {
 			t.Fatalf("park %+v: %s", st.Agents[0].Park, line)
 		}
+		for _, reason := range reasons {
+			if !strings.Contains(line, "verification reason: "+reason) {
+				t.Fatalf("park missing reason %q: %s", reason, line)
+			}
+		}
+		if got != "" && strings.Contains(line, "verification reason:") {
+			t.Fatalf("verified park reported a failure: %s", line)
+		}
 		return got
 	}
 	n := reads
@@ -228,7 +236,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("plain park recorded %q after %d reads", got, reads-n)
 	}
 	draft = true
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}, parkDraftReason); got != "" {
 		t.Fatalf("draft park recorded %q", got)
 	}
 	draft = false
@@ -242,7 +250,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("older host's park recorded %q", got)
 	}
 	// Unpublished commits on the workspace: a plain wait.
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "published HEAD does not match the workspace HEAD"); got != "" {
 		t.Fatalf("park ahead of the published head recorded %q", got)
 	}
 	// A new push, then a re-park at it: the new head's review request.
@@ -253,23 +261,34 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	// A host's own claim is no proof: another branch's pull request, a fork's
 	// or one in another repository is a plain wait.
 	branch = "feature"
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed, ReviewHead: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed, ReviewHead: pushed}, "pull request head branch is not owned by this execution"); got != "" {
 		t.Fatalf("another branch's pull request recorded %q", got)
 	}
 	branch, repo = executionBranch(r.Ref), "fork/beekeeper"
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "pull request head repository does not match the target repository"); got != "" {
 		t.Fatalf("a fork's pull request recorded %q", got)
 	}
 	repo = sshTestRepository
 	n = reads
-	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}); got != "" || reads != n {
+	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}, "target repository does not match the execution repository"); got != "" || reads != n {
 		t.Fatalf("another repository's pull request recorded %q after %d reads", got, reads-n)
 	}
 	if got := park(executionPark{Waits: "no target"}); got != "" || reads != n {
 		t.Fatalf("a park without a target recorded %q", got)
 	}
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: "invalid"}, "workspace HEAD is not a full commit ID"); got != "" || reads != n {
+		t.Fatalf("an invalid workspace head recorded %q after %d reads", got, reads-n)
+	}
+	prHead = "invalid"
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request response has no valid head commit"); got != "" {
+		t.Fatalf("an invalid published head recorded %q", got)
+	}
+	executionReviewGH = func(context.Context, ...string) ([]byte, error) { return []byte("invalid JSON"), nil }
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request response could not be decoded"); got != "" {
+		t.Fatalf("an invalid pull response recorded %q", got)
+	}
 	executionReviewGH = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("unreachable") }
-	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}, "GitHub pull request lookup failed"); got != "" {
 		t.Fatalf("an unread pull request recorded %q", got)
 	}
 }
