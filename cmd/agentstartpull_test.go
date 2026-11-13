@@ -26,10 +26,11 @@ func TestPullRequestTaskFinishesWithItsMerge(t *testing.T) {
 	for _, tc := range []struct {
 		name, brief, kind string
 		served, pulls     []string
+		wantDelivery      bool
 	}{
-		{name: "pull request task", brief: "Prove https://github.com/example/app/pull/7 on main.", served: []string{pull}, pulls: []string{pull}},
+		{name: "pull request task", brief: "Prove https://github.com/example/app/pull/7 on main.", served: []string{pull}, pulls: []string{pull}, wantDelivery: true},
 		{name: "issue task", brief: "Fix https://github.com/example/app/issues/3.\nSee https://github.com/example/app/pull/7 for context.", served: []string{"example/app#3"}},
-		{name: "reviewer", brief: "Review https://github.com/example/app/pull/7.", kind: capacity.TaskKindReview, served: []string{pull}},
+		{name: "reviewer", brief: "Review https://github.com/example/app/pull/7.", kind: capacity.TaskKindReview, served: []string{pull}, pulls: []string{pull}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := stubApp(t)
@@ -47,10 +48,13 @@ func TestPullRequestTaskFinishesWithItsMerge(t *testing.T) {
 			}
 			startPullDeliveries(st, s, pulls)
 			holds := slices.ContainsFunc(st.Deliveries, func(d state.Delivery) bool { return slices.Contains(d.Pulls, pull) })
-			if holds != (len(tc.pulls) > 0) {
-				t.Fatalf("a delivery holds %s: %v, want %v (%+v)", pull, holds, len(tc.pulls) > 0, st.Deliveries)
+			if holds != tc.wantDelivery {
+				t.Fatalf("a delivery holds %s: %v, want %v (%+v)", pull, holds, tc.wantDelivery, st.Deliveries)
 			}
-			if len(tc.pulls) == 0 {
+			if tc.kind == capacity.TaskKindReview && len(st.Deliveries) != 0 {
+				t.Fatalf("a reviewer owns no delivery, got %+v", st.Deliveries)
+			}
+			if !tc.wantDelivery {
 				return
 			}
 			merged := func(context.Context, []github.PR) (map[github.PR]github.RefState, error) {

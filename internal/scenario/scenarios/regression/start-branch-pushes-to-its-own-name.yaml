@@ -1,0 +1,62 @@
+name: start-branch-pushes-to-its-own-name
+description: >
+  A worker started by hand with --branch works in a new worktree from the
+  freshly fetched origin/main, in a checkout whose own push.default is
+  upstream. Its branch's upstream is its own name on origin, never main: the
+  worker's git push -u origin <branch> and its plain git push both land on
+  that branch, two commits ahead of main, which they leave as it was. Live,
+  the branch tracked origin/main and the worker's push went to main.
+issue: https://github.com/giantswarm/beekeeper/issues/3858
+flow: regression
+tags: [regression, worktree, git]
+timeout: 60s
+
+given:
+  repositories:
+    - name: example/app
+      # The person's checkout overrides the global push.default=current.
+      checkout:
+        config: {push.default: upstream}
+  harness:
+    workers:
+      - name: app-worker
+        harness: claude
+        turns:
+          - steps:
+              # The start's worktree: <stateDir>/worktrees/<repo>/<branch>.
+              - write: {path: /work/state/worktrees/app/app-worker/one.txt, content: "the first change\n"}
+              - git: [add, one.txt]
+                dir: /work/state/worktrees/app/app-worker
+              - git: [commit, --quiet, -m, "feat: the first change"]
+                dir: /work/state/worktrees/app/app-worker
+              - git: [push, --quiet, -u, origin, app-worker]
+                dir: /work/state/worktrees/app/app-worker
+              - write: {path: /work/state/worktrees/app/app-worker/two.txt, content: "the second change\n"}
+              - git: [add, two.txt]
+                dir: /work/state/worktrees/app/app-worker
+              - git: [commit, --quiet, -m, "feat: the second change"]
+                dir: /work/state/worktrees/app/app-worker
+              - git: [push, --quiet]
+                dir: /work/state/worktrees/app/app-worker
+            reply: pushed
+  calls:
+    # The desk has no token of its own.
+    - program: gh
+      args: [auth, token]
+      respond: {stderr: "no oauth token found for github.com\n", exit: 1}
+
+when:
+  - name: start
+    run:
+      args: [--as, guide, agents, start, app-worker, /work/worker.txt, --dir, /work/checkouts/example/app, --branch, app-worker, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app-worker, outcome: finish}
+
+then:
+  - events: {contains: [agents.start]}
+  - worker: {name: app-worker, harness: claude, turns: 1, outcome: finish}
+  - origin: {repository: example/app, branch: app-worker, ahead: 2}

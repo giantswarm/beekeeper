@@ -16,7 +16,11 @@ import (
 // (.circleci/scenario-control.sh): every scenario it adds or changes runs
 // against the candidate built from its merge base, the source tree that
 // BEEKEEPER_SCENARIO_CONTROL_BASE names, and must fail there on an
-// assertion. Without the variable it skips.
+// assertion. Without the variable it skips. Under BEEKEEPER_SCENARIO_SHARD
+// it controls the scenarios of that shard, the ones the shard's suite runs.
+//
+// control: none: it gains only the shard filter, which the merge base
+// lacks; the control itself is unchanged and runs in CI's step
 func TestScenarioControl(t *testing.T) {
 	base := os.Getenv(ControlEnv)
 	if base == "" {
@@ -26,11 +30,15 @@ func TestScenarioControl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the pull request's scenarios do not load, so the control shows nothing: %v", err)
 	}
-	plan, err := PlanControl(all, "scenarios", filepath.Join(base, "internal", "scenario", "scenarios"))
+	sh := shard(t)
+	plan, err := PlanControl(sh.Of(all), "scenarios", filepath.Join(base, "internal", "scenario", "scenarios"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	rep := &ControlReport{Base: "the merge base at " + base}
+	if sh.Total > 1 {
+		rep.Base += ", shard " + sh.String()
+	}
 	for _, c := range plan.Skip {
 		rep.Entry(c).OK = true
 	}

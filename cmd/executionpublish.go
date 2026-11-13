@@ -524,7 +524,17 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if err != nil {
 			return result, err
 		}
-		if result.Head != p.Head || p.Shallow || hasHeadErr != nil {
+		// A workspace whose pinned commit holds the default branch, as a
+		// continuation pinned at its pull request's head can, is up to date:
+		// the base beyond that commit is an empty bundle, and the whole
+		// history the host retries with exceeds the transfer limit in a
+		// large repository.
+		upToDate := false
+		if !p.Shallow && hasHeadErr == nil {
+			_, behindErr := publishGit(ctx, repo, "merge-base", "--is-ancestor", "refs/heads/base", p.Head)
+			upToDate = behindErr == nil
+		}
+		if !upToDate {
 			bundleArgs := []string{"bundle", "create", bundlePath, "refs/heads/base"}
 			if !p.Shallow && hasHeadErr == nil {
 				bundleArgs = append(bundleArgs, "^"+p.Head)
@@ -975,7 +985,15 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			}
 			result, syncErr := fetchSyncBaseBundle(ctx, s, j, workspace, bundlePath, shallow)
 			if syncErr != nil && !shallow {
-				result, syncErr = fetchSyncBaseBundle(ctx, s, j, workspace, bundlePath, true)
+				// The whole history heals a workspace that lacks some of it; a
+				// retry that fails as well, as one over the transfer limit does,
+				// says nothing of why the first attempt failed, so both are told.
+				var retryErr error
+				if result, retryErr = fetchSyncBaseBundle(ctx, s, j, workspace, bundlePath, true); retryErr != nil {
+					syncErr = fmt.Errorf("%w; the retry with the whole history failed too: %w", syncErr, retryErr)
+				} else {
+					syncErr = nil
+				}
 			}
 			if syncErr != nil {
 				return syncErr

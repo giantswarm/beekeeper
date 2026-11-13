@@ -97,6 +97,14 @@ var BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error
 	return out + errOut, code, err
 }
 
+// decodeRun reads the JSON document a BeekeeperRun printed into v. The
+// output is stdout and then stderr, so the document is its first value: a
+// diagnostic after it (a stale state snapshot's) is no failed read, and
+// output without a document is.
+func decodeRun(out string, v any) error {
+	return json.NewDecoder(strings.NewReader(out)).Decode(v)
+}
+
 // LoopCommand runs a configured command (the classifier, the post-install)
 // with stdin: its stdout, its stderr and its exit code.
 var LoopCommand = RunArgv
@@ -2547,7 +2555,10 @@ func (l *Loop) claim(act superloop.Action, target string) error {
 
 // Reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
-// remove, note add, all logged as the loop), else not, and it runs.
+// remove, note add, all logged as the loop), else not, and it runs. A start
+// on an execution host logs its line at the reservation; one whose
+// reservation was released after it, unacknowledged by the host, started
+// nothing.
 func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Action, c LoopClaim) (string, bool, error) {
 	// Reconciliation runs in background action streams. Its history reads must
 	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
@@ -2567,10 +2578,21 @@ func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Act
 		return slices.ContainsFunc(evs, func(e state.Event) bool { return e.Verb == verb && match(e.Detail) })
 	}
 	opens := func(d string) bool { return strings.HasPrefix(d, c.Target+":") }
+	started := func() bool {
+		last := -1
+		for i, e := range evs {
+			if e.Verb == verbStart && opens(e.Detail) {
+				last = i
+			}
+		}
+		return last >= 0 && !slices.ContainsFunc(evs[last+1:], func(e state.Event) bool {
+			return e.Verb == executionReleasedEvent && opens(e.Detail)
+		})
+	}
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged(verbStart, opens)
+		done = started()
 	case superloop.KindGo:
 		l.Mu.Lock()
 		repairing := l.Stages[act.Key+" repair"]
@@ -3427,7 +3449,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		var capacity struct {
 			Room int `json:"room"`
 		}
-		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+		if readErr != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
 			err = ErrLoopLater
 		}
 	} else {
@@ -3841,7 +3863,7 @@ func roomOpen(out string) bool {
 	var v struct {
 		Room int `json:"room"`
 	}
-	if json.Unmarshal([]byte(out), &v) != nil {
+	if decodeRun(out, &v) != nil {
 		return true
 	}
 	return v.Room > 0
@@ -3878,7 +3900,10 @@ func (l *Loop) PlacesRemotely() bool {
 
 // startPlacement prefers configured execution hosts by default. If none can
 // take the repository and selected task kind, ordinary local capacity is the
-// fallback. Explicit hostsFirst: false retains local-first placement.
+// fallback. Explicit hostsFirst: false retains local-first placement. A host
+// whose pick is another provider than the coordinator's does not take the
+// start while the coordinator's pick is behind its weekly pace and the
+// coordinator has room (PaceYield).
 func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
 	kind := workerRole
 	if review {
@@ -3919,11 +3944,20 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		}
 		return startHost{}, nil
 	}
+	var unacknowledged map[execution.HostID]bool
+	if review {
+		unacknowledged = l.unacknowledgedHosts(name, repo)
+	}
 	for i, selector := range k.Hosts {
 		h, err := l.Host.ExecutionHost(selector)
 		if err != nil {
 			l.RecordHostPlacement(selector, repo, err.Error())
 			l.SayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
+			continue
+		}
+		if unacknowledged[h.Identity] {
+			l.RecordHostPlacement(selector, repo, "never acknowledged the start of "+name)
+			l.SayOnce("host unacknowledged "+selector+" "+name, "SUPERVISOR HOST SKIPPED %s: it never acknowledged the start of %q, which starts elsewhere", selector, name)
 			continue
 		}
 		if !h.AdmitsRepository(repo) {
@@ -3935,6 +3969,14 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		if reason := HostCapacityReason(hostOut, hostCode, hostErr); reason != "" {
 			l.RecordHostPlacement(selector, repo, reason)
 			l.SayOnce("host capacity "+selector+" "+reason, "SUPERVISOR HOST WAITS %s: %s", selector, reason)
+			continue
+		}
+		// The coordinator's pick decides which subscription a start spends
+		// while it is behind its weekly pace: a host that would spend
+		// another provider passes the start to the coordinator's room.
+		if reason := PaceYield(out, hostOut); localReady && reason != "" {
+			l.RecordHostPlacement(selector, repo, reason)
+			l.SayOnce("host pace "+selector+" "+repo, "SUPERVISOR HOST SKIPPED %s for %s: %s", selector, repo, reason)
 			continue
 		}
 		ref, err := l.defaultBranch(ctx, repo)
@@ -3953,6 +3995,24 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		return startHost{}, ErrLoopLater
 	}
 	return startHost{}, nil
+}
+
+// unacknowledgedHosts are the execution hosts that never acknowledged a
+// start of name for repo: its reservation there was released. A reviewer's
+// name is its pull request's round, so the round's next start goes to
+// another host or the coordinator, never back to the host that failed it.
+func (l *Loop) unacknowledgedHosts(name, repo string) map[execution.HostID]bool {
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return nil
+	}
+	hosts := map[execution.HostID]bool{}
+	for _, s := range st.Starts {
+		if r := s.Execution; r != nil && r.Released() && strings.EqualFold(s.Name, name) && strings.EqualFold(r.Request.Repository, repo) {
+			hosts[r.Handle.Ref.Host] = true
+		}
+	}
+	return hosts
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:
@@ -4176,13 +4236,12 @@ func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip [
 		}
 		return nil, failed()
 	}
-	// The output is stdout and then stderr: the document is its first value.
 	var next struct {
 		Pick      json.RawMessage   `json:"pick"`
 		Skipped   []board.Candidate `json:"skipped"`
 		AfterPick []board.Candidate `json:"after_pick"`
 	}
-	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
+	if err := decodeRun(out, &next); err != nil {
 		if code != 0 {
 			return nil, failed()
 		}

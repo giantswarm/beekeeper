@@ -1014,6 +1014,12 @@ beside a finding, it is refused (exit 3). beekeeper delivers them itself: both a
 supervisor to file and hand to a worker; a finding that names its issue's URL
 (`https://github.com/<owner>/<repo>/issues/<n>`) is filed already, and its line says so.
 
+`idle --done` (not `--blocked`) also retires the park of every other worker on the same task
+issue, the one its serve record or else its task names: that worker's task ends as done, its serve
+records and the timers that wake it go (`timer.done`), and an `agents.park-retired` event says so.
+Its wake would only start a session that finds the work done
+([Parking](worker-sessions.md#parking)).
+
 The supervisor loop logs unfiled findings intact in `supervisor.file`; `guide watch` delivers them
 once as `GUIDE PROBLEM` to file in their owning repositories, before the agent leaves the roster.
 These status reports create no decision notes and need no thread reference. Printed reports escape
