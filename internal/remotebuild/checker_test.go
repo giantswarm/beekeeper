@@ -59,6 +59,8 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 		rc       int
 		want     []string
 		not      []string
+		// lacking is what EnvironmentLacking reads of the output.
+		lacking string
 	}{
 		{
 			name:  "image tools",
@@ -68,14 +70,18 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 			not:   []string{"installing", EnvironmentLacks},
 		},
 		{
-			name:  "install",
-			image: map[string]string{"go": install},
-			argv:  []string{"jq", "."},
+			// The repository's CI installs jq with apt: the jq the checker
+			// installs is the one its tests find, so the image lacks nothing.
+			name:     "install",
+			image:    map[string]string{"go": install},
+			packages: []string{"jq"},
+			argv:     []string{"jq", "."},
 			want: []string{
 				"golangci-lint not in builder image; installing " + GolangCILintModule,
 				"jq not in builder image; installing " + GoJQModule,
 				"gojq by TOOLS/" + version(GoJQModule) + "/jq .",
 			},
+			not: []string{EnvironmentLacks},
 		},
 		{
 			name:  "already installed",
@@ -94,12 +100,14 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 			not:   []string{"linted by"},
 		},
 		{
+			// jq is no Debian package of the image, but its program is.
 			name:     "a package the image lacks",
 			image:    map[string]string{"golangci-lint": lint, "jq": jq, "dpkg-query": dpkgQuery},
-			packages: []string{"libasound2-dev", "libfoo"},
+			packages: []string{"jq", "libasound2-dev", "libfoo"},
 			argv:     []string{"jq", "."},
 			want:     []string{"beekeeper run: " + EnvironmentLacks + " libasound2-dev, which the repository CI installs", "jq of the image ."},
-			not:      []string{"libfoo,"},
+			not:      []string{"libfoo,", "lacks jq"},
+			lacking:  EnvironmentLacks + " libasound2-dev, which the repository CI installs",
 		},
 		{
 			name:     "an image without dpkg",
@@ -107,6 +115,7 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 			packages: []string{"libfoo"},
 			argv:     []string{"jq", "."},
 			want:     []string{EnvironmentLacks + " libfoo, which the repository CI installs", "jq of the image ."},
+			lacking:  EnvironmentLacks + " libfoo, which the repository CI installs",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,7 +157,30 @@ func TestCheckerEnvProvidesTheToolsAndNamesWhatItLacks(t *testing.T) {
 					t.Errorf("output has %q: %s", not, text)
 				}
 			}
+			if got := EnvironmentLacking(out.String()); got != tc.lacking {
+				t.Errorf("EnvironmentLacking = %q, want %q: %s", got, tc.lacking, text)
+			}
 		})
+	}
+}
+
+// TestEnvironmentLackingIsTheEnvironmentsOwnLine reads the checker
+// environment's line naming what the image lacks, and only that line: a
+// failing test whose output quotes it stays the check's finding.
+//
+// control: none: EnvironmentLacking is new, so the base cannot build the test
+func TestEnvironmentLackingIsTheEnvironmentsOwnLine(t *testing.T) {
+	lacks := EnvironmentLacks + " libasound2-dev, which the repository CI installs"
+	line := "beekeeper run: " + lacks
+	for _, tc := range []struct{ name, out, want string }{
+		{"the environment's line", "go: downloading example.invalid/x v1.0.0\n" + line + "\n# example.invalid/midi\nFAIL\n", lacks},
+		{"the last line", "beekeeper run: jq not in builder image; installing " + GoJQModule + "\n" + line, lacks},
+		{"a test quoting it", "--- FAIL: TestChecker (0.01s)\n    checker_test.go:9: output has \"" + line + "\"\nFAIL\n", ""},
+		{"none", "--- FAIL: TestCombined (0.00s)\nFAIL\n", ""},
+	} {
+		if got := EnvironmentLacking(tc.out); got != tc.want {
+			t.Errorf("%s: EnvironmentLacking = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -206,5 +238,13 @@ jobs:
 	}
 	if got := CIPackages(t.TempDir()); len(got) != 0 {
 		t.Fatalf("a repository without CI installs %q", got)
+	}
+	// A CI directory linked out of the worktree is not read either.
+	linked := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, ".circleci"), filepath.Join(linked, ".circleci")); err != nil {
+		t.Fatal(err)
+	}
+	if got := CIPackages(linked); len(got) != 0 {
+		t.Fatalf("a CI directory linked out of the worktree installs %q", got)
 	}
 }

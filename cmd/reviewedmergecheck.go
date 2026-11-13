@@ -378,9 +378,8 @@ func mergeCheckHostFailure(out string) bool { return mergeCheckHostDiagnostic(ou
 func mergeCheckHostDiagnostic(out string) string {
 	// The checker's own line names what its environment lacks of what the
 	// repository's CI installs: a check failing there is no branch's finding.
-	if _, lacks, ok := strings.Cut(out, remotebuild.EnvironmentLacks); ok {
-		lacks, _, _ = strings.Cut(lacks, "\n")
-		return remotebuild.EnvironmentLacks + lacks
+	if lacks := remotebuild.EnvironmentLacking(out); lacks != "" {
+		return lacks
 	}
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",

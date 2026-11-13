@@ -43,6 +43,22 @@ var CheckerTools = []CheckerTool{
 // that fails after it is the checker's environment fault, not the branch's.
 const EnvironmentLacks = "checker environment lacks"
 
+// checkerLine starts every line the checker environment prints.
+const checkerLine = "beekeeper run: "
+
+// EnvironmentLacking is the checker environment's line of out naming the
+// packages the image lacks, from EnvironmentLacks on, or "" when out has
+// none. Only the environment's own line counts, which starts a line: a
+// test's output that quotes it is indented, and its failure is the check's.
+func EnvironmentLacking(out string) string {
+	for line := range strings.SplitSeq(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, checkerLine+EnvironmentLacks); ok {
+			return EnvironmentLacks + rest
+		}
+	}
+	return ""
+}
+
 // checkerEnv starts every merge-result command in the builder. $1 holds the
 // Debian packages the repository's CI installs; name and module pairs of
 // CheckerTools follow up to --, then the command. Each tool the image lacks
@@ -50,7 +66,9 @@ const EnvironmentLacks = "checker environment lacks"
 // exits 125, a checker environment failure, so it is never read as a finding
 // of the check. A package the image lacks cannot be installed by the builder's
 // non-root user: the line naming it marks a failing check as the
-// environment's. The builder's non-root user may not write an image's GOPATH
+// environment's. A package named like a program on the command's PATH, such
+// as jq of CheckerTools, is there, whatever put the program there. The
+// builder's non-root user may not write an image's GOPATH
 // (where Go keeps its checksum database cache) or the user's cache directory:
 // installs and the linter keep both in the workspace.
 const checkerEnv = `packages=$1
@@ -72,10 +90,11 @@ done
 shift
 lacking=
 for p in $packages; do
+ type -P "$p" >/dev/null 2>&1 && continue
  [ "$(dpkg-query -W -f='${Status}' "$p" 2>/dev/null)" = "install ok installed" ] || lacking="$lacking $p"
 done
 if [ -n "$lacking" ]; then
- printf 'beekeeper run: ` + EnvironmentLacks + `%s, which the repository CI installs\n' "$lacking" >&2
+ printf '` + checkerLine + EnvironmentLacks + `%s, which the repository CI installs\n' "$lacking" >&2
 fi
 if [ "$1" = golangci-lint ]; then
  export GOPATH=/work/tools/gopath GOLANGCI_LINT_CACHE=${GOLANGCI_LINT_CACHE:-/work/tools/lint-cache}
@@ -105,8 +124,17 @@ const ciFileLimit = 1 << 20
 // apt-get install and apt install commands its scripts run, sorted. A
 // package for another architecture than amd64, the builder's, is left out.
 func CIPackages(root string) []string {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
 	seen := map[string]bool{}
 	for _, pattern := range ciFiles {
+		// The CI directory is the worktree's own, never a link out of it.
+		dir := filepath.Dir(filepath.FromSlash(pattern))
+		if at, err := filepath.EvalSymlinks(filepath.Join(root, dir)); err != nil || at != filepath.Join(resolved, dir) {
+			continue
+		}
 		files, _ := filepath.Glob(filepath.Join(root, pattern))
 		for _, file := range files {
 			// Only a regular file of the worktree: never a link out of it.

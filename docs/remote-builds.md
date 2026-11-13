@@ -52,13 +52,17 @@ than findings of the check.
 The environment also reads the Debian packages the repository's CI installs:
 the `apt-packages` inputs and the literal `apt-get install` and `apt install`
 packages of its GitHub workflows and CircleCI config (`CIPackages`), for amd64.
-The builder's non-root user cannot install them, so the environment checks them
-with `dpkg-query` and names the ones the image lacks on one line (`checker
-environment lacks <packages>`) before the command runs. A check that fails after
-that line is a checker environment finding naming the packages, never a branch
-repair: add them to the builder image. Unlike ordinary worker commands, merge
-validation never falls back locally: an unavailable builder is a checker
-environment finding.
+It reads them only from the worktree's own files and directories, never through
+a link out of the worktree. The builder's non-root user cannot install them, so
+the environment checks them with `dpkg-query` and names the ones the image
+lacks on one line (`beekeeper run: checker environment lacks <packages>`) before
+the command runs. A package named like a program on the command's `PATH`, such
+as `jq` from the list above, is there whatever put it there. A check that fails
+after that line is a checker environment finding naming the packages, never a
+branch repair: add them to the builder image. Only the environment's own line,
+at the start of a line, counts: a test's output that quotes it is the check's.
+Unlike ordinary worker commands, merge validation never falls back locally:
+an unavailable builder is a checker environment finding.
 Each validation attempt owns an isolated worktree and retires its builder when
 finished. One environment failure triggers one clean retry; actual code failures
 do not retry. Existing builders need retirement after changing resource settings.
