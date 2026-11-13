@@ -90,7 +90,12 @@ host answers its release and policy digest; once its check (agents hosts
 check) passes with that digest, the digest is the host's pin.
 
 While executions are in a turn on the host nothing changes and the host
-waits to update (exit 3); compatible hosts still take new starts. An
+waits to update (exit 3). A host pinned to an older release than the
+coordinator's drains: it takes no new start until its update succeeds, so
+the executions on it reach the turn boundary the update waits for, and the
+supervisor loop updates it at the first pass that finds them there. A host
+behind for more than one release or for longer than an hour is handed on
+once as the loop's finding. An
 execution between turns, a parked worker's waiting for its wake, does not
 hold the update back: the host updates under it, its next turn begins on the
 updated host, and the coordinator rebinds it to the pinned policy (as agents
@@ -100,8 +105,9 @@ and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
 whenever its release differs from the coordinator's, and retries a held host
 hourly. During the coordinator's probation, updates wait without holding
-hosts or recording a failed attempt. Compatible older hosts keep taking starts;
-their live protocol, identity, capabilities and pinned policy are still checked.
+hosts or recording a failed attempt, and compatible older hosts keep taking
+starts; their live protocol, identity, capabilities and pinned policy are
+still checked.
 The next pass targets the coordinator's
 release after its verdict, including its recovery release after rollback.
 If the coordinator rolls back during a host's probation, the host
@@ -115,7 +121,8 @@ anonymously, and hands it to the host: the host downloads the binary and
 its bundle from the release's public download URLs and asks GitHub's API
 nothing, so a host without a GitHub login, whose anonymous API limit its IP
 may share, updates all the same. A failed lookup delays only the update,
-a rate limit named with its reset; the current host policy remains admitted.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+a rate limit named with its reset; the current host policy remains admitted
+and the host takes starts until the lookup is retried.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		line, err := a.updateExecutionHost(cmd.Context(), args[0])
 		if err != nil {
 			return err
@@ -385,7 +392,7 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 		}
 		pin.Version, pin.PolicyDigest, pin.Tools, pin.PinnedAt = version, x.PolicyDigest, maps.Clone(caps.Tools), now
 		pin.Held, pin.HeldAt, pin.HeldVersion, pin.Reported = "", time.Time{}, "", false
-		pin.Behind, pin.BehindReported = "", false
+		pin.Behind, pin.BehindSince, pin.BehindReported = "", time.Time{}, false
 		return []state.Event{event(by, "agents.host-pinned", "%s on %s, policy %s", selector, version, x.PolicyDigest)}, nil
 	}); serr != nil {
 		return "", serr
@@ -551,7 +558,9 @@ func pinnedHost(st *state.State, selector string, h execution.Host) execution.Ho
 }
 
 // admitExecution says whether the host selector takes a new start: not
-// while an installation is held. Release equality is not compatibility:
+// while an installation is held, nor, once the coordinator's probation
+// passed, while the host drains for the coordinator's release
+// (loop.HostDrains). Release equality is not compatibility:
 // probeExecution checks the live protocol, capabilities, identity and policy.
 func (a *app) admitExecution(selector string, h execution.Host) error {
 	st, err := a.store.Peek()
@@ -562,8 +571,14 @@ func (a *app) admitExecution(selector string, h execution.Host) error {
 	if pin != nil && pin.Identity != h.Identity {
 		pin = nil
 	}
-	if pin != nil && loop.HostHoldBlocks(*pin) {
+	if pin == nil {
+		return nil
+	}
+	if loop.HostHoldBlocks(*pin) {
 		return refused("execution host %s is held since %s, it takes no start: %s (beekeeper agents hosts update %s lifts it)", selector, pin.HeldAt.Format(time.RFC3339), pin.Held, selector)
+	}
+	if version := coordinatorVersion(); releaseVersion(version) && loop.HostDrains(*pin, version, st.Budget, a.timeNow()) && coordinatorHostUpdateReady(version) == nil {
+		return refused("execution host %s drains, it takes no start: it runs %s and updates to the coordinator's %s once the executions on it are between turns (beekeeper agents hosts update %s tries it now)", selector, pin.Version, version, selector)
 	}
 	return nil
 }

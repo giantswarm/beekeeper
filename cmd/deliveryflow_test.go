@@ -124,6 +124,69 @@ func TestDeliveryWaitMissingNoteReportedOnce(t *testing.T) {
 	}
 }
 
+// A park waits on the person only when no target settles it and its words
+// name the person or what only a person gives. A note covers the wait: open,
+// it is in its addressee's queue; answered a moment ago, the watch resumes
+// the park.
+func TestDeliveryPersonWaitNamesThePerson(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name, on, waits, class string
+		missing                bool
+	}{
+		{name: "park on a blocker issue", on: "example/blocker#235", waits: "after the trace fix, finish the release-note gap", class: deliveryFlowing},
+		{name: "budget reset in an agents note", waits: "GitHub budget reset; continuation recorded in agents note", class: deliveryFlowing},
+		{name: "park on an answered note", on: "#2382", waits: "the person's decision on the scope", class: deliveryFlowing},
+		{name: "park on an open central note", on: "team#7", waits: "the person's decision on the scope", class: deliveryPerson},
+		{name: "park on a merge hold", on: litHoldMerges, waits: "the release window the person decides", class: deliveryFlowing},
+		{name: "park on a firing alert", on: "alert:DeliveryStalled", waits: "the person's reply on the alert", class: deliveryFlowing},
+		{name: "the loop's review", waits: "the loop's review of the change", class: deliveryFlowing},
+		{name: "wait names the person", waits: "waiting on Timo", class: deliveryPerson, missing: true},
+		{name: "wait on the person's answer", waits: "the person's answer on the cache", class: deliveryPerson, missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := state.Delivery{Ref: deliveryTestIssue, Agent: workerRole, Step: state.DeliveryImplementing, Since: now}
+			st := &state.State{DeliveriesAt: now, Deliveries: []state.Delivery{d}, Agents: []state.Agent{{Party: state.Party{Name: workerRole}, Task: deliveryFlowTestTask, Park: &state.Park{On: tc.on, Waits: tc.waits, At: now}}}}
+			got := classifyDelivery(st, d, now, deliveryPolicy{person: "Timo"})
+			if got.Class != tc.class || got.MissingNote != tc.missing {
+				t.Fatalf("classification %+v, want %s, missing note %t", got, tc.class, tc.missing)
+			}
+		})
+	}
+}
+
+// The live waits of https://github.com/giantswarm/beekeeper/issues/3713: a
+// worker parked on a blocker issue, one on GitHub's budget reset with its
+// continuation in an agents note, and one on a note answered seconds before
+// raise no alarm. A worker waiting on Timo without a note raises it once.
+func TestDeliveryWaitWithoutNoteAlarmsOnlyForThePerson(t *testing.T) {
+	a, _ := supervisorApp(t)
+	a.cfg.Guide.Person = "Timo"
+	const blocker, budget, answered, person = "example/project#11", "example/project#12", "example/project#13", "example/project#14"
+	parks := map[string]state.Park{
+		blocker:  {On: "example/blocker#235", RefKind: github.RefIssue, Waits: "After trace fix, verify green consumer CI; finish v1.13.0 v2 release-note gap"},
+		budget:   {Waits: "GitHub budget reset for post-merge acceptance; continuation recorded in agents note."},
+		answered: {On: "#2382", Waits: "App drift review needs existing scope decision"},
+		person:   {Waits: "waiting on Timo"},
+	}
+	seed(t, a, func(st *state.State) {
+		for _, ref := range []string{blocker, budget, answered, person} {
+			name := "worker " + ref
+			park := parks[ref]
+			park.At = a.timeNow()
+			st.StartDelivery(ref, name, "", a.timeNow())
+			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: name}, Task: deliveryFlowTestTask, Park: &park})
+		}
+	})
+	line, err := a.checkDeliveries(a.timeNow())
+	if err != nil || strings.Count(line, "WAITING WITHOUT A NOTE") != 1 || !strings.Contains(line, deliveryURL(person, false)+":") {
+		t.Fatalf("%q %v", line, err)
+	}
+	if line, err := a.checkDeliveries(a.timeNow().Add(time.Minute)); err != nil || line != "" {
+		t.Fatalf("again %q %v", line, err)
+	}
+}
+
 func TestDeliveryExternalHoldRestoresBoardAfterRestart(t *testing.T) {
 	a, _ := supervisorApp(t)
 	f := useFakeBoard(t, a, map[int]string{7: holdWorking})

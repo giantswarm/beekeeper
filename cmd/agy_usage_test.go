@@ -482,7 +482,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 		legacy     bool
 		both       bool
 	}{
-		{name: "short", repo: "example/app"},
+		{name: litShort, repo: "example/app"},
 		{name: "bounded", repo: longRepo},
 		{name: "before upgrade", repo: longRepo, legacy: true},
 		{name: "new brief takes precedence", repo: longRepo, both: true},

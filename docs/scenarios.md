@@ -11,6 +11,7 @@ found live becomes a scenario that fails before its fix. The plan is
 make test-scenarios                              # every scenario
 BEEKEEPER_SCENARIO_FLOW=smoke make test-scenarios  # the flows named (comma-separated)
 BEEKEEPER_SCENARIO_TAG=board make test-scenarios   # the scenarios with any of these tags
+BEEKEEPER_SCENARIO_SHARD=1/2 make test-scenarios  # one of two shards (index from 0), as CI runs them
 BEEKEEPER_SCENARIO_REPORT=/tmp/scenarios make test-scenarios  # write the report and artifacts
 ```
 
@@ -20,9 +21,14 @@ runs against the host. Ubuntu restricts them through AppArmor
 (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 
 CI's `test-scenarios` job runs the suite on every pull request on a machine
-executor (Docker's seccomp profile refuses the namespaces). The suite fails
-when its wall time exceeds 10 minutes and warns from 8. The job's artifacts
-hold `report.txt`, `report.json` (every scenario, step and duration, and the
+executor (Docker's seccomp profile refuses the namespaces), in two parallel
+containers: each runs one shard, the scenarios whose FNV-1a hash of
+`<flow>/<name>` modulo 2 is its index, so every scenario runs in exactly one
+and adding a scenario moves no other. Each shard fails when its wall time
+exceeds 10 minutes and warns from 8. When a shard nears the warning, the suite grows by a
+container: raise the job's `parallelism` in `.circleci/custom.yml`. The shards follow the container
+count (`CIRCLE_NODE_TOTAL`), so the scenarios are split anew without a code change. Each
+container's artifacts hold `report.txt`, `report.json` (every scenario, step and duration, and the
 suite's wall time), `junit/scenarios.xml` (one case per step) and each
 scenario's own artifacts under `<flow>/<name>/`: the world's call log
 (`calls.jsonl`), every step's output, background logs and the driver's log.
@@ -33,7 +39,8 @@ A pull request that fixes or changes behavior of beekeeper's core adds or extend
 fails without the change (the rule in [AGENTS.md](../AGENTS.md)). The `scenario-control` step of
 the `test-scenarios` job (`.circleci/scenario-control.sh`) checks the "fails without": it builds
 the candidate from the pull request's merge base with `main` and runs against it, with the pull
-request's harness, only the scenarios the pull request adds or changes. Each must fail there on
+request's harness, only the scenarios the pull request adds or changes, each in the container of
+its shard. Each must fail there on
 an assertion: an expectation, an unanswered call or its timeout. The step fails for a scenario
 that passes on the base, since it shows nothing the change does, for one whose run on the base
 fails in the harness (the sandbox, the world, the desk's setup), which is no evidence, and when
@@ -61,7 +68,8 @@ the merge base does not build.
 ### Go tests
 
 A fix whose regression test is a Go test, not a scenario, needs the same proof. The same step
-(`internal/testcontrol`) takes the `Test…` functions the pull request adds or changes in any
+(`internal/testcontrol`), in the job's first container (shard 0) only, so it runs once per pull
+request, takes the `Test…` functions the pull request adds or changes in any
 `_test.go`, applies the pull request's test files (its `_test.go` files and the files under
 `testdata/`, as it adds, changes or deletes them) to a checkout of the merge base, and runs those
 tests there with `go test`. The ones that fail on the base run again on the pull request's code,
@@ -96,15 +104,16 @@ and Go tests passes both parts.
   new and changed test opts out or is not run, and fails on a control paragraph it cannot read.
 
 The step passes at once, without a build, on a branch that adds or changes neither a scenario nor
-a `_test.go` file, on `main` and on tags. The job's artifacts hold its log (`control.log`), the
-scenarios' report (`control/report.txt` and `control/report.json`: every scenario with its change,
-verdict, first failures on the base and opt-out reason) with each run's artifacts under
-`control/<flow>/<name>/`, and the Go tests' report (`go-control/report.txt` and
-`go-control/report.json`: every test with its change, tags, run on the base and on the change,
-first failures or build errors and opt-out reason) with each `go test` run's command, events and
-stderr under `go-control/runs/`. A pull request that changes the Go-test control first runs it on
-the clock fix of https://github.com/giantswarm/beekeeper/pull/3832, whose regression test must
-fail on the fix's parent (`go-control-history/`). To run the step on a branch:
+a `_test.go` file, on `main` and on tags. Each container's artifacts hold its log (`control.log`)
+and the report of its shard's scenarios (`control/report.txt` and `control/report.json`: every
+scenario with its change, verdict, first failures on the base and opt-out reason) with each run's
+artifacts under `control/<flow>/<name>/`. The first container's (shard 0) also hold the Go tests'
+report (`go-control/report.txt` and `go-control/report.json`: every test with its change, tags,
+run on the base and on the change, first failures or build errors and opt-out reason) with each
+`go test` run's command, events and stderr under `go-control/runs/`. A pull request that changes
+the Go-test control first runs it on the clock fix of
+https://github.com/giantswarm/beekeeper/pull/3832, whose regression test must fail on the fix's
+parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
 `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
 
 ## How a scenario runs
@@ -121,7 +130,11 @@ fail on the fix's parent (`go-control-history/`). To run the step on a branch:
    directories, and a bare Git origin with one commit on `main` for each of
    `given.repositories` and of `given.github`'s repositories under
    `/work/origins/<owner>/<name>.git`, and a root for each of
-   `given.hosts` (see [Execution hosts](#execution-hosts)).
+   `given.hosts` (see [Execution hosts](#execution-hosts)). A repository
+   with `checkout` also gets a person's main checkout, cloned under its
+   GitHub URL to `/work/checkouts/<owner>/<name>` with the Git
+   configuration `checkout.config` names; `agents.roots` then holds
+   `/work/checkouts`, so a hand start's `--dir` may name it.
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -160,6 +173,8 @@ given:
       capacity: {ceiling: 4}
   repositories:
     - name: example/app
+      checkout:                      # optional: /work/checkouts/example/app
+        config: {push.default: upstream}   # git config in the checkout
   calls:
     - program: gh
       # Every pattern must match one argument whole (a regular expression;
@@ -396,7 +411,8 @@ over a model, so a scenario can override any call.
   `--version` and `login status` answer a host's probes.
 - **`agy`**: `--input-format stream-json --output-format stream-json` under
   `agy-run`, with `init` naming the conversation, a `user_input` step per
-  message and `result`. Also `models` and `--version`.
+  message and `result`. Also `models`, `--version` and the usage probe
+  `-p /usage` (`harness.usage.agy`, the Gemini models' bucket).
 - **`omp`**: `--mode rpc` with its standard input on its inbox, one turn per
   `steer` command. Also `models --json` and `--version`.
 - **`systemd-run`, `systemctl`**: the user's service manager. The world runs
@@ -441,6 +457,7 @@ given:
   harness:
     usage:                           # what a harness's usage probe reports
       claude: {session: 40, week: 20}  # percent of the 5-hour and 7-day windows
+      agy: {session: 10, week: 5}      # the Gemini models' windows
       codex:
         session: 10
         week: 5
@@ -515,7 +532,13 @@ given:
       fault: unreachable             # optional, see below
       slow: 300ms                    # delay of every ssh call to it
       config: {}                     # laid over the host's own config.yaml
+      pinned: v1.0.0-rc.1            # the release the desk pinned it to
 ```
+
+`pinned` records the host in the desk's state (`hostPins`) as pinned to that release, with the
+policy digest it prepared, as an earlier coordinator's `agents hosts update` left it. A desk on
+another release (`given.releases.installed`) finds the host behind its own; the host still runs
+the candidate.
 
 | Fault | What happens |
 | --- | --- |
@@ -523,6 +546,7 @@ given:
 | `host-key-changed` | `ssh` fails the host key check: exit 255 with OpenSSH's warning |
 | `missing-tool` | the remote shell does not find beekeeper: exit 127 |
 | `older-go` | the host pins Go 1.21.0 while its repository's `go.mod` names 1.26.0 |
+| `drops-source` | the host passes its checks but drops a start's source upload: exit 255 |
 | `slow` | every call is delayed; one slower than `ConnectTimeout` times out with 255 |
 
 The `host` step changes a host's faults while the scenario runs:

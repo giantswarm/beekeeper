@@ -686,3 +686,22 @@ func TestReview3325InventoryCapsFailClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeGoExemptsOnlyTheRepairNamingItsPull(t *testing.T) {
+	r := newLoopRig(t)
+	const pr, head, name = "o/r#2", "abc123", "r 1"
+	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", pr, head, name), pr)); err != nil {
+		t.Fatal(err)
+	}
+	// The refill's start of the item under the worker's name: its brief
+	// names the issue only, and the pull request waits for its merge.
+	board := "Work https://github.com/o/r/issues/1"
+	if _, repairs, _ := r.a.startGateExemptions(name, board, briefIssues(board), r.a.timeNow()); len(repairs) != 0 {
+		t.Fatalf("board start inherited the merge go's exemption: %v", repairs)
+	}
+	// The repair of a refused merge names the pull request in its brief.
+	repair := "Repair the branch for https://github.com/o/r/pull/2 (branch r-1 at head abc123 in o/r)."
+	if _, repairs, _ := r.a.startGateExemptions(name, repair, briefIssues(repair), r.a.timeNow()); !slices.Contains(repairs, pr) {
+		t.Fatalf("repair start lost the merge go's exemption: %v", repairs)
+	}
+}
