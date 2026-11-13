@@ -7,7 +7,7 @@ description: >
   host, the coordinator retires the execution on the host and hosts check
   reports its resource audit state as retired.
 issue: https://github.com/giantswarm/beekeeper/issues/3746
-flow: harness
+flow: regression
 tags: [regression, harness, hosts, claude]
 timeout: 90s
 
