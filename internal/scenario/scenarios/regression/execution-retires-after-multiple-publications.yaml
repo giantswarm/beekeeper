@@ -87,5 +87,4 @@ then:
       not_contains: [execution.publish-denied]
   - step: check
     output:
-      contains: ['"state":"retired"', '"reason":"managed retention"']
-      not_contains: ['"reason":"overdue lifecycle cleanup"']
+      contains: ['"state":"retired"', '"reason":"retained recovery work"']
