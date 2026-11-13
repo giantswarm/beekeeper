@@ -11,6 +11,7 @@ found live becomes a scenario that fails before its fix. The plan is
 make test-scenarios                              # every scenario
 BEEKEEPER_SCENARIO_FLOW=smoke make test-scenarios  # the flows named (comma-separated)
 BEEKEEPER_SCENARIO_TAG=board make test-scenarios   # the scenarios with any of these tags
+BEEKEEPER_SCENARIO_SHARD=1/2 make test-scenarios  # one of two shards (index from 0), as CI runs them
 BEEKEEPER_SCENARIO_REPORT=/tmp/scenarios make test-scenarios  # write the report and artifacts
 ```
 
@@ -20,9 +21,14 @@ runs against the host. Ubuntu restricts them through AppArmor
 (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 
 CI's `test-scenarios` job runs the suite on every pull request on a machine
-executor (Docker's seccomp profile refuses the namespaces). The suite fails
-when its wall time exceeds 10 minutes and warns from 8. The job's artifacts
-hold `report.txt`, `report.json` (every scenario, step and duration, and the
+executor (Docker's seccomp profile refuses the namespaces), in two parallel
+containers: each runs one shard, the scenarios whose FNV-1a hash of
+`<flow>/<name>` modulo 2 is its index, so every scenario runs in exactly one
+and adding a scenario moves no other. Each shard fails when its wall time
+exceeds 10 minutes and warns from 8. When a shard nears the warning, the suite grows by a
+container: raise the job's `parallelism` in `.circleci/custom.yml`. The shards follow the container
+count (`CIRCLE_NODE_TOTAL`), so the scenarios are split anew without a code change. Each
+container's artifacts hold `report.txt`, `report.json` (every scenario, step and duration, and the
 suite's wall time), `junit/scenarios.xml` (one case per step) and each
 scenario's own artifacts under `<flow>/<name>/`: the world's call log
 (`calls.jsonl`), every step's output, background logs and the driver's log.
@@ -33,7 +39,8 @@ A pull request that fixes or changes behavior of beekeeper's core adds or extend
 fails without the change (the rule in [AGENTS.md](../AGENTS.md)). The `scenario-control` step of
 the `test-scenarios` job (`.circleci/scenario-control.sh`) checks the "fails without": it builds
 the candidate from the pull request's merge base with `main` and runs against it, with the pull
-request's harness, only the scenarios the pull request adds or changes. Each must fail there on
+request's harness, only the scenarios the pull request adds or changes, each in the container of
+its shard. Each must fail there on
 an assertion: an expectation, an unanswered call or its timeout. The step fails for a scenario
 that passes on the base, since it shows nothing the change does, for one whose run on the base
 fails in the harness (the sandbox, the world, the desk's setup), which is no evidence, and when
@@ -58,11 +65,56 @@ the merge base does not build.
   against that pull request's base again; a reason written for one change does not cover the
   next.
 
-The step passes at once, without a build, on a branch that adds or changes no scenario, on `main`
-and on tags. The job's artifacts hold its log (`control.log`), its report (`control/report.txt`
-and `control/report.json`: every scenario with its change, verdict, first failures on the base
-and opt-out reason) and each run's artifacts under `control/<flow>/<name>/`. To run it on a
-branch: `bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
+### Go tests
+
+A fix whose regression test is a Go test, not a scenario, needs the same proof. The same step
+(`internal/testcontrol`), in the job's first container (shard 0) only, so it runs once per pull
+request, takes the `Test…` functions the pull request adds or changes in any
+`_test.go`, applies the pull request's test files (its `_test.go` files and the files under
+`testdata/`, as it adds, changes or deletes them) to a checkout of the merge base, and runs those
+tests there with `go test`. The ones that fail on the base run again on the pull request's code,
+where they must pass: a test that fails on both shows nothing. At least one test must fail on the
+base and pass on the change; the step fails when none does. A pull request with both scenarios
+and Go tests passes both parts.
+
+- **Added** is a test whose package on the base has no test of its name. **Changed** is one whose
+  code differs from the base's; its doc comment, comments and blank lines do not count. A test the
+  pull request moves unchanged from another package is **moved** and does not run.
+- A test runs with the fewest of the build tags CI tests with (`scenario`, `integration`, `perf`)
+  that build its file. One that builds only with another tag, such as a live test, is listed and
+  does not run.
+- A package that does not build on the base is reported with its compiler errors. Its tests show
+  nothing, as a test the base skips, or whose package's `TestMain` fails, shows nothing.
+- The tests of a new package, whose Go code the base does not have, are listed and do not run; a
+  package of tests only (such as one that tests a script or a Makefile) runs, new or not. Nor does
+  any test of a pull request that changes only its test files and test data: any other changed file
+  counts as a change, because a test may read it at runtime.
+- A test that cannot fail on the base, such as one of behavior main already has or one of code the
+  base lacks, opts out with a paragraph of its doc comment that gives the reason, which the review
+  checks:
+
+  ```go
+  // TestDoubleFlag checks --double.
+  //
+  // control: none: --double is new, so the base cannot parse it
+  func TestDoubleFlag(t *testing.T) {
+  ```
+
+  The opt-out holds for the change that writes it, as a scenario's does. The step passes when each
+  new and changed test opts out or is not run, and fails on a control paragraph it cannot read.
+
+The step passes at once, without a build, on a branch that adds or changes neither a scenario nor
+a `_test.go` file, on `main` and on tags. Each container's artifacts hold its log (`control.log`)
+and the report of its shard's scenarios (`control/report.txt` and `control/report.json`: every
+scenario with its change, verdict, first failures on the base and opt-out reason) with each run's
+artifacts under `control/<flow>/<name>/`. The first container's (shard 0) also hold the Go tests'
+report (`go-control/report.txt` and `go-control/report.json`: every test with its change, tags,
+run on the base and on the change, first failures or build errors and opt-out reason) with each
+`go test` run's command, events and stderr under `go-control/runs/`. A pull request that changes
+the Go-test control first runs it on the clock fix of
+https://github.com/giantswarm/beekeeper/pull/3832, whose regression test must fail on the fix's
+parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
+`bash .circleci/scenario-control.sh` (Linux with namespaces, as for the suite).
 
 ## How a scenario runs
 
@@ -508,6 +560,7 @@ given:
 | `host-key-changed` | `ssh` fails the host key check: exit 255 with OpenSSH's warning |
 | `missing-tool` | the remote shell does not find beekeeper: exit 127 |
 | `older-go` | the host pins Go 1.21.0 while its repository's `go.mod` names 1.26.0 |
+| `drops-source` | the host passes its checks but drops a start's source upload: exit 255 |
 | `slow` | every call is delayed; one slower than `ConnectTimeout` times out with 255 |
 
 The `host` step changes a host's faults while the scenario runs:

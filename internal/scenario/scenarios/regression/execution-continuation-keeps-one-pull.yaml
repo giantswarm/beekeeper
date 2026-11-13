@@ -8,10 +8,7 @@ description: >
   keeps one open pull request, and after the merge none of the task's pull
   requests is open. Live, every continuation published a branch and a pull
   request of its own, and the superseded ones stayed open after the merge.
-  Today the coordinator refuses the continuation's publication as a
-  duplicate, so its work reaches no pull request at all.
 issue: https://github.com/giantswarm/beekeeper/issues/3738
-pending: https://github.com/giantswarm/beekeeper/issues/3738
 flow: regression
 tags: [regression, hosts, delivery, duplicate-pr]
 timeout: 300s

@@ -40,6 +40,7 @@ func init() {
 		},
 		ClearRecords:               clearRecords,
 		Clock:                      clock,
+		CloseSupersededPulls:       closeDuplicateExecutionPulls,
 		Code:                       Code,
 		ContinuationName:           continuationName,
 		CoordinatorHostUpdateReady: coordinatorHostUpdateReady,

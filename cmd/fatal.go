@@ -37,6 +37,7 @@ const (
 	fatalStateDirOption    = "--state-dir"
 	fatalDirOption         = "--dir"
 	fatalBranchOption      = "--branch"
+	fatalHostOption        = "--host"
 	fatalHarnessOption     = "--harness"
 	fatalExcludeOption     = "--exclude"
 	fatalGateOption        = "--gate"
@@ -500,7 +501,10 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if checkout == "" {
 		checkout = filepath.Join(cfg.Projects.Dir, loop.RepoName(repo))
 	}
-	args = append(args, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
+	// The repair works in this machine's checkout, may restore its
+	// configuration from the snapshot and proves the probe here, so it is
+	// never placed on an execution host (supervisor.hostsFirst).
+	args = append(args, fatalHostOption, executionLocal, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
 	if len(cfg.Capacity.Choices) > 0 {
 		args = append(args, fatalHarnessOption, "auto")
 		for _, harness := range slices.Compact(broken) {

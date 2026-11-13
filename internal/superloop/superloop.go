@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
@@ -198,7 +199,7 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
 	var onHead *Review
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
-		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) {
+		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) && (rd.until.IsZero() || r.At.Before(rd.until)) {
 			onHead = &p.Reviews[i]
 			break
 		}
@@ -726,6 +727,13 @@ func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d"
 func endKey(ref string) string              { return "end " + ref }
 func intakeKey(ref string) string           { return "intake " + strings.ToLower(ref) }
 
+// retryKey is the key of round rd of ref's head after an earlier round's
+// reviewer left that head without a verdict: reviewKey names the head's
+// first round only.
+func retryKey(ref, head string, rd int) string {
+	return fmt.Sprintf("review %s@%s r%d", ref, head, rd)
+}
+
 // redKey is the key of the wake that tells the red checks names of ref's
 // head to the park of parked; a single check's redKey is its own mark.
 func redKey(ref, head string, parked time.Time, names ...string) string {
@@ -1044,6 +1052,11 @@ func Plan(in Input) []Action {
 	// (or forwards in this pass): the worker has it in the review, word for
 	// word.
 	forwarded := func(e Event) bool {
+		// A complete current description explicitly asks for filing, even
+		// when some of its words also occur in a forwarded review.
+		if _, ok := findings.Parse(problemText(e)); ok {
+			return false
+		}
 		for ref, rs := range l.rounds {
 			p, tracked := in.Pulls[ref]
 			for i, rd := range rs {
@@ -1123,6 +1136,16 @@ func Plan(in Input) []Action {
 		return ""
 	}
 	progress := func(e Event) bool {
+		// An explicit current finding is placed even when it names the
+		// worker's own issue, and individually before a done report settles.
+		if _, ok := findings.Parse(problemText(e)); ok {
+			key := findingKey(e)
+			if !l.has(key) {
+				ev := e
+				add(Action{Key: key, Kind: KindFile, Agent: e.Agent, Event: &ev, Message: problemText(e)})
+			}
+			return true
+		}
 		key := progressKey(e)
 		if l.has(key) || l.has(eventKey(KindProgress, e)) {
 			return true
@@ -1160,6 +1183,13 @@ func Plan(in Input) []Action {
 				fk := eventKey(KindFile, e)
 				if len(unfiled) > 0 && !l.has(fk) {
 					add(Action{Key: fk, Kind: KindFile, Agent: e.Agent, Event: &ev, Message: strings.Join(unfiled, "\n")})
+					continue
+				}
+				pendingFinding := slices.ContainsFunc(eventsByAgent[e.Agent], func(p Event) bool {
+					_, explicit := findings.Parse(problemText(p))
+					return p.Verb == VerbProblem && near(p, e) && explicit && !l.has(findingKey(p))
+				})
+				if pendingFinding {
 					continue
 				}
 				a := Action{Key: dk, Kind: KindDone, Agent: e.Agent, Event: &ev}
@@ -1357,15 +1387,30 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// The round runs until its reviewer reports done. One done
 		// without a verdict on the round's head or on the head now
 		// reviewed a head the worker pushed in between: the newest
-		// head gets its round.
+		// head gets its round. A reviewer that left the roster without
+		// a verdict (its start failed, or it ended without one) reviews
+		// nothing more: OrphanWait after the round opened, the head it
+		// left gets a new round too, and that round's reservation
+		// releases the gone reviewer's assignment of the head.
+		reviewer := ReviewerName(ref, len(rs))
 		done := slices.ContainsFunc(in.Events, func(e Event) bool {
-			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
+			return e.Verb == VerbDone && e.Agent == reviewer && e.At.After(last.at)
 		})
-		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
+		gone := !in.Now.IsZero() && !in.Now.Before(last.at.Add(OrphanWait)) && !slices.ContainsFunc(in.Workers, func(o Worker) bool {
+			return strings.EqualFold(o.Name, reviewer)
+		})
+		same := sameHead(p.Head, last.head)
+		if !gone && (!done || same) || !p.Green || !isParked || !requested {
 			return
 		}
 		if len(rs) < MaxReviews {
-			review()
+			if !same {
+				review()
+				return
+			}
+			a := base
+			a.Key, a.Kind, a.Round, a.SelfHosted = retryKey(ref, p.Head, len(rs)+1), KindReview, len(rs)+1, w.SelfHosted
+			add(a)
 			return
 		}
 		// The reviews are used: the loop merges after a verdict, never
@@ -1377,6 +1422,13 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
 					a.Message = reworkMessage(p, ev.Head, cycles, rounds, false) + "\n\nThe review, word for word:\n\n" + ev.Body
 					add(a)
+					return
+				}
+				// A last reviewer gone without a done (its start failed,
+				// it crashed) reviewed nothing: an earlier round's
+				// verdict gives no go on a head nobody reviewed.
+				if !done {
+					leave(ref, p.URL, agent, leftNoVerdict(p.Head), fmt.Sprintf("its %d reviews are used and round %d's reviewer %q is gone without a verdict on head %s: no merge go comes without a desk review of it", len(rs), len(rs), reviewer, short(p.Head)))
 					return
 				}
 				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, round %d %s head %s and the last reviewer finished without a verdict", len(rs), i+1, ev.Verdict, short(ev.Head))))

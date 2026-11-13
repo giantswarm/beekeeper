@@ -401,7 +401,7 @@ completion is refused under --as.`,
 	idle.Flags().StringVar(&blockedBy, "by", "", "open issue URL or #note blocking the delivery")
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
 	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
-	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository, and its issue's URL once filed; "none" when there was none (required with --done)`)
+	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one per broken function, workaround or follow-up, with evidence and owning repository, and its issue's URL once filed (the multiline filing format is in agents problem --help); "none" when there was none (required with --done)`)
 	var keepDesktop bool
 	var removeReason string
 	remove := &cobra.Command{
@@ -633,7 +633,7 @@ func problemsFound(lines []string, finished bool) ([]string, error) {
 	var found []string
 	none := false
 	for _, l := range lines {
-		l = oneLine(l)
+		l = normalizeFinding(l)
 		switch {
 		case l == "":
 			return nil, refused("an empty --problem: one line per finding, or --problem none")

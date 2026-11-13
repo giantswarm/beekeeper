@@ -1,10 +1,11 @@
 # Operating SSH execution hosts
 
-Managed, headless Claude Code sessions run on an explicitly selected SSH host.
+Managed, headless Claude Code sessions run on a selected SSH host.
 Each execution gets its own linked worktree and branch backed by an isolated
 bare repository copy, an owned user service,
-a conversation identifier, and one coordinator roster registration. Omitting
-`--host`, or selecting `--host local`, keeps the local launch path.
+a conversation identifier, and one coordinator roster registration. `--host local` keeps the
+local launch path. A start without `--host` is placed as the supervisor loop places its own
+(`supervisor.hostsFirst`, see [placement](#placement-of-starts)).
 
 Read the [design](ssh-execution-hosts.md) for the ownership and failure contract.
 Remote wake and resume use durable message receipts as described below. New
@@ -556,6 +557,8 @@ reservation, workspace, or process. Remote starts require `--repo` and `--ref`;
 coordinator's existing provider and bucket pool across hosts and the selected
 host's physical guards. A host does not create another subscription budget.
 
+### Placement of starts
+
 `supervisor loop` places its worker starts on execution hosts. With
 `supervisor.hosts` naming execution hosts (in order of preference), a start
 whose repository a host maps, and for which `capacity --host <selector>` has
@@ -588,6 +591,30 @@ head moved by anything but the reviewer's own fix;
 retrying an identical review reconciles a lost response. No host GitHub
 credential is needed. The coordinator authenticates the reviewer session,
 exact head and reported review before a merge.
+
+A start by hand, `agents start` or `emergency start` without `--host`, is placed the same way:
+on the first of `supervisor.hosts` that maps its repository, lists its harness and has room
+(`capacity --host`), pinned to `--ref`, else to the repository's default branch. Its repository is
+`--repo`, else the origin of the checkout `--dir` names, else the one its brief names, else the
+origin of `agents.dir` or the current directory; the host's workspace takes the place of `--dir`
+and `--branch`. Its first line says where it went: `placed on <host> by
+supervisor.hostsFirst: …`, or `on this machine: <why>` with each host's reason when none takes it,
+and the start then runs here within the coordinator's guards. One that names `--repo` or `--ref` is
+refused with those reasons instead. A review, a timer's start, `--desktop`, a `--mode` other than
+`headless` and `--host local` stay on the coordinator; so does every hand start under
+`supervisor.hostsFirst: false`. The fatal sentinel's repair passes `--host local`: it works in the
+coordinator's checkout and proves its probe there. `--dry-run` shows the placement without starting.
+
+The loop's fresh continuation of a parked worker (`<name> next-<id>`) is placed the same way,
+whether the parked worker ran on the coordinator or on a host. On a host it continues the worker's
+open pull request at its head and publishes to its branch (see [Publish a branch and pull
+request](#publish-a-branch-and-pull-request)), so it stays on the coordinator, with a `SUPERVISOR
+CONTINUATION STAYS HERE` line saying why, when the pull request is no longer open (post-merge work
+keeps the desk's checkout and leases), when the worker holds more than one pull request of the
+repository (the one its park waits on and those of its desk-review parks: a host continues one, and
+its start gate refuses more) or the previous worker's workspace on the coordinator holds
+uncommitted changes to tracked files or commits on no remote branch. With no room on any host or
+here, `SUPERVISOR CONTINUATION WAITS` says so and the continuation waits for the next pass.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
@@ -885,8 +912,19 @@ beekeeper agents publish --title "fix: resolve the defect" --body-file /srv/beek
 
 The coordinator receives a Git bundle over the authenticated callback, verifies
 its HEAD and ancestry from the pinned execution commit, and pushes with its own
-GitHub login. The remote branch is always
-`beekeeper-execution/<execution-id>/<generation>` in the execution's repository;
+GitHub login. New work uses
+`beekeeper-execution/<execution-id>/<generation>` in the execution's repository.
+An authorized continuation of a recorded park or loop repair claim starts at the
+existing PR's head and keeps its branch and PR, even with a new execution ID.
+The coordinator pins that assignment separately from the source ref: naming a
+branch or mentioning a PR in a brief does not grant write access. Fork branches
+and more than one open PR in the repository are refused. An incident's repair
+named by its issue, or a repair claim whose PR has since closed or merged, is
+no assignment: that start begins fresh. A continuation uses
+`beekeeper agents publish` without title/body flags. Its publication reads the
+assigned PR by its number and pushes to that PR's branch; it never creates a PR.
+If that PR was closed or moved to another branch meanwhile, the publication is
+refused and nothing is pushed. Beyond the continuation's assignment,
 a worker cannot select a repository, remote, destination ref, default branch,
 force option or arbitrary GitHub API operation. The coordinator resolves the
 repository's default branch and creates the PR against it. Both PR text and
@@ -902,6 +940,16 @@ repeat the publication: Git rejects history rewrites, and the coordinator looks
 up the exact owned branch before creating a PR. A create attempt is never retried
 blindly. PR editing and commenting continue to use coordinating workflows;
 this command grants no general GitHub API authority.
+
+When a PR merges, the supervisor loop closes the PRs other executions published
+for the same task that are still open, with a comment naming the merged PR. The
+same task means the same repository and an issue both PRs close (a closing
+keyword in the title or body, or GitHub's closing link). Only a PR at the URL and
+on the branch the coordinator recorded for an execution's publication is closed:
+a shared title, brief line or mere mention of an issue is no task identity, and a
+PR no execution published is never touched. The merge does not wait for this
+cleanup. When GitHub cannot be read or a close fails, the loop logs `SUPERVISOR
+SUPERSEDED PULLS of <PR> stay open` and the merge goes on.
 
 A desk reviewer on the host fixes its own findings the same way: it commits in its
 workspace, which holds the assigned head of the pull request's branch, and runs
@@ -937,6 +985,14 @@ worker commits and merges there without supplying one. Resolve conflicts and
 commit locally, then publish. No source checkout is modified and no host GitHub
 credential or SSH agent is forwarded. This command creates no review or merge
 authorization; park on the returned PR and follow the independent review gate.
+
+Only the default branch's commits beyond the execution's pinned commit travel.
+A workspace whose pinned commit already holds the default branch, as a
+continuation pinned at its pull request's head can, is up to date: the answer
+names the default branch's head, carries no bundle and merges nothing. A shallow
+workspace, or one that lacks the pinned commit, receives the whole history, which
+heals it; a non-shallow workspace whose sync fails retries that way once, and when
+the retry fails as well the command reports both failures.
 
 Each transfer uses authenticated 256 KiB chunks, within the existing wire bound,
 and a SHA-256 digest over the complete bundle. A bundle is bounded to 64 MiB;

@@ -64,9 +64,10 @@ type Supervisor struct {
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
 	// Hosts are execution host selectors (agents.hosts) the loop's worker
-	// starts may be placed on, in order of preference. HostsFirst defaults
-	// to true. A host must map the item's repository and pass its own
-	// check (capacity --host); the start is pinned to the repository's
+	// starts, and agents start or emergency start without --host, may be
+	// placed on, in order of preference. HostsFirst defaults to true. A
+	// host must map the item's repository and pass its own check
+	// (capacity --host); the start is pinned to the repository's
 	// default branch. Reviewers follow the same preferences unless a local
 	// review directory is required; releases and the loop stay local.
 	Hosts []string `yaml:"hosts"`

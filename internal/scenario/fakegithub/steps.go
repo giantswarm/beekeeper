@@ -480,8 +480,10 @@ type PullExpect struct {
 
 // IssueExpect checks an issue.
 type IssueExpect struct {
-	Repo   string `yaml:"repo"`
-	Number int    `yaml:"number"`
+	Repo   string  `yaml:"repo"`
+	Number int     `yaml:"number"`
+	Body   *string `yaml:"body"`
+
 	// State is open or closed.
 	State  string   `yaml:"state"`
 	Labels []string `yaml:"labels"`
@@ -570,7 +572,7 @@ func (e *Expect) Validate() error {
 		if i.State != "" && i.State != "open" && i.State != "closed" {
 			errs = append(errs, fmt.Errorf("issue: state %q is neither open nor closed", i.State))
 		}
-		if i.State == "" && i.Labels == nil && i.Board == "" && i.Archived == nil && i.Comments == nil && i.OpenPulls == nil && i.Pulls == nil {
+		if i.State == "" && i.Body == nil && i.Labels == nil && i.Board == "" && i.Archived == nil && i.Comments == nil && i.OpenPulls == nil && i.Pulls == nil {
 			errs = append(errs, errors.New("issue without a fact to check"))
 		}
 	}
@@ -796,6 +798,9 @@ func (m *Model) checkIssue(want *IssueExpect) error {
 		if !strings.EqualFold(got, want.Board) {
 			bad("board status %q, want %q", got, want.Board)
 		}
+	}
+	if want.Body != nil && i.Body != *want.Body {
+		bad("body %q, want %q", i.Body, *want.Body)
 	}
 	if want.Archived != nil {
 		items := m.Items(i, nil)

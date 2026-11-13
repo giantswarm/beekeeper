@@ -33,6 +33,7 @@ import (
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -94,6 +95,14 @@ var BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error
 	}
 	out, errOut, code, err := RunArgv(ctx, "", append([]string{bin}, args...))
 	return out + errOut, code, err
+}
+
+// decodeRun reads the JSON document a BeekeeperRun printed into v. The
+// output is stdout and then stderr, so the document is its first value: a
+// diagnostic after it (a stale state snapshot's) is no failed read, and
+// output without a document is.
+func decodeRun(out string, v any) error {
+	return json.NewDecoder(strings.NewReader(out)).Decode(v)
 }
 
 // LoopCommand runs a configured command (the classifier, the post-install)
@@ -2304,6 +2313,11 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
 		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
+		if act.Kind == superloop.KindFile {
+			// One inventory/write stream prevents two reporters creating the
+			// same issue, and serializes the durable receipt store.
+			key = "transition:findings"
+		}
 		if act.Kind == superloop.KindEnd {
 			if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok && by != "" {
 				key = "transition:" + strings.TrimSpace(by)
@@ -2541,7 +2555,10 @@ func (l *Loop) claim(act superloop.Action, target string) error {
 
 // Reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
-// remove, note add, all logged as the loop), else not, and it runs.
+// remove, note add, all logged as the loop), else not, and it runs. A start
+// on an execution host logs its line at the reservation; one whose
+// reservation was released after it, unacknowledged by the host, started
+// nothing.
 func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Action, c LoopClaim) (string, bool, error) {
 	// Reconciliation runs in background action streams. Its history reads must
 	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
@@ -2561,10 +2578,21 @@ func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Act
 		return slices.ContainsFunc(evs, func(e state.Event) bool { return e.Verb == verb && match(e.Detail) })
 	}
 	opens := func(d string) bool { return strings.HasPrefix(d, c.Target+":") }
+	started := func() bool {
+		last := -1
+		for i, e := range evs {
+			if e.Verb == verbStart && opens(e.Detail) {
+				last = i
+			}
+		}
+		return last >= 0 && !slices.ContainsFunc(evs[last+1:], func(e state.Event) bool {
+			return e.Verb == executionReleasedEvent && opens(e.Detail)
+		})
+	}
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged(verbStart, opens)
+		done = started()
 	case superloop.KindGo:
 		l.Mu.Lock()
 		repairing := l.Stages[act.Key+" repair"]
@@ -3421,7 +3449,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		var capacity struct {
 			Room int `json:"room"`
 		}
-		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+		if readErr != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
 			err = ErrLoopLater
 		}
 	} else {
@@ -3835,7 +3863,7 @@ func roomOpen(out string) bool {
 	var v struct {
 		Room int `json:"room"`
 	}
-	if json.Unmarshal([]byte(out), &v) != nil {
+	if decodeRun(out, &v) != nil {
 		return true
 	}
 	return v.Room > 0
@@ -3913,11 +3941,20 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		}
 		return startHost{}, nil
 	}
+	var unacknowledged map[execution.HostID]bool
+	if review {
+		unacknowledged = l.unacknowledgedHosts(name, repo)
+	}
 	for i, selector := range k.Hosts {
 		h, err := l.Host.ExecutionHost(selector)
 		if err != nil {
 			l.RecordHostPlacement(selector, repo, err.Error())
 			l.SayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
+			continue
+		}
+		if unacknowledged[h.Identity] {
+			l.RecordHostPlacement(selector, repo, "never acknowledged the start of "+name)
+			l.SayOnce("host unacknowledged "+selector+" "+name, "SUPERVISOR HOST SKIPPED %s: it never acknowledged the start of %q, which starts elsewhere", selector, name)
 			continue
 		}
 		if !h.AdmitsRepository(repo) {
@@ -3947,6 +3984,24 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		return startHost{}, ErrLoopLater
 	}
 	return startHost{}, nil
+}
+
+// unacknowledgedHosts are the execution hosts that never acknowledged a
+// start of name for repo: its reservation there was released. A reviewer's
+// name is its pull request's round, so the round's next start goes to
+// another host or the coordinator, never back to the host that failed it.
+func (l *Loop) unacknowledgedHosts(name, repo string) map[execution.HostID]bool {
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return nil
+	}
+	hosts := map[execution.HostID]bool{}
+	for _, s := range st.Starts {
+		if r := s.Execution; r != nil && r.Released() && strings.EqualFold(s.Name, name) && strings.EqualFold(r.Request.Repository, repo) {
+			hosts[r.Handle.Ref.Host] = true
+		}
+	}
+	return hosts
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:
@@ -4170,13 +4225,12 @@ func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip [
 		}
 		return nil, failed()
 	}
-	// The output is stdout and then stderr: the document is its first value.
 	var next struct {
 		Pick      json.RawMessage   `json:"pick"`
 		Skipped   []board.Candidate `json:"skipped"`
 		AfterPick []board.Candidate `json:"after_pick"`
 	}
-	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
+	if err := decodeRun(out, &next); err != nil {
 		if code != 0 {
 			return nil, failed()
 		}
@@ -4559,9 +4613,31 @@ func unclassifiedParkMessage(e superloop.Event) string {
 // file transitions only summarized delivery to a note and must not be replayed.
 const FileReportSeparator = "; file in the owning repositories:\n"
 
-// toFile leaves the full finding in the settled transition's event. The
-// guide's feed reads that event once; no decision or thread is needed.
-func (l *Loop) toFile(_ context.Context, st *state.State, act superloop.Action) (string, error) {
+// toFile places current findings itself. Only an unplaceable report keeps
+// the separator the guide consumes; successful placement creates no guide work.
+// Only an action carrying one agents.problem is a report: a done's action
+// joins its unfiled one-line findings, which would otherwise parse as one
+// finding titled by the first and described by the rest.
+func (l *Loop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if report, ok := findings.Parse(act.Message); ok && act.Event != nil && act.Event.Verb == superloop.VerbProblem {
+		if _, why := (superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Never: l.Host.Cfg().Supervisor.Ownership.Never}).Unread(report.Repo + "#1"); why == "" && l.Host.Cfg().Board.Owner != "" && l.Host.Cfg().Board.Project > 0 {
+			url, err := l.placeFinding(ctx, report)
+			if err != nil && !errors.Is(err, findings.ErrUnplaced) {
+				return "", err
+			}
+			if err == nil {
+				ref, ok := Cmd.ParseRef(url)
+				if !ok {
+					return "", fmt.Errorf("finding returned invalid issue URL %q", url)
+				}
+				intake := superloop.Action{Kind: superloop.KindIntake, Key: act.Key + " intake", Ref: Cmd.RefName(ref), URL: url, Agent: act.Agent}
+				if _, err := l.intakeIssue(ctx, st, intake); err != nil {
+					return "", err
+				}
+				return "finding placed: " + url, nil
+			}
+		}
+	}
 	e := *act.Event
 	from := ""
 	if ref := AgentRef(st, e.Agent); ref != "" && !strings.Contains(act.Message, ref) {
