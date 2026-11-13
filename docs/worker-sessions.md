@@ -200,8 +200,9 @@ roster, no live process, no running remote execution) no longer holds its head: 
 next start of that review releases the assignment, logs `review.released` and starts
 the next round's reviewer. For a pull request parked for desk review, the loop starts that
 round itself 15 minutes after the gone reviewer's round opened (a failed remote start, too),
-within the two rounds a pull request gets. The brief includes closing issues, their parent epic,
-the round and previous findings. The shipped [review skill](../plugin/skills/review/SKILL.md)
+within the two rounds a pull request gets. Past them, a head such a reviewer left gets no merge go
+on an earlier round's verdict, only a leave line. The brief includes closing issues, their parent
+epic, the round and previous findings. The shipped [review skill](../plugin/skills/review/SKILL.md)
 checks acceptance criteria and behavioural coverage as well as correctness.
 `--model` overrides `supervisor.reviewModel` (default `opus`).
 `--light-lines` overrides `supervisor.reviewLightLines` (default 150): smaller

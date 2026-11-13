@@ -198,7 +198,7 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
 	var onHead *Review
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
-		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) {
+		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) && (rd.until.IsZero() || r.At.Before(rd.until)) {
 			onHead = &p.Reviews[i]
 			break
 		}
@@ -1399,6 +1399,13 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
 					a.Message = reworkMessage(p, ev.Head, cycles, rounds, false) + "\n\nThe review, word for word:\n\n" + ev.Body
 					add(a)
+					return
+				}
+				// A last reviewer gone without a done (its start failed,
+				// it crashed) reviewed nothing: an earlier round's
+				// verdict gives no go on a head nobody reviewed.
+				if !done {
+					leave(ref, p.URL, agent, leftNoVerdict(p.Head), fmt.Sprintf("its %d reviews are used and round %d's reviewer %q is gone without a verdict on head %s: no merge go comes without a desk review of it", len(rs), len(rs), reviewer, short(p.Head)))
 					return
 				}
 				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, round %d %s head %s and the last reviewer finished without a verdict", len(rs), i+1, ev.Verdict, short(ev.Head))))

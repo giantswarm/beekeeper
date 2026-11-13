@@ -1177,6 +1177,35 @@ func TestAGoneReviewersHeadGetsTheNextRound(t *testing.T) {
 	if l.Key != leaveKey(pr, leftNoVerdict(head1)) || !strings.Contains(l.Message, "none gave a verdict") {
 		t.Errorf("leave = %+v", l)
 	}
+	// When round 2 asks for changes on head1, only round 2's cycle counts.
+	r2 := Review{ID: "R2", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: in.Now}
+	in.Pulls = pull(head2, true, r2)
+	in.Rounds = 2
+	in.Taken = append(in.Taken, taken(t, in.Now, Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
+	in.Workers = parkedOn(head2, in.Now.Add(time.Minute))
+	if g := only(t, Plan(in), KindGo); g.Head != head2 || !strings.Contains(g.Message, "1 of 2 change-request round(s) used") {
+		t.Errorf("go = %+v", g)
+	}
+}
+
+// Past MaxReviews a last reviewer gone without a done (its start failed)
+// reviewed nothing: round 1's findings give no go on the fixes nobody
+// reviewed, only the leave. One that reported done leaves the go as before.
+func TestAGoneLastReviewerGivesNoGoOnAnEarlierVerdict(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix the panic", At: t1}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
+	in := Input{Workers: parkedOn(head2, t0.Add(time.Hour)), Pulls: pull(head2, true, r1), Rounds: 1, Taken: acts, Now: t0.Add(2*time.Hour + OrphanWait)}
+	l := only(t, Plan(in), KindLeave)
+	if l.Key != leaveKey(pr, leftNoVerdict(head2)) || !strings.Contains(l.Message, "is gone without a verdict on head "+short(head2)) {
+		t.Errorf("leave = %+v", l)
+	}
+	// The reviewer that reported done is retired besides.
+	in.Events = []Event{{At: t0.Add(3 * time.Hour), Verb: VerbDone, Agent: ReviewerName(pr, 2)}}
+	got := slices.DeleteFunc(Plan(in), func(a Action) bool { return a.Kind == KindDone })
+	if g := only(t, got, KindGo); g.Head != head2 || !strings.Contains(g.Message, "the last reviewer finished without a verdict") {
+		t.Errorf("go = %+v", g)
+	}
 }
 
 // TestAMultiPullWorkerStaysWhileItServesOpenWork: a merged pull request's
