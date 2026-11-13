@@ -17,6 +17,7 @@ const (
 	head3         = "3333333333333333333333333333333333333333"
 	worker        = "worker one"
 	release       = "v1.2.0"
+	reviewChanges = "fix x"
 	// guidePerson is the guide's person.
 	guidePerson = "pat"
 	// deskAuthor is the login the desk opens its pull requests as.
@@ -295,10 +296,10 @@ func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
 // them, and its fixes count only after it parked again and a review
 // approves the fixed head.
 func TestFindingsAreForwardedAfterTheHeadMoved(t *testing.T) {
-	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: reviewChanges, At: t1}
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
 	in := Input{Workers: parked(t0), Pulls: pull(head2, true, changes), Rounds: 1, Taken: taken(t, t0, started)}
-	if a := only(t, Plan(in), KindForward); !strings.HasSuffix(a.Message, "fix x") {
+	if a := only(t, Plan(in), KindForward); !strings.HasSuffix(a.Message, reviewChanges) {
 		t.Errorf("forward = %+v", a)
 	}
 	fwd := Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker}
@@ -1041,9 +1042,9 @@ func TestTheHeadTheReviewerPushedAndApprovedGetsTheGo(t *testing.T) {
 		t.Errorf("a running round got %+v", got)
 	}
 	// Findings on the pushed head go to the worker and count as round 1's.
-	changes := Review{ID: "R1", Head: head2, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	changes := Review{ID: "R1", Head: head2, Verdict: ChangesRequested, Body: reviewChanges, At: t1}
 	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head2, true, changes), Rounds: 2, Taken: tk}
-	if a := only(t, Plan(in), KindForward); !strings.Contains(a.Message, "changes on head "+head2) || !strings.HasSuffix(a.Message, "fix x") {
+	if a := only(t, Plan(in), KindForward); !strings.Contains(a.Message, "changes on head "+head2) || !strings.HasSuffix(a.Message, reviewChanges) {
 		t.Errorf("forward = %+v", a)
 	}
 	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Minute), Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})...)
@@ -1190,6 +1191,77 @@ func TestAnOldParkOfTheCurrentHeadStands(t *testing.T) {
 	in.Pulls = pull(head3, true)
 	if got := reviews(); len(got) != 0 {
 		t.Errorf("a park of another head got %+v", got)
+	}
+}
+
+// A reviewer that left the roster without a verdict, and without a done (its
+// remote start failed), holds the parked head no longer: OrphanWait after its
+// round opened, the same head gets the next round under a key of its own,
+// once, and past MaxReviews the leave says no verdict came.
+// https://github.com/giantswarm/beekeeper/issues/3757
+func TestAGoneReviewersHeadGetsTheNextRound(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker, Head: head1, Round: 1})
+	in := Input{Workers: parkedOn(head1, t0.Add(-time.Minute)), Pulls: pull(head1, true), Rounds: 1, Taken: tk, Now: t0.Add(OrphanWait - time.Second)}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("before OrphanWait the loop took %+v", got)
+	}
+	in.Now = t0.Add(OrphanWait)
+	// A reviewer still on the roster runs its round, done or not.
+	for _, done := range []bool{false, true} {
+		in.Workers = append(parkedOn(head1, t0.Add(-time.Minute)), Worker{Name: ReviewerName(pr, 1), Done: done})
+		if got := Plan(in); len(got) != 0 {
+			t.Fatalf("a reviewer on the roster (done %v) got %+v", done, got)
+		}
+	}
+	in.Workers = parkedOn(head1, t0.Add(-time.Minute))
+	in.Pulls = pull(head1, false)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("a head not green got %+v", got)
+	}
+	in.Pulls = pull(head1, true)
+	r := only(t, Plan(in), KindReview)
+	if r.Key != retryKey(pr, head1, 2) || r.Head != head1 || r.Round != 2 || r.Agent != worker || KeyHead(r.Key) != head1 || IsSweep(r.Key) {
+		t.Fatalf("next round = %+v", r)
+	}
+	in.Taken = append(in.Taken, taken(t, in.Now, r)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("a second pass took %+v", got)
+	}
+	// Its reviewer gone without a verdict too: the reviews are used.
+	in.Now = in.Now.Add(OrphanWait)
+	l := only(t, Plan(in), KindLeave)
+	if l.Key != leaveKey(pr, leftNoVerdict(head1)) || !strings.Contains(l.Message, "none gave a verdict") {
+		t.Errorf("leave = %+v", l)
+	}
+	// When round 2 asks for changes on head1, that verdict is the one
+	// review: the worker's fixes get the go without a second review.
+	r2 := Review{ID: "R2", Head: head1, Verdict: ChangesRequested, Body: reviewChanges, At: in.Now}
+	in.Pulls = pull(head2, true, r2)
+	in.Rounds = 2
+	in.Taken = append(in.Taken, taken(t, in.Now, Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
+	in.Workers = parkedOn(head2, in.Now.Add(time.Minute))
+	if g := only(t, Plan(in), KindGo); g.Head != head2 || !strings.Contains(g.Message, "without a second review") {
+		t.Errorf("go = %+v", g)
+	}
+}
+
+// A later round's reviewer gone without a verdict, with or without a done
+// (its start failed), leaves round 1's verdict the pull request's one
+// review (https://github.com/giantswarm/beekeeper/issues/3861): the fixes it
+// asked for get the go, with no further round.
+func TestAGoneLastReviewerLeavesTheOneReviewStanding(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix the panic", At: t1}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
+	in := Input{Workers: parkedOn(head2, t0.Add(time.Hour)), Pulls: pull(head2, true, r1), Rounds: 1, Taken: acts, Now: t0.Add(2*time.Hour + OrphanWait)}
+	if g := only(t, Plan(in), KindGo); g.Head != head2 || !strings.Contains(g.Message, "no second review") {
+		t.Errorf("gone reviewer: go = %+v", g)
+	}
+	// The reviewer that reported done is retired besides.
+	in.Events = []Event{{At: t0.Add(3 * time.Hour), Verb: VerbDone, Agent: ReviewerName(pr, 2)}}
+	got := slices.DeleteFunc(Plan(in), func(a Action) bool { return a.Kind == KindDone })
+	if g := only(t, got, KindGo); g.Head != head2 || !strings.Contains(g.Message, "no second review") {
+		t.Errorf("done reviewer: go = %+v", g)
 	}
 }
 

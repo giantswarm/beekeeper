@@ -208,8 +208,10 @@ reported one, and refuses a second session on a head already requested, includin
 after a restart. An assigned reviewer that is gone without a result (done or off the
 roster, no live process, no running remote execution) no longer holds its head: the loop's
 next start of that review releases the assignment, logs `review.released` and starts
-the next round's reviewer, since the one review has still to come. The brief includes
-closing issues, their parent epic and the round. The shipped [review skill](../plugin/skills/review/SKILL.md)
+the next round's reviewer, since the one review has still to come. For a pull request parked
+for desk review, the loop starts that round itself 15 minutes after the gone reviewer's round
+opened (a failed remote start, too), within the rounds a pull request gets while none gave a
+verdict. The brief includes closing issues, their parent epic and the round. The shipped [review skill](../plugin/skills/review/SKILL.md)
 checks acceptance criteria and behavioural coverage as well as correctness.
 `--model` overrides `supervisor.reviewModel` (default `opus`).
 `--light-lines` overrides `supervisor.reviewLightLines` (default 150): smaller
