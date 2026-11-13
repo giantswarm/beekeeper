@@ -243,7 +243,11 @@ func ApplyLoopWorkflowRuns(p *superloop.Pull, raw []byte, rollup []LoopCheck) er
 }
 
 // ReadBaseMerge reads whether the approval of approved covers p's head: it
-// only merges its base into approved with the reviewed patch unchanged.
+// only brings its base into approved (github.ApprovalCovers), by a merge, a
+// merge whose conflicts it resolves, or a rebase, with no change of its
+// own. A pull request gets one desk review
+// (https://github.com/giantswarm/beekeeper/issues/3861): the merge-result
+// check against the current base is such a head's gate, never a new review.
 var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
 	r, ok := Cmd.ParseRef(p.Ref)
 	if !ok || p.Base == "" {
@@ -251,8 +255,8 @@ var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	only, _, err := github.BaseMergeCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
-	return only, err
+	covered, _, err := github.ApprovalCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return covered, err
 }
 
 // ReadDeskLogin is the login gh acts as: the one the desk's agents open
@@ -2364,9 +2368,9 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	return err
 }
 
-// baseMerged reports whether p's head only merges its base into approved,
+// baseMerged reports whether p's head only brings its base into approved,
 // read once per pair of heads; a read that fails is said once and counts as
-// no: the new head gets its review.
+// no: the new head waits for its worker's park before its go.
 func (l *Loop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
 	key := p.Ref + " " + approved + " " + p.Head
 	l.Mu.Lock()
@@ -3348,6 +3352,12 @@ func (l *Loop) WakeOrStartFixer(ctx context.Context, st *state.State, act superl
 		return fmt.Errorf("its repository is unread (%s): %w", why, ErrLoopLater)
 	}
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
+		// A finished reviewer's execution no longer has publication authority.
+		// Let its done report retire it before starting its repair turn, rather
+		// than enqueueing work on the completed execution.
+		if act.Agent == act.RepairAgent && st.Agents[i].Done {
+			return fmt.Errorf("the reviewer is finishing its report before its repair: %w", ErrLoopLater)
+		}
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
 			p, err := l.readPull(ctx, act.Ref)
 			if err != nil {
@@ -3378,7 +3388,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately hand CI and review to the loop with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately hand CI, the one desk review if it has not had it yet, and the merge to the loop with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -3388,7 +3398,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately park from the worktree so the loop owns CI:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
-If the new head only merges the base branch with the PR patch unchanged, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review. A rebase or a conflict resolution that changes the patch needs a new review.
+A pull request gets one desk review: once it had it, the supervisor merges the repaired head once CI is green without a new review. Bring the base into the branch only for this repair (a conflict, or a merge result that is red against the base), never just to bring it up to date.
 `
 
 const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
@@ -3567,25 +3577,31 @@ Trust green CI on the exact reviewed head. Do not run local tests, lints, builds
 Inspect the code and tests. For a full review use your own worktree at the pinned head;
 for a light review read the diff, issue and CI. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. Review only:
-never edit, commit or push fixes to the reviewed branch ({{.Branch}}). Post findings and
-request changes; report the verdict and review URL with beekeeper agents idle --done --report
-so the supervisor forwards them to the implementing worker. Approve only the assigned,
-unchanged head when it needs no fixes. Open an issue
+This is the pull request's one desk review: no second review runs for it.
+Every finding is blocking or a nit to fix in this round; drop anything else. Fix your own
+findings yourself in your worktree at the pinned head (a light review creates one only for its
+fixes): fix them in code, tests or docs, commit them as one commit and push it once to the pull request's branch (git push origin
+HEAD:refs/heads/{{.Branch}}; never force-push), then approve the head you pushed at once,
+without waiting for its CI: the loop waits for green CI on that head and merges it. Never merge the base into the branch or rebase it to bring it up to date: the loop
+merges the approved head as it is, and its merge-result check against the current base is the
+gate. Request changes only for a finding that needs a product or design decision or cannot be
+fixed on the branch, or when your publication is refused: the
+worker fixes those, and the loop merges its green fix without another review. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
-An approval's nit-only push is checked by the supervisor against the approved head; do not
-start another independent review for it. Other changes require review of the new head.
 
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
-regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (the assigned head only).
-Each finding: <file>:<line>: <what is wrong> → <what would be right>.
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or, when you
+pushed fixes, the full SHA of the head you pushed, in backticks, even while its CI runs).
+Each finding: <file>:<line>: <what is wrong> → <what would be right>; say which you fixed.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
 and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>"
-for each problem encountered). The supervisor relays findings to the worker and gives the
-merge go only after approval. Do not review an unchanged approved head again.
+for each problem encountered). The supervisor gives the merge go after your approval once CI
+is green, or relays the findings you could not fix to the worker.
+A real conflict or red CI after your approval returns to you for a repair turn, never a
+second review verdict. Push the repair and park for the loop to wait for CI and merge.
 `
 
 // Brief renders the template in file (def when file is empty) with d into
@@ -3683,13 +3699,7 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 		if p.Head != act.Head || !p.Green {
 			return "", Cmd.Refused("review head moved or CI is not green")
 		}
-		previous := ""
-		for _, review := range p.Reviews {
-			if review.Verdict != "" {
-				previous = review.Body
-			}
-		}
-		act.Message, err = Cmd.ReviewContext(ctx, p, previous, l.Host.Cfg().Supervisor.ReviewLightLines)
+		act.Message, err = Cmd.ReviewContext(ctx, p, l.Host.Cfg().Supervisor.ReviewLightLines)
 		if err != nil {
 			return "", err
 		}

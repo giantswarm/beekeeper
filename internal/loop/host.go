@@ -155,7 +155,7 @@ type Command struct {
 	RemoveAgent                func(st *state.State, i int)
 	ReportIdle                 func(ag *state.Agent, now time.Time)
 	RepositoryStartReason      func(st *state.State, now time.Time, ref string) string
-	ReviewContext              func(ctx context.Context, p superloop.Pull, previous string, threshold int) (string, error)
+	ReviewContext              func(ctx context.Context, p superloop.Pull, threshold int) (string, error)
 	RoleRun                    func(st *state.State, p state.Party) bool
 	RunGit                     func(ctx context.Context, dir string, args ...string) ([]byte, error)
 	ShortDur                   func(d time.Duration) string

@@ -79,6 +79,38 @@ retain their own admission. Supervisor status names the scan hold.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+## One desk review per pull request
+
+A pull request gets one desk review
+([#3861](https://github.com/giantswarm/beekeeper/issues/3861)). The loop starts it once the
+head its worker parked on is green. Once any round gave a verdict, no review starts again
+for that pull request, whatever head comes next: not by the loop, not by `agents review` by
+hand (it refuses with exit 3), not after a continuation; `supervisor.reviewRounds` adds no
+rounds. A running reviewer holds the pull request even if its head moves before the verdict.
+A second round starts only when the first ended without any verdict, since the one review
+has still to come.
+
+- **The reviewer fixes its findings.** It pushes one commit to the branch and approves the
+  head it pushed, without waiting for its CI. A red check on that head returns to the reviewer
+  for a repair turn; once it is green the loop gives it the merge go and merges it.
+  The approval stays the pull request's review when the head moves on later.
+- **Findings the reviewer cannot fix** go to the worker word for word. Its green fix, parked
+  on, gets the merge go without a second review.
+- **Nobody updates the branch.** No worker, fixer, reviewer or the loop merges the base into
+  an approved or green branch or rebases it to make it current: that only runs CI again.
+  The loop merges the approved head as it is, and the merge-result check of base plus head
+  is the gate. A real conflict returns to the reviewer for one repair, without another
+  review verdict. A red merge result goes back to the worker as a finding. The repaired
+  head merges on the same approval, and other pull requests keep merging meanwhile.
+
+The behavioral scenarios `delivery/board-item-to-merged-and-done`,
+`delivery/moved-head-keeps-its-active-reviewer`,
+`delivery/push-after-approval-merges-without-a-second-review`,
+`delivery/reviewer-fixes-and-the-loop-merges`, `merge-result/approved-head-merges-as-is-after-main-moved`,
+`merge-result/a-real-conflict-is-repaired-once` and
+`merge-result/red-result-hands-back-while-others-merge` hold these rules
+([#3862](https://github.com/giantswarm/beekeeper/issues/3862)).
+
 ## Outages and emergencies
 
 `beekeeper fatal status` reports each outage's scope. A red repository default
@@ -119,9 +151,11 @@ is in `supervisor.ownership.bots`. The sweep then lists the bot's open pull
 requests in the repositories the desk owns (no `team`, the team's own by its
 team files, or `supervisor.ownership.review`; never `never`): one without a
 live owner for 15 minutes gets the loop's review, on approval its go, and the
-gated merge follows as for the desk's own. A head the bot moves (a rebase after
-another merge) gets a new review. A worker's park on one requests the same
-review at once.
+gated merge follows as for the desk's own. A head the bot moves after the
+approval keeps it when it only rebases onto the base or merges it; any other
+change gets a worker that takes it over and parks for the go, never a second
+review ([one desk review per pull request](#one-desk-review-per-pull-request)). A worker's park on one
+requests the same review at once.
 
 Independently, `beekeeper emergency auto-install pause --reason "<their words>"`
 pauses the loop's release installation without stopping reviews, merges or
