@@ -1129,9 +1129,9 @@ wakes and handovers; no user settings file is changed.
 `guide.effort` selects the guide's session effort, ahead of the rules. The
 supervisor is a loop, so `supervisor.effort` is the last default of the
 sessions it starts: a matching rule, the choice's effort and the continued
-session's effort win over it, and agy gets none. The loop passes no
-`--effort` of its own; its starts resolve the order themselves. Both are
-optional.
+session's effort win over it, and agy gets none. The loop passes it to each
+start as `--default-effort`, the last step of the start's order, never as
+`--effort`. Both are optional.
 
 ### Owned issue monitor
 

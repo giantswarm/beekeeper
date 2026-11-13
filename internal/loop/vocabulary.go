@@ -25,11 +25,13 @@ const (
 	boardEscalateName                = "escalate"
 	configFlag                       = "config"
 	continuationQueuedEvent          = "agents.continuation-queued"
+	defaultEffortFlag                = "--default-effort"
 	deliveryBlocked                  = "blocked"
 	deliveryExemptOnlyFlag           = "--wip-exempt-only"
 	deliveryFlowing                  = "flowing"
 	devctlBinary                     = "devctl"
 	diskHoldingFile                  = "disk-holding.json"
+	effortFlag                       = "--effort"
 	epicOwnerTask                    = "Epic owner: "
 	epicSnapshotFile                 = "epic-delivery.json"
 	excludeFlag                      = "exclude"
@@ -81,11 +83,13 @@ func Vocabulary() map[string]any {
 		"boardEscalateName":                boardEscalateName,
 		"configFlag":                       configFlag,
 		"continuationQueuedEvent":          continuationQueuedEvent,
+		"defaultEffortFlag":                defaultEffortFlag,
 		"deliveryBlocked":                  deliveryBlocked,
 		"deliveryExemptOnlyFlag":           deliveryExemptOnlyFlag,
 		"deliveryFlowing":                  deliveryFlowing,
 		"devctlBinary":                     devctlBinary,
 		"diskHoldingFile":                  diskHoldingFile,
+		"effortFlag":                       effortFlag,
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,

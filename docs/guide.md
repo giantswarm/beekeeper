@@ -265,7 +265,8 @@ resumes and the SSH executions alike, takes the first of:
 4. the effort of the session the start continues, on that session's harness:
    the parked worker a fresh continuation continues, or the roster agent a
    start of the same name resumes or replaces;
-5. `supervisor.effort`, for the sessions the loop starts.
+5. `--default-effort`, which the loop passes to the sessions it starts with
+   its `supervisor.effort`.
 
 None of them leaves the harness default; agy gets no effort from 4 or 5. The
 `agents.start` event of each start names the effort it applied. A rule's

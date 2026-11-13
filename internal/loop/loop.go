@@ -2965,6 +2965,11 @@ func isLoopGitHubHeldOutput(line string) bool {
 // Run runs a beekeeper command as the loop; a non-zero exit is an error
 // with its output.
 func (l *Loop) Run(ctx context.Context, args ...string) (string, error) {
+	// The loop's supervisor.effort is the last default of its starts: the
+	// start puts a rule, the choice and the continued session ahead of it.
+	if effort := strings.TrimSpace(l.Host.Cfg().Supervisor.Effort); effort != "" && len(args) >= 4 && args[0] == agentsName && args[1] == agentStartName && !slices.Contains(args, effortFlag) {
+		args = append(args, defaultEffortFlag, effort)
+	}
 	out, code, err := BeekeeperRun(ctx, l.As(args...)...)
 	if err != nil {
 		return out, err

@@ -89,26 +89,27 @@ func TestEffortDryRunAndWake(t *testing.T) {
 	}
 }
 
-// TestEffortLoopLeavesEffortToTheStart checks that the loop passes no
-// --effort of its own: supervisor.effort is the start's last default, after
-// the rule, the choice and the continued session, which an explicit flag
-// from the loop would mask.
-func TestEffortLoopLeavesEffortToTheStart(t *testing.T) {
+// TestEffortLoopPassesItsDefaultLast checks that the loop passes
+// supervisor.effort to its starts as --default-effort, never as --effort: an
+// explicit flag would mask the start's rule, choice and continued session.
+// A start the loop gives an --effort of its own gets no default beside it.
+func TestEffortLoopPassesItsDefaultLast(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
 	l := &loop.Loop{Host: r.a}
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", "--harness", capacity.HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
-	if call := r.called(agentsName, agentStartName); slices.Contains(call, effortFlag) {
-		t.Fatalf("the loop's default masks the start's resolution: %q", call)
+	call := r.called(agentsName, agentStartName)
+	if i := slices.Index(call, "--default-effort"); slices.Contains(call, effortFlag) || i < 0 || call[i+1] != testEffortHigh {
+		t.Fatalf("the loop's default is not the start's last: %q", call)
 	}
 	r.calls = nil
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", effortFlag, testEffortLow); err != nil {
 		t.Fatal(err)
 	}
-	call := r.called(agentsName, agentStartName)
-	if strings.Count(strings.Join(call, " "), effortFlag) != 1 || call[len(call)-1] != testEffortLow {
+	call = r.called(agentsName, agentStartName)
+	if slices.Contains(call, "--default-effort") || strings.Count(strings.Join(call, " "), effortFlag) != 1 || call[len(call)-1] != testEffortLow {
 		t.Fatalf("explicit effort overridden: %q", call)
 	}
 }
@@ -142,14 +143,16 @@ func TestEffortRulePrecedence(t *testing.T) {
 	}
 }
 
-// TestEffortLoopDefaultYieldsToRuleAndChoice checks the order of a loop
-// start's effort: a matching rule, then the choice's effort, then
-// supervisor.effort; agy gets none, and a start not of the loop gets no
-// loop default.
+// TestEffortLoopDefaultYieldsToRuleAndChoice checks the order of a
+// start's effort under the loop's --default-effort: a matching rule, then
+// the choice's effort, then the default; agy gets none, and a start without
+// the default keeps the harness default.
 func TestEffortLoopDefaultYieldsToRuleAndChoice(t *testing.T) {
 	a, _ := stubApp(t)
-	a.as = loop.LoopParty.Name
-	a.cfg.Supervisor.Effort = testEffortHigh
+	start := a.agentStartCmd()
+	if err := start.Flags().Set("default-effort", testEffortHigh); err != nil {
+		t.Fatal(err)
+	}
 	a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortLow}}
 	a.cfg.Capacity.Choices = []config.Choice{{Harness: claudeComm, Model: bgModel, Effort: testEffortX}, {Harness: claudeComm, Model: testPlainModel}}
 	for _, tc := range []struct{ name, kind, harness, model, choice, want string }{
@@ -164,9 +167,11 @@ func TestEffortLoopDefaultYieldsToRuleAndChoice(t *testing.T) {
 			t.Errorf("%+v: got %q, %v", tc, got, err)
 		}
 	}
-	a.as = agentOne
+	if err := start.Flags().Set("default-effort", ""); err != nil {
+		t.Fatal(err)
+	}
 	if got, err := a.selectedEffort("scan-worker", workerRole, claudeComm, testPlainModel, "", ""); err != nil || got != "" {
-		t.Fatalf("a start not of the loop took the loop's default: %q, %v", got, err)
+		t.Fatalf("a start without the loop's default took one: %q, %v", got, err)
 	}
 }
 

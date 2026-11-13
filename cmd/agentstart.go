@@ -740,6 +740,8 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
+	c.Flags().StringVar(&a.startDefaultEffort, defaultEffortFlag[2:], "", "the effort when no --effort, rule, choice or continued session gives one: the loop's supervisor.effort")
+	_ = c.Flags().MarkHidden(defaultEffortFlag[2:])
 	addTimerFlags(c)
 	return c
 }
