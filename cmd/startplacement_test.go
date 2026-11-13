@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/loop"
 )
@@ -21,7 +22,7 @@ func handPlacementTestApp(t *testing.T) (*app, string, *[]string, *[]execution.S
 	t.Helper()
 	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, capacity.HarnessAgy: testAgyVersion})
 	other := a.cfg.Agents.Hosts[sshTestOtherSelector]
-	other.Repositories = map[string]string{"example/unrelated": "/srv/source"}
+	other.Repositories = map[string]string{"example/unrelated": hostFixtureSource}
 	a.cfg.Agents.Hosts[sshTestOtherSelector] = other
 	a.cfg.Supervisor.Hosts = []string{sshTestOtherSelector, sshTestSelector}
 	a.cfg.Supervisor.HostsFirst = true
@@ -77,12 +78,10 @@ func TestHandStartPlacementRepositoryAndRef(t *testing.T) {
 	if p.Host != sshTestSelector || p.Ref != "release-1" || len(*looked) != 1 {
 		t.Fatalf("--ref: %+v, lookups %q", p, *looked)
 	}
-	keepTestGit(t)
 	checkout := t.TempDir()
-	for _, args := range [][]string{{"init", "-b", mainBranch}, {"remote", "add", "origin", "git@github.com:" + sshTestRepository + ".git"}} {
-		if _, err := runGit(ctx, checkout, args...); err != nil {
-			t.Fatal(err)
-		}
+	testCheckoutArgs(t, checkout, nil)
+	if _, err := runGit(ctx, checkout, gitRemoteCommand, "set-url", workerGitHubOrigin, "git@github.com:"+sshTestRepository+".git"); err != nil {
+		t.Fatal(err)
 	}
 	if repo, err := a.handStartRepository(ctx, "", "no repository here", checkout); err != nil || repo != sshTestRepository {
 		t.Fatalf("checkout's origin: %q, %v", repo, err)
@@ -104,10 +103,10 @@ func TestHandStartStaysHereAndSaysWhy(t *testing.T) {
 		edit func(*handStart)
 		want string
 	}{
-		{"review", func(s *handStart) { s.review, s.kind = true, capacity.StartKind(true, false) }, "review start stays here"},
-		{"timer", func(s *handStart) { s.byTimer = true }, "timer's start stays here"},
-		{"desktop", func(s *handStart) { s.desktop = true }, "--desktop"},
-		{"background", func(s *handStart) { s.mode = "background" }, "--mode background runs on this machine"},
+		{"a review", func(s *handStart) { s.review, s.kind = true, capacity.StartKind(true, false) }, "review start stays here"},
+		{"a timer's start", func(s *handStart) { s.byTimer = true }, "timer's start stays here"},
+		{"--desktop", func(s *handStart) { s.desktop = true }, "--desktop"},
+		{"--mode background", func(s *handStart) { s.mode = config.ModeBackground }, "--mode background runs on this machine"},
 		{"no model", func(s *handStart) { s.model = "" }, "names no model"},
 		{"unmapped", func(s *handStart) { s.repository = handTestUnmapped }, "no host takes it: " + sshTestOtherSelector + ": " + handTestUnmapped + " is not mapped; " + sshTestSelector + ": " + handTestUnmapped + " is not mapped"},
 	} {

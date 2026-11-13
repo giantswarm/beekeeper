@@ -7,13 +7,10 @@ description: >
   repository no host maps is not placed and says why.
 issue: https://github.com/giantswarm/beekeeper/issues/3866
 flow: harness
-tags: [harness, hosts, placement]
+tags: [harness, placement]
 timeout: 90s
 
 given:
-  desk:
-    config:
-      supervisor: {hosts: [builder]}
   repositories:
     - name: example/app
     - name: example/other
@@ -49,6 +46,13 @@ given:
           {"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
 
 when:
+  # The desk places its starts on builder (supervisor.hostsFirst is the
+  # default). The host is in agents.hosts once it is provisioned, so the
+  # placement is set then.
+  - name: hosts
+    run: {args: [config, set, supervisor.hosts, '[builder]']}
+    expect:
+      - exit: 0
   - name: check
     run: {args: [agents, hosts, check, builder]}
     expect:

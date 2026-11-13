@@ -160,7 +160,7 @@ func (a *app) handStartRepository(ctx context.Context, repository, brief, dir st
 	checkout, err := a.agentDir(dir, "")
 	if err == nil {
 		var out []byte
-		if out, err = runGit(ctx, checkout, "remote", "get-url", "origin"); err == nil {
+		if out, err = runGit(ctx, checkout, gitRemoteCommand, "get-url", workerGitHubOrigin); err == nil {
 			if r := execution.RepositoryIdentity(string(out)); r != "" {
 				return r, nil
 			}
