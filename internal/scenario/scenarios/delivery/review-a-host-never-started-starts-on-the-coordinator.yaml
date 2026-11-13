@@ -1,0 +1,135 @@
+name: review-a-host-never-started-starts-on-the-coordinator
+description: >
+  A worker parks its green pull request for desk review. The loop places
+  the reviewer on its execution host, which passes its checks but drops the
+  start's source upload: the host never acknowledges the start, and its
+  reservation is released. The loop's next pass does not take that start
+  for the round's reviewer. It starts the reviewer again, past the host
+  that failed it, on the coordinator, and the review comes in. Live, such a
+  round was logged as taken before an interruption, and the pull request
+  sat parked and green with no reviewer.
+issue: https://github.com/giantswarm/beekeeper/issues/3756
+flow: delivery
+tags: [delivery, loop, review, hosts]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    # Down at first: the task's worker starts on the coordinator.
+    - {name: builder, fault: unreachable}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        host: local
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      # The round's reviewer, on the coordinator.
+      - name: Review app 2 r1
+        host: local
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The host does not answer: the refill starts the worker on the
+  # coordinator.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, host: local, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  # The pass takes the park as the request for the desk review; nothing ran
+  # on the head yet, so no reviewer starts.
+  - name: parked
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park], not_contains: [supervisor.review, session.report-rejected]}
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  # The host answers again, but drops every start's source upload.
+  - host: {name: builder, fault: drops-source}
+  - advance: 2s
+  # Green: the loop places the reviewer on the host, which never
+  # acknowledges its start; the reservation is released.
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - events: {contains: [execution.reserved, execution.released]}
+      - worker: {name: Review app 2 r1, turns: 0}
+  - advance: 2s
+  # The next pass starts the reviewer again, past the host that failed it.
+  - name: retry
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output:
+          contains: [SUPERVISOR HOST SKIPPED builder, "started for https://github.com/example/app/pull/2"]
+          not_contains: [taken before an interruption]
+      - events: {contains: [supervisor.review], not_contains: [session.report-rejected]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: Review app 2 r1, host: local, outcome: finish}
+
+then:
+  - worker: {name: Review app 2 r1, host: local, harness: claude, turns: 1, outcome: finish}
+  - worker: {name: app 1, host: local, turns: 1, outcome: finish}

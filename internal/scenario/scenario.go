@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -782,6 +784,60 @@ func Filter(all []*Scenario, flows, tags []string) []*Scenario {
 		out = append(out, s)
 	}
 	return out
+}
+
+// Shard is one of Total disjoint parts of the suite: CI runs each in its
+// own container, so the suite grows without crossing its wall-time budget.
+// The zero Shard is the whole suite.
+type Shard struct {
+	Index, Total int
+}
+
+// ParseShard reads "<index>/<total>" (index from 0); empty is the whole
+// suite.
+func ParseShard(s string) (Shard, error) {
+	if strings.TrimSpace(s) == "" {
+		return Shard{}, nil
+	}
+	i, n, ok := strings.Cut(strings.TrimSpace(s), "/")
+	index, err1 := strconv.Atoi(i)
+	total, err2 := strconv.Atoi(n)
+	if !ok || err1 != nil || err2 != nil || total < 1 || index < 0 || index >= total {
+		return Shard{}, fmt.Errorf("shard %q is not <index>/<total> with 0 <= index < total", s)
+	}
+	return Shard{Index: index, Total: total}, nil
+}
+
+// Holds reports whether s runs in this shard. A scenario's shard is the
+// FNV-1a hash of its flow/name modulo Total: every scenario runs in exactly
+// one shard, the suite and the control agree on it, and adding or removing
+// a scenario moves no other.
+func (sh Shard) Holds(s *Scenario) bool {
+	if sh.Total <= 1 {
+		return true
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s.Flow + "/" + s.Name))
+	return int(h.Sum32()%uint32(sh.Total)) == sh.Index //nolint:gosec // Total is a small positive count
+}
+
+// Of keeps the scenarios of this shard.
+func (sh Shard) Of(all []*Scenario) []*Scenario {
+	var out []*Scenario
+	for _, s := range all {
+		if sh.Holds(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// String is the shard as ParseShard reads it, "all" for the whole suite.
+func (sh Shard) String() string {
+	if sh.Total <= 1 {
+		return "all"
+	}
+	return fmt.Sprintf("%d/%d", sh.Index, sh.Total)
 }
 
 // SplitList splits a comma-separated list, dropping empty entries.

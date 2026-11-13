@@ -28,16 +28,20 @@
 # test-scenarios runs the behavioral scenarios (docs/scenarios.md) on every
 # pull request. Each scenario runs in its own user, mount, PID and network
 # namespaces, which the Docker executor's seccomp profile refuses, so the job
-# runs on a machine executor with the Go toolchain go.mod pins. The suite
-# fails above 10 minutes of wall time and warns from 8; its report, JUnit
-# results and every scenario's artifacts are kept. Its scenario-control step
+# runs on a machine executor with the Go toolchain go.mod pins. The job runs
+# in two containers (parallelism), each one shard of the scenarios
+# (BEEKEEPER_SCENARIO_SHARD, split by a hash of flow/name), so the one check
+# stays and the suite can grow. Each shard fails above 10 minutes of wall
+# time and warns from 8; its report, JUnit results and every scenario's
+# artifacts are kept. Its scenario-control step
 # (.circleci/scenario-control.sh) builds the pull request's merge base and
-# runs only the scenarios the pull request adds or changes against it: each
-# must fail there on an assertion, or opt out with control: {none: <reason>}.
-# The same step runs the Test functions the pull request adds or changes in
-# any _test.go against the merge base's code with its test files applied
-# (internal/testcontrol): at least one must fail there and pass on the pull
-# request's code, or each opts out with a control: none: <reason> paragraph.
+# runs the scenarios of its shard that the pull request adds or changes
+# against it: each must fail there on an assertion, or opt out with
+# control: {none: <reason>}. Shard 0's step also runs the Test functions the
+# pull request adds or changes in any _test.go against the merge base's code
+# with its test files applied (internal/testcontrol): at least one must fail
+# there and pass on the pull request's code, or each opts out with a
+# control: none: <reason> paragraph.
 version: 2.1
 
 jobs:
@@ -76,10 +80,18 @@ jobs:
     machine:
       image: ubuntu-2404:current
     resource_class: medium
+    parallelism: 2
     environment:
       BEEKEEPER_SCENARIO_REPORT: /tmp/scenarios
     steps:
     - checkout
+    - run:
+        name: Select this container's shard of the scenarios
+        command: |
+          set -euo pipefail
+          shard="${CIRCLE_NODE_INDEX:-0}/${CIRCLE_NODE_TOTAL:-1}"
+          echo "export BEEKEEPER_SCENARIO_SHARD=${shard}" >> "$BASH_ENV"
+          echo "scenario shard ${shard}"
     - run:
         name: Install the Go toolchain go.mod pins
         command: |
