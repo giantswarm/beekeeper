@@ -610,7 +610,9 @@ whether the parked worker ran on the coordinator or on a host. On a host it cont
 open pull request at its head and publishes to its branch (see [Publish a branch and pull
 request](#publish-a-branch-and-pull-request)), so it stays on the coordinator, with a `SUPERVISOR
 CONTINUATION STAYS HERE` line saying why, when the pull request is no longer open (post-merge work
-keeps the desk's checkout and leases) or the previous worker's workspace on the coordinator holds
+keeps the desk's checkout and leases), when the worker holds more than one pull request of the
+repository (the one its park waits on and those of its desk-review parks: a host continues one, and
+its start gate refuses more) or the previous worker's workspace on the coordinator holds
 uncommitted changes to tracked files or commits on no remote branch. With no room on any host or
 here, `SUPERVISOR CONTINUATION WAITS` says so and the continuation waits for the next pass.
 

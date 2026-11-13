@@ -104,7 +104,8 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			if k := st.StartIndex(ag.Party); workspace == "" && k >= 0 {
 				workspace = st.Starts[k].Dir
 			}
-			place, here, err := l.continuationPlacement(ctx, name, r.Repo, workspace, pullOpen)
+			pulls := continuationPulls(st, ag, r.Repo)
+			place, here, err := l.continuationPlacement(ctx, name, r.Repo, workspace, pullOpen, pulls)
 			if err != nil {
 				if errors.Is(err, ErrLoopLater) {
 					l.SayOnce("continue room "+ag.Name, "SUPERVISOR CONTINUATION WAITS %s: no room for a start yet on any host or here (beekeeper capacity and the SUPERVISOR HOST WAITS lines name the limit)", ag.Name)
@@ -120,7 +121,13 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			context := fmt.Sprintf("Previous wait: %s\nReference: %s\nPublished head: %s\nEvents:\n%s", ag.Park.Waits, ref, head, strings.Join(ag.Park.Continuation, "\n"))
 			context += "\nExisting branch: " + branch
 			if place.remote() {
-				context += fmt.Sprintf("\nThis continuation runs on execution host %s, in a workspace of its own at the pull request's head; the previous worker's workspace (%s) is not reachable from it.", place.Selector, workspace)
+				// The start gate pins the one pull request it continues;
+				// without one the workspace starts at the pinned ref.
+				from := place.Ref + ", with no pull request to continue"
+				if len(pulls) == 1 {
+					from = "the head of " + pulls[0]
+				}
+				context += fmt.Sprintf("\nThis continuation runs on execution host %s, in a workspace of its own at %s; the previous worker's workspace (%s) is not reachable from it.", place.Selector, from, workspace)
 			} else {
 				context += "\nPrevious workspace (inspect for unpublished work): " + workspace
 			}
@@ -228,20 +235,53 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 // starts (startPlacement, supervisor.hostsFirst). A host continues the open
 // pull request from its head, so the continuation stays here, with here
 // saying why, when the pull request is no longer open (post-merge work may
-// need the desk's checkout, leases and proofs) or the previous workspace on
+// need the desk's checkout, leases and proofs), when it carries more than
+// one pull request of the repository (pulls, continuationPulls: the host's
+// start gate refuses that start on every pass) or the previous workspace on
 // this machine holds work no remote has.
-func (l *Loop) continuationPlacement(ctx context.Context, name, repo, workspace string, pullOpen bool) (place startHost, here string, err error) {
+func (l *Loop) continuationPlacement(ctx context.Context, name, repo, workspace string, pullOpen bool, pulls []string) (place startHost, here string, err error) {
 	if !l.PlacesRemotely() {
 		return startHost{}, "", nil
 	}
 	if !pullOpen {
 		return startHost{}, "its pull request is no longer open: the post-merge work stays with the desk's checkout and leases", nil
 	}
+	if len(pulls) > 1 {
+		return startHost{}, fmt.Sprintf("it carries %d pull requests of %s (%s), and a host continues one", len(pulls), repo, strings.Join(pulls, ", ")), nil
+	}
 	if what := ContinuationUnpublished(ctx, workspace); what != "" {
 		return startHost{}, fmt.Sprintf("its previous workspace %s holds %s, which a host would not see", workspace, what), nil
 	}
 	place, err = l.startPlacement(ctx, name, repo, false, false)
 	return place, "", err
+}
+
+// continuationPulls are the pull requests of repo a host continuation of ag
+// is handed, as the start gate's repair of its park names them
+// (startGateExemptions): the one its park waits on and each desk-review
+// park of its party. A host continues exactly one of them: with more, its
+// start gate refuses the start.
+func continuationPulls(st *state.State, ag state.Agent, repo string) []string {
+	var pulls []string
+	add := func(raw string) {
+		r, ok := Cmd.ParseRef(raw)
+		if !ok || !strings.EqualFold(r.Repo, repo) {
+			return
+		}
+		url := fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
+		if !slices.ContainsFunc(pulls, func(p string) bool { return strings.EqualFold(p, url) }) {
+			pulls = append(pulls, url)
+		}
+	}
+	if ag.Park.RefKind == github.RefPullRequest || ag.Park.ReviewHead != "" {
+		add(ag.Park.On)
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.Party.Is(ag.Party) {
+			add(rp.On)
+		}
+	}
+	return pulls
 }
 
 // ContinuationUnpublished names what a previous worker's workspace on this
