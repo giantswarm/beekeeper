@@ -570,7 +570,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if v.Finished && v.Text == "" {
 			return "", nil, refused("final report is required")
 		}
-		if m := post.Unlinked(strings.Join(append([]string{v.Text}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
+		// The no-change proof becomes the comment that closes the task's issue.
+		if m := post.Unlinked(strings.Join(append([]string{v.Text, v.NoChange}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
 			return "", nil, refused("report refused: %s", strings.Join(m, "; "))
 		}
 		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {

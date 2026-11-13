@@ -408,6 +408,30 @@ func stubNoChangeGitHub(t *testing.T, states map[github.PR]github.RefState, writ
 	return &writes
 }
 
+// TestRemoteNoChangeProofNeedsFullURLs: the no-change proof becomes the
+// comment that closes the issue, so a bare reference in it refuses the
+// report, as one in the report's text does, before anything is closed.
+func TestRemoteNoChangeProofNeedsFullURLs(t *testing.T) {
+	a, r := executionTestApp(t)
+	writes := stubNoChangeGitHub(t, map[github.PR]github.RefState{{Repo: sshTestRepository, N: 1711}: {Kind: github.RefIssue, State: github.Open}}, nil)
+	request := execution.ControlRequest{Ref: r.Ref, ID: "bare-proof", Sequence: 1, Operation: execution.ControlReport,
+		Data: mustExecutionJSON(t, executionReport{Finished: true, NoChange: "fixed by #1712, merged", Text: completedFixtureTask, Problems: []string{ghNone}})}
+	var result execution.ControlResult
+	if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Error, "#1712 without its full URL") || len(*writes) > 0 {
+		t.Fatalf("bare reference in the proof: %+v, writes %q", result, *writes)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Done || len(st.Records) != 1 {
+		t.Fatalf("refused report ended the task: done %v, records %+v", st.Agents[0].Done, st.Records)
+	}
+}
+
 // TestRemoteNoChangeClosesTheServedIssue: an execution host's worker that
 // ends its task with --done --no-change has the coordinator close the open
 // issue it served, with its proof as the comment, since the worker cannot
