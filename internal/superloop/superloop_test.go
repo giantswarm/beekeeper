@@ -1060,10 +1060,10 @@ func TestTheHeadTheReviewerPushedAndApprovedGetsTheGo(t *testing.T) {
 	}
 }
 
-// Red checks on the head the reviewer pushed and approved go to the worker
-// as if it had parked on it, and its fix of them merges on the loop's go:
+// Red checks on the head the reviewer pushed and approved return to the
+// reviewer, and its fix of them merges on the loop's go:
 // the approval stays the pull request's one review, no second round starts.
-func TestRedChecksOnTheReviewersHeadGoToTheWorkerAndItsFixMerges(t *testing.T) {
+func TestRedChecksOnTheReviewersHeadReturnToItAndItsFixMerges(t *testing.T) {
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	// GitHub attached the approval to the round's head: the push raced it.
 	approved := Review{ID: "R1", Head: head2, Commit: head1, Verdict: Approved, At: t1}
@@ -1073,15 +1073,16 @@ func TestRedChecksOnTheReviewersHeadGoToTheWorkerAndItsFixMerges(t *testing.T) {
 	p[pr] = pp
 	in := Input{Workers: parkedOn(head1, t0.Add(-time.Minute)), Pulls: p, Rounds: 1, Taken: tk}
 	red := only(t, Plan(in), KindRed)
-	if red.Agent != worker || red.Head != head2 || !strings.Contains(red.Message, "lint https://ci/lint") {
+	if red.Agent != ReviewerName(pr, 1) || red.Head != head2 || !strings.Contains(red.Message, "lint https://ci/lint") {
 		t.Fatalf("red = %+v", red)
 	}
 	in.Taken = append(slices.Clone(tk), taken(t, t1.Add(time.Minute), red)...)
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("a red wake told already got %+v", got)
 	}
-	// The worker's fix, green and parked on: the go, no second review.
+	// The reviewer's repair, green and parked on: the go, no second review.
 	in.Workers = parkedOn(head3, t0.Add(time.Hour))
+	in.Workers[0].Name = ReviewerName(pr, 1)
 	in.Pulls = pull(head3, true, approved)
 	got := Plan(in)
 	if g := only(t, got, KindGo); g.Head != head3 || !strings.Contains(g.Message, "merges without a second review") {

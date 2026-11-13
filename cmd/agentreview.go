@@ -169,7 +169,7 @@ with execution review flags.`,
 // starts again, whatever its head; the loop merges after the fixes. A round
 // released without a result (its reviewer gone) leaves the one review to
 // come and keeps its number. An assigned or requested round forbids a second
-// session on its head, including after restart and before its comment
+// session on the pull request, including after restart and before its comment
 // lands.
 func reviewRound(st *state.State, p superloop.Pull) (int, error) {
 	once := func(verdict, head string) error {
@@ -188,8 +188,8 @@ func reviewRound(st *state.State, p superloop.Pull) (int, error) {
 		if r.Result != nil && r.Result.Verdict != "" {
 			return 0, once(r.Result.Verdict, cmp.Or(r.Result.Head, r.Head))
 		}
-		if loop.SameCommit(r.Head, p.Head) && r.Released.IsZero() {
-			return 0, refused("%s already has a reviewer for head %s", p.Ref, p.Head)
+		if r.Released.IsZero() {
+			return 0, refused("%s already has a reviewer for head %s", p.Ref, r.Head)
 		}
 		round = max(round, r.Round+1)
 	}
@@ -197,10 +197,7 @@ func reviewRound(st *state.State, p superloop.Pull) (int, error) {
 		if !reviewRequestActive(st, r) || !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
-		if loop.SameCommit(r.Head, p.Head) {
-			return 0, refused("%s already requested review of head %s", p.Ref, p.Head)
-		}
-		round = max(round, r.Round+1)
+		return 0, refused("%s already requested review of head %s", p.Ref, r.Head)
 	}
 	return round, nil
 }
@@ -378,28 +375,28 @@ func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
 // gone, for its head to get a new reviewer.
 const reviewReleasedVerb = "review.released"
 
-// reserveReview reserves act's review of its head. An assignment at that
-// head whose reviewer is gone is released first (releaseGoneReviews): it
-// would otherwise refuse every retry of the head for good.
+// reserveReview reserves the pull request's one review, even if its head
+// moved. Gone reviewers are released first (releaseGoneReviews): they
+// would otherwise refuse every retry for good.
 func (a *app) reserveReview(act superloop.Action) error {
 	live, err := a.reviewersLive(act)
 	if err != nil {
 		return err
 	}
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		released := releaseGoneReviews(st, act.Ref, act.Head, live, a.timeNow().UTC())
+		released := releaseGoneReviews(st, act.Ref, live, a.timeNow().UTC())
 		for _, request := range st.ReviewRequests {
-			if reviewRequestActive(st, request) && strings.EqualFold(request.Ref, act.Ref) && (request.Head == act.Head || request.Round == act.Round) {
+			if reviewRequestActive(st, request) && strings.EqualFold(request.Ref, act.Ref) {
 				return nil, refused("%s already requested this head or review round", act.Ref)
 			}
 		}
 		for _, round := range st.DeskReviews {
-			if round.Released.IsZero() && strings.EqualFold(round.Ref, act.Ref) && round.Head == act.Head {
-				return nil, refused("%s already assigned review of this head", act.Ref)
+			if strings.EqualFold(round.Ref, act.Ref) && (round.Released.IsZero() || round.Result != nil) {
+				return nil, refused("%s already assigned its one review", act.Ref)
 			}
 		}
 		st.ReviewRequests = slices.DeleteFunc(st.ReviewRequests, func(r state.ReviewRequest) bool {
-			return strings.EqualFold(r.Ref, act.Ref) && (r.Head == act.Head || r.Round == act.Round)
+			return strings.EqualFold(r.Ref, act.Ref)
 		})
 		st.ReviewRequests = append(st.ReviewRequests, state.ReviewRequest{Ref: act.Ref, Head: act.Head, Round: act.Round, PID: os.Getpid()})
 		return released, nil
@@ -407,7 +404,7 @@ func (a *app) reserveReview(act superloop.Action) error {
 }
 
 // reviewersLive says which parties have a running process, read only when
-// an assignment at act's head could be released: a reviewer's process can
+// an assignment of act's pull request could be released: a reviewer's process can
 // outlive its roster entry. nil keeps every assignment held, also when the
 // process table cannot be read.
 func (a *app) reviewersLive(act superloop.Action) (func(state.Party) bool, error) {
@@ -416,7 +413,7 @@ func (a *app) reviewersLive(act superloop.Action) (func(state.Party) bool, error
 		return nil, err
 	}
 	if !slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool {
-		return r.Released.IsZero() && r.Result == nil && strings.EqualFold(r.Ref, act.Ref) && r.Head == act.Head
+		return r.Released.IsZero() && r.Result == nil && strings.EqualFold(r.Ref, act.Ref)
 	}) {
 		return nil, nil
 	}
@@ -430,14 +427,14 @@ func (a *app) reviewersLive(act superloop.Action) (func(state.Party) bool, error
 	}, nil
 }
 
-// releaseGoneReviews releases every assignment at ref's head that no longer
+// releaseGoneReviews releases every assignment of ref that no longer
 // holds it (deskReviewHeld) and logs each: its reviewer is gone without a
 // result, and the head gets a new reviewer in a new round.
-func releaseGoneReviews(st *state.State, ref, head string, live func(state.Party) bool, now time.Time) []state.Event {
+func releaseGoneReviews(st *state.State, ref string, live func(state.Party) bool, now time.Time) []state.Event {
 	var events []state.Event
 	for i := range st.DeskReviews {
 		round := &st.DeskReviews[i]
-		if !round.Released.IsZero() || !strings.EqualFold(round.Ref, ref) || round.Head != head || deskReviewHeld(st, *round, live) {
+		if !round.Released.IsZero() || !strings.EqualFold(round.Ref, ref) || deskReviewHeld(st, *round, live) {
 			continue
 		}
 		round.Released = now

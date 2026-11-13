@@ -204,7 +204,7 @@ in a checkout of that repository. It requires green CI at the pinned head. A
 pull request gets one desk review
 ([#3861](https://github.com/giantswarm/beekeeper/issues/3861)): the command refuses
 (exit 3) once the pull request has a desk verdict on any head, or an assigned round
-reported one, and refuses a second session on a head already requested, including
+reported one, and refuses a second session while its review runs, even after a push, including
 after a restart. An assigned reviewer that is gone without a result (done or off the
 roster, no live process, no running remote execution) no longer holds its head: the loop's
 next start of that review releases the assignment, logs `review.released` and starts
@@ -224,14 +224,14 @@ The comment's first line is always `Desk review (opus): approved` or
 `Head reviewed:` to the SHA. The reviewer fixes its own findings on the branch,
 pushes one commit and approves the head it pushed, naming that SHA, without waiting
 for its CI; the loop gives that head the merge go once it is green. Findings the
-reviewer cannot fix (a product or design decision, or a push refused to a reviewer
-on an SSH execution host, https://github.com/giantswarm/beekeeper/issues/3849) go
+reviewer cannot fix (a product or design decision, or a refused publication) go
 back to the worker, who fixes them, pushes and parks again; its green fix gets the
 merge go without a second review. Nobody merges the base into an approved branch or
 rebases it to bring it up to date: the loop merges the approved head as it is, and
-the merge-result check against the current base is the gate. Only a real conflict
-or a red merge result goes back to the worker for repair, and the repaired head
-merges on the same approval. The supervisor may still attest a nit-only push with
+the merge-result check against the current base is the gate. A real conflict or red CI on the
+reviewed branch returns to the reviewer for a repair turn; a red merge result goes
+back to the worker. The repaired head merges on the same approval. The supervisor may still
+attest a nit-only push with
 `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`,
 for a head no park asks the go for. Workers cannot attest their own fixes.
 `merge.requireReview: true` requires the fixed approval comment covering the

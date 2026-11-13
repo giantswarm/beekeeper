@@ -62,6 +62,17 @@ func TestReviewRoundPinsHeadAcrossRestarts(t *testing.T) {
 			t.Fatalf("duplicate not refused: %v", err)
 		}
 	}
+	// A reviewer may have pushed its fix without posting a verdict yet.
+	// The changed head still belongs to that active review, including when
+	// the reservation and assignment refer to the original head.
+	for _, st := range []*state.State{
+		{ReviewRequests: []state.ReviewRequest{{Ref: p.Ref, Head: loopFixed, Round: 1, PID: os.Getpid()}}},
+		{DeskReviews: []state.DeskReview{{Ref: p.Ref, Head: loopFixed, Round: 1}}},
+	} {
+		if _, err := reviewRound(st, p); Code(err) != ExitRefused {
+			t.Fatalf("moved head started a concurrent review: %v", err)
+		}
+	}
 	if round, err := reviewRound(&state.State{}, p); err != nil || round != 1 {
 		t.Fatalf("round=%d err=%v", round, err)
 	}
@@ -413,7 +424,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			retry := superloop.Action{Ref: loopPR, Head: loopHead, Round: 2}
+			retry := superloop.Action{Ref: loopPR, Head: loopFixed, Round: 2}
 			err := r.a.reserveReview(retry)
 			st, rerr := r.a.store.Read()
 			if rerr != nil {
@@ -434,7 +445,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 			if st.DeskReviews[0].Released.IsZero() {
 				t.Fatalf("gone assignment not released: %+v", st.DeskReviews[0])
 			}
-			if !slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 2 && q.Head == loopHead }) || slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 1 }) {
+			if !slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 2 && q.Head == loopFixed }) || slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 1 }) {
 				t.Fatalf("restart not reserved in place of the gone one: %+v", st.ReviewRequests)
 			}
 			events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == reviewReleasedVerb })

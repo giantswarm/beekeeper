@@ -206,10 +206,15 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	// once is the pull request's one desk review, when a round gave it:
 	// no second review starts, whoever pushed past it.
 	onceRound, once := p.reviewed(rs, l.pushed(p))
+	if once != nil && once.Verdict == Approved {
+		base.RepairAgent = ReviewerName(ref, onceRound)
+	}
 	switch {
 	case p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty:
+		base.Agent = cmp.Or(base.RepairAgent, base.Agent)
 		fix(fmt.Sprintf("head %s conflicts with %s: merge %s into the branch and resolve the conflicts", short(p.Head), baseName(p), baseName(p)))
 	case len(p.Red) > 0:
+		base.Agent = cmp.Or(base.RepairAgent, base.Agent)
 		var names []string
 		for _, c := range p.Red {
 			names = append(names, strings.TrimSpace(c.Name+" "+c.URL))

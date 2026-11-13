@@ -924,10 +924,11 @@ behind its base merges at the reviewed head as it stands: GitHub merges it onto 
 base, with no branch update and no second CI run, and the merge-result check of base plus
 head is its gate. A base that requires up-to-date branches refuses that merge (GitHub's
 merge state `BEHIND`): a configuration refusal for the repository's owner, never a branch
-update. A conflicting or draft branch, or a red merge result, goes back to the worker for
-repair and another green published head. That head keeps the approval when it only brings
-the base into the approved one (`github.ApprovalCovers`: a merge of the base, a conflict's
-resolution with lines of either side, or a rebase, with no change of its own), and the loop
+update. A conflicting branch goes back to the reviewer; a draft branch or a red merge result
+goes back to the worker for repair and another green published head. That head keeps the
+approval when it only brings the base into the approved one (`github.ApprovalCovers`: a merge
+of the base, a conflict's resolution with lines of either side, or a rebase, with no change
+of its own), and the loop
 accepts such a head, including when `merge.requireReview` is enabled; its planner gives the
 go for it without a fresh park. Any other repaired head gets the go once its worker parked
 on it, never a second review; with `merge.requireReview` the gate merges only a head an

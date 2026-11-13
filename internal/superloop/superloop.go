@@ -449,6 +449,9 @@ type Action struct {
 	Agent      string // the worker it concerns
 	Head       string
 	Round      int
+	// RepairAgent is the reviewer responsible for conflicts and red CI after approval.
+	// It does not change the delivery owner or authorize another review.
+	RepairAgent string
 	// The verdict the merge decision observed. A newer change request must
 	// force replanning before the loop records its exact-head authorization.
 	ReviewID      string
@@ -1349,6 +1352,9 @@ func planPull(in Input, l ledger, ref string, p Pull, parked map[string]Worker, 
 		return
 	}
 	rs := l.rounds[ref]
+	if n, v := p.reviewed(rs, l.pushed(p)); v != nil && v.Verdict == Approved {
+		base.RepairAgent = ReviewerName(ref, n)
+	}
 	// Approved heads use the merge executor's durable repair handoff, which
 	// retains the approval and retries a capacity-limited fixer only once.
 	approved := false
@@ -1361,6 +1367,7 @@ func planPull(in Input, l ledger, ref string, p Pull, parked map[string]Worker, 
 			a := base
 			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
 			a.Kind = KindRework
+			a.Agent = cmp.Or(a.RepairAgent, a.Agent)
 			a.Message = fmt.Sprintf("%s at head %s conflicts with its base. Fetch origin, merge the base into the branch, resolve the conflicts without local tests or lints and push, then immediately park again: the loop waits for green CI, and a pull request that had its one desk review merges without a second one. Never force-push.", p.URL, short(p.Head))
 			if !l.has(a.Key) {
 				add(a)
@@ -1370,15 +1377,19 @@ func planPull(in Input, l ledger, ref string, p Pull, parked map[string]Worker, 
 	}
 	// The reviewer fixes its findings on the branch and approves the head
 	// it pushed, before that head's CI ends. The worker's park still names
-	// the head it pushed: red checks on the approved head go to that worker
-	// as if it had parked on it, from the verdict on, once each.
+	// the head it pushed: use the approved head for CI, but send failures
+	// to its reviewer, from the verdict on, once each.
 	ciWorker := w
 	if isParked && !sameHead(w.ParkedHead, p.Head) && len(rs) > 0 {
 		if v := p.verdict(rs[len(rs)-1], l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) {
 			ciWorker.ParkedHead, ciWorker.ParkedAt = p.Head, v.At
 		}
 	}
-	planRed(l, p, ciWorker, isParked, add)
+	ciWorker.Name = cmp.Or(base.RepairAgent, ciWorker.Name)
+	planRed(l, p, ciWorker, isParked, func(a Action) {
+		a.RepairAgent = base.RepairAgent
+		add(a)
+	})
 	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && !slices.ContainsFunc(p.Reviews, func(r Review) bool {
 		return r.Verdict == ChangesRequested && (sameHead(r.Head, p.Head) || !r.At.Before(l.keys[goKey(ref, head)].At))
 	}) && in.baseMerged(p, head) {
@@ -1775,8 +1786,8 @@ func planRed(l ledger, p Pull, w Worker, isParked bool, add func(Action)) {
 		Message: redMessage(p, lines)})
 }
 
-// redMessage tells the worker parked on p which checks on its head, its
-// own or the one its reviewer pushed and approved, concluded red.
+// redMessage reports failed checks to the author before review, and to
+// the reviewer after approval.
 func redMessage(p Pull, lines []string) string {
 	return fmt.Sprintf("CI is red on %s at head %s; no review and no merge go comes until every check is green. Red: %s. "+
 		"Read the failure, fix it and push (or rerun a check that failed for no reason of the change), then park again from the worktree: beekeeper agents park --on %s \"desk review\".",

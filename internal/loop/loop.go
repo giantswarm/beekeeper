@@ -3330,6 +3330,12 @@ func (l *Loop) WakeOrStartFixer(ctx context.Context, st *state.State, act superl
 		return fmt.Errorf("its repository is unread (%s): %w", why, ErrLoopLater)
 	}
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
+		// A finished reviewer's execution no longer has publication authority.
+		// Let its done report retire it before starting its repair turn, rather
+		// than enqueueing work on the completed execution.
+		if act.Agent == act.RepairAgent && st.Agents[i].Done {
+			return fmt.Errorf("the reviewer is finishing its report before its repair: %w", ErrLoopLater)
+		}
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
 			p, err := l.readPull(ctx, act.Ref)
 			if err != nil {
@@ -3557,7 +3563,7 @@ HEAD:refs/heads/{{.Branch}}; never force-push), then approve the head you pushed
 without waiting for its CI: the loop waits for green CI on that head and merges it. Never merge the base into the branch or rebase it to bring it up to date: the loop
 merges the approved head as it is, and its merge-result check against the current base is the
 gate. Request changes only for a finding that needs a product or design decision or cannot be
-fixed on the branch, or when your push is refused (a reviewer on an SSH execution host): the
+fixed on the branch, or when your publication is refused: the
 worker fixes those, and the loop merges its green fix without another review. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
@@ -3572,6 +3578,8 @@ beekeeper agents idle --done --report "<the same Desk review (opus): verdict lin
 and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>"
 for each problem encountered). The supervisor gives the merge go after your approval once CI
 is green, or relays the findings you could not fix to the worker.
+A real conflict or red CI after your approval returns to you for a repair turn, never a
+second review verdict. Push the repair and park for the loop to wait for CI and merge.
 `
 
 // Brief renders the template in file (def when file is empty) with d into

@@ -318,8 +318,18 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 				if call != nil || !strings.Contains(r.out.String(), "SUPERVISOR MERGE POLICY REFUSED") || !strings.Contains(r.out.String(), reason) {
 					t.Fatalf("policy refusal requested repair or lost its reason: %v\n%s", r.calls, r.out)
 				}
-			} else if call == nil || !strings.Contains(call[3], reason) {
-				t.Fatalf("gate diagnostics hid the mutation result: %v\n%s", r.calls, r.out)
+			} else {
+				if call != nil {
+					t.Fatalf("conflict returned to the author: %v", call)
+				}
+				start := r.called(agentsName, agentStartName, loopReviewer)
+				if start == nil {
+					t.Fatalf("no reviewer repair turn: %v\n%s", r.calls, r.out)
+				}
+				brief, err := os.ReadFile(start[3])
+				if err != nil || !strings.Contains(string(brief), reason) {
+					t.Fatalf("reviewer repair lost the gate diagnostic: %v: %s", err, brief)
+				}
 			}
 		})
 	}

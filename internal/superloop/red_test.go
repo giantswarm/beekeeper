@@ -214,8 +214,8 @@ func TestApprovedConflictingHeadUsesMergeRepair(t *testing.T) {
 // A reviewer fixes its findings and reports its published fixes without
 // waiting for CI (https://github.com/giantswarm/beekeeper/issues/3861). The
 // original worker's park is still on head1; failures on the reviewed head2
-// wake it, and head2 merges once green.
-func TestReviewerFixesReturnRedCIToWorkerAndMergeOnlyOnGreen(t *testing.T) {
+// go back to its reviewer, and head2 merges once green.
+func TestReviewerFixesReturnRedCIToReviewerAndMergeOnlyOnGreen(t *testing.T) {
 	in := Input{Workers: parkedOn(head1, t0), Pulls: pull(head1, true), Rounds: 1}
 	in.Taken = taken(t, t0, only(t, Plan(in), KindReview))
 	approval := Review{ID: "fixed", Head: head2, Verdict: Approved, At: t1}
@@ -227,7 +227,7 @@ func TestReviewerFixesReturnRedCIToWorkerAndMergeOnlyOnGreen(t *testing.T) {
 	p.Red = []Check{{Name: lintCheck, URL: lintURL}}
 	in.Pulls[pr] = p
 	red := only(t, Plan(in), KindRed)
-	if red.Agent != worker || red.Head != head2 {
+	if red.Agent != ReviewerName(pr, 1) || red.Head != head2 {
 		t.Fatalf("reviewer fix CI failure went to %+v", red)
 	}
 	in.Taken = append(in.Taken, taken(t, t1.Add(time.Minute), red)...)
