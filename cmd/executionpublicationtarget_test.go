@@ -116,7 +116,6 @@ func TestContinuationPublicationRejectsInvalidTargets(t *testing.T) {
 		repairs []string
 		readErr bool
 	}{
-		{name: "pull request closed", change: func(pull, _ map[string]any) { pull["state"] = noteStatusClosed }},
 		{name: "head in a fork", change: func(_, head map[string]any) {
 			head["repo"] = map[string]string{continuationFixtureRepoKey: "other/beekeeper"}
 		}},
@@ -153,6 +152,62 @@ func TestContinuationPublicationRejectsInvalidTargets(t *testing.T) {
 	}
 	if target, err := continuationPublication(t.Context(), sshTestRepository, []string{"giantswarm/devctl#42"}); target != nil || err != nil {
 		t.Fatalf("other repository's repair = %+v, %v", target, err)
+	}
+}
+
+// The start gate's repairs hold more than PRs to continue: an incident hold
+// names its repair by the issue, and the loop's repair claims of a board
+// item's name stay on record after their PR closed. Neither refuses the
+// start; only an open PR is pinned.
+func TestContinuationPublicationSkipsIssuesAndClosedPulls(t *testing.T) {
+	old := executionPublishGH
+	t.Cleanup(func() { executionPublishGH = old })
+	sha := strings.Repeat("b", 40)
+	pull := func(n int, pullState string) []byte {
+		return []byte(fmt.Sprintf(`{"state":%q,"html_url":"https://github.com/%s/pull/%d","head":{"ref":"fix/example-%d","sha":%q,"repo":{"full_name":%q}},"base":{"ref":%q}}`, pullState, sshTestRepository, n, n, sha, sshTestRepository, mainBranch))
+	}
+	issueReadFails := false
+	executionPublishGH = func(_ context.Context, args ...string) ([]byte, error) {
+		switch args[len(args)-1] {
+		case fmt.Sprintf("repos/%s/pulls/3", sshTestRepository):
+			return nil, fmt.Errorf("gh: Not Found (HTTP 404)")
+		case fmt.Sprintf("repos/%s/issues/3", sshTestRepository):
+			if issueReadFails {
+				return nil, fmt.Errorf("issue read unavailable")
+			}
+			return []byte(`{"number":3,"state":"open"}`), nil
+		case fmt.Sprintf("repos/%s/pulls/41", sshTestRepository):
+			return pull(41, noteStatusClosed), nil
+		case fmt.Sprintf("repos/%s/pulls/42", sshTestRepository):
+			return pull(42, noteStatusOpen), nil
+		}
+		t.Fatalf("unexpected read %v", args)
+		return nil, nil
+	}
+	issue, closed, open := sshTestRepository+"#3", sshTestRepository+"#41", sshTestRepository+"#42"
+	for _, tc := range []struct {
+		name    string
+		repairs []string
+		branch  string
+	}{
+		{name: "incident repair named by its issue", repairs: []string{issue}},
+		{name: "pull request closed since its claim", repairs: []string{closed}},
+		{name: "the one open pull request", repairs: []string{closed, issue, open}, branch: "fix/example-42"},
+	} {
+		target, err := continuationPublication(t.Context(), sshTestRepository, tc.repairs)
+		branch := ""
+		if target != nil {
+			branch = target.Branch
+		}
+		if err != nil || branch != tc.branch {
+			t.Fatalf("%s: target %+v, err %v; want branch %q", tc.name, target, err, tc.branch)
+		}
+	}
+	// A number that is neither read as a pull request nor told an issue
+	// still refuses the start.
+	issueReadFails = true
+	if _, err := continuationPublication(t.Context(), sshTestRepository, []string{issue}); err == nil {
+		t.Fatal("unreadable repair accepted")
 	}
 }
 

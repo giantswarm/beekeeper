@@ -47,9 +47,34 @@ func readRESTPull(ctx context.Context, repository string, n int) (restPull, erro
 	return pull, nil
 }
 
+// repairRefIsIssue reports whether number n of repository is an issue, not a
+// pull request. GitHub's issues endpoint answers both; only a pull request
+// carries pull_request.
+func repairRefIsIssue(ctx context.Context, repository string, n int) (bool, error) {
+	data, err := executionPublishGH(github.ActingOn(ctx, repository), workerGitHubAPIGroup, fmt.Sprintf("repos/%s/issues/%d", repository, n))
+	if err != nil {
+		return false, err
+	}
+	var item struct {
+		Number int              `json:"number"`
+		Pull   *json.RawMessage `json:"pull_request"`
+	}
+	if err := json.Unmarshal(data, &item); err != nil {
+		return false, fmt.Errorf("decode issue %s#%d: %w", repository, n, err)
+	}
+	return item.Number == n && item.Pull == nil, nil
+}
+
 // continuationPublication accepts only the repair targets established by the
 // start gate's recorded park or loop claim. A source ref or a PR in a brief is
 // not a grant. Pin the source and destination together before reserving a start.
+//
+// The start gate's repairs are wider than PRs to continue: an incident hold
+// names its repair by the issue, and the loop's repair claims of a name stay
+// on record after their PR closed or merged, so a later start of the same
+// board item under the same name finds them again. Neither an issue nor a
+// closed PR is a destination; that start begins anew. Only open PRs count,
+// and more than one in the repository is ambiguous.
 func continuationPublication(ctx context.Context, repository string, repairs []string) (*state.ExecutionPublication, error) {
 	var target *state.ExecutionPublication
 	for _, raw := range repairs {
@@ -57,19 +82,24 @@ func continuationPublication(ctx context.Context, repository string, repairs []s
 		if !ok || !strings.EqualFold(ref.Repo, repository) {
 			continue
 		}
-		if target != nil {
-			return nil, refused("continuation names multiple pull requests in its repository")
-		}
 		pull, err := readRESTPull(ctx, repository, ref.N)
 		if err != nil {
+			if issue, kindErr := repairRefIsIssue(ctx, repository, ref.N); kindErr == nil && issue {
+				continue
+			}
 			return nil, fmt.Errorf("read continuation pull request: %w", err)
 		}
-		if pull.State != noteStatusOpen ||
-			pull.URL != fmt.Sprintf("https://github.com/%s/pull/%d", repository, ref.N) ||
+		if pull.State != noteStatusOpen {
+			continue
+		}
+		if target != nil {
+			return nil, refused("continuation names multiple open pull requests in its repository")
+		}
+		if pull.URL != fmt.Sprintf("https://github.com/%s/pull/%d", repository, ref.N) ||
 			!strings.EqualFold(pull.Head.Repo.FullName, repository) ||
 			!publicationCommit(pull.Head.SHA) || pull.Head.Ref == "" || pull.Head.Ref == pull.Base.Ref ||
 			pull.Head.Ref == pull.Head.Repo.DefaultBranch {
-			return nil, refused("continuation requires an open pull request on a distinct branch in its repository")
+			return nil, refused("continuation requires a pull request on a distinct branch in its repository")
 		}
 		target = &state.ExecutionPublication{Branch: pull.Head.Ref, Head: pull.Head.SHA, URL: pull.URL}
 	}

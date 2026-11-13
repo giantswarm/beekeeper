@@ -886,8 +886,10 @@ GitHub login. New work uses
 An authorized continuation of a recorded park or loop repair claim starts at the
 existing PR's head and keeps its branch and PR, even with a new execution ID.
 The coordinator pins that assignment separately from the source ref: naming a
-branch or mentioning a PR in a brief does not grant write access. Closed PRs,
-fork branches and ambiguous repair assignments are refused. A continuation uses
+branch or mentioning a PR in a brief does not grant write access. Fork branches
+and more than one open PR in the repository are refused. An incident's repair
+named by its issue, or a repair claim whose PR has since closed or merged, is
+no assignment: that start begins fresh. A continuation uses
 `beekeeper agents publish` without title/body flags. Its publication reads the
 assigned PR by its number and pushes to that PR's branch; it never creates a PR.
 If that PR was closed or moved to another branch meanwhile, the publication is
