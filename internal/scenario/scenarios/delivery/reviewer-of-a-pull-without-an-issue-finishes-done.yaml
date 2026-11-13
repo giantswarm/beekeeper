@@ -73,6 +73,12 @@ when:
     run: {args: [watch, --once]}
     expect:
       - exit: 0
+  # The loop's first pass: a park from before it is no review request.
+  - name: loop
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 1s
   # A worker whose task names no issue: its pull request closes none.
   - name: start
     run:
