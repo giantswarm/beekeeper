@@ -1257,6 +1257,22 @@ func TestAReviewOfAReplacedHeadIsNoVerdict(t *testing.T) {
 	}
 }
 
+// A review of the head a later round opened on is that round's, never an
+// earlier round's, even when it came a moment before the loop logged that
+// round's start: a quick reviewer of round two approves its head, and round
+// one, whose head the author replaced, did not approve "a different head".
+// https://github.com/giantswarm/beekeeper/issues/3843
+func TestAReviewOfALaterRoundsHeadIsThatRoundsVerdict(t *testing.T) {
+	r2 := t0.Add(time.Hour)
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	tk = append(tk, taken(t, r2, Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker, Round: 2})...)
+	approved := Review{ID: "R2", Head: head2, Commit: head2, Verdict: Approved, At: r2.Add(-5 * time.Second)}
+	in := Input{Workers: parkedOn(head2, t0.Add(30*time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	if g := only(t, Plan(in), KindGo); g.Head != head2 {
+		t.Errorf("go = %+v", g)
+	}
+}
+
 // A reviewer that left the roster without a verdict, and without a done (its
 // remote start failed), holds the parked head no longer: OrphanWait after its
 // round opened, the same head gets the next round under a key of its own,

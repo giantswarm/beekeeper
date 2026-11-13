@@ -199,8 +199,10 @@ const verdictSlack = 30 * time.Second
 // round started on a head no earlier round opened on is the round's, on its
 // own head, when pushed says that head was pushed during the round. A
 // verdict on any other head (one from before the round, a teammate's late
-// review of an older head), of an earlier round, or of nobody's round never
-// counts, nor does one of a head its author had replaced when it came.
+// review of an older head), of an earlier or a later round, or of nobody's
+// round never counts, nor does one of a head its author had replaced when it
+// came. A later round's head is that round's even when its review came a
+// moment before the loop logged the round's start.
 func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
 	var onHead *Review
@@ -218,7 +220,7 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 		if onHead != nil && (r.At.Before(onHead.At) || r.Verdict != ChangesRequested) {
 			continue
 		}
-		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) && pushed(r) {
+		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) && !slices.ContainsFunc(rd.later, func(h string) bool { return sameHead(h, r.Head) }) && pushed(r) {
 			return &p.Reviews[i]
 		}
 	}
@@ -538,6 +540,8 @@ type round struct {
 	at      time.Time
 	until   time.Time
 	earlier []string
+	// later are the heads the rounds after it opened on.
+	later []string
 }
 
 // question is a pull request whose ownership the guide's person was asked
@@ -628,6 +632,9 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			}
 			for _, rd := range rs[:i] {
 				rs[i].earlier = append(rs[i].earlier, rd.head)
+			}
+			for _, rd := range rs[i+1:] {
+				rs[i].later = append(rs[i].later, rd.head)
 			}
 		}
 	}
