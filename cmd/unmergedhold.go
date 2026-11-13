@@ -333,6 +333,11 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 			return e.By.Name == loop.LoopParty.Name && (e.Verb == loop.LoopClaimVerb || e.Verb == loop.LoopClaimEndVerb)
 		}); err == nil {
 			settled := map[string]bool{}
+			// boardStart: the newest claim for name is this start's own
+			// board start. A pull request whose merge go the loop claimed
+			// waits for its merge, not for a worker: such a start inherits
+			// no exemption from the go.
+			newest, boardStart := true, false
 			for i := len(evs) - 1; i >= 0; i-- {
 				e := evs[i]
 				key, agent, ok := loop.Keyed(e.Detail)
@@ -346,9 +351,14 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 				if settled[key] || !strings.EqualFold(agent, name) {
 					continue
 				}
-				if !strings.HasPrefix(key, "next") && !strings.HasPrefix(key, "fill ") && !strings.HasPrefix(key, "review ") {
-					addRepairPull(e.Subject)
+				own := strings.HasPrefix(key, "next") || strings.HasPrefix(key, "fill ")
+				if newest {
+					newest, boardStart = false, own
 				}
+				if own || strings.HasPrefix(key, "review ") || boardStart && strings.HasPrefix(key, "go ") {
+					continue
+				}
+				addRepairPull(e.Subject)
 			}
 		}
 	}

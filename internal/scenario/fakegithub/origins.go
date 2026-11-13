@@ -435,6 +435,28 @@ func (o *Origins) SetRef(r *Repo, ref, sha string) error {
 	return err
 }
 
+// PullRef is the ref GitHub keeps at pull request n's head.
+func PullRef(n int) string { return fmt.Sprintf("refs/pull/%d/head", n) }
+
+// FollowPull points pull request n's ref at branch, so a fetch of
+// refs/pull/<n>/head reads the branch's head as it moves, as on GitHub.
+func (o *Origins) FollowPull(r *Repo, n int, branch string) error {
+	_, err := o.git(r, "symbolic-ref", PullRef(n), "refs/heads/"+branch)
+	return err
+}
+
+// PinPull keeps pull request n's ref at the commit it names now, for a
+// branch about to go: GitHub keeps the ref of a pull request whose branch
+// was deleted.
+func (o *Origins) PinPull(r *Repo, n int) error {
+	sha, ok := o.Resolve(r, PullRef(n))
+	if !ok {
+		return nil
+	}
+	_, err := o.git(r, "update-ref", "--no-deref", PullRef(n), sha)
+	return err
+}
+
 // DeleteRef removes a ref.
 func (o *Origins) DeleteRef(r *Repo, ref string) error {
 	if _, ok := o.Resolve(r, ref); !ok {

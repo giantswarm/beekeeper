@@ -21,6 +21,10 @@ given:
       capacity:
         providers: {codex: {ceiling: 2}}
         choices: [{harness: codex, model: gpt-5.2-codex}]
+      # The lane settles only briefly after the other pull request merges
+      # (its release is unknown): the repaired head's merge follows within
+      # the scenario's seconds instead of the default five minutes.
+      merge: {settle: 1s}
   github:
     repositories:
       - name: example/app

@@ -648,6 +648,11 @@ func (m *Model) AddPull(r *Repo, s PullSpec) (*Pull, error) {
 	for _, l := range s.Labels {
 		p.Labels = append(p.Labels, m.EnsureLabel(r, l, "", "").Name)
 	}
+	if m.Origins.Has(r) {
+		if err := m.Origins.FollowPull(r, n, s.Head); err != nil {
+			return nil, err
+		}
+	}
 	r.Pulls = append(r.Pulls, p)
 	return p, nil
 }
@@ -1396,6 +1401,13 @@ func (m *Model) Merge(p *Pull, s MergeSpec) error {
 // DeleteBranch removes a branch.
 func (m *Model) DeleteBranch(r *Repo, name string) error {
 	if m.Origins.Has(r) {
+		for _, p := range r.Pulls {
+			if p.Head == name {
+				if err := m.Origins.PinPull(r, p.Number); err != nil {
+					return err
+				}
+			}
+		}
 		return m.Origins.DeleteRef(r, "refs/heads/"+name)
 	}
 	if _, ok := r.Branches[name]; !ok {

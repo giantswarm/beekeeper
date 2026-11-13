@@ -82,7 +82,8 @@ given:
 **Origins.** Every repository has a bare Git origin, and GitHub's branches, heads, commits, files,
 diffs and merges are the origin's, read and written with real `git`. A pull request's head is its
 branch's head, so a worker's push moves it, and a merge commits to the base branch and closes the
-issues the pull request closes.
+issues the pull request closes. As on GitHub, `refs/pull/<n>/head` follows that head and keeps its
+last commit once the branch is deleted, so a fetch of it reads a commit pushed from another clone.
 
 **The board.** Without `projects`, the scenario's board is the desk's (`board.owner`,
 `board.project`), with the Status options Todo, Ready, In Progress, Blocked and Done plus any an

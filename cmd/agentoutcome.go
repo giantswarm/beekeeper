@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -16,6 +17,11 @@ const taskEndings = `finish with a merged pull request or --done --no-change "<r
 // Only the worker owning a delivery may end it. Reviewers serving its PR
 // report their review independently; that does not complete the issue.
 func workerDeliveries(st *state.State, ag state.Agent) []int {
+	// A review session owns no delivery, even one whose ref is the pull
+	// request it reviews (a worker started without an issue).
+	if slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Kind == capacity.TaskKindReview && s.Is(ag.Party) }) {
+		return nil
+	}
 	var found []int
 	for i, d := range st.Deliveries {
 		served := slices.ContainsFunc(st.Records, func(r state.Record) bool {
