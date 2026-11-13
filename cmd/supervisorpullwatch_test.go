@@ -188,6 +188,42 @@ func TestPullWatcherPassUsesObservationsWhileFetchIsBlocked(t *testing.T) {
 	}
 }
 
+// GitHub leaves the mergeability of some old pull requests unknown. One
+// nobody updated for ten minutes no longer keeps the watch at the 30-second
+// interval, while one updated a minute ago is still read again there
+// (#3769).
+func TestPullWatcherStopsWaitingForMergeabilityThatNeverComes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		updated time.Duration
+		want    time.Duration
+	}{
+		{name: "updated a minute ago", updated: time.Minute, want: loop.LoopPullShort},
+		{name: "updated long ago", updated: time.Hour, want: loop.LoopPullLong},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := l.PullWatcher()
+			w.Set([]string{loopPR}, nil, nil, 0, nil)
+			w.Snapshot.ListedAt = time.Now()
+			p := r.pull
+			p.Mergeable, p.Updated = "UNKNOWN", time.Now().Add(-tc.updated)
+			old := loop.ReadLoopPullBatch
+			t.Cleanup(func() { loop.ReadLoopPullBatch = old })
+			loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {
+				return map[string]loop.WatchedLoopPull{loopPR: {Pull: p, At: r.a.now}}, nil
+			}
+			if next, err := w.Poll(t.Context(), l); err != nil || next != tc.want {
+				t.Fatalf("next poll in %s (err %v), want %s", next, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestPullWatcherGreenReachesDeliveryWithoutDeskEvent(t *testing.T) {
 	observe, sweep := loop.ReadObservedLoopPull, loop.ReadLoopSweep
 	r := newLoopRig(t)

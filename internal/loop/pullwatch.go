@@ -25,9 +25,10 @@ const (
 	loopPullBackoff = 10 * time.Minute
 	LoopPullMaxAge  = 5 * time.Minute
 	// LoopPullChecksWait is how long after a pull request's last update the
-	// watch waits for its first check at the short interval: a pull request
-	// without any check since longer has no CI coming until a push updates
-	// it, and the long interval reads it.
+	// watch waits at the short interval for its first check and for GitHub
+	// to compute its mergeability: a pull request without any check, or of
+	// unknown mergeability, since longer has neither coming at that pace,
+	// and the long interval reads it.
 	LoopPullChecksWait = 10 * time.Minute
 	loopPullBatchSize  = 60
 	// loopPullDetailBatchSize bounds a batch of pull requests read on first
@@ -600,7 +601,10 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	})
 	next := LoopPullLong
 	for _, p := range found {
-		if p.Pending || p.Pull.Mergeable == "UNKNOWN" {
+		// Live, 22 old pull requests of unknown mergeability kept the whole
+		// watch at the short interval too: like a check that never comes, an
+		// old pull request's unknown mergeability no longer does (#3769).
+		if p.Pending || (p.Pull.Mergeable == "UNKNOWN" && !loopPullQuiet(p.Pull)) {
 			next = LoopPullShort
 		}
 	}
@@ -919,10 +923,17 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 	}
 	// Every old pull request of a repository without CI kept the whole watch
 	// at the short interval for checks that never come (#3769).
-	if pending && len(checks) == 0 && !p.Updated.IsZero() && clk.Since(p.Updated) > LoopPullChecksWait {
+	if pending && len(checks) == 0 && loopPullQuiet(p) {
 		pending = false
 	}
 	return p, pending, err
+}
+
+// loopPullQuiet says nobody updated a pull request for LoopPullChecksWait:
+// a first check or a mergeability GitHub has not given since is not coming
+// at the short interval. An unknown update time is not quiet.
+func loopPullQuiet(p superloop.Pull) bool {
+	return !p.Updated.IsZero() && clk.Since(p.Updated) > LoopPullChecksWait
 }
 
 // Check suites expose workflows which never created a job. Read them in the

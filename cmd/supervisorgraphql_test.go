@@ -382,6 +382,20 @@ func TestLoopPassAdmitsOnTheSavedReading(t *testing.T) {
 	if err := r.a.loopGitHub(t.Context(), "pass", func() error { ran = true; return nil }); !errors.Is(err, loop.ErrLoopLater) || ran {
 		t.Fatalf("saved reading under the reserve above github.floor admitted the pass: ran=%t err=%v", ran, err)
 	}
+	// A saved reading over a minute old is no ground to hold or admit the
+	// pass on: it takes one fresh reading, none after its no-op, and that
+	// healthy reading releases the hold.
+	readings := 0
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		readings++
+		return github.Budget{Remaining: 4900, Reset: r.a.now.Add(time.Hour),
+			GraphQL: &github.GraphQL{Remaining: 4800, Limit: 5000, Reset: r.a.now.Add(time.Hour)}}, nil
+	}
+	r.a.now = r.a.now.Add(2 * time.Minute)
+	ran = false
+	if err := r.a.loopGitHub(t.Context(), "pass", func() error { ran = true; return nil }); err != nil || !ran || readings != 1 {
+		t.Fatalf("stale saved reading: ran=%t readings=%d err=%v, want the pass admitted on one fresh reading", ran, readings, err)
+	}
 }
 
 func healthyLoopBudget(t *testing.T, r *loopRig) {

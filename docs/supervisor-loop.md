@@ -57,7 +57,8 @@ separately; selecting another minimum or a GitHub window resetting never repleni
 allowance. One independent watcher reads the pull requests of active deliveries, parks and sweep
 discoveries in GraphQL batches of up to 60. It polls every 30 seconds while checks or mergeability
 are pending and every two minutes when settled. A pull request no check has reported on ten minutes
-after its last update counts as settled: no CI is coming until a push updates it.
+after its last update counts as settled: no CI is coming until a push updates it. So does one whose
+mergeability GitHub still reports unknown then: the two-minute polls read it until GitHub has it.
 
 Files, body and reviews refresh only when the head or `updatedAt` changes. Errors and rate limits
 are logged once per episode and back off exponentially to ten minutes, respecting `github.floor`.
