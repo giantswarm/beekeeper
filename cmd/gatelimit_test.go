@@ -71,7 +71,7 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err == nil {
 		t.Error("the heard marker is left: the owner would not be woken")
 	}
-	st, _ := g.Host.store.Read()
+	st, _ := gateApp(g.Host).store.Read()
 	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 && m.Phase == state.Running && m.Child == pid }); i < 0 {
 		t.Fatalf("the merge does not run on in its lane: %+v", st.Merges)
 	}
@@ -85,13 +85,13 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 		}
 	}
 	// The gate's process is gone, as the watch sees it once the call ended.
-	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PID = deadPID(t)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w := &app{cfg: g.Host.cfg, store: g.Host.store, now: time.Now()}
+	w := &app{cfg: gateApp(g.Host).cfg, store: gateApp(g.Host).store, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)
@@ -112,14 +112,14 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	left := func(t *testing.T) (*app, string) {
 		t.Helper()
 		g, gatePID := runningMerge(t, scratchRepo, lane), deadPID(t)
-		if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Merges[0].PID, st.Merges[0].By = gatePID, owner
 			st.Agents = []state.Agent{{Party: owner}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		base := MergeBase(g.Host.store.Dir(), scratchRepo, 7)
+		base := MergeBase(gateApp(g.Host).store.Dir(), scratchRepo, 7)
 		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +128,7 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 		if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		return g.Host, base
+		return gateApp(g.Host), base
 	}
 
 	a, base := left(t)

@@ -195,7 +195,7 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 				t.Fatal("the watch settled a release unknown before the settle rule")
 			}
 
-			g.Host.now = a.now.Add(6 * time.Minute)
+			gateApp(g.Host).now = a.now.Add(6 * time.Minute)
 			if why, err := g.Step(); err != nil || why != "" {
 				t.Fatalf("after the settle: %q, %v", why, err)
 			}
@@ -234,7 +234,7 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	endDevctl(t, a, scratchRepo, 889, "", "143")
 
 	until := mergedAt.Add(settle)
-	g.Host.now = until.Add(-time.Second)
+	gateApp(g.Host).now = until.Add(-time.Second)
 	why, err := g.Step()
 	if err != nil || why != "next in lane o/r, o/r#889's release is unknown: the lane settles until "+until.Local().Format("15:04") {
 		t.Fatalf("before mergedAt plus settle: %q, %v", why, err)
@@ -246,7 +246,7 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	}
 
 	// Past mergedAt plus settle, still well before the record time plus settle.
-	g.Host.now = until.Add(time.Second)
+	gateApp(g.Host).now = until.Add(time.Second)
 	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("after mergedAt plus settle: %q, %v", why, err)
 	}

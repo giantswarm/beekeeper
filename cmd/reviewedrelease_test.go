@@ -57,7 +57,7 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 			if !ok || !out.Merged || out.NoRelease != tc.noRelease || tc.candidate && out.Release != reviewFixCandidate {
 				t.Fatalf("lost durable release metadata: %s %+v", raw, out)
 			}
-			if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+			if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: out, Rc: result.ExitCode}, time.Now(), ""), nil
 			}); err != nil {
 				t.Fatal(err)
@@ -89,7 +89,7 @@ func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	}
 	const rollKey = "flux-system/r"
 	now := time.Now()
-	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Roll = []string{rollKey}
 		return recordRun(st, 0, lane, g.Me, RunOutcome{Out: out}, now, ""), nil
 	}); err != nil {

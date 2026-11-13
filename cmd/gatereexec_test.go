@@ -124,7 +124,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 		// The re-executed gate: the same process, arguments and stdio.
 		t.Setenv(GateRunningEnv, fmt.Sprintf("%d:%d", pid, run.Offset))
 		stdout := capture(t, &os.Stdout)
-		err := g.Host.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
+		err := gateApp(g.Host).gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -359,7 +359,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Host.store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
+	if gateApp(g.Host).store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
 	stderr := capture(t, &os.Stderr)
@@ -394,7 +394,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 		t.Errorf("stale-writer event %q", d)
 	}
 
-	w := &app{cfg: g.Host.cfg, store: newer, now: time.Now()}
+	w := &app{cfg: gateApp(g.Host).cfg, store: newer, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)

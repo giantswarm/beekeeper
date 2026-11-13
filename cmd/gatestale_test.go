@@ -108,7 +108,7 @@ func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := runningMergeIn(t, store, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	newer, err := state.OpenVersion(g.Host.store.Dir(), newerRelease)
+	newer, err := state.OpenVersion(gateApp(g.Host).store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if g.Host.store, err = state.OpenVersion(g.Host.store.Dir(), olderRelease); err != nil {
+	if gateApp(g.Host).store, err = state.OpenVersion(gateApp(g.Host).store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
 	_, err = g.Start("", nil)
@@ -126,7 +126,7 @@ func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 	if !errors.As(err, &stale) || stale.Version != olderRelease || stale.Newer != newerRelease {
 		t.Fatalf("start: %v, want the stale writer", err)
 	}
-	if d := lastEventOf(t, g.Host, "merge.refused"); d != "" {
+	if d := lastEventOf(t, gateApp(g.Host), "merge.refused"); d != "" {
 		t.Errorf("refused as it is: %q", d)
 	}
 }

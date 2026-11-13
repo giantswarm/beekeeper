@@ -203,8 +203,8 @@ func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 		if why, err := g.Step(); err != nil || why == "" || !g.Passive {
 			t.Fatalf("poll: %q, %v", why, err)
 		}
-		if g.Host.cfg.Merge.Cap != cap || len(g.Lane.Repositories) != 2 {
-			t.Fatalf("stale settings: cap %d, lane %+v", g.Host.cfg.Merge.Cap, g.Lane)
+		if gateApp(g.Host).cfg.Merge.Cap != cap || len(g.Lane.Repositories) != 2 {
+			t.Fatalf("stale settings: cap %d, lane %+v", gateApp(g.Host).cfg.Merge.Cap, g.Lane)
 		}
 	}
 }

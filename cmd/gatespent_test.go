@@ -155,10 +155,10 @@ func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 	}
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
-	g.Host.now = time.Now()
-	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].Joined = g.Host.now.Add(-time.Minute)
-		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, Joined: g.Host.now.Add(-time.Minute)})
+	gateApp(g.Host).now = time.Now()
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].Joined = gateApp(g.Host).now.Add(-time.Minute)
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, Joined: gateApp(g.Host).now.Add(-time.Minute)})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -176,13 +176,13 @@ func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 		t.Errorf("the base branch was read %d times for two places of the pass, want twice", reads)
 	}
 
-	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Waiting, Joined: g.Host.now.Add(time.Minute)}}
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Waiting, Joined: gateApp(g.Host).now.Add(time.Minute)}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g.Host.now = g.Host.now.Add(2 * time.Minute)
+	gateApp(g.Host).now = gateApp(g.Host).now.Add(2 * time.Minute)
 	readFor(9)
 	if reads != 3 {
 		t.Errorf("a new pass read the base branch %d times in all, want a third read", reads)

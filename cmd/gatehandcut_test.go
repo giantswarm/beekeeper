@@ -63,8 +63,8 @@ func startMerge(t *testing.T, g *GateRun) error {
 // of 10, and starts it: the reason it still waits, if any.
 func turnCame(t *testing.T, g *GateRun) (string, error) {
 	t.Helper()
-	g.Host.cfg.Merge.Cap = 10
-	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	gateApp(g.Host).cfg.Merge.Cap = 10
+	_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
 		return nil, nil
 	})

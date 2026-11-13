@@ -369,8 +369,8 @@ func stopGate(t *testing.T, output string) string {
 	PullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
 	gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	g.Host.cfg.StateDir = g.Host.store.Dir()
-	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	gateApp(g.Host).cfg.StateDir = gateApp(g.Host).store.Dir()
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Output = output
 		return nil, nil
 	}); err != nil {
@@ -388,7 +388,7 @@ func stopGate(t *testing.T, output string) string {
 	}
 	child := gateState(t, g).Merges[0].Child
 	task := strings.TrimSuffix(filepath.Base(output), taskOutputExt)
-	said := g.Host.stopTask("", task)
+	said := gateApp(g.Host).stopTask("", task)
 	select {
 	case err := <-done:
 		if Code(err) != 143 {

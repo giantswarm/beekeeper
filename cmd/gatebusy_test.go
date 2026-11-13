@@ -38,7 +38,7 @@ func busyGate(t *testing.T, budget, pause time.Duration) *GateRun {
 	stubGitHub(t, github.Open, "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	g.Argv = mergeArgv(scratchRepo, "--update-branch")
-	g.Host.cfg.Merge.BusyBudget = config.Duration{Duration: budget}
+	gateApp(g.Host).cfg.Merge.BusyBudget = config.Duration{Duration: budget}
 	return g
 }
 

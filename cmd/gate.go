@@ -393,8 +393,8 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 			g.LastWhy = why
 		}
 		pause = gateQueuePause(pause, g.Passive)
-		if g.Central && g.Host.cfg.Merge.QueueTTL.Duration > 0 {
-			pause = min(pause, g.Host.cfg.Merge.QueueTTL.Duration/2)
+		if g.Central && gateApp(g.Host).cfg.Merge.QueueTTL.Duration > 0 {
+			pause = min(pause, gateApp(g.Host).cfg.Merge.QueueTTL.Duration/2)
 		}
 		select {
 		case <-ctx.Done():

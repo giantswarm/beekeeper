@@ -70,10 +70,10 @@ func TestMergeCapCountsMergesAndPromotes(t *testing.T) {
 func TestQueuedGateReloadsCap(t *testing.T) {
 	g, st, me := capGate(t)
 	g.Queued = true
-	g.Host.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
+	gateApp(g.Host).loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	hostDevctl(t, devctlArgv(8, prMerge)...)
 	for _, cap := range []int{5, 12, 5} {
-		if err := os.WriteFile(g.Host.loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
+		if err := os.WriteFile(gateApp(g.Host).loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := g.ReloadQueueConfig(); err != nil {
@@ -84,14 +84,14 @@ func TestQueuedGateReloadsCap(t *testing.T) {
 			t.Fatalf("cap %d: wait %q", cap, why)
 		}
 	}
-	if err := os.WriteFile(g.Host.loadedCfg, []byte("merge: ["), 0o600); err != nil {
+	if err := os.WriteFile(gateApp(g.Host).loadedCfg, []byte("merge: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.ReloadQueueConfig(); err != nil {
 		t.Fatal(err)
 	}
-	if g.Host.cfg.Merge.Cap != 5 {
-		t.Fatalf("invalid edit changed cap to %d", g.Host.cfg.Merge.Cap)
+	if gateApp(g.Host).cfg.Merge.Cap != 5 {
+		t.Fatalf("invalid edit changed cap to %d", gateApp(g.Host).cfg.Merge.Cap)
 	}
 }
 
@@ -102,12 +102,12 @@ func TestQueuedGateStartsAfterCapRaise(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	g, _, _ := capGate(t)
 	g.Argv, g.Queued = mergeArgv(scratchRepo), true
-	g.Host.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
-	setBudget(t, g.Host, 4000)
+	gateApp(g.Host).cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
+	setBudget(t, gateApp(g.Host), 4000)
 	hostDevctls(t, 8)
-	g.Host.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
+	gateApp(g.Host).loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	for _, cap := range []int{5, 12} {
-		if err := os.WriteFile(g.Host.loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
+		if err := os.WriteFile(gateApp(g.Host).loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		why, err := g.Step()
@@ -121,22 +121,22 @@ func TestQueuedGateStartsAfterCapRaise(t *testing.T) {
 			t.Fatalf("still waiting after raise: %q", why)
 		}
 	}
-	if d := lastEventOf(t, g.Host, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
+	if d := lastEventOf(t, gateApp(g.Host), verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
 		t.Fatalf("merge did not start: %q", d)
 	}
 }
 
 func TestQueuedGateMovesToReloadedLane(t *testing.T) {
 	g, _, _ := capGate(t)
-	g.Host.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
+	gateApp(g.Host).loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	raw := fmt.Sprintf("lanes:\n  - name: shared\n    repositories: [%s]\n", scratchRepo)
-	if err := os.WriteFile(g.Host.loadedCfg, []byte(raw), 0o600); err != nil {
+	if err := os.WriteFile(gateApp(g.Host).loadedCfg, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.ReloadQueueConfig(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := g.Host.store.Read()
+	st, err := gateApp(g.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

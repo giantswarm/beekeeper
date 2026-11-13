@@ -31,15 +31,15 @@ func TestGateTakesOverDeadOwnerAndRunsMerge(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	g := takeoverGate(t, 1<<30, state.Running)
-	setBudget(t, g.Host, 4000)
-	g.Host.cfg.Merge.BudgetFresh.Duration = time.Hour
+	setBudget(t, gateApp(g.Host), 4000)
+	gateApp(g.Host).cfg.Merge.BudgetFresh.Duration = time.Hour
 	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("step: %q, %v", why, err)
 	}
-	if d := lastEventOf(t, g.Host, "merge.takeover"); !strings.Contains(d, "old pid 1073741824, gate pid 1073741824 is gone") {
+	if d := lastEventOf(t, gateApp(g.Host), "merge.takeover"); !strings.Contains(d, "old pid 1073741824, gate pid 1073741824 is gone") {
 		t.Fatalf("takeover event: %q", d)
 	}
-	if d := lastEventOf(t, g.Host, verbMerged); !strings.Contains(d, "exit 0, release v1.2.4") {
+	if d := lastEventOf(t, gateApp(g.Host), verbMerged); !strings.Contains(d, "exit 0, release v1.2.4") {
 		t.Fatalf("merge outcome: %q", d)
 	}
 }
@@ -86,7 +86,7 @@ func TestGateTakesOverMergedPRAndConfirmsRelease(t *testing.T) {
 func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	g := takeoverGate(t, sleeper(t), state.Running)
-	old, err := state.OpenVersion(g.Host.store.Dir(), olderRelease)
+	old, err := state.OpenVersion(gateApp(g.Host).store.Dir(), olderRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,11 +96,11 @@ func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g.Host.store, err = state.OpenVersion(g.Host.store.Dir(), newerRelease)
+	gateApp(g.Host).store, err = state.OpenVersion(gateApp(g.Host).store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.Host.store.Update(func(*state.State) ([]state.Event, error) { return nil, nil }); err != nil {
+	if err := gateApp(g.Host).store.Update(func(*state.State) ([]state.Event, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if done, err := g.Takeover(); done || err != nil {
@@ -123,13 +123,13 @@ func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 	g := takeoverGate(t, 1<<30, state.Running)
 	var out bytes.Buffer
-	g.Host.out = &out
-	g.Host.printLanes(g.Host.laneViews(gateState(t, g)))
+	gateApp(g.Host).out = &out
+	gateApp(g.Host).printLanes(gateApp(g.Host).laneViews(gateState(t, g)))
 	if !strings.Contains(out.String(), "STALE: gate pid 1073741824 is gone") {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &watcher{app: g.Host, last: map[string]time.Time{}}
+	w := &watcher{app: gateApp(g.Host), last: map[string]time.Time{}}
 	w.staleMerges()
 	w.staleMerges()
 	if strings.Count(out.String(), "MERGE STALE:") != 1 {
@@ -140,7 +140,7 @@ func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 func TestSameSessionReusesWaitingPlace(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)
-	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) { st.Merges[0].By = g.Me; return nil, nil }); err != nil {
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) { st.Merges[0].By = g.Me; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	old := gateState(t, g).Merges[0]
@@ -156,7 +156,7 @@ func TestSameSessionReusesWaitingPlace(t *testing.T) {
 func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)
-	if err := g.Host.checkPlaces(g.Ctx, watchParty, g.Host.now, "", "", 0, time.Second); err != nil {
+	if err := gateApp(g.Host).checkPlaces(g.Ctx, watchParty, gateApp(g.Host).now, "", "", 0, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	q := merge.Queue(gateState(t, g), scratchRepo)

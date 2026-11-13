@@ -19,7 +19,7 @@ func (g *GateRun) waitBehindLive() (why string, claimed bool) {
 	if !g.Placed {
 		return "", false
 	}
-	st, err := g.Host.store.Read()
+	st, err := g.Host.Store().Read()
 	if err != nil {
 		return "", false // the ordinary step reports or re-executes a stale writer
 	}
@@ -32,7 +32,7 @@ func (g *GateRun) waitBehindLive() (why string, claimed bool) {
 		return "", false
 	}
 	q := merge.Queue(st, g.Lane.Name)
-	ahead, behind := q.Ahead(g.Repo, g.Pr, merge.Unheld(st, g.Host.now, g.Lane, g.Host.present))
+	ahead, behind := q.Ahead(g.Repo, g.Pr, merge.Unheld(st, g.Host.Now(), g.Lane, g.Host.Present))
 	if q.Running != nil {
 		ahead, behind = *q.Running, true
 	}

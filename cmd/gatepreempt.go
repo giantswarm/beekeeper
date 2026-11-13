@@ -62,7 +62,7 @@ func (g *GateRun) watchPreempt() (stop func() (state.Hold, bool)) {
 
 // PreemptChild ends the running merge's devctl when a hold preempts it.
 func (g *GateRun) PreemptChild() (state.Hold, bool) {
-	st, err := g.Host.store.Read()
+	st, err := g.Host.Store().Read()
 	if err != nil {
 		return state.Hold{}, false
 	}
@@ -72,12 +72,12 @@ func (g *GateRun) PreemptChild() (state.Hold, bool) {
 	}
 	m := st.Merges[i]
 	h, ok := merge.Preempts(st, clk.Now(), m, g.Lane)
-	if !ok || m.Child == 0 || readPID(MergeBase(g.Host.store.Dir(), g.Repo, g.Pr)) != m.Child {
+	if !ok || m.Child == 0 || Cmd.ReadPID(MergeBase(g.Host.Store().Dir(), g.Repo, g.Pr)) != m.Child {
 		return state.Hold{}, false
 	}
 	GateLine("%s (%s) by %q lets %s through first: ending %s's devctl (pid %d) before it merges; it keeps its place in lane %s",
-		holdTarget(h), h.Reason, h.By.Name, h.Except, g.Key(), m.Child, g.Lane.Name)
-	if err := endChild(m.Child); err != nil {
+		Cmd.HoldTarget(h), h.Reason, h.By.Name, h.Except, g.Key(), m.Child, g.Lane.Name)
+	if err := Cmd.EndChild(m.Child); err != nil {
 		return state.Hold{}, false
 	}
 	return h, true
@@ -98,8 +98,8 @@ func (g *GateRun) Requeue(base string, h state.Hold) error {
 // toWaiting puts the running merge back to waiting in its place, a hold h
 // letting another pull request through first; when says where its run was.
 func (g *GateRun) toWaiting(h state.Hold, when string) error {
-	why := fmt.Sprintf("held in lane %s (%s) by %q: %s goes first; %s keeps its place", g.Lane.Name, holdTarget(h), h.By.Name, h.Except, g.Key())
-	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	why := fmt.Sprintf("held in lane %s (%s) by %q: %s goes first; %s keeps its place", g.Lane.Name, Cmd.HoldTarget(h), h.By.Name, h.Except, g.Key())
+	_ = g.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		i := g.Mine(st, state.Running)
 		if i < 0 {
 			return nil, nil
@@ -107,7 +107,7 @@ func (g *GateRun) toWaiting(h state.Hold, when string) error {
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Child, m.HandCut = state.Waiting, time.Time{}, nil, 0, ""
 		m.Seen = clk.Now().UTC()
-		return []state.Event{event(g.Me, "merge.preempted", "%s: %s, %s", g.Key(), when, why)}, nil
+		return []state.Event{Cmd.Event(g.Me, "merge.preempted", "%s: %s, %s", g.Key(), when, why)}, nil
 	})
 	g.Requeued = true
 	return &PreemptedError{Why: why}

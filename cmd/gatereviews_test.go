@@ -105,7 +105,7 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v)", Code(err), err)
 	}
-	st, err := g.Host.store.Read()
+	st, err := gateApp(g.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}

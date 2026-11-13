@@ -59,11 +59,11 @@ func (g *GateRun) Overlaps() bool {
 // LanePending says what the merge's lane waits for before its next merge
 // lands, "" when nothing (merge.Lane.Unsettled without the overlap).
 func (g *GateRun) LanePending() string {
-	st, err := g.Host.store.Read()
+	st, err := g.Host.Store().Read()
 	if err != nil {
 		return fmt.Sprintf("the state does not load (%v)", err)
 	}
-	return merge.Queue(st, g.Lane.Name).Unsettled(clk.Now(), g.Host.cfg.Merge.Settle.Duration, false, proc.Alive)
+	return merge.Queue(st, g.Lane.Name).Unsettled(clk.Now(), g.Host.Cfg().Merge.Settle.Duration, false, proc.Alive)
 }
 
 // AwaitReleases runs before the merge's devctl in a lane without an
@@ -97,7 +97,7 @@ func (g *GateRun) AwaitReleases() error {
 		cancel() // the warm-up ends with the wait: nothing outlives it
 		<-warmed
 	}()
-	wait := ReleasesWait(g.Host.cfg.Merge.Settle.Duration)
+	wait := ReleasesWait(g.Host.Cfg().Merge.Settle.Duration)
 	deadline := clk.Now().Add(wait)
 	tick := clk.NewTicker(ReleasesPoll)
 	defer tick.Stop()
@@ -139,7 +139,7 @@ func (g *GateRun) AwaitReleases() error {
 // since lets another pull request through first (merge.Preempts), a
 // refusal when its place left the lane.
 func (g *GateRun) stillRunning() error {
-	st, err := g.Host.store.Read()
+	st, err := g.Host.Store().Read()
 	if err != nil {
 		return nil // the next read decides; devctl's start reads it again
 	}
@@ -170,11 +170,11 @@ func (g *GateRun) stopWaiting(s os.Signal) error {
 	if sig, ok := s.(syscall.Signal); ok {
 		code, how = 128+int(sig), sig.String()
 	}
-	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		if i := g.Mine(st, state.Running); i >= 0 {
 			st.Merges = slices.Delete(st.Merges, i, i+1)
 		}
-		return []state.Event{event(g.Me, "merge.stopped", "%s in lane %s: %s while it waited for the lane's release, nothing merged", g.Key(), g.Lane.Name, how)}, nil
+		return []state.Event{Cmd.Event(g.Me, "merge.stopped", "%s in lane %s: %s while it waited for the lane's release, nothing merged", g.Key(), g.Lane.Name, how)}, nil
 	})
 	GateLine("%s: %s stopped it while it waited for lane %s's release; nothing merged, it left the lane", g.Key(), how, g.Lane.Name)
 	return ExitCode(code)
@@ -183,7 +183,7 @@ func (g *GateRun) stopWaiting(s os.Signal) error {
 // WarmUp waits for the existing head's CI within the configured timeout.
 // It never updates the branch; the merge judges the wait's outcome.
 func (g *GateRun) WarmUp(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, g.Host.cfg.Merge.TimeoutFor(g.Repo))
+	ctx, cancel := context.WithTimeout(ctx, g.Host.Cfg().Merge.TimeoutFor(g.Repo))
 	defer cancel()
 	PrWarmWait(ctx, g.Repo, g.Pr)
 }
@@ -223,26 +223,26 @@ func (g *GateRun) ConfirmRelease(out *merge.Outcome, rc int) (string, int) {
 		line = fmt.Sprintf("%s merged and released %s, its tag pipeline green; lane %s is free", g.Key(), o.Release, g.Lane.Name)
 	}
 	now := clk.Now().UTC()
-	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.Repo && m.PR == g.Pr && m.Phase == state.Settling && m.Releasing
 		})
 		if i < 0 {
 			return nil, nil
 		}
-		deliveryEvents := recordDeliveryRelease(st, g.Repo, g.Pr, *out, st.Merges[i].HandCut, now)
+		deliveryEvents := Cmd.RecordDeliveryRelease(st, g.Repo, g.Pr, *out, st.Merges[i].HandCut, now)
 		if out.ReleaseFailed {
 			m := &st.Merges[i]
 			m.Releasing, m.PID, m.Finished = false, 0, now
 			m.Release, m.ReleaseFailed, m.Exit = out.Release, true, rc
-			return append(deliveryEvents, []state.Event{event(g.Me, "merge.release", "%s: release %s, lane %s settles without a roll", g.Key(), release, g.Lane.Name)}...), nil
+			return append(deliveryEvents, []state.Event{Cmd.Event(g.Me, "merge.release", "%s: release %s, lane %s settles without a roll", g.Key(), release, g.Lane.Name)}...), nil
 		}
 		if out.Unconfirmed {
 			st.Merges[i].Releasing, st.Merges[i].Finished = false, now
-			return append(deliveryEvents, []state.Event{event(g.Me, "merge.release", "%s: release unconfirmed, lane %s settles by the settle rule", g.Key(), g.Lane.Name)}...), nil
+			return append(deliveryEvents, []state.Event{Cmd.Event(g.Me, "merge.release", "%s: release unconfirmed, lane %s settles by the settle rule", g.Key(), g.Lane.Name)}...), nil
 		}
 		st.Merges = slices.Delete(st.Merges, i, i+1)
-		return append(deliveryEvents, []state.Event{event(g.Me, "merge.release", "%s: release %s, lane %s is free", g.Key(), release, g.Lane.Name)}...), nil
+		return append(deliveryEvents, []state.Event{Cmd.Event(g.Me, "merge.release", "%s: release %s, lane %s is free", g.Key(), release, g.Lane.Name)}...), nil
 	})
 	return line, rc
 }

@@ -49,7 +49,7 @@ var TagExists = func(ctx context.Context, repo, tag string) (bool, error) {
 var ReleaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 	var out bytes.Buffer
 	c := exec.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
-	c.Env = devctlCommandEnv("")
+	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdout, c.Stderr = &out, os.Stderr
 	_ = c.Run() // its exit code is the document's verdict
 	return out.Bytes()
@@ -83,7 +83,7 @@ var ReviewGuard = func(ctx context.Context, repo string, n int) (string, error) 
 // stderr: a warm-up whose verdict the merge's own devctl run judges.
 var PrWarmWait = func(ctx context.Context, repo string, n int) {
 	c := exec.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
-	c.Env = devctlCommandEnv("")
+	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdout, c.Stderr = io.Discard, os.Stderr
 	_ = c.Run()
 }
@@ -121,7 +121,7 @@ type Binary interface {
 // MergeFiles is the base of the merge's files (mergeBase), its directory
 // created.
 func (g *GateRun) MergeFiles() (string, error) {
-	base := MergeBase(g.Host.store.Dir(), g.Repo, g.Pr)
+	base := MergeBase(g.Host.Store().Dir(), g.Repo, g.Pr)
 	return base, os.MkdirAll(filepath.Dir(base), 0o700)
 }
 
@@ -495,7 +495,7 @@ func FollowChild(base string, pid int, offset int64, bin Binary, hold func(doc [
 // SIGTERM is the caller giving up on the call, never a stop aimed at the run;
 // a seam for the tests.
 var TimedCaller = func() bool {
-	t, err := plat.Machine.Processes()
+	t, err := Cmd.Plat().Machine.Processes()
 	return err == nil && UnderTimeout(t, os.Getpid())
 }
 
@@ -550,7 +550,7 @@ func LaunchChild(spec ChildSpec, base string) (int, error) {
 		return 0, err
 	}
 	spec.Argv = append([]string{path}, spec.Argv[1:]...)
-	spec.Env, spec.Gate = devctlCommandEnv(spec.Config), os.Getpid()
+	spec.Env, spec.Gate = Cmd.DevctlCommandEnv(spec.Config), os.Getpid()
 	spec.Dir, _ = os.Getwd()
 	raw, _ := json.Marshal(spec)
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
@@ -569,9 +569,9 @@ func startChild(base string) error {
 	if err != nil {
 		return err
 	}
-	if userSystemd() {
+	if Cmd.UserSystemd() {
 		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), clk.Now().UnixNano())
-		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, MergeChildCmd, base}, TermIsSuccess: true})
+		return Cmd.Plat().Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, MergeChildCmd, base}, TermIsSuccess: true})
 	}
 	c := exec.Command(self, MergeChildCmd, base) //nolint:gosec // as above
 	platform.Detach(c)

@@ -21,7 +21,7 @@ const PairFresh = 30 * time.Second
 // before declares it anew; its sibling refused before leaves the refusal for
 // the step, which refuses this merge with it.
 func (g *GateRun) DeclarePair(arg string) error {
-	ref, ok := parseRef(arg)
+	ref, ok := Cmd.ParseRef(arg)
 	switch {
 	case g.Pr == 0:
 		return GateRefused("%s %s is for devctl pr merge, not a promotion: nothing promoted", merge.PairFlag, arg)
@@ -33,12 +33,12 @@ func (g *GateRun) DeclarePair(arg string) error {
 		return GateRefused("%s %s names the merge itself: nothing merged, name the pull request it lands with", merge.PairFlag, arg)
 	}
 	var taken string
-	err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
-		prunePairs(st, g.Host.now, g.Host.cfg.Merge.SeedTTL.Duration)
+	err := g.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
+		prunePairs(st, g.Host.Now(), g.Host.Cfg().Merge.SeedTTL.Duration)
 		for _, key := range []string{g.Key(), sib} {
 			if i := st.PairOf(key); i >= 0 && !samePair(st.Pairs[i], g.Key(), sib) {
 				p := st.Pairs[i]
-				taken = fmt.Sprintf("%s lands with %s already (declared by %q at %s)", key, p.Sibling(key), p.By.Name, clock(g.Host.now, p.At))
+				taken = fmt.Sprintf("%s lands with %s already (declared by %q at %s)", key, p.Sibling(key), p.By.Name, Cmd.Clock(g.Host.Now(), p.At))
 				return nil, nil
 			}
 		}
@@ -48,14 +48,14 @@ func (g *GateRun) DeclarePair(arg string) error {
 			}
 			st.Pairs = slices.Delete(st.Pairs, i, i+1)
 		}
-		st.Pairs = append(st.Pairs, state.Pair{Keys: []string{g.Key(), sib}, By: g.Me, At: g.Host.now.UTC()})
-		return []state.Event{event(g.Me, "merge.paired", "%s lands with %s", g.Key(), sib)}, nil
+		st.Pairs = append(st.Pairs, state.Pair{Keys: []string{g.Key(), sib}, By: g.Me, At: g.Host.Now().UTC()})
+		return []state.Event{Cmd.Event(g.Me, "merge.paired", "%s lands with %s", g.Key(), sib)}, nil
 	})
 	switch {
 	case err != nil:
 		return g.stateRefused(err)
 	case taken != "":
-		_ = g.Host.store.Log(event(g.Me, "merge.refused", "%s: %s", g.Key(), taken))
+		_ = g.Host.Store().Log(Cmd.Event(g.Me, "merge.refused", "%s: %s", g.Key(), taken))
 		return GateRefused("%s: nothing merged; a merge lands with one other at most", taken)
 	}
 	return nil
@@ -122,7 +122,7 @@ func (g *GateRun) PairTurn(st *state.State) (why string, need int) {
 	if p.Ready == nil {
 		p.Ready = map[string]time.Time{}
 	}
-	p.Ready[g.Key()] = g.Host.now.UTC()
+	p.Ready[g.Key()] = g.Host.Now().UTC()
 	j := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Key() == sib && m.Phase == state.Waiting })
 	switch {
 	case j < 0:
@@ -131,7 +131,7 @@ func (g *GateRun) PairTurn(st *state.State) (why string, need int) {
 	case !proc.Alive(st.Merges[j].PID):
 		return fmt.Sprintf("next in lane %s, it lands with %s, queued in lane %s, whose merge is not in the gate: both start once it is next there",
 			g.Lane.Name, sib, st.Merges[j].Lane), 0
-	case g.Host.now.Sub(p.Ready[sib]) > PairFresh:
+	case g.Host.Now().Sub(p.Ready[sib]) > PairFresh:
 		return fmt.Sprintf("next in lane %s, it lands with %s, not next in lane %s yet: both start once it is",
 			g.Lane.Name, sib, st.Merges[j].Lane), 0
 	}

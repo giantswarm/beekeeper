@@ -260,7 +260,7 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	if why := turn(second); why == "" {
 		t.Error("the second's turn came while the first settles")
 	}
-	ana.gate(1).Host.leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.Me}}, "rolled")
+	gateApp(ana.gate(1).Host).leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.Me}}, "rolled")
 	if why := turn(second); why != "" {
 		t.Errorf("the second waits after the first rolled: %s", why)
 	}

@@ -21,14 +21,14 @@ const centralEvery = 15 * time.Second
 // unreachable central instance refuses it with ExitCentral.
 func (g *GateRun) CentralTurn() (string, error) {
 	every := centralEvery
-	if ttl := g.Host.cfg.Merge.QueueTTL.Duration; ttl > 0 {
+	if ttl := g.Host.Cfg().Merge.QueueTTL.Duration; ttl > 0 {
 		every = min(every, ttl/2)
 	}
 	if g.centralWhy != "" && time.Since(g.CentralAsked) < every {
 		return g.centralWhy, nil
 	}
 	var t laneTurn
-	_, err := g.Host.callCentralRaw(g.Ctx, g.Me, "lane_queue", g.prArgs(), &t)
+	_, err := g.Host.CallCentralRaw(g.Ctx, g.Me, "lane_queue", g.prArgs(), &t)
 	g.CentralAsked, g.centralWhy = time.Now(), ""
 	if err := g.centralRefusal(err); err != nil {
 		return "", err
@@ -67,7 +67,7 @@ func (g *GateRun) centralRefusal(err error) error {
 // one. When another merge of the lane started there first, the merge waits
 // again here (unstart) and it returns what it waits for.
 func (g *GateRun) CentralStart() (string, error) {
-	_, err := g.Host.callCentralRaw(g.Ctx, g.Me, "lane_settle", g.prArgs(), nil)
+	_, err := g.Host.CallCentralRaw(g.Ctx, g.Me, "lane_settle", g.prArgs(), nil)
 	if err == nil {
 		return "", nil
 	}
@@ -90,7 +90,7 @@ func (g *GateRun) CentralRecord(settles bool, why string) {
 	} else {
 		args[paramReason] = why
 	}
-	if _, err := g.Host.callCentralRaw(context.WithoutCancel(g.Ctx), g.Me, tool, args, nil); err != nil {
+	if _, err := g.Host.CallCentralRaw(context.WithoutCancel(g.Ctx), g.Me, tool, args, nil); err != nil {
 		GateLine("central lane %s was not told of %s's outcome (%v): its place there stays until `beekeeper lanes leave %s`",
 			g.Lane.Name, g.Key(), err, g.Key())
 	}
@@ -103,7 +103,7 @@ func (g *GateRun) CentralLeave(why string) {
 	}
 	args := g.prArgs()
 	args[paramReason] = why
-	_, _ = g.Host.callCentralRaw(context.WithoutCancel(g.Ctx), g.Me, "lane_leave", args, nil)
+	_, _ = g.Host.CallCentralRaw(context.WithoutCancel(g.Ctx), g.Me, "lane_leave", args, nil)
 	g.joined = false
 }
 
