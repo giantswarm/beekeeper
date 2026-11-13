@@ -1,7 +1,6 @@
 package loop
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -24,7 +23,7 @@ func HostCapacityReason(out string, code int, err error) string {
 		Verdict string   `json:"verdict"`
 		Blocks  []string `json:"blocks"`
 	}
-	if json.Unmarshal([]byte(out), &verdict) != nil || verdict.Room == nil {
+	if decodeRun(out, &verdict) != nil || verdict.Room == nil {
 		return "capacity answer is unreadable"
 	}
 	if *verdict.Room > 0 {

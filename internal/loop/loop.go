@@ -97,6 +97,14 @@ var BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error
 	return out + errOut, code, err
 }
 
+// decodeRun reads the JSON document a BeekeeperRun printed into v. The
+// output is stdout and then stderr, so the document is its first value: a
+// diagnostic after it (a stale state snapshot's) is no failed read, and
+// output without a document is.
+func decodeRun(out string, v any) error {
+	return json.NewDecoder(strings.NewReader(out)).Decode(v)
+}
+
 // LoopCommand runs a configured command (the classifier, the post-install)
 // with stdin: its stdout, its stderr and its exit code.
 var LoopCommand = RunArgv
@@ -3437,7 +3445,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		var capacity struct {
 			Room int `json:"room"`
 		}
-		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+		if readErr != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
 			err = ErrLoopLater
 		}
 	} else {
@@ -3851,7 +3859,7 @@ func roomOpen(out string) bool {
 	var v struct {
 		Room int `json:"room"`
 	}
-	if json.Unmarshal([]byte(out), &v) != nil {
+	if decodeRun(out, &v) != nil {
 		return true
 	}
 	return v.Room > 0
@@ -4186,13 +4194,12 @@ func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip [
 		}
 		return nil, failed()
 	}
-	// The output is stdout and then stderr: the document is its first value.
 	var next struct {
 		Pick      json.RawMessage   `json:"pick"`
 		Skipped   []board.Candidate `json:"skipped"`
 		AfterPick []board.Candidate `json:"after_pick"`
 	}
-	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
+	if err := decodeRun(out, &next); err != nil {
 		if code != 0 {
 			return nil, failed()
 		}
