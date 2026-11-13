@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -30,7 +29,7 @@ var installedLoopBinary = os.Executable
 var loopVersionOf = func(ctx context.Context, path string) string {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "version").Output() //nolint:gosec // the running or installed beekeeper binary
+	out, err := proc.CommandContext(ctx, path, "version").Output() //nolint:gosec // the running or installed beekeeper binary
 	if err != nil {
 		return ""
 	}

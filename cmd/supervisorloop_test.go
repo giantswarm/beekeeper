@@ -376,7 +376,9 @@ func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix " + loopURL})
 			i = len(st.Agents) - 1
 		}
-		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: deskReviewWait, ReviewHead: loopHead}
+		// A park verifies the head the worker published: the pull
+		// request's head now.
+		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: deskReviewWait, ReviewHead: cmp.Or(r.pull.Head, loopHead)}
 		return nil, nil
 	})
 	if err != nil {
@@ -542,11 +544,12 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 	}
 }
 
-// A new head after an approval with a change of its own gets the second
-// review, whatever supervisor.reviewRounds says; past it the loop merges
-// the reviewed, green head itself, and no note asks the person whether to
-// merge (https://github.com/giantswarm/beekeeper/issues/2207).
-func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
+// A new head after an approval with a change of its own gets no second
+// review, whatever supervisor.reviewRounds says: the loop merges the green
+// head its worker parked on itself, and no note asks the person whether to
+// merge (https://github.com/giantswarm/beekeeper/issues/2207,
+// https://github.com/giantswarm/beekeeper/issues/3861).
+func TestLoopMergesANewHeadAfterAnApprovalWithoutASecondReview(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -562,27 +565,14 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	if note := r.called("note", loop.LoopAdd); note != nil {
 		t.Fatalf("a new head after an approval escalated: %v", note)
 	}
-	start := r.called(agentsName, agentStartName)
-	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Fatalf("no review of the new head: %v\n%s", r.calls, r.out)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a second review started: %v", start)
 	}
-	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
+	if evs := r.logged(t, "supervisor.review"); len(evs) != 1 {
 		t.Errorf("review logged as %+v", evs)
 	}
-	// The second review approves, and the worker pushes a change of its
-	// own once more: no third reviewer and no question, the loop merges.
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
-	const own = "3333333333333333333333333333333333333333"
-	r.pull.Head = own
-	r.park(t, loopPR, time.Now().Add(2*time.Minute))
-	r.calls = nil
-	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start != nil {
-		t.Fatalf("a third review started: %v", start)
-	}
-	if merge := r.called(gateCmdName); merge == nil || !slices.Contains(merge, own) {
-		t.Fatalf("the loop did not merge the reviewed, green head %s: %v\n%s", own, r.calls, r.out)
+	if merge := r.called(gateCmdName); merge == nil || !slices.Contains(merge, loopFixed) {
+		t.Fatalf("the loop did not merge the green head %s: %v\n%s", loopFixed, r.calls, r.out)
 	}
 	r.pass(t)
 	if note := r.called("note", loop.LoopAdd); note != nil {
@@ -590,10 +580,41 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	}
 }
 
+// The reviewer fixes its findings on the branch and approves the head it
+// pushed (https://github.com/giantswarm/beekeeper/issues/3861): the loop
+// merges that head once its CI is green, without a second review, a new
+// park of the worker or a question to the person.
+func TestLoopMergesTheHeadTheReviewerFixedAndApproved(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 1)) == nil {
+		t.Fatalf("no review: %v\n%s", r.calls, r.out)
+	}
+	r.pull.Head, r.pull.Green = loopFixed, false
+	r.verdict("R1", loopFixed, superloop.Approved, "Desk review (opus): approved\nHead reviewed: `"+loopFixed+"`")
+	r.pass(t)
+	if c := r.called(gateCmdName); c != nil {
+		t.Fatalf("a go before the fixed head's CI is green: %v", c)
+	}
+	r.pull.Green = true
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("a second review started: %v", c)
+	}
+	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, loopFixed) {
+		t.Fatalf("no go for the reviewer's fixed head: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called("note", loop.LoopAdd); c != nil {
+		t.Fatalf("a question reached the person: %v", c)
+	}
+}
+
 // https://github.com/giantswarm/beekeeper/issues/1841: the gate's
 // --update-branch moved the approved head on by a merge of the base; the
 // worker parked on it gets the go without a second review, naming the
-// gate's command. A head with more than the base merge gets its review.
+// gate's command. A head with more than the base merge gets the go too, once
+// its worker parked on it: no second review.
 func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.DevctlOwners = []string{"o"}
@@ -628,22 +649,18 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	if !slices.Equal(r.baseReads, []string{loopHead + ".." + loopFixed}) {
 		t.Errorf("base merge reads = %v", r.baseReads)
 	}
-	// A further head with a change of its own: its review, no go.
+	// A further head with a change of its own, parked on: its go, no
+	// review. A repository in merge.admin gets --admin --match-head-commit
+	// in its go.
 	const own = "3333333333333333333333333333333333333333"
 	r.pull.Head = own
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
+	r.a.cfg.Merge.Admin = []string{"O/R"}
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName); c != nil {
-		t.Errorf("a head with its own change got %v", c)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a second review of a head with its own change: %v", start)
 	}
-	if start := r.called(agentsName, agentStartName); start == nil {
-		t.Fatalf("no review of a head with its own change: %v\n%s", r.calls, r.out)
-	}
-	// A repository in merge.admin gets --admin --match-head-commit in its go.
-	r.a.cfg.Merge.Admin = []string{"O/R"}
-	r.verdict("R2", own, superloop.Approved, "")
-	r.pass(t)
 	wake = r.called(gateCmdName)
 	if wake == nil || !slices.Contains(wake, own) {
 		t.Fatalf("no admin merge go: %v\n%s", r.calls, r.out)
@@ -677,9 +694,10 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 	}
 }
 
-// A comparison GitHub does not answer is no base merge: the head gets its
-// review, and the failure is said.
-func TestLoopReviewsAHeadItCannotCompare(t *testing.T) {
+// A comparison GitHub does not answer is no base merge, and the failure is
+// said; the head its worker parked on gets the go all the same, never a
+// second review.
+func TestLoopMergesAHeadItCannotCompareWithoutASecondReview(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -689,33 +707,43 @@ func TestLoopReviewsAHeadItCannotCompare(t *testing.T) {
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, errors.New("gh: 502") }
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || !strings.Contains(r.out.String(), "cannot tell whether "+loopPR) {
-		t.Fatalf("no review after a failed comparison: %v\n%s", r.calls, r.out)
+	if !strings.Contains(r.out.String(), "cannot tell whether "+loopPR) {
+		t.Fatalf("the failed comparison was not said: %s", r.out)
+	}
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a second review after a failed comparison: %v", start)
+	}
+	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, loopFixed) {
+		t.Fatalf("no go for the parked head: %v\n%s", r.calls, r.out)
 	}
 }
 
-// After an approval and a second round's findings, the green fixes receive
-// the loop's merge go without a third round or a question to the person.
-func TestLoopMergesFixesAfterExhaustedRounds(t *testing.T) {
+// After an approval, findings posted on a later head (a teammate's, or
+// those of a second round an older loop started) are forwarded, and their
+// green fixes receive the loop's merge go without another round or a
+// question to the person.
+func TestLoopMergesFixesOfFindingsAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
 	r.pull.Head = loopFixed
+	r.verdict("R2", loopFixed, superloop.ChangesRequested, "Review: changes requested")
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	r.verdict("R2", loopFixed, superloop.ChangesRequested, "Review: changes requested")
-	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("unexpected second review: %v", r.calls)
+	}
 	const fixedAgain = "3333333333333333333333333333333333333333"
 	r.pull.Head = fixedAgain
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
 	if c := r.called(agentsName, agentStartName); c != nil {
-		t.Fatalf("unexpected third review: %v", r.calls)
+		t.Fatalf("unexpected second review: %v", r.calls)
 	}
 	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, fixedAgain) {
-		t.Fatalf("fixed head got no go: %v", r.calls)
+		t.Fatalf("fixed head got no go: %v\n%s", r.calls, r.out)
 	}
 	if c := r.called("note", loop.LoopAdd); c != nil {
 		t.Fatalf("merge question reached the person: %v", c)
@@ -1722,9 +1750,11 @@ func TestLoopGivesNoGoToAnApprovedHeadWithoutGreenChecks(t *testing.T) {
 	}
 }
 
-// An earlier round's approval authorizes no later head, and a round still
-// running authorizes nothing.
-func TestLoopAnOldApprovalAuthorizesNoNewHead(t *testing.T) {
+// An approval is the pull request's one review: a head its worker moved and
+// parked on before the go gets the go itself, never a second round,
+// whatever supervisor.reviewRounds says
+// (https://github.com/giantswarm/beekeeper/issues/3861).
+func TestLoopAnApprovalIsTheOneReviewOfANewHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.ReviewRounds = 2
 	r.park(t, loopPR, time.Now())
@@ -1733,12 +1763,11 @@ func TestLoopAnOldApprovalAuthorizesNoNewHead(t *testing.T) {
 	r.pull.Head = loopFixed // the head moved before the go
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Fatalf("no second round for the new head: %v", r.calls)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a second round for the new head: %v", start)
 	}
-	r.pass(t)
-	if c := r.called(agentsName, agentWakeName); c != nil {
-		t.Errorf("the old approval gave the in-flight round's head the go: %v", c)
+	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, loopFixed) {
+		t.Fatalf("no go for the new head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -3087,7 +3116,8 @@ func TestLoopHostsFirstReviewerPreservesChoices(t *testing.T) {
 // https://github.com/giantswarm/beekeeper/issues/1927: a worker on an SSH
 // execution host parks on the pull request it published through the
 // coordinator; its park at the published head is a review request, and a
-// park after a new publication asks for that head's review.
+// park after a new publication, past the approval, asks for that head's go:
+// no second review.
 func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	r := newLoopRig(t)
 	ref := execution.Ref{Host: "host-a", Execution: "remote-one", Generation: 1}
@@ -3142,20 +3172,19 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	if !strings.Contains(r.out.String(), "go "+loopPR+"@"+loopHead) {
 		t.Fatalf("the approval took no go: %v\n%s", r.calls, r.out)
 	}
-	// The worker publishes one more commit and parks again at it.
+	// The worker publishes one more commit and parks again at it: its go,
+	// no second review.
 	r.pull.Head = loopFixed
 	park(loopFixed)
 	r.pass(t)
-	start = r.called(agentsName, agentStartName)
-	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Fatalf("no review of the remote worker's new head: %v\n%s", r.calls, r.out)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("a second review of the remote worker's new head: %v", c)
 	}
-	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
+	if evs := r.logged(t, "supervisor.review"); len(evs) != 1 {
 		t.Errorf("review logged as %+v", evs)
 	}
-	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c != nil {
-		t.Errorf("one head got a second review: %v", c)
+	if !strings.Contains(r.out.String(), "go "+loopPR+"@"+loopFixed) {
+		t.Fatalf("the new head took no go: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -4249,7 +4278,13 @@ func TestLoopDoesNotReexecWhenShutdownBeginsWhileWatchDrains(t *testing.T) {
 	}
 }
 
-func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
+// TestLoopSkipsHousekeepingWhileItsRestartWaits checks that a pass whose
+// restart waits for a claim in flight reads no alerts and starts no
+// reviewer, and that the restart re-executes once the claim ends.
+//
+// control: none: the base ended such a pass before it planned, which skips
+// its housekeeping and starts no reviewer either
+func TestLoopSkipsHousekeepingWhileItsRestartWaits(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.replaced = true
@@ -4267,21 +4302,18 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 		alertReads++
 		return nil, nil
 	}
-	pullReads := 0
-	oldReadPull := loop.ReadLoopPull
-	t.Cleanup(func() { loop.ReadLoopPull = oldReadPull })
-	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		pullReads++
-		return r.pull, nil
-	}
 	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	l.PassActions.Wait()
 	if r.execs != 0 {
 		t.Fatalf("re-executed while a claim was in flight: %d", r.execs)
 	}
-	if alertReads != 0 || pullReads != 0 {
-		t.Fatalf("ran pass observations on a replaced binary (alerts=%d pulls=%d)", alertReads, pullReads)
+	if alertReads != 0 {
+		t.Fatalf("read alerts on a replaced binary: %d", alertReads)
+	}
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("started a reviewer on a replaced binary: %v", c)
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR LOOP restart held: claims are in flight") {
 		t.Fatalf("missing restart-held log: %s", r.out.String())

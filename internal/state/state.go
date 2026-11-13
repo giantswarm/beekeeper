@@ -583,6 +583,9 @@ type Timer struct {
 	Checked    time.Time `json:"checked,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
 	Unreadable bool      `json:"unreadable,omitempty"`
+	// Failing is the first of the checks in a row whose probe could not
+	// run: the guide was told of them once, and is told when it runs again.
+	Failing time.Time `json:"failing,omitzero"`
 	// Since is the first check that found the condition not holding; Stuck
 	// is set once the watch said it has not held for a day.
 	Since time.Time `json:"since,omitzero"`
@@ -691,6 +694,30 @@ type OverrideKey struct {
 	Absent   bool   `json:"absent,omitempty"`
 
 	rest rest
+}
+
+// PaceOff is the person's word that worker starts on a subscription provider
+// may run ahead of its 7-day pace (capacity pace off), such as a usage reset
+// in hand: until Until, and only within the 7-day window current at At. The
+// window's caps and the 5-hour window still bound the starts.
+type PaceOff struct {
+	Provider string    `json:"provider"`
+	Until    time.Time `json:"until"`
+	Reason   string    `json:"reason"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+
+	rest rest
+}
+
+// PaceOff is the pace override of provider in effect at now, nil for none.
+func (st *State) PaceOff(provider string, now time.Time) *PaceOff {
+	for i := range st.PaceOffs {
+		if p := &st.PaceOffs[i]; strings.EqualFold(p.Provider, provider) && now.Before(p.Until) {
+			return p
+		}
+	}
+	return nil
 }
 
 // Looked reports whether someone has to look at the timer by now: a plain
@@ -1339,6 +1366,9 @@ type State struct {
 	// set --until).
 	Overrides    []Override `json:"overrides,omitempty"`
 	NextOverride int        `json:"nextOverride,omitempty"`
+	// PaceOffs are the providers whose worker starts may run ahead of their
+	// 7-day pace for a while (capacity pace off).
+	PaceOffs []PaceOff `json:"paceOffs,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
 	// Claims are the records this desk published on GitHub as claims
@@ -1427,6 +1457,9 @@ type State struct {
 	HostIdleSince       time.Time                `json:"hostIdleSince,omitzero"`
 	HostLastRemoteStart time.Time                `json:"hostLastRemoteStart,omitzero"`
 	HostIdleReported    bool                     `json:"hostIdleReported,omitempty"`
+	// LocalTasks are the tasks whose starts stay on the coordinator (agents
+	// move): no supervisor.hosts placement takes them to an execution host.
+	LocalTasks []LocalTask `json:"localTasks,omitempty"`
 	// TranscriptGrants are the guide's expiring grants of wider transcript
 	// access to workers.
 	TranscriptGrants []TranscriptGrant `json:"transcriptGrants,omitempty"`
@@ -1473,6 +1506,60 @@ type TranscriptRequest struct {
 	rest rest
 }
 
+// LocalTask is a task whose remaining work needs what only the coordinator
+// has (data, devices, commands): every start of it, the loop's and a hand
+// start without --host, runs on the coordinator. A worker on an execution
+// host asks for it with agents move, the desk marks one with agents move
+// --ref.
+type LocalTask struct {
+	// Ref is the task's issue or pull request, owner/repo#n.
+	Ref string    `json:"ref"`
+	Why string    `json:"why"`
+	By  Party     `json:"by"`
+	At  time.Time `json:"at"`
+
+	rest rest
+}
+
+// LocalTaskFor is the mark of the first of refs (owner/repo#n, any case)
+// that stays on the coordinator.
+func (st *State) LocalTaskFor(refs ...string) (LocalTask, bool) {
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		for _, t := range st.LocalTasks {
+			if strings.EqualFold(t.Ref, ref) {
+				return t, true
+			}
+		}
+	}
+	return LocalTask{}, false
+}
+
+// MarkLocal records that ref stays on the coordinator, replacing an older
+// mark of it, and reports whether the mark is new.
+func (st *State) MarkLocal(t LocalTask) bool {
+	for i := range st.LocalTasks {
+		if strings.EqualFold(st.LocalTasks[i].Ref, t.Ref) {
+			st.LocalTasks[i] = t
+			return false
+		}
+	}
+	st.LocalTasks = append(st.LocalTasks, t)
+	return true
+}
+
+// UnmarkLocal lifts ref's mark and reports whether it had one.
+func (st *State) UnmarkLocal(ref string) bool {
+	n := len(st.LocalTasks)
+	st.LocalTasks = slices.DeleteFunc(st.LocalTasks, func(t LocalTask) bool { return strings.EqualFold(t.Ref, ref) })
+	if len(st.LocalTasks) == 0 {
+		st.LocalTasks = nil
+	}
+	return len(st.LocalTasks) != n
+}
+
 // HostPlacement is the last dated placement decision for a configured host.
 type HostPlacement struct {
 	At         time.Time `json:"at"`
@@ -1491,6 +1578,11 @@ type HostPin struct {
 	PolicyDigest string            `json:"policyDigest,omitempty"`
 	Tools        map[string]string `json:"tools,omitempty"`
 	PinnedAt     time.Time         `json:"pinnedAt,omitzero"`
+	// Configured is the digest the agents.hosts entry named when the host
+	// was last pinned, empty for none. An entry that names another digest
+	// than this and PolicyDigest is a changed host policy: the host is due
+	// for an update, as for a new release.
+	Configured string `json:"configured,omitempty"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
 	// UpdateError is a release lookup failure before contacting the host.
@@ -1505,11 +1597,13 @@ type HostPin struct {
 	// Reported says the supervisor loop handed the hold on as its finding.
 	Reported bool `json:"reported,omitempty"`
 	// Behind is the first coordinator release the host did not follow
-	// while it drained or waited; BehindReported says the supervisor loop
-	// handed on, once, that it stayed behind for more than that release.
-	// The next successful update clears both.
-	Behind         string `json:"behind,omitempty"`
-	BehindReported bool   `json:"behindReported,omitempty"`
+	// while it drained or waited, since BehindSince; BehindReported says
+	// the supervisor loop handed on, once, that it stayed behind for more
+	// than that release or past its bound. The next successful update
+	// clears them.
+	Behind         string    `json:"behind,omitempty"`
+	BehindSince    time.Time `json:"behindSince,omitzero"`
+	BehindReported bool      `json:"behindReported,omitempty"`
 
 	rest rest
 }

@@ -33,19 +33,19 @@ func noTools(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 }
 
-func TestLookPathPrefersPATH(t *testing.T) {
+func TestLookToolPrefersPATH(t *testing.T) {
 	noTools(t)
 	onPath := tool(t, t.TempDir(), "kindish")
 	t.Setenv("PATH", filepath.Dir(onPath))
 	gobin := t.TempDir()
 	tool(t, gobin, "kindish")
 	t.Setenv("GOBIN", gobin)
-	if got, err := LookPath("kindish"); err != nil || got != onPath {
+	if got, err := LookTool("kindish"); err != nil || got != onPath {
 		t.Errorf("LookPath = %q, %v; want %q", got, err, onPath)
 	}
 }
 
-func TestLookPathFallsBackToTheGoToolDirs(t *testing.T) {
+func TestLookToolFallsBackToTheGoToolDirs(t *testing.T) {
 	for name, place := range map[string]func(t *testing.T) string{
 		"GOBIN": func(t *testing.T) string {
 			dir := t.TempDir()
@@ -63,14 +63,14 @@ func TestLookPathFallsBackToTheGoToolDirs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			noTools(t)
 			want := tool(t, place(t), "kindish")
-			if got, err := LookPath("kindish"); err != nil || got != want {
+			if got, err := LookTool("kindish"); err != nil || got != want {
 				t.Errorf("LookPath = %q, %v; want %q", got, err, want)
 			}
 		})
 	}
 }
 
-func TestLookPathSkipsWhatIsNotExecutable(t *testing.T) {
+func TestLookToolSkipsWhatIsNotExecutable(t *testing.T) {
 	noTools(t)
 	gobin := t.TempDir()
 	t.Setenv("GOBIN", gobin)
@@ -81,17 +81,17 @@ func TestLookPathSkipsWhatIsNotExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"kindish", "dirish"} {
-		if _, err := LookPath(name); !errors.Is(err, exec.ErrNotFound) {
-			t.Errorf("LookPath(%s) = %v", name, err)
+		if _, err := LookTool(name); !errors.Is(err, exec.ErrNotFound) {
+			t.Errorf("LookTool(%s) = %v", name, err)
 		}
 	}
 }
 
-func TestLookPathNamesTheDirsLookedIn(t *testing.T) {
+func TestLookToolNamesTheDirsLookedIn(t *testing.T) {
 	noTools(t)
 	gobin := t.TempDir()
 	t.Setenv("GOBIN", gobin)
-	_, err := LookPath("kindish")
+	_, err := LookTool("kindish")
 	if !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("LookPath = %v", err)
 	}
@@ -102,15 +102,15 @@ func TestLookPathNamesTheDirsLookedIn(t *testing.T) {
 	}
 }
 
-func TestLookPathLeavesAPathToExec(t *testing.T) {
+func TestLookToolLeavesAPathToExec(t *testing.T) {
 	noTools(t)
 	gobin := t.TempDir()
 	t.Setenv("GOBIN", gobin)
-	if _, err := LookPath(filepath.Join(t.TempDir(), "kindish")); err == nil || strings.Contains(err.Error(), "nor in") {
+	if _, err := LookTool(filepath.Join(t.TempDir(), "kindish")); err == nil || strings.Contains(err.Error(), "nor in") {
 		t.Errorf("an absent path = %v", err)
 	}
 	p := tool(t, t.TempDir(), "kindish")
-	if got, err := LookPath(p); err != nil || got != p {
-		t.Errorf("LookPath(%s) = %q, %v", p, got, err)
+	if got, err := LookTool(p); err != nil || got != p {
+		t.Errorf("LookTool(%s) = %q, %v", p, got, err)
 	}
 }

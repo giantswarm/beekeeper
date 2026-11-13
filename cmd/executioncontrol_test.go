@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -324,8 +325,62 @@ func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
 	}
 }
 
-func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
-	for _, waits := range []string{"merge hold lifting", "gate run completion"} {
+// TestExecutionMoveHandsOnItsPublication: a host worker that published its
+// work and then asks for the coordinator (agents move) hands the fresh
+// worker there the branch, head and pull request it published, and that
+// pull request stays on the coordinator beside the issue it serves, also
+// when no park or desk review named it
+// (https://github.com/giantswarm/beekeeper/issues/3900).
+//
+// control: none: agents move and its execution control are new, so the
+// merge base cannot build this test; the scenario
+// regression/host-worker-moves-its-task-to-the-coordinator fails on the base
+func TestExecutionMoveHandsOnItsPublication(t *testing.T) {
+	a, r := executionTestApp(t)
+	pull := "https://github.com/" + sshTestRepository + "/pull/7"
+	branch := executionBranch(r.Ref)
+	var line string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Published = &state.ExecutionPublication{At: a.now, Branch: branch, Head: loopHead, URL: pull}
+		var evs []state.Event
+		var err error
+		line, evs, err = a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{Operation: execution.ControlMove, Data: mustExecutionJSON(t, executionMove{Why: "the proof needs the coordinator's data"})})
+		return evs, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, "on the coordinator") {
+		t.Fatalf("move reply %q", line)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := st.Agents[0].Park
+	if p == nil || len(p.Continuation) != 1 {
+		t.Fatalf("park %+v, want one queued continuation", p)
+	}
+	for _, want := range []string{branch, loopHead, pull} {
+		if !strings.Contains(p.Continuation[0], want) {
+			t.Fatalf("continuation %q does not name %s", p.Continuation[0], want)
+		}
+	}
+	for _, ref := range []string{sshTestRepository + "#1711", sshTestRepository + "#7"} {
+		if _, ok := st.LocalTaskFor(ref); !ok {
+			t.Fatalf("%s carries no mark to stay on the coordinator: %+v", ref, st.LocalTasks)
+		}
+	}
+	if rec, _ := executionRecord(st, r.Ref); rec == nil || !rec.Completed {
+		t.Fatalf("execution record %+v, want it completed", rec)
+	}
+}
+
+// TestExecutionParkReasonMaySayAnything: an SSH execution's park on a pull
+// request is recorded on it whatever its reason says; --on alone says what
+// a park waits on.
+func TestExecutionParkReasonMaySayAnything(t *testing.T) {
+	for _, waits := range []string{"the editor's held-still source", "merge hold lifting", "gate run completion"} {
 		t.Run(waits, func(t *testing.T) {
 			a, _ := executionTestApp(t)
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -335,8 +390,15 @@ func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
 				})
 				return evs, err
 			})
-			if err == nil || !strings.Contains(err.Error(), "does not settle") {
-				t.Fatalf("mismatched park: %v", err)
+			if err != nil {
+				t.Fatalf("park refused: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := st.Agents[0].Park; p == nil || p.On != refOne || p.Waits != waits {
+				t.Fatalf("park %+v, want on %s waiting for %q", p, refOne, waits)
 			}
 		})
 	}
@@ -344,6 +406,7 @@ func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
 
 func TestRemoteCompletionRequiresAndRecordsDeliveryEvidence(t *testing.T) {
 	a, r := executionTestApp(t)
+	stubNoChangeGitHub(t, map[github.PR]github.RefState{{Repo: sshTestRepository, N: 1711}: {Kind: github.RefIssue, State: github.Open}}, nil)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.StartDelivery("giantswarm/beekeeper#1711", r.Name, "", a.now)
 		return nil, nil
@@ -380,5 +443,131 @@ func TestRemoteCompletionRequiresAndRecordsDeliveryEvidence(t *testing.T) {
 	}
 	if !st.Agents[0].Done || st.Deliveries[0].Outcome != state.OutcomeNoChange || st.Deliveries[0].Evidence == "" {
 		t.Fatalf("missing remote outcome: %+v", st.Deliveries)
+	}
+}
+
+// stubNoChangeGitHub answers the coordinator's reads of issues and pull
+// requests from states and records its gh writes, which fail with writeErr.
+func stubNoChangeGitHub(t *testing.T, states map[github.PR]github.RefState, writeErr error) *[][]string {
+	t.Helper()
+	prevStates, prevGH := refStates, executionPublishGH
+	t.Cleanup(func() { refStates, executionPublishGH = prevStates, prevGH })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, r := range refs {
+			if s, ok := states[r]; ok {
+				out[r] = s
+			}
+		}
+		return out, nil
+	}
+	var writes [][]string
+	executionPublishGH = func(_ context.Context, args ...string) ([]byte, error) {
+		writes = append(writes, args)
+		return nil, writeErr
+	}
+	return &writes
+}
+
+// TestRemoteNoChangeProofNeedsFullURLs: the no-change proof becomes the
+// comment that closes the issue, so a bare reference in it refuses the
+// report, as one in the report's text does, before anything is closed.
+func TestRemoteNoChangeProofNeedsFullURLs(t *testing.T) {
+	a, r := executionTestApp(t)
+	writes := stubNoChangeGitHub(t, map[github.PR]github.RefState{{Repo: sshTestRepository, N: 1711}: {Kind: github.RefIssue, State: github.Open}}, nil)
+	request := execution.ControlRequest{Ref: r.Ref, ID: "bare-proof", Sequence: 1, Operation: execution.ControlReport,
+		Data: mustExecutionJSON(t, executionReport{Finished: true, NoChange: "fixed by #1712, merged", Text: completedFixtureTask, Problems: []string{ghNone}})}
+	var result execution.ControlResult
+	if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Error, "#1712 without its full URL") || len(*writes) > 0 {
+		t.Fatalf("bare reference in the proof: %+v, writes %q", result, *writes)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Done || len(st.Records) != 1 {
+		t.Fatalf("refused report ended the task: done %v, records %+v", st.Agents[0].Done, st.Records)
+	}
+}
+
+// TestRemoteNoChangeClosesTheServedIssue: an execution host's worker that
+// ends its task with --done --no-change has the coordinator close the open
+// issue it served, with its proof as the comment, since the worker cannot
+// and refill offers an open issue again. A failed close keeps the outcome
+// and tells the guide; a closed issue and a pull request are left alone.
+func TestRemoteNoChangeClosesTheServedIssue(t *testing.T) {
+	const proof = "fixed on main by https://github.com/giantswarm/beekeeper/pull/1712, merged"
+	const url = "https://github.com/giantswarm/beekeeper/issues/1711"
+	issue := github.PR{Repo: sshTestRepository, N: 1711}
+	open := github.RefState{Kind: github.RefIssue, State: github.Open}
+	for _, tc := range []struct {
+		name     string
+		state    github.RefState
+		writeErr error
+		closes   bool
+		problem  string
+	}{
+		{name: "open issue", state: open, closes: true},
+		{name: "close fails", state: open, writeErr: errors.New("HTTP 403: Resource not accessible"), closes: true, problem: url + " stays open: remote-worker ended its task with no change, and closing the issue failed: HTTP 403"},
+		{name: "closed issue", state: github.RefState{Kind: github.RefIssue, State: github.Closed}},
+		{name: "pull request", state: github.RefState{Kind: github.RefPullRequest, State: github.Open}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, r := executionTestApp(t)
+			writes := stubNoChangeGitHub(t, map[github.PR]github.RefState{issue: tc.state}, tc.writeErr)
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.StartDelivery("giantswarm/beekeeper#1711", r.Name, "", a.now)
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			request := execution.ControlRequest{Ref: r.Ref, ID: "no-change", Sequence: 1, Operation: execution.ControlReport,
+				Data: mustExecutionJSON(t, executionReport{Finished: true, NoChange: proof, Text: completedFixtureTask, Problems: []string{ghNone}})}
+			var result execution.ControlResult
+			if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil || result.Error != "" {
+				t.Fatalf("no-change report: %v %+v", err, result)
+			}
+			if !tc.closes {
+				if len(*writes) > 0 {
+					t.Fatalf("wrote to GitHub for a %s %s: %q", tc.state.State, tc.state.Kind, *writes)
+				}
+				return
+			}
+			if len(*writes) != 1 {
+				t.Fatalf("closes: got %q, want one", *writes)
+			}
+			w := (*writes)[0]
+			want := fmt.Sprintf("issue close %s --repo %s --comment", url, sshTestRepository)
+			if len(w) != 7 || strings.Join(w[:6], " ") != want || !strings.HasPrefix(w[6], "No change needed: "+proof) {
+				t.Fatalf("close: got %q, want %q and the proof as the comment", w, want)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !st.Agents[0].Done || st.Deliveries[0].Outcome != state.OutcomeNoChange || len(st.Records) != 0 {
+				t.Fatalf("outcome: done %v, deliveries %+v, records %+v", st.Agents[0].Done, st.Deliveries, st.Records)
+			}
+			reports := st.WorkerReports
+			if len(reports) != 1 {
+				t.Fatalf("reports: %+v", reports)
+			}
+			closed, err := a.store.Events(0, func(ev state.Event) bool { return ev.Verb == "agents.no-change-closed" })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.problem == "" {
+				if len(reports[0].Problems) != 0 || len(closed) != 1 || !strings.HasPrefix(closed[0].Detail, url+": closed for remote-worker") {
+					t.Fatalf("problems %q, closed events %+v", reports[0].Problems, closed)
+				}
+				return
+			}
+			if len(reports[0].Problems) != 1 || !strings.HasPrefix(reports[0].Problems[0], tc.problem) || len(closed) != 0 {
+				t.Fatalf("problems %q, want %q; closed events %+v", reports[0].Problems, tc.problem, closed)
+			}
+		})
 	}
 }

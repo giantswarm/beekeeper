@@ -11,7 +11,6 @@ import (
 	"maps"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -25,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/loop"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -281,7 +281,7 @@ func runUsageCommand(ctx context.Context, command []string, timeout time.Duratio
 func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Duration, dir string) (capacity.UsageReading, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	c := exec.CommandContext(ctx, command[0], command[1:]...) //nolint:gosec // the configured usage command
+	c := proc.CommandContext(ctx, command[0], command[1:]...) //nolint:gosec // the configured usage command
 	c.Dir = dir
 	c.Env = usageProbeEnv(command)
 	var stdout, stderr bytes.Buffer
@@ -662,7 +662,7 @@ func (a *app) runServeMode(ctx context.Context, p config.Provider) (config.Serve
 	}
 	ctx, cancel := context.WithTimeout(ctx, config.DefaultUsageTimeout)
 	defer cancel()
-	c := exec.CommandContext(ctx, p.ServeModeCommand[0], p.ServeModeCommand[1:]...) //nolint:gosec // the configured serving-mode command
+	c := proc.CommandContext(ctx, p.ServeModeCommand[0], p.ServeModeCommand[1:]...) //nolint:gosec // the configured serving-mode command
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if len(a.serveModeEnv) > 0 {
@@ -1588,6 +1588,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
+	withPaceOffs(readings, st, w.now)
 	v := capacityStopped(capacity.BuildProvidersCapacity(c, pa, k, readings, h, false, nil, capacity.ForWorker, w.now), w.app, st)
 
 	var parts []string

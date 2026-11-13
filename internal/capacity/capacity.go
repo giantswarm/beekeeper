@@ -217,6 +217,10 @@ type ProviderView struct {
 
 	NoPlanWindows       bool `json:"noPlanWindows,omitempty"`
 	SupplementalBuckets bool `json:"-"`
+
+	// PaceOff is the person's override that lets worker starts run ahead of
+	// the provider's 7-day pace (capacity pace off), nil for none.
+	PaceOff *PaceOffView `json:"paceOff,omitempty"`
 }
 
 func (p *ProviderView) FindBucket(name string) *BucketView {
@@ -283,6 +287,9 @@ func (p *ProviderView) Line(now time.Time) string {
 	if ws := p.WindowsSummary(now); ws != "" {
 		s += "; " + ws
 	}
+	if p.PaceOff != nil {
+		s += "; " + p.PaceOff.Line(now)
+	}
 	return s + "; " + p.Verdict
 }
 
@@ -290,6 +297,9 @@ func (p *ProviderView) WatchSummary(now time.Time) string {
 	s := fmt.Sprintf("%d busy of ceiling %d", len(p.Busy), p.Ceiling)
 	if ws := p.WindowsSummary(now); ws != "" {
 		s += ", " + ws
+	}
+	if p.PaceOff != nil {
+		s += ", " + p.PaceOff.Line(now)
 	}
 	s += ", " + p.Verdict
 	if p.High {
@@ -409,6 +419,21 @@ func (c *ChoiceView) Summary() string {
 		return noProblems + " (" + c.Reason + ")"
 	}
 	return noProblems
+}
+
+// BehindPace is how many points the pick's 7-day usage is behind its even
+// weekly pace, and whether it is behind: false for no pick, a self-hosted
+// pick, or one on or ahead of its pace.
+func (c *ChoiceView) BehindPace() (float64, bool) {
+	if c == nil || c.Harness == "" {
+		return 0, false
+	}
+	for _, cand := range c.Candidates {
+		if cand.OK && cand.Harness == c.Harness && cand.Model == c.Model && cand.Provider == c.Provider && cand.BehindPace != nil {
+			return *cand.BehindPace, *cand.BehindPace > 0
+		}
+	}
+	return 0, false
 }
 
 // AgentCount sorts the roster: busy with a task, parked (kept on purpose, a
@@ -824,6 +849,9 @@ type ProviderReadingResult struct {
 	// constraintCeiling is the ceiling the constraints held right now
 	// allow: the sessions the mode they permit sustains.
 	ConstraintCeiling int
+	// PaceOff is the provider's pace override in effect (capacity pace
+	// off), nil for none.
+	PaceOff *PaceOffView
 }
 
 // WindowUnderused reports whether sd's 7-day usage is heavily behind its pace
@@ -855,6 +883,10 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 		busy = []string{}
 	}
 	pv := &ProviderView{Name: name, Busy: busy}
+	if res.PaceOff != nil {
+		po := *res.PaceOff
+		pv.PaceOff = &po
+	}
 	if len(pa.Unconfirmed) > 0 {
 		pv.Error = "remote execution reservation is unresolved; inspect its registration and provider"
 		pv.Blocks = []string{pv.Error}
@@ -895,12 +927,14 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 		allHigh := true
 		var firstHighFH *UsageWindow
 		var bucketBlocks []string
+		var sevenDays []*UsageWindow
 		for _, bName := range pv.BucketOrder {
 			b := r.Buckets[bName]
 			fh := effectiveWindow(b.FiveHour, now)
 			sd := effectiveSevenDayWindow(b.SevenDay, now)
+			sevenDays = append(sevenDays, sd)
 			var pace *float64
-			if kind == ForWorker {
+			if kind == ForWorker && !pv.PaceOff.waives(sd) {
 				pace = sdPace(sd)
 			}
 			dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
@@ -957,6 +991,7 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 				Blocks:    bBlocks,
 			}
 		}
+		pv.PaceOff.settle(sevenDays...)
 		if maxBucketCeiling == 0 {
 			pv.Ceiling, pv.Room = 0, 0
 			pv.High = allHigh
@@ -988,8 +1023,9 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 	pv.SevenDay = effectiveSevenDayWindow(r.SevenDay, now)
 	pv.Pace = sdPace(pv.SevenDay)
 	pv.Underused = WindowUnderused(pv.SevenDay, pCfg.Usage, now)
+	pv.PaceOff.settle(pv.SevenDay)
 	var pace *float64
-	if kind == ForWorker {
+	if kind == ForWorker && !pv.PaceOff.waives(pv.SevenDay) {
 		pace = pv.Pace
 	}
 	dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pace)
@@ -1610,9 +1646,11 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *ProviderVi
 	}
 	// No worker start runs ahead of the even pace: a margin, the choice's or
 	// its provider's, may only tighten it, and skipPace no longer waives it.
-	// Desk reviews inside the reserved review headroom are not refused by the
-	// pace check, only by a provider at its hard limit.
-	if kind == ForWorker && sd != nil && sd.Pace != nil {
+	// Only the person's pace override of the provider (capacity pace off)
+	// does, within the 7-day window it was set in. Desk reviews inside the
+	// reserved review headroom are not refused by the pace check, only by a
+	// provider at its hard limit.
+	if kind == ForWorker && sd != nil && sd.Pace != nil && !pv.PaceOff.waives(sd) {
 		margin := min(ch.EffectivePaceMargin(pCfg), pCfg.PaceMargin, 0)
 		over := math.Round((sd.UsedPercent-*sd.Pace)*10) / 10
 		if over > margin+1e-9 {
@@ -1821,6 +1859,22 @@ func ChoicesHaveModel(choices []config.Choice, model string) bool {
 	return slices.ContainsFunc(choices, func(ch config.Choice) bool {
 		return choiceModelMatches(ch, m)
 	})
+}
+
+// ChoiceEffort is the effort of the first choice of harness and model: a
+// start that names both takes the effort of the choice that would have
+// picked them. "" without a model or a matching choice.
+func ChoiceEffort(choices []config.Choice, harness, model string) string {
+	h, m := cmp.Or(strings.TrimSpace(harness), claudeComm), strings.TrimSpace(model)
+	if m == "" {
+		return ""
+	}
+	for _, ch := range choices {
+		if strings.EqualFold(ch.Harness, h) && choiceModelMatches(ch, m) {
+			return strings.TrimSpace(ch.Effort)
+		}
+	}
+	return ""
 }
 
 func FilterChoiceModel(k config.Capacity, model string) config.Capacity {

@@ -3,17 +3,18 @@ package codex
 import (
 	"context"
 	"errors"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func TestProbeUsageProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, "sh", "-c", `
+	c := proc.CommandContext(ctx, "sh", "-c", `
  read -r init
  case "$init" in *initialize*) ;; *) exit 1;; esac
  echo '{"id":1,"result":{}}'
@@ -49,7 +50,7 @@ func TestProbeUsageStops(t *testing.T) {
 func TestProbeUsageDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	c := exec.CommandContext(ctx, "sh", "-c", "read -r request; read -r more")
+	c := proc.CommandContext(ctx, "sh", "-c", "read -r request; read -r more")
 	if _, err := probeUsage(c, time.Now()); err == nil {
 		t.Fatal("expected deadline error")
 	}
@@ -60,7 +61,7 @@ func TestProbeUsageDeadline(t *testing.T) {
 func TestProbeUsageDeadlineWithAChildHoldingStdout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	c := exec.CommandContext(ctx, "sh", "-c", "sleep 5; true")
+	c := proc.CommandContext(ctx, "sh", "-c", "sleep 5; true")
 	c.WaitDelay = time.Second // as ProbeUsage sets it
 	start := time.Now()
 	if _, err := probeUsage(c, time.Now()); err == nil {
@@ -112,7 +113,7 @@ func TestUsageRequestErrorNamesTheCause(t *testing.T) {
 func TestProbeUsageReturnsTheRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, "sh", "-c", `
+	c := proc.CommandContext(ctx, "sh", "-c", `
  read -r init
  echo '{"id":1,"result":{}}'
  read -r ready

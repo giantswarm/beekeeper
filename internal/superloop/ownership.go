@@ -277,6 +277,10 @@ func leaveKey(ref, reason string) string { return fmt.Sprintf("leave %s %s", ref
 // new park: one leave line per head.
 func leftUnreviewed(head string) string { return "unreviewed@" + short(head) }
 
+// leftUnhanded is the reason a head its author pushed past its park waits
+// for the author's park on it: one leave line per head.
+func leftUnhanded(head string) string { return "unhanded@" + short(head) }
+
 // leftNoVerdict is the reason a head whose reviews are used and gave no
 // verdict gets no go: one leave line per head.
 func leftNoVerdict(head string) string   { return "noverdict@" + short(head) }

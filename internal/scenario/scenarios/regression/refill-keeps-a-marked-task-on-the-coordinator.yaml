@@ -1,0 +1,93 @@
+name: refill-keeps-a-marked-task-on-the-coordinator
+description: >
+  The desk marks a task to stay on the coordinator (agents move --ref): its
+  remaining step needs production data only the coordinator has. The
+  loop's refill then starts the task's worker on the coordinator, saying
+  why, although the execution host that maps the repository has room; once
+  the mark is lifted, the task's starts are placed as any again. Live, the
+  refill started such a task on the host again and again, where it could
+  not finish.
+issue: https://github.com/giantswarm/beekeeper/issues/3900
+flow: regression
+tags: [regression, hosts, placement, refill]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - reply: working where the task's data is
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The guide marks the task before any start.
+  - name: mark
+    run: {args: [--as, guide, agents, move, --ref, 'example/app#1', the 300-clip proof needs the production projects on the coordinator]}
+    expect:
+      - exit: 0
+      - output: {contains: ["example/app#1 stays on the coordinator"]}
+      - events: {contains: [agents.move]}
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR NEXT STAYS HERE https://github.com/example/app/issues/1: its task example/app#1 needs the coordinator (agents move)"]}
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: local, outcome: finish}
+  - name: roster
+    run: {args: [agents, --json]}
+  # Lifting the mark takes nothing else back.
+  - name: lift
+    run: {args: [--as, guide, agents, move, --ref, 'example/app#1', --clear]}
+    expect:
+      - exit: 0
+      - output: {contains: ["example/app#1: its starts are placed as any again"]}
+  - name: lift-again
+    run: {args: [--as, guide, agents, move, --ref, 'example/app#1', --clear]}
+
+then:
+  - worker: {name: app 1, host: local, harness: claude, turns: 1, outcome: finish}
+  - {step: roster, json_path: {path: '[0].name', equals: app 1}}
+  - {step: roster, json_path: {path: '[0].execution', exists: false}}
+  - {step: lift-again, exit: 3}
+  - {step: lift-again, stderr: {contains: ["example/app#1 carries no mark to stay on the coordinator"]}}

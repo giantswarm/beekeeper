@@ -384,7 +384,7 @@ func commits() {
 			return nil, err
 		}
 		state := strings.ToUpper(c.str("state"))
-		if !slices.Contains([]string{statusPending, statusSuccess, statusFailure, statusError}, state) {
+		if !slices.Contains(statusStates, state) {
 			return nil, errInvalid("state is not one of error, failure, pending, success")
 		}
 		s := c.m.SetStatus(r, sha, cmpOr(c.str("context"), "default"), state, c.str("description"), c.str("target_url"))
@@ -420,9 +420,19 @@ func commits() {
 					commits = append(commits, c.commitShape(r, info))
 				}
 			}
-			if changed, err := c.m.Origins.Changed(r, base, head); err == nil {
+			// Each file as GitHub lists it: its status, a rename's previous
+			// name, its blob and its patch, which the desk's approval
+			// coverage compares (github.ApprovalCovers).
+			if changed, err := c.m.Origins.CompareFiles(r, base, head); err == nil {
 				for _, f := range changed {
-					files = append(files, obj{"filename": f.Path, "status": "modified", "additions": f.Additions, "deletions": f.Deletions, "changes": f.Additions + f.Deletions})
+					file := obj{"filename": f.Path, "status": f.Status, "sha": f.SHA, "additions": f.Additions, "deletions": f.Deletions, "changes": f.Additions + f.Deletions}
+					if f.Patch != "" {
+						file["patch"] = f.Patch
+					}
+					if f.Previous != "" {
+						file["previous_filename"] = f.Previous
+					}
+					files = append(files, file)
 				}
 			}
 		} else if base != head {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -209,7 +208,7 @@ type shell func(ctx context.Context, command string, timeout time.Duration) erro
 func runShell(ctx context.Context, command string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "sh", "-c", command).CombinedOutput() //nolint:gosec // the configured probe or remedy of this machine
+	out, err := proc.CommandContext(ctx, "sh", "-c", command).CombinedOutput() //nolint:gosec // the configured probe or remedy of this machine
 	if err != nil {
 		if s := strings.TrimSpace(string(out)); s != "" {
 			return fmt.Errorf("%w: %s", err, truncate(s, 200))

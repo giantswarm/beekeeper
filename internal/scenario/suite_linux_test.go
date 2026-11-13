@@ -23,12 +23,25 @@ const (
 )
 
 // ReportEnv names the directory of the suite's report and artifacts;
-// FlowEnv and TagEnv filter the scenarios (comma-separated).
+// FlowEnv and TagEnv filter the scenarios (comma-separated); ShardEnv
+// ("<index>/<total>") runs one shard of them, as each CI container does.
+// The budget holds per shard.
 const (
 	ReportEnv = "BEEKEEPER_SCENARIO_REPORT"
 	FlowEnv   = "BEEKEEPER_SCENARIO_FLOW"
 	TagEnv    = "BEEKEEPER_SCENARIO_TAG"
+	ShardEnv  = "BEEKEEPER_SCENARIO_SHARD"
 )
+
+// shard is the shard ShardEnv names; a malformed one fails the test.
+func shard(t *testing.T) Shard {
+	t.Helper()
+	sh, err := ParseShard(os.Getenv(ShardEnv))
+	if err != nil {
+		t.Fatalf("%s: %v", ShardEnv, err)
+	}
+	return sh
+}
 
 var suiteStarted = time.Now()
 
@@ -97,17 +110,24 @@ func runner(t *testing.T) *Runner {
 }
 
 // TestScenarios runs every scenario under scenarios/ (filtered by
-// BEEKEEPER_SCENARIO_FLOW and BEEKEEPER_SCENARIO_TAG) in parallel, each in
-// its own sandbox, and writes the report.
+// BEEKEEPER_SCENARIO_FLOW and BEEKEEPER_SCENARIO_TAG, and to the shard
+// BEEKEEPER_SCENARIO_SHARD names) in parallel, each in its own sandbox, and
+// writes the report.
+//
+// control: none: it gains only the shard filter, which the merge base
+// lacks; the shard's split is TestShardSplitsTheSuite's, and every
+// scenario still runs in one of CI's containers
 func TestScenarios(t *testing.T) {
 	all, err := LoadDir("scenarios")
 	if err != nil {
 		t.Fatal(err)
 	}
-	scenarios := Filter(all, SplitList(os.Getenv(FlowEnv)), SplitList(os.Getenv(TagEnv)))
+	sh := shard(t)
+	scenarios := sh.Of(Filter(all, SplitList(os.Getenv(FlowEnv)), SplitList(os.Getenv(TagEnv))))
 	if len(scenarios) == 0 {
-		t.Fatalf("no scenario matches flows %q and tags %q", os.Getenv(FlowEnv), os.Getenv(TagEnv))
+		t.Fatalf("no scenario matches flows %q and tags %q in shard %s", os.Getenv(FlowEnv), os.Getenv(TagEnv), sh)
 	}
+	t.Logf("shard %s: %d of %d scenarios", sh, len(scenarios), len(all))
 	r := runner(t)
 	rep := &Report{Started: suiteStarted, Budget: Budget, Warn: Warn}
 	var mu sync.Mutex

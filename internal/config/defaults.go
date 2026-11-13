@@ -113,6 +113,7 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.RestartWait, DefaultRestartWait)
 	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
 	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.ReserveFor, DefaultReserveFor)

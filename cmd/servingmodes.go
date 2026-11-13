@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -694,7 +693,7 @@ func (a *app) runServeModeSwitch(ctx context.Context, p config.Provider, mode st
 // wanted mode as its argument, in dir (the working directory, empty for the
 // caller's) with env added to the process environment.
 func runServeModeSwitchCommand(ctx context.Context, p config.Provider, mode, dir string, env []string) (string, error) {
-	c := exec.CommandContext(ctx, p.ServeModeSwitch[0], append(slices.Clone(p.ServeModeSwitch[1:]), mode)...) //nolint:gosec // the configured switch command
+	c := proc.CommandContext(ctx, p.ServeModeSwitch[0], append(slices.Clone(p.ServeModeSwitch[1:]), mode)...) //nolint:gosec // the configured switch command
 	// The switch's own timeout must end its process: a switcher that
 	// leaves a child holding the mode would keep the machine's one-switch
 	// lock past the timeout, and the retry would wait on the orphan.

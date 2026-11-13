@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -350,7 +350,7 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 	defer func() { _ = logFile.Close() }()
 
 	model := argvModel(argv)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv from the unit beekeeper started
+	cmd := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv from the unit beekeeper started
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return err

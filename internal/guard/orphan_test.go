@@ -2,16 +2,17 @@ package guard
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 type orphanCapper struct {
@@ -21,11 +22,11 @@ type orphanCapper struct {
 }
 
 func (f *orphanCapper) ScopePopulated(string) (bool, error) { return f.populated() }
-func (f *orphanCapper) Command(string, platform.Cap, []string) (*exec.Cmd, error) {
+func (f *orphanCapper) Command(string, platform.Cap, []string) (*proc.Cmd, error) {
 	if f.argv != nil {
-		return exec.Command(f.argv[0], f.argv[1:]...), nil //nolint:gosec // the test's own command
+		return proc.CommandContext(context.Background(), f.argv[0], f.argv[1:]...), nil //nolint:gosec // the test's own command
 	}
-	return exec.Command("sleep", "2"), nil
+	return proc.CommandContext(context.Background(), "sleep", "2"), nil
 }
 
 func TestRunReleasesOrphanedScope(t *testing.T) {

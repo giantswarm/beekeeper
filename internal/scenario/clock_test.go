@@ -51,6 +51,10 @@ func TestParseAdvance(t *testing.T) {
 
 // The advance step is as strict as the rest of the loader, also inside its
 // own mapping, which a custom unmarshaler would otherwise read leniently.
+//
+// control: none: the measure step and the cpu expectation are new, so the
+// merge base does not build this package's tests; the scenario
+// busy-desk-guide-watch-reads-what-changed fails there
 func TestParseRejectsAdvance(t *testing.T) {
 	for _, tc := range []struct{ name, advance, want string }{
 		{"unknown key", "{by: 1h, stpe: 5m}", "field stpe not found"},
@@ -78,7 +82,7 @@ func TestParseRejectsAdvance(t *testing.T) {
 		t.Fatalf("a bad start: %v", err)
 	}
 	_, err = Parse("advance-and-run.yaml", []byte(strings.Replace(advanceScenario("1m"), "  - advance: 1m", "  - {advance: 1m, run: {args: [version]}}", 1)))
-	if err == nil || !strings.Contains(err.Error(), "exactly one of run, background, stop, wait_for, advance, github, fault and host") {
+	if err == nil || !strings.Contains(err.Error(), "exactly one of run, background, stop, wait_for, advance, measure, github, fault and host") {
 		t.Fatalf("an advance with a run: %v", err)
 	}
 }

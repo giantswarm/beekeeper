@@ -28,6 +28,7 @@ const (
 	ControlPark      = "park"
 	ControlResume    = "resume"
 	ControlReport    = "report"
+	ControlMove      = "move"
 	unitActive       = "active"
 	unitInactive     = "inactive"
 	inspectOperation = "inspect"

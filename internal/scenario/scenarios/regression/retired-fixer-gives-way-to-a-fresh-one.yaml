@@ -1,0 +1,152 @@
+name: retired-fixer-gives-way-to-a-fresh-one
+description: >
+  A worker started on an SSH execution host publishes its pull request and
+  parks on it; the loop ends the execution for the desk review and keeps
+  its review park. A red check gets a fresh fixer under the worker's name,
+  whose execution crashes and is retired: the entry stays on the roster, and
+  no message reaches its execution any more. When the next check turns red,
+  the loop gives that entry's work to a fresh fixer on the pull request's
+  branch instead of waking the retired one. Live, agents wake refused the
+  retired worker on every pass and the pull requests waited for hours.
+issue: https://github.com/giantswarm/beekeeper/issues/3906
+flow: regression
+tags: [regression, hosts, delivery, ci]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        # No board item: the worker is started by hand, so the refill starts
+        # no worker of its own for the issue under the same name.
+        issues:
+          - {number: 1, title: First item}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # Every session named app 1 on the host: the task's worker, then the
+      # fixer of each red check.
+      - name: app 1
+        host: builder
+        turns:
+          # The task's worker publishes its pull request and parks on it for
+          # the desk review.
+          - steps:
+              - write: {path: change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+              - write: {path: .beekeeper-scratch/body.md, content: "Closes https://github.com/example/app/issues/1\n"}
+              - beekeeper: [agents, publish, --title, "feat: the worker's change", --body-file, '${dir}/.beekeeper-scratch/body.md']
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+          # The fixer of the first red check crashes without a word.
+          - outcome: crash
+          # The fixer of the next red check.
+          - reply: fixing the red check
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The loop runs before the park: a park from before its first pass is no
+  # request for a review.
+  - name: first
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 2s
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app 1, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, turns: 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  # The watch sees the turn ended; the loop then ends the parked execution
+  # for the desk review and keeps its review park.
+  - advance: 2s
+  - name: observe-park
+    run: {args: [watch, --once]}
+  - advance: 2s
+  - name: end-for-review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, agents.remove]}
+  # A red check: the worker is off the roster, so a fresh fixer takes the
+  # name: the pass reserves its execution on the host, which crashes.
+  - advance: 2s
+  - name: build-red
+    github: {check: {repo: example/app, pull: 2, name: build, state: red}}
+  - name: first-red
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [execution.reserved, agents.start]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, turns: 2, outcome: crash}
+  # The watch sees the execution ended and retires it; its entry stays on
+  # the roster with its task.
+  - advance: 2s
+  - name: observe-crash
+    run: {args: [watch, --once]}
+  - advance: 2s
+  - name: retire
+    run: {args: [watch, --once]}
+  - name: retired
+    run: {args: [log, --verb, execution.retirement-requested, --json]}
+    expect:
+      - exit: 0
+      - output: {matches: 'app 1: (crash|failed-start) on '}
+  # The next red check is for the retired worker: a fresh fixer takes it.
+  - advance: 2s
+  - name: lint-red
+    github: {check: {repo: example/app, pull: 2, name: lint, state: red}}
+  - name: next-red
+    run: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, turns: 3, outcome: finish}
+  - name: removed
+    run: {args: [log, --verb, agents.remove, --json]}
+    expect:
+      - exit: 0
+      - output: {contains: ["a fresh fixer takes over https://github.com/example/app/pull/2"]}
+
+then:
+  - worker: {name: app 1, host: builder, harness: claude, turns: 3, outcome: finish}
+  # The fixes go to the task's one pull request.
+  - github: {issue: {repo: example/app, number: 1, open_pulls: 1}}

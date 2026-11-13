@@ -352,6 +352,7 @@ completion is refused under --as.`,
 					return nil, err
 				}
 				found = freshWorkerProblems(ag, found)
+				issue := taskIssue(st, *ag)
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished || blocked
@@ -364,6 +365,9 @@ completion is refused under --as.`,
 					for _, r := range clearRecords(st, ag.Party) {
 						evs = append(evs, event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r)))
 					}
+				}
+				if finished && !blocked {
+					evs = append(evs, retireTaskParks(st, me, *ag, issue, a.now)...)
 				}
 				if report != "" || len(found) > 0 {
 					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found, TellTo: reviewStarter(st, *ag, report)})
@@ -485,7 +489,7 @@ started is never archived nor stopped.`,
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
 	c.AddCommand(a.agentReviewCmd())
-	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
+	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.agentMoveCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
 	c.AddCommand(a.executionHostCmds()...)
 	return c
 }
