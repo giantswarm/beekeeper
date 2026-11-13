@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -56,7 +55,7 @@ var (
 	// stderr, and returns its document.
 	releaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 		var out bytes.Buffer
-		c := exec.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
+		c := proc.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
 		c.Env = devctlCommandEnv("")
 		c.Stdout, c.Stderr = &out, os.Stderr
 		_ = c.Run() // its exit code is the document's verdict
@@ -92,7 +91,7 @@ var (
 	// prWarmWait runs devctl pr wait for repo#n, its progress on the gate's
 	// stderr: a warm-up whose verdict the merge's own devctl run judges.
 	prWarmWait = func(ctx context.Context, repo string, n int) {
-		c := exec.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
+		c := proc.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
 		c.Env = devctlCommandEnv("")
 		c.Stdout, c.Stderr = io.Discard, os.Stderr
 		_ = c.Run()
@@ -656,7 +655,7 @@ func launchChild(spec childSpec, base string) (int, error) {
 		gateLine("previous merge termination: %s", strings.TrimSpace(string(raw)))
 	}
 	removeMergeFiles(base)
-	path, err := exec.LookPath(spec.Argv[0])
+	path, err := proc.LookPath(spec.Argv[0])
 	if err != nil {
 		return 0, err
 	}
@@ -684,7 +683,7 @@ func startChild(base string) error {
 		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), clk.Now().UnixNano())
 		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}, TermIsSuccess: true})
 	}
-	c := exec.Command(self, mergeChildCmd, base) //nolint:gosec // as above
+	c := proc.CommandContext(context.Background(), self, mergeChildCmd, base) //nolint:gosec // as above
 	platform.Detach(c)
 	if err := c.Start(); err != nil {
 		return err
@@ -955,7 +954,7 @@ func mergeChild(base string) childResult {
 	}
 	var stop atomic.Value
 	var gone atomic.Bool
-	var current atomic.Pointer[os.Process]
+	var current atomic.Pointer[proc.Child]
 	stopCh := make(chan struct{})
 	go func() {
 		for s := range sig {
@@ -1037,14 +1036,14 @@ const busySpent = "busy-base budget spent"
 // with its caller: once its gate is gone without the left mark (leftExt)
 // and no other run follows it (followerGlob), the command is sent SIGTERM
 // and gone set.
-func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
+func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[proc.Child], stop *atomic.Value, gone *atomic.Bool) int {
 	started := clk.Now()
 	skip := slices.Contains(spec.Env, github.DevctlSkipVersionCheckEnv+"=true")
 	if spec.Config != "" || os.Getenv(beekeeperConfigEnv) != "" {
 		skip = !guardsEnabledForConfig(spec.Config)
 	}
 	github.SetDevctlSkipVersionCheck(skip)
-	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
+	c := proc.CommandContext(context.Background(), spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
 	progress := newMergeProgress(base, spec.Argv, clk.Now().UTC())
 	c.Stdout, c.Stderr, c.Env, c.Dir = out, io.MultiWriter(errs, progress), github.DevctlEnv(spec.Env, skip), spec.Dir
 	if err := c.Start(); err != nil {

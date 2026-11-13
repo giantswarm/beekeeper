@@ -202,7 +202,7 @@ func readDiskPaths(ctx context.Context, extra []string) []diskPath {
 	roots := []string{filepath.Join(home, ".local/state"), filepath.Join(home, ".cache")}
 	// Ask Docker for its configured root, including rootless installations.
 	dockerCtx, stop := context.WithTimeout(ctx, 300*time.Millisecond)
-	if exe, err := proc.LookPath("docker"); err == nil {
+	if exe, err := proc.LookTool("docker"); err == nil {
 		if b, err := proc.Command(dockerCtx, exe, "info", "--format", "{{.DockerRootDir}}").Output(); err == nil {
 			if root := strings.TrimSpace(string(b)); filepath.IsAbs(root) {
 				roots = append(roots, root)

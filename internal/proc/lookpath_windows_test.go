@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestLookPathWindowsGoToolExecutables(t *testing.T) {
+func TestLookToolWindowsGoToolExecutables(t *testing.T) {
 	gobin := windowsToolDirs(t)
 	want := filepath.Join(gobin, "kindish.exe")
 	// LookPath inspects the filename and metadata; it does not execute
@@ -16,13 +16,13 @@ func TestLookPathWindowsGoToolExecutables(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"kindish", "kindish.exe"} {
-		if got, err := LookPath(name); err != nil || got != want {
-			t.Errorf("LookPath(%q) = %q, %v; want %q", name, got, err, want)
+		if got, err := LookTool(name); err != nil || got != want {
+			t.Errorf("LookTool(%q) = %q, %v; want %q", name, got, err, want)
 		}
 	}
 }
 
-func TestLookPathWindowsLeavesBothPathSeparatorsToExec(t *testing.T) {
+func TestLookToolWindowsLeavesBothPathSeparatorsToExec(t *testing.T) {
 	gobin := windowsToolDirs(t)
 	dir := filepath.Join(gobin, "proc-lookpath-missing")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -32,7 +32,7 @@ func TestLookPathWindowsLeavesBothPathSeparatorsToExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{`proc-lookpath-missing/kindish`, `proc-lookpath-missing\kindish`} {
-		if got, err := LookPath(name); err == nil || got != "" || strings.Contains(err.Error(), "nor in") {
+		if got, err := LookTool(name); err == nil || got != "" || strings.Contains(err.Error(), "nor in") {
 			t.Errorf("explicit path %q reached fallback: %q, %v", name, got, err)
 		}
 	}

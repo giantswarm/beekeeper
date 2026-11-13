@@ -1,14 +1,15 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // askTimeout bounds a request to the broker: it answers in milliseconds.
@@ -46,9 +47,9 @@ func (c Capper) CapSlot(cp platform.Cap) error {
 
 // Command is "<Exe> sandbox scope … -- argv": it asks the broker of Dir
 // for the scope name around itself and then execs argv in it.
-func (c Capper) Command(name string, cp platform.Cap, argv []string) (*exec.Cmd, error) {
+func (c Capper) Command(name string, cp platform.Cap, argv []string) (*proc.Cmd, error) {
 	args := append([]string{"sandbox", "scope", "--spool", c.Dir, "--unit", name, "--slice", cp.Slice, "--max", cp.Max, "--swap", cp.Swap, "--"}, argv...)
-	return exec.Command(c.Exe, args...), nil //nolint:gosec // this binary, running the caller's command is the purpose
+	return proc.CommandContext(context.Background(), c.Exe, args...), nil //nolint:gosec // this binary, running the caller's command is the purpose
 }
 
 // Adopt is the host's: a sandboxed session asks for its scope instead.

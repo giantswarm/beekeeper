@@ -308,6 +308,20 @@ files calls the `time` package's clock again. To migrate a flow, replace
 those calls with `internal/clock`'s (imported as `clk` in `cmd`, whose
 `clock` function formats times) and add its files to that list.
 
+### The process seam
+
+The scenarios are moving into the test process
+([the plan](plans/3788-behavioral-scenarios.md), the process seam),
+where a process the core starts is answered by the world instead of the
+operating system. So the core starts every process through
+`internal/proc`, never `os/exec`: `proc.CommandContext` (or
+`proc.Command` for a read under `proc.Background`) returns a `*proc.Cmd`,
+configured as an `exec.Cmd` is, whose `Process`, `ProcessState` and exit
+error (`*proc.ExitError`) are `proc`'s; `proc.LookPath` searches `PATH`
+and `proc.LookTool` the Go tool directories too. A release build answers
+all of it with `os/exec`. `internal/proc/coreguard`'s `TestCoreUsesProc`
+fails when a core package (not the test harnesses) imports `os/exec`.
+
 ### Driving the supervisor loop
 
 A scenario drives the loop pass by pass: `run: {args: [supervisor, loop,

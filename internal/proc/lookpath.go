@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-// LookPath is exec.LookPath, then the Go tool directories for a bare name
+// LookTool is exec.LookPath, then the Go tool directories for a bare name
 // PATH lacks: beside the running binary, $GOBIN, every $GOPATH/bin,
 // ~/go/bin and ~/.go/bin, in that order. A systemd user unit, the sandbox
 // broker for one, runs with the service manager's PATH, the distribution's
 // default without the directory go install writes to, where kind and the
 // other Go CLIs live beside beekeeper. A tool found nowhere fails naming
 // the directories looked in; a name with a path separator is exec's alone.
-func LookPath(name string) (string, error) {
+func LookTool(name string) (string, error) {
 	path, err := exec.LookPath(name)
 	if err == nil || filepath.Base(name) != name {
 		return path, err

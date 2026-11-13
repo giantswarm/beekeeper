@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/install"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -49,7 +49,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return usageErr("--dir %s: not a directory", dir)
 	}
-	bin, err := exec.LookPath(agy.Comm)
+	bin, err := proc.LookPath(agy.Comm)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func agyModel(flag string, listed func() ([]string, error)) (string, error) {
 func agyModels(ctx context.Context, bin string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, inboxWait)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "models").Output() //nolint:gosec // agy from PATH
+	out, err := proc.CommandContext(ctx, bin, "models").Output() //nolint:gosec // agy from PATH
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func (a *app) continueAgyAgent(ctx context.Context, by state.Party, ag state.Age
 			return err
 		}
 	}
-	bin, err := exec.LookPath(agy.Comm)
+	bin, err := proc.LookPath(agy.Comm)
 	if err != nil {
 		return err
 	}
@@ -487,7 +487,7 @@ func readAgyBriefStream(streamPath string) (convID string, accepted bool, err er
 // restartAgyRemoteDaemon runs `systemctl --user try-restart <unit>`; a seam
 // for tests.
 var restartAgyRemoteDaemon = func(ctx context.Context, unit string) error {
-	return exec.CommandContext(ctx, "systemctl", "--user", "try-restart", unit).Run() //nolint:gosec // configured unit name
+	return proc.CommandContext(ctx, "systemctl", "--user", "try-restart", unit).Run() //nolint:gosec // configured unit name
 }
 
 // notifyAgyRemoteDaemon waits briefly for <ConversationsDir>/<convID>.db,

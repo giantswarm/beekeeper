@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 var publicationIdent = regexp.MustCompile(`^(.*) <([^<>\r\n]+)> [0-9]+ [+-][0-9]{4}$`)
@@ -29,7 +29,7 @@ func publicationIdentity(ctx context.Context, workspace string) ([]string, error
 	}
 	var identity []string
 	for _, role := range []string{"AUTHOR", "COMMITTER"} {
-		c := exec.CommandContext(ctx, "git", "-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "var", "GIT_"+role+"_IDENT") //nolint:gosec // fixed git var identity queries; role is an internal enumeration, no shell
+		c := proc.CommandContext(ctx, "git", "-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "var", "GIT_"+role+"_IDENT") //nolint:gosec // fixed git var identity queries; role is an internal enumeration, no shell
 		c.Dir = workspace
 		c.Env = env
 		out, err := c.Output()

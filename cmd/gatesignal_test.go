@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func TestGatedChildSignalExit(t *testing.T) {
@@ -31,7 +33,7 @@ func TestGatedChildSignalExit(t *testing.T) {
 					defer func() { os.Stderr = original }()
 					rc = runChild(argv, io.Discard)
 				} else {
-					var current atomic.Pointer[os.Process]
+					var current atomic.Pointer[proc.Child]
 					var stop atomic.Value
 					var gone atomic.Bool
 					if route == "watch stop" {

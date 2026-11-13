@@ -58,3 +58,7 @@ below. Where they differ from this block, they take precedence.
   one must fail there and pass on the change, and a package that does not build on the base shows
   nothing. A test that cannot fail there says why in its doc comment with a
   `control: none: <reason>` paragraph. Reviews reject a core fix without a scenario.
+- The core starts processes through `internal/proc` (`proc.CommandContext`, `proc.Cmd`,
+  `proc.ExitError`, `proc.LookPath`), never `os/exec`, so that the behavioral scenarios can answer
+  every start in their test process ([docs/scenarios.md](docs/scenarios.md#the-process-seam)).
+  `internal/proc/coreguard` fails on an `os/exec` import in a core package.

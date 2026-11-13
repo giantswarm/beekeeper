@@ -14,9 +14,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // ErrNotLoggedIn is a profile directory without an active profile.
@@ -57,7 +58,7 @@ func ParseStatus(raw []byte) (Profile, error) {
 
 // Status reads the active profile of the profile directory home with tsh.
 func Status(ctx context.Context, tsh, home string) (Profile, error) {
-	c := exec.CommandContext(ctx, tsh, "status", "--format=json") //nolint:gosec // the configured tsh binary
+	c := proc.CommandContext(ctx, tsh, "status", "--format=json") //nolint:gosec // the configured tsh binary
 	c.Env = append(os.Environ(), "TELEPORT_HOME="+home)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
@@ -214,7 +215,7 @@ func (r Renewal) tshLogin(ctx context.Context, home string, log *os.File) error 
 	if r.Auth != "" {
 		args = append(args, "--auth="+r.Auth)
 	}
-	c := exec.CommandContext(ctx, r.Tsh, args...) //nolint:gosec // the configured tsh binary and proxy
+	c := proc.CommandContext(ctx, r.Tsh, args...) //nolint:gosec // the configured tsh binary and proxy
 	c.Env = append(os.Environ(), "TELEPORT_HOME="+home, "KUBECONFIG="+filepath.Join(home, kubeconfig))
 	c.Stdout, c.Stderr = log, log
 	c.WaitDelay = 5 * time.Second

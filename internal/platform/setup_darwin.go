@@ -8,10 +8,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // notifyLabel is the standby service's launchd label.
@@ -102,7 +103,7 @@ func (l launchdSetup) target(path string) string {
 }
 
 func (l launchdSetup) Started(ctx context.Context, path string) bool {
-	return exec.CommandContext(ctx, "launchctl", "print", l.target(path)).Run() == nil //nolint:gosec // the user's domain and the label install writes
+	return proc.CommandContext(ctx, "launchctl", "print", l.target(path)).Run() == nil //nolint:gosec // the user's domain and the label install writes
 }
 
 func (l launchdSetup) NeedsStop(ctx context.Context, path string) bool {

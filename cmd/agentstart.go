@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -801,7 +800,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		bin, err := exec.LookPath(agy.Comm)
+		bin, err := proc.LookPath(agy.Comm)
 		if err != nil {
 			return err
 		}
@@ -837,7 +836,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if _, err := a.codexModel(model); err != nil {
 			return err
 		}
-		_, err = exec.LookPath(codex.Comm)
+		_, err = proc.LookPath(codex.Comm)
 		return err
 	default:
 		resolvedDir, err := a.agentDir(dir, "")
@@ -847,7 +846,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		_, err = exec.LookPath(claudeComm)
+		_, err = proc.LookPath(claudeComm)
 		return err
 	}
 }
@@ -1034,7 +1033,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -2520,7 +2519,7 @@ func devBuild() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	onPath, err := exec.LookPath("beekeeper")
+	onPath, err := proc.LookPath("beekeeper")
 	if err == nil {
 		if a, err1 := os.Stat(self); err1 == nil {
 			if b, err2 := os.Stat(onPath); err2 == nil && os.SameFile(a, b) {
