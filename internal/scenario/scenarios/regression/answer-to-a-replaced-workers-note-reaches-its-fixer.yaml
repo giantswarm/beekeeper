@@ -1,0 +1,189 @@
+name: answer-to-a-replaced-workers-note-reaches-its-fixer
+description: >
+  A worker files a note for its person, parks on its pull request for the
+  desk review and leaves the roster. Red CI makes the loop start a fresh
+  worker under the same name for the pull request, and that worker parks on
+  the open note. The person's answer reaches the fresh worker, whose
+  continuation the loop starts and which registers and parks as itself; the
+  first worker's transcript is never resumed beside it. Without the fix the
+  fresh worker takes the task but not the note, so the answer resumes the
+  first worker's codex thread and two sessions work the same item.
+issue: https://github.com/giantswarm/beekeeper/issues/3714
+flow: regression
+tags: [regression, loop, continuation, notes, answer, codex]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Headless workers: a continuation is a fresh session's next turn.
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          # The worker opens its pull request, asks its person and parks for
+          # the desk review.
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper:
+                  - note
+                  - add
+                  - --for
+                  - scenario
+                  - --ref
+                  - example/app#1
+                  - --status-quo
+                  - The builds use the free cache, which is full every day by noon.
+                  - --why
+                  - The larger cache costs money every month, and what the desk spends is yours to decide.
+                  - --option
+                  - "Buy it: the cache holds a week of builds for 20 EUR per month"
+                  - --option
+                  - "Stay free: nothing is spent and the afternoon builds stay slow"
+                  - --recommend
+                  - "1"
+                  - --default
+                  - keep the free cache
+                  - --due
+                  - 3h
+                  - May the desk buy the larger build cache for 20 EUR per month?
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+          # The fresh worker the loop starts on red CI waits for the answer
+          # to the note.
+          - steps:
+              - beekeeper: [agents, park, --on, '#1', the person's answer on the build cache]
+      # The answer's continuation is registered under its own name and parks
+      # as itself.
+      - name: 'app 1 next-[0-9a-f]+'
+        turns:
+          - steps:
+              - beekeeper: [agents, register]
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-red
+    github: {check: {repo: example/app, pull: 2, name: build, state: red}}
+  # The pass applies the note and the park; the worker leaves the roster
+  # for the desk review, and red CI starts a fresh worker for the pull
+  # request under its name.
+  - name: red
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [note.add, agents.park, supervisor.red]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 2, outcome: finish}
+  - advance: 2s
+  - name: apply
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: parked
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: ., len: 1}
+      - json_path: {path: '[0].name', equals: app 1}
+      - json_path: {path: '[0].park.on', equals: '#1'}
+  # The person answers the first worker's note. The answer reaches the
+  # fresh worker parked on it, which queues its continuation; no codex
+  # thread is resumed.
+  - name: answer
+    run: {args: [--as, scenario, answer, 'example/app#1', --note, '1', "Yes, buy it, but only for three months."]}
+    expect:
+      - exit: 0
+      - output: {contains: ["note #1 answered and closed"]}
+      - calls: {program: codex, args: [resume], max: 0}
+      - events: {contains: [answer.recorded, agents.continuation-queued]}
+  - advance: 2s
+  - name: continue
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'app 1 next-[0-9a-f]+', outcome: finish}
+  - name: roster
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: ., len: 1}
+      - output: {matches: '"name": *"app 1 next-[0-9a-f]+"'}
+  - advance: 2s
+  - name: settle
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: parks
+    run: {args: [log, --verb, agents.park]}
+    expect:
+      - exit: 0
+      - output: {matches: 'app 1 next-[0-9a-f]+: parked on example/app#2'}
+  - name: takeover
+    run: {args: [log, --verb, agents.continuation]}
+
+then:
+  # The first worker ran its turn and the fresh worker its own: neither
+  # transcript was resumed.
+  - worker: {name: app 1, turns: 2, outcome: finish}
+  - worker: {name: 'app 1 next-[0-9a-f]+', harness: codex, turns: 1, outcome: finish}
+  - calls: {program: codex, args: [resume], max: 0}
+  - {step: takeover, output: {contains: ["takes its task after the desk review of example/app#2"]}}
+  - events: {contains: [supervisor.red, answer.recorded, agents.continuation-queued, agents.continuation], not_contains: [session.report-rejected]}
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - calls: {program: gh, args: [pr, create], min: 1, max: 1}

@@ -3516,12 +3516,12 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		}
 		return err
 	}
-	if hasRP && rp.Serves != "" {
+	// The fresh worker takes the task of the worker that parked on the pull
+	// request and left the roster: an answer, a timer or a message for that
+	// session reaches the fresh one instead of resuming its transcript.
+	if hasRP {
 		if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
-			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
-				Cmd.InheritReviewParkOnAgent(current, &current.Agents[i], rp, l.Host.TimeNow().UTC())
-			}
-			return nil, nil
+			return Cmd.TakeOverReviewPark(l.Host, current, rp, name)
 		}); err != nil {
 			return err
 		}
