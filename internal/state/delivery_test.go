@@ -77,6 +77,14 @@ func TestStartDeliveryForLinkedPullKeepsIssueDeliveries(t *testing.T) {
 	}
 }
 
+// The worker a continuation continues, the continuation, and a pull request
+// of the task the worker did not park on.
+const (
+	parkedWorker     = "parked worker"
+	continuingWorker = "continuing worker"
+	otherPull        = "o/r#3"
+)
+
 func TestContinueDeliveryKeepsTheTasksDelivery(t *testing.T) {
 	started := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
 	at := started.Add(3 * time.Hour)
@@ -89,23 +97,23 @@ func TestContinueDeliveryKeepsTheTasksDelivery(t *testing.T) {
 		fresh bool
 	}{
 		{name: "merged and released", pull: pull,
-			prev: []Delivery{{Ref: issue, Pulls: []string{pull}, Step: DeliveryDone, Outcome: OutcomeMerged, Evidence: "merged", Agent: "old", Started: started}},
-			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryDone, Outcome: OutcomeMerged, Evidence: "merged", Agent: "next", Started: started}},
+			prev: []Delivery{{Ref: issue, Pulls: []string{pull}, Step: DeliveryDone, Outcome: OutcomeMerged, Evidence: "merged", Agent: parkedWorker, Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryDone, Outcome: OutcomeMerged, Evidence: "merged", Agent: continuingWorker, Started: started}},
 		{name: "merged without the parked pull", pull: pull,
-			prev: []Delivery{{Ref: issue, Pulls: []string{"o/r#3"}, Step: DeliveryDone, Outcome: OutcomeMerged, Agent: "old", Started: started}},
-			want: Delivery{Ref: issue, Pulls: []string{pull, "o/r#3"}, Step: DeliveryDone, Outcome: OutcomeMerged, Agent: "next", Started: started}},
+			prev: []Delivery{{Ref: issue, Pulls: []string{otherPull}, Step: DeliveryDone, Outcome: OutcomeMerged, Agent: parkedWorker, Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull, otherPull}, Step: DeliveryDone, Outcome: OutcomeMerged, Agent: continuingWorker, Started: started}},
 		{name: "still in review", pull: "O/R#2",
-			prev: []Delivery{{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Agent: "old", Started: started}},
-			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Agent: "next", Started: started}},
+			prev: []Delivery{{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Agent: parkedWorker, Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Agent: continuingWorker, Started: started}},
 		{name: "ended without a change", pull: pull, fresh: true,
-			prev: []Delivery{{Ref: issue, Pulls: []string{"o/r#3"}, Step: DeliveryDone, Outcome: OutcomeNoChange, Agent: "old", Started: started}},
-			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryImplementing, Agent: "next", Started: at, Since: at}},
+			prev: []Delivery{{Ref: issue, Pulls: []string{otherPull}, Step: DeliveryDone, Outcome: OutcomeNoChange, Agent: parkedWorker, Started: started}},
+			want: Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryImplementing, Agent: continuingWorker, Started: at, Since: at}},
 		{name: "none yet", fresh: true,
-			want: Delivery{Ref: issue, Pulls: []string{}, Step: DeliveryImplementing, Agent: "next", Started: at, Since: at}},
+			want: Delivery{Ref: issue, Pulls: []string{}, Step: DeliveryImplementing, Agent: continuingWorker, Started: at, Since: at}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &State{Deliveries: tc.prev}
-			st.ContinueDelivery("O/R#1", "next", tc.pull, at)
+			st.ContinueDelivery("O/R#1", continuingWorker, tc.pull, at)
 			if len(st.Deliveries) != 1 || !reflect.DeepEqual(st.Deliveries[0], tc.want) {
 				t.Fatalf("got %+v, want %+v", st.Deliveries, tc.want)
 			}
