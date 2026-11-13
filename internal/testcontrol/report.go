@@ -177,7 +177,7 @@ func (rep *Report) Text(w io.Writer) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Go-test control of %s against the merge base %s\n", short(rep.Head), short(rep.Base))
 	if !rep.CodeChanged {
-		b.WriteString("the pull request changes no code the Go build reads, only tests and other files\n")
+		b.WriteString("the pull request changes only its test files and test data\n")
 	}
 	if len(rep.Applied) > 0 {
 		fmt.Fprintf(&b, "applied to the base: %s\n", strings.Join(rep.Applied, ", "))

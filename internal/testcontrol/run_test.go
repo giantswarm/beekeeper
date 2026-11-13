@@ -160,3 +160,44 @@ func TestControlFailsWithoutATestThatShowsTheChange(t *testing.T) {
 		t.Errorf("the report does not name the test that passes on the base:\n%s", text.String())
 	}
 }
+
+// A fix of a file outside the Go build (a script, a Makefile, a config)
+// whose regression test is in a test-only package still runs on the base:
+// its test fails there and passes on the pull request's tree.
+func TestControlRunsTheTestOfAFileOutsideTheGoBuild(t *testing.T) {
+	t.Parallel()
+	baseTree := map[string]string{
+		"go.mod":              "module example.com/ctl\n\ngo 1.24\n",
+		"limit.txt":           "10\n",
+		"check/check_test.go": "package check\n\nimport \"testing\"\n\nfunc TestLimit(t *testing.T) {}\n",
+	}
+	headTree := map[string]string{
+		"limit.txt": "20\n",
+		"check/check_test.go": `package check
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestLimit(t *testing.T) {
+	raw, err := os.ReadFile("../limit.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "20" {
+		t.Fatalf("limit %s, want 20", got)
+	}
+}
+`,
+	}
+	head, base := history(t, baseTree, headTree)
+	rep, err := Control(t.Context(), Options{Head: head, Base: base, Timeout: runTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OK || len(rep.Cases) != 1 || !rep.Cases[0].Shows() {
+		t.Fatalf("ok %t, cases %+v; want check.TestLimit failing on the base and passing on the pull request", rep.OK, rep.Cases)
+	}
+}

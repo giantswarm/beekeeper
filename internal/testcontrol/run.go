@@ -304,7 +304,9 @@ func (rn *runner) goTest(ctx context.Context, root, label string, args []string)
 	rn.runs++
 	c := exec.CommandContext(ctx, "go", args...) //nolint:gosec // go test of the control's own trees
 	c.Dir = root
-	c.Env = append(os.Environ(), "GOWORK=off")
+	c.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "BEEKEEPER_TEST_CONTROL_")
+	}), "GOWORK=off")
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	runErr := c.Run()

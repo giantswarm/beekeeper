@@ -1,7 +1,6 @@
 package testcontrol
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -37,7 +35,7 @@ const (
 
 // Why the control does not run a test of the pull request.
 const (
-	SkipNoCode     = "the pull request changes no code, only tests: the merge base with its test files is its own code"
+	SkipNoCode     = "the pull request changes only tests: the merge base with its test files is its own tree"
 	SkipOptedOut   = "opted out"
 	SkipNewPackage = "new package: the base has none of its code"
 	SkipTags       = "builds only with tags or on a platform CI does not test with"
@@ -84,8 +82,8 @@ func (c *Case) Shows() bool { return c.Base == Fails && c.Head == Passes }
 
 // Plan is the control of one pull request.
 type Plan struct {
-	// CodeChanged says whether the pull request changes what the Go build
-	// reads beyond its tests: Go code, go.mod, go.sum or an embedded file.
+	// CodeChanged says whether the pull request changes anything beyond its
+	// test files and test data.
 	CodeChanged bool
 	// Overlay are the test files and test data the pull request changes,
 	// the ones the control applies to the base.
@@ -154,103 +152,21 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 
 // The kinds of a file the pull request changes.
 const (
-	kindOther    = iota // read by neither the build nor the control: docs, CI, scenarios
+	kindCode     = iota // anything beyond test files and test data
 	kindTest            // a _test.go file: applied to the base
 	kindTestData        // a file under a testdata directory: applied too
-	kindCode            // read by the Go build
 )
 
-// classify sorts a changed file of the tree at root; embeds caches the
-// //go:embed patterns of a directory's Go files.
-func classify(root, p string, embeds map[string][]string) int {
-	base := path.Base(p)
+// classify sorts a changed file by its path.
+func classify(p string) int {
 	switch {
 	case slices.Contains(strings.Split(path.Dir(p), "/"), "testdata"):
 		return kindTestData
-	case strings.HasSuffix(base, "_test.go"):
+	case strings.HasSuffix(path.Base(p), "_test.go"):
 		return kindTest
-	case base == "go.mod" || base == "go.sum" || base == "go.work" || base == "go.work.sum":
+	default:
 		return kindCode
 	}
-	switch path.Ext(base) {
-	case ".go", ".s", ".c", ".h", ".cc", ".cpp", ".syso":
-		return kindCode
-	}
-	if embedded(root, p, embeds) {
-		return kindCode
-	}
-	return kindOther
-}
-
-// embedded says whether a non-test Go file of a directory above p embeds
-// it.
-func embedded(root, p string, embeds map[string][]string) bool {
-	for dir := path.Dir(p); ; dir = path.Dir(dir) {
-		pats, ok := embeds[dir]
-		if !ok {
-			pats = embedPatterns(filepath.Join(root, filepath.FromSlash(dir)))
-			embeds[dir] = pats
-		}
-		rel := p
-		if dir != "." {
-			rel = strings.TrimPrefix(p, dir+"/")
-		}
-		for _, pat := range pats {
-			if matchEmbed(pat, rel) {
-				return true
-			}
-		}
-		if dir == "." {
-			return false
-		}
-	}
-}
-
-// matchEmbed says whether an embed pattern covers rel: the file itself or
-// a directory above it.
-func matchEmbed(pat, rel string) bool {
-	elems := strings.Split(rel, "/")
-	for i := range elems {
-		if ok, _ := path.Match(pat, strings.Join(elems[:i+1], "/")); ok {
-			return true
-		}
-	}
-	return false
-}
-
-// embedPatterns are the //go:embed patterns of the non-test Go files of
-// dir.
-func embedPatterns(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var pats []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // a Go file of the tree
-		if err != nil || !bytes.Contains(raw, []byte("//go:embed")) {
-			continue
-		}
-		sc := bufio.NewScanner(bytes.NewReader(raw))
-		sc.Buffer(nil, 1<<20)
-		for sc.Scan() {
-			rest, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "//go:embed")
-			if !ok {
-				continue
-			}
-			for _, f := range strings.Fields(rest) {
-				if u, err := strconv.Unquote(f); err == nil {
-					f = u
-				}
-				pats = append(pats, strings.TrimPrefix(f, "all:"))
-			}
-		}
-	}
-	return pats
 }
 
 // PlanControl plans the control of the pull request whose files changes
@@ -263,10 +179,9 @@ func embedPatterns(dir string) []string {
 // control line is the base's runs when its code changes.
 func PlanControl(changes []FileChange, head, base string) (*Plan, error) {
 	p := &Plan{}
-	embeds := map[string][]string{}
 	var headFiles, baseFiles []string
 	for _, c := range changes {
-		switch classify(head, c.Path, embeds) {
+		switch classify(c.Path) {
 		case kindTest:
 			p.Overlay = append(p.Overlay, c)
 			if c.Status != 'D' {
@@ -346,7 +261,7 @@ func (p *Plan) decide(c *Case, t, old *Test, head, base string) {
 		c.Skip = SkipNoCode
 	case optedOut:
 		c.Skip = SkipOptedOut
-	case !hasCode(base, t.Dir):
+	case hasCode(head, t.Dir) && !hasCode(base, t.Dir):
 		c.Skip = SkipNewPackage
 	case !ok:
 		c.Skip = SkipTags

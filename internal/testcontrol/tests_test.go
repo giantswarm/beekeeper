@@ -145,39 +145,20 @@ func TestPlain(t *testing.T) {}
 	}
 }
 
-// A changed file is a test file, test data, code the Go build reads (an
-// embedded file too) or neither.
+// A changed file is a test file, test data, or anything else that a test
+// may exercise.
 func TestClassify(t *testing.T) {
-	root := t.TempDir()
-	writeTree(t, root, map[string]string{
-		"main.go":                    "package main\n\nfunc main() {}\n",
-		"plugin/embed.go":            "package plugin\n\nimport \"embed\"\n\n//go:embed skills\nvar Skills embed.FS\n",
-		"config/crd/crd.go":          "package crd\n\nimport _ \"embed\"\n\n//go:embed \"*.yaml\"\nvar CRDs string\n",
-		"plugin/skills/x/SKILL.md":   "x",
-		"config/crd/a.yaml":          "a",
-		"config/crd/notes.md":        "n",
-		"internal/x/embed_test.go":   "package x\n\nimport _ \"embed\"\n\n//go:embed fixture.json\nvar fixture string\n",
-		"internal/x/fixture.json":    "{}",
-		"internal/scenario/s/a.yaml": "a",
-	})
-	embeds := map[string][]string{}
 	for p, want := range map[string]int{
-		"plugin/skills/x/SKILL.md":      kindCode,
-		"config/crd/a.yaml":             kindCode,
-		"config/crd/notes.md":           kindOther,
-		"internal/x/fixture.json":       kindOther,
-		"internal/scenario/s/a.yaml":    kindOther,
-		"docs/scenarios.md":             kindOther,
-		".circleci/x.sh":                kindOther,
 		"internal/x/x.go":               kindCode,
 		"internal/x/x_test.go":          kindTest,
 		"internal/x/testdata/a.json":    kindTestData,
 		"internal/x/testdata/y_test.go": kindTestData,
 		"internal/x/testdata/z.go":      kindTestData,
+		".circleci/cosign-retry.sh":     kindCode,
+		"docs/scenarios.md":             kindCode,
 		"go.mod":                        kindCode,
-		"go.sum":                        kindCode,
 	} {
-		if got := classify(root, p, embeds); got != want {
+		if got := classify(p); got != want {
 			t.Errorf("%s: kind %d, want %d", p, got, want)
 		}
 	}

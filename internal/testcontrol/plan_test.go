@@ -116,7 +116,8 @@ func TestApply(t *testing.T) {
 }
 
 // The trees of TestPlanControl: a fix of package fixed with its tests, a
-// test moved to a new package, tests that build only with tags.
+// test moved to a new package, packages of tests only on the base and
+// new, and tests that build only with tags.
 var (
 	planBase = map[string]string{
 		"go.mod":         "module example.com/plan\n\ngo 1.24\n",
@@ -139,9 +140,10 @@ func TestChanged(t *testing.T) { _ = N() }
 // control: none: written for the change that added this test
 func TestBaseOptOut(t *testing.T) { _ = N() }
 `,
-		"old/old.go":      "package old\n",
-		"old/old_test.go": "package old\n\nimport \"testing\"\n\nfunc TestMoved(t *testing.T) { t.Log(\"moved\") }\n",
-		"tags/tags.go":    "package tags\n",
+		"old/old.go":                "package old\n",
+		"old/old_test.go":           "package old\n\nimport \"testing\"\n\nfunc TestMoved(t *testing.T) { t.Log(\"moved\") }\n",
+		"scripted/scripted_test.go": "package scripted\n\nimport \"testing\"\n\nfunc TestScript(t *testing.T) {}\n",
+		"tags/tags.go":              "package tags\n",
 	}
 	planHead = map[string]string{
 		"fixed/fixed.go": "package fixed\n\nfunc N() int { return 2 }\n",
@@ -176,17 +178,20 @@ func TestOptedOut(t *testing.T) { _ = N() }
 // control: none: too short
 func TestBadControl(t *testing.T) { _ = N() }
 `,
-		"fixed/testdata/golden.txt": "2\n",
-		"old/old_test.go":           gone,
-		"new/new.go":                "package new\n",
-		"new/new_test.go":           "package new\n\nimport \"testing\"\n\nfunc TestMoved(t *testing.T) { t.Log(\"moved\") }\n\nfunc TestBrandNew(t *testing.T) {}\n",
-		"tags/live_test.go":         "//go:build hyprlive\n\npackage tags\n\nimport \"testing\"\n\nfunc TestLive(t *testing.T) {}\n",
-		"tags/tagged_test.go":       "//go:build integration\n\npackage tags\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {}\n",
-		"docs/plan.md":              "a page\n",
+		"fixed/testdata/golden.txt":   "2\n",
+		"old/old_test.go":             gone,
+		"new/new.go":                  "package new\n",
+		"new/new_test.go":             "package new\n\nimport \"testing\"\n\nfunc TestMoved(t *testing.T) { t.Log(\"moved\") }\n\nfunc TestBrandNew(t *testing.T) {}\n",
+		"scripted/scripted_test.go":   "package scripted\n\nimport \"testing\"\n\nfunc TestScript(t *testing.T) { t.Log(\"changed\") }\n",
+		"scriptnew/scriptnew_test.go": "package scriptnew\n\nimport \"testing\"\n\nfunc TestNewScript(t *testing.T) {}\n",
+		"tags/live_test.go":           "//go:build hyprlive\n\npackage tags\n\nimport \"testing\"\n\nfunc TestLive(t *testing.T) {}\n",
+		"tags/tagged_test.go":         "//go:build integration\n\npackage tags\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {}\n",
+		"docs/plan.md":                "a page\n",
 	}
 	planChanges = []FileChange{
 		{'M', "docs/plan.md"}, {'M', "fixed/fixed.go"}, {'A', "fixed/testdata/golden.txt"}, {'M', "fixed/fixed_test.go"},
 		{'A', "new/new.go"}, {'A', "new/new_test.go"}, {'D', "old/old_test.go"},
+		{'M', "scripted/scripted_test.go"}, {'A', "scriptnew/scriptnew_test.go"},
 		{'A', "tags/live_test.go"}, {'A', "tags/tagged_test.go"},
 	}
 )
@@ -209,20 +214,22 @@ func TestPlanControl(t *testing.T) {
 	for _, c := range p.Overlay {
 		overlay = append(overlay, c.String())
 	}
-	if want := []string{"A fixed/testdata/golden.txt", "M fixed/fixed_test.go", "A new/new_test.go", "D old/old_test.go", "A tags/live_test.go", "A tags/tagged_test.go"}; !slices.Equal(overlay, want) {
+	if want := []string{"A fixed/testdata/golden.txt", "M fixed/fixed_test.go", "A new/new_test.go", "D old/old_test.go", "M scripted/scripted_test.go", "A scriptnew/scriptnew_test.go", "A tags/live_test.go", "A tags/tagged_test.go"}; !slices.Equal(overlay, want) {
 		t.Errorf("overlay %q, want %q", overlay, want)
 	}
 	type want struct{ change, skip, tags string }
 	wants := map[string]want{
-		"fixed.TestChanged":    {ChangeChanged, "", ""},
-		"fixed.TestBaseOptOut": {ChangeChanged, "", ""},
-		"fixed.TestAdded":      {ChangeAdded, "", ""},
-		"fixed.TestOptedOut":   {ChangeAdded, SkipOptedOut, ""},
-		"fixed.TestBadControl": {ChangeAdded, "", ""},
-		"new.TestMoved":        {ChangeMoved, "moved unchanged from old", ""},
-		"new.TestBrandNew":     {ChangeAdded, SkipNewPackage, ""},
-		"tags.TestLive":        {ChangeAdded, SkipTags, ""},
-		"tags.TestTagged":      {ChangeAdded, "", "integration"},
+		"fixed.TestChanged":       {ChangeChanged, "", ""},
+		"fixed.TestBaseOptOut":    {ChangeChanged, "", ""},
+		"fixed.TestAdded":         {ChangeAdded, "", ""},
+		"fixed.TestOptedOut":      {ChangeAdded, SkipOptedOut, ""},
+		"fixed.TestBadControl":    {ChangeAdded, "", ""},
+		"new.TestMoved":           {ChangeMoved, "moved unchanged from old", ""},
+		"new.TestBrandNew":        {ChangeAdded, SkipNewPackage, ""},
+		"scripted.TestScript":     {ChangeChanged, "", ""},
+		"scriptnew.TestNewScript": {ChangeAdded, "", ""},
+		"tags.TestLive":           {ChangeAdded, SkipTags, ""},
+		"tags.TestTagged":         {ChangeAdded, "", "integration"},
 	}
 	var got []string
 	for _, c := range p.Cases {
@@ -253,15 +260,31 @@ func TestPlanControl(t *testing.T) {
 	if len(p.Problems) != 1 || !strings.Contains(p.Problems[0], "TestBadControl") {
 		t.Errorf("problems %q, want TestBadControl's control line", p.Problems)
 	}
-	if run := p.Run(); len(run) != 5 {
-		t.Errorf("%d cases to run, want 5", len(run))
+	if run := p.Run(); len(run) != 7 {
+		t.Errorf("%d cases to run, want 7", len(run))
 	}
 
-	// Without the change to fixed/fixed.go, the base with the pull
-	// request's test files is its code: nothing runs.
-	var testsOnly []FileChange
+	// A pull request of tests plus a non-Go file (docs/plan.md) still
+	// runs its tests: a test may read that file at runtime.
+	var withPage []FileChange
 	for _, c := range planChanges {
 		if c.Path != "fixed/fixed.go" && c.Path != "new/new.go" {
+			withPage = append(withPage, c)
+		}
+	}
+	p, err = PlanControl(withPage, head, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.CodeChanged || len(p.Run()) != 7 {
+		t.Fatalf("a pull request of tests and a page: code changed %t, %d cases to run", p.CodeChanged, len(p.Run()))
+	}
+
+	// When only test files and test data change, the base with the pull
+	// request's test files is its own tree: nothing runs.
+	var testsOnly []FileChange
+	for _, c := range withPage {
+		if c.Path != "docs/plan.md" {
 			testsOnly = append(testsOnly, c)
 		}
 	}
@@ -270,7 +293,7 @@ func TestPlanControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.CodeChanged || len(p.Run()) != 0 {
-		t.Fatalf("a pull request of tests and docs only: code changed %t, %d cases to run", p.CodeChanged, len(p.Run()))
+		t.Fatalf("a pull request of tests only: code changed %t, %d cases to run", p.CodeChanged, len(p.Run()))
 	}
 	for _, c := range p.Cases {
 		if c.Change != ChangeMoved && c.Skip != SkipNoCode {

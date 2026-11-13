@@ -77,9 +77,10 @@ and Go tests passes both parts.
   does not run.
 - A package that does not build on the base is reported with its compiler errors. Its tests show
   nothing, as a test the base skips, or whose package's `TestMain` fails, shows nothing.
-- The tests of a new package, whose code the base does not have, are listed and do not run. Nor
-  does any test of a pull request that changes no code the Go build reads (Go files, `go.mod`,
-  `go.sum`, embedded files) beyond its tests: the base with its test files is its own code.
+- The tests of a new package, whose Go code the base does not have, are listed and do not run; a
+  package of tests only (such as one that tests a script or a Makefile) runs, new or not. Nor does
+  any test of a pull request that changes only its test files and test data: any other changed file
+  counts as a change, because a test may read it at runtime.
 - A test that cannot fail on the base, such as one of behavior main already has or one of code the
   base lacks, opts out with a paragraph of its doc comment that gives the reason, which the review
   checks:

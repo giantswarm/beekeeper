@@ -66,7 +66,7 @@ func TestGoTestControl(t *testing.T) {
 	if dir != "" {
 		o.Logs = filepath.Join(dir, "runs")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 11*time.Minute)
 	defer cancel()
 	rep, err := Control(ctx, o)
 	if err != nil {
