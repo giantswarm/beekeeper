@@ -634,7 +634,8 @@ beekeeper agents move --ref example/app#12 --clear
 
 A worker on a host that finds itself on the wrong machine runs the first form from its workspace
 instead of parking. The coordinator marks its task (the issue it serves and the pull requests it
-waits on or asked a desk review of), records `agents.move`, and queues the task for a fresh
+waits on or asked a desk review of, those of the execution's repository only; a host's worker
+never marks another repository's), records `agents.move`, and queues the task for a fresh
 worker, which the loop's next pass starts on the coordinator. That worker continues from what is
 published, never from the host's workspace, so the worker publishes first (`agents publish`),
 then moves and ends its turn. A worker on the coordinator marks its task the same way and keeps

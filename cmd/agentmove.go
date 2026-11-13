@@ -138,10 +138,11 @@ func (a *app) moveHere(why string) error {
 	return err
 }
 
-// moveToCoordinator applies a host worker's agents move: its task is
-// marked to stay on the coordinator and queued for a fresh worker, which the
-// loop's next pass starts there. It validates before it changes anything, as
-// a refused control leaves the state unchanged.
+// moveToCoordinator applies a host worker's agents move: its task, the refs
+// of its execution's repository, is marked to stay on the coordinator and
+// queued for a fresh worker, which the loop's next pass starts there. It
+// validates before it changes anything, as a refused control leaves the
+// state unchanged.
 func (a *app) moveToCoordinator(st *state.State, ag *state.Agent, me state.Party, why string) (string, []state.Event, error) {
 	why = oneLine(why)
 	if why == "" {
@@ -153,9 +154,21 @@ func (a *app) moveToCoordinator(st *state.State, ag *state.Agent, me state.Party
 	if ag.Park != nil && ag.Park.Continuing {
 		return "", nil, refused("%s: a fresh continuation is starting already", ag.Name)
 	}
-	refs := movedTaskRefs(st, *ag)
+	if ag.Execution == nil {
+		return "", nil, refused("%q runs on no execution host", ag.Name)
+	}
+	r, _ := executionRecord(st, *ag.Execution)
+	if r == nil {
+		return "", nil, refused("%q has no execution record", ag.Name)
+	}
+	// A host's worker moves its own task only: refs of another repository,
+	// such as one an earlier park of it named, stay as they are.
+	refs := slices.DeleteFunc(movedTaskRefs(st, *ag), func(ref string) bool {
+		p, _ := parseRef(ref)
+		return !strings.EqualFold(p.Repo, r.Request.Repository)
+	})
 	if len(refs) == 0 {
-		return "", nil, refused("%q names no issue or pull request of its task to move", ag.Name)
+		return "", nil, refused("%q names no issue or pull request of %s in its task to move", ag.Name, r.Request.Repository)
 	}
 	message := fmt.Sprintf("%s asked for the coordinator: %s", ag.Name, why)
 	if ag.Park == nil {
@@ -164,11 +177,7 @@ func (a *app) moveToCoordinator(st *state.State, ag *state.Agent, me state.Party
 	if !slices.Contains(ag.Park.Continuation, message) {
 		ag.Park.Continuation = append(ag.Park.Continuation, message)
 	}
-	if ag.Execution != nil {
-		if r, _ := executionRecord(st, *ag.Execution); r != nil {
-			r.Completed = true
-		}
-	}
+	r.Completed = true
 	events := append(markMoved(st, me, ag.Name, refs, why, a.now), event(me, continuationQueuedEvent, "%s: %s", ag.Name, message))
 	return fmt.Sprintf("moved: a fresh worker continues %s on the coordinator, from what is published, not from this workspace; end your turn now", issueURL(refs[0])), events, nil
 }
