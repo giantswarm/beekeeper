@@ -140,7 +140,7 @@ CI's job runs one beside it, and locally the same image does:
 
 ```bash
 docker run -d --rm --name beekeeper-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 \
-  gsoci.azurecr.io/giantswarm/postgres:18.6-alpine
+  gsoci.azurecr.io/giantswarm/postgres:18.7-alpine
 BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable' make test-envtest
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
