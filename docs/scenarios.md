@@ -11,6 +11,7 @@ found live becomes a scenario that fails before its fix. The plan is
 make test-scenarios                              # every scenario
 BEEKEEPER_SCENARIO_FLOW=smoke make test-scenarios  # the flows named (comma-separated)
 BEEKEEPER_SCENARIO_TAG=board make test-scenarios   # the scenarios with any of these tags
+BEEKEEPER_SCENARIO_SHARD=1/2 make test-scenarios  # one of two shards (index from 0), as CI runs them
 BEEKEEPER_SCENARIO_REPORT=/tmp/scenarios make test-scenarios  # write the report and artifacts
 ```
 
@@ -20,8 +21,11 @@ runs against the host. Ubuntu restricts them through AppArmor
 (`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`).
 
 CI's `test-scenarios` job runs the suite on every pull request on a machine
-executor (Docker's seccomp profile refuses the namespaces). The suite fails
-when its wall time exceeds 10 minutes and warns from 8. The job's artifacts
+executor (Docker's seccomp profile refuses the namespaces), in two parallel
+containers: each runs one shard, the scenarios whose FNV-1a hash of
+`<flow>/<name>` modulo 2 is its index, so every scenario runs in exactly one
+and adding a scenario moves no other. Each shard fails when its wall time
+exceeds 10 minutes and warns from 8. Each container's artifacts
 hold `report.txt`, `report.json` (every scenario, step and duration, and the
 suite's wall time), `junit/scenarios.xml` (one case per step) and each
 scenario's own artifacts under `<flow>/<name>/`: the world's call log
@@ -33,7 +37,8 @@ A pull request that fixes or changes behavior of beekeeper's core adds or extend
 fails without the change (the rule in [AGENTS.md](../AGENTS.md)). The `scenario-control` step of
 the `test-scenarios` job (`.circleci/scenario-control.sh`) checks the "fails without": it builds
 the candidate from the pull request's merge base with `main` and runs against it, with the pull
-request's harness, only the scenarios the pull request adds or changes. Each must fail there on
+request's harness, only the scenarios the pull request adds or changes, each in the container of
+its shard. Each must fail there on
 an assertion: an expectation, an unanswered call or its timeout. The step fails for a scenario
 that passes on the base, since it shows nothing the change does, for one whose run on the base
 fails in the harness (the sandbox, the world, the desk's setup), which is no evidence, and when
