@@ -36,16 +36,29 @@ workspace volume bound. The scheduler reserves this capacity; Go scratch files
 use the workspace volume rather than the container's default `/tmp`.
 
 Supervisor merge validation also uses this runner when enabled, including
-`golangci-lint run` in the Go image. An image's own `golangci-lint` runs as is;
-an image without one gets the version CI pins (`GolangCILintModule` in
-`internal/remotebuild`) installed with `go install` into `/work/tools` of the
-builder, so the image needs Go and network access to the module proxy. The
-builder runs as a non-root user, so the lint step sets `GOPATH` (where Go caches
-the checksum database) and, unless set, `GOLANGCI_LINT_CACHE` under
-`/work/tools` too: an image's own `GOPATH` may not be writable. A failed
-install exits 125, a checker environment finding rather than lint findings.
-Unlike ordinary worker commands, merge validation never
-falls back locally: an unavailable builder is a checker environment finding.
+`golangci-lint run` in the Go image. Every check runs in the checker
+environment, which starts each command from one list, `CheckerTools` in
+`internal/remotebuild`: the programs the repositories' lint and tests call
+that CI images carry, `golangci-lint` (the version CI pins) and `jq` (gojq,
+installed under the name `jq`). An image's own tool runs as is; one the image
+lacks is installed with `go install` into `/work/tools` of the builder and put
+on the command's `PATH`, so the image needs Go and network access to the module
+proxy. The builder runs as a non-root user, so installs and the lint step set
+`GOPATH` (where Go caches the checksum database) and, unless set,
+`GOLANGCI_LINT_CACHE` under `/work/tools` too: an image's own `GOPATH` may not
+be writable. A failed install exits 125, a checker environment finding rather
+than findings of the check.
+
+The environment also reads the Debian packages the repository's CI installs:
+the `apt-packages` inputs and the literal `apt-get install` and `apt install`
+packages of its GitHub workflows and CircleCI config (`CIPackages`), for amd64.
+The builder's non-root user cannot install them, so the environment checks them
+with `dpkg-query` and names the ones the image lacks on one line (`checker
+environment lacks <packages>`) before the command runs. A check that fails after
+that line is a checker environment finding naming the packages, never a branch
+repair: add them to the builder image. Unlike ordinary worker commands, merge
+validation never falls back locally: an unavailable builder is a checker
+environment finding.
 Each validation attempt owns an isolated worktree and retires its builder when
 finished. One environment failure triggers one clean retry; actual code failures
 do not retry. Existing builders need retirement after changing resource settings.

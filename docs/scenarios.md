@@ -539,7 +539,8 @@ the desk's `run.remote` and puts a fake `kubectl` on its `PATH`.
 ```yaml
 given:
   builder:
-    tools: [go]                      # the Go image's toolchain: go, golangci-lint
+    tools: [go]                      # the Go image's toolchain: go, golangci-lint, jq
+    testsCall: [jq]                  # programs the repository's tests run
 ```
 
 - **`kubectl`** keeps the Jobs the desk creates and answers `get`, `create`,
@@ -548,13 +549,15 @@ given:
   upload, launch and follow scripts run as they are. A pod's `/work` is the
   sandbox's: one builder runs at a time, and deleting its Job empties it.
 - **The image** is `/work/builder/bin`: the system's shell and coreutils,
-  and a fake for each of `tools`. An image without `golangci-lint` is one
-  the desk's merge validation installs the linter into.
-- **`go`** in the pod passes every build, vet and test. `go install` puts
-  the fake of the tool it names into `GOBIN`, as the real one puts the
-  tool there. **`golangci-lint`** reports no findings.
+  and a fake for each of `tools`. An image without `golangci-lint` or `jq` is
+  one the desk's merge validation installs them into.
+- **`go`** in the pod passes every build, vet and test, except a test while
+  a program of `testsCall` is not on the pod's `PATH`: it fails as such a test
+  does, `<program>: command not found`. `go install` puts the fake of the tool
+  it names (`golangci-lint`, `gojq`) into `GOBIN`, as the real one puts the
+  tool there. **`golangci-lint`** reports no findings; **`jq`** prints nothing.
 
-Every call of `kubectl`, `go` and `golangci-lint` is in the world's call
+Every call of `kubectl`, `go`, `golangci-lint` and `jq` is in the world's call
 log, so `calls` expectations may name them. The image's tools are the
 pod's, apart from `given.tools` on the desk's `PATH`, and no tool there may
 be named `kubectl`.
