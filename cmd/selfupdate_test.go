@@ -426,11 +426,7 @@ func TestCanaryRunsACheckThatRanOutOfTimeAgain(t *testing.T) {
 		if !slices.Equal(args, status) {
 			return "ok", nil
 		}
-		who := path
-		if path == running {
-			who = "running"
-		}
-		runs = append(runs, who)
+		runs = append(runs, path)
 		if at, ok := ctx.Deadline(); ok {
 			within = append(within, time.Until(at))
 		}
@@ -440,10 +436,10 @@ func TestCanaryRunsACheckThatRanOutOfTimeAgain(t *testing.T) {
 		return "ok", nil
 	}
 	var out bytes.Buffer
-	if err := (&app{}).canaryRelease(context.Background(), &out, "candidate", "v1.5.0"); err != nil {
+	if err := (&app{}).canaryRelease(context.Background(), &out, testCandidateBinary, "v1.5.0"); err != nil {
 		t.Fatalf("a candidate that ran out of time on a slow check was refused: %v\n%s", err, out.String())
 	}
-	if want := []string{"candidate", "running", "candidate"}; !slices.Equal(runs, want) {
+	if want := []string{testCandidateBinary, running, testCandidateBinary}; !slices.Equal(runs, want) {
 		t.Fatalf("supervisor status ran on %v, want %v", runs, want)
 	}
 	near := func(got, want time.Duration) bool { return got > want-5*time.Second && got <= want }
@@ -483,11 +479,11 @@ func TestCanaryTimeoutOnABusyHostJudgesTheHost(t *testing.T) {
 		return "", fmt.Errorf("%w: signal: killed", context.DeadlineExceeded)
 	}
 
-	err = probationHealth(context.Background(), "", "candidate")
+	err = probationHealth(context.Background(), "", testCandidateBinary)
 	if !errors.Is(err, update.ErrHealthUnproven) || !strings.Contains(err.Error(), "the host is too busy") {
 		t.Fatalf("busy host: probation = %v, want unproven, the host too busy", err)
 	}
-	if err := a.canaryRelease(context.Background(), io.Discard, "candidate", "v1.5.0"); err == nil {
+	if err := a.canaryRelease(context.Background(), io.Discard, testCandidateBinary, "v1.5.0"); err == nil {
 		t.Fatal("busy host: the candidate passed a check nothing passed")
 	}
 	if a.isSkippedRelease("v1.5.0") {
@@ -495,11 +491,11 @@ func TestCanaryTimeoutOnABusyHostJudgesTheHost(t *testing.T) {
 	}
 
 	runningAnswers = true
-	err = probationHealth(context.Background(), "", "candidate")
+	err = probationHealth(context.Background(), "", testCandidateBinary)
 	if err == nil || errors.Is(err, update.ErrHealthUnproven) || !strings.Contains(err.Error(), "on its second run") {
 		t.Fatalf("hung candidate: probation = %v, want a failed version probe", err)
 	}
-	if err := a.canaryRelease(context.Background(), io.Discard, "candidate", "v1.5.1"); err == nil || !a.isSkippedRelease("v1.5.1") {
+	if err := a.canaryRelease(context.Background(), io.Discard, testCandidateBinary, "v1.5.1"); err == nil || !a.isSkippedRelease("v1.5.1") {
 		t.Fatalf("hung candidate: canary = %v, skipped = %v", err, a.isSkippedRelease("v1.5.1"))
 	}
 }
