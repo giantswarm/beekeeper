@@ -45,7 +45,7 @@ func TestAnotherDesksGreenPullIsReviewedWithoutTheWait(t *testing.T) {
 // control: none: Input.Elsewhere and AwaitingFirstReview are new, so the base cannot build this test
 func TestAnotherDesksPullWaitsUnlessItsGreenHeadAwaitsAFirstReview(t *testing.T) {
 	for name, f := range map[string]func(*Pull){
-		"red":         func(p *Pull) { p.Green = false; p.Red = []Check{{Name: lintCheck, URL: lintURL}} },
+		"red check":   func(p *Pull) { p.Green = false; p.Red = []Check{{Name: lintCheck, URL: lintURL}} },
 		"conflicting": func(p *Pull) { p.Mergeable = mergeableConflicting },
 		"running":     func(p *Pull) { p.Green = false },
 		"draft":       func(p *Pull) { p.Draft = true },
