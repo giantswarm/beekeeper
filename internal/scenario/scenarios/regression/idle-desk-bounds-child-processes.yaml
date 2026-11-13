@@ -1,9 +1,12 @@
 name: idle-desk-bounds-child-processes
 description: >
-  A long-running supervisor and its watch sample an idle desk for a minute.
-  Credential discovery is shared across their probes, and all child command
-  starts together stay below 100, including the cold start. Repeated auth
-  helpers previously consumed that budget on their own.
+  A long-running supervisor and its watch sample an idle desk for a minute at
+  the shipped cadence (loop and watch every 30 seconds). Credential discovery
+  is shared across their budget probes: the gh login is read once, not on
+  every probe. The external program calls the world answers, cold start
+  included, stay below the 100 a minute an idle desk may start. Git is the
+  real one and not counted here; the worktree scan's git queries are bounded
+  by the worktree tests.
 issue: https://github.com/giantswarm/beekeeper/issues/3984
 flow: regression
 tags: [regression, performance, loop, budget]
@@ -15,8 +18,8 @@ given:
   desk:
     config:
       github: {probeRepo: example/app}
-      supervisor: {loopInterval: 2s, releaseEvery: 24h, workerBrief: ""}
-      watch: {interval: 2s}
+      supervisor: {loopInterval: 30s, releaseEvery: 24h, workerBrief: ""}
+      watch: {interval: 30s}
   github:
     repositories:
       - name: example/app
@@ -45,5 +48,6 @@ when:
 
 then:
   - calls: {max: 100}
-  - calls: {program: gh, args: [auth, token], min: 1, max: 1}
+  # The budget probes' gh login, not the one-off login check at start.
+  - calls: {program: gh, args: [auth, token, --hostname], min: 1, max: 1}
   - calls: {program: devctl, args: [auth, status], min: 1, max: 2}

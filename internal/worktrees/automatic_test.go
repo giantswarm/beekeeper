@@ -15,6 +15,9 @@ const (
 	automaticFeature      = "feature"
 	automaticDefault      = "main"
 	advertisedDefaultHead = "base refs/heads/main\n"
+	gitLsRemote           = "ls-remote"
+	gitRevList            = "rev-list"
+	remoteStatusHead      = "work"
 )
 
 func TestAutomaticRequiresEndedTaskAndPreservesWork(t *testing.T) {
@@ -76,18 +79,15 @@ func TestRemoteStatusUsesCurrentPublicationAndRequiresBranchHistory(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			git := func(_ context.Context, _ string, args ...string) ([]byte, error) {
-				if args[0] == "rev-list" {
-					return []byte("work\n"), nil
+				if args[0] == gitRevList {
+					return []byte(remoteStatusHead + "\n"), nil
 				}
-				if args[0] == "merge-base" {
-					return nil, errors.New("not an ancestor")
-				}
-				if len(args) != 3 || args[0] != "ls-remote" || args[1] != "--heads" {
+				if len(args) != 3 || args[0] != gitLsRemote || args[1] != "--heads" {
 					t.Fatalf("unexpected query: %v", args)
 				}
 				return []byte(tc.out), tc.err
 			}
-			gone, published, err := RemoteStatus(context.Background(), git, Tree{Branch: automaticFeature, Head: "work", Pushed: tc.tracked}, tc.hadPull)
+			gone, published, err := RemoteStatus(context.Background(), git, Tree{Branch: automaticFeature, Head: remoteStatusHead, Pushed: tc.tracked}, tc.hadPull)
 			if gone != tc.wantGone || published != tc.wantPublished || (err != nil) != (tc.err != nil) {
 				t.Fatalf("gone=%v published=%v err=%v", gone, published, err)
 			}
@@ -108,14 +108,9 @@ func TestRemoteStatusForkBudget(t *testing.T) {
 			git := func(_ context.Context, _ string, args ...string) ([]byte, error) {
 				calls++
 				switch args[0] {
-				case "ls-remote":
+				case gitLsRemote:
 					return []byte(refs.String()), nil
-				case "merge-base":
-					if published {
-						return nil, nil
-					}
-					return nil, errors.New("not an ancestor")
-				case "rev-list":
+				case gitRevList:
 					if published {
 						return nil, nil
 					}
@@ -125,7 +120,7 @@ func TestRemoteStatusForkBudget(t *testing.T) {
 					return nil, nil
 				}
 			}
-			gone, got, err := RemoteStatus(t.Context(), git, Tree{Head: "local-head", Branch: "work", Pushed: "work"}, true)
+			gone, got, err := RemoteStatus(t.Context(), git, Tree{Head: "local-head", Branch: remoteStatusHead, Pushed: remoteStatusHead}, true)
 			if err != nil || !gone || got != published {
 				t.Fatalf("gone=%t published=%t err=%v", gone, got, err)
 			}

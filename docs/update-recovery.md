@@ -54,7 +54,9 @@ probation stays pending.
 
 Before installation, the candidate also runs its isolated workflow fixture through
 `self-update --installation-probe`, without the live configuration. This proves a reviewed merge
-against a scratch origin. Recovery never repeats that fixture or its GitHub searches.
+against a scratch origin. A candidate that fails it keeps the current binary; the update is
+retried at the next check, and the release is not skipped. Probation does not repeat this check,
+and recovery never repeats that fixture or its fixture GitHub's searches.
 
 ## Automatic recovery
 
@@ -277,17 +279,19 @@ protocol does not claim durable installation on filesystems without them.
     evidence for candidates with a pull-request parser regression and missing
     merge-worktree validation (`status: "failed"`, `merge_commit` empty).
   - `recovery-proof/recovery-proof.json`: probation rollback proof showing the
-    retained last-known-good controller detecting consecutive isolated workflow
-    probe failures on the broken candidate, restoring the verified previous
+    retained last-known-good controller detecting consecutive failed executable
+    probes of a candidate that cannot start, restoring the verified previous
     binary within the 30-minute probation window, quarantining the broken digest,
     recording `RELEASE ROLLED BACK`, and passing the post-rollback workflow merge
-    probe.
+    probe. It also records that the pre-install installation probe refuses the
+    candidate with the pull-request parser regression.
 
 ### Workflow fixture compatibility and updater contention
 
-The controller invokes the candidate’s isolated probe entrypoint. The candidate
-supplies both probe code and the GitHub adapter; the controller reads only its
-verdict. A retained control release still runs its own fixture. Raw
+The pre-install canary invokes the candidate’s isolated probe entrypoint
+(`self-update --installation-probe`). The candidate supplies both probe code and
+the GitHub adapter; the canary reads only its verdict. A controller retained from
+a release before the executable probe still runs the fixture during probation. Raw
 workflow reads in the fixture repository at its main ref return a normal GitHub
 404 when no workflow exists; they must not become unknown-command failures.
 Reads outside that repository and ref remain unrecognized. The isolated probe

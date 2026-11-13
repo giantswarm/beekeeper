@@ -9,26 +9,31 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
+const (
+	forkRepo   = "acme/app"
+	forkBranch = "nopr"
+)
+
 // Repeated cleanup scans must reuse both positive and negative graph results.
 // A new local commit invalidates the result, while dirty work is always retained.
 func TestWorktreePublicationForkBudget(t *testing.T) {
 	const source = "source.go"
 	a, read, root := worktreeApp(t)
 	m, _ := read()
-	dir := filepath.Join(root, "nopr")
+	dir := filepath.Join(root, forkBranch)
 	writeT(t, filepath.Join(dir, source), "package feature\n")
 	gitT(t, dir, "add", source)
 	gitT(t, dir, "commit", "-qm", "feature")
 	m.dirs, m.automatic = []string{dir}, true
 	m.retire = func(context.Context, []string, bool) error { return nil }
 	m.pulls = func(context.Context, []github.Head) (map[github.Head]github.HeadPull, error) {
-		return map[github.Head]github.HeadPull{{Repo: "acme/app", Branch: "nopr"}: {State: github.Closed, ClosedAt: m.now.Add(-24 * time.Hour)}}, nil
+		return map[github.Head]github.HeadPull{{Repo: forkRepo, Branch: forkBranch}: {State: github.Closed, ClosedAt: m.now.Add(-24 * time.Hour)}}, nil
 	}
 	graphs := 0
 	git := m.git
 	m.git = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
-		if args[0] == "ls-remote" {
-			return git(ctx, dir, "ls-remote", "--heads", "local")
+		if args[0] == diskRemoteQuery {
+			return git(ctx, dir, diskRemoteQuery, "--heads", "local")
 		}
 		if args[0] == "merge-base" || len(args) > 1 && args[0] == "rev-list" && args[1] == "--max-count=1" {
 			graphs++

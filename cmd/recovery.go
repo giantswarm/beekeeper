@@ -246,11 +246,14 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
+	// A rolled-back journal goes to finish even where Settled calls it done
+	// (no observations, a hold): finish releases the recovery writer fence,
+	// idempotently, and probes nothing.
 	switch {
-	case j.Settled():
-		return true, nil
 	case j.RolledBack():
 		return c.finish(ctx, j)
+	case j.Settled():
+		return true, nil
 	case !j.Pending():
 		// A crash between the rename and its journal write reconciles here.
 		c.prepared++

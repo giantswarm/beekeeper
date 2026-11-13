@@ -86,9 +86,16 @@ type cachedBudgetCredential struct {
 	readAt, retryAt time.Time
 }
 
-// BudgetCredentials selects the stored gh login and devctl's App login once
-// per process. Unavailable providers are retried after a minute; a rejected
-// credential is invalidated by the HTTP probe. Neither route depends on cwd.
+// budgetCredentialMaxAge reads a held credential again well before an
+// expiring one (an App's token lasts an hour) is refused in a probe: a
+// refused probe is an unreadable identity, and the budget fails closed.
+const budgetCredentialMaxAge = 10 * time.Minute
+
+// BudgetCredentials selects the stored gh login and devctl's App login, read
+// at most once per budgetCredentialMaxAge per process. Unavailable providers
+// are retried after a minute; a rejected credential is invalidated by the
+// HTTP probe. Without devctl there is no App identity, as before the cache.
+// A read the caller cancelled is not kept. Neither route depends on cwd.
 func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	budgetCredentialCache.Lock()
 	defer budgetCredentialCache.Unlock()
@@ -105,10 +112,25 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	now := clk.Now()
 	var credentials []BudgetCredential
 	for _, id := range []string{IdentityGH, IdentityApp} {
+		// A missing devctl is a path lookup, no process. Leaving the App out
+		// lets the caller report a previously configured App as unavailable.
+		if id == IdentityApp {
+			if _, err := budgetDevctl(); err != nil {
+				delete(budgetCredentialCache.entries, id)
+				continue
+			}
+		}
 		cached, ok := budgetCredentialCache.entries[id]
-		if !ok || !cached.retryAt.IsZero() && !now.Before(cached.retryAt) {
-			cached = cachedBudgetCredential{credential: readBudgetCredential(ctx, id), readAt: now}
-			if cached.credential.Err != nil || cached.credential.Skip {
+		if !ok || !now.Before(cached.retryAt) {
+			read := readBudgetCredential(ctx, id)
+			if ctx.Err() != nil {
+				// The caller's deadline says nothing about the provider; a
+				// cached failure would fail every other caller's budget closed.
+				credentials = append(credentials, read)
+				continue
+			}
+			cached = cachedBudgetCredential{credential: read, readAt: now, retryAt: now.Add(budgetCredentialMaxAge)}
+			if read.Err != nil || read.Skip {
 				cached.retryAt = now.Add(time.Minute)
 			}
 			budgetCredentialCache.entries[id] = cached
@@ -124,7 +146,9 @@ func RejectBudgetCredential(identity string) {
 	budgetCredentialCache.Lock()
 	defer budgetCredentialCache.Unlock()
 	if cached, ok := budgetCredentialCache.entries[identity]; ok {
-		cached.retryAt = cached.readAt.Add(time.Minute)
+		if retry := cached.readAt.Add(time.Minute); retry.Before(cached.retryAt) {
+			cached.retryAt = retry
+		}
 		budgetCredentialCache.entries[identity] = cached
 	}
 }

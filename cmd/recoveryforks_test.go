@@ -27,7 +27,7 @@ func TestRecoveryProbeForkBudget(t *testing.T) {
 	if err := recoveryProbe(t.Context(), binary, binary+".control", dir); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(log)
+	raw, err := os.ReadFile(log) //nolint:gosec // the test's own temporary file
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,5 +92,29 @@ func TestRecoveryRolledBackCandidateHasNoFurtherProbes(t *testing.T) {
 	}
 	if probes != before {
 		t.Fatalf("rolled-back candidate launched %d probes", probes-before)
+	}
+}
+
+// A rollback no controller observed (Settled already calls it done) is still
+// finished: the person's line is filed and the writer fence released, with
+// no probe of the restored candidate.
+func TestRecoveryFinishesAnUnobservedRollback(t *testing.T) {
+	c, _ := recoveryRig(t)
+	probes := 0
+	recoveryProbe = func(context.Context, string, string, string) error { probes++; return nil }
+	if err := update.Rollback(t.Context(), c.target, "manual", func(_, _ string, restore func() error) error { return restore() }); err != nil {
+		t.Fatal(err)
+	}
+	if j := journal(t, c); !j.RolledBack() || j.Observed != nil {
+		t.Fatalf("want an unobserved rollback: %+v", j)
+	}
+	if !c.mustTick(t) {
+		t.Fatal("the finished rollback did not settle")
+	}
+	if lines := c.filedReports(t); len(lines) != 1 || !strings.Contains(lines[0], "RELEASE ROLLED BACK") {
+		t.Fatalf("the person's line: %q", lines)
+	}
+	if j := journal(t, c); j.Observed == nil || !j.Observed.Notified || !j.Observed.Restarted || probes != 0 {
+		t.Fatalf("finish skipped or probed: %+v, %d probes", j.Observed, probes)
 	}
 }

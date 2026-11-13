@@ -65,7 +65,7 @@ func (cache PublicationCache) Wrap(git Git) Git {
 }
 
 func publicationRepository(dir string) (common, boundary string, ok bool) {
-	raw, err := os.ReadFile(filepath.Join(dir, ".git"))
+	raw, err := os.ReadFile(filepath.Join(dir, ".git")) //nolint:gosec // a scanned worktree's own gitfile
 	if err != nil {
 		return "", "", false
 	}
@@ -76,7 +76,7 @@ func publicationRepository(dir string) (common, boundary string, ok bool) {
 	if !filepath.IsAbs(gd) {
 		gd = filepath.Join(dir, gd)
 	}
-	raw, err = os.ReadFile(filepath.Join(gd, "commondir"))
+	raw, err = os.ReadFile(filepath.Join(gd, "commondir")) //nolint:gosec // the git directory that gitfile names
 	if err != nil {
 		return "", "", false
 	}
