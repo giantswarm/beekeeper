@@ -136,7 +136,7 @@ func TestReadReusesUnchangedElements(t *testing.T) {
 	if second.Starts[0].Successor == after.Starts[0].Successor || second.Starts[0].Successor.Name != "n0" {
 		t.Errorf("the snapshot was lent or changed by a caller: %+v", second.Starts[0].Successor)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json")) //nolint:gosec // the test's own state under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}

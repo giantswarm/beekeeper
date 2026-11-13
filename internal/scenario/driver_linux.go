@@ -770,7 +770,7 @@ func (d *driver) measure(ctx context.Context, m *Measure) (shares map[string]flo
 // ownCPU is the user and system time process pid used itself, without its
 // children's.
 func ownCPU(pid int) (time.Duration, error) {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)) //nolint:gosec // a process of the scenario's sandbox
 	if err != nil {
 		return 0, err
 	}

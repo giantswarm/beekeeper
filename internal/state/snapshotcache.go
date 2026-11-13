@@ -40,8 +40,7 @@ func (s *FileStore) readSnapshot(f *os.File) (*State, error) {
 // readSized reads f to its end, size its expected length: a state document is
 // replaced, never changed in place, so one allocation fits it.
 func readSized(f *os.File, size int64) ([]byte, error) {
-	var b bytes.Buffer
-	b.Grow(int(max(size, 0)) + bytes.MinRead)
+	b := bytes.NewBuffer(make([]byte, 0, max(size, 0)+bytes.MinRead))
 	_, err := b.ReadFrom(f)
 	return b.Bytes(), err
 }
