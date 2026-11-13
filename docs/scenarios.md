@@ -346,7 +346,8 @@ over a model, so a scenario can override any call.
     probes.
 - **`codex`**: `exec --json … -` and `exec resume --json … <thread> -` under
   beekeeper's `codex-run`, with `thread.started`, `turn.started`, the items
-  and `turn.completed` with its tokens. `app-server` answers the usage probe;
+  and `turn.completed` with its tokens. `app-server` answers the usage probe,
+  or refuses a stretch of its requests (`harness.usage.codex.fail`);
   `--version` and `login status` answer a host's probes.
 - **`agy`**: `--input-format stream-json --output-format stream-json` under
   `agy-run`, with `init` naming the conversation, a `user_input` step per
@@ -395,7 +396,14 @@ given:
   harness:
     usage:                           # what a harness's usage probe reports
       claude: {session: 40, week: 20}  # percent of the 5-hour and 7-day windows
-      codex: {session: 10, week: 5}
+      codex:
+        session: 10
+        week: 5
+        fail:                        # the account refuses a stretch of the requests
+          after: 1                   # once this many are answered (0)
+          times: 2                   # this many (0: every one after); then it answers
+          message: 'failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; content-type=; body='
+          code: -32603               # the JSON-RPC error code (-32603)
     models:                          # what agy models and omp models list
       agy: [gemini-3-pro]
     workers:

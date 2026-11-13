@@ -23,6 +23,7 @@ func parseGiven(t *testing.T, doc string) Given {
 const validGiven = `
 usage:
   claude: {session: 40, week: 20}
+  codex: {session: 10, week: 5, fail: {after: 1, times: 2, message: 'failed to fetch codex rate limits: boom', code: -32600}}
 models:
   agy: [gemini-3-pro]
 workers:
@@ -62,6 +63,10 @@ func TestGivenValidate(t *testing.T) {
 		{"host that is not given", "workers: [{host: builder, turns: [{}]}]", `host "builder"`},
 		{"usage of a harness without a probe", "usage: {omp: {session: 1}}", `"omp" has no usage probe`},
 		{"usage beyond 100", "usage: {claude: {session: 101}}", "percent between 0 and 100"},
+		{"a failing claude probe", "usage: {claude: {fail: {message: x}}}", "only codex's usage probe fails"},
+		{"a failure without a message", "usage: {codex: {fail: {times: 1}}}", "fail: no message"},
+		{"a negative count", "usage: {codex: {fail: {after: -1, message: x}}}", "after and times are counts"},
+		{"a failure in a turn", "workers: [{turns: [{usage: {fail: {message: x}}}]}]", "fail is given in harness.usage"},
 		{"models of a harness that lists none", "models: {claude: [sonnet]}", `"claude" lists no models`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

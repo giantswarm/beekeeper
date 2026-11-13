@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -141,6 +142,10 @@ func codexAppServer(c *client) int {
 			rep, err := c.ask(request{Op: opUsage, Harness: Codex})
 			if err != nil || rep.Usage == nil {
 				out.emit(map[string]any{"id": *msg.ID, "error": map[string]any{"code": -32000, "message": "usage unavailable"}})
+				continue
+			}
+			if f := rep.Fail; f != nil {
+				out.emit(map[string]any{"id": *msg.ID, "error": map[string]any{"code": cmp.Or(f.Code, -32603), "message": f.Message}})
 				continue
 			}
 			now := time.Now()

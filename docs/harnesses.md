@@ -186,6 +186,16 @@ fresh valid reading; an explicit invalid or stopped reading (`spend_control_reac
 `rate_limit_reached_type`, null or empty `rate_limits`) or a reading older than `staleAfter` fails
 closed (`ceiling 0, room 0`).
 
+Once the rollouts' reading is older than `every`, the reader asks the account (`codex app-server`,
+`account/rateLimits/read`, no model turn). A request that may pass when sent again (no answer, 429
+or 5xx) is sent again after 1 and 3 seconds, within `timeout`; a refusal (401, no login) is not,
+and the next refresh asks again. A failed refresh keeps the last reading and says why, with the
+endpoint, the status and the error code the account answered, never its body: `account refresh
+failed: GET https://chatgpt.com/backend-api/wham/usage answered 401 Unauthorized (token_expired);
+using last Codex reading`. `beekeeper capacity` and the watch mark a kept reading older than
+`staleAfter` as stale, in the line (`STALE: read 20m ago, max 15m (…)`) and in the JSON (`stale`,
+`sourceAt`); the first answer of the account replaces it.
+
 On a Pro plan where only the weekly `primary` window (`window_minutes: 10080`) is reported and
 `secondary` is `null`, the 7-day window and weekly pace govern the provider. `capacity.choices`
 offers `codex` entries (`{harness: codex, model: <model>}`) to `beekeeper capacity` and `agents

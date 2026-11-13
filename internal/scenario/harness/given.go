@@ -111,6 +111,26 @@ type Tokens struct {
 type Usage struct {
 	Session float64 `yaml:"session" json:"session"`
 	Week    float64 `yaml:"week" json:"week"`
+	// Fail makes the account refuse a stretch of the usage probe's
+	// requests (codex only, in harness.usage).
+	Fail *UsageFail `yaml:"fail" json:"-"`
+}
+
+// UsageFail is a stretch of the account's usage requests that fail: after
+// the first After requests are answered, the next Times (every one when 0)
+// get Message as codex app-server's error reply, with the JSON-RPC error
+// Code (-32603, an internal error, when 0). The requests after them are
+// answered again.
+type UsageFail struct {
+	After   int    `yaml:"after" json:"after"`
+	Times   int    `yaml:"times" json:"times"`
+	Message string `yaml:"message" json:"message"`
+	Code    int    `yaml:"code" json:"code,omitempty"`
+}
+
+// fails reports whether the request after n answered or refused ones fails.
+func (f *UsageFail) fails(n int) bool {
+	return f != nil && n >= f.After && (f.Times == 0 || n < f.After+f.Times)
 }
 
 // Step is one step of a turn: exactly one of beekeeper, git, gh, run and
@@ -195,6 +215,16 @@ func (g *Given) Validate(hosts []Host) error {
 		if u.Session < 0 || u.Session > 100 || u.Week < 0 || u.Week > 100 {
 			bad("harness.usage.%s: percent between 0 and 100", name)
 		}
+		if f := u.Fail; f != nil {
+			switch {
+			case name != Codex:
+				bad("harness.usage.%s: fail: only codex's usage probe fails (its app-server's account request)", name)
+			case strings.TrimSpace(f.Message) == "":
+				bad("harness.usage.%s: fail: no message", name)
+			case f.After < 0 || f.Times < 0:
+				bad("harness.usage.%s: fail: after and times are counts", name)
+			}
+		}
 	}
 	for name, models := range g.Models {
 		if name != Agy && name != Omp {
@@ -231,6 +261,9 @@ func (g *Given) Validate(hosts []Host) error {
 			}
 			if u := t.Usage; u != nil && (u.Session < 0 || u.Session > 100 || u.Week < 0 || u.Week > 100) {
 				bad("%s: usage: percent between 0 and 100", at)
+			}
+			if u := t.Usage; u != nil && u.Fail != nil {
+				bad("%s: usage: fail is given in harness.usage, not in a turn", at)
 			}
 			saved := slices.Clone(builtins)
 			for k, st := range t.Steps {

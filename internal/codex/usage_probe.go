@@ -9,8 +9,119 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+// UsageRequestError is the app-server's error reply to the account usage
+// request. Cause says what failed (the endpoint, the HTTP status it answered
+// and the error code of its body), never the body itself, which can carry
+// account metadata.
+type UsageRequestError struct {
+	// Cause is "GET <endpoint> answered 401 Unauthorized (token_expired)",
+	// or the app-server's own words when the account did not answer with a
+	// status ("codex account authentication required to read rate limits").
+	Cause string
+	// Transient is true for a failure that may pass when the request is
+	// sent again: no answer, or an answer of 429 or 5xx.
+	Transient bool
+}
+
+func (e *UsageRequestError) Error() string {
+	if e.Cause == "" {
+		return "codex account usage request failed"
+	}
+	return "codex account usage request failed: " + e.Cause
+}
+
+// UsageRequestTransient reports whether err is an account usage request
+// that may succeed when sent again.
+func UsageRequestTransient(err error) bool {
+	var re *UsageRequestError
+	return errors.As(err, &re) && re.Transient
+}
+
+// jsonRPCInvalidRequest is the error code of a request the app-server
+// refuses itself, such as one without a login.
+const jsonRPCInvalidRequest = -32600
+
+// maxUsageCause bounds a cause's length: it is shown in one line.
+const maxUsageCause = 160
+
+var (
+	// unexpectedStatus is the backend client's "GET <url> failed: <status>;
+	// content-type=…; body=…".
+	unexpectedStatus = regexp.MustCompile(`^([A-Z]+) (\S+) failed: (\d{3})([^;]*);`)
+	errorCode        = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+)
+
+// usageRequestError turns the app-server's error reply into the cause of the
+// failure.
+func usageRequestError(raw json.RawMessage) *UsageRequestError {
+	var reply struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &reply) != nil {
+		return &UsageRequestError{}
+	}
+	msg := strings.TrimSpace(reply.Message)
+	msg = strings.TrimPrefix(msg, "failed to fetch codex rate limits: ")
+	if m := unexpectedStatus.FindStringSubmatch(msg); m != nil {
+		endpoint, _, _ := strings.Cut(m[2], "?")
+		status, _ := strconv.Atoi(m[3])
+		cause := m[1] + " " + endpoint + " answered " + strings.TrimSpace(m[3]+" "+strings.TrimSpace(m[4]))
+		if _, body, ok := strings.Cut(msg, "; body="); ok {
+			if code := bodyErrorCode(body); code != "" {
+				cause += " (" + code + ")"
+			}
+		}
+		return &UsageRequestError{Cause: shortCause(cause), Transient: status == 429 || status >= 500}
+	}
+	// No status: the request went unanswered, or the app-server refused it
+	// itself (no login). Its words never carry a body.
+	line, _, _ := strings.Cut(msg, "\n")
+	line, _, _ = strings.Cut(line, "; body=")
+	return &UsageRequestError{Cause: shortCause(line), Transient: reply.Code != jsonRPCInvalidRequest}
+}
+
+// bodyErrorCode is the error code of an error body ({"error":{"code":…}},
+// {"detail":{"code":…}} or {"code":…}), or "" when it has none that looks
+// like a code.
+func bodyErrorCode(body string) string {
+	type coded struct {
+		Code any `json:"code"`
+	}
+	var doc struct {
+		Error  coded `json:"error"`
+		Detail coded `json:"detail"`
+		Code   any   `json:"code"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(body)), &doc) != nil {
+		return ""
+	}
+	for _, c := range []any{doc.Error.Code, doc.Detail.Code, doc.Code} {
+		if s, ok := c.(string); ok && errorCode.MatchString(s) {
+			return s
+		}
+	}
+	return ""
+}
+
+func shortCause(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxUsageCause {
+		return s
+	}
+	cut := maxUsageCause
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // ProbeUsage fetches account usage without starting a model turn. Codex owns
 // authentication; no credential values pass through beekeeper.
@@ -57,7 +168,7 @@ func probeUsage(c *exec.Cmd, at time.Time) (UsageReading, error) {
 				continue
 			}
 			if !isNullOrEmptyJSON(msg.Error) {
-				return nil, errors.New("codex account usage request failed")
+				return nil, usageRequestError(msg.Error)
 			}
 			return msg.Result, nil
 		}
