@@ -422,8 +422,9 @@ func TestTrimHarnessRequiresCompleteHeadPulls(t *testing.T) {
 					t.Errorf("checkout %d lost build output", i)
 				}
 			}
-			if tc.wantRemoved && remoteReads != 2 {
-				t.Fatalf("empty answers did not exercise advertised heads: %d", remoteReads)
+			// Both linked worktrees share one current remote advertisement.
+			if tc.wantRemoved && remoteReads != 1 {
+				t.Fatalf("empty answers read advertised heads %d times, want 1 shared read", remoteReads)
 			}
 		})
 	}
