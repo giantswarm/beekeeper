@@ -1,12 +1,14 @@
 name: conflict-repair-goes-to-one-session
 description: >
-  One live session repairs a pull request's conflict with its base. Two
-  sessions park on the same pull request at the same head, which conflicts
-  with its base. The loop gives the conflict's repair to the first one,
-  whose fresh continuation takes it and is at it. The second park at that
-  head gets no second repair: the loop says once that the claim is held and
-  does not wake it. When someone else wakes it for the same conflict, its
-  continuation is not started; it is retired with the reason.
+  One live session repairs a pull request's conflict with its base. Sessions
+  park on the same pull request (for desk review or on a timer wake while
+  serving it), while an unrelated worker plain-parks on the pull request for
+  overlap. The loop gives the conflict's repair to the first session, whose
+  fresh continuation takes it and holds the claim. Later parks for that pull
+  request get no second repair: the loop says once that the claim is held and
+  does not wake them. When someone else wakes the duplicate sessions, their
+  continuations are not started and they are retired with the reason, while the
+  overlap waiter's continuation for its own issue still starts.
 issue: https://github.com/giantswarm/beekeeper/issues/3869
 flow: duplicate-pr
 tags: [duplicate-pr, loop, conflict, continuation]
@@ -17,9 +19,15 @@ given:
     config:
       # The budget probe reads a repository the scenario's GitHub has.
       github: {probeRepo: example/app}
+      capacity:
+        ceiling: 4
+        providers:
+          claude: {ceiling: 4}
   github:
     repositories:
       - name: example/app
+        issues:
+          - {number: 9, title: "feat: separate overlapping work"}
         pulls:
           # Its base moved on: the pull request conflicts with it.
           - {number: 2, title: "feat: the change", head: app-1, mergeable: CONFLICTING}
@@ -28,8 +36,12 @@ given:
     usage:
       claude: {session: 10, week: 40}
     workers:
-      # The continuation that took the repair: its turn is still running.
+      # The continuations that take the repair and the unrelated overlap task:
+      # their turns stay running.
       - name: 'app 2 first next-[0-9a-f]+'
+        turns:
+          - outcome: hang
+      - name: 'app 9 next-[0-9a-f]+'
         turns:
           - outcome: hang
       # Two sessions park on the pull request's head for the desk review,
@@ -50,6 +62,20 @@ given:
                 dir: second
               - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
                 dir: second
+      # A third session serving the pull request parks on an explicit timer
+      # wake without a pull request target.
+      - name: app 2 rebase
+        turns:
+          - steps:
+              - beekeeper: [sessions, serve, app 2 rebase, 'example/app#2', --waits, 'a timer wake']
+              - beekeeper: [agents, park, 'a timer wake']
+      # An unrelated worker serving https://github.com/example/app/issues/9
+      # plain-parks on the pull request waiting on overlap.
+      - name: app 9
+        turns:
+          - steps:
+              - beekeeper: [sessions, serve, app 9, 'example/app#9', --waits, 'overlap: waiting for example/app#2']
+              - beekeeper: [agents, park, --on, 'example/app#2', 'overlap: waiting for example/app#2']
   calls:
     # What the watch reads beside GitHub: no GitHub App login beside the gh
     # login, and empty journals of the kernel and of systemd-oomd.
@@ -103,10 +129,28 @@ when:
       timeout: 30s
       expect:
         - worker: {name: app 2 second, outcome: finish}
+  - name: start-rebase
+    run:
+      args: [--as, supervisor loop, agents, start, app 2 rebase, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 2 rebase, outcome: finish}
+  - name: start-waiter
+    run:
+      args: [--as, supervisor loop, agents, start, app 9, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 9, outcome: finish}
   - advance: 2s
-  # The pass applies the second park at the same head and starts the
-  # first one's continuation. The conflict's claim is held: the second
-  # park is not woken for a second repair.
+  # The pass applies the new parks and starts the first session's
+  # continuation. The conflict's claim is held: the second park is not woken
+  # for a second repair.
   - name: held
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -119,31 +163,58 @@ when:
       timeout: 30s
       expect:
         - worker: {name: 'app 2 first next-[0-9a-f]+', turns: 1, running: true}
-  # The second session's turn has been quiet for longer than the 30 s in
-  # which a session still counts as running its turn: it can be retired.
+  # The parked sessions' turns have been quiet for longer than the 30 s in
+  # which a session still counts as running its turn: duplicate ones can be
+  # retired.
   - advance: 45s
-  # Someone else wakes the second session for the same conflict.
+  # Someone else wakes both duplicate sessions and the overlap waiter.
   - name: wake
     run: {args: [--as, guide, agents, wake, app 2 second, "https://github.com/example/app/pull/2 conflicts with main: merge main into it"]}
     expect:
       - exit: 0
-  # Its continuation is not started: it is retired with the reason.
+  - name: wake-rebase
+    run: {args: [--as, guide, agents, wake, app 2 rebase, "the timer fired; continue https://github.com/example/app/pull/2"]}
+    expect:
+      - exit: 0
+  - name: wake-waiter
+    run: {args: [--as, guide, agents, wake, app 9, "continue https://github.com/example/app/issues/9 independently of https://github.com/example/app/pull/2"]}
+    expect:
+      - exit: 0
+  # Duplicate continuations for https://github.com/example/app/pull/2 are
+  # retired with the reason, while the overlap waiter for
+  # https://github.com/example/app/issues/9 continues with a fresh worker.
   - name: retire
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
       - output:
-          contains: ['SUPERVISOR DONE [done example/app#2 app 2 second] app 2 second: off the roster: ', 'holds its conflict claim since']
-          not_contains: ['SUPERVISOR REWORK', 'fresh worker app 2 second next-']
-      - events: {contains: [supervisor.done, agents.remove]}
+          contains:
+            - 'SUPERVISOR DONE [done example/app#2 app 2 second] app 2 second: off the roster: '
+            - 'SUPERVISOR DONE [done example/app#2 app 2 rebase] app 2 rebase: off the roster: '
+            - 'holds its conflict claim since'
+            - 'SUPERVISOR CONTINUATION app 9: fresh worker app 9 next-'
+          not_contains:
+            - 'SUPERVISOR REWORK'
+            - 'fresh worker app 2 second next-'
+            - 'fresh worker app 2 rebase next-'
+      - events: {contains: [supervisor.done, agents.remove, agents.continuation]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app 9 next-[0-9a-f]+', turns: 1, running: true}
   - name: roster
     run: {args: [agents, --json]}
 
 then:
-  # The first one's continuation is the only session at the conflict.
+  # Only the first session's continuation and the unrelated overlap waiter's
+  # continuation remain on the roster.
   - {step: roster, exit: 0}
-  - {step: roster, json_path: {path: ., len: 1}}
+  - {step: roster, json_path: {path: ., len: 2}}
   - worker: {name: 'app 2 first next-[0-9a-f]+', turns: 1, running: true}
+  - worker: {name: 'app 9 next-[0-9a-f]+', turns: 1, running: true}
   - worker: {name: 'app 2 second next-[0-9a-f]+', turns: 0}
+  - worker: {name: 'app 2 rebase next-[0-9a-f]+', turns: 0}
   - worker: {name: app 2 second, turns: 1, outcome: finish}
+  - worker: {name: app 2 rebase, turns: 1, outcome: finish}
+  - worker: {name: app 9, turns: 1, outcome: finish}
   - github: {pull: {repo: example/app, number: 2, state: open}}

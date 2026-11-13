@@ -87,11 +87,13 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			url := Cmd.IssueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
 			pullOpen := true
+			var parkedPull *superloop.Pull
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
 				pull, err := readLoopContextPull(ctx, ref)
 				if err != nil {
 					continue
 				}
+				parkedPull = &pull
 				url, branch, head = pull.URL, pull.Branch, pull.Head
 				if pull.State != superloop.Open {
 					branch, pullOpen = pull.Base, false
@@ -100,15 +102,19 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 					url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
 				}
 			}
-			// Another live session repairs this head's conflict: a
-			// second repair of it is not started.
-			if pullOpen && head != "" {
-				folded, err := l.foldTaken()
-				if err != nil {
-					return err
+			// Another live session holds this pull request's conflict claim:
+			// a second session for that pull request is not started.
+			folded, err := l.foldTaken()
+			if err != nil {
+				return err
+			}
+			if held := heldConflicts(current, folded.Claims); len(held) > 0 {
+				heldRef, heldURL, c, blocked, readErr := l.heldContinuationPull(ctx, current, ag, ref, parkedPull, held)
+				if readErr != nil {
+					continue
 				}
-				if c, held := heldConflicts(current, folded.Claims).holder(ref, head); held && !c.of(ag.Name) {
-					if err := l.retireContinuation(ctx, current, ag, ref, url, c); err != nil {
+				if blocked {
+					if err := l.retireContinuation(ctx, current, ag, heldRef, heldURL, c); err != nil {
 						if errors.Is(err, state.ErrRecoveryWriterFenced) {
 							return err
 						}
@@ -250,6 +256,145 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 	return nil
 }
 
+// heldContinuationPull checks whether ag's continuation would work on an open
+// pull request whose conflict claim another live session holds in held. Plain
+// waits on another worker's pull request (overlap waits) continue their own
+// task instead.
+func (l *Loop) heldContinuationPull(ctx context.Context, st *state.State, ag state.Agent, ref string, parkedPull *superloop.Pull, held conflictClaims) (string, string, conflictClaim, bool, error) {
+	var candidates []string
+	addCandidate := func(raw string) {
+		pr, ok := Cmd.ParseRef(raw)
+		if !ok {
+			return
+		}
+		cand := Cmd.RefName(pr)
+		if len(held[strings.ToLower(cand)]) == 0 {
+			return
+		}
+		if !slices.ContainsFunc(candidates, func(cur string) bool { return strings.EqualFold(cur, cand) }) {
+			candidates = append(candidates, cand)
+		}
+	}
+	addCandidate(ref)
+	for _, rp := range st.ReviewParks {
+		if rp.Party.Is(ag.Party) {
+			addCandidate(rp.On)
+		}
+	}
+	for _, m := range Cmd.RefURL().FindAllString(ag.Task+" "+ag.LastTask, -1) {
+		if strings.Contains(strings.ToLower(m), "/pull/") {
+			addCandidate(m)
+		}
+	}
+	owner := l.Host.Cfg().Board.Owner
+	for _, cand := range candidates {
+		c, ok := held.forPull(cand, "")
+		if !ok || strings.EqualFold(c.Holder, ag.Name) {
+			continue
+		}
+		var pull superloop.Pull
+		if parkedPull != nil && strings.EqualFold(cand, ref) {
+			pull = *parkedPull
+		} else {
+			var err error
+			pull, err = readLoopContextPull(ctx, cand)
+			if err != nil {
+				return "", "", conflictClaim{}, false, err
+			}
+		}
+		if pull.State != superloop.Open {
+			continue
+		}
+		c, ok = held.forPull(cand, pull.Head)
+		if !ok || strings.EqualFold(c.Holder, ag.Name) {
+			continue
+		}
+		if !continuationOwnsPull(st, ag, cand, pull, owner) {
+			continue
+		}
+		pullURL := pull.URL
+		if pullURL == "" {
+			if pr, ok := Cmd.ParseRef(cand); ok {
+				pullURL = fmt.Sprintf("https://github.com/%s/pull/%d", pr.Repo, pr.N)
+			}
+		}
+		return cand, pullURL, c, true, nil
+	}
+	return "", "", conflictClaim{}, false, nil
+}
+
+// continuationOwnsPull reports whether ag works on cand rather than plain-parking
+// on cand as an overlap waiter for another task.
+func continuationOwnsPull(st *state.State, ag state.Agent, cand string, pull superloop.Pull, owner string) bool {
+	if slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+		return rp.Party.Is(ag.Party) && strings.EqualFold(rp.On, cand)
+	}) {
+		return true
+	}
+	parkedOnCand := false
+	if ag.Park != nil {
+		if pr, ok := Cmd.ParseRef(ag.Park.On); ok {
+			on := Cmd.RefName(pr)
+			if strings.EqualFold(on, cand) {
+				parkedOnCand = true
+			} else if !refMatchesPull(st, on, cand, pull) {
+				return false
+			}
+		}
+	}
+	if parkedOnCand {
+		w := strings.ToLower(strings.TrimSpace(ag.Park.Waits))
+		if ag.Park.ReviewHead != "" || ag.Park.Checks || Cmd.IsDeskReviewWait(ag.Park.Waits) ||
+			strings.HasPrefix(w, "desk review") || strings.HasPrefix(w, "ci pending") {
+			return true
+		}
+	}
+	if slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+		return rp.Party.Is(ag.Party) && !strings.EqualFold(rp.On, cand)
+	}) {
+		return false
+	}
+	if served := LoopServes(st, ag); served != "" {
+		return refMatchesPull(st, served, cand, pull)
+	}
+	if taskServes := LoopTaskServes(ag, cand); taskServes != "" {
+		return refMatchesPull(st, taskServes, cand, pull)
+	}
+	if !parkedOnCand {
+		return true
+	}
+	refs := Cmd.NamedRefs(ag.Task+" "+ag.LastTask, owner)
+	if len(refs) > 0 {
+		hasCand := false
+		for _, r := range refs {
+			if pr, ok := Cmd.ParseRef(r); ok {
+				norm := Cmd.RefName(pr)
+				if !refMatchesPull(st, norm, cand, pull) {
+					return false
+				}
+				hasCand = true
+			}
+		}
+		if hasCand {
+			return true
+		}
+	}
+	return strings.EqualFold(ag.Name, superloop.PullWorkerName(cand))
+}
+
+func refMatchesPull(st *state.State, ref, cand string, pull superloop.Pull) bool {
+	if strings.EqualFold(ref, cand) {
+		return true
+	}
+	if slices.ContainsFunc(pull.Closes, func(c string) bool { return strings.EqualFold(c, ref) }) {
+		return true
+	}
+	if rp, ok := st.ReviewParkFor(cand); ok && rp.Serves != "" && strings.EqualFold(rp.Serves, ref) {
+		return true
+	}
+	return false
+}
+
 // retireContinuation takes ag off the roster instead of starting its fresh
 // continuation: its pull request's conflict at c's head is c's session's to
 // resolve. A session its person started stays parked with its events, and
@@ -266,6 +411,21 @@ func (l *Loop) retireContinuation(ctx context.Context, st *state.State, ag state
 	if err != nil {
 		return err
 	}
+	_ = l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
+		hi := slices.IndexFunc(current.Agents, func(cur state.Agent) bool { return strings.EqualFold(cur.Name, c.Holder) })
+		if hi < 0 {
+			return nil, nil
+		}
+		holder := current.Agents[hi]
+		for k := range current.ReviewParks {
+			if strings.EqualFold(current.ReviewParks[k].On, ref) && current.ReviewParks[k].Party.Is(ag.Party) {
+				current.ReviewParks[k].Party = holder.Party
+				current.ReviewParks[k].Agent = holder.Name
+				current.ReviewParks[k].Execution = holder.Execution
+			}
+		}
+		return nil, nil
+	})
 	return l.completeAction(act, what)
 }
 
