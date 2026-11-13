@@ -9,15 +9,22 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+// tidiedStatus is the Status board tidy leaves an archived item in; moveI1 is
+// I1's move to In Progress.
+const (
+	tidiedStatus = "Done"
+	moveI1       = "I1=s3"
+)
+
 // archivedItem is issue5 with its item I1 on the board archived in Done,
 // open or closed, with or without a Team.
 func archivedItem(state, team string) string {
-	t := "null"
+	t := jsonNull
 	if team != "" {
 		t = `{"name":"` + team + `"}`
 	}
 	return `{"data":{"repository":{"issue":{"id":"ISSUE","state":"` + state + `","projectItems":{"nodes":[` +
-		`{"id":"I1","isArchived":true,"project":{"id":"P"},"status":{"name":"Done"},"team":` + t + `}]}}}}}`
+		`{"id":"I1","isArchived":true,"project":{"id":"P"},"status":{"name":"` + tidiedStatus + `"},"team":` + t + `}]}}}}}`
 }
 
 const notOnBoardClosed = `{"data":{"repository":{"issue":{"id":"ISSUE","state":"CLOSED","projectItems":{"nodes":[]}}}}}`
@@ -31,9 +38,9 @@ func TestIntakeLeavesClosedIssuesAndArchivedItems(t *testing.T) {
 		name, item string
 		want       Moved
 	}{
-		{"closed, archived", archivedItem("CLOSED", ""), Moved{Ref: issue5, From: "Done", To: "Done", Closed: true, Archived: true}},
+		{"closed, archived", archivedItem(stateClosed, ""), Moved{Ref: issue5, From: tidiedStatus, To: tidiedStatus, Closed: true, Archived: true}},
 		{"closed, off the board", notOnBoardClosed, Moved{Ref: issue5, To: backlog, Closed: true}},
-		{"open, archived without a Team", archivedItem("OPEN", ""), Moved{Ref: issue5, From: "Done", To: "Done", Archived: true, Kept: true}},
+		{"open, archived without a Team", archivedItem(stateOpen, ""), Moved{Ref: issue5, From: tidiedStatus, To: tidiedStatus, Archived: true, Kept: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeGH{t: t, item: tc.item}
@@ -59,10 +66,10 @@ func TestRankLeavesAnArchivedItemUnlessUnarchived(t *testing.T) {
 		want      Ranked
 		mutations []string
 	}{
-		{"closed", "CLOSED", false, Ranked{Ref: issue5, Archived: true, Closed: true}, nil},
-		{"closed, --unarchive", "CLOSED", true, Ranked{Ref: issue5, Archived: true, Closed: true}, nil},
-		{"open", "OPEN", false, Ranked{Ref: issue5, Archived: true}, nil},
-		{"open, --unarchive", "OPEN", true, Ranked{Ref: issue5, Above: issue9, Unarchived: true, Team: teamX}, []string{"unarchive I1", "I1=t1", rankAfterNine}},
+		{"closed", stateClosed, false, Ranked{Ref: issue5, Archived: true, Closed: true}, nil},
+		{"closed, --unarchive", stateClosed, true, Ranked{Ref: issue5, Archived: true, Closed: true}, nil},
+		{"open", stateOpen, false, Ranked{Ref: issue5, Archived: true}, nil},
+		{"open, --unarchive", stateOpen, true, Ranked{Ref: issue5, Above: issue9, Unarchived: true, Team: teamX}, []string{"unarchive I1", "I1=t1", rankAfterNine}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeGH{t: t, item: archivedItem(tc.state, ""), byIssue: map[string]string{"9": item9}}
@@ -82,17 +89,17 @@ func TestRankLeavesAnArchivedItemUnlessUnarchived(t *testing.T) {
 // and leaves a closed issue's as it is.
 func TestMoveRestoresOnlyAnOpenIssuesArchivedItem(t *testing.T) {
 	ctx := context.Background()
-	f := &fakeGH{t: t, item: archivedItem("CLOSED", teamX)}
+	f := &fakeGH{t: t, item: archivedItem(stateClosed, teamX)}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(ctx, issue5, "in progress")
-	if want := (Moved{Ref: issue5, From: "Done", To: inProgress, Closed: true, Archived: true}); err != nil || *mv != want || len(f.mutations) != 0 {
+	if want := (Moved{Ref: issue5, From: tidiedStatus, To: inProgress, Closed: true, Archived: true}); err != nil || *mv != want || len(f.mutations) != 0 {
 		t.Fatalf("Move of a closed issue's archived item = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
-	f = &fakeGH{t: t, item: archivedItem("OPEN", teamX)}
+	f = &fakeGH{t: t, item: archivedItem(stateOpen, teamX)}
 	c.GH = f.run
 	mv, err = c.Move(ctx, issue5, "in progress")
-	if want := (Moved{Ref: issue5, From: "Done", To: inProgress, Archived: true, Unarchived: true}); err != nil || *mv != want ||
-		!slices.Equal(f.mutations, []string{"unarchive I1", "I1=s3"}) {
+	if want := (Moved{Ref: issue5, From: tidiedStatus, To: inProgress, Archived: true, Unarchived: true}); err != nil || *mv != want ||
+		!slices.Equal(f.mutations, []string{"unarchive I1", moveI1}) {
 		t.Fatalf("Move of an open issue's archived item = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
 }

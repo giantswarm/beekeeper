@@ -512,7 +512,7 @@ func TestMoveTakesOnlyTheBoardsStatuses(t *testing.T) {
 	f := &fakeGH{t: t, item: onBoard}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(context.Background(), "https://github.com/o/r/issues/5", "in progress")
-	if err != nil || *mv != (Moved{Ref: issue5, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I1=s3"}) {
+	if err != nil || *mv != (Moved{Ref: issue5, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{moveI1}) {
 		t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
 	// An item on the board is moved by the issue's projectItems: no add,
