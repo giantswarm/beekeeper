@@ -43,8 +43,14 @@ WIP place: implementation, CI, review, merge, release and automatic timers
 under a day. An open decision addressed to the guide's person and linked to
 the delivery (or its worker's note park) is **waiting on the person** and
 appears in the existing guide queue. A missing decision note is reported as
-a defect; file it with `note add --for <person> --ref <issue>` and include
-the question, default and deadline.
+a defect (`DELIVERY WAITING WITHOUT A NOTE`); file it with
+`note add --for <person> --ref <issue>` and include the question, default
+and deadline. Only a park with no target whose wait names the person, or
+what only a person gives (a decision, an answer, an approval, a reply), is
+missing its note. A park on a note is covered by it: an open note is in its
+addressee's queue, and an answered one's park resumes at the watch's next
+look. A park on an issue or pull request, a hold, a lease, an alert or a
+release waits on that target, whatever its words say.
 
 Use `agents park --external "<what must happen>"` for any external event
 that no current decision can resolve. It needs an explicit wake when the
