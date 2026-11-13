@@ -61,18 +61,37 @@ func (l *Loop) RunRefillCadence(ctx context.Context, ticks <-chan time.Time) {
 	}
 }
 
-func (l *Loop) RefillTick(ctx context.Context) error {
+func (l *Loop) RefillTick(ctx context.Context) (result error) {
 	// Configuration is stable for the entire dispatch, including its child commands.
 	l.RefillConfigMu.RLock()
 	defer l.RefillConfigMu.RUnlock()
-	if ctx.Err() != nil || l.PauseForReexec() || !l.BeginInFlight(LoopFillStream) {
+	dispatched := false
+	why := "loop stopping or waiting to re-exec"
+	defer func() {
+		if !l.DryRun && !dispatched && l.Host.Cfg().Supervisor.WorkerBrief != "" {
+			if result != nil {
+				why = Cmd.OneLine(result.Error())
+			}
+			_, _ = fmt.Fprintf(l.Host.Out(), RefillZeroFormat, why)
+		}
+	}()
+	if ctx.Err() != nil || l.PauseForReexec() {
+		return nil
+	}
+	if !l.BeginInFlight(LoopFillStream) {
+		why = "previous refill still running"
 		return nil
 	}
 	defer l.EndInFlight(LoopFillStream)
+	why = "starts held"
 	if !l.DryRun {
-		if err := l.refreshStartConditions(ctx); err != nil {
+		reason, err := l.refreshStartConditions(ctx)
+		if err != nil {
 			l.HoldStarts(true)
 			return err
+		}
+		if reason != "" {
+			why = reason
 		}
 	}
 	if l.Host.Cfg().Supervisor.WorkerBrief == "" {
@@ -104,6 +123,7 @@ func (l *Loop) RefillTick(ctx context.Context) error {
 	l.Mu.Lock()
 	l.BoardNone = nil
 	l.Mu.Unlock()
+	dispatched = true // Fill owns the summary once it can attempt starts.
 	return l.Fill(ctx, st, folded.Claims, folded.Taken, reservations)
 }
 
