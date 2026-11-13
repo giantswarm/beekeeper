@@ -144,14 +144,15 @@ when:
     run: {args: [log, --verb, self-update.recovery]}
     expect:
       - output: {contains: ["v1.0.0-rc.3 passed its probation: last known good"]}
-      # The loop it passed was slow: GitHub held its answers.
-      - github: {calls: {caller: slow-loop, fault: slow, min: 3}}
-      - github: {calls: {caller: slow-loop, fault: slow-lookup, min: 1}}
-  # The loop finished its first pass: its refill read the board.
-  - wait_for:
+  # The pass the controller judged was slow: GitHub held the loop's answers,
+  # and its first pass ends with the lookup's late answer.
+  - name: first-pass
+    wait_for:
       timeout: 60s
       expect:
-        - log: {name: slow-loop, contains: ["SUPERVISOR REFILL started 0"]}
+        - log: {name: slow-loop, contains: ["SUPERVISOR RELEASE LOOKUP FAILED"]}
+        - github: {calls: {caller: slow-loop, fault: slow-lookup, min: 1}}
+        - github: {calls: {caller: slow-loop, fault: slow, min: 2}}
   - stop: slow-loop
   # The loop of candidate 3 now runs another copy of that release, one no
   # update replaces: it never re-executes into a newer one.
