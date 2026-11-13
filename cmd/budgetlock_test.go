@@ -12,6 +12,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -29,6 +30,9 @@ func holdStateLock(t *testing.T, a *app) {
 // Another process holding the state lock past the budget's save does not
 // make the budget unknown to the merge gate or to budget --gate: GitHub
 // answered, and only keeping the reading lost to the lock (#3411).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 	a, out := budgetApp(t)
 	refuse := false
@@ -38,9 +42,9 @@ func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 	// caller's deadline allows; a short one keeps the test fast.
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	g := &gateRun{app: a, ctx: ctx}
+	g := &gate.GateRun{Host: a, Ctx: ctx}
 	start := time.Now()
-	b, err := g.gateBudget()
+	b, err := g.GateBudget()
 	if err != nil || b.Remaining != 4800 {
 		t.Fatalf("merge gate: budget %+v, %v with the state lock busy", b, err)
 	}
@@ -62,6 +66,9 @@ func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 
 // A saved reading younger than merge.budgetFresh is the merge gate's budget
 // without the state lock and without GitHub.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 	a, _ := budgetApp(t)
 	refuse := false
@@ -75,8 +82,8 @@ func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 	}
 	holdStateLock(t, a)
 	a.now = now
-	g := &gateRun{app: a, ctx: t.Context()}
-	b, err := g.gateBudget()
+	g := &gate.GateRun{Host: a, Ctx: t.Context()}
+	b, err := g.GateBudget()
 	if err != nil || b.Remaining != 4321 || *queries != 0 {
 		t.Fatalf("merge gate: budget %+v, %v after %d GraphQL queries, want the saved reading", b, err, *queries)
 	}
@@ -84,6 +91,9 @@ func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 
 // A budget GitHub does not give stays unknown while the lock is busy: the
 // busy lock never hides another failure.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing.T) {
 	a, out := budgetApp(t)
 	refuse := true
@@ -91,8 +101,8 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 	holdStateLock(t, a)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	g := &gateRun{app: a, ctx: ctx}
-	if b, err := g.gateBudget(); err == nil {
+	g := &gate.GateRun{Host: a, Ctx: ctx}
+	if b, err := g.GateBudget(); err == nil {
 		t.Fatalf("merge gate passed a refused GraphQL budget: %+v", b)
 	}
 	c := a.budgetCmd()
@@ -108,6 +118,8 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestOnlyLockBusy(t *testing.T) {
 	busy := &state.LockBusyError{Waited: 100 * time.Millisecond}
 	commitBusy := errors.Join(execution.ErrCoordinatorBusy, context.DeadlineExceeded)
@@ -128,11 +140,11 @@ func TestOnlyLockBusy(t *testing.T) {
 		{errors.Join(), false},
 		{context.DeadlineExceeded, false},
 	} {
-		if got := onlyLockBusy(c.err); got != c.want {
+		if got := gate.OnlyLockBusy(c.err); got != c.want {
 			t.Errorf("onlyLockBusy(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
-	if unsavedBudget(nil) != nil || unsavedBudget(busy) != nil || unsavedBudget(commitBusy) != nil || !errors.Is(unsavedBudget(errors.Join(other, busy)), other) {
+	if gate.UnsavedBudget(nil) != nil || gate.UnsavedBudget(busy) != nil || gate.UnsavedBudget(commitBusy) != nil || !errors.Is(gate.UnsavedBudget(errors.Join(other, busy)), other) {
 		t.Error("unsavedBudget kept a lone busy lock or dropped another failure")
 	}
 }

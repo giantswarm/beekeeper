@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -59,7 +60,7 @@ var ReadDeliveryRelease = func(ctx context.Context, p superloop.Pull) (string, s
 	if err != nil || !contains {
 		return "", "", err
 	}
-	return verdictAvailable, tag, nil
+	return gate.VerdictAvailable, tag, nil
 }
 
 type deliveryReleaseResult struct {

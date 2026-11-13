@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -15,6 +16,9 @@ import (
 
 // A paused derivation models slow ownership classification. Writers must finish
 // before it resumes, and a conflicting delivery write must force recomputation.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow().UTC()
@@ -51,7 +55,7 @@ func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "concurrent-start"}})
 			st.Timers = append(st.Timers, state.Timer{ID: 1, Due: now})
 			st.Deliveries[0].Step = state.DeliveryDone
-			st.Deliveries[0].Verdict = verdictAvailable
+			st.Deliveries[0].Verdict = gate.VerdictAvailable
 			st.Deliveries[0].Release = releaseTag
 			st.Deliveries = append(st.Deliveries, state.Delivery{Ref: "o/r#201", Step: state.DeliveryImplementing, Started: now, Since: now})
 			return nil, nil

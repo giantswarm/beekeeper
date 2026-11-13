@@ -123,7 +123,6 @@ func init() {
 		RoleRun:               roleRun,
 		RunGit:                runGit,
 		ShortDur:              shortDur,
-		ShortSHA:              shortSHA,
 		StopMerges:            stopMerges,
 		TakeOverReviewPark:    takeOverReviewPark,
 		Truncate:              truncate,

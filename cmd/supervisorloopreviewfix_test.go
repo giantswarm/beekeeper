@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -316,6 +317,8 @@ func TestReviewFixEndDoesNotFinishAPlainWaiter(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 	for _, phase := range []string{state.Waiting, state.Running} {
 		t.Run(phase, func(t *testing.T) {
@@ -325,7 +328,7 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			submissions := 0
 			r.answer = func(args []string) (string, int) {
-				if len(args) == 0 || args[0] != gateCmdName {
+				if len(args) == 0 || args[0] != gate.GateCmdName {
 					return "", 0
 				}
 				submissions++
@@ -335,12 +338,12 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				return "", ExitGateQueued
+				return "", gate.ExitGateQueued
 			}
 			r.pass(t)
 			for range 2 {
 				r.pass(t)
-				if call := r.called(gateCmdName); call != nil {
+				if call := r.called(gate.GateCmdName); call != nil {
 					t.Fatalf("live gate submitted again: %v", call)
 				}
 			}
@@ -349,23 +352,25 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 			}
 			r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
 			r.pass(t)
-			if r.called(gateCmdName) != nil || len(r.logged(t, "supervisor.merge")) != 1 {
+			if r.called(gate.GateCmdName) != nil || len(r.logged(t, "supervisor.merge")) != 1 {
 				t.Fatalf("queued completion not reconciled: %v\n%s", r.calls, r.out)
 			}
 		})
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 	for _, tc := range []struct {
 		code    int
 		message string
 	}{
-		{ExitGateQueued, "gate queued"},
-		{ExitGateDuplicate, "is already queued in lane"},
-		{ExitGateDuplicate, "is already merging"},
-		{ExitGateRefused, "waited for its turn behind the running merge"},
-		{ExitGateRefused, "held: conflict with the release window"},
+		{gate.ExitGateQueued, "gate queued"},
+		{gate.ExitGateDuplicate, "is already queued in lane"},
+		{gate.ExitGateDuplicate, "is already merging"},
+		{gate.ExitGateRefused, "waited for its turn behind the running merge"},
+		{gate.ExitGateRefused, "held: conflict with the release window"},
 	} {
 		t.Run(tc.message, func(t *testing.T) {
 			r := newLoopRig(t)
@@ -373,7 +378,7 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			r.answer = func(args []string) (string, int) {
-				if len(args) > 0 && args[0] == gateCmdName {
+				if len(args) > 0 && args[0] == gate.GateCmdName {
 					return tc.message, tc.code
 				}
 				return "", 0
@@ -382,7 +387,7 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 			if call := r.called(agentsName, agentWakeName, loopWorker); call != nil {
 				t.Fatalf("gate wait/refusal woke worker for repair: %v", call)
 			}
-			if tc.code == ExitGateQueued || tc.code == ExitGateDuplicate {
+			if tc.code == gate.ExitGateQueued || tc.code == gate.ExitGateDuplicate {
 				if len(r.logged(t, loop.LoopFailureVerb)) != 0 {
 					t.Fatal("queue wait recorded as failure")
 				}
@@ -391,6 +396,8 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 	for _, reason := range []string{"branch conflicts with base", "branch behind its base"} {
 		t.Run(reason, func(t *testing.T) {
@@ -399,14 +406,14 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			r.answer = func(args []string) (string, int) {
-				if len(args) == 0 || args[0] != gateCmdName {
+				if len(args) == 0 || args[0] != gate.GateCmdName {
 					return "", 0
 				}
 				raw, err := json.Marshal(github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, ExitCode: github.SquashNotApplicable, Reason: reason})
 				if err != nil {
 					t.Fatal(err)
 				}
-				return string(raw) + "\n" + GatePrefix + "nothing merged; repair needed\n", github.SquashNotApplicable
+				return string(raw) + "\n" + gate.GatePrefix + "nothing merged; repair needed\n", github.SquashNotApplicable
 			}
 			r.pass(t)
 			call := r.called(agentsName, agentWakeName, loopWorker)
@@ -431,6 +438,8 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 	for _, limit := range []int{0, 1} {
 		t.Run(fmt.Sprintf("wip=%d", limit), func(t *testing.T) {
@@ -501,7 +510,7 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 			if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 2)) != nil {
 				t.Fatalf("a second review round started: %v\n%s", r.calls, r.out)
 			}
-			if r.called(gateCmdName) == nil || r.lastMerged != loopFixed {
+			if r.called(gate.GateCmdName) == nil || r.lastMerged != loopFixed {
 				t.Fatalf("the fixed head did not merge: %v\n%s", r.calls, r.out)
 			}
 		})

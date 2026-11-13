@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 )
@@ -34,11 +35,11 @@ case "$*" in *--accept-red*) echo '`+mergedDoc+`';; *) echo '`+baseRedDoc+`'; ex
 // and whether the installed devctl has --accept-red.
 func stubBase(t *testing.T, e2e string, accepts bool) {
 	t.Helper()
-	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
+	gate.BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
 		return github.BaseChecks{Base: mainBranch, Head: "0123456789", Required: []string{"go-build"},
 			Outcomes: map[string]string{"e2e-test": e2e, "go-build": github.CheckPass}}, nil
 	}
-	devctlAcceptsRed = func(context.Context) bool { return accepts }
+	gate.DevctlAcceptsRed = func(context.Context) bool { return accepts }
 }
 
 func devctlCalls(t *testing.T, path string) []string {
@@ -50,6 +51,9 @@ func devctlCalls(t *testing.T, path string) []string {
 // A pull request red only on a non-required check that is red on the base
 // head too merges: devctl runs again accepting that check, the caller reads
 // the merge's document alone, and the event names the check and why.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 	noSystemd(t)
 	calls := acceptingDevctl(t)
@@ -57,7 +61,7 @@ func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 	stubBase(t, github.CheckFail, true)
 	stdout := gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); err != nil {
+	if err := g.RunMerge(); err != nil {
 		t.Fatalf("the merge red on a base-red check: %v", err)
 	}
 	got := devctlCalls(t, calls)
@@ -78,6 +82,9 @@ func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 // A red check green on the base head, or any red check while the installed
 // devctl has no --accept-red, ends the merge red as before: devctl runs
 // once, and the caller reads its red document.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 	for name, tc := range map[string]struct {
 		e2e     string
@@ -94,7 +101,7 @@ func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 			stubBase(t, tc.e2e, tc.accepts)
 			stdout := gateStdout(t)
 			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-			if err := g.runMerge(); Code(err) != 1 {
+			if err := g.RunMerge(); Code(err) != 1 {
 				t.Fatalf("exit %d, want devctl's 1", Code(err))
 			}
 			if got := devctlCalls(t, calls); len(got) != 1 {
@@ -114,18 +121,21 @@ func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 // the pull request's break: the gate refuses it as infra, and the failed
 // attempt's reason, which wakes its owner, names the matched line and the
 // rerun of that job.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedCheckOnAnInfraFlakeIsNotThePullRequestsBreak(t *testing.T) {
 	noSystemd(t)
 	calls := acceptingDevctl(t)
 	stubGitHub(t, github.Open, "")
 	stubBase(t, github.CheckPass, true)
-	infraReds = func(context.Context, []byte) []merge.Infra {
+	gate.InfraReds = func(context.Context, []byte) []merge.Infra {
 		return []merge.Infra{{Check: "e2e-test", Repo: scratchRepo, Run: 11, Job: 12, Signature: "Go module proxy",
 			Line: `read "https://proxy.golang.org/golang.org/x/text/@v/v0.41.0.zip": stream error: stream ID 143; INTERNAL_ERROR; received from peer`}}
 	}
 	_ = gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); Code(err) != 1 {
+	if err := g.RunMerge(); Code(err) != 1 {
 		t.Fatalf("exit %d, want devctl's 1", Code(err))
 	}
 	if got := devctlCalls(t, calls); len(got) != 1 {

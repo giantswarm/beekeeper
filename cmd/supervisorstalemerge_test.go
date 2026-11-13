@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -16,6 +17,8 @@ func mergeFailureForTest(head string) string {
 	return fmt.Sprintf("merge result (main + %s) failed go test: regression", head)
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestStaleMergeResultFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -23,8 +26,8 @@ func TestStaleMergeResultFailure(t *testing.T) {
 		stale  bool
 	}{
 		{"full current", mergeFailureForTest(loopHead), false},
-		{"short current", mergeFailureForTest(shortSHA(loopHead)), false},
-		{"old head", mergeFailureForTest(shortSHA(loopFixed)), true},
+		{"short current", mergeFailureForTest(gate.ShortSHA(loopHead)), false},
+		{"old head", mergeFailureForTest(gate.ShortSHA(loopFixed)), true},
 		{"missing identity", "merge result () failed go test", true},
 		{"truncated identity", "merge result (main + ", true},
 		{"multiple results", mergeFailureForTest(loopHead) + "\n" + mergeFailureForTest(loopFixed), true},
@@ -40,6 +43,9 @@ func TestStaleMergeResultFailure(t *testing.T) {
 
 // A surrounding record naming the current head cannot relabel a diagnostic
 // from the previous merge result, whether persisted or returned synchronously.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 	for _, source := range []string{"stored", "synchronous"} {
 		t.Run(source, func(t *testing.T) {
@@ -47,7 +53,7 @@ func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 			r.park(t, loopPR, time.Now())
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
-			reason := mergeFailureForTest(shortSHA(loopFixed))
+			reason := mergeFailureForTest(gate.ShortSHA(loopFixed))
 			if source == "stored" {
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 					st.Failed = append(st.Failed, state.Failed{Repo: loopMergeRepo, PR: 7, Head: loopHead, By: loop.LoopParty, Exit: github.SquashRed, Reason: reason})
@@ -57,14 +63,14 @@ func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 				}
 			} else {
 				r.answer = func(args []string) (string, int) {
-					if len(args) > 0 && args[0] == gateCmdName {
+					if len(args) > 0 && args[0] == gate.GateCmdName {
 						return fmt.Sprintf(`{"route":%q,"repository":%q,"number":7,"headSha":%q,"reason":%q}`, reviewedMergeRoute, loopMergeRepo, loopHead, reason), github.SquashRed
 					}
 					return "", 0
 				}
 			}
 			r.pass(t)
-			if r.called(gateCmdName) == nil || r.called(agentsName, agentWakeName, loopWorker) != nil {
+			if r.called(gate.GateCmdName) == nil || r.called(agentsName, agentWakeName, loopWorker) != nil {
 				t.Fatalf("expected gate validation without repair: %v", r.calls)
 			}
 			if len(r.logged(t, loop.LoopMergeFailureDropped)) != 1 || strings.Count(r.out.String(), "SUPERVISOR MERGE DROPPED") != 1 {
@@ -74,6 +80,8 @@ func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopRetiresStalePersistedRepair(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		for _, tested := range []string{loopHead, loopFixed} {
@@ -83,7 +91,7 @@ func TestLoopRetiresStalePersistedRepair(t *testing.T) {
 				key := "go " + loopPR + "@" + loopHead + " reopened episode"
 				stage := key + " repair"
 				stages := map[string]bool{stage: true}
-				details := map[string]string{stage: mergeFailureForTest(shortSHA(tested))}
+				details := map[string]string{stage: mergeFailureForTest(gate.ShortSHA(tested))}
 				taken := []superloop.Taken{{Key: key}}
 				got, err := l.DropInvalidMergeRepairs(taken, stages, details)
 				if err != nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -212,7 +213,7 @@ var publicationGHReasons = []struct{ match, reason string }{
 	{"HTTP 5", "GitHub answered with a server error"},
 	{"could not connect", publicationUnreachable},
 	{"connection", publicationUnreachable},
-	{timeoutComm, "GitHub did not answer in time"},
+	{gate.TimeoutComm, "GitHub did not answer in time"},
 }
 
 // publicationGHReason names why a gh call failed, never its raw output.

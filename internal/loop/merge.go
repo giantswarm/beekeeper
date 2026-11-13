@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -209,7 +210,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	// The claim ends when GitHub reports the merge: the gate leaves the
 	// release wait to its merge-child (--until-merged), which records the
 	// release with the run, and the delivery observation tracks it apart.
-	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--until-merged", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
+	gateArgs := []string{gate.GateCmdName, "--wait", "0s", "--limit", "0", "--until-merged", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := BeekeeperRun(ctx, l.As(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
 		if saveErr := a.OperationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
@@ -266,18 +267,18 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		}
 		return "", MergeHeld(waitPolicy, "%s", pending)
 	}
-	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
+	if err == nil && (code == gate.ExitGateQueued || code == gate.ExitGateDuplicate && !mutationResult) {
 		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, Cmd.OneLine(out))
 		return "", MergeHeld(waitGate, "%s", pending)
 	}
 	// An unavailable read never authorizes a merge and is not a durable
 	// policy refusal. Reconsider it on a budget-admitted pass, so quota
 	// recovery does not wait for the generic exponential failure backoff.
-	if err == nil && (code == ExitGateUnread || code == ExitGateRefused && github.RateLimited(errors.New(out))) {
+	if err == nil && (code == gate.ExitGateUnread || code == gate.ExitGateRefused && github.RateLimited(errors.New(out))) {
 		pending = "GitHub read unavailable; retrying when GitHub answers: " + Cmd.OneLine(out)
 		return "", MergeHeld(WaitUnread, "%s", pending)
 	}
-	if err == nil && code == ExitGateRefused || mutationResult && code == github.SquashRefused {
+	if err == nil && code == gate.ExitGateRefused || mutationResult && code == github.SquashRefused {
 		if mutationResult && reply.Reason != "" {
 			out = reply.Reason
 		}
@@ -336,7 +337,7 @@ func StaleMergeResultFailure(reason, head string) bool {
 		}
 		identity, tail, closed := strings.Cut(rest, ")")
 		_, tested, paired := strings.Cut(identity, " + ")
-		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != Cmd.ShortSHA(head)) {
+		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != gate.ShortSHA(head)) {
 			return true
 		}
 		reason = tail

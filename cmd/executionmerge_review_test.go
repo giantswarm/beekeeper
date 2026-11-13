@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -76,6 +77,8 @@ func TestExecutionMergeWorkerApprovalCannotAuthorize(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 	cases := []struct {
 		name string
@@ -97,9 +100,9 @@ func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 			a, use, pull := mergeReviewRig(t)
 			completeMergeReview(t, a, use, &pull.Reviews[0])
 			a.cfg.Lanes = []config.Lane{{Name: "selected", Repositories: []string{use.Repository}, Installation: installationA}}
-			old := readHelmReleases
-			t.Cleanup(func() { readHelmReleases = old })
-			readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
+			old := gate.ReadHelmReleases
+			t.Cleanup(func() { gate.ReadHelmReleases = old })
+			gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				if test.hold.ExceptSession != "" {
 					test.hold.ExceptSession = st.Starts[0].Name
@@ -188,6 +191,8 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 	return *executionReviewRound(st, use)
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	completeMergeReview(t, a, use, &pull.Reviews[0])
@@ -199,9 +204,9 @@ func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 	}
 	st.Holds = []state.Hold{{Target: merge.LanePrefix + lane.Name, Except: fmt.Sprintf("%s#%d", use.Repository, use.PR)}}
 	st.Merges = []state.Merge{{Repo: "other/repository", PR: 8, Lane: lane.Name, Phase: state.Settling, Finished: time.Now()}}
-	old := readHelmReleases
-	t.Cleanup(func() { readHelmReleases = old })
-	readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	old := gate.ReadHelmReleases
+	t.Cleanup(func() { gate.ReadHelmReleases = old })
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		t.Fatal("fix window read blocked installation readiness")
 		return nil, nil
 	}
@@ -209,7 +214,7 @@ func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 		t.Fatal("explicit repair window denied", err)
 	}
 	st.Holds = nil
-	readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		return nil, fmt.Errorf("installation unavailable")
 	}
 	if err := a.executionMergeLive(context.Background(), st, use); err == nil {

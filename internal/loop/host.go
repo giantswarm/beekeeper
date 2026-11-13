@@ -162,7 +162,6 @@ type Command struct {
 	RoleRun                    func(st *state.State, p state.Party) bool
 	RunGit                     func(ctx context.Context, dir string, args ...string) ([]byte, error)
 	ShortDur                   func(d time.Duration) string
-	ShortSHA                   func(sha string) string
 	StopMerges                 func(store state.Store, by state.Party, pick func(state.Merge) bool, keepSeeded bool, how func(state.Merge) string) ([]string, error)
 	TakeOverReviewPark         func(a Host, st *state.State, rp state.ReviewPark, name string) ([]state.Event, error)
 	Truncate                   func(s string, n int) string

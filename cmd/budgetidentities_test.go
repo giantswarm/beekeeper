@@ -19,10 +19,13 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestBudgetNamesIdentitiesAndNeverReusesAnotherWindow(t *testing.T) {
 	a, out := budgetApp(t)
 	appRemaining := 4910
@@ -98,8 +101,8 @@ func TestBudgetNamesIdentitiesAndNeverReusesAnotherWindow(t *testing.T) {
 	if queries["gh"] != 1 || queries[github.IdentityApp] != 1 {
 		t.Fatalf("cache not per identity: %v", queries)
 	}
-	g := &gateRun{app: a, ctx: context.Background()}
-	minimum, err := g.gateBudget()
+	g := &gate.GateRun{Host: a, Ctx: context.Background()}
+	minimum, err := g.GateBudget()
 	if err != nil || minimum.Identity != "gh" || minimum.Remaining != 1941 || !minimum.Reset.Equal(resetGH.Truncate(time.Second)) {
 		t.Fatalf("merge gate ignored low GraphQL: %+v, %v", minimum, err)
 	}

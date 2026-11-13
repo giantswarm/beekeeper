@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
@@ -38,7 +38,7 @@ func (a *app) squashMergeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n, err := strconv.Atoi(args[1])
 			if err != nil || n <= 0 {
-				return exitCode(github.SquashTooling)
+				return gate.ExitCode(github.SquashTooling)
 			}
 			if head != "" {
 				if err := a.load(); err != nil {
@@ -47,7 +47,7 @@ func (a *app) squashMergeCmd() *cobra.Command {
 				doc := completeReviewedRelease(cmd.Context(), a.reviewedMerge(cmd.Context(), args[0], n, head), waitRelease)
 				raw, _ := json.Marshal(doc)
 				_, _ = os.Stdout.Write(append(raw, '\n'))
-				return exitCode(doc.ExitCode)
+				return gate.ExitCode(doc.ExitCode)
 			}
 			skip := os.Getenv(github.DevctlSkipVersionCheckEnv) == "true"
 			if a.cfgPath != "" || os.Getenv(beekeeperConfigEnv) != "" {
@@ -58,26 +58,11 @@ func (a *app) squashMergeCmd() *cobra.Command {
 				Progress: os.Stderr, Now: time.Now, Sleep: time.Sleep}.Run(cmd.Context())
 			raw, _ := json.MarshalIndent(doc, "", "  ")
 			_, _ = os.Stdout.Write(append(raw, '\n'))
-			return exitCode(doc.ExitCode)
+			return gate.ExitCode(doc.ExitCode)
 		},
 	}
 	c.Flags().BoolVar(&waitRelease, "release-wait", false, "confirm this merge's auto-release before saving the child outcome")
 	c.Flags().StringVar(&head, "head", "", "the supervisor reviewed head, merged once with the repository method and flags")
 	c.Flags().DurationVar(&timeout, "timeout", squashTimeout, "how long to wait for the head's checks")
 	return c
-}
-
-// squashArgv is the gate's command for repo#pr on the plain squash merge
-// route, with the caller's --timeout.
-func squashArgv(self, repo string, pr int, devctlArgv []string) []string {
-	argv := []string{self, squashMergeCmd, repo, strconv.Itoa(pr)}
-	for i, a := range devctlArgv {
-		if v, ok := strings.CutPrefix(a, "--timeout="); ok {
-			return append(argv, "--timeout", v)
-		}
-		if a == "--timeout" && i+1 < len(devctlArgv) {
-			return append(argv, "--timeout", devctlArgv[i+1])
-		}
-	}
-	return argv
 }

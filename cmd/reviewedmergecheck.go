@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -94,7 +95,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 		return false, mergeValidationUnavailable("base %s did not resolve in %s", p.Base, repoDir), github.SquashTooling
 	}
 	if !hasReviewedCommit(ctx, repoDir, head) {
-		return false, mergeValidationUnavailable("reviewed head %s is not in %s", shortSHA(head), repoDir), github.SquashTooling
+		return false, mergeValidationUnavailable("reviewed head %s is not in %s", gate.ShortSHA(head), repoDir), github.SquashTooling
 	}
 	// When the current base is already an ancestor of head, the PR's own
 	// green checks already verified the merge result.
@@ -319,7 +320,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 			}
 		}
 		if baseSHA == "" || out != "" {
-			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, shortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
+			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, gate.ShortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
 		}
 	}
 	// Keep heavyweight live canaries in full CI, outside the coordinator merge
@@ -332,7 +333,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 		if missing := mergeCheckHostDependencies(out, tracked); len(missing) > 0 {
 			return mergeValidationSkippedOnHost("go test", baseBranch, head, missing), 0
 		}
-		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
+		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, gate.ShortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
 	if len(lintMissing) > 0 {
 		return mergeValidationSkippedOnHost(mergeLintCommand, baseBranch, head, lintMissing), 0
@@ -344,7 +345,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 // stopped on native build dependencies the checker host lacks.
 func mergeValidationSkippedOnHost(check, baseBranch, head string, missing []string) string {
 	return fmt.Sprintf("%s: the checker host lacks the build dependency %s that %s of %s + %s needs; the pull request's own checks stand",
-		reasonMergeValidationSkipped, strings.Join(missing, ", "), check, baseBranch, shortSHA(head))
+		reasonMergeValidationSkipped, strings.Join(missing, ", "), check, baseBranch, gate.ShortSHA(head))
 }
 
 const (

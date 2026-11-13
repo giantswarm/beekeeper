@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -52,6 +53,8 @@ func TestWatchSettlesALostMerge(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.now = relayNow
@@ -68,7 +71,7 @@ func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := mergeBase(w.store.Dir(), "o/doc", 1)
+	base := gate.MergeBase(w.store.Dir(), "o/doc", 1)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}

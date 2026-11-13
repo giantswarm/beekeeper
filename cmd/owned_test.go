@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -82,9 +83,9 @@ func tellOwnerRun(t *testing.T, owner state.Party) (*app, childResult, *[]string
 	}); err != nil {
 		t.Fatal(err)
 	}
-	infra := infraReds
-	infraReds = func(context.Context, []byte) []merge.Infra { return nil }
-	t.Cleanup(func() { infraReds = infra })
+	infra := gate.InfraReds
+	gate.InfraReds = func(context.Context, []byte) []merge.Infra { return nil }
+	t.Cleanup(func() { gate.InfraReds = infra })
 	var woke []string
 	was := wakeOwner
 	wakeOwner = func(_ *app, _ context.Context, by state.Party, q, msg, _ string) error {
@@ -93,7 +94,7 @@ func tellOwnerRun(t *testing.T, owner state.Party) (*app, childResult, *[]string
 	}
 	t.Cleanup(func() { wakeOwner = was })
 	r := childResult{
-		spec: childSpec{Argv: strings.Fields("/usr/bin/devctl pr wait o/r 7"), Owner: owner, Gate: 0},
+		spec: gate.ChildSpec{Argv: strings.Fields("/usr/bin/devctl pr wait o/r 7"), Owner: owner, Gate: 0},
 		base: filepath.Join(store.Dir(), ownedRuns, "pr-wait-o_r-7-1"),
 		rc:   0, doc: []byte(greenDoc), last: "checks pending", kept: "/k/pr-wait.log",
 	}
@@ -201,10 +202,13 @@ func TestRunReason(t *testing.T) {
 
 // A second merge of a pull request whose merge runs is refused with exit 3
 // and the running one's start, owner and last line.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
-	base, err := g.mergeFiles()
+	base, err := g.MergeFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +216,11 @@ func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := *g
-	second.pid, second.me = g.pid+1, state.Party{Name: "second"}
-	_, err = second.step()
+	second.Pid, second.Me = g.Pid+1, state.Party{Name: "second"}
+	_, err = second.Step()
 	var e *exitError
-	if !errors.As(err, &e) || e.code != ExitGateDuplicate {
-		t.Fatalf("got %v, want exit %d", err, ExitGateDuplicate)
+	if !errors.As(err, &e) || e.code != gate.ExitGateDuplicate {
+		t.Fatalf("got %v, want exit %d", err, gate.ExitGateDuplicate)
 	}
 	d := lastEvent(t, g, "merge.refused")
 	for _, want := range []string{"o/r#7 is already merging: started", `by "worker"`, "last line: waiting for the release v1.2.4", "do not merge again"} {
@@ -224,7 +228,7 @@ func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 			t.Errorf("refusal %q lacks %q", d, want)
 		}
 	}
-	if st := gateState(t, g); len(st.Merges) != 1 || st.Merges[0].PID != g.pid {
+	if st := gateState(t, g); len(st.Merges) != 1 || st.Merges[0].PID != g.Pid {
 		t.Errorf("merges %+v", st.Merges)
 	}
 }
@@ -288,19 +292,22 @@ func TestAWaiterWhoseOwnerLeftTheRosterIsWokenBySession(t *testing.T) {
 
 // merge-child records the SIGTERM that stops it as the run's stop, passes it
 // on to its command and keeps it across the re-exec of a replaced binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeChildRecordsItsStop(t *testing.T) {
 	fakeDevctl(t, `echo "queued" >&2; exec sleep 30`)
 	base := filepath.Join(t.TempDir(), ownedRuns, "pr-merge-o_r-7-1")
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(childSpec{Argv: mergeArgv("o/r"), Env: os.Environ()})
+	raw, _ := json.Marshal(gate.ChildSpec{Argv: mergeArgv("o/r"), Env: os.Environ()})
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	go func() {
-		for deadline := time.Now().Add(childStart); readPID(base) == 0 && time.Now().Before(deadline); {
-			time.Sleep(followPoll)
+		for deadline := time.Now().Add(gate.ChildStart); readPID(base) == 0 && time.Now().Before(deadline); {
+			time.Sleep(gate.FollowPoll)
 		}
 		time.Sleep(300 * time.Millisecond)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
@@ -318,6 +325,9 @@ func TestMergeChildRecordsItsStop(t *testing.T) {
 // route a wait takes: owned, unowned (no state), and owned without its run
 // files (the gate's own line). The gate's lines and devctl's progress go to
 // stderr, so `<gated wait> | jq .` parses.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 	const doc = `{"verdict":"available","reason":""}`
 	for _, c := range []struct {
@@ -343,7 +353,7 @@ func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 				t.Fatal(err)
 			}
 			return s
-		}, said: GatePrefix},
+		}, said: gate.GatePrefix},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			noSystemd(t)
@@ -371,11 +381,14 @@ func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 // A red merge whose check died on a transient infrastructure failure wakes
 // its owner naming the matched line and the job's rerun, not as the pull
 // request's break alone.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedRunOnAnInfraFlakeWakesItsOwnerWithTheRerun(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
-	was := infraReds
-	t.Cleanup(func() { infraReds = was })
-	infraReds = func(_ context.Context, doc []byte) []merge.Infra {
+	was := gate.InfraReds
+	t.Cleanup(func() { gate.InfraReds = was })
+	gate.InfraReds = func(_ context.Context, doc []byte) []merge.Infra {
 		if !merge.Red(doc) {
 			t.Errorf("infra read for a document that is not red")
 		}
