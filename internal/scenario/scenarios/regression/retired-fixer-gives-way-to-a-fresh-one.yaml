@@ -1,7 +1,7 @@
 name: retired-fixer-gives-way-to-a-fresh-one
 description: >
-  A task's worker runs on an SSH execution host, publishes its pull request
-  and parks on it; the loop ends the execution for the desk review and keeps
+  A worker started on an SSH execution host publishes its pull request and
+  parks on it; the loop ends the execution for the desk review and keeps
   its review park. A red check gets a fresh fixer under the worker's name,
   whose execution crashes and is retired: the entry stays on the roster, and
   no message reaches its execution any more. When the next check turns red,
@@ -24,8 +24,10 @@ given:
   github:
     repositories:
       - name: example/app
+        # No board item: the worker is started by hand, so the refill starts
+        # no worker of its own for the issue under the same name.
         issues:
-          - {number: 1, title: First item, board: Ready}
+          - {number: 1, title: First item}
   harness:
     # Usage on pace: neither ahead of it nor far behind.
     usage:
@@ -73,11 +75,18 @@ when:
     run: {args: [watch, --once]}
     expect:
       - exit: 0
-  - name: start
+  # The loop runs before the park: a park from before its first pass is no
+  # request for a review.
+  - name: first
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-      - events: {contains: [agents.start]}
+  - advance: 2s
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app 1, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
   - wait_for:
       timeout: 30s
       expect:
@@ -95,7 +104,7 @@ when:
       - exit: 0
       - events: {contains: [agents.park, agents.remove]}
   # A red check: the worker is off the roster, so a fresh fixer takes the
-  # name, and its execution crashes.
+  # name: the pass reserves its execution on the host, which crashes.
   - advance: 2s
   - name: build-red
     github: {check: {repo: example/app, pull: 2, name: build, state: red}}
@@ -103,7 +112,7 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-      - events: {contains: [supervisor.red]}
+      - events: {contains: [execution.reserved, agents.start]}
   - wait_for:
       timeout: 30s
       expect:

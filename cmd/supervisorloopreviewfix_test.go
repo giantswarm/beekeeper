@@ -115,7 +115,7 @@ func TestReworkReplacesEndedSSHWorker(t *testing.T) {
 			r.Retirement = &state.ExecutionRetirement{ID: "retirement", Trigger: execution.RetireTriggerCrash}
 		}},
 		{name: "stopped execution", replace: true, end: func(r *state.ExecutionRecord) {
-			r.StopRequest = &execution.StopRequest{ID: "stop", Reason: "stopped by hand"}
+			r.StopRequest = &execution.StopRequest{ID: "hand-stop", Reason: "stopped by hand"}
 			r.Observation.StopAcknowledged = true
 		}},
 		{name: "released reservation", replace: true, end: func(r *state.ExecutionRecord) { r.ReleasedAt = time.Now() }},
@@ -134,7 +134,7 @@ func TestReworkReplacesEndedSSHWorker(t *testing.T) {
 			}
 			tc.end(rec)
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = append(st.Agents, state.Agent{Party: party, Execution: &ref, Task: "the task"})
+				st.Agents = append(st.Agents, state.Agent{Party: party, Execution: &ref, Task: "fix the pull request"})
 				st.Starts = append(st.Starts, state.Start{Party: party, Execution: rec})
 				return nil, nil
 			}); err != nil {
