@@ -125,3 +125,30 @@ func TestPlacementRetryRecoversAnIssueWhoseCreateResponseWasLost(t *testing.T) {
 		t.Fatalf("retry: %s %v, creates=%d", url, err, posts)
 	}
 }
+
+func TestPlaceLeavesMissingRepositoriesAndDisabledIssuesToTheGuide(t *testing.T) {
+	report := Report{Repo: findingRepo, Title: findingTitle, Body: findingBody}
+	missing := func(context.Context, ...string) ([]byte, error) {
+		return nil, errors.New("gh api repos/example/app/issues: exit status 1: gh: Not Found (HTTP 404)")
+	}
+	if _, err := Place(context.Background(), missing, report); !errors.Is(err, ErrUnplaced) {
+		t.Fatalf("missing repository stays pending: %v", err)
+	}
+	calls := 0
+	disabled := func(context.Context, ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte(`[[{"number":3,"title":"Another finding"}]]`), nil
+		}
+		return nil, errors.New("gh: Issues are disabled for this repo (HTTP 410)")
+	}
+	if _, err := Place(context.Background(), disabled, report); !errors.Is(err, ErrUnplaced) || calls != 2 {
+		t.Fatalf("disabled issues stay pending: %v, calls=%d", err, calls)
+	}
+	transient := func(context.Context, ...string) ([]byte, error) {
+		return nil, errors.New("gh: Bad Gateway (HTTP 502)")
+	}
+	if _, err := Place(context.Background(), transient, report); err == nil || errors.Is(err, ErrUnplaced) {
+		t.Fatalf("a transient failure must stay pending, not reach the guide: %v", err)
+	}
+}

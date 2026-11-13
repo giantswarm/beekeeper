@@ -244,9 +244,11 @@ and ranks it by its originating item and the board rules.
 
 Findings use one serialized stream. Durable receipts remember reports already placed across loop
 restarts and reporter assignments, so an old repeated report cannot overwrite newer facts. Board
-intake is retried after placement without creating another issue. Failed GitHub reads and writes
+intake is retried after placement without creating another issue. Other failed GitHub reads and writes
 remain pending; an unread inventory is never treated as empty.
 
-Free prose, ambiguous titles, a closed explicit target, an owner outside the configured scope, or
-an unconfigured board leave the full finding for `GUIDE PROBLEM`. The guide follows the same rule:
-known findings add nothing, new facts rewrite descriptions, and only new findings create issues.
+Free prose, ambiguous titles, a closed explicit target, an owner outside the configured scope, a
+repository GitHub does not find or whose issues are disabled, or an unconfigured board leave the
+full finding for `GUIDE PROBLEM`. So do the one-line findings of a final report, which the loop
+delivers together. The guide follows the same rule: known findings add nothing, new facts rewrite
+descriptions, and only new findings create issues.

@@ -60,8 +60,35 @@ func TestFindingWithoutAConfiguredProjectStaysWithTheGuide(t *testing.T) {
 	cfg.GitHub.AllowedOrgs = []string{"example"}
 	l := Loop{Host: findingHost{cfg: cfg}}
 	const report = "example/app: Queue stalls\n\nThe queue stalls."
-	line, err := l.toFile(context.Background(), &state.State{}, superloop.Action{Message: report, Event: &superloop.Event{Agent: "reporter"}})
+	line, err := l.toFile(context.Background(), &state.State{}, superloop.Action{Message: report, Event: &superloop.Event{Verb: superloop.VerbProblem, Agent: "reporter"}})
 	if err != nil || !strings.Contains(line, FileReportSeparator+report) {
 		t.Fatalf("lost unplaceable finding: %q %v", line, err)
+	}
+}
+
+func TestJoinedFinalReportFindingsStayWithTheGuide(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Board.Owner = "acme"
+	cfg.Board.Project = 1
+	cfg.GitHub.AllowedOrgs = []string{"acme"}
+	previous := github.RunGH
+	t.Cleanup(func() { github.RunGH = previous })
+	calls := 0
+	github.RunGH = func(context.Context, ...string) ([]byte, error) {
+		calls++
+		return []byte(`[[]]`), nil
+	}
+	l := Loop{Host: findingHost{store: store, cfg: cfg}}
+	// A done's file action joins its report's unfiled one-line findings. The
+	// first one's repository prefix must not turn the rest into an issue body.
+	const joined = "acme/app: Queue stalls when the lease expires\nacme/app: Heartbeat lost on reconnect"
+	done := superloop.Event{Verb: superloop.VerbDone, Agent: "finder"}
+	line, err := l.toFile(context.Background(), &state.State{}, superloop.Action{Kind: superloop.KindFile, Message: joined, Event: &done})
+	if err != nil || calls != 0 || !strings.Contains(line, FileReportSeparator+joined) {
+		t.Fatalf("joined findings placed as one issue: %q %v, GitHub calls=%d", line, err, calls)
 	}
 }

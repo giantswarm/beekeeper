@@ -57,6 +57,13 @@ type issue struct {
 
 func normalized(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 
+// unplaceable is an answer no retry changes: GitHub does not find the
+// repository for the desk's credential (a misspelt or unreadable owner), or
+// its issues are disabled. Retrying it would hold the reporter's done forever.
+func unplaceable(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "HTTP 410"))
+}
+
 // Place reads the entire open inventory before any write. Re-reading it on a
 // retry recovers an issue created before an interrupted board intake. Nothing
 // here posts comments. An ambiguous title or a closed explicit target is not a
@@ -64,6 +71,9 @@ func normalized(s string) string { return strings.ToLower(strings.Join(strings.F
 func Place(ctx context.Context, gh github.GH, r Report) (string, error) {
 	ctx = github.ActingOn(ctx, r.Repo)
 	raw, err := gh(ctx, apiCommand, "repos/"+r.Repo+"/issues?state=open&per_page=100", "--paginate", "--slurp")
+	if unplaceable(err) {
+		return "", fmt.Errorf("%w: %s has no issues to read: %w", ErrUnplaced, r.Repo, err)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -103,6 +113,9 @@ func Place(ctx context.Context, gh github.GH, r Report) (string, error) {
 		return fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, i.Number), nil
 	}
 	raw, err = gh(ctx, apiCommand, "repos/"+r.Repo+"/issues", "--method", "POST", "-f", "title="+r.Title, "-f", "body="+r.Body)
+	if unplaceable(err) {
+		return "", fmt.Errorf("%w: %s accepts no issue: %w", ErrUnplaced, r.Repo, err)
+	}
 	if err != nil {
 		return "", err
 	}

@@ -4554,8 +4554,11 @@ const FileReportSeparator = "; file in the owning repositories:\n"
 
 // toFile places current findings itself. Only an unplaceable report keeps
 // the separator the guide consumes; successful placement creates no guide work.
+// Only an action carrying one agents.problem is a report: a done's action
+// joins its unfiled one-line findings, which would otherwise parse as one
+// finding titled by the first and described by the rest.
 func (l *Loop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if report, ok := findings.Parse(act.Message); ok {
+	if report, ok := findings.Parse(act.Message); ok && act.Event != nil && act.Event.Verb == superloop.VerbProblem {
 		if _, why := (superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Never: l.Host.Cfg().Supervisor.Ownership.Never}).Unread(report.Repo + "#1"); why == "" && l.Host.Cfg().Board.Owner != "" && l.Host.Cfg().Board.Project > 0 {
 			url, err := l.placeFinding(ctx, report)
 			if err != nil && !errors.Is(err, findings.ErrUnplaced) {
