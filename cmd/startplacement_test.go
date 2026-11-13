@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"slices"
 	"strings"
@@ -63,8 +64,33 @@ func TestHandStartIsPlacedOnTheFirstHostThatTakesIt(t *testing.T) {
 	}
 }
 
-// The repository a start names is --repo, else its brief's, else its
-// checkout's GitHub origin; a --ref given pins the start instead of the
+// With --json the placement line goes to stderr: stdout is the start's
+// JSON answer alone.
+func TestHandStartPlacementLineLeavesJSONOutAlone(t *testing.T) {
+	a, brief, _, _ := handPlacementTestApp(t)
+	a.json = true
+	var stderr bytes.Buffer
+	c := a.agentsCmd()
+	usageArgs(c)
+	c.SetArgs([]string{agentStartName, "--name", "hand", brief, "--repo", sshTestRepository, "--harness", claudeComm, "--model", bgModel})
+	c.SetOut(a.out)
+	c.SetErr(&stderr)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	if err := c.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("hand start: %v\n%s\n%s", err, a.out, &stderr)
+	}
+	placed := "placed on " + sshTestSelector + " by supervisor.hostsFirst"
+	if out := a.out.(*bytes.Buffer).String(); strings.Contains(out, placed) {
+		t.Fatalf("placement line on stdout under --json:\n%s", out)
+	}
+	if !strings.Contains(stderr.String(), placed) {
+		t.Fatalf("placement line missing on stderr:\n%s", &stderr)
+	}
+}
+
+// The repository a start names is --repo, else the GitHub origin of the
+// checkout --dir names, else its brief's, else the origin of agents.dir or
+// the current directory; a --ref given pins the start instead of the
 // default branch.
 func TestHandStartPlacementRepositoryAndRef(t *testing.T) {
 	a, _, looked, _ := handPlacementTestApp(t)
@@ -86,7 +112,19 @@ func TestHandStartPlacementRepositoryAndRef(t *testing.T) {
 	if repo, err := a.handStartRepository(ctx, "", "no repository here", checkout); err != nil || repo != sshTestRepository {
 		t.Fatalf("checkout's origin: %q, %v", repo, err)
 	}
-	if _, err := a.handStartRepository(ctx, "", "https://github.com/example/one/issues/1 example/two#2", checkout); err == nil || !strings.Contains(err.Error(), "several repositories") {
+	// --dir's checkout outranks a repository the brief only cites.
+	if repo, err := a.handStartRepository(ctx, "", "Work https://github.com/example/one/issues/1", checkout); err != nil || repo != sshTestRepository {
+		t.Fatalf("--dir's origin over the brief's: %q, %v", repo, err)
+	}
+	// A --dir without a GitHub origin leaves the brief's.
+	originless := t.TempDir()
+	if _, err := runGit(ctx, originless, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if repo, err := a.handStartRepository(ctx, "", "Work https://github.com/example/one/issues/1", originless); err != nil || repo != "example/one" {
+		t.Fatalf("brief's past an origin-less --dir: %q, %v", repo, err)
+	}
+	if _, err := a.handStartRepository(ctx, "", "https://github.com/example/one/issues/1 example/two#2", ""); err == nil || !strings.Contains(err.Error(), "several repositories") {
 		t.Fatalf("two repositories: %v", err)
 	}
 }

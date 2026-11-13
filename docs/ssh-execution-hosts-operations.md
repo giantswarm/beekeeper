@@ -591,13 +591,15 @@ exact head and reported review before a merge.
 A start by hand, `agents start` or `emergency start` without `--host`, is placed the same way:
 on the first of `supervisor.hosts` that maps its repository, lists its harness and has room
 (`capacity --host`), pinned to `--ref`, else to the repository's default branch. Its repository is
-`--repo`, else the one its brief names, else the origin of its checkout; the host's workspace takes
-the place of `--dir` and `--branch`. Its first line says where it went: `placed on <host> by
+`--repo`, else the origin of the checkout `--dir` names, else the one its brief names, else the
+origin of `agents.dir` or the current directory; the host's workspace takes the place of `--dir`
+and `--branch`. Its first line says where it went: `placed on <host> by
 supervisor.hostsFirst: …`, or `on this machine: <why>` with each host's reason when none takes it,
 and the start then runs here within the coordinator's guards. One that names `--repo` or `--ref` is
 refused with those reasons instead. A review, a timer's start, `--desktop`, a `--mode` other than
 `headless` and `--host local` stay on the coordinator; so does every hand start under
-`supervisor.hostsFirst: false`. `--dry-run` shows the placement without starting.
+`supervisor.hostsFirst: false`. The fatal sentinel's repair passes `--host local`: it works in the
+coordinator's checkout and proves its probe there. `--dry-run` shows the placement without starting.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots

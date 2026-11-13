@@ -18,7 +18,8 @@
 # supervisor; missed timer firing/check deadlines are fatal after 2m grace.
 # `beekeeper install --recovery-only` installs these independent services
 # without restoring hooks, watch or loop that were deliberately uninstalled.
-# Stop/holds/capacity still govern repairs; three attempts,
+# Stop/holds/capacity still govern repairs, which run on this machine
+# (--host local, never placed on supervisor.hosts); three attempts,
 # ten minutes apart, with only one repair owner at a time. Only a passing
 # probe clears an outage; unreadable is unknown. Inspect: beekeeper fatal status.
 # A red repository default branch holds only merges into that branch (except

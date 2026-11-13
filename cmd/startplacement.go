@@ -143,12 +143,19 @@ func (a *app) placementBrief(path string) string {
 	return brief
 }
 
-// handStartRepository is the repository a start names: --repo, else the one
-// its brief names, else the origin of its checkout (--dir, else agents.dir,
-// else the current directory).
+// handStartRepository is the repository a start names: --repo, else the
+// origin of the checkout --dir names (the one a worker start works in),
+// else the one its brief names, else the origin of agents.dir or the
+// current directory. A repository the brief merely cites never moves a
+// start out of the checkout --dir gave it.
 func (a *app) handStartRepository(ctx context.Context, repository, brief, dir string) (string, error) {
 	if r := strings.TrimSpace(repository); r != "" {
 		return r, nil
+	}
+	if dir != "" {
+		if r := a.checkoutRepository(ctx, dir); r != "" {
+			return r, nil
+		}
 	}
 	switch repos := briefRepositories(brief); len(repos) {
 	case 0:
@@ -157,14 +164,24 @@ func (a *app) handStartRepository(ctx context.Context, repository, brief, dir st
 	default:
 		return "", fmt.Errorf("the brief names several repositories (%s)", strings.Join(repos, ", "))
 	}
-	checkout, err := a.agentDir(dir, "")
-	if err == nil {
-		var out []byte
-		if out, err = runGit(ctx, checkout, gitRemoteCommand, "get-url", workerGitHubOrigin); err == nil {
-			if r := execution.RepositoryIdentity(string(out)); r != "" {
-				return r, nil
-			}
+	if dir == "" {
+		if r := a.checkoutRepository(ctx, ""); r != "" {
+			return r, nil
 		}
 	}
-	return "", fmt.Errorf("the start names no repository: no --repo, none in its brief and no GitHub origin of its checkout")
+	return "", fmt.Errorf("the start names no repository: no --repo, no GitHub origin of its checkout and none in its brief")
+}
+
+// checkoutRepository is the GitHub repository of a checkout's origin (dir,
+// else agents.dir, else the current directory), "" when it has none.
+func (a *app) checkoutRepository(ctx context.Context, dir string) string {
+	checkout, err := a.agentDir(dir, "")
+	if err != nil {
+		return ""
+	}
+	out, err := runGit(ctx, checkout, gitRemoteCommand, "get-url", workerGitHubOrigin)
+	if err != nil {
+		return ""
+	}
+	return execution.RepositoryIdentity(string(out))
 }
