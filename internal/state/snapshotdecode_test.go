@@ -42,20 +42,20 @@ func TestDecodeReusingEqualsWholeDecode(t *testing.T) {
 		t.Fatal(err)
 	}
 	docs := map[string]string{
-		"pretty":   string(encoded),
-		"compact":  string(compact),
-		"unknown":  `{"future":{"a":[1,2]},"notes":[{"id":1,"text":"x","later":true},null,{"id":2}],"nextNote":3,"supervisor":{"x":1}}`,
-		"empty":    `{"notes":[],"starts":null,"agents":[ ],"guideReports":["a", "b" ,"c"]}`,
-		"spaces":   " \n{ \"notes\" : [ { \"id\" : 1 } , { \"id\" : 2 } ] , \"nextNote\" : 1 } \n",
-		"case":     `{"Notes":[{"id":1}],"notes":[{"id":2}]}`,
-		"twice":    `{"notes":[{"id":1}],"notes":[{"id":2}]}`,
-		"string":   `{"notes":"not an array"}`,
-		"element":  `{"notes":[{"id":"one"}]}`,
-		"trailing": `{"notes":[{"id":1}]} x`,
-		"cut":      `{"notes":[{"id":1}`,
-		"null":     `null`,
-		"array":    `[]`,
-		"nothing":  ``,
+		"pretty":    string(encoded),
+		"compact":   string(compact),
+		"unknown":   `{"future":{"a":[1,2]},"notes":[{"id":1,"text":"x","later":true},null,{"id":2}],"nextNote":3,"supervisor":{"x":1}}`,
+		"empty":     `{"notes":[],"starts":null,"agents":[ ],"guideReports":["a", "b" ,"c"]}`,
+		"spaces":    " \n{ \"notes\" : [ { \"id\" : 1 } , { \"id\" : 2 } ] , \"nextNote\" : 1 } \n",
+		"case":      `{"Notes":[{"id":1}],"notes":[{"id":2}]}`,
+		"twice":     `{"notes":[{"id":1}],"notes":[{"id":2}]}`,
+		"string":    `{"notes":"not an array"}`,
+		"element":   `{"notes":[{"id":"one"}]}`,
+		"trailing":  `{"notes":[{"id":1}]} x`,
+		"cut":       `{"notes":[{"id":1}`,
+		"no object": `null`,
+		"array":     `[]`,
+		"nothing":   ``,
 	}
 	for name, doc := range docs {
 		t.Run(name, func(t *testing.T) {
