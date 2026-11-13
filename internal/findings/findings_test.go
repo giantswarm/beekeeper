@@ -9,10 +9,10 @@ import (
 )
 
 const (
+	findingRepo  = "example/app"
 	findingTitle = "Queue stalls"
 	findingBody  = "Facts"
 	findingURL   = "https://github.com/example/app/issues/2"
-	apiCommand   = "api"
 )
 
 func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
@@ -33,7 +33,7 @@ func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
 				}
 				return []byte(`{}`), nil
 			}
-			url, err := Place(context.Background(), gh, Report{Repo: "example/app", Title: findingTitle, Body: tc.body})
+			url, err := Place(context.Background(), gh, Report{Repo: findingRepo, Title: findingTitle, Body: tc.body})
 			if err != nil || url != findingURL {
 				t.Fatalf("%s: %v", url, err)
 			}
@@ -57,12 +57,12 @@ func TestPlaceReadsAllPagesAndOnlyRewritesNewFacts(t *testing.T) {
 func TestPlaceNeverCreatesOnUnreadOrAmbiguousInventory(t *testing.T) {
 	for _, raw := range []string{`broken`, `null`, `[]`, `[null]`, `[[{"number":1,"title":"Queue stalls"},{"number":2,"title":"Queue stalls"}]]`} {
 		count := 0
-		_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { count++; return []byte(raw), nil }, Report{Repo: "example/app", Title: findingTitle, Body: findingBody})
+		_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { count++; return []byte(raw), nil }, Report{Repo: findingRepo, Title: findingTitle, Body: findingBody})
 		if err == nil || count != 1 {
 			t.Fatalf("%q: calls=%d error=%v", raw, count, err)
 		}
 	}
-	_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { return []byte(`[[]]`), nil }, Report{Repo: "example/app", Number: 9, Title: findingTitle, Body: findingBody})
+	_, err := Place(context.Background(), func(context.Context, ...string) ([]byte, error) { return []byte(`[[]]`), nil }, Report{Repo: findingRepo, Number: 9, Title: findingTitle, Body: findingBody})
 	if !errors.Is(err, ErrUnplaced) {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestPlaceCreatesOneIssueAndIgnoresPulls(t *testing.T) {
 			t.Fatal(args)
 		}
 		return []byte(`{"number":2}`), nil
-	}, Report{Repo: "example/app", Title: findingTitle, Body: findingBody})
+	}, Report{Repo: findingRepo, Title: findingTitle, Body: findingBody})
 	if err != nil || calls != 2 || url != findingURL {
 		t.Fatalf("%s %v calls=%d", url, err, calls)
 	}
@@ -88,7 +88,7 @@ func TestPlaceCreatesOneIssueAndIgnoresPulls(t *testing.T) {
 func TestParseRequiresExplicitOwnerAndCurrentDescription(t *testing.T) {
 	for _, text := range []string{"example/app: Queue stalls\n\nFacts", "https://github.com/example/app/issues/2: Queue stalls\n\nFacts"} {
 		r, ok := Parse(text)
-		if !ok || r.Repo != "example/app" || r.Body != findingBody || r.Title != findingTitle {
+		if !ok || r.Repo != findingRepo || r.Body != findingBody || r.Title != findingTitle {
 			t.Fatalf("%+v %v", r, ok)
 		}
 		if strings.Contains(text, "issues/2") && r.Number != 2 {
@@ -116,7 +116,7 @@ func TestPlacementRetryRecoversAnIssueWhoseCreateResponseWasLost(t *testing.T) {
 		}
 		return []byte(`[[]]`), nil
 	}
-	report := Report{Repo: "example/app", Title: findingTitle, Body: findingBody}
+	report := Report{Repo: findingRepo, Title: findingTitle, Body: findingBody}
 	if _, err := Place(context.Background(), gh, report); err == nil {
 		t.Fatal("lost response was ignored")
 	}

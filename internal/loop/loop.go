@@ -4556,7 +4556,7 @@ const FileReportSeparator = "; file in the owning repositories:\n"
 // the separator the guide consumes; successful placement creates no guide work.
 func (l *Loop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	if report, ok := findings.Parse(act.Message); ok {
-		if _, why := (superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Never: l.Host.Cfg().Supervisor.Ownership.Never}).Unread(report.Repo + "#1"); why == "" && l.Host.Cfg().Board.Owner != "" {
+		if _, why := (superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Never: l.Host.Cfg().Supervisor.Ownership.Never}).Unread(report.Repo + "#1"); why == "" && l.Host.Cfg().Board.Owner != "" && l.Host.Cfg().Board.Project > 0 {
 			url, err := l.placeFinding(ctx, report)
 			if err != nil && !errors.Is(err, findings.ErrUnplaced) {
 				return "", err

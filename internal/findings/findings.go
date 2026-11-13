@@ -26,6 +26,8 @@ type Report struct {
 // ErrUnplaced leaves ambiguous ownership to the guide, without a mutation.
 var ErrUnplaced = errors.New("finding needs disambiguation")
 
+const apiCommand = "api"
+
 var header = regexp.MustCompile(`^(?:https://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/issues/([0-9]+))?:[ \t]+([^\n]+)\n+([\s\S]+)$`)
 
 // Parse accepts an explicit owner, stable title and complete current body.
@@ -61,7 +63,7 @@ func normalized(s string) string { return strings.ToLower(strings.Join(strings.F
 // license to create another issue.
 func Place(ctx context.Context, gh github.GH, r Report) (string, error) {
 	ctx = github.ActingOn(ctx, r.Repo)
-	raw, err := gh(ctx, "api", "repos/"+r.Repo+"/issues?state=open&per_page=100", "--paginate", "--slurp")
+	raw, err := gh(ctx, apiCommand, "repos/"+r.Repo+"/issues?state=open&per_page=100", "--paginate", "--slurp")
 	if err != nil {
 		return "", err
 	}
@@ -94,13 +96,13 @@ func Place(ctx context.Context, gh github.GH, r Report) (string, error) {
 		if strings.TrimSpace(i.Body) != strings.TrimSpace(r.Body) {
 			// The reporter supplies the complete current description. Replace it in
 			// place, preserving no timestamps, repetition counts or comment history.
-			if _, err := gh(ctx, "api", fmt.Sprintf("repos/%s/issues/%d", r.Repo, i.Number), "--method", "PATCH", "-f", "body="+r.Body); err != nil {
+			if _, err := gh(ctx, apiCommand, fmt.Sprintf("repos/%s/issues/%d", r.Repo, i.Number), "--method", "PATCH", "-f", "body="+r.Body); err != nil {
 				return "", err
 			}
 		}
 		return fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, i.Number), nil
 	}
-	raw, err = gh(ctx, "api", "repos/"+r.Repo+"/issues", "--method", "POST", "-f", "title="+r.Title, "-f", "body="+r.Body)
+	raw, err = gh(ctx, apiCommand, "repos/"+r.Repo+"/issues", "--method", "POST", "-f", "title="+r.Title, "-f", "body="+r.Body)
 	if err != nil {
 		return "", err
 	}

@@ -4,17 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 type findingHost struct {
 	Host
 	store state.Store
+	cfg   *config.Config
 }
+
+func (h findingHost) Cfg() *config.Config { return h.cfg }
 
 func (h findingHost) Store() state.Store                                             { return h.store }
 func (h findingHost) LoopGitHub(_ context.Context, _ string, run func() error) error { return run() }
@@ -45,5 +51,17 @@ func TestFindingReceiptsRespectExplicitTargetsAcrossRestarts(t *testing.T) {
 	l := Loop{Host: findingHost{store: store}}
 	if _, err := l.placeFinding(context.Background(), findings.Report{Repo: "example/app", Title: "Queue stalls", Body: "Facts"}); !errors.Is(err, findings.ErrUnplaced) {
 		t.Fatalf("ambiguous receipt: %v", err)
+	}
+}
+
+func TestFindingWithoutAConfiguredProjectStaysWithTheGuide(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Board.Owner = "example"
+	cfg.GitHub.AllowedOrgs = []string{"example"}
+	l := Loop{Host: findingHost{cfg: cfg}}
+	const report = "example/app: Queue stalls\n\nThe queue stalls."
+	line, err := l.toFile(context.Background(), &state.State{}, superloop.Action{Message: report, Event: &superloop.Event{Agent: "reporter"}})
+	if err != nil || !strings.Contains(line, FileReportSeparator+report) {
+		t.Fatalf("lost unplaceable finding: %q %v", line, err)
 	}
 }
