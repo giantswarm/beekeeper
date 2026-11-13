@@ -119,7 +119,9 @@ when:
       timeout: 30s
       expect:
         - worker: {name: 'app 2 first next-[0-9a-f]+', turns: 1, running: true}
-  - advance: 2s
+  # The second session's turn has been quiet for longer than the 30 s in
+  # which a session still counts as running its turn: it can be retired.
+  - advance: 45s
   # Someone else wakes the second session for the same conflict.
   - name: wake
     run: {args: [--as, guide, agents, wake, app 2 second, "https://github.com/example/app/pull/2 conflicts with main: merge main into it"]}
