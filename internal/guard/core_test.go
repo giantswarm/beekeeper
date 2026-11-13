@@ -1,15 +1,17 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func TestRunCoreLimits(t *testing.T) {
@@ -76,7 +78,7 @@ func TestCoreCommandLowersARaisedSoftLimitInEachShell(t *testing.T) {
 	var shells []string
 	seen := map[string]bool{}
 	for _, name := range []string{"sh", "dash", "bash"} {
-		path, err := exec.LookPath(name)
+		path, err := proc.LookPath(name)
 		if err != nil {
 			continue
 		}
@@ -99,7 +101,7 @@ func TestCoreCommandLowersARaisedSoftLimitInEachShell(t *testing.T) {
 			wrapped[0] = shell
 			raise := []string{shell, "-c", `ulimit -S -c "$(ulimit -H -c)" || exit 99; exec "$@"`, "raise"}
 			argv := slices.Concat(raise, wrapped)
-			out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // owned test command
+			out, err := proc.CommandContext(context.Background(), argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // owned test command
 			if err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
@@ -117,7 +119,7 @@ func TestCoreCommandPreservesLimitsAndArguments(t *testing.T) {
 	}
 	for _, core := range []bool{false, true} {
 		argv := coreCommand([]string{"sh", "-c", "printf '%s\\n' \"$1\"; ulimit -S -c; ulimit -H -c", "test", "argument with spaces; $HOME"}, core)
-		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // owned test command
+		out, err := proc.CommandContext(context.Background(), argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // owned test command
 		if err != nil {
 			t.Fatalf("%v: %s", err, out)
 		}

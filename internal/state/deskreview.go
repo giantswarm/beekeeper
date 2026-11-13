@@ -53,6 +53,10 @@ type ReviewPark struct {
 	Serves     string         `json:"serves,omitempty"`
 	PostMerge  *string        `json:"postMerge,omitempty"`
 	Worktree   string         `json:"worktree,omitempty"`
+	// Continuing names the fresh session the loop is starting for this
+	// park's task once its pull request ended: that start continues the
+	// task's delivery (ContinueDelivery) with On among its pulls.
+	Continuing string `json:"continuing,omitempty"`
 }
 
 // ReviewParkFor returns the recorded desk-review park for on (owner/repo#n).

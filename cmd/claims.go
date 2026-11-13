@@ -304,6 +304,26 @@ func (a *app) otherClaims(ctx context.Context, issue string) (live, stale []clai
 	return live, stale, nil
 }
 
+// otherDeskClaim is the oldest live claim of another desk on issue in a
+// line, "" when none holds it or the desk reads no claims: the supervisor
+// loop's sign that a pull request serving issue is that desk's worker's
+// (superloop.Input.Elsewhere). Staleness is read on the desk's clock.
+func (a *app) otherDeskClaim(ctx context.Context, issue string) (string, error) {
+	if !a.claimsOn() {
+		return "", nil
+	}
+	cs, err := a.claimClient().Read(ctx, issue)
+	if err != nil {
+		return "", err
+	}
+	now, staleAfter := a.timeNow(), a.cfg.Board.Claims.StaleAfter.Duration
+	live, _ := claim.Others(cs, a.claimDesk(), now, staleAfter)
+	if len(live) == 0 {
+		return "", nil
+	}
+	return live[0].Says(now, staleAfter), nil
+}
+
 // claimedPrefix opens the skip reason of an item another desk claims.
 const claimedPrefix = "claimed by desk "
 

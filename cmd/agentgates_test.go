@@ -5,7 +5,6 @@ package cmd
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -49,8 +48,8 @@ func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.
 				a, _ := stubApp(t)
 				a.now = time.Now()
 				asked := stubGitHub(t, tc.pull, "")
-				start := func() (*exec.Cmd, func()) {
-					c := exec.Command("sleep", "30")
+				start := func() (*proc.Cmd, func()) {
+					c := proc.CommandContext(context.Background(), "sleep", "30")
 					if err := c.Start(); err != nil {
 						t.Skip("no sleep:", err)
 					}

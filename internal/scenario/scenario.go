@@ -80,6 +80,10 @@ type Given struct {
 	Desk Desk `yaml:"desk"`
 	// Repositories each get a bare Git origin with one commit on main.
 	Repositories []Repository `yaml:"repositories"`
+	// Checkouts are repositories of the scenario cloned on the desk, at
+	// /work/src/<owner>/<name>, as an operator keeps the checkout a
+	// session's --dir names (agents.roots holds /work/src).
+	Checkouts []string `yaml:"checkouts"`
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
@@ -106,6 +110,16 @@ type Given struct {
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
+	// Files are written under /work before the desk starts: a brief a
+	// start by hand reads.
+	Files []File `yaml:"files"`
+}
+
+// File is a file of the scenario's /work: Path relative to it, and its
+// Content.
+type File struct {
+	Path    string `yaml:"path"`
+	Content string `yaml:"content"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -140,16 +154,22 @@ type Call struct {
 	Times   int      `yaml:"times"`
 }
 
-// Response is what a fake prints and exits with.
+// Response is what a fake prints and exits with, Delay later in real time
+// (a slow command: devctl waiting for a release), at most MaxCallDelay.
 type Response struct {
-	Stdout string `yaml:"stdout"`
-	Stderr string `yaml:"stderr"`
-	Exit   int    `yaml:"exit"`
+	Stdout string   `yaml:"stdout"`
+	Stderr string   `yaml:"stderr"`
+	Exit   int      `yaml:"exit"`
+	Delay  Duration `yaml:"delay"`
 }
 
+// MaxCallDelay bounds a given call's delay below the minute a fake waits
+// for the world's answer.
+const MaxCallDelay = 50 * time.Second
+
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// advance, github, fault and host, with optional expectations of its own
-// response.
+// advance, measure, github, fault and host, with optional expectations of its
+// own response.
 type Step struct {
 	Name string `yaml:"name"`
 	// Run runs the candidate to its exit.
@@ -168,8 +188,18 @@ type Step struct {
 	GitHub *fakegithub.Step      `yaml:"github"`
 	Fault  *fakegithub.FaultStep `yaml:"fault"`
 	// Host changes an execution host's faults.
-	Host   *harness.HostStep `yaml:"host"`
-	Expect []Expect          `yaml:"expect"`
+	Host *harness.HostStep `yaml:"host"`
+	// Measure waits its time and measures what the background steps cost
+	// in it (a cpu expectation).
+	Measure *Measure `yaml:"measure"`
+	Expect  []Expect `yaml:"expect"`
+}
+
+// Measure is a stretch of real time, For long, over which the background
+// steps' processes are measured: a busy desk's cost is a share of a core
+// over time, which no single moment shows.
+type Measure struct {
+	For Duration `yaml:"for"`
 }
 
 // Run is a call of the candidate binary, or with Release of that release's
@@ -199,6 +229,7 @@ const (
 	KindGitHub     = "github"
 	KindFault      = "fault"
 	KindHost       = "host"
+	KindMeasure    = "measure"
 )
 
 // Kind is the step's kind, "" unless exactly one is set.
@@ -228,6 +259,9 @@ func (s Step) Kind() string {
 	if s.Host != nil {
 		kinds = append(kinds, KindHost)
 	}
+	if s.Measure != nil {
+		kinds = append(kinds, KindMeasure)
+	}
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -255,6 +289,17 @@ type Expect struct {
 	Origin *OriginExpect         `yaml:"origin"`
 	// Log checks what a background step has written so far.
 	Log *LogExpect `yaml:"log"`
+	// CPU bounds the share of a core a background step used in a measure
+	// step.
+	CPU *CPUExpect `yaml:"cpu"`
+}
+
+// CPUExpect bounds the CPU the background step Name's process used itself
+// (its user and system time, not its children's) during a measure step, as a
+// share of one core: at most Max.
+type CPUExpect struct {
+	Name string  `yaml:"name"`
+	Max  float64 `yaml:"max"`
 }
 
 // TextExpect checks a text: every Contains is in it, no NotContains is,
@@ -322,7 +367,7 @@ func (e Expect) kinds() []string {
 		"exit": e.Exit != nil, "output": e.Output != nil, "stderr": e.Stderr != nil,
 		"json_path": e.JSONPath != nil, "events": e.Events != nil, "duration": e.Duration != nil,
 		"process": e.Process != nil, "calls": e.Calls != nil, "github": e.GitHub != nil,
-		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil,
+		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil, "cpu": e.CPU != nil,
 	} {
 		if set {
 			k = append(k, name)
@@ -460,6 +505,11 @@ func (s *Scenario) Validate() error {
 			bad("given.github: %v", err)
 		}
 	}
+	for _, name := range s.Given.Checkouts {
+		if !slices.Contains(s.repositoryNames(), name) {
+			bad("given.checkouts: %q is no repository of the scenario", name)
+		}
+	}
 	for i, tool := range s.Given.Tools {
 		switch {
 		case !toolRE.MatchString(tool):
@@ -473,12 +523,23 @@ func (s *Scenario) Validate() error {
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
 	}
+	for i, f := range s.Given.Files {
+		switch {
+		case !filepath.IsLocal(f.Path):
+			bad("given.files[%d]: path %q is not relative to /work", i, f.Path)
+		case slices.ContainsFunc(s.Given.Files[:i], func(o File) bool { return filepath.Clean(o.Path) == filepath.Clean(f.Path) }):
+			bad("given.files[%d]: %q is named twice", i, f.Path)
+		}
+	}
 	for i, c := range s.Given.Calls {
 		if !slices.Contains(s.programs(), c.Program) {
 			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(s.programs(), ", "))
 		}
 		if c.Times < 0 {
 			bad("given.calls[%d]: times %d", i, c.Times)
+		}
+		if c.Respond.Delay.Duration > MaxCallDelay {
+			bad("given.calls[%d]: delay %s is over %s, the fake's wait for an answer", i, c.Respond.Delay, MaxCallDelay)
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("given.calls[%d]: %v", i, err)
@@ -515,7 +576,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, advance, github, fault and host", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, measure, github, fault and host", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {
@@ -566,6 +627,12 @@ func (s *Scenario) Validate() error {
 			}
 		case KindAdvance:
 			errs = append(errs, s.validateAdvance(where, st.Advance, background)...)
+		case KindMeasure:
+			if st.Measure.For.Duration == 0 {
+				bad("%s: measure without for", where)
+			} else if st.Measure.For.Duration > s.Timeout.Duration {
+				bad("%s: measure for %s exceeds the scenario's %s", where, st.Measure.For, s.Timeout)
+			}
 		}
 		if st.Name != "" {
 			names[st.Name] = kind
@@ -603,6 +670,7 @@ var stepObserves = map[string][]string{
 	KindGitHub:     {"duration"},
 	KindFault:      {"duration"},
 	KindHost:       {"duration"},
+	KindMeasure:    {"duration", "cpu"},
 }
 
 func (s *Scenario) validateExpect(where string, e Expect, stepKind string, background []string, inThen bool) []error {
@@ -613,7 +681,7 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	kind := e.Kind()
 	if kind == "" {
-		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin and log (has %v)", e.kinds())
+		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin, log and cpu (has %v)", e.kinds())
 		return errs
 	}
 	switch kind {
@@ -666,6 +734,14 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 		if (p.Running == nil) == (p.Exit == nil) {
 			bad("process: exactly one of running and exit")
+		}
+	}
+	if c := e.CPU; c != nil {
+		if !slices.Contains(background, c.Name) {
+			bad("cpu %q names no earlier background step", c.Name)
+		}
+		if c.Max <= 0 {
+			bad("cpu without a positive max")
 		}
 	}
 	if g := e.GitHub; g != nil {

@@ -459,9 +459,6 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
-		if err := validateParkWait(v.On, v.Waits); err != nil {
-			return "", nil, err
-		}
 		if err := validateOverlapPark(v.On, v.Waits); err != nil {
 			return "", nil, err
 		}
@@ -553,6 +550,12 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		ag.Park = nil
 		return fmt.Sprintf("%s: your park ended, nobody is woken. %s", ag.Name, parkMessage(p, me.Name)),
 			[]state.Event{event(me, resumedEvent, "%s: it left its own park, nobody is woken: %s", ag.Name, parkedText(p, a.now))}, nil
+	case execution.ControlMove:
+		var v executionMove
+		if err := execution.Decode(c.Data, &v); err != nil {
+			return "", nil, err
+		}
+		return a.moveToCoordinator(st, ag, me, v.Why)
 	case "problem":
 		var finding string
 		if err := execution.Decode(c.Data, &finding); err != nil {

@@ -4278,7 +4278,13 @@ func TestLoopDoesNotReexecWhenShutdownBeginsWhileWatchDrains(t *testing.T) {
 	}
 }
 
-func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
+// TestLoopSkipsHousekeepingWhileItsRestartWaits checks that a pass whose
+// restart waits for a claim in flight reads no alerts and starts no
+// reviewer, and that the restart re-executes once the claim ends.
+//
+// control: none: the base ended such a pass before it planned, which skips
+// its housekeeping and starts no reviewer either
+func TestLoopSkipsHousekeepingWhileItsRestartWaits(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.replaced = true
@@ -4296,21 +4302,18 @@ func TestLoopSkipsPassObservationsWhileDrainingForReexec(t *testing.T) {
 		alertReads++
 		return nil, nil
 	}
-	pullReads := 0
-	oldReadPull := loop.ReadLoopPull
-	t.Cleanup(func() { loop.ReadLoopPull = oldReadPull })
-	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		pullReads++
-		return r.pull, nil
-	}
 	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	l.PassActions.Wait()
 	if r.execs != 0 {
 		t.Fatalf("re-executed while a claim was in flight: %d", r.execs)
 	}
-	if alertReads != 0 || pullReads != 0 {
-		t.Fatalf("ran pass observations on a replaced binary (alerts=%d pulls=%d)", alertReads, pullReads)
+	if alertReads != 0 {
+		t.Fatalf("read alerts on a replaced binary: %d", alertReads)
+	}
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("started a reviewer on a replaced binary: %v", c)
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR LOOP restart held: claims are in flight") {
 		t.Fatalf("missing restart-held log: %s", r.out.String())

@@ -110,12 +110,7 @@ func valueEnd(raw []byte, i int) (int, error) {
 	for j := i; j < len(raw); j++ {
 		switch raw[j] {
 		case '"':
-			for j++; j < len(raw) && raw[j] != '"'; j++ {
-				if raw[j] == '\\' {
-					j++
-				}
-			}
-			if j >= len(raw) {
+			if j = stringEnd(raw, j+1); j < 0 {
 				return 0, errMemberSyntax
 			}
 			if depth == 0 {
@@ -140,6 +135,29 @@ func valueEnd(raw []byte, i int) (int, error) {
 		return 0, errMemberSyntax
 	}
 	return len(raw), nil
+}
+
+// stringEnd is the index of the quote that ends the JSON string whose content
+// starts at raw[i]: the first quote after i that an odd run of backslashes
+// does not escape; -1 when none does. It finds the quotes with IndexByte, not
+// byte by byte: most of a state document's bytes are in strings.
+func stringEnd(raw []byte, i int) int {
+	for k := i; k <= len(raw); {
+		q := bytes.IndexByte(raw[k:], '"')
+		if q < 0 {
+			return -1
+		}
+		q += k
+		escaped := false
+		for b := q - 1; b >= i && raw[b] == '\\'; b-- {
+			escaped = !escaped
+		}
+		if !escaped {
+			return q
+		}
+		k = q + 1
+	}
+	return -1
 }
 
 // encodeKeeping encodes v, a type without JSON methods, with the members r
@@ -212,6 +230,7 @@ type (
 	plainTimer             Timer
 	plainOverride          Override
 	plainOverrideKey       OverrideKey
+	plainPaceOff           PaceOff
 	plainRecord            Record
 	plainClaim             Claim
 	plainAlertOwner        AlertOwner
@@ -238,6 +257,7 @@ type (
 	plainStop              Stop
 	plainHostPlacement     HostPlacement
 	plainHostPin           HostPin
+	plainLocalTask         LocalTask
 	plainTranscriptGrant   TranscriptGrant
 	plainTranscriptRequest TranscriptRequest
 )
@@ -303,6 +323,8 @@ func (v *OverrideKey) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainOverrideKey)(v), &v.rest)
 }
 func (v OverrideKey) MarshalJSON() ([]byte, error) { return encodeKeeping(plainOverrideKey(v), v.rest) }
+func (v *PaceOff) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainPaceOff)(v), &v.rest) }
+func (v PaceOff) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPaceOff(v), v.rest) }
 func (v *Record) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainRecord)(v), &v.rest) }
 func (v Record) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainRecord(v), v.rest) }
 func (v *Claim) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*plainClaim)(v), &v.rest) }
@@ -391,6 +413,10 @@ func (v *Stop) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plai
 func (v Stop) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainStop(v), v.rest) }
 func (v *HostPin) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainHostPin)(v), &v.rest) }
 func (v HostPin) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainHostPin(v), v.rest) }
+func (v *LocalTask) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainLocalTask)(v), &v.rest)
+}
+func (v LocalTask) MarshalJSON() ([]byte, error) { return encodeKeeping(plainLocalTask(v), v.rest) }
 func (v *TranscriptGrant) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainTranscriptGrant)(v), &v.rest)
 }

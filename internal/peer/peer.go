@@ -20,10 +20,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Sender runs the headless turn that sends a message.
@@ -119,7 +120,7 @@ var errTurnFailed = errors.New("the relay turn failed")
 
 // turn runs one headless relay turn of req, a SendMessage input.
 func (s Sender) turn(ctx context.Context, bin, model, req string) (Result, error) {
-	c := exec.CommandContext(ctx, bin, "-p", //nolint:gosec // the configured claude binary; the message is one argument
+	c := proc.CommandContext(ctx, bin, "-p", //nolint:gosec // the configured claude binary; the message is one argument
 		"--model", model,
 		"--tools", "SendMessage",
 		"--allowedTools", "SendMessage",

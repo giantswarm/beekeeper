@@ -105,7 +105,8 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 				workspace = st.Starts[k].Dir
 			}
 			pulls := continuationPulls(st, ag, r.Repo)
-			place, here, err := l.continuationPlacement(ctx, name, r.Repo, workspace, pullOpen, pulls)
+			local := localTask(st, append([]string{ref, LoopServes(st, ag), LoopTaskServes(ag, ref)}, pulls...)...)
+			place, here, err := l.continuationPlacement(ctx, name, r.Repo, workspace, pullOpen, pulls, local)
 			if err != nil {
 				if errors.Is(err, ErrLoopLater) {
 					l.SayOnce("continue room "+ag.Name, "SUPERVISOR CONTINUATION WAITS %s: no room for a start yet on any host or here (beekeeper capacity and the SUPERVISOR HOST WAITS lines name the limit)", ag.Name)
@@ -128,6 +129,8 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 					from = "the head of " + pulls[0]
 				}
 				context += fmt.Sprintf("\nThis continuation runs on execution host %s, in a workspace of its own at %s; the previous worker's workspace (%s) is not reachable from it.", place.Selector, from, workspace)
+			} else if ag.Execution != nil {
+				context += "\nThe previous worker ran on an execution host; its workspace there is not reachable from here: continue from what it published."
 			} else {
 				context += "\nPrevious workspace (inspect for unpublished work): " + workspace
 			}
@@ -238,10 +241,14 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 // need the desk's checkout, leases and proofs), when it carries more than
 // one pull request of the repository (pulls, continuationPulls: the host's
 // start gate refuses that start on every pass) or the previous workspace on
-// this machine holds work no remote has.
-func (l *Loop) continuationPlacement(ctx context.Context, name, repo, workspace string, pullOpen bool, pulls []string) (place startHost, here string, err error) {
+// this machine holds work no remote has. local, the reason localTask gives,
+// keeps a task marked to stay on the coordinator (agents move) here.
+func (l *Loop) continuationPlacement(ctx context.Context, name, repo, workspace string, pullOpen bool, pulls []string, local string) (place startHost, here string, err error) {
 	if !l.PlacesRemotely() {
 		return startHost{}, "", nil
+	}
+	if local != "" {
+		return startHost{}, local, nil
 	}
 	if !pullOpen {
 		return startHost{}, "its pull request is no longer open: the post-merge work stays with the desk's checkout and leases", nil

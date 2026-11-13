@@ -54,6 +54,10 @@ type Host interface {
 	NextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoardItem, error)
 	Now() time.Time
 	OperationOutcome(operation string, reason string, rawURL string, success bool) error
+	// OtherDeskClaim is another desk's live claim on issue (owner/repo#n)
+	// in a line ("desk <name> (session …) since …"), "" when none holds it
+	// or the desk reads no claims (board.claims.off).
+	OtherDeskClaim(ctx context.Context, issue string) (string, error)
 	Out() io.Writer
 	ParkIsPull(ctx context.Context, st *state.State, ref string) bool
 	PrepareEventSegmentation() error
@@ -100,7 +104,6 @@ type Command struct {
 	DeliveryExempt             func(st *state.State, now time.Time, ref string, exempt bool) bool
 	DeliveryURL                func(ref string, pull bool) string
 	DevctlCommandEnv           func(configPath string) []string
-	EffortFlags                func(level string) []string
 	EndNotes                   func(st *state.State, worker state.Party, now time.Time)
 	EndedParkCandidate         func(ag state.Agent) bool
 	EpicChildStatus            func(st *state.State, child board.Item, now time.Time, policy any) string
@@ -108,13 +111,13 @@ type Command struct {
 	ErrGone                    func() error
 	EscapedLine                func(s string) string
 	Event                      func(by state.Party, verb string, format string, a ...any) state.Event
+	ExecutionCannotContinue    func(r *state.ExecutionRecord) string
 	ExecutionRecord            func(st *state.State, ref execution.Ref) (*state.ExecutionRecord, int)
 	FreshPark                  func(st *state.State, ag state.Agent) bool
 	FreshSessions              func(p0 Host) ([]*claude.Session, *proc.Table, error)
 	HeldBy                     func(notes []state.Note, ref string, except int) (*state.Note, *state.ItemHold)
 	HostExecutions             func(st *state.State, selector string) int
 	IncidentExempt             func(st *state.State, now time.Time, refs ...string) bool
-	InheritReviewParkOnAgent   func(st *state.State, ag *state.Agent, rp state.ReviewPark, now time.Time)
 	IsDeskReviewWait           func(waits string) bool
 	IssueURL                   func(ref string) string
 	LoopBroker                 func(ctx context.Context) (string, error)
@@ -161,6 +164,7 @@ type Command struct {
 	ShortDur                   func(d time.Duration) string
 	ShortSHA                   func(sha string) string
 	StopMerges                 func(store state.Store, by state.Party, pick func(state.Merge) bool, keepSeeded bool, how func(state.Merge) string) ([]string, error)
+	TakeOverReviewPark         func(a Host, st *state.State, rp state.ReviewPark, name string) ([]state.Event, error)
 	Truncate                   func(s string, n int) string
 	Unactivated                func(r *state.ExecutionRecord) bool
 	UnmergedHoldReason         func(repo string, recent []UnmergedPull, limit int, window time.Duration) string

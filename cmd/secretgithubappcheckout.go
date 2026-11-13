@@ -3,9 +3,10 @@ package cmd
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // checkGitHubAppCheckout checks the repository containing the target, including
@@ -23,7 +24,7 @@ func checkGitHubAppCheckout(ctx context.Context, file string) error {
 		dir = parent
 	}
 	git := func(args ...string) ([]byte, error) {
-		c := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed git operations in the configured target directory
+		c := proc.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed git operations in the configured target directory
 		return c.Output()
 	}
 	root, err := git("rev-parse", "--show-toplevel")

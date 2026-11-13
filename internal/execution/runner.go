@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -162,7 +161,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 			}
 		}
 	}
-	c := exec.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments; no daemon or resume
+	c := proc.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments; no daemon or resume
 	c.Dir, c.Env, c.Stdin = j.Handle.Workspace, env, strings.NewReader(j.Request.Prompt)
 	var stream *messageStream
 	if j.Request.Messaging {

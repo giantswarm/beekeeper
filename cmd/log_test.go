@@ -199,13 +199,13 @@ func TestLogDetailOutput(t *testing.T) {
 	if err := store.Record(state.Event{At: now, Verb: "agents.problem", Detail: "excluded problem"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{litPlain, "short", "json", "json-short"} {
+	for _, mode := range []string{litPlain, litShort, "json", "json-short"} {
 		t.Run(mode, func(t *testing.T) {
 			var out bytes.Buffer
 			a := &app{store: store, out: &out, now: now, json: strings.Contains(mode, "json")}
 			c := a.logCmd()
 			args := []string{"--verb", "agents.report"}
-			if strings.Contains(mode, "short") {
+			if strings.Contains(mode, litShort) {
 				args = append(args, "--short")
 			}
 			c.SetArgs(args)
@@ -230,7 +230,7 @@ func TestLogDetailOutput(t *testing.T) {
 			if strings.Contains(out.String(), "excluded problem") {
 				t.Fatal("verb filter included a problem")
 			}
-			if mode == "short" {
+			if mode == litShort {
 				lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 				if len(lines) != len(details) {
 					t.Fatalf("got %d lines, want %d: %q", len(lines), len(details), out.String())

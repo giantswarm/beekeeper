@@ -14,8 +14,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,6 +38,7 @@ const (
 	repoDir      = workDir + "/repo"
 	stateDir     = workDir + "/state"
 	originsDir   = workDir + "/origins"
+	srcDir       = workDir + "/src"
 	checkoutsDir = workDir + "/checkouts"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
@@ -134,6 +137,13 @@ type driver struct {
 	// github.allowedOrgs: the hosts are provisioned against them.
 	cfg  map[string]any
 	orgs []string
+	// rewrites counts given.state.rewrite's rewrites of the state so far;
+	// its writer stops when rewriteStop closes, then closes rewriteDone,
+	// rewriteErr why it stopped early.
+	rewrites    atomic.Int64
+	rewriteStop chan struct{}
+	rewriteDone chan struct{}
+	rewriteErr  error
 }
 
 // deskCaller names the desk itself to the scenario's GitHub: what a unit
@@ -211,6 +221,9 @@ func (d *driver) run() {
 		for _, name := range slices.Sorted(maps.Keys(d.procs)) {
 			d.procs[name].stop()
 		}
+		for _, f := range d.stopRewrites() {
+			d.res.Fail("%s", f)
+		}
 		_ = d.fakes.Close()
 		for _, f := range d.fakes.Failures() {
 			d.res.Fail("%s", f)
@@ -237,6 +250,7 @@ func (d *driver) run() {
 			_ = d.githubLog.Close()
 		}
 	}()
+	d.startRewrites()
 	for i, st := range d.s.When {
 		if err := ctx.Err(); err != nil {
 			d.res.Fail("scenario timed out after %s before when[%d]", d.s.Timeout, i)
@@ -302,6 +316,14 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 		overlay(cfg, map[string]any{"run": map[string]any{"remote": remote}})
 	}
+	if len(d.s.Given.Checkouts) > 0 {
+		// A session's --dir must be a checkout under agents.dir or agents.roots.
+		roots := []any{srcDir}
+		if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+			roots = append(roots, checkoutsDir)
+		}
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": roots}})
+	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -328,9 +350,23 @@ func (d *driver) setup(ctx context.Context) error {
 	if err := os.WriteFile(filepath.Join(workDir, "worker.txt"), []byte("Work {{.URL}}\n"), 0o600); err != nil {
 		return err
 	}
+	for _, f := range d.s.Given.Files {
+		path := filepath.Join(workDir, f.Path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(f.Content), 0o600); err != nil {
+			return fmt.Errorf("given.files %s: %w", f.Path, err)
+		}
+	}
 	for _, name := range repos {
 		if err := origin(ctx, name); err != nil {
 			return fmt.Errorf("origin %s: %w", name, err)
+		}
+	}
+	for _, name := range d.s.Given.Checkouts {
+		if err := sourceCheckout(ctx, name); err != nil {
+			return fmt.Errorf("checkout %s: %w", name, err)
 		}
 	}
 	for _, r := range d.s.Given.Repositories {
@@ -429,6 +465,29 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 	return d.seedHostPins(hosts)
 }
 
+// reconfigureHost changes a host's policy as an operator does: the host's
+// configuration changes and it prepares its policy again, and the desk's
+// agents.hosts entry names the digest prepare printed.
+func (d *driver) reconfigureHost(ctx context.Context, h harness.HostStep) error {
+	digest, err := harness.Reconfigure(ctx, harness.Desk{Env: d.stepEnv(deskCaller, nil)}, h.Name, h.Config)
+	if err != nil {
+		return fmt.Errorf("host %s: %w", h.Name, err)
+	}
+	raw, err := os.ReadFile(configFile)
+	if err != nil {
+		return err
+	}
+	cfg := map[string]any{}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return err
+	}
+	overlay(cfg, map[string]any{"agents": map[string]any{"hosts": map[string]any{h.Name: map[string]any{"policyDigest": digest}}}})
+	if raw, err = yaml.Marshal(cfg); err != nil {
+		return err
+	}
+	return os.WriteFile(configFile, raw, 0o600)
+}
+
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
 func (d *driver) repositories() []string { return d.s.repositoryNames() }
@@ -464,11 +523,34 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 		return fmt.Errorf("the scenario's GitHub: %w", err)
 	}
 	d.github = srv
-	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
-		res := srv.GH(context.Background(), fakegithub.GHCall{Args: req.Args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
+	gh := func(args []string, req CallRequest) (CallResponse, bool, string) {
+		res := srv.GH(context.Background(), fakegithub.GHCall{Args: args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
 		return CallResponse{Stdout: res.Stdout, Stderr: res.Stderr, Exit: res.Exit}, res.Handled, res.Reason
+	}
+	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
+		return gh(req.Args, req)
+	})
+	// devctl auth exec runs its command as devctl's GitHub login: the gh it
+	// runs (the reviewed merge of a merge.devctlOwners repository) reaches
+	// the scenario's GitHub. Every other devctl call is the scenario's to
+	// answer.
+	d.world.Handle("devctl", func(req CallRequest) (CallResponse, bool, string) {
+		args, ok := devctlExecsGH(req.Args)
+		if !ok {
+			return CallResponse{}, false, ""
+		}
+		return gh(args, req)
 	})
 	return nil
+}
+
+// devctlExecsGH is the gh arguments of `devctl auth exec -- gh <args>`,
+// false for any other devctl call.
+func devctlExecsGH(args []string) ([]string, bool) {
+	if len(args) < 4 || args[0] != "auth" || args[1] != "exec" || args[2] != "--" || filepath.Base(args[3]) != "gh" {
+		return nil, false
+	}
+	return args[4:], true
 }
 
 // stepEnv is the environment of a step's candidate: the allowlist, the
@@ -529,6 +611,21 @@ func overlay(dst, src map[string]any) {
 		}
 		dst[k] = v
 	}
+}
+
+// sourceCheckout clones owner/name onto the desk under srcDir. It names its
+// origin as GitHub does; the scenario's git leads that URL to the origin.
+func sourceCheckout(ctx context.Context, name string) error {
+	dst := filepath.Join(srcDir, name)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	c := exec.CommandContext(ctx, binDir+"/git", "clone", "--quiet", "https://github.com/"+name+".git", dst) //nolint:gosec // real git on the scenario's own paths
+	c.Env = env(nil)
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone: %w: %s", err, out)
+	}
+	return nil
 }
 
 // origin creates the bare origin of owner/name with one commit on main.
@@ -656,8 +753,24 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		sr.Args, failures = d.advance(ctx, st.Advance)
 		sr.Failures = append(sr.Failures, failures...)
 	case KindHost:
-		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
+		err := d.fakes.ApplyHostStep(*st.Host)
+		if err == nil && len(st.Host.Config) > 0 {
+			err = d.reconfigureHost(ctx, *st.Host)
+		}
+		if err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
+		}
+	case KindMeasure:
+		var shares map[string]float64
+		var failures []string
+		shares, sr.Args, failures = d.measure(ctx, st.Measure)
+		sr.Failures = append(sr.Failures, failures...)
+		v.CPU = func(name string) (float64, error) {
+			share, ok := shares[name]
+			if !ok {
+				return 0, errors.New("it did not run through the measure step")
+			}
+			return share, nil
 		}
 	}
 	dur := time.Since(started)
@@ -738,6 +851,71 @@ func (d *driver) start(st Step) error {
 		close(p.done)
 	}()
 	return nil
+}
+
+// measure waits m.For and gives the share of one core each background step's
+// process used itself in that time, of those that ran through it, with a
+// summary for the report: each share and the state's rewrites in it.
+func (d *driver) measure(ctx context.Context, m *Measure) (shares map[string]float64, summary, failures []string) {
+	names := slices.Sorted(maps.Keys(d.procs))
+	before := map[string]time.Duration{}
+	for _, name := range names {
+		if running, _ := d.procs[name].state(); running {
+			if cpu, err := ownCPU(d.procs[name].cmd.Process.Pid); err == nil {
+				before[name] = cpu
+			}
+		}
+	}
+	rewrites, started := d.rewrites.Load(), time.Now()
+	select {
+	case <-ctx.Done():
+		return nil, nil, []string{fmt.Sprintf("scenario timed out after %s while measuring", d.s.Timeout)}
+	case <-time.After(m.For.Duration):
+	}
+	took := time.Since(started)
+	shares = map[string]float64{}
+	for _, name := range names {
+		cpu0, ok := before[name]
+		if !ok {
+			continue
+		}
+		cpu, err := ownCPU(d.procs[name].cmd.Process.Pid)
+		if running, _ := d.procs[name].state(); err != nil || !running {
+			continue
+		}
+		shares[name] = (cpu - cpu0).Seconds() / took.Seconds()
+		summary = append(summary, fmt.Sprintf("%s: %.3f of a core", name, shares[name]))
+	}
+	summary = append(summary, fmt.Sprintf("%d state rewrites in %s", d.rewrites.Load()-rewrites, took.Round(time.Millisecond)))
+	return shares, summary, nil
+}
+
+// ownCPU is the user and system time process pid used itself, without its
+// children's.
+func ownCPU(pid int) (time.Duration, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)) //nolint:gosec // a process of the scenario's sandbox
+	if err != nil {
+		return 0, err
+	}
+	end := bytes.LastIndexByte(raw, ')')
+	if end < 0 {
+		return 0, errors.New("malformed stat")
+	}
+	// f[0] is field 3 (state): utime and stime are fields 14 and 15.
+	f := strings.Fields(string(raw[end+1:]))
+	if len(f) < 13 {
+		return 0, errors.New("short stat")
+	}
+	var ticks int64
+	for _, s := range f[11:13] {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		ticks += n
+	}
+	// USER_HZ is 100 on every Linux architecture Go supports.
+	return time.Duration(ticks) * (time.Second / 100), nil
 }
 
 // waitFor polls the expectations until all hold, the wait's timeout or the

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -17,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
@@ -99,7 +99,7 @@ inputs and outputs in the selected configuration.`,
 			if err != nil {
 				return err
 			}
-			broker := exec.Command(exe, "sandbox", "broker", "--secrets-only") //nolint:gosec // this binary, isolated configuration
+			broker := proc.CommandContext(context.Background(), exe, "sandbox", "broker", "--secrets-only") //nolint:gosec // this binary, isolated configuration
 			broker.Env = env
 			broker.Stdout, broker.Stderr = cmd.ErrOrStderr(), cmd.ErrOrStderr()
 			if err := broker.Start(); err != nil {
@@ -135,13 +135,13 @@ inputs and outputs in the selected configuration.`,
 					return errors.New("scratch broker did not become ready")
 				}
 			}
-			run := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // the requested command
+			run := proc.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // the requested command
 			run.Env = append(slices.Clone(env), scratchBrokerEnv+"="+spool)
 			run.Stdin, run.Stdout, run.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
 			run.Cancel = func() error { return run.Process.Signal(syscall.SIGTERM) }
 			run.WaitDelay = brokeredStopDelay
 			if err := run.Run(); err != nil {
-				var exit *exec.ExitError
+				var exit *proc.ExitError
 				if errors.As(err, &exit) {
 					return &exitError{code: exit.ExitCode()}
 				}

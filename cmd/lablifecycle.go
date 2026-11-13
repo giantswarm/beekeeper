@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -29,7 +29,7 @@ func (a *app) labDockerCall(ctx context.Context, args ...string) ([]byte, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput() //nolint:gosec // subcommands and arguments are assembled by the lifecycle functions
+	out, err := proc.CommandContext(ctx, "docker", args...).CombinedOutput() //nolint:gosec // subcommands and arguments are assembled by the lifecycle functions
 	if err != nil {
 		return nil, fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
 	}

@@ -60,6 +60,25 @@ func TestRecordingPreservesSweepAndEpisodeKeys(t *testing.T) {
 	}
 }
 
+// A recorded pass that reviews another desk's worker's pull request at once
+// replays as one that does: the recording keeps that a claim holds, not its
+// words.
+//
+// control: none: Input.Elsewhere is new, so the base cannot build this test
+func TestRecordingPreservesAnotherDesksPull(t *testing.T) {
+	in := sweepInput(pull(head1, true), 0)
+	in.Elsewhere = map[string]string{pr: claimElsewhere}
+	only(t, Plan(in), KindReview)
+	data, err := json.Marshal(Recording(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "w-1") {
+		t.Fatalf("recording retained the claim's words: %s", data)
+	}
+	only(t, Plan(replayRecording(t, in)), KindReview)
+}
+
 func TestRecordingPreservesDeliveryStates(t *testing.T) {
 	for _, step := range []string{state.DeliveryUnknown, state.DeliveryImplementing, state.DeliveryCI, state.DeliveryReviewQueued, state.DeliveryReviewing, state.DeliveryFixing, state.DeliveryMerging, state.DeliveryReleasing, state.DeliveryDone, state.DeliveryDropped} {
 		in := state.Delivery{Ref: pr, Origin: state.DeliveryOriginObserved, Step: step}

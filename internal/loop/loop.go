@@ -12,7 +12,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -36,6 +35,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -114,13 +114,13 @@ func RunArgv(ctx context.Context, stdin string, argv []string) (string, string, 
 	if len(argv) == 0 {
 		return "", "", 0, errors.New("no command")
 	}
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
+	c := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
 	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdin = strings.NewReader(stdin)
 	var out, errOut bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errOut
 	err := c.Run()
-	var ee *exec.ExitError
+	var ee *proc.ExitError
 	if errors.As(err, &ee) {
 		return out.String(), errOut.String(), ee.ExitCode(), nil
 	}
@@ -540,6 +540,11 @@ type Loop struct {
 	Bin          Replaceable
 	Reexecuted   bool
 	reexecFailed bool
+	// restartHeldAt is when the restart into the replaced binary first
+	// waited for claims in flight; supervisor.restartWait bounds the wait,
+	// and a save the installed release refused (staleSave) ends it.
+	restartHeldAt time.Time
+	staleSave     bool
 	// baseMerges are the answers of ReadBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
@@ -791,6 +796,14 @@ func RunLoop(ctx context.Context, a Host, once bool) (runErr error) {
 		l.Mu.Unlock()
 		l.LifecyclePhase("begin pass")
 		if err := l.Pass(ctx); err != nil {
+			// A save the installed release refuses ends the restart's wait
+			// for its claims: this binary records nothing more.
+			var stale *state.StaleWriterError
+			if errors.As(err, &stale) {
+				l.Mu.Lock()
+				l.staleSave = true
+				l.Mu.Unlock()
+			}
 			if reexec, rerr := l.Reexec(ctx); rerr != nil {
 				return rerr
 			} else if reexec {
@@ -894,7 +907,7 @@ func (l *Loop) WaitNextPass(ctx context.Context) bool {
 				l.Bin = b
 				l.Mu.Unlock()
 			}
-			if b != nil && b.Replaced() && !l.reexecFailed && (!l.ReexecBusy() || (l.Host != nil && state.WriterFenced(l.Host.Store()))) {
+			if b != nil && b.Replaced() && !l.reexecFailed && (!l.ReexecBusy() || l.restartWaitSpent() || (l.Host != nil && state.WriterFenced(l.Host.Store()))) {
 				return true
 			}
 		}
@@ -975,6 +988,54 @@ func (l *Loop) ReexecBusy() bool {
 	return len(l.inFlight) > 0
 }
 
+// inFlightKeys names the claims in flight, sorted, for the restart's line.
+func (l *Loop) inFlightKeys() string {
+	l.Mu.Lock()
+	keys := slices.Sorted(maps.Keys(l.inFlight))
+	l.Mu.Unlock()
+	return strings.Join(keys, ", ")
+}
+
+// restartHeld is when the restart first waited for claims in flight, now
+// for the first wait.
+func (l *Loop) restartHeld() time.Time {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if l.restartHeldAt.IsZero() {
+		l.restartHeldAt = clk.Now()
+	}
+	return l.restartHeldAt
+}
+
+// restartWaitSpent says the restart has waited supervisor.restartWait for
+// its claims in flight, or a save of this binary was refused as stale: it
+// re-executes with them in flight.
+func (l *Loop) restartWaitSpent() bool {
+	l.Mu.Lock()
+	held, stale := l.restartHeldAt, l.staleSave
+	l.Mu.Unlock()
+	return stale || !held.IsZero() && clk.Since(held) >= l.restartWait()
+}
+
+// restartWait is supervisor.restartWait, its default when unset.
+func (l *Loop) restartWait() time.Duration {
+	if d := l.Host.Cfg().Supervisor.RestartWait.Duration; d > 0 {
+		return d
+	}
+	return config.DefaultRestartWait
+}
+
+// RestartWaits says the restart into the replaced binary waits for the
+// claims in flight (Reexec), the state not fenced: the passes go on
+// planning and run the merge decisions only, so no merge waits on a restart
+// that waits on a merge.
+func (l *Loop) RestartWaits() bool {
+	if l == nil || l.DryRun || l.Host == nil || state.WriterFenced(l.Host.Store()) {
+		return false
+	}
+	return l.PauseForReexec()
+}
+
 func (l *Loop) BackgroundContext(ctx context.Context) context.Context {
 	if l == nil {
 		return ctx
@@ -1021,12 +1082,24 @@ func (l *Loop) Reexec(ctx context.Context) (bool, error) {
 			l.StopWatch()
 			l.StopWatch = nil
 		}
+		l.Mu.Lock()
+		l.restartHeldAt, l.staleSave = time.Time{}, false
+		l.Mu.Unlock()
 		return false, nil
 	}
-	busy := l.ReexecBusy()
-	if busy && !fenced {
-		l.SayOnce("reexec-busy", "SUPERVISOR LOOP restart held: claims are in flight; re-executing the installed binary once they finish")
-		return false, nil
+	if l.ReexecBusy() && !fenced {
+		held, wait := l.restartHeld(), l.restartWait()
+		if !l.restartWaitSpent() {
+			l.SayOnce("reexec-busy", "SUPERVISOR LOOP restart held: claims are in flight (%s); re-executing the installed binary once they finish, at the latest at %s (supervisor.restartWait %s); merge decisions go on meanwhile",
+				l.inFlightKeys(), held.Add(wait).UTC().Format(time.RFC3339), wait)
+			return false, nil
+		}
+		// A claim in flight past the bound holds the restart no longer. Its
+		// side effect is recorded with its claim, which the new binary
+		// reconciles; a merge's gate and merge-child run on outside the loop.
+		l.SayOnce("reexec-bound", "SUPERVISOR LOOP restart waited %s for claims in flight (%s, supervisor.restartWait %s or a save the installed release refused): re-executing the installed binary with them in flight; the new binary reconciles their claims",
+			clk.Since(held).Round(time.Second), l.inFlightKeys(), wait)
+		l.CancelBackgroundActions()
 	}
 	wasRefilling := l.StopRefill != nil
 	if wasRefilling {
@@ -1074,6 +1147,7 @@ func (l *Loop) Reexec(ctx context.Context) (bool, error) {
 	if err := b.Exec(); err != nil {
 		l.Mu.Lock()
 		l.reexecFailed = true
+		l.restartHeldAt, l.staleSave = time.Time{}, false
 		l.Mu.Unlock()
 		l.SayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
 		if wasRefilling {
@@ -1355,6 +1429,53 @@ func (l *Loop) SaveCache() {
 	_ = l.Host.Store().WriteFile(LoopCacheFile, c)
 }
 
+// recoverPass is the pass's recovery: unfinished turns, the quota, parks to
+// continue or recover, review requests and ended review workers, the rest
+// skipped once a restart waits for the claims in flight. It returns the
+// state read after them, nil when the pass stops for a restart.
+func (l *Loop) recoverPass(ctx context.Context, st *state.State) (*state.State, error) {
+	reread := func() error {
+		if l.DryRun {
+			return nil
+		}
+		var err error
+		st, err = l.Host.Store().Read()
+		return err
+	}
+	steps := []struct {
+		phase string
+		run   func(context.Context, *state.State) error
+		fresh bool
+	}{
+		{LoopPhaseRecover, l.recoverUnfinishedTurns, false},
+		{LoopPhaseRecover, l.RecoverQuota, false},
+		{loopPhaseContinueParks, l.ContinueParks, true},
+		{loopPhaseRecoverParks, l.RecoverParks, true},
+		{loopPhaseRecoverReviews, l.RecoverReviewRequests, true},
+		{loopPhaseEndReviews, l.EndReviewWorkers, true},
+	}
+	for i, step := range steps {
+		if i > 0 {
+			if stop, err := l.passCheckpoint(ctx); stop || err != nil {
+				return nil, err
+			}
+		}
+		if l.RestartWaits() {
+			break // the rest waits for the new binary
+		}
+		l.LifecyclePhase(step.phase)
+		if step.fresh {
+			if err := reread(); err != nil {
+				return nil, err
+			}
+		}
+		if err := step.run(ctx, st); err != nil {
+			return nil, err
+		}
+	}
+	return st, reread()
+}
+
 // Pass is one look: gather, plan, act.
 func (l *Loop) Pass(ctx context.Context) (result error) {
 	ctx = context.WithValue(ctx, loopPullContextKey{}, l)
@@ -1409,16 +1530,19 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
-	if !l.DryRun {
+	// While the restart waits for the claims in flight (RestartWaits), the
+	// pass skips its housekeeping (reports, timers, wakes, recoveries): it
+	// observes, plans and runs the merge decisions only.
+	if !l.DryRun && !l.RestartWaits() {
 		l.LifecyclePhase("apply session reports")
 		if err := a.ConsumeReports(ctx); err != nil {
 			return err
 		}
 	}
-	if !l.DryRun {
+	if !l.DryRun && !l.RestartWaits() {
 		l.LifecyclePhase("watch conditions")
 		if err := l.WatchConditions(ctx); err != nil {
 			l.HoldStarts(true)
@@ -1427,10 +1551,10 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			l.ClearSaid("watch-conditions")
 		}
 	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
-	if !l.DryRun {
+	if !l.DryRun && !l.RestartWaits() {
 		l.LifecyclePhase("watch alerts")
 		if err := l.watchAlerts(ctx); err != nil {
 			l.SayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
@@ -1438,7 +1562,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			l.ClearSaid("alerts")
 		}
 	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
 	readState := a.Store().Read
@@ -1452,7 +1576,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	l.LifecyclePhase("read state and dispatch timers")
 	// Wall-clock timer jobs keep running while GitHub observations are
 	// held. Board commands they invoke still share the query admission gate.
-	if !l.DryRun {
+	if !l.DryRun && !l.RestartWaits() {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
@@ -1463,7 +1587,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		l.ReloadConfig()
 		a = l.Host.SnapshotAtNow()
 	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
 	// An unknown or stale reading is resolved by a reading of the loop's
@@ -1507,7 +1631,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		}
 		l.ClearSaid("graphql allowance")
 	}
-	if !l.DryRun {
+	if !l.DryRun && !l.RestartWaits() {
 		if err := l.CompleteEpics(ctx, st); err != nil {
 			l.SayOnce("epic completion", "SUPERVISOR EPIC completion waits: %v", err)
 		} else {
@@ -1518,97 +1642,33 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		} else {
 			l.ClearSaid("epic wake")
 		}
-		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 			return err
 		}
 		l.LifecyclePhase(loopPhaseTidy)
 		l.Tidy(ctx, st)
-		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 			return err
 		}
 		l.LifecyclePhase(loopPhaseTidy)
 		l.UpdateHosts(ctx, st)
-		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 			return err
 		}
 		l.LifecyclePhase(loopPhaseTidy)
 		if err := a.SyncClaims(ctx); err != nil {
 			l.SayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
-		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 			return err
 		}
 	}
-	l.LifecyclePhase(LoopPhaseRecover)
-	if err := l.recoverUnfinishedTurns(ctx, st); err != nil {
-		return err
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
-		return err
-	}
-	l.LifecyclePhase(LoopPhaseRecover)
-	if err := l.RecoverQuota(ctx, st); err != nil {
-		return err
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
-		return err
-	}
-	l.LifecyclePhase(loopPhaseContinueParks)
-	if !l.DryRun {
-		st, err = a.Store().Read()
-		if err != nil {
+	if !l.RestartWaits() {
+		if st, err = l.recoverPass(ctx, st); st == nil || err != nil {
 			return err
 		}
 	}
-	if err := l.ContinueParks(ctx, st); err != nil {
-		return err
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
-		return err
-	}
-	l.LifecyclePhase(loopPhaseRecoverParks)
-	if !l.DryRun {
-		st, err = a.Store().Read()
-		if err != nil {
-			return err
-		}
-	}
-	if err := l.RecoverParks(ctx, st); err != nil {
-		return err
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
-		return err
-	}
-	l.LifecyclePhase(loopPhaseRecoverReviews)
-	if !l.DryRun {
-		st, err = a.Store().Read()
-		if err != nil {
-			return err
-		}
-	}
-	if err := l.RecoverReviewRequests(ctx, st); err != nil {
-		return err
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
-		return err
-	}
-	l.LifecyclePhase(loopPhaseEndReviews)
-	if !l.DryRun {
-		st, err = a.Store().Read()
-		if err != nil {
-			return err
-		}
-	}
-	if err := l.EndReviewWorkers(ctx, st); err != nil {
-		return err
-	}
-	if !l.DryRun {
-		st, err = a.Store().Read()
-		if err != nil {
-			return err
-		}
-	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
 	l.LifecyclePhase(LoopPhaseObserve)
@@ -1754,12 +1814,12 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
 	l.LifecyclePhase("discover pull requests")
 	swept := l.SweepPulls(ctx, in, tracked)
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
 	l.LifecyclePhase("observe repository ownership")
@@ -1772,7 +1832,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	unread := map[string]bool{}
 	unreviewedEnded := map[string]bool{}
 	for _, ref := range tracked {
-		if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+		if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 			return err
 		}
 		// This phase only consumes dated observations; the watcher owns IO.
@@ -1915,7 +1975,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			}
 		}
 	}
-	if !l.DryRun && len(postMerge) > 0 {
+	if !l.DryRun && !l.RestartWaits() && len(postMerge) > 0 {
 		for i := len(in.Taken) - 1; i >= 0; i-- {
 			if t := in.Taken[i]; t.Kind == superloop.KindRelease {
 				version := strings.TrimPrefix(t.Key, "release ")
@@ -1942,12 +2002,13 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	if reexec, err := l.Reexec(ctx); err != nil || reexec {
 		return err
 	}
-	if l.PauseForReexec() {
+	if l.PauseForReexec() && !l.RestartWaits() {
 		return nil
 	}
 	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
 	}
+	in.Elsewhere = l.markElsewhere(ctx, in)
 	if !l.DryRun {
 		if err := l.reportSweep(in.Ownerless, unread); err != nil {
 			return err
@@ -2026,7 +2087,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		}
 		return l.Fill(ctx, st, claims, in.Taken)
 	}
-	if stop, err := l.stopPassForReexec(ctx); stop || err != nil {
+	if stop, err := l.passCheckpoint(ctx); stop || err != nil {
 		return err
 	}
 	l.LifecyclePhase("dispatch planned actions")
@@ -2057,7 +2118,7 @@ func (l *Loop) ExecAction(ctx context.Context, st *state.State, claims map[strin
 	if ctx.Err() != nil {
 		return nil
 	}
-	if l.PauseForReexec() {
+	if l.PauseForReexec() && (act.Kind != superloop.KindGo || !l.RestartWaits()) {
 		l.MergeWaited(act, MergeHeld(waitRestart, "the loop runs no action while it restarts into its replaced binary"))
 		return nil
 	}
@@ -2129,11 +2190,17 @@ func (l *Loop) ExecAction(ctx context.Context, st *state.State, claims map[strin
 // delays a review or worker start, and the reverse.
 func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[string]LoopClaim, failures map[string]LoopFailure, taken []superloop.Taken, actions []superloop.Action) (result error) {
 	fillLaunched := false
+	// A restart that waits for the claims in flight runs the merge
+	// decisions only; every other action waits for the new binary.
+	restarting := l.RestartWaits()
 	defer func() {
 		if l.Host.Cfg().Supervisor.WorkerBrief != "" && !fillLaunched {
 			why := "action dispatch cancelled before refill"
-			if result != nil {
+			switch {
+			case result != nil:
 				why = "action dispatch failed before refill: " + Cmd.OneLine(result.Error())
+			case restarting:
+				why = "the loop restarts into its replaced binary once its claims finish: merge decisions only"
 			}
 			_, _ = fmt.Fprintf(l.Host.Out(), RefillZeroFormat, why)
 		}
@@ -2165,6 +2232,9 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 		otherActs  []superloop.Action
 	)
 	for _, act := range actions {
+		if restarting && act.Kind != superloop.KindGo {
+			continue
+		}
 		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone || act.Kind == superloop.KindProgress {
 			planned[act.Agent] = true
 		}
@@ -2243,6 +2313,11 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 				}
 			}
 		})
+	}
+
+	if restarting {
+		fillLaunched = l.IndependentFill // the cadence's refill says why it waits
+		return l.passActionsEnded(&passMerges, len(laneOrder) > 0)
 	}
 
 	l.reviewsPlanned(reviewActs)
@@ -2346,11 +2421,17 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	launch("stream:roster", func() error {
 		return l.Roster(bgCtx, planned)
 	})
+	return l.passActionsEnded(&passMerges, len(laneOrder) > 0)
+}
 
+// passActionsEnded ends a pass's dispatch: a single pass waits for its
+// actions, a running loop briefly for its merges, and the first error an
+// action reported is the pass's.
+func (l *Loop) passActionsEnded(passMerges *sync.WaitGroup, merging bool) error {
 	if l.Once {
 		l.PassActions.Wait()
 		passMerges.Wait()
-	} else if len(laneOrder) > 0 {
+	} else if merging {
 		done := make(chan struct{})
 		go func() {
 			passMerges.Wait()
@@ -2983,8 +3064,10 @@ func isLoopGitHubHeldOutput(line string) bool {
 // Run runs a beekeeper command as the loop; a non-zero exit is an error
 // with its output.
 func (l *Loop) Run(ctx context.Context, args ...string) (string, error) {
-	if len(args) >= 4 && args[0] == agentsName && args[1] == agentStartName && !slices.Contains(args, effortFlag) {
-		args = append(args, l.startEffort(args)...)
+	// The loop's supervisor.effort is the last default of its starts: the
+	// start puts a rule, the choice and the continued session ahead of it.
+	if effort := strings.TrimSpace(l.Host.Cfg().Supervisor.Effort); effort != "" && len(args) >= 4 && args[0] == agentsName && args[1] == agentStartName && !slices.Contains(args, effortFlag) {
+		args = append(args, defaultEffortFlag, effort)
 	}
 	out, code, err := BeekeeperRun(ctx, l.As(args...)...)
 	if err != nil {
@@ -3373,15 +3456,69 @@ func (l *Loop) WakeOrStartFixer(ctx context.Context, st *state.State, act superl
 		// activate that execution. Recover the original start before telling
 		// it the current findings, and keep the action pending on failure.
 		if ref := st.Agents[i].Execution; ref != nil {
-			if rec, _ := Cmd.ExecutionRecord(st, *ref); rec != nil && Cmd.Unactivated(rec) {
+			rec, _ := Cmd.ExecutionRecord(st, *ref)
+			if rec != nil && Cmd.Unactivated(rec) {
 				if _, err := l.remoteStartRefused(ctx, act.Agent); err != nil {
 					return err
+				}
+			}
+			// An SSH execution that ended for good (retired with its
+			// workspace moved aside, released, stopped) takes no message,
+			// and its entry holds the name a new start needs: the entry
+			// gives way to a fresh fixer, as a worker off the roster does.
+			if why := endedExecution(rec); why != "" {
+				free, err := l.dropEndedExecution(st.Agents[i], *ref, why, act)
+				if err != nil {
+					return err
+				}
+				if free {
+					current, err := l.Host.Store().Read()
+					if err != nil {
+						return err
+					}
+					return l.StartFixer(ctx, current, act)
 				}
 			}
 		}
 		return l.wake(ctx, act)
 	}
 	return l.StartFixer(ctx, st, act)
+}
+
+// endedExecution says why the SSH execution of rec ended for good, "" while
+// a message can still reach it: it runs, or its conversation can go on.
+func endedExecution(rec *state.ExecutionRecord) string {
+	if rec == nil || !rec.Terminal() {
+		return ""
+	}
+	return Cmd.ExecutionCannotContinue(rec)
+}
+
+// dropEndedExecution takes ag off the roster, whose SSH execution ref ended
+// for good (why), so that a fresh fixer of act can take its name. It reports
+// whether the name is free: false when the name went to another entry or
+// the execution changed since the pass read it.
+func (l *Loop) dropEndedExecution(ag state.Agent, ref execution.Ref, why string, act superloop.Action) (bool, error) {
+	free := false
+	err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(current.Agents, func(x state.Agent) bool { return strings.EqualFold(x.Name, ag.Name) })
+		if i < 0 {
+			free = true
+			return nil, nil
+		}
+		x := current.Agents[i]
+		if !x.Is(ag.Party) || x.Execution == nil || *x.Execution != ref {
+			return nil, nil
+		}
+		if rec, _ := Cmd.ExecutionRecord(current, ref); endedExecution(rec) == "" {
+			return nil, nil
+		}
+		Cmd.RemoveAgent(current, i)
+		free = true
+		return []state.Event{Cmd.Event(LoopParty, "agents.remove", "%s: its SSH execution ended for good (%s); a fresh fixer takes over %s",
+			ag.Name, why, cmp.Or(act.URL, act.Ref))}, nil
+	})
+	return free, err
 }
 
 const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{else}}Fix{{end}} the findings on {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
@@ -3446,35 +3583,29 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 	}
 	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", RepoName(r.Repo), r.N))
 	var place startHost
+	var here string
 	var err error
 	if act.Kind == superloop.KindEnd {
 		// Terminal continuations can need the live desk checkout and host
 		// policy sync. Execution hosts only have prepared workspaces, so
 		// keep this work on the coordinator even under hostsFirst.
-		flags := startFlags(false, false)
-		if model := l.Host.RuleModel(name, workerRole); model != "" {
-			flags = append(flags, modelFlag, model)
-		}
-		out, code, readErr := BeekeeperRun(ctx, l.As(append([]string{LoopCapacity}, flags...)...)...)
-		var capacity struct {
-			Room int `json:"room"`
-		}
-		if readErr != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
-			err = ErrLoopLater
-		}
+		place, err = l.localPlacement(ctx, name)
 	} else {
-		place, err = l.startPlacement(ctx, name, r.Repo, false, false)
+		place, here, err = l.taskPlacement(ctx, st, name, r.Repo, act.Ref, rp.Serves)
 	}
 	if err != nil {
 		if errors.Is(err, ErrLoopLater) {
 			where := "on any host"
-			if act.Kind == superloop.KindEnd {
+			if act.Kind == superloop.KindEnd || here != "" {
 				where = "on the coordinator"
 			}
 			l.SayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
 			return fmt.Errorf("no room for a worker start yet %s (beekeeper capacity and the SUPERVISOR HOST WAITS lines name the limit): %w", where, ErrLoopLater)
 		}
 		return err
+	}
+	if here != "" {
+		l.SayOnce("here "+act.Key, "SUPERVISOR FIXER STAYS HERE %s: %s", act.URL, here)
 	}
 	tmpl := defaultFixerBrief
 	if act.Kind == superloop.KindGo {
@@ -3527,6 +3658,15 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
+	if act.Kind == superloop.KindEnd && hasRP {
+		// The session continues the review park's task: its start keeps the
+		// task's delivery with the ended pull request (recordStart). Only
+		// this start does, so the mark goes once it returned.
+		if err := l.markReviewParkContinuing(act.Ref, name); err != nil {
+			return err
+		}
+		defer func() { _ = l.markReviewParkContinuing(act.Ref, "") }()
+	}
 	if _, err := l.RunStart(ctx, act, args...); err != nil {
 		if Cmd.Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
@@ -3540,17 +3680,30 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		}
 		return err
 	}
-	if hasRP && rp.Serves != "" {
+	// The fresh worker takes the task of the worker that parked on the pull
+	// request and left the roster: an answer, a timer or a message for that
+	// session reaches the fresh one instead of resuming its transcript.
+	if hasRP {
 		if err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
-			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
-				Cmd.InheritReviewParkOnAgent(current, &current.Agents[i], rp, l.Host.TimeNow().UTC())
-			}
-			return nil, nil
+			return Cmd.TakeOverReviewPark(l.Host, current, rp, name)
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// markReviewParkContinuing names name as the fresh session that continues
+// the task of on's review park (state.ReviewPark.Continuing); "" clears it.
+func (l *Loop) markReviewParkContinuing(on, name string) error {
+	return l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
+		for i := range current.ReviewParks {
+			if strings.EqualFold(current.ReviewParks[i].On, on) {
+				current.ReviewParks[i].Continuing = name
+			}
+		}
+		return nil, nil
+	})
 }
 
 // BriefData is what a brief template renders.
@@ -3632,13 +3785,41 @@ func (l *Loop) Brief(file, def, key string, d BriefData) (string, error) {
 			}
 		}
 	}
-	dir := filepath.Join(l.Host.Store().Dir(), "supervisor-loop")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	path := l.briefPath(key)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, briefName.ReplaceAllString(key, "-")+".md")
 	return path, os.WriteFile(path, b.Bytes(), 0o600)
 }
+
+// briefPath is the file of key's brief under the state's directory.
+func (l *Loop) briefPath(key string) string {
+	return filepath.Join(l.Host.Store().Dir(), "supervisor-loop", briefFile(key))
+}
+
+// briefFile is the file name of key's brief: the key with what a file name
+// may not keep replaced. A name longer than briefFileMax keeps its start
+// (a red wake's repository, number, head and park time) and ends in a hash
+// of the whole key instead of the rest (the red checks' names, which the
+// brief holds), so it stays within the file system's 255 bytes and two keys
+// that share the start keep files of their own.
+func briefFile(key string) string {
+	name := briefName.ReplaceAllString(key, "-")
+	if len(name) > briefFileMax {
+		sum := sha256.Sum256([]byte(key))
+		hash := hex.EncodeToString(sum[:])[:briefHashLen]
+		name = name[:briefFileMax-len(hash)-1] + "-" + hash
+	}
+	return name + ".md"
+}
+
+const (
+	// briefFileMax bounds a brief's file name before its extension, well
+	// below the 255 bytes of a file name.
+	briefFileMax = 160
+	// briefHashLen is the length of the hash a bounded name ends in.
+	briefHashLen = 16
+)
 
 // briefName is what a key may not keep in a file name.
 var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -4326,13 +4507,24 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 	if err := l.Host.FatalAdmission(name, false); err != nil {
 		return "", fmt.Errorf("fatal admission: %v: %w", err, ErrLoopLater)
 	}
-	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return "", err
+	}
+	place, here, err := l.taskPlacement(ctx, st, name, r.Repo, next.Ref)
 	if err != nil {
 		if errors.Is(err, ErrLoopLater) {
-			l.SayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
-			return "", fmt.Errorf("no room for a start on any host: %w", ErrLoopLater)
+			where := "on any host"
+			if here != "" {
+				where = "on the coordinator, where " + here
+			}
+			l.SayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet %s", next.URL, where)
+			return "", fmt.Errorf("no room for a start %s: %w", where, ErrLoopLater)
 		}
 		return "", err
+	}
+	if here != "" {
+		l.SayOnce("here "+next.Ref, "SUPERVISOR NEXT STAYS HERE %s: %s", next.URL, here)
 	}
 	brief, err := l.Brief(k.WorkerBrief, "", "next "+next.Ref, BriefData{URL: next.URL, Repo: r.Repo, Number: r.N})
 	if err != nil {
@@ -4902,22 +5094,6 @@ func (l *Loop) WakeReleased(ctx context.Context, release superloop.Action) error
 	return nil
 }
 
-// startEffort keeps a matching agents.models effort ahead of the loop's
-// default; the start resolves that rule itself.
-func (l *Loop) startEffort(args []string) []string {
-	kind := workerRole
-	if slices.Contains(args, "--"+reviewFlag) || slices.Contains(args, "--"+reviewOfSelfHostedFlag) {
-		kind = taskKindReview
-	}
-	if i := slices.Index(args, taskKindArg); i >= 0 && i+1 < len(args) {
-		kind = args[i+1]
-	}
-	if l.Host.Cfg().Agents.EffortFor(args[2], kind) != "" {
-		return nil
-	}
-	return Cmd.EffortFlags(l.Host.Cfg().Supervisor.Effort)
-}
-
 func (l *Loop) HoldingStarts() bool {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
@@ -4950,4 +5126,17 @@ func (l *Loop) stopPassForReexec(ctx context.Context) (bool, error) {
 		return true, err
 	}
 	return l.PauseForReexec(), nil
+}
+
+// passCheckpoint is stopPassForReexec between the pass's phases, where a
+// restart that waits for its claims in flight lets the pass go on to its
+// merge decisions (RestartWaits); its housekeeping stops as ever.
+func (l *Loop) passCheckpoint(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	if reexec, err := l.Reexec(ctx); err != nil || reexec {
+		return true, err
+	}
+	return l.PauseForReexec() && !l.RestartWaits(), nil
 }

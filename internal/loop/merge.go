@@ -206,7 +206,10 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 			resultErr = errors.Join(resultErr, err)
 		}
 	}()
-	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
+	// The claim ends when GitHub reports the merge: the gate leaves the
+	// release wait to its merge-child (--until-merged), which records the
+	// release with the run, and the delivery observation tracks it apart.
+	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--until-merged", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := BeekeeperRun(ctx, l.As(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
 		if saveErr := a.OperationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {

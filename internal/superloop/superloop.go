@@ -383,6 +383,12 @@ type Input struct {
 	// no live owner, as the loop saw it: the sweep gives one past
 	// OrphanWait.
 	Ownerless map[string]time.Time
+	// Elsewhere are the pull requests of Ownerless that another desk's
+	// worker opened, by ref: that desk's live claim on an issue each serves
+	// (PullIssues), in its words. Such a worker parks on its own desk, so a
+	// green head awaiting its first review is its request for this desk's
+	// review, which the sweep starts without OrphanWait.
+	Elsewhere map[string]string
 }
 
 // FiledIssue is an issue a session on the desk created, with the issue or

@@ -127,9 +127,13 @@ func TestValidateHosts(t *testing.T) {
 	}
 }
 
+// TestHostStepValidate checks a host step's kinds against the hosts.
+//
+// control: none: a step's config, which the changed cases name, is harness code the base lacks
 func TestHostStepValidate(t *testing.T) {
 	hosts := []Host{{Name: "builder"}}
-	for _, ok := range []HostStep{{Name: "builder", Fault: Unreachable}, {Name: "builder", Clear: true}, {Name: "builder", Fault: MissingTool, Slow: Duration{1}}} {
+	retention := map[string]any{"agents": map[string]any{"execution": map[string]any{"retention": "72h"}}}
+	for _, ok := range []HostStep{{Name: "builder", Fault: Unreachable}, {Name: "builder", Clear: true}, {Name: "builder", Fault: MissingTool, Slow: Duration{1}}, {Name: "builder", Config: retention}} {
 		if err := ok.Validate(hosts); err != nil {
 			t.Errorf("%+v: %v", ok, err)
 		}
@@ -138,8 +142,9 @@ func TestHostStepValidate(t *testing.T) {
 		"none of given.hosts":      {Name: "other", Clear: true},
 		`fault "on-fire"`:          {Name: "builder", Fault: "on-fire"},
 		"a host's provisioning":    {Name: "builder", Fault: OlderGo},
-		"one of fault, slow and c": {Name: "builder"},
+		"one of fault, slow, conf": {Name: "builder"},
 		"(clear alone)":            {Name: "builder", Clear: true, Fault: Unreachable},
+		"and clear (clear alone)":  {Name: "builder", Clear: true, Config: retention},
 	} {
 		if err := bad.Validate(hosts); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%+v: error %v, want one containing %q", bad, err, want)
