@@ -731,13 +731,11 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (capacity.Usag
 	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
 		return capacity.UsageReading{}, mkdirErr
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, u.EffectiveTimeout())
-	defer cancel()
 	home := ""
 	if _, statErr := os.Stat(filepath.Join(codex.HomeDir(stateDir), "auth.json")); statErr == nil {
 		home = codex.HomeDir(stateDir)
 	}
-	fresh, probeErr := codex.ProbeUsage(probeCtx, dir, home, now)
+	fresh, probeErr := probeCodexAccount(ctx, u.EffectiveTimeout(), dir, home, now)
 	if probeErr == nil {
 		r := codexUsageToReading(fresh)
 		r.At = now.UTC()
@@ -764,7 +762,7 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (capacity.Usag
 	if haveCached && !snapshot.Stopped && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
 		cached.At = now.UTC()
 		if capacity.ValidateReadingAt(cached, u, now) == nil {
-			cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
+			cached.Fallback = codexRefreshFallback(probeErr)
 			return cached, nil
 		}
 	}
@@ -772,9 +770,52 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (capacity.Usag
 		return capacity.UsageReading{}, probeErr
 	}
 	r := codexUsageToReading(cr)
-	r.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
+	r.Fallback = codexRefreshFallback(probeErr)
 	return r, nil
 }
+
+// codexProbeRetries are the pauses before the account usage request is sent
+// again after a failure that may pass (no answer, 429 or 5xx): a network that
+// is still coming up after a resume answers a moment later. A refusal (401,
+// no login) is not sent again; the next refresh asks again.
+var codexProbeRetries = []time.Duration{time.Second, 3 * time.Second}
+
+// probeCodexAccount reads the account's usage at the observation time at,
+// sending the request again after a transient failure while the timeout
+// leaves room. A request the timeout ends says so, with the timeout.
+func probeCodexAccount(ctx context.Context, timeout time.Duration, dir, home string, at time.Time) (codex.UsageReading, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		r, err := codex.ProbeUsage(ctx, dir, home, at)
+		if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return codex.UsageReading{}, &codex.UsageRequestError{Cause: "no answer within " + dur(timeout), Transient: true}
+		}
+		if err == nil || attempt == len(codexProbeRetries) || !codex.UsageRequestTransient(err) {
+			return r, err
+		}
+		select {
+		case <-ctx.Done():
+			return codex.UsageReading{}, err
+		case <-clk.After(codexProbeRetries[attempt]):
+		}
+	}
+}
+
+// codexRefreshFallback says why the account refresh failed and that the last
+// reading stands. The cause leads, so a shortened line still names it.
+func codexRefreshFallback(probeErr error) string {
+	cause := probeErr.Error()
+	var re *codex.UsageRequestError
+	if errors.As(probeErr, &re) && re.Cause != "" {
+		cause = re.Cause
+	}
+	return codexRefreshFailed + ": " + cause + "; using last Codex reading"
+}
+
+// codexRefreshFailed opens the fallback of a reading kept after a failed
+// account refresh.
+const codexRefreshFailed = "account refresh failed"
 
 func (a *app) useCodexRolloutUsage(u config.Usage, cached capacity.UsageReading) bool {
 	if a.readUsage != nil || !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
@@ -1043,6 +1084,10 @@ func (a *app) cachedUsageReading(file string, u config.Usage, now time.Time, cau
 
 func keptReadingFallback(u config.Usage, msg string) string {
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) && !codex.QuotaStop(errors.New(msg)) {
+		if strings.HasPrefix(msg, codexRefreshFailed+": ") {
+			// The reader's own fallback already says the last reading stands.
+			return capacity.UsageUnreadable + msg
+		}
 		return capacity.UsageUnreadable + "kept last good reading: " + msg
 	}
 	return msg
