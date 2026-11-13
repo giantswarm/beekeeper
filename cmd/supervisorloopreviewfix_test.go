@@ -229,7 +229,7 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			submissions := 0
 			r.answer = func(args []string) (string, int) {
-				if len(args) == 0 || args[0] != gateCmdName {
+				if len(args) == 0 || args[0] != GateCmdName {
 					return "", 0
 				}
 				submissions++
@@ -244,7 +244,7 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 			r.pass(t)
 			for range 2 {
 				r.pass(t)
-				if call := r.called(gateCmdName); call != nil {
+				if call := r.called(GateCmdName); call != nil {
 					t.Fatalf("live gate submitted again: %v", call)
 				}
 			}
@@ -253,7 +253,7 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 			}
 			r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
 			r.pass(t)
-			if r.called(gateCmdName) != nil || len(r.logged(t, "supervisor.merge")) != 1 {
+			if r.called(GateCmdName) != nil || len(r.logged(t, "supervisor.merge")) != 1 {
 				t.Fatalf("queued completion not reconciled: %v\n%s", r.calls, r.out)
 			}
 		})
@@ -277,7 +277,7 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			r.answer = func(args []string) (string, int) {
-				if len(args) > 0 && args[0] == gateCmdName {
+				if len(args) > 0 && args[0] == GateCmdName {
 					return tc.message, tc.code
 				}
 				return "", 0
@@ -303,7 +303,7 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 			r.pass(t)
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			r.answer = func(args []string) (string, int) {
-				if len(args) == 0 || args[0] != gateCmdName {
+				if len(args) == 0 || args[0] != GateCmdName {
 					return "", 0
 				}
 				raw, err := json.Marshal(github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, ExitCode: github.SquashNotApplicable, Reason: reason})
@@ -396,7 +396,7 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 			// Pass 4: R2 approves; the loop merges through gate (--reviewed-head) with no worker waiting.
 			r.verdict("R2", loopFixed, superloop.Approved, "")
 			r.pass(t)
-			if r.called(gateCmdName) == nil || r.lastMerged != loopFixed {
+			if r.called(GateCmdName) == nil || r.lastMerged != loopFixed {
 				t.Fatalf("approved second round did not merge: %v\n%s", r.calls, r.out)
 			}
 		})

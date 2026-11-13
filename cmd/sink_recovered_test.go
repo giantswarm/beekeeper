@@ -29,10 +29,10 @@ func recoveredMergeOwed() state.Owed {
 
 func stubRecoveredPull(t *testing.T) {
 	t.Helper()
-	prev := pullState
-	t.Cleanup(func() { pullState = prev })
+	prev := PullState
+	t.Cleanup(func() { PullState = prev })
 	merged := time.Now().UTC()
-	pullState = func(_ context.Context, repo string, pr int) (github.Pull, error) {
+	PullState = func(_ context.Context, repo string, pr int) (github.Pull, error) {
 		if repo != scratchRepo || pr != 7 {
 			t.Errorf("looked up %s#%d, want %s", repo, pr, decisionRef)
 		}
@@ -52,7 +52,7 @@ func TestTheSinkDispatchesARecoveredMerge(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Phase: state.Running})
 		return recordRun(st, len(st.Merges)-1, config.Lane{Name: scratchRepo}, sinkParty,
-			runOutcome{rc: 143, unanswered: errors.New("GitHub unavailable")}, time.Now().UTC(), ""), nil
+			RunOutcome{Rc: 143, Unanswered: errors.New("GitHub unavailable")}, time.Now().UTC(), ""), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestTheSinkDispatchesARecoveredMerge(t *testing.T) {
 // The gate and its replacement may confirm a merge before or after owed
 // recovery. Both paths retain their log details, but dispatch only once.
 func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
-	for _, producer := range []string{gateCmdName, sinkReplacement} {
+	for _, producer := range []string{GateCmdName, sinkReplacement} {
 		for _, recoveryFirst := range []bool{false, true} {
 			name := producer + "/gate-first"
 			if recoveryFirst {
@@ -117,12 +117,12 @@ func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
 					}
 				}
 				record := func() {
-					base := mergeBase(a.store.Dir(), scratchRepo, 7)
+					base := MergeBase(a.store.Dir(), scratchRepo, 7)
 					doc := []byte(`{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v1.2.3"}}`)
-					if producer == gateCmdName {
-						g := &gateRun{a: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
-							lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
-						if err := g.record(base, childRun{doc: doc}); err != nil {
+					if producer == GateCmdName {
+						g := &GateRun{Host: a, Ctx: t.Context(), Repo: scratchRepo, Pr: 7, Me: sinkParty,
+							Lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
+						if err := g.Record(base, ChildRun{Doc: doc}); err != nil {
 							t.Fatal(err)
 						}
 						return
@@ -233,10 +233,10 @@ func TestARecoveredMergeWaitsUntilItsEventCanBeRecorded(t *testing.T) {
 
 // A history read failure must leave the runner's evidence for a later poll.
 func TestMergeRecordersKeepResultsWhenHistoryFails(t *testing.T) {
-	for _, producer := range []string{gateCmdName, sinkReplacement} {
+	for _, producer := range []string{GateCmdName, sinkReplacement} {
 		t.Run(producer, func(t *testing.T) {
 			a, _ := sinkApp(t, mergedSinkYAML)
-			base := mergeBase(a.store.Dir(), scratchRepo, 7)
+			base := MergeBase(a.store.Dir(), scratchRepo, 7)
 			doc := []byte(`{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v1.2.3"}}`)
 			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 				t.Fatal(err)
@@ -254,10 +254,10 @@ func TestMergeRecordersKeepResultsWhenHistoryFails(t *testing.T) {
 			}
 			store := a.store
 			a.store = unreadMergeHistory{store}
-			if producer == gateCmdName {
-				g := &gateRun{a: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
-					lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
-				if err := g.record(base, childRun{doc: doc}); err == nil {
+			if producer == GateCmdName {
+				g := &GateRun{Host: a, Ctx: t.Context(), Repo: scratchRepo, Pr: 7, Me: sinkParty,
+					Lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
+				if err := g.Record(base, ChildRun{Doc: doc}); err == nil {
 					t.Fatal("recording failure was hidden")
 				}
 			} else {

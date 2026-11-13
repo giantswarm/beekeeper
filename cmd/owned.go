@@ -65,37 +65,37 @@ func (a *app) ownedRun(ctx context.Context, argv []string, limit time.Duration) 
 	cli := callerCLI()
 	base := ownedBase(a.store.Dir(), argv, os.Getpid())
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
-		gateLine("%v: this runs unowned, its outcome reaches nobody if your turn ends first", err)
-		return exitCode(runChild(argv, os.Stdout))
+		GateLine("%v: this runs unowned, its outcome reaches nobody if your turn ends first", err)
+		return ExitCode(runChild(argv, os.Stdout))
 	}
-	spec := childSpec{Argv: argv, Owner: me, Config: a.explicitConfig(), WithCaller: true}
+	spec := ChildSpec{Argv: argv, Owner: me, Config: a.explicitConfig(), WithCaller: true}
 	lead, polls := claimLead(a.store.Dir(), argv, base)
 	if !polls {
-		if self, err := selfExe(); err == nil {
+		if self, err := SelfExe(); err == nil {
 			spec.Argv, spec.Command = []string{self, followRunCmd, lead}, argv
-			gateLine("the same command already polls GitHub on this machine (%s): following its outcome instead of polling again", filepath.Base(lead))
+			GateLine("the same command already polls GitHub on this machine (%s): following its outcome instead of polling again", filepath.Base(lead))
 		}
 	}
 	var pid int
 	r := runDetached(spec, base, leaveAt(time.Now(), limit, false), func(p int) { pid = p })
-	if r.ended {
+	if r.Ended {
 		// Its merge-child stops devctl once this gate is gone.
-		return exitCode(r.rc)
+		return ExitCode(r.Rc)
 	}
-	if r.left {
+	if r.Left {
 		// The run goes on and keeps the lead: its merge-child hands the
 		// outcome over once this gate is gone without its heard marker.
-		if err := os.WriteFile(base+leftExt, nil, 0o600); err != nil {
-			gateLine("the run cannot be marked to run on (%v): it ends with this call", err)
+		if err := os.WriteFile(base+LeftExt, nil, 0o600); err != nil {
+			GateLine("the run cannot be marked to run on (%v): it ends with this call", err)
 		}
-		gateLine("%s runs on outside the call (pid %d), %s: do not run it again, do not poll", strings.Join(argv, " "), pid, ownerOf(me))
+		GateLine("%s runs on outside the call (pid %d), %s: do not run it again, do not poll", strings.Join(argv, " "), pid, ownerOf(me))
 		return &exitError{code: ExitGateQueued}
 	}
 	if polls {
 		releaseLead(a.store.Dir(), argv, base)
 	}
 	handOver(base, r, cli)
-	return exitCode(r.rc)
+	return ExitCode(r.Rc)
 }
 
 // yieldPoll is how often a wait that yields to the merges at the reset
@@ -118,7 +118,7 @@ func (a *app) yieldToMerges(ctx context.Context, argv []string) error {
 			return nil
 		}
 		if !said {
-			gateLine("waiting: %s, queued for the GitHub budget's reset, goes first (merge.resetFirst); %s starts after it, at %s at the latest",
+			GateLine("waiting: %s, queued for the GitHub budget's reset, goes first (merge.resetFirst); %s starts after it, at %s at the latest",
 				merge.Keys(first), strings.Join(argv, " "), clock(time.Now(), merge.ResetFirstUntil(first, a.cfg.Merge.ResetFirst.Duration)))
 			said = true
 		}
@@ -170,7 +170,7 @@ func claimLead(stateDir string, argv []string, base string) (string, bool) {
 		_, finished := readResult(lead)
 		info, _ := os.Stat(lf)
 		pid := readPID(lead)
-		if !finished && (pid != 0 && proc.Alive(pid) || pid == 0 && info != nil && time.Since(info.ModTime()) < childStart) {
+		if !finished && (pid != 0 && proc.Alive(pid) || pid == 0 && info != nil && time.Since(info.ModTime()) < ChildStart) {
 			return lead, false
 		}
 	}
@@ -238,7 +238,7 @@ func (a *app) followRunCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(_ *cobra.Command, args []string) error {
-			return exitCode(followRun(args[0], os.Stdout, os.Stderr))
+			return ExitCode(followRun(args[0], os.Stdout, os.Stderr))
 		},
 	}
 }
@@ -282,7 +282,7 @@ func followRun(lead string, stdout, stderr io.Writer) int {
 				return 128 + int(syscall.SIGKILL)
 			}
 		}
-		time.Sleep(followPoll)
+		time.Sleep(FollowPoll)
 	}
 }
 
@@ -333,8 +333,8 @@ func heardFile(base string, gate int) string { return fmt.Sprintf("%s.%d.heard",
 
 // handOver leaves the heard marker when r's outcome reached its caller: no
 // write to its pipes failed and the CLI it runs under, if any, still runs.
-func handOver(base string, r childRun, cli int) {
-	if r.unheard || cli != 0 && !proc.Alive(cli) {
+func handOver(base string, r ChildRun, cli int) {
+	if r.Unheard || cli != 0 && !proc.Alive(cli) {
 		return
 	}
 	_ = os.WriteFile(heardFile(base, os.Getpid()), nil, 0o600) //nolint:gosec // under the state directory, named by the gate
@@ -371,14 +371,14 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 		_, _ = fmt.Fprintf(os.Stderr, "%s, owed to %q: the state does not take it (%v)\n", o.Line, o.Owner.Name, err)
 	}
 	for deadline := time.Now().Add(ownerWait); proc.Alive(r.spec.Gate) && time.Now().Before(deadline); {
-		time.Sleep(followPoll)
+		time.Sleep(FollowPoll)
 	}
 	if heard(o) {
 		a.paid(o)
 		return
 	}
 	if merge.Red(r.doc) {
-		r.infra = infraReds(ctx, r.doc)
+		r.infra = InfraReds(ctx, r.doc)
 		o.Line = r.outcome()
 	}
 	a.payOwed(ctx, o)
@@ -468,7 +468,7 @@ func runReason(doc []byte, last, handCut string) string {
 		case handCut != "":
 			rel = "none awaited, " + handCut + " has no auto-release and its tags are cut by hand"
 		case o.NoRelease:
-			rel = noneWarranted
+			rel = NoneWarranted
 		case rel == "":
 			rel = "unknown"
 		}

@@ -91,7 +91,7 @@ func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, u
 		var releases []merge.HelmRelease
 		if lane.Installation != "" {
 			var err error
-			releases, err = readHelmReleases(ctx, lane)
+			releases, err = ReadHelmReleases(ctx, lane)
 			if err != nil {
 				return refused("merge lane readiness unavailable")
 			}
@@ -205,7 +205,7 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 					if !grant.Consumed {
 						return nil, refused("authorization has no merge attempt to reconcile")
 					}
-					grant.Outcome = verdictUnconfirmed
+					grant.Outcome = VerdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {
 						grant.Outcome = execution.MergeSucceeded
 					}

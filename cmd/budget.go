@@ -107,7 +107,7 @@ unread core budget:
 				ctx = context.WithValue(ctx, budgetGateKey{}, true)
 			}
 			b, err := readBudget(a, ctx)
-			if err = unsavedBudget(err); err != nil {
+			if err = UnsavedBudget(err); err != nil {
 				if !a.json {
 					for _, warning := range b.Warnings {
 						_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)

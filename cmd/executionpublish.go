@@ -212,7 +212,7 @@ var publicationGHReasons = []struct{ match, reason string }{
 	{"HTTP 5", "GitHub answered with a server error"},
 	{"could not connect", publicationUnreachable},
 	{"connection", publicationUnreachable},
-	{timeoutComm, "GitHub did not answer in time"},
+	{TimeoutComm, "GitHub did not answer in time"},
 }
 
 // publicationGHReason names why a gh call failed, never its raw output.

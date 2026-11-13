@@ -51,7 +51,7 @@ func mergeArgv(repo string, extra ...string) []string {
 
 // runningMerge is a gate run of repo#pr in its lane that devctl's turn has
 // come for, with the devctl release window open when repo is devctl's.
-func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
+func runningMerge(t *testing.T, repo string, lane config.Lane) *GateRun {
 	t.Helper()
 	store, err := state.Open(t.TempDir())
 	if err != nil {
@@ -62,15 +62,15 @@ func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
 
 // runningMergeIn is runningMerge in store, on a machine that runs no devctl
 // process of its own.
-func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane config.Lane) *gateRun {
+func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane config.Lane) *GateRun {
 	t.Helper()
 	hostDevctls(t, 0)
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
 	me := state.Party{Name: workerRole}
-	g := &gateRun{a: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
-		argv: mergeArgv(repo)}
+	g := &GateRun{Host: &app{cfg: cfg, store: store, now: relayNow}, Ctx: context.Background(), Repo: repo, Pr: 7, Lane: lane, Me: me, Pid: os.Getpid(),
+		Argv: mergeArgv(repo)}
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = []state.Merge{{Repo: repo, PR: 7, Lane: lane.Name, By: me, PID: g.pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
+		st.Merges = []state.Merge{{Repo: repo, PR: 7, Lane: lane.Name, By: me, PID: g.Pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
 		if repo == merge.ToolRepo {
 			st.Holds = []state.Hold{{Target: merge.AllMerges, Except: repo, By: me, Tool: merge.Tool, ToolFrom: devctlFrom, ToolPR: 7}}
 		}
@@ -82,18 +82,18 @@ func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane conf
 	return g
 }
 
-func gateState(t *testing.T, g *gateRun) *state.State {
+func gateState(t *testing.T, g *GateRun) *state.State {
 	t.Helper()
-	st, err := g.a.store.Read()
+	st, err := g.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return st
 }
 
-func lastEvent(t *testing.T, g *gateRun, verb string) string {
+func lastEvent(t *testing.T, g *GateRun, verb string) string {
 	t.Helper()
-	evs, err := g.a.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
+	evs, err := g.Host.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
 	if err != nil || len(evs) == 0 {
 		return ""
 	}
@@ -148,7 +148,7 @@ func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 				_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
 				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
 			}()
-			if err := g.runMerge(); err != nil {
+			if err := g.RunMerge(); err != nil {
 				t.Fatalf("the merge did not finish: %v", err)
 			}
 			raw, err := os.ReadFile(where) //nolint:gosec // the test's file
@@ -188,14 +188,14 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	fakeDevctl(t, `echo $PPID >`+pidFile+`; kill -KILL $PPID; sleep 1`)
 	stubGitHub(t, github.Merged, "")
 	// The script would kill this test binary if the recovery ran it too.
-	was := releaseWait
-	t.Cleanup(func() { releaseWait = was })
-	releaseWait = func(context.Context, string, ...string) []byte { return nil }
+	was := ReleaseWait
+	t.Cleanup(func() { ReleaseWait = was })
+	ReleaseWait = func(context.Context, string, ...string) []byte { return nil }
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); Code(err) != 137 {
+	if err := g.RunMerge(); Code(err) != 137 {
 		t.Fatalf("exit %d, want 137", Code(err))
 	}
-	raw, err := os.ReadFile(mergeBase(g.a.store.Dir(), scratchRepo, 7) + terminationExt)
+	raw, err := os.ReadFile(MergeBase(g.Host.store.Dir(), scratchRepo, 7) + TerminationExt)
 	if err != nil || !strings.Contains(string(raw), "runner disappeared") || !strings.Contains(string(raw), "no cap kill confirmed") {
 		t.Fatalf("missing runner-loss diagnostic: %q, %v", raw, err)
 	}
@@ -215,12 +215,12 @@ func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
 			stubGitHub(t, github.Open, "")
 			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 			out := gateStderr(t, func() {
-				if err := g.runMerge(); Code(err) != 137 {
+				if err := g.RunMerge(); Code(err) != 137 {
 					t.Fatalf("exit %d, want 137", Code(err))
 				}
 			})
-			base := mergeBase(g.a.store.Dir(), scratchRepo, 7)
-			raw, err := os.ReadFile(base + terminationExt) //nolint:gosec // a test fixture
+			base := MergeBase(g.Host.store.Dir(), scratchRepo, 7)
+			raw, err := os.ReadFile(base + TerminationExt) //nolint:gosec // a test fixture
 			if err != nil || !strings.Contains(string(raw), tc.want) {
 				t.Fatalf("persisted reason %q: %v", raw, err)
 			}
@@ -228,7 +228,7 @@ func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
 				t.Fatalf("gate output lacks reason: %s", out)
 			}
 			out = gateStderr(t, func() {
-				_, _ = launchChild(childSpec{Argv: []string{"/missing-merge-command"}}, base)
+				_, _ = LaunchChild(ChildSpec{Argv: []string{"/missing-merge-command"}}, base)
 			})
 			if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, tc.want) {
 				t.Fatalf("rerun lost reason: %s", out)
@@ -252,9 +252,9 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 	for _, c := range []struct {
 		name, repo, pull string
 		lane             config.Lane
-		check            func(t *testing.T, g *gateRun, st *state.State)
+		check            func(t *testing.T, g *GateRun, st *state.State)
 	}{
-		{"merged, a lane to roll", scratchRepo, github.Merged, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"merged, a lane to roll", scratchRepo, github.Merged, gazelleLane, func(t *testing.T, g *GateRun, st *state.State) {
 			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
 				t.Errorf("want one settling merge: %+v", st.Merges)
 			}
@@ -265,7 +265,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Error("logged merge.failed")
 			}
 		}},
-		{"unmerged leaves the lane", scratchRepo, github.Open, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"unmerged leaves the lane", scratchRepo, github.Open, gazelleLane, func(t *testing.T, g *GateRun, st *state.State) {
 			if len(st.Merges) != 0 {
 				t.Errorf("a run with nothing merged keeps a place: %+v", st.Merges)
 			}
@@ -273,7 +273,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Errorf("merge.failed event: %q", d)
 			}
 		}},
-		{"merged devctl keeps its window for the update", merge.ToolRepo, github.Merged, toolLane, func(t *testing.T, _ *gateRun, st *state.State) {
+		{"merged devctl keeps its window for the update", merge.ToolRepo, github.Merged, toolLane, func(t *testing.T, _ *GateRun, st *state.State) {
 			// Its release unconfirmed, it settles its lane by the settle rule.
 			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Release != "" {
 				t.Errorf("want one settling merge, its release unknown: %+v", st.Merges)
@@ -282,7 +282,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Errorf("want the window, merged: %+v", st.Holds)
 			}
 		}},
-		{"unmerged devctl lifts its window", merge.ToolRepo, github.Open, toolLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"unmerged devctl lifts its window", merge.ToolRepo, github.Open, toolLane, func(t *testing.T, g *GateRun, st *state.State) {
 			if len(st.Holds) != 0 {
 				t.Errorf("window left: %+v", st.Holds)
 			}
@@ -290,7 +290,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Errorf("hold.lift event: %q", d)
 			}
 		}},
-		{"GitHub unanswered settles by the rule", scratchRepo, "", gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"GitHub unanswered settles by the rule", scratchRepo, "", gazelleLane, func(t *testing.T, g *GateRun, st *state.State) {
 			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Exit != 143 {
 				t.Errorf("want one settling merge: %+v", st.Merges)
 			}
@@ -304,7 +304,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 			fakeDevctl(t, `echo merged >&2; kill -TERM $$`)
 			asked := stubGitHub(t, c.pull, devctlFrom)
 			g := runningMerge(t, c.repo, c.lane)
-			if err := g.runMerge(); Code(err) != 143 {
+			if err := g.RunMerge(); Code(err) != 143 {
 				t.Fatalf("exit %d, want 143", Code(err))
 			}
 			if *asked == 0 {
@@ -329,14 +329,14 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 			stubGitHub(t, c.pull, c.version)
 			g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
 			// Its gate and devctl are gone.
-			err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Merges[0].PID, st.Merges[0].Child = 0, 0
 				return nil, nil
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			g.a.closeToolWindow(context.Background(), watchParty)
+			g.Host.closeToolWindow(context.Background(), watchParty)
 			st := gateState(t, g)
 			if lifted := len(st.Holds) == 0; lifted != c.lifted {
 				t.Fatalf("lifted %v, want %v: %+v", lifted, c.lifted, st.Holds)
@@ -353,11 +353,11 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		updates := 0
 		devctlUpdate = func(context.Context) error { updates++; return nil }
 		g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-		_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Merges[0].PID, st.Merges[0].Child = 0, os.Getpid()
 			return nil, nil
 		})
-		g.a.closeToolWindow(context.Background(), watchParty)
+		g.Host.closeToolWindow(context.Background(), watchParty)
 		if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolMerged || updates != 0 {
 			t.Errorf("a running devctl's window, pull request %q: %+v, %d updates", pull, st.Holds, updates)
 		}
@@ -374,11 +374,11 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	pull, version, updates, fail := github.Open, devctlFrom, 0, error(nil)
-	pullState = func(context.Context, string, int) (github.Pull, error) {
+	PullState = func(context.Context, string, int) (github.Pull, error) {
 		*asked++
 		return github.Pull{State: pull}, nil
 	}
-	devctlVersion = func(context.Context) string { return version }
+	DevctlVersion = func(context.Context) string { return version }
 	published := false
 	devctlUpdate = func(context.Context) error {
 		updates++
@@ -396,7 +396,7 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 		return ok
 	}
 	sinceUpdate := func() {
-		_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Holds[0].ToolUpdated = time.Now().Add(-toolUpdateEvery)
 			return nil, nil
 		})
@@ -404,20 +404,20 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 
 	// The pull request waits for its checks: no update, the window stays and
 	// lets the other merges through, the installed devctl being the latest.
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if st := gateState(t, g); len(st.Holds) != 1 || updates != 0 || held() {
 		t.Fatalf("before the merge: %d updates, holds %+v", updates, st.Holds)
 	}
 
 	// Merged, no release published yet: the update installs nothing.
 	pull = github.Merged
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	st := gateState(t, g)
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || updates != 1 || !held() {
 		t.Fatalf("merged, nothing released: %d updates, holds %+v", updates, st.Holds)
 	}
 	asked0 := *asked
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if updates != 1 || *asked != asked0 {
 		t.Fatalf("within toolUpdateEvery: %d updates, GitHub asked %d more times", updates, *asked-asked0)
 	}
@@ -426,7 +426,7 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	// and says why.
 	fail = errors.New("the latest release has no signature bundle for this platform's binary")
 	sinceUpdate()
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	st = gateState(t, g)
 	if len(st.Holds) != 1 || updates != 2 || !held() || !strings.Contains(st.Holds[0].ToolFailed, "no signature bundle") {
 		t.Fatalf("an unverified release: %d updates, holds %+v", updates, st.Holds)
@@ -434,7 +434,7 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	if d := lastEvent(t, g, "hold.update"); !strings.Contains(d, "no signature bundle") {
 		t.Errorf("hold.update event: %q", d)
 	}
-	if end := holdEnd(g.a, st.Holds[0]); !strings.Contains(end, "its last update failed, the window stays") || !strings.Contains(end, "no signature bundle") {
+	if end := holdEnd(g.Host, st.Holds[0]); !strings.Contains(end, "its last update failed, the window stays") || !strings.Contains(end, "no signature bundle") {
 		t.Errorf("the window's end: %q", end)
 	}
 
@@ -442,7 +442,7 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	// while the merge's devctl still runs; the held merges pass.
 	fail, published = nil, true
 	sinceUpdate()
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	st = gateState(t, g)
 	if len(st.Holds) != 0 || updates != 3 || held() {
 		t.Fatalf("a verified release: %d updates, holds %+v", updates, st.Holds)
@@ -455,8 +455,8 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	}
 
 	// The merge's record later finds the window gone and lifts nothing more.
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
 	})
 	if st = gateState(t, g); len(st.Holds) != 0 {
 		t.Errorf("the record reopened a window: %+v", st.Holds)
@@ -468,15 +468,15 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	version := devctlFrom
-	devctlVersion = func(context.Context) string { return version }
+	DevctlVersion = func(context.Context) string { return version }
 	devctlUpdate = func(context.Context) error { version = devctlTo; return nil }
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	g.pr = 0
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	g.Pr = 0
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PR, st.Holds[0].ToolPR = 0, 0
 		return nil, nil
 	})
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if st := gateState(t, g); len(st.Holds) != 0 || *asked != 0 {
 		t.Fatalf("a promotion's verified release: holds %+v, GitHub asked %d times", st.Holds, *asked)
 	}
@@ -490,20 +490,20 @@ func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T)
 func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 	stubGitHub(t, "", devctlFrom) // restores the stubs, devctl's update a no-op
 	asked, answer, version := 0, "", devctlFrom
-	pullState = func(context.Context, string, int) (github.Pull, error) {
+	PullState = func(context.Context, string, int) (github.Pull, error) {
 		asked++
 		if answer == "" {
 			return github.Pull{}, errors.New("no network")
 		}
 		return github.Pull{State: answer}, nil
 	}
-	devctlVersion = func(context.Context) string { return version }
+	DevctlVersion = func(context.Context) string { return version }
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Three merges queued behind the window, whose merge's gate is gone.
-	var gates []*gateRun
+	var gates []*GateRun
 	for range 3 {
 		gates = append(gates, runningMergeIn(t, store, merge.ToolRepo, config.Lane{Name: merge.ToolRepo}))
 	}
@@ -521,7 +521,7 @@ func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 	// Four steps of each gate within the interval, GitHub unanswered: one read.
 	for range 4 {
 		for _, g := range gates {
-			g.a.pollToolWindow(context.Background(), g.me)
+			g.Host.pollToolWindow(context.Background(), g.Me)
 		}
 	}
 	st := gateState(t, gates[0])
@@ -530,7 +530,7 @@ func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 	}
 
 	// The gate whose merge ended reads at once.
-	gates[0].a.closeToolWindow(context.Background(), gates[0].me)
+	gates[0].Host.closeToolWindow(context.Background(), gates[0].Me)
 	if asked != 2 {
 		t.Fatalf("GitHub asked %d times after the merge's own check, want 2", asked)
 	}
@@ -538,20 +538,20 @@ func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 	// The interval passed, the pull request merged: the next step reads it.
 	answer = github.Merged
 	checkedAgo(toolCheckEvery)
-	gates[1].a.pollToolWindow(context.Background(), gates[1].me)
-	gates[2].a.pollToolWindow(context.Background(), gates[2].me)
+	gates[1].Host.pollToolWindow(context.Background(), gates[1].Me)
+	gates[2].Host.pollToolWindow(context.Background(), gates[2].Me)
 	if st = gateState(t, gates[0]); asked != 3 || len(st.Holds) != 1 || !st.Holds[0].ToolMerged {
 		t.Fatalf("GitHub asked %d times after the interval, want 3; holds %+v", asked, st.Holds)
 	}
 
 	// devctl reports the release: the next step after the interval lifts.
 	version = devctlTo
-	gates[2].a.pollToolWindow(context.Background(), gates[2].me)
+	gates[2].Host.pollToolWindow(context.Background(), gates[2].Me)
 	if st = gateState(t, gates[0]); len(st.Holds) != 1 {
 		t.Fatalf("lifted within the interval: %+v", st.Holds)
 	}
 	checkedAgo(toolCheckEvery)
-	gates[2].a.pollToolWindow(context.Background(), gates[2].me)
+	gates[2].Host.pollToolWindow(context.Background(), gates[2].Me)
 	if st = gateState(t, gates[0]); len(st.Holds) != 0 {
 		t.Fatalf("not lifted after the interval: %+v", st.Holds)
 	}
@@ -582,7 +582,7 @@ func TestSquashArgv(t *testing.T) {
 		"bk squash-merge fixture-person/lab 7 --timeout 10m":  mergeArgv(labRepo, "--timeout", "10m"),
 		"bk squash-merge fixture-person/lab 7 --timeout 1h0m": mergeArgv(labRepo, "--timeout=1h0m"),
 	} {
-		if got := strings.Join(squashArgv("bk", labRepo, 7, argv), " "); got != want {
+		if got := strings.Join(SquashArgv("bk", labRepo, 7, argv), " "); got != want {
 			t.Errorf("%v: %q, want %q", argv, got, want)
 		}
 	}
@@ -606,9 +606,9 @@ func TestUpdateBranchRefused(t *testing.T) {
 				}
 
 				// A queued run from an older version must not update either route.
-				g := &gateRun{a: a, repo: repo, pr: 7, argv: mergeArgv(repo, flag)}
+				g := &GateRun{Host: a, Repo: repo, Pr: 7, Argv: mergeArgv(repo, flag)}
 				stderr = gateStderr(t, func() {
-					argv, routeErr := g.mergeArgv()
+					argv, routeErr := g.MergeArgv()
 					err = routeErr
 					if len(argv) != 0 {
 						t.Errorf("refused route produced argv %v", argv)
@@ -626,14 +626,14 @@ func TestUpdateBranchRefused(t *testing.T) {
 // run's own files; kept outputs past keptFor are pruned.
 func TestKeepOutput(t *testing.T) {
 	dir := t.TempDir()
-	base := mergeBase(dir, labRepo, 7)
+	base := MergeBase(dir, labRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(base+".log", []byte("not found error\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := filepath.Join(dir, keptOutputs, "old.log")
+	old := filepath.Join(dir, KeptOutputs, "old.log")
 	if err := os.MkdirAll(filepath.Dir(old), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -641,10 +641,10 @@ func TestKeepOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if err := os.Chtimes(old, now.Add(-keptFor-time.Hour), now.Add(-keptFor-time.Hour)); err != nil {
+	if err := os.Chtimes(old, now.Add(-KeptFor-time.Hour), now.Add(-KeptFor-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	path := keepOutput(base, []byte(`{"exitCode":7}`), now)
+	path := KeepOutput(base, []byte(`{"exitCode":7}`), now)
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's file
 	if err != nil || !strings.Contains(string(raw), "not found error") || !strings.Contains(string(raw), `"exitCode":7`) {
 		t.Fatalf("kept %q: %q, %v", path, raw, err)
@@ -652,7 +652,7 @@ func TestKeepOutput(t *testing.T) {
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Errorf("the old output is not pruned: %v", err)
 	}
-	removeMergeFiles(base)
+	RemoveMergeFiles(base)
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("the kept output went with the run's files: %v", err)
 	}
@@ -673,12 +673,12 @@ func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
-	was := selfExe
-	selfExe = func() (string, error) { return self, nil }
-	t.Cleanup(func() { selfExe = was })
+	was := SelfExe
+	SelfExe = func() (string, error) { return self, nil }
+	t.Cleanup(func() { SelfExe = was })
 	stubGitHub(t, "", "")
 	g := runningMerge(t, labRepo, config.Lane{Name: labRepo})
-	if err := g.runMerge(); err != nil {
+	if err := g.RunMerge(); err != nil {
 		t.Fatalf("the plain squash merge: %v", err)
 	}
 	raw, _ := os.ReadFile(args) //nolint:gosec // the test's file
@@ -706,12 +706,12 @@ case "$*" in *"`+exampleOwnerRepo+` 7"*) ;; *) echo "unexpected arguments: $*" >
 echo '`+mergedDoc+`'`)
 	stubGitHub(t, "", "")
 	g := runningMerge(t, exampleOwnerRepo, config.Lane{Name: exampleOwnerRepo, Installation: "staging"})
-	g.a.cfg.Merge.DevctlOwners = cfg.Merge.DevctlOwners
-	if !g.runsDevctl() {
+	g.Host.cfg.Merge.DevctlOwners = cfg.Merge.DevctlOwners
+	if !g.RunsDevctl() {
 		t.Fatal("example owner takes the plain merge route")
 	}
 	output := capture(t, &os.Stderr)
-	err = g.runMerge()
+	err = g.RunMerge()
 	got := output()
 	if err != nil {
 		t.Fatalf("devctl merge: %v; output: %s", err, got)
@@ -748,13 +748,13 @@ func TestAnUnansweredReviewRefusesEveryRoute(t *testing.T) {
 			if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 				t.Fatal(err)
 			}
-			was := selfExe
-			selfExe = func() (string, error) { return self, nil }
-			t.Cleanup(func() { selfExe = was })
+			was := SelfExe
+			SelfExe = func() (string, error) { return self, nil }
+			t.Cleanup(func() { SelfExe = was })
 			stubGitHub(t, "", "")
 			g := runningMerge(t, repo, config.Lane{Name: repo})
 			var err error
-			out := gateStderr(t, func() { err = g.runMerge() })
+			out := gateStderr(t, func() { err = g.RunMerge() })
 			var code *exitError
 			if !errors.As(err, &code) || code.code != 5 {
 				t.Errorf("exit %v, want 5", err)
@@ -783,15 +783,15 @@ func TestHelperMergeChild(t *testing.T) {
 func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 	lane := config.Lane{Name: "portal-tools", Installation: "nowhere", Context: "no-such-context"}
 	g := runningMerge(t, "o/r", lane)
-	g.a.now = time.Now()
-	if _, why, err := g.laneReady(merge.Lane{}); err == nil && why == "" {
+	g.Host.now = time.Now()
+	if _, why, err := g.LaneReady(merge.Lane{}); err == nil && why == "" {
 		t.Fatal("an unreadable installation is ready without a fix window")
 	}
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Holds = append(st.Holds, state.Hold{Target: merge.LanePrefix + lane.Name, Except: "o/r#7", By: state.Party{Name: supervisorName}, Reason: "the outage fix"})
 		return nil, nil
 	})
-	if _, why, err := g.laneReady(merge.Lane{}); err != nil || why != "" {
+	if _, why, err := g.LaneReady(merge.Lane{}); err != nil || why != "" {
 		t.Fatalf("the fix window's merge waits: %q, %v", why, err)
 	}
 	if d := lastEvent(t, g, "merge.window"); !strings.Contains(d, "o/r#7 in lane portal-tools") || !strings.Contains(d, "the outage fix") {
@@ -805,7 +805,7 @@ func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version, updates, fail := devctlFrom, 0, error(nil)
-	devctlVersion = func(context.Context) string { return version }
+	DevctlVersion = func(context.Context) string { return version }
 	devctlUpdate = func(context.Context) error {
 		updates++
 		if fail != nil {
@@ -815,15 +815,15 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 		return nil
 	}
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = nil
 		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
 		return nil, nil
 	})
 
 	fail = errors.New("no release asset yet")
-	g.a.closeToolWindow(context.Background(), watchParty)
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if st := gateState(t, g); len(st.Holds) != 1 || updates != 1 {
 		t.Fatalf("after a failed update: %d updates, holds %+v", updates, st.Holds)
 	}
@@ -832,11 +832,11 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	}
 
 	fail = nil
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Holds[0].ToolUpdated = time.Now().Add(-toolUpdateEvery)
 		return nil, nil
 	})
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if st := gateState(t, g); len(st.Holds) != 0 || updates != 2 {
 		t.Fatalf("after the update: %d updates, holds %+v", updates, st.Holds)
 	}
@@ -850,8 +850,8 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, NoRelease: true}}, time.Now(), ""), nil
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: merge.Outcome{Merged: true, NoRelease: true}}, time.Now(), ""), nil
 	})
 	if st := gateState(t, g); len(st.Holds) != 0 {
 		t.Fatalf("window left: %+v", st.Holds)
@@ -864,10 +864,10 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlTo)
 	// Stop after the startup transaction so no external merge runs.
-	reviewGuard = func(context.Context, string, int) (string, error) { return "stop before merge", nil }
+	ReviewGuard = func(context.Context, string, int) (string, error) { return "stop before merge", nil }
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	g.a.cfg.Merge.Cap = 10
-	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	g.Host.cfg.Merge.Cap = 10
+	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
 		return nil, nil
 	}); err != nil {
@@ -880,7 +880,7 @@ func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 		}
 		return ok
 	}
-	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Holds[0].Reason = "waiting for the devctl release"
 		return nil, nil
 	}); err != nil {
@@ -889,20 +889,20 @@ func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	if !held() {
 		t.Fatal("open window admitted another repository's merge")
 	}
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if held() {
 		t.Fatal("installed release still blocks another repository's merge")
 	}
 	waiting := gateState(t, g).Merges[0]
 	waiting.Phase, waiting.Started = state.Waiting, time.Time{}
 	for range 2 {
-		if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Merges = []state.Merge{waiting}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if why, err := g.start("", nil); Code(err) != ExitGateRefused || why != "" {
+		if why, err := g.Start("", nil); Code(err) != ExitGateRefused || why != "" {
 			t.Fatalf("rerun start: %q, %v", why, err)
 		}
 		if st := gateState(t, g); len(st.Holds) != 0 || held() {
@@ -925,17 +925,17 @@ func TestAToolMergeStartOpensAWindowUnlessAlreadyMerged(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stubGitHub(t, tc.pull, devctlFrom)
-			reviewGuard = func(context.Context, string, int) (string, error) { return "stop before merge", nil }
+			ReviewGuard = func(context.Context, string, int) (string, error) { return "stop before merge", nil }
 			g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-			g.a.cfg.Merge.Cap = 10
-			if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			g.Host.cfg.Merge.Cap = 10
+			if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
 				st.Holds = nil
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if why, err := g.start("", nil); Code(err) != ExitGateRefused || why != "" {
+			if why, err := g.Start("", nil); Code(err) != ExitGateRefused || why != "" {
 				t.Fatalf("start: %q, %v", why, err)
 			}
 			if st := gateState(t, g); (len(st.Holds) != 0) != tc.wantHold {
@@ -954,13 +954,13 @@ func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
 	updates := 0
 	devctlUpdate = func(context.Context) error { updates++; return nil }
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	g.a.cfg.Merge.Cap = 10
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	g.Host.cfg.Merge.Cap = 10
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
 		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease, st.Holds[0].ToolPR = true, devctlTo, 6
 		return nil, nil
 	})
-	why, err := g.start("", nil)
+	why, err := g.Start("", nil)
 	if err != nil || !strings.Contains(why, "waiting for devctl to report "+devctlTo) || !strings.Contains(why, merge.ToolRepo+"#6") {
 		t.Fatalf("start: %q, %v", why, err)
 	}
@@ -979,8 +979,8 @@ func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
 func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: devctlTo + "-rc.1"}}, time.Now(), ""), nil
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: merge.Outcome{Merged: true, Release: devctlTo + "-rc.1"}}, time.Now(), ""), nil
 	})
 	if st := gateState(t, g); len(st.Holds) != 0 {
 		t.Fatalf("window left: %+v", st.Holds)
@@ -1008,7 +1008,7 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	}
 
 	// Merged, the candidate not yet published: the window holds.
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	st := gateState(t, g)
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || !held() {
 		t.Fatalf("merged, no candidate: holds %+v", st.Holds)
@@ -1016,13 +1016,13 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	if opened := st.Holds[0].At; !since.Equal(opened) {
 		t.Errorf("asked for candidates since %v, the window opened %v", since, opened)
 	}
-	if end := holdEnd(g.a, st.Holds[0]); !strings.Contains(end, "candidate") {
+	if end := holdEnd(g.Host, st.Holds[0]); !strings.Contains(end, "candidate") {
 		t.Errorf("the window's end names no candidate: %q", end)
 	}
 
 	// The candidate is out: the window lifts, the merge still runs.
 	candidate = devctlTo + "-rc.1"
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	st = gateState(t, g)
 	if len(st.Holds) != 0 || held() {
 		t.Fatalf("a published candidate left the window: holds %+v", st.Holds)
@@ -1035,8 +1035,8 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	}
 
 	// The merge's record later finds the window gone.
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: candidate}}, time.Now(), ""), nil
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: merge.Outcome{Merged: true, Release: candidate}}, time.Now(), ""), nil
 	})
 	if st = gateState(t, g); len(st.Holds) != 0 {
 		t.Errorf("the record reopened a window: %+v", st.Holds)
@@ -1049,12 +1049,12 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version := devctlFrom + "-rc.1"
-	devctlVersion = func(context.Context) string { return version }
+	DevctlVersion = func(context.Context) string { return version }
 	devctlUpdate = func(context.Context) error { return nil }
-	promotion := func(t *testing.T) *gateRun {
+	promotion := func(t *testing.T) *GateRun {
 		g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-		g.pr = 0
-		_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		g.Pr = 0
+		_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Merges[0].PR, st.Holds[0].ToolPR = 0, 0
 			return nil, nil
 		})
@@ -1062,13 +1062,13 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	}
 
 	g := promotion(t)
-	if !g.toolMerge() {
+	if !g.ToolMerge() {
 		t.Fatal("a promotion of devctl opens no window")
 	}
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
 	})
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	st := gateState(t, g)
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || st.Holds[0].ToolRelease != devctlTo {
 		t.Fatalf("before devctl reports %s: holds %+v", devctlTo, st.Holds)
@@ -1077,14 +1077,14 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 		t.Error("the promotion's window lets another merge through")
 	}
 	version = devctlTo
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if st := gateState(t, g); len(st.Holds) != 0 {
 		t.Fatalf("after devctl reports %s: holds %+v", devctlTo, st.Holds)
 	}
 
 	g = promotion(t)
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return recordRun(st, 0, g.lane, g.me, runOutcome{rc: 1, unanswered: errors.New("no pull request")}, time.Now(), ""), nil
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Rc: 1, Unanswered: errors.New("no pull request")}, time.Now(), ""), nil
 	})
 	if st := gateState(t, g); len(st.Holds) != 0 {
 		t.Fatalf("an undocumented promotion left its window: %+v", st.Holds)
@@ -1099,12 +1099,12 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, "v8.0.5")
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = nil
 		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
 		return nil, nil
 	})
-	g.a.closeToolWindow(context.Background(), watchParty)
+	g.Host.closeToolWindow(context.Background(), watchParty)
 	if st := gateState(t, g); len(st.Holds) != 1 {
 		t.Fatalf("lifted on v8.0.5 before %s: %+v", devctlTo, st.Holds)
 	}
@@ -1135,10 +1135,10 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			g.a.cfg.Merge.CITimeout = cfg.Merge.CITimeout
-			g.a.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: c.override}}
-			g.argv = mergeArgv(scratchRepo, c.extra...)
-			if err := g.runMerge(); err != nil {
+			g.Host.cfg.Merge.CITimeout = cfg.Merge.CITimeout
+			g.Host.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: c.override}}
+			g.Argv = mergeArgv(scratchRepo, c.extra...)
+			if err := g.RunMerge(); err != nil {
 				t.Fatalf("exit %d, want 0", Code(err))
 			}
 			raw, err := os.ReadFile(args) //nolint:gosec // the test's file
@@ -1160,11 +1160,11 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 // not only a PID.
 func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 	stateDir := t.TempDir()
-	base := mergeBase(stateDir, scratchRepo, 42)
+	base := MergeBase(stateDir, scratchRepo, 42)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeRunInfo(base, runInfo{
+	writeRunInfo(base, RunInfo{
 		Command: "devctl pr merge o/r 42",
 		Gate:    4024700,
 		Owner:   state.Party{Name: "beekeeper 2137", Session: "sess-2137"},
@@ -1173,7 +1173,7 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := []byte(`{"route":"reviewed merge","verdict":"merged","headSha":"3d8e8a7f","requestedBy":"supervisor loop (for beekeeper 2137)"}` + "\n")
-	kept := keepOutput(base, doc, time.Date(2026, 11, 3, 2, 39, 14, 0, time.UTC))
+	kept := KeepOutput(base, doc, time.Date(2026, 11, 3, 2, 39, 14, 0, time.UTC))
 	if kept == "" {
 		t.Fatal("expected kept output file")
 	}
@@ -1191,17 +1191,17 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 // The command remains the first line even without owner metadata and after
 // the transient run files are removed.
 func TestKeepOutputStartsWithTheMergeCommandAndFlags(t *testing.T) {
-	base := mergeBase(t.TempDir(), scratchRepo, 7)
+	base := MergeBase(t.TempDir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	command := "devctl pr merge o/r 7 --rebase --update-branch"
-	writeRunInfo(base, runInfo{Command: command})
+	writeRunInfo(base, RunInfo{Command: command})
 	if err := os.WriteFile(base+".log", []byte("merge refused\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	kept := keepOutput(base, []byte(`{"verdict":"red"}`), time.Now())
-	removeMergeFiles(base)
+	kept := KeepOutput(base, []byte(`{"verdict":"red"}`), time.Now())
+	RemoveMergeFiles(base)
 	raw, err := os.ReadFile(kept) //nolint:gosec // the test's file
 	if err != nil {
 		t.Fatal(err)
@@ -1217,12 +1217,12 @@ func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := gateStderr(t, func() {
-		_, _ = launchChild(childSpec{Argv: []string{"/missing-merge-command"}}, base)
+		_, _ = LaunchChild(ChildSpec{Argv: []string{"/missing-merge-command"}}, base)
 	})
 	if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, "runner disappeared") || !strings.Contains(out, "no cap kill confirmed") {
 		t.Fatalf("rerun did not recover lost runner: %s", out)
 	}
-	raw, err := os.ReadFile(base + terminationExt) //nolint:gosec // a test fixture
+	raw, err := os.ReadFile(base + TerminationExt) //nolint:gosec // a test fixture
 	if err != nil || !strings.Contains(string(raw), "runner disappeared") {
 		t.Fatalf("lost diagnostic after cleanup: %q, %v", raw, err)
 	}
@@ -1236,24 +1236,24 @@ func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
 			toolRelease = func(context.Context, string) (string, error) { return tag, nil }
 			g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
 			if !live {
-				_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 					st.Merges[0].PID, st.Merges[0].Child = 0, 0
 					return nil, nil
 				})
 			}
 			// An unrelated newer binary is installed before this merge gets a tag.
-			g.a.closeToolWindow(context.Background(), watchParty)
+			g.Host.closeToolWindow(context.Background(), watchParty)
 			if st := gateState(t, g); len(st.Holds) != 1 {
 				t.Fatal("unrelated release lifted the window")
 			}
 			// The merge's tag appears, but its binary is not installed yet.
 			tag = "v999.0.0"
-			g.a.closeToolWindow(context.Background(), watchParty)
+			g.Host.closeToolWindow(context.Background(), watchParty)
 			if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolRelease != tag {
 				t.Fatalf("expected persisted release, got %+v", st.Holds)
 			}
-			devctlVersion = func(context.Context) string { return "999.0.0" }
-			g.a.closeToolWindow(context.Background(), watchParty)
+			DevctlVersion = func(context.Context) string { return "999.0.0" }
+			g.Host.closeToolWindow(context.Background(), watchParty)
 			if st := gateState(t, g); len(st.Holds) != 0 {
 				t.Fatalf("installed merge release kept window: %+v", st.Holds)
 			}

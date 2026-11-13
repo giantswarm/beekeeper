@@ -31,7 +31,7 @@ func TestAClassicProtectionDeclineNamesTheAlignment(t *testing.T) {
 	stubGitHub(t, "", "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	var err error
-	out := gateStderr(t, func() { err = g.runMerge() })
+	out := gateStderr(t, func() { err = g.RunMerge() })
 	var code *exitError
 	if !errors.As(err, &code) || code.code != 3 {
 		t.Errorf("exit %v, want 3", err)

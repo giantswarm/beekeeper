@@ -50,10 +50,10 @@ func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	g, base, pid, stderr := launchedMerge(t, `echo merging >&2; sleep 2; echo '`+mergedDoc+`'`)
 	asked := stubGitHub(t, github.Open, "")
-	g.leaveAt = time.Now().Add(300 * time.Millisecond)
+	g.LeaveAt = time.Now().Add(300 * time.Millisecond)
 	stdout := capture(t, &os.Stdout)
 	start := time.Now()
-	err := g.follow(base, pid, 0)
+	err := g.Follow(base, pid, 0)
 	took, doc, said := time.Since(start), stdout(), stderr()
 	if Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, ExitGateQueued, said)
@@ -64,14 +64,14 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	if doc != "" {
 		t.Errorf("stdout %q, want nothing: the document is the wake's", doc)
 	}
-	if !strings.Contains(said, "o/r#7's devctl runs past this call's limit") || !strings.Contains(said, g.outcomeTo()) ||
+	if !strings.Contains(said, "o/r#7's devctl runs past this call's limit") || !strings.Contains(said, g.OutcomeTo()) ||
 		!strings.Contains(said, "do not run it again, do not poll") {
 		t.Errorf("stderr:\n%s", said)
 	}
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err == nil {
 		t.Error("the heard marker is left: the owner would not be woken")
 	}
-	st, _ := g.a.store.Read()
+	st, _ := g.Host.store.Read()
 	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 && m.Phase == state.Running && m.Child == pid }); i < 0 {
 		t.Fatalf("the merge does not run on in its lane: %+v", st.Merges)
 	}
@@ -85,13 +85,13 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 		}
 	}
 	// The gate's process is gone, as the watch sees it once the call ended.
-	if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PID = deadPID(t)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w := &app{cfg: g.a.cfg, store: g.a.store, now: time.Now()}
+	w := &app{cfg: g.Host.cfg, store: g.Host.store, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)
@@ -112,23 +112,23 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	left := func(t *testing.T) (*app, string) {
 		t.Helper()
 		g, gatePID := runningMerge(t, scratchRepo, lane), deadPID(t)
-		if err := g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Merges[0].PID, st.Merges[0].By = gatePID, owner
 			st.Agents = []state.Agent{{Party: owner}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		base := mergeBase(g.a.store.Dir(), scratchRepo, 7)
+		base := MergeBase(g.Host.store.Dir(), scratchRepo, 7)
 		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		spec := childSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gatePID}
+		spec := ChildSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gatePID}
 		raw, _ := json.Marshal(spec)
 		if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		return g.a, base
+		return g.Host, base
 	}
 
 	a, base := left(t)
@@ -149,7 +149,7 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	if st, _ := a.store.Read(); len(st.Merges) != 0 {
 		t.Errorf("merges left: %+v", st.Merges)
 	}
-	if d := lastEvent(t, &gateRun{a: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, &GateRun{Host: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 		t.Errorf("merged event %q", d)
 	}
 	if _, err := os.Stat(base + ".rc"); err == nil {
@@ -207,11 +207,11 @@ func TestLeaveAt(t *testing.T) {
 		}
 	}
 	carried := now.Add(-time.Minute)
-	t.Setenv(gateLimitEnv, carried.Format(time.RFC3339Nano))
+	t.Setenv(GateLimitEnv, carried.Format(time.RFC3339Nano))
 	if got := leaveAt(now, 9*time.Minute, false); !got.Equal(carried) {
 		t.Errorf("re-executed: %s, want the call's own %s", got, carried)
 	}
-	if _, ok := os.LookupEnv(gateLimitEnv); ok {
-		t.Errorf("%s is left for devctl", gateLimitEnv)
+	if _, ok := os.LookupEnv(GateLimitEnv); ok {
+		t.Errorf("%s is left for devctl", GateLimitEnv)
 	}
 }

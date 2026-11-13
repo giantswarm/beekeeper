@@ -27,7 +27,7 @@ const (
 )
 
 // capGate is the waiting merge o/r#7 of a queue app with merge.cap 5.
-func capGate(t *testing.T) (*gateRun, *state.State, state.Merge) {
+func capGate(t *testing.T) (*GateRun, *state.State, state.Merge) {
 	t.Helper()
 	me := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
 		Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()}
@@ -37,7 +37,7 @@ func capGate(t *testing.T) (*gateRun, *state.State, state.Merge) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &gateRun{a: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), me: me.By, pid: os.Getpid()}, st, me
+	return &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}, st, me
 }
 
 // merge.cap counts the merges and promotes only: nine waits running leave a
@@ -45,7 +45,7 @@ func capGate(t *testing.T) (*gateRun, *state.State, state.Merge) {
 func TestMergeCapDoesNotCountWaits(t *testing.T) {
 	g, st, me := capGate(t)
 	hostDevctl(t, slices.Concat(devctlArgv(3, prWait), devctlArgv(3, relWait), devctlArgv(3, rollWait))...)
-	if why := g.capWait(st, me); why != "" {
+	if why := g.CapWait(st, me); why != "" {
 		t.Errorf("cap wait %q with nine waits and no merge running, want none", why)
 	}
 }
@@ -55,13 +55,13 @@ func TestMergeCapDoesNotCountWaits(t *testing.T) {
 func TestMergeCapCountsMergesAndPromotes(t *testing.T) {
 	g, st, me := capGate(t)
 	hostDevctl(t, slices.Concat(devctlArgv(3, prMerge), devctlArgv(2, promote), devctlArgv(4, prWait))...)
-	if why := g.capWait(st, me); !strings.Contains(why, "5 merges and promotes run machine-wide (cap 5)") {
+	if why := g.CapWait(st, me); !strings.Contains(why, "5 merges and promotes run machine-wide (cap 5)") {
 		t.Errorf("cap wait %q, want the five merges and promotes to fill the cap", why)
 	}
 	// A promotion's dry run and a help call merge nothing.
 	hostDevctl(t, slices.Concat(devctlArgv(4, prMerge), [][]string{
 		append(devctlArgv(1, promote)[0], "--dry-run"), append(devctlArgv(1, prMerge)[0], "--help")})...)
-	if why := g.capWait(st, me); why != "" {
+	if why := g.CapWait(st, me); why != "" {
 		t.Errorf("cap wait %q with four merges, a dry run and a help call, want none", why)
 	}
 }
@@ -69,29 +69,29 @@ func TestMergeCapCountsMergesAndPromotes(t *testing.T) {
 // A queued run sees an edited cap on its next poll, without a new binary.
 func TestQueuedGateReloadsCap(t *testing.T) {
 	g, st, me := capGate(t)
-	g.queued = true
-	g.a.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
+	g.Queued = true
+	g.Host.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	hostDevctl(t, devctlArgv(8, prMerge)...)
 	for _, cap := range []int{5, 12, 5} {
-		if err := os.WriteFile(g.a.loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
+		if err := os.WriteFile(g.Host.loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := g.reloadQueueConfig(); err != nil {
+		if err := g.ReloadQueueConfig(); err != nil {
 			t.Fatal(err)
 		}
-		why := g.capWait(st, me)
+		why := g.CapWait(st, me)
 		if (why == "") != (cap == 12) {
 			t.Fatalf("cap %d: wait %q", cap, why)
 		}
 	}
-	if err := os.WriteFile(g.a.loadedCfg, []byte("merge: ["), 0o600); err != nil {
+	if err := os.WriteFile(g.Host.loadedCfg, []byte("merge: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reloadQueueConfig(); err != nil {
+	if err := g.ReloadQueueConfig(); err != nil {
 		t.Fatal(err)
 	}
-	if g.a.cfg.Merge.Cap != 5 {
-		t.Fatalf("invalid edit changed cap to %d", g.a.cfg.Merge.Cap)
+	if g.Host.cfg.Merge.Cap != 5 {
+		t.Fatalf("invalid edit changed cap to %d", g.Host.cfg.Merge.Cap)
 	}
 }
 
@@ -101,16 +101,16 @@ func TestQueuedGateStartsAfterCapRaise(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	g, _, _ := capGate(t)
-	g.argv, g.queued = mergeArgv(scratchRepo), true
-	g.a.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
-	setBudget(t, g.a, 4000)
+	g.Argv, g.Queued = mergeArgv(scratchRepo), true
+	g.Host.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
+	setBudget(t, g.Host, 4000)
 	hostDevctls(t, 8)
-	g.a.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
+	g.Host.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	for _, cap := range []int{5, 12} {
-		if err := os.WriteFile(g.a.loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
+		if err := os.WriteFile(g.Host.loadedCfg, []byte(fmt.Sprintf("merge:\n  cap: %d\n", cap)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		why, err := g.step()
+		why, err := g.Step()
 		if err != nil {
 			t.Fatalf("cap %d: %v", cap, err)
 		}
@@ -121,26 +121,26 @@ func TestQueuedGateStartsAfterCapRaise(t *testing.T) {
 			t.Fatalf("still waiting after raise: %q", why)
 		}
 	}
-	if d := lastEventOf(t, g.a, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
+	if d := lastEventOf(t, g.Host, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
 		t.Fatalf("merge did not start: %q", d)
 	}
 }
 
 func TestQueuedGateMovesToReloadedLane(t *testing.T) {
 	g, _, _ := capGate(t)
-	g.a.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
+	g.Host.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	raw := fmt.Sprintf("lanes:\n  - name: shared\n    repositories: [%s]\n", scratchRepo)
-	if err := os.WriteFile(g.a.loadedCfg, []byte(raw), 0o600); err != nil {
+	if err := os.WriteFile(g.Host.loadedCfg, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.reloadQueueConfig(); err != nil {
+	if err := g.ReloadQueueConfig(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := g.a.store.Read()
+	st, err := g.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.lane.Name != litShared || st.Merges[0].Lane != litShared {
-		t.Fatalf("lane not updated: %+v, %+v", g.lane, st.Merges)
+	if g.Lane.Name != litShared || st.Merges[0].Lane != litShared {
+		t.Fatalf("lane not updated: %+v, %+v", g.Lane, st.Merges)
 	}
 }

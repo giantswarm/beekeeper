@@ -74,7 +74,7 @@ func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.
 				}); err != nil {
 					t.Fatal(err)
 				}
-				base := mergeBase(a.store.Dir(), m.Repo, m.PR)
+				base := MergeBase(a.store.Dir(), m.Repo, m.PR)
 				if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 					t.Fatal(err)
 				}

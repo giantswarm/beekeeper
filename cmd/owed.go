@@ -152,7 +152,7 @@ func (a *app) owedLine(ctx context.Context, o state.Owed) (string, bool) {
 	if !o.Ask {
 		return o.Line, true
 	}
-	p, err := pullState(ctx, o.Repo, o.PR)
+	p, err := PullState(ctx, o.Repo, o.PR)
 	if err != nil {
 		if time.Since(o.Since) < owedAsk {
 			a.failedPay(o, fmt.Sprintf("GitHub does not answer for %s#%d (%v)", o.Repo, o.PR, err))

@@ -38,7 +38,7 @@ func TestGatedChildSignalExit(t *testing.T) {
 						stop.Store(signal)
 						argv = []string{sleepComm, "30"}
 					}
-					rc = runSpec("", childSpec{Argv: argv, Env: os.Environ()}, stderr, stderr, &current, &stop, &gone)
+					rc = runSpec("", ChildSpec{Argv: argv, Env: os.Environ()}, stderr, stderr, &current, &stop, &gone)
 				}
 				if want := 128 + int(signal); rc != want {
 					t.Fatalf("exit %d, want %d", rc, want)

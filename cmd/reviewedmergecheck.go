@@ -91,7 +91,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 		return false, mergeValidationUnavailable("base %s did not resolve in %s", p.Base, repoDir), github.SquashTooling
 	}
 	if !hasReviewedCommit(ctx, repoDir, head) {
-		return false, mergeValidationUnavailable("reviewed head %s is not in %s", shortSHA(head), repoDir), github.SquashTooling
+		return false, mergeValidationUnavailable("reviewed head %s is not in %s", ShortSHA(head), repoDir), github.SquashTooling
 	}
 	// When the current base is already an ancestor of head, the PR's own
 	// green checks already verified the merge result.
@@ -301,7 +301,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 			}
 		}
 		if baseSHA == "" || out != "" {
-			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, shortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
+			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint (config: %s): %s", baseBranch, ShortSHA(head), configLabel, summarizeMergeCheckOutput(out)), github.SquashRed
 		}
 	}
 	// Keep heavyweight live canaries in full CI, outside the coordinator merge
@@ -310,7 +310,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
-		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
+		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, ShortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
 
 	return "", 0

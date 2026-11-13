@@ -76,7 +76,7 @@ func deadPID(t *testing.T) int {
 // launchedMerge is o/r#7's merge running devctl (fakeDevctl's script) in a
 // merge-child of the gate's, its stderr captured, once devctl has printed
 // its first line.
-func launchedMerge(t *testing.T, script string) (g *gateRun, base string, pid int, stderr func() string) {
+func launchedMerge(t *testing.T, script string) (g *GateRun, base string, pid int, stderr func() string) {
 	t.Helper()
 	noSystemd(t)
 	fakeDevctl(t, script)
@@ -84,14 +84,14 @@ func launchedMerge(t *testing.T, script string) (g *gateRun, base string, pid in
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", ownerName)
 	g = runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	base, err := g.mergeFiles()
+	base, err := g.MergeFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pid, err = launchChild(childSpec{Argv: mergeArgv(scratchRepo), Owner: g.me}, base); err != nil {
+	if pid, err = LaunchChild(ChildSpec{Argv: mergeArgv(scratchRepo), Owner: g.Me}, base); err != nil {
 		t.Fatal(err)
 	}
-	g.started(pid)
+	g.Started(pid)
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if info, err := os.Stat(base + ".log"); err == nil && info.Size() > 0 {
 			break
@@ -112,9 +112,9 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 	t.Run("the installed binary follows on", func(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
-		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{}, false, nil)
-		if !run.replaced || run.offset != int64(len(devctlFirstLine)) {
-			t.Fatalf("replaced %v at offset %d, want %d", run.replaced, run.offset, len(devctlFirstLine))
+		run := FollowChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{}, false, nil)
+		if !run.Replaced || run.Offset != int64(len(devctlFirstLine)) {
+			t.Fatalf("replaced %v at offset %d, want %d", run.Replaced, run.Offset, len(devctlFirstLine))
 		}
 		for _, ext := range []string{".log", ".pid"} {
 			if _, err := os.Stat(base + ext); err != nil {
@@ -122,9 +122,9 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 			}
 		}
 		// The re-executed gate: the same process, arguments and stdio.
-		t.Setenv(gateRunningEnv, fmt.Sprintf("%d:%d", pid, run.offset))
+		t.Setenv(GateRunningEnv, fmt.Sprintf("%d:%d", pid, run.Offset))
 		stdout := capture(t, &os.Stdout)
-		err := g.a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
+		err := g.Host.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -136,7 +136,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 			!strings.Contains(said, "continuing under beekeeper") || !strings.Contains(said, fmt.Sprintf("following o/r#7's devctl (pid %d) on", pid)) {
 			t.Errorf("stderr:\n%s", said)
 		}
-		if _, ok := os.LookupEnv(gateRunningEnv); ok {
+		if _, ok := os.LookupEnv(GateRunningEnv); ok {
 			t.Error("the running marker is left in the environment, devctl would inherit it")
 		}
 		if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
@@ -153,14 +153,14 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
 		bin := &fakeBinary{replaced: true, execErr: errBusy}
-		g.bin = bin
+		g.Bin = bin
 		stdout := capture(t, &os.Stdout)
-		err := g.follow(base, pid, 0)
+		err := g.Follow(base, pid, 0)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
 		}
-		want := fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, len(devctlFirstLine))
+		want := fmt.Sprintf("%s=%d:%d", GateRunningEnv, pid, len(devctlFirstLine))
 		if len(bin.execs) != 1 || !slices.Contains(bin.execs[0], want) {
 			t.Errorf("re-exec attempts %q, want one with %s", bin.execs, want)
 		}
@@ -209,19 +209,19 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			base := mergeBase(store.Dir(), scratchRepo, 7)
+			base := MergeBase(store.Dir(), scratchRepo, 7)
 			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			pid, err := launchChild(childSpec{Argv: mergeArgv(scratchRepo)}, base)
+			pid, err := LaunchChild(ChildSpec{Argv: mergeArgv(scratchRepo)}, base)
 			if err != nil {
 				t.Fatal(err)
 			}
 			self := filepath.Join(dir, "bin", "beekeeper")
 			copyTestBinary(t, self)
-			gateCmd := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
+			gateCmd := exec.Command(self, append([]string{GateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
 			gateCmd.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
-				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gateRunningEnv, pid))
+				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", GateRunningEnv, pid))
 			var stdout strings.Builder
 			gateCmd.Stdout = &stdout
 			stderr := &lines{}
@@ -347,24 +347,24 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 	}
 	g := runningMergeIn(t, store, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	// The gate's process is gone once its devctl ended, as the watch sees it.
-	g.pid = deadPID(t)
+	g.Pid = deadPID(t)
 	newer, err := state.OpenVersion(store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = newer.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].PID = g.pid
+		st.Merges[0].PID = g.Pid
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.a.store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
+	if g.Host.store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
 	stderr := capture(t, &os.Stderr)
 	stdout := capture(t, &os.Stdout)
-	err = g.runMerge()
+	err = g.RunMerge()
 	doc, said := stdout(), stderr()
 	if err != nil {
 		t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -376,7 +376,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 		!strings.Contains(said, "which records the run at its next poll") {
 		t.Errorf("stderr:\n%s", said)
 	}
-	base := mergeBase(store.Dir(), scratchRepo, 7)
+	base := MergeBase(store.Dir(), scratchRepo, 7)
 	if raw, err := os.ReadFile(base + ".rc"); err != nil || strings.TrimSpace(string(raw)) != "0" { //nolint:gosec // the test's file
 		t.Errorf("the run's exit code is not left for the watch: %q, %v", raw, err)
 	}
@@ -394,7 +394,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 		t.Errorf("stale-writer event %q", d)
 	}
 
-	w := &app{cfg: g.a.cfg, store: newer, now: time.Now()}
+	w := &app{cfg: g.Host.cfg, store: newer, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)
@@ -421,7 +421,7 @@ func TestAReplacedMergeChildHandsItsOutcomeOverUnderTheInstalledOne(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	spec := childSpec{Argv: []string{"/bin/sh", "-c", "echo '" + greenDoc + "'; echo 'checks pending' >&2; exit 4"},
+	spec := ChildSpec{Argv: []string{"/bin/sh", "-c", "echo '" + greenDoc + "'; echo 'checks pending' >&2; exit 4"},
 		Command: strings.Fields("devctl pr wait o/r 7"), Owner: owner, Gate: deadPID(t)}
 	raw, _ := json.Marshal(spec)
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
@@ -494,7 +494,7 @@ func TestAStaleStepReExecutesAReplacedGate(t *testing.T) {
 	}
 	bin := &fakeBinary{replaced: true, execErr: errBusy}
 	was := runningBinary
-	runningBinary = func() binary { return bin }
+	runningBinary = func() Binary { return bin }
 	t.Cleanup(func() { runningBinary = was })
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
 	if Code(err) != ExitGateRefused {

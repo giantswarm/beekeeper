@@ -310,28 +310,28 @@ func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	release := toolRelease
 	t.Cleanup(func() { toolRelease = release })
 	toolRelease = func(context.Context, string) (string, error) { return devctlTo, nil }
-	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority
+	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := PullState, DevctlVersion, devctlUpdate, JudgeWait, BaseChecks, DevctlAcceptsRed, InfraReds, toolCandidate, ReviewGuard, mergeAuthority
 	t.Cleanup(func() {
-		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
+		PullState, DevctlVersion, devctlUpdate, JudgeWait, BaseChecks, DevctlAcceptsRed, InfraReds, toolCandidate, ReviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
 	})
-	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	ReviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
 	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	toolCandidate = func(context.Context, time.Time) (string, error) { return "", nil }
-	infraReds = func(context.Context, []byte) []merge.Infra { return nil }
+	InfraReds = func(context.Context, []byte) []merge.Infra { return nil }
 	devctlUpdate = func(context.Context) error { return nil }
-	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
+	BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
 		return github.BaseChecks{}, fmt.Errorf("no network")
 	}
-	devctlAcceptsRed = func(context.Context) bool { return false }
-	judgeWait = 0
-	pullState = func(context.Context, string, int) (github.Pull, error) {
+	DevctlAcceptsRed = func(context.Context) bool { return false }
+	JudgeWait = 0
+	PullState = func(context.Context, string, int) (github.Pull, error) {
 		*asked++
 		if pullAt == "" {
 			return github.Pull{}, fmt.Errorf("no network")
 		}
 		return github.Pull{State: pullAt}, nil
 	}
-	devctlVersion = func(context.Context) string { return version }
+	DevctlVersion = func(context.Context) string { return version }
 	return asked
 }
 

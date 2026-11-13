@@ -539,7 +539,7 @@ func TestUnconfirmedReleaseStallGraceAndRecovery(t *testing.T) {
 			a.cfg.Delivery.StallAfter.Duration = time.Minute
 			now := a.timeNow()
 			seed(t, a, func(st *state.State) {
-				st.Deliveries = []state.Delivery{{Ref: refOne, Step: state.DeliveryReleasing, Since: now, Verdict: verdictUnconfirmed}}
+				st.Deliveries = []state.Delivery{{Ref: refOne, Step: state.DeliveryReleasing, Since: now, Verdict: VerdictUnconfirmed}}
 			})
 			for _, age := range []time.Duration{4 * time.Second, 30*time.Minute - time.Second} {
 				if line, err := a.checkDeliveries(now.Add(age)); err != nil || line != "" {
@@ -548,7 +548,7 @@ func TestUnconfirmedReleaseStallGraceAndRecovery(t *testing.T) {
 			}
 			if completes {
 				seed(t, a, func(st *state.State) {
-					applyDeliveryVerdict(&st.Deliveries[0], verdictAvailable, "v1.2.3", now.Add(29*time.Minute))
+					applyDeliveryVerdict(&st.Deliveries[0], VerdictAvailable, "v1.2.3", now.Add(29*time.Minute))
 				})
 			}
 			line, err := a.checkDeliveries(now.Add(30 * time.Minute))
@@ -560,7 +560,7 @@ func TestUnconfirmedReleaseStallGraceAndRecovery(t *testing.T) {
 			}
 			if !completes {
 				seed(t, a, func(st *state.State) {
-					applyDeliveryVerdict(&st.Deliveries[0], verdictAvailable, "v1.2.3", now.Add(32*time.Minute))
+					applyDeliveryVerdict(&st.Deliveries[0], VerdictAvailable, "v1.2.3", now.Add(32*time.Minute))
 				})
 				if line, err := a.checkDeliveries(now.Add(32 * time.Minute)); err != nil || !strings.Contains(line, "RECOVERED:") {
 					t.Fatalf("recovery: %s %v", line, err)

@@ -38,9 +38,9 @@ func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 	// caller's deadline allows; a short one keeps the test fast.
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	g := &gateRun{a: a, ctx: ctx}
+	g := &GateRun{Host: a, Ctx: ctx}
 	start := time.Now()
-	b, err := g.gateBudget()
+	b, err := g.GateBudget()
 	if err != nil || b.Remaining != 4800 {
 		t.Fatalf("merge gate: budget %+v, %v with the state lock busy", b, err)
 	}
@@ -75,8 +75,8 @@ func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 	}
 	holdStateLock(t, a)
 	a.now = now
-	g := &gateRun{a: a, ctx: t.Context()}
-	b, err := g.gateBudget()
+	g := &GateRun{Host: a, Ctx: t.Context()}
+	b, err := g.GateBudget()
 	if err != nil || b.Remaining != 4321 || *queries != 0 {
 		t.Fatalf("merge gate: budget %+v, %v after %d GraphQL queries, want the saved reading", b, err, *queries)
 	}
@@ -91,8 +91,8 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 	holdStateLock(t, a)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	g := &gateRun{a: a, ctx: ctx}
-	if b, err := g.gateBudget(); err == nil {
+	g := &GateRun{Host: a, Ctx: ctx}
+	if b, err := g.GateBudget(); err == nil {
 		t.Fatalf("merge gate passed a refused GraphQL budget: %+v", b)
 	}
 	c := a.budgetCmd()
@@ -128,11 +128,11 @@ func TestOnlyLockBusy(t *testing.T) {
 		{errors.Join(), false},
 		{context.DeadlineExceeded, false},
 	} {
-		if got := onlyLockBusy(c.err); got != c.want {
+		if got := OnlyLockBusy(c.err); got != c.want {
 			t.Errorf("onlyLockBusy(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
-	if unsavedBudget(nil) != nil || unsavedBudget(busy) != nil || unsavedBudget(commitBusy) != nil || !errors.Is(unsavedBudget(errors.Join(other, busy)), other) {
+	if UnsavedBudget(nil) != nil || UnsavedBudget(busy) != nil || UnsavedBudget(commitBusy) != nil || !errors.Is(UnsavedBudget(errors.Join(other, busy)), other) {
 		t.Error("unsavedBudget kept a lone busy lock or dropped another failure")
 	}
 }

@@ -1,5 +1,5 @@
 package cmd
 
-func (g *gateRun) fatalPublicationBarrier() error {
-	return g.a.fatalPublicationBarrier(g.ctx, nil, g.repo, g.pr)
+func (g *GateRun) fatalPublicationBarrier() error {
+	return g.Host.fatalPublicationBarrier(g.Ctx, nil, g.Repo, g.Pr)
 }

@@ -207,7 +207,7 @@ func TestAMergedEventCarriesItsPullRequestAsItsSubject(t *testing.T) {
 		want string
 	}{{7, decisionRef}, {0, ""}} {
 		st := &state.State{Merges: []state.Merge{{Repo: scratchRepo, PR: tc.pr, Lane: scratchRepo, Phase: state.Running}}}
-		evs := recordRun(st, 0, config.Lane{Name: scratchRepo}, sinkParty, runOutcome{out: merge.Outcome{Merged: true, Release: "v1.2.0"}}, time.Now(), "")
+		evs := recordRun(st, 0, config.Lane{Name: scratchRepo}, sinkParty, RunOutcome{Out: merge.Outcome{Merged: true, Release: "v1.2.0"}}, time.Now(), "")
 		i := slices.IndexFunc(evs, func(e state.Event) bool { return e.Verb == verbMerged })
 		if i < 0 || evs[i].Subject != tc.want {
 			t.Fatalf("PR %d: events %+v, want subject %q", tc.pr, evs, tc.want)

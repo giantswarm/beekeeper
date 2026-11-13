@@ -27,14 +27,14 @@ const (
 
 // pairedGate is the waiting merge o/r#7 of a queue app, paired with
 // o/s#7, and the app's state; merges are the other places.
-func pairedGate(t *testing.T, merges ...state.Merge) (*gateRun, *state.State) {
+func pairedGate(t *testing.T, merges ...state.Merge) (*GateRun, *state.State) {
 	t.Helper()
 	me := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
 		Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()}
 	a := queueApp(t, append([]state.Merge{me}, merges...)...)
 	a.cfg.Merge.Cap, a.cfg.Merge.SessionCap = 5, 2
-	g := &gateRun{a: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), me: me.By, pid: os.Getpid()}
-	if err := g.declarePair(siblingKey); err != nil {
+	g := &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}
+	if err := g.DeclarePair(siblingKey); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()
@@ -54,24 +54,24 @@ func sibling(t *testing.T) state.Merge {
 // lane, then takes two cap slots; the sibling, the first started, takes none.
 func TestAPairedMergeStartsOnlyWithItsSiblingNext(t *testing.T) {
 	g, st := pairedGate(t)
-	if why, _ := g.pairTurn(st); !strings.Contains(why, "it lands with o/s#7, which has no place in a lane yet") {
+	if why, _ := g.PairTurn(st); !strings.Contains(why, "it lands with o/s#7, which has no place in a lane yet") {
 		t.Errorf("without its sibling: %q", why)
 	}
-	if !g.a.now.Equal(st.Pairs[0].Ready[pairedKey]) {
+	if !g.Host.now.Equal(st.Pairs[0].Ready[pairedKey]) {
 		t.Errorf("the merge at its turn is not ready: %+v", st.Pairs[0])
 	}
 
 	st.Merges = append(st.Merges, sibling(t))
-	if why, _ := g.pairTurn(st); !strings.Contains(why, "it lands with o/s#7, not next in lane o/s yet") {
+	if why, _ := g.PairTurn(st); !strings.Contains(why, "it lands with o/s#7, not next in lane o/s yet") {
 		t.Errorf("its sibling behind others: %q", why)
 	}
-	st.Pairs[0].Ready[siblingKey] = g.a.now
-	if why, need := g.pairTurn(st); why != "" || need != 2 {
+	st.Pairs[0].Ready[siblingKey] = g.Host.now
+	if why, need := g.PairTurn(st); why != "" || need != 2 {
 		t.Errorf("its sibling next: %q, %d slots, want none and 2", why, need)
 	}
 
 	st.Pairs[0].Started, st.Pairs[0].Ready = siblingKey, nil
-	if why, need := g.pairTurn(st); why != "" || need != 0 {
+	if why, need := g.PairTurn(st); why != "" || need != 0 {
 		t.Errorf("its sibling started: %q, %d slots, want none and 0", why, need)
 	}
 }
@@ -83,26 +83,26 @@ func TestAPairStartsBackToBack(t *testing.T) {
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	sib := sibling(t)
 	g, _ := pairedGate(t, sib)
-	g.argv, g.a.now = mergeArgv(scratchRepo), time.Now()
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Pairs[0].Ready = map[string]time.Time{siblingKey: g.a.now}
+	g.Argv, g.Host.now = mergeArgv(scratchRepo), time.Now()
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Pairs[0].Ready = map[string]time.Time{siblingKey: g.Host.now}
 		return nil, nil
 	})
-	if why, err := g.start("", nil); why != "" || err != nil {
+	if why, err := g.Start("", nil); why != "" || err != nil {
 		t.Fatalf("the first with its sibling next: %q, %v", why, err)
 	}
-	st, _ := g.a.store.Read()
+	st, _ := g.Host.store.Read()
 	if len(st.Pairs) != 1 || st.Pairs[0].Started != pairedKey {
 		t.Fatalf("pairs %+v", st.Pairs)
 	}
 
 	hostDevctl(t, devctlArgv(9, prMerge)...)
-	s := &gateRun{a: g.a, ctx: context.Background(), repo: siblingRepo, pr: 7, lane: g.a.cfg.LaneOf(siblingRepo), me: sib.By, pid: sib.PID, argv: mergeArgv(siblingRepo)}
-	_ = s.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	s := &GateRun{Host: g.Host, Ctx: context.Background(), Repo: siblingRepo, Pr: 7, Lane: g.Host.cfg.LaneOf(siblingRepo), Me: sib.By, Pid: sib.PID, Argv: mergeArgv(siblingRepo)}
+	_ = s.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{sib}
 		return nil, nil
 	})
-	if why, err := s.start("", nil); why != "" || err != nil {
+	if why, err := s.Start("", nil); why != "" || err != nil {
 		t.Fatalf("the sibling after the first started, the cap full: %q, %v", why, err)
 	}
 	if d := lastEvent(t, s, testMergedWord); !strings.Contains(d, "o/s#7 exit 0") {
@@ -116,25 +116,25 @@ func TestAPairTakesTwoSlots(t *testing.T) {
 	g, st := pairedGate(t)
 	me := st.Merges[0]
 	hostDevctl(t, devctlArgv(4, prMerge)...)
-	if why := g.capWaitFor(st, me, 1); why != "" {
+	if why := g.CapWaitFor(st, me, 1); why != "" {
 		t.Errorf("one slot of five with four running: %q", why)
 	}
-	if why := g.capWaitFor(st, me, 2); !strings.Contains(why, "4 merges and promotes run machine-wide (cap 5), it and the merge it lands with need 2 slots") {
+	if why := g.CapWaitFor(st, me, 2); !strings.Contains(why, "4 merges and promotes run machine-wide (cap 5), it and the merge it lands with need 2 slots") {
 		t.Errorf("two slots of five with four running: %q", why)
 	}
 	hostDevctl(t, devctlArgv(9, prMerge)...)
-	if why := g.capWaitFor(st, me, 0); why != "" {
+	if why := g.CapWaitFor(st, me, 0); why != "" {
 		t.Errorf("the sibling of a started pair waits on the cap: %q", why)
 	}
 
 	st.Merges = append(st.Merges, state.Merge{Repo: "o/c", PR: 1, Lane: "o/c", By: me.By, PID: sleeper(t), Phase: state.Running, Started: time.Now()})
-	if why := g.sessionWaitFor(st, 1); why != "" {
+	if why := g.SessionWaitFor(st, 1); why != "" {
 		t.Errorf("one of two session slots with one running: %q", why)
 	}
-	if why := g.sessionWaitFor(st, 2); why == "" {
+	if why := g.SessionWaitFor(st, 2); why == "" {
 		t.Error("the pair's first starts with one of its party's two slots free")
 	}
-	if why := g.sessionWaitFor(st, 0); why != "" {
+	if why := g.SessionWaitFor(st, 0); why != "" {
 		t.Errorf("the sibling of a started pair waits on the session cap: %q", why)
 	}
 }
@@ -154,7 +154,7 @@ func TestARefusalOfEitherRefusesBoth(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(gateFromEnv, strconv.Itoa(queued))
+	t.Setenv(GateFromEnv, strconv.Itoa(queued))
 	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, true); Code(err) != ExitGateRefused {
 		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}
@@ -208,26 +208,26 @@ func TestAPairedMergeQueuesWithoutTheFlag(t *testing.T) {
 // refused before declares its pair anew.
 func TestAPairDeclaration(t *testing.T) {
 	g, _ := pairedGate(t)
-	if err := g.declarePair(siblingKey); err != nil {
+	if err := g.DeclarePair(siblingKey); err != nil {
 		t.Errorf("the same pair again: %v", err)
 	}
-	if err := g.declarePair("o/t#4"); Code(err) != ExitGateRefused {
+	if err := g.DeclarePair("o/t#4"); Code(err) != ExitGateRefused {
 		t.Errorf("a second sibling: %v, want refused", err)
 	}
-	if err := g.declarePair(pairedKey); Code(err) != ExitGateRefused {
+	if err := g.DeclarePair(pairedKey); Code(err) != ExitGateRefused {
 		t.Errorf("itself: %v, want refused", err)
 	}
-	if err := g.declarePair("nothing"); Code(err) != ExitGateRefused {
+	if err := g.DeclarePair("nothing"); Code(err) != ExitGateRefused {
 		t.Errorf("no pull request: %v, want refused", err)
 	}
-	_ = g.a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = g.Host.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Pairs[0].Refused, st.Pairs[0].RefusedKey = "a reviewer", pairedKey
 		return nil, nil
 	})
-	if err := g.declarePair("https://github.com/o/s/pull/7"); err != nil {
+	if err := g.DeclarePair("https://github.com/o/s/pull/7"); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := g.a.store.Read(); len(st.Pairs) != 1 || st.Pairs[0].Refused != "" {
+	if st, _ := g.Host.store.Read(); len(st.Pairs) != 1 || st.Pairs[0].Refused != "" {
 		t.Errorf("the rerun keeps its refusal: %+v", st.Pairs)
 	}
 }

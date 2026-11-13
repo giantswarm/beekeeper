@@ -203,7 +203,7 @@ func TestSupervisorNitAttestationKeepsApprovalWithoutSecondRound(t *testing.T) {
 	if start := r.called(agentsName, agentStartName); start != nil {
 		t.Fatalf("second review started: %v", start)
 	}
-	if merge := r.called(gateCmdName); merge == nil {
+	if merge := r.called(GateCmdName); merge == nil {
 		t.Fatalf("no merge go after nits: %s", r.out)
 	}
 	r.pull.Head = "3333333333333333333333333333333333333333"

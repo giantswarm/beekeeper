@@ -78,7 +78,7 @@ func (w *watcher) settledReleaseParks(ctx context.Context, st *state.State) []se
 				if err := json.Unmarshal(raw, &doc); err != nil {
 					return err
 				}
-				available[p.On] = doc.Verdict == verdictAvailable && doc.ExitCode == 0
+				available[p.On] = doc.Verdict == VerdictAvailable && doc.ExitCode == 0
 				return nil
 			}
 			var err error

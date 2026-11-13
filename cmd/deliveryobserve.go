@@ -23,7 +23,7 @@ func applyDeliveryVerdict(d *state.Delivery, verdict, tag string, now time.Time)
 			d.Evidence = deliveryURL(d.Ref, true)
 		}
 	}
-	if verdict == verdictAvailable || verdict == state.DeliveryNoRelease {
+	if verdict == VerdictAvailable || verdict == state.DeliveryNoRelease {
 		if d.Step != state.DeliveryDone {
 			d.Since = now
 		}
@@ -43,7 +43,7 @@ func recordDeliveryRelease(st *state.State, repo string, pr int, out merge.Outco
 	}
 	ref := fmt.Sprintf("%s#%d", repo, pr)
 	prev := slices.Clone(st.Deliveries)
-	verdict := verdictUnconfirmed
+	verdict := VerdictUnconfirmed
 	switch {
 	case out.ReleaseFailed:
 		verdict = state.DeliveryReleaseFailed
@@ -51,7 +51,7 @@ func recordDeliveryRelease(st *state.State, repo string, pr int, out merge.Outco
 	case out.NoRelease || handCut != "":
 		verdict = state.DeliveryNoRelease
 	case out.Release != "":
-		verdict = verdictAvailable
+		verdict = VerdictAvailable
 	}
 	for i := range st.Deliveries {
 		d := &st.Deliveries[i]

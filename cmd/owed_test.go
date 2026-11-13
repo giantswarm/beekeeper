@@ -27,9 +27,9 @@ const stoppedMerged = "devctl pr merge o/r 7 was stopped by SIGTERM (exit 143) b
 // stubPull makes every pull request GitHub reads p, or err.
 func stubPull(t *testing.T, p github.Pull, err error) {
 	t.Helper()
-	was := pullState
-	pullState = func(context.Context, string, int) (github.Pull, error) { return p, err }
-	t.Cleanup(func() { pullState = was })
+	was := PullState
+	PullState = func(context.Context, string, int) (github.Pull, error) { return p, err }
+	t.Cleanup(func() { PullState = was })
 }
 
 // stoppedMerge is tellOwnerRun's run as the gated merge of o/r#7 its

@@ -29,9 +29,9 @@ const (
 func stubReviews(t *testing.T, why string, err error) *int {
 	t.Helper()
 	asked := new(int)
-	was := reviewGuard
-	t.Cleanup(func() { reviewGuard = was })
-	reviewGuard = func(context.Context, string, int) (string, error) {
+	was := ReviewGuard
+	t.Cleanup(func() { ReviewGuard = was })
+	ReviewGuard = func(context.Context, string, int) (string, error) {
 		*asked++
 		return why, err
 	}
@@ -89,8 +89,8 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 func TestAPromotionReadsNoReviews(t *testing.T) {
 	asked := stubReviews(t, changesRequested, nil)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
-	g.pr = 0
-	if err := g.checkReviews(g.refuseWith); err != nil || *asked != 0 {
+	g.Pr = 0
+	if err := g.CheckReviews(g.RefuseWith); err != nil || *asked != 0 {
 		t.Errorf("%v, %d reads", err, *asked)
 	}
 }
@@ -101,11 +101,11 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubReviews(t, changesRequested, nil)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
-	err := g.checkReviews(g.refuseRunningWith)
+	err := g.CheckReviews(g.RefuseRunningWith)
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v)", Code(err), err)
 	}
-	st, err := g.a.store.Read()
+	st, err := g.Host.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,17 +167,17 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 	t.Cleanup(func() { mergeAuthority = oldAuth })
 	mergeAuthority = gateMergeHeadAuthority
 
-	g := &gateRun{
-		a:    r.a,
-		ctx:  t.Context(),
-		repo: loopMergeRepo,
-		pr:   7,
-		lane: r.a.cfg.LaneOf(loopMergeRepo),
-		me:   state.Party{Name: loopWorker},
-		pid:  os.Getpid(),
-		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7", "--head", loopFixed},
+	g := &GateRun{
+		Host: r.a,
+		Ctx:  t.Context(),
+		Repo: loopMergeRepo,
+		Pr:   7,
+		Lane: r.a.cfg.LaneOf(loopMergeRepo),
+		Me:   state.Party{Name: loopWorker},
+		Pid:  os.Getpid(),
+		Argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7", "--head", loopFixed},
 	}
-	why, err := g.reviewHold()
+	why, err := g.ReviewHold()
 	if err != nil {
 		t.Fatalf("reviewHold err = %v", err)
 	}
@@ -187,13 +187,13 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 
 	// Recording an explicit supervisor.go for that exact head clears the hold,
 	// including when reviewGuard sees the earlier changes-requested review.
-	reviewGuard = func(context.Context, string, int) (string, error) {
+	ReviewGuard = func(context.Context, string, int) (string, error) {
 		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
 	}
 	if err := r.a.store.Record(about(event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loop.LoopWorkerMergeGo), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	why, err = g.reviewHold()
+	why, err = g.ReviewHold()
 	if err != nil || why != "" {
 		t.Fatalf("reviewHold after exact-head supervisor.go = %q, %v; want empty", why, err)
 	}
@@ -207,19 +207,19 @@ func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
 	r.pull.Head = loopFixed
 	mergeAuthority = gateMergeHeadAuthority
-	g := &gateRun{a: r.a, ctx: t.Context(), repo: loopMergeRepo, pr: 7, lane: r.a.cfg.LaneOf(loopMergeRepo),
-		me: loop.LoopParty, pid: os.Getpid(), reviewedHead: loopFixed,
-		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
-	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
+	g := &GateRun{Host: r.a, Ctx: t.Context(), Repo: loopMergeRepo, Pr: 7, Lane: r.a.cfg.LaneOf(loopMergeRepo),
+		Me: loop.LoopParty, Pid: os.Getpid(), ReviewedHead: loopFixed,
+		Argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
+	if why, err := g.ReviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
 		t.Fatalf("reviewHold without a claim = %q, %v; want a refusal", why, err)
 	}
 	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	reviewGuard = func(context.Context, string, int) (string, error) {
+	ReviewGuard = func(context.Context, string, int) (string, error) {
 		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
 	}
-	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
+	if why, err := g.ReviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
 		t.Fatalf("reviewHold with only an ownership claim = %q, %v; want refusal", why, err)
 	}
 }

@@ -73,7 +73,7 @@ func evaluateThroughput(now time.Time, after time.Duration, obs throughputObserv
 	unknown := map[string]bool{}
 	candidate := obs.Candidate
 	if candidate == "" {
-		candidate = unknownState
+		candidate = UnknownState
 	}
 	urls := []string{}
 	for _, o := range outcomes {
@@ -125,7 +125,7 @@ func evaluateThroughput(now time.Time, after time.Duration, obs throughputObserv
 		}
 	}
 	if unknown[runMerge] || unknown[agentStartName] || obs.Unknown || obs.At.IsZero() || now.Sub(obs.At) > 3*throughputCadence || obs.At.After(now) {
-		status = unknownState
+		status = UnknownState
 	}
 	slices.Sort(urls)
 	return status, fmt.Sprintf("release throughput %s; candidate %s; oldest eligible wait %s; public PRs: %s", status, candidate, oldest.Round(time.Second), strings.Join(urls, ", "))
@@ -184,7 +184,7 @@ func (a *app) checkThroughput(now time.Time, held bool, progress ...func()) (str
 		}
 		if initializing && len(evs) == 0 {
 			if commit {
-				return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: unknownState})
+				return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: UnknownState})
 			}
 			return nil, nil
 		}

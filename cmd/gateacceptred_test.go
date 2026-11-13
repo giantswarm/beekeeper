@@ -34,11 +34,11 @@ case "$*" in *--accept-red*) echo '`+mergedDoc+`';; *) echo '`+baseRedDoc+`'; ex
 // and whether the installed devctl has --accept-red.
 func stubBase(t *testing.T, e2e string, accepts bool) {
 	t.Helper()
-	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
+	BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
 		return github.BaseChecks{Base: mainBranch, Head: "0123456789", Required: []string{"go-build"},
 			Outcomes: map[string]string{"e2e-test": e2e, "go-build": github.CheckPass}}, nil
 	}
-	devctlAcceptsRed = func(context.Context) bool { return accepts }
+	DevctlAcceptsRed = func(context.Context) bool { return accepts }
 }
 
 func devctlCalls(t *testing.T, path string) []string {
@@ -57,7 +57,7 @@ func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 	stubBase(t, github.CheckFail, true)
 	stdout := gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); err != nil {
+	if err := g.RunMerge(); err != nil {
 		t.Fatalf("the merge red on a base-red check: %v", err)
 	}
 	got := devctlCalls(t, calls)
@@ -94,7 +94,7 @@ func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 			stubBase(t, tc.e2e, tc.accepts)
 			stdout := gateStdout(t)
 			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-			if err := g.runMerge(); Code(err) != 1 {
+			if err := g.RunMerge(); Code(err) != 1 {
 				t.Fatalf("exit %d, want devctl's 1", Code(err))
 			}
 			if got := devctlCalls(t, calls); len(got) != 1 {
@@ -119,13 +119,13 @@ func TestARedCheckOnAnInfraFlakeIsNotThePullRequestsBreak(t *testing.T) {
 	calls := acceptingDevctl(t)
 	stubGitHub(t, github.Open, "")
 	stubBase(t, github.CheckPass, true)
-	infraReds = func(context.Context, []byte) []merge.Infra {
+	InfraReds = func(context.Context, []byte) []merge.Infra {
 		return []merge.Infra{{Check: "e2e-test", Repo: scratchRepo, Run: 11, Job: 12, Signature: "Go module proxy",
 			Line: `read "https://proxy.golang.org/golang.org/x/text/@v/v0.41.0.zip": stream error: stream ID 143; INTERNAL_ERROR; received from peer`}}
 	}
 	_ = gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); Code(err) != 1 {
+	if err := g.RunMerge(); Code(err) != 1 {
 		t.Fatalf("exit %d, want devctl's 1", Code(err))
 	}
 	if got := devctlCalls(t, calls); len(got) != 1 {

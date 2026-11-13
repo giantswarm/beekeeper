@@ -40,7 +40,7 @@ func TestTheBudgetReadRetriesATransientFailure(t *testing.T) {
 				return github.Budget{Remaining: 5000, Limit: 5000}, nil
 			}
 			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
-			b, err := g.gateBudget()
+			b, err := g.GateBudget()
 			if (err == nil) != c.ok || reads != c.reads || c.ok && b.Remaining != 5000 {
 				t.Fatalf("budget %+v, %v after %d reads, want ok %v after %d", b, err, reads, c.ok, c.reads)
 			}
@@ -60,7 +60,7 @@ func TestABudgetUnreadInTransitExitsRetryableNotRefused(t *testing.T) {
 		says  []string
 	}{
 		{"every try times out in transit", errors.New(`Get "https://api.github.com/repos/giantswarm/devctl": dial tcp: lookup api.github.com: i/o timeout`),
-			ExitGateUnread, 1 + len(readBackoff), []string{"reading the GitHub budget failed in transit", "i/o timeout", "4 tries failed in transit", "was not judged"}},
+			ExitGateUnread, 1 + len(ReadBackoff), []string{"reading the GitHub budget failed in transit", "i/o timeout", "4 tries failed in transit", "was not judged"}},
 		{"gh without a token", errors.New("gh auth token: no oauth token found"),
 			ExitGateRefused, 1, []string{"the GitHub budget is unknown", "gh auth status"}},
 	} {
@@ -82,7 +82,7 @@ func TestABudgetUnreadInTransitExitsRetryableNotRefused(t *testing.T) {
 				return github.Budget{}, c.fail
 			}
 			g := placedGate(a, 7, os.Getpid())
-			why, err := g.step()
+			why, err := g.Step()
 			if Code(err) != c.code || reads != c.reads {
 				t.Fatalf("%q, exit %d (%v) after %d reads, want %d after %d", why, Code(err), err, reads, c.code, c.reads)
 			}
@@ -103,24 +103,24 @@ func TestTheHelmReleaseReadRefusesOnlyAfterItsRetries(t *testing.T) {
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	for _, answerAt := range []int{0, 3} {
 		reads := 0
-		was := readHelmReleases
-		t.Cleanup(func() { readHelmReleases = was })
-		readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+		was := ReadHelmReleases
+		t.Cleanup(func() { ReadHelmReleases = was })
+		ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 			if reads++; reads == answerAt {
 				return nil, nil
 			}
 			return nil, errors.New("context teleport.giantswarm.io-gazelle: signal: killed: ")
 		}
 		g := runningMerge(t, scratchRepo, lane)
-		_, why, err := g.laneReady(merge.Lane{})
+		_, why, err := g.LaneReady(merge.Lane{})
 		if answerAt != 0 {
 			if err != nil || why != "" || reads != answerAt {
 				t.Fatalf("answered at try %d: %q, %v after %d reads", answerAt, why, err, reads)
 			}
 			continue
 		}
-		if Code(err) != ExitGateRefused || reads != 1+len(readBackoff) {
-			t.Fatalf("exit %d (%v) after %d reads, want %d after %d", Code(err), err, reads, ExitGateRefused, 1+len(readBackoff))
+		if Code(err) != ExitGateRefused || reads != 1+len(ReadBackoff) {
+			t.Fatalf("exit %d (%v) after %d reads, want %d after %d", Code(err), err, reads, ExitGateRefused, 1+len(ReadBackoff))
 		}
 		d := lastEvent(t, g, "merge.refused")
 		for _, want := range []string{"cannot read the HelmReleases of " + gazelle, "signal: killed", "4 tries failed in transit", "once it answers"} {

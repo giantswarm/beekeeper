@@ -432,7 +432,7 @@ func TestStopEndsARunningMergesDevctl(t *testing.T) {
 		go func() { _ = c.Wait(); close(done) }()
 		t.Cleanup(func() { _ = c.Process.Kill(); <-done })
 		children[pr] = c.Process.Pid
-		base := mergeBase(a.store.Dir(), scratchRepo, pr)
+		base := MergeBase(a.store.Dir(), scratchRepo, pr)
 		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -450,14 +450,14 @@ func TestStopEndsARunningMergesDevctl(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged := time.Now().Add(-time.Minute)
-	orig := pullState
-	pullState = func(_ context.Context, _ string, pr int) (github.Pull, error) {
+	orig := PullState
+	PullState = func(_ context.Context, _ string, pr int) (github.Pull, error) {
 		if pr == 9 {
 			return github.Pull{State: github.Merged, MergedAt: merged}, nil
 		}
 		return github.Pull{State: github.Open}, nil
 	}
-	t.Cleanup(func() { pullState = orig })
+	t.Cleanup(func() { PullState = orig })
 	if err := a.stop(context.Background(), "stop"); err != nil {
 		t.Fatal(err)
 	}

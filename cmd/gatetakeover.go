@@ -7,7 +7,7 @@ func (w *watcher) staleMerges() {
 	}
 	found := map[string]bool{}
 	for _, m := range st.Merges {
-		if why := staleMerge(st, m); why != "" {
+		if why := StaleMerge(st, m); why != "" {
 			key := "stale-merge " + m.Key()
 			found[key] = true
 			if !w.isActive(key) {

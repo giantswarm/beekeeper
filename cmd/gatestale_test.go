@@ -79,7 +79,7 @@ func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 	}
 	bin := &fakeBinary{replaced: true, execErr: errBusy}
 	was := runningBinary
-	runningBinary = func() binary { return bin }
+	runningBinary = func() Binary { return bin }
 	t.Cleanup(func() { runningBinary = was })
 	stderr := capture(t, &os.Stderr)
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
@@ -108,7 +108,7 @@ func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := runningMergeIn(t, store, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	newer, err := state.OpenVersion(g.a.store.Dir(), newerRelease)
+	newer, err := state.OpenVersion(g.Host.store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,15 +118,15 @@ func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if g.a.store, err = state.OpenVersion(g.a.store.Dir(), olderRelease); err != nil {
+	if g.Host.store, err = state.OpenVersion(g.Host.store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
-	_, err = g.start("", nil)
+	_, err = g.Start("", nil)
 	var stale *state.StaleWriterError
 	if !errors.As(err, &stale) || stale.Version != olderRelease || stale.Newer != newerRelease {
 		t.Fatalf("start: %v, want the stale writer", err)
 	}
-	if d := lastEventOf(t, g.a, "merge.refused"); d != "" {
+	if d := lastEventOf(t, g.Host, "merge.refused"); d != "" {
 		t.Errorf("refused as it is: %q", d)
 	}
 }

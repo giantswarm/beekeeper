@@ -38,11 +38,11 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	if !wait || doc.MergeCommitSha == "" {
 		return result
 	}
-	ctx, cancel := context.WithTimeout(ctx, releasePRWait)
+	ctx, cancel := context.WithTimeout(ctx, ReleasePRWait)
 	defer cancel()
 	raw, err := waitReviewedRelease(ctx, doc.Repo, doc.Number)
 	out, reason, ok := merge.ParseReleaseWait(raw)
-	result.Release = &reviewedRelease{Verdict: verdictUnconfirmed}
+	result.Release = &reviewedRelease{Verdict: VerdictUnconfirmed}
 	switch {
 	case !ok:
 		result.ExitCode = 9
@@ -60,7 +60,7 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	case out.Unconfirmed || out.Release == "":
 		result.ExitCode = 9
 	default:
-		result.Release.Verdict = verdictAvailable
+		result.Release.Verdict = VerdictAvailable
 		result.Release.Tag = out.Release
 		result.ExitCode = 0
 	}

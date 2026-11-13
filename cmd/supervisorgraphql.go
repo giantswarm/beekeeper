@@ -186,7 +186,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	// A reading lost only to a busy state or lease commit stands (#3841).
 	b, err := readLoopGraphQLBudget(a, ctx)
-	if err = unsavedBudget(err); err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
+	if err = UnsavedBudget(err); err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
 		return fmt.Errorf("loop GitHub budget unavailable (%s): %w", loopBudgetUnavailable(a, b, err), loop.ErrLoopLater)
 	}
 	g := b.GraphQL
@@ -228,7 +228,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	runErr := run()
 	after, err := readLoopGraphQLBudget(a, ctx)
-	if err = unsavedBudget(err); err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
+	if err = UnsavedBudget(err); err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
 		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", loop.ErrLoopLater)
 	}
 	if scan {
@@ -290,7 +290,7 @@ var refreshLoopBudget = readFreshLoopBudget
 func readFreshLoopBudget(a *app, ctx context.Context) (*state.Budget, error) {
 	at := clk.Now()
 	b, err := readLoopGraphQLBudget(a, ctx)
-	if err = unsavedBudget(err); err != nil {
+	if err = UnsavedBudget(err); err != nil {
 		return nil, err
 	}
 	return loopBudgetReading(b, at), nil

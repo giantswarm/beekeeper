@@ -37,7 +37,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
-		"gateCmdName":                      gateCmdName,
+		"gateCmdName":                      GateCmdName,
 		"harnessAuto":                      capacity.HarnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
 		"hostUpdateDeferred":               hostUpdateDeferred,
@@ -61,7 +61,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,
 		"verbStart":                        verbStart,
-		"verdictAvailable":                 verdictAvailable,
+		"verdictAvailable":                 VerdictAvailable,
 		"workerGitHubAPIGroup":             workerGitHubAPIGroup,
 		"workerRole":                       workerRole,
 	}

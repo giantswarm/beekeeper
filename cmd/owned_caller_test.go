@@ -40,7 +40,7 @@ func fakeGate(t *testing.T) (pid int, stop func()) {
 
 // childOf writes spec for a run at base under a fresh runs directory and
 // returns base and the file the fake devctl writes its pid to.
-func childOf(t *testing.T, name string, spec childSpec) (base, devpid string) {
+func childOf(t *testing.T, name string, spec ChildSpec) (base, devpid string) {
 	t.Helper()
 	base = filepath.Join(t.TempDir(), ownedRuns, name)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
@@ -58,7 +58,7 @@ func childOf(t *testing.T, name string, spec childSpec) (base, devpid string) {
 func pidIn(t *testing.T, file string) int {
 	t.Helper()
 	var pid int
-	if !eventually(childStart, func() bool {
+	if !eventually(ChildStart, func() bool {
 		raw, err := os.ReadFile(file) //nolint:gosec // the test's file
 		pid, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
 		return err == nil && pid > 0
@@ -76,7 +76,7 @@ func pidIn(t *testing.T, file string) int {
 func TestAWaitEndsWithItsCaller(t *testing.T) {
 	gatePID, stopGate := fakeGate(t)
 	argv := strings.Fields("devctl release wait o/r v1.2.3")
-	base, devpid := childOf(t, "release-wait-o_r-v1.2.3-1", childSpec{Argv: argv, Owner: state.Party{Session: "s1", Name: ownerName}, Gate: gatePID, WithCaller: true})
+	base, devpid := childOf(t, "release-wait-o_r-v1.2.3-1", ChildSpec{Argv: argv, Owner: state.Party{Session: "s1", Name: ownerName}, Gate: gatePID, WithCaller: true})
 	fakeDevctl(t, `echo $$ >`+devpid+`; echo "waiting for tag v1.2.3 to exist" >&2; exec sleep 60`)
 	done := make(chan childResult, 1)
 	go func() { done <- mergeChild(base) }()
@@ -110,8 +110,8 @@ func TestAWaitEndsWithItsCaller(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGHUP)
 	}()
-	fr := followChild(follow, running, 0, nil, nil, time.Time{}, true, nil)
-	if !fr.ended || fr.left || fr.rc != 128+int(syscall.SIGTERM) {
+	fr := FollowChild(follow, running, 0, nil, nil, time.Time{}, true, nil)
+	if !fr.Ended || fr.Left || fr.Rc != 128+int(syscall.SIGTERM) {
 		t.Errorf("the gate's follow: %+v, want ended with 143", fr)
 	}
 }
@@ -125,18 +125,18 @@ func TestARunLeftToRunOnOutlivesItsGate(t *testing.T) {
 	owner := state.Party{Session: "s1", Name: ownerName}
 	for _, c := range []struct {
 		name string
-		spec childSpec
+		spec ChildSpec
 		left bool
 	}{
-		{name: "pr-merge-o_r-7-1", spec: childSpec{Argv: mergeArgv("o/r"), Owner: owner}},
-		{name: "release-wait-o_r-v1.2.3-1", spec: childSpec{Argv: strings.Fields("devctl release wait o/r v1.2.3"), Owner: owner, WithCaller: true}, left: true},
+		{name: "pr-merge-o_r-7-1", spec: ChildSpec{Argv: mergeArgv("o/r"), Owner: owner}},
+		{name: "release-wait-o_r-v1.2.3-1", spec: ChildSpec{Argv: strings.Fields("devctl release wait o/r v1.2.3"), Owner: owner, WithCaller: true}, left: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			gatePID, stopGate := fakeGate(t)
 			c.spec.Gate = gatePID
 			base, devpid := childOf(t, c.name, c.spec)
 			if c.left {
-				if err := os.WriteFile(base+leftExt, nil, 0o600); err != nil {
+				if err := os.WriteFile(base+LeftExt, nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -146,7 +146,7 @@ func TestARunLeftToRunOnOutlivesItsGate(t *testing.T) {
 			go func() { done <- mergeChild(base) }()
 			pidIn(t, devpid)
 			stopGate()
-			time.Sleep(5 * followPoll)
+			time.Sleep(5 * FollowPoll)
 			select {
 			case r := <-done:
 				t.Fatalf("devctl ended with its gate: exit %d", r.rc)

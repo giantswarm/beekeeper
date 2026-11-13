@@ -66,9 +66,9 @@ func TestAMergeQueuedUnderTheFloorRunsFirstAtTheReset(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a, reset := resetApp(t)
-	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	if why, err := g.step(); err != nil || !strings.Contains(why, "under the floor 100 until the reset") {
+	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "under the floor 100 until the reset") {
 		t.Fatalf("step: %q, %v; want a wait for the reset", why, err)
 	}
 	st, err := a.store.Read()
@@ -118,24 +118,24 @@ func TestTheOldestMergeQueuedForTheResetGoesFirst(t *testing.T) {
 	a.cfg.Merge.ResetFirst = config.Duration{Duration: 5 * time.Minute}
 	a.cfg.Merge.Cap = 2
 	hostDevctls(t, 10)
-	g := &gateRun{a: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), me: me.By, pid: os.Getpid()}
+	g := &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if why := g.capWait(st, me); !strings.Contains(why, "1 merges run (cap 2) and o/s#3, queued for the reset before it, goes first") {
+	if why := g.CapWait(st, me); !strings.Contains(why, "1 merges run (cap 2) and o/s#3, queued for the reset before it, goes first") {
 		t.Errorf("cap wait %q, want o/s#3 first", why)
 	}
 	if first := merge.ResetFirst(st, a.now, time.Hour, func(int) bool { return true }); merge.Keys(first) != "o/s#3, o/r#7" {
 		t.Errorf("reset first %q, want the oldest queued first", merge.Keys(first))
 	}
 	a.cfg.Merge.Cap = 3
-	if why := g.capWait(st, me); why != "" {
+	if why := g.CapWait(st, me); why != "" {
 		t.Errorf("cap wait %q with a slot for both, want none", why)
 	}
 	// Past its window the merge counts the machine's merges and promotes again.
 	a.now = reset.Add(a.cfg.Merge.ResetFirst.Duration)
-	if why := g.capWait(st, me); !strings.Contains(why, "11 merges and promotes run machine-wide (cap 3)") {
+	if why := g.CapWait(st, me); !strings.Contains(why, "11 merges and promotes run machine-wide (cap 3)") {
 		t.Errorf("cap wait %q past the window, want the machine's merges and promotes", why)
 	}
 }
@@ -177,7 +177,7 @@ func TestBudgetGateLetsTheMergesQueuedForTheResetGoFirst(t *testing.T) {
 
 // Ordinary one-PR merges need their own reserve, rather than the reader floor.
 func TestBoundedMergeUnderTheBudgetFloor(t *testing.T) {
-	for _, remaining := range []int{2438, mergeBudgetReserve} {
+	for _, remaining := range []int{2438, MergeBudgetReserve} {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
 			noSystemd(t)
 			fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -200,10 +200,10 @@ func TestBoundedMergeUnderTheBudgetFloor(t *testing.T) {
 func TestMergeBelowItsReserveStillWaitsForReset(t *testing.T) {
 	a, _ := resetApp(t)
 	a.cfg.GitHub.Floor = 2500
-	setBudget(t, a, mergeBudgetReserve-1)
-	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	if why, err := g.step(); err != nil || !strings.Contains(why, "until the reset") {
+	setBudget(t, a, MergeBudgetReserve-1)
+	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "until the reset") {
 		t.Fatalf("step: %q, %v; want reset wait", why, err)
 	}
 }

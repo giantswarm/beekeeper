@@ -341,7 +341,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		return "pull request has no head commit", false, nil
 	}
 	if p.Head != "" && targetHead != "" && !loop.SameCommit(p.Head, targetHead) {
-		return fmt.Sprintf("pull request head is %s, not %s", shortSHA(p.Head), shortSHA(targetHead)), false, nil
+		return fmt.Sprintf("pull request head is %s, not %s", ShortSHA(p.Head), ShortSHA(targetHead)), false, nil
 	}
 	reviews, err := a.trustedReviews(ctx, p)
 	if err != nil {
@@ -384,7 +384,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	}
 
 	if a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
-		return fmt.Sprintf("head %s requires an approved independent review; an exact-head go alone is insufficient", shortSHA(head)), false, nil
+		return fmt.Sprintf("head %s requires an approved independent review; an exact-head go alone is insufficient", ShortSHA(head)), false, nil
 	}
 
 	type goRecord struct {
@@ -473,12 +473,12 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 	}
 
 	if latest != nil && latest.Verdict == superloop.ChangesRequested {
-		return fmt.Sprintf("head %s has no approved desk review (latest desk review on %s requested changes) and no supervisor go for that exact head", shortSHA(head), shortSHA(cmp.Or(latest.Head, latest.Commit))), false, nil
+		return fmt.Sprintf("head %s has no approved desk review (latest desk review on %s requested changes) and no supervisor go for that exact head", ShortSHA(head), ShortSHA(cmp.Or(latest.Head, latest.Commit))), false, nil
 	}
 	if latest != nil && latest.Verdict == superloop.Approved {
-		return fmt.Sprintf("head %s moved past approved head %s without a new approved desk review or supervisor go for %s", shortSHA(head), shortSHA(cmp.Or(latest.Head, latest.Commit)), shortSHA(head)), false, nil
+		return fmt.Sprintf("head %s moved past approved head %s without a new approved desk review or supervisor go for %s", ShortSHA(head), ShortSHA(cmp.Or(latest.Head, latest.Commit)), ShortSHA(head)), false, nil
 	}
-	return fmt.Sprintf("head %s has no approved desk review and no supervisor go for that exact head", shortSHA(head)), false, nil
+	return fmt.Sprintf("head %s has no approved desk review and no supervisor go for that exact head", ShortSHA(head)), false, nil
 }
 
 // trustedReviews are p's reviews with a verdict the desk trusts

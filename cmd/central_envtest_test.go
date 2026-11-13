@@ -203,7 +203,7 @@ func TestCentralEnvtest(t *testing.T) {
 }
 
 // gate is the person's gate on backstage#pr, its central calls only.
-func (p *person) gate(pr int) *gateRun {
+func (p *person) gate(pr int) *GateRun {
 	p.t.Helper()
 	a := &app{cfgPath: p.cfg, as: p.agent, out: &bytes.Buffer{}}
 	if err := a.load(); err != nil {
@@ -213,8 +213,8 @@ func (p *person) gate(pr int) *gateRun {
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	g := &gateRun{a: a, ctx: context.Background(), repo: backstage, pr: pr, lane: a.cfg.LaneOf(backstage), me: me}
-	g.central = a.cfg.CentralLane(g.lane)
+	g := &GateRun{Host: a, Ctx: context.Background(), Repo: backstage, Pr: pr, Lane: a.cfg.LaneOf(backstage), Me: me}
+	g.Central = a.cfg.CentralLane(g.Lane)
 	return g
 }
 
@@ -229,15 +229,15 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	pia := newPerson(t, m, e.token(t, piaEmail, "giantswarm:team-planeteers"), piaEmail, piaTeam, "pia-laptop", "pia-agent")
 
 	first, second := ana.gate(1), pia.gate(2)
-	if !first.central {
+	if !first.Central {
 		t.Fatal("the lane on gazelle, a central installation, is not central")
 	}
-	turn := func(g *gateRun) string {
+	turn := func(g *GateRun) string {
 		t.Helper()
-		g.centralAsked = time.Time{}
-		why, err := g.centralTurn()
+		g.CentralAsked = time.Time{}
+		why, err := g.CentralTurn()
 		if err != nil {
-			t.Fatalf("%s: %v", g.key(), err)
+			t.Fatalf("%s: %v", g.Key(), err)
 		}
 		return why
 	}
@@ -247,24 +247,24 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	if why := turn(second); !strings.Contains(why, "position 2 in central lane "+portalLane+" behind "+backstage+"#1") {
 		t.Errorf("the second merge: %q", why)
 	}
-	if why, err := first.centralStart(); why != "" || err != nil {
+	if why, err := first.CentralStart(); why != "" || err != nil {
 		t.Fatalf("the first start: %q, %v", why, err)
 	}
 	if why := turn(second); !strings.Contains(why, "behind "+backstage+"#1") {
 		t.Errorf("the second behind a running merge: %q", why)
 	}
-	if why, err := second.centralStart(); why == "" || err != nil {
+	if why, err := second.CentralStart(); why == "" || err != nil {
 		t.Errorf("the second started beside a running merge: %q, %v", why, err)
 	}
-	first.centralRecord(true, "")
+	first.CentralRecord(true, "")
 	if why := turn(second); why == "" {
 		t.Error("the second's turn came while the first settles")
 	}
-	ana.gate(1).a.leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.me}}, "rolled")
+	ana.gate(1).Host.leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.Me}}, "rolled")
 	if why := turn(second); why != "" {
 		t.Errorf("the second waits after the first rolled: %s", why)
 	}
-	second.centralLeave("test done")
+	second.CentralLeave("test done")
 
 	// A central hold refuses the gate and is listed and checked as central.
 	if out, code := ana.run(verbHold, "set", "--lane", portalLane, "-r", "proving window"); code != 0 || !strings.Contains(out, "held lane:"+portalLane) {
@@ -276,7 +276,7 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	if out, code := pia.run(verbHold, "list"); code != 0 || !strings.Contains(out, "central (muster context lab)") || !strings.Contains(out, "proving window") {
 		t.Errorf("hold list: exit %d: %s", code, out)
 	}
-	if _, err := pia.gate(2).centralTurn(); Code(err) != ExitGateRefused {
+	if _, err := pia.gate(2).CentralTurn(); Code(err) != ExitGateRefused {
 		t.Errorf("a held lane's gate: %v (exit %d), want %d", err, Code(err), ExitGateRefused)
 	}
 	if out, code := ana.run(verbHold, "lift", "--lane", portalLane); code != 0 {
@@ -293,7 +293,7 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	}
 
 	m.Down(true)
-	if _, err := pia.gate(3).centralTurn(); Code(err) != ExitCentral {
+	if _, err := pia.gate(3).CentralTurn(); Code(err) != ExitCentral {
 		t.Errorf("unreachable: %v (exit %d), want %d", err, Code(err), ExitCentral)
 	}
 }

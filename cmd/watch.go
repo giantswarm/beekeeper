@@ -616,7 +616,7 @@ func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.H
 	if w.readHRs != nil {
 		return w.readHRs(ctx, lane)
 	}
-	return readHelmReleases(ctx, lane)
+	return ReadHelmReleases(ctx, lane)
 }
 
 // watchClock is a watch's time: its loops wait on its timers.

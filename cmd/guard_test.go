@@ -75,7 +75,7 @@ func TestMain(m *testing.M) {
 	}
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
-	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	ReviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
 	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
@@ -93,7 +93,7 @@ func TestMain(m *testing.M) {
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
 	// Nor does a gate read that fails in transit pause between its tries.
-	readBackoff = make([]time.Duration, len(readBackoff))
+	ReadBackoff = make([]time.Duration, len(ReadBackoff))
 	// Nor its Go build cache: the trim sees only a cache a test points
 	// GOCACHE at; the cache the tests started with is no cache to it.
 	machineCache := gocache.Dir()
@@ -132,7 +132,7 @@ func TestMain(m *testing.M) {
 	// outcome handed over (tellOwner) into the file instead of a wake.
 	if wakes := os.Getenv(testWakesEnv); wakes != "" {
 		wakeOwner = recordWakes(wakes)
-	} else if len(os.Args) > 2 && os.Args[1] == mergeChildCmd {
+	} else if len(os.Args) > 2 && os.Args[1] == MergeChildCmd {
 		os.Exit(mergeChild(os.Args[2]).rc)
 	}
 	if len(os.Args) > 2 && os.Args[1] == followRunCmd {

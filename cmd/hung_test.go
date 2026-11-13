@@ -33,7 +33,7 @@ func hungChild(t *testing.T, dir, repo string, pr int) int {
 	}
 	t.Cleanup(func() { _ = c.Process.Kill() })
 	go func() { _ = c.Wait() }()
-	base := mergeBase(dir, repo, pr)
+	base := MergeBase(dir, repo, pr)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +46,10 @@ func hungChild(t *testing.T, dir, repo string, pr int) int {
 // stubPulls answers GitHub with each pull request's state by number.
 func stubPulls(t *testing.T, pulls map[int]github.Pull) {
 	t.Helper()
-	was, wait := pullState, judgeWait
-	t.Cleanup(func() { pullState, judgeWait = was, wait })
-	judgeWait = 0
-	pullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
+	was, wait := PullState, JudgeWait
+	t.Cleanup(func() { PullState, JudgeWait = was, wait })
+	JudgeWait = 0
+	PullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
 		if p, ok := pulls[n]; ok {
 			return p, nil
 		}
@@ -228,7 +228,7 @@ func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	w.lastHungCheck = now.Add(-time.Second)
 	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: started}})
 	child := hungChild(t, w.store.Dir(), hungRepo, 1)
-	base := mergeBase(w.store.Dir(), hungRepo, 1)
+	base := MergeBase(w.store.Dir(), hungRepo, 1)
 	p := newMergeProgress(base, []string{"--release-timeout=30m"}, started)
 	p.observe("release: waiting for the release of abc\n", started.Add(time.Minute))
 	p.observe("pipeline 123: workflow build running\n", now.Add(-time.Minute))

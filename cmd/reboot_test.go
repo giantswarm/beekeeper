@@ -68,7 +68,7 @@ func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := mergeBase(w.store.Dir(), "o/doc", 1)
+	base := MergeBase(w.store.Dir(), "o/doc", 1)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}

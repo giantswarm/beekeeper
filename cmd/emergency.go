@@ -334,7 +334,7 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 		return err
 	}
 	if p.State != superloop.Open || p.Draft || !strings.EqualFold(p.Head, head) || !p.Green {
-		return refused("admin merge requires %s open, non-draft and green at %s; it is %s at %s, green %v", ref, shortSHA(head), p.State, shortSHA(p.Head), p.Green)
+		return refused("admin merge requires %s open, non-draft and green at %s; it is %s at %s, green %v", ref, ShortSHA(head), p.State, ShortSHA(p.Head), p.Green)
 	}
 	if why := adminMergeBlock(p); why != "" {
 		return refused("admin merge of %s: %s", ref, why)

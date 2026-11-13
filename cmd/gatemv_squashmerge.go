@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// squashArgv is the gate's command for repo#pr on the plain squash merge
+// SquashArgv is the gate's command for repo#pr on the plain squash merge
 // route, with the caller's --timeout.
-func squashArgv(self, repo string, pr int, devctlArgv []string) []string {
+func SquashArgv(self, repo string, pr int, devctlArgv []string) []string {
 	argv := []string{self, squashMergeCmd, repo, strconv.Itoa(pr)}
 	for i, a := range devctlArgv {
 		if v, ok := strings.CutPrefix(a, "--timeout="); ok {

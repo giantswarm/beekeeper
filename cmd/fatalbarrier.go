@@ -62,7 +62,7 @@ func (a *app) fatalPublicationBarrier(ctx context.Context, st *state.State, repo
 	}
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
 	defer cancel()
-	base, err := pullBase(ctx, repo, pr)
+	base, err := PullBase(ctx, repo, pr)
 	if err != nil {
 		return fmt.Errorf("%v; merge base unreadable: %w", x.Refusal(), err)
 	}

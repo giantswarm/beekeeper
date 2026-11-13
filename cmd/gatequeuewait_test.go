@@ -40,10 +40,10 @@ func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
+			g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true}
 			if tc.handoff {
-				g.from, g.queued = pid, true
-				if why, err := g.step(); err != nil || why == "" || *asked != 0 {
+				g.From, g.Queued = pid, true
+				if why, err := g.Step(); err != nil || why == "" || *asked != 0 {
 					t.Fatalf("handoff read GitHub or failed: %q, %v, reads %d", why, err, *asked)
 				}
 			}
@@ -53,8 +53,8 @@ func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
 				t.Fatal(err)
 			}
 			for range 3 {
-				if why, err := g.step(); err != nil || why == "" || !g.passive {
-					t.Fatalf("follower: why %q, err %v, passive %v", why, err, g.passive)
+				if why, err := g.Step(); err != nil || why == "" || !g.Passive {
+					t.Fatalf("follower: why %q, err %v, passive %v", why, err, g.Passive)
 				}
 			}
 			after, err := os.Stat(path)
@@ -77,8 +77,8 @@ func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
-	if why, err := g.step(); err != nil || why == "" || !g.passive {
+	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true}
+	if why, err := g.Step(); err != nil || why == "" || !g.Passive {
 		t.Fatalf("not waiting behind predecessor: %q, %v", why, err)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -94,8 +94,8 @@ func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
 		reads++
 		return github.Budget{}, fmt.Errorf("no budget in this test")
 	}
-	if _, err := g.step(); Code(err) != ExitGateRefused || g.passive || reads != 1 {
-		t.Fatalf("head skipped normal checks: %v, passive %v, budget reads %d", err, g.passive, reads)
+	if _, err := g.Step(); Code(err) != ExitGateRefused || g.Passive || reads != 1 {
+		t.Fatalf("head skipped normal checks: %v, passive %v, budget reads %d", err, g.Passive, reads)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestQueuedFollowerCancellationDoesNotWaitForItsSleep(t *testing.T) {
 }
 
 func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
-	t.Setenv(gateFromEnv, "")
+	t.Setenv(GateFromEnv, "")
 	for _, seeded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("seeded=%v", seeded), func(t *testing.T) {
 			asked := stubGitHub(t, github.Open, "")
@@ -147,18 +147,18 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7,
-				lane: a.cfg.LaneOf(scratchRepo), pid: parent, placed: true}
+			g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7,
+				Lane: a.cfg.LaneOf(scratchRepo), Pid: parent, Placed: true}
 			before, err := a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
 			merge.Prune(before, time.Now(), a.cfg.Merge.QueueTTL.Duration, a.cfg.Merge.SeedTTL.Duration, proc.Alive)
-			if g.mine(before, state.Waiting) >= 0 {
+			if g.Mine(before, state.Waiting) >= 0 {
 				t.Fatal("fixture does not reproduce an expired place whose parent is gone")
 			}
 			handoff := time.Now()
-			if err := g.enqueue("a long passive wait"); Code(err) != ExitGateQueued {
+			if err := g.Enqueue("a long passive wait"); Code(err) != ExitGateQueued {
 				t.Fatalf("handoff: %v", err)
 			}
 			launched()
@@ -166,17 +166,17 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			seen := st.Merges[g.mine(st, state.Waiting)].Seen
-			g.pid, g.from, g.queued = os.Getpid(), parent, true
-			if why, err := g.step(); err != nil || why == "" || !g.passive {
+			seen := st.Merges[g.Mine(st, state.Waiting)].Seen
+			g.Pid, g.From, g.Queued = os.Getpid(), parent, true
+			if why, err := g.Step(); err != nil || why == "" || !g.Passive {
 				t.Fatalf("expired handoff was lost: why %q, err %v", why, err)
 			}
 			st, err = a.store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}
-			m := st.Merges[g.mine(st, state.Waiting)]
-			if seen.Before(handoff) || !m.Joined.Equal(joined) || m.PID != g.pid || m.Seeded != seeded || *asked != 0 {
+			m := st.Merges[g.Mine(st, state.Waiting)]
+			if seen.Before(handoff) || !m.Joined.Equal(joined) || m.PID != g.Pid || m.Seeded != seeded || *asked != 0 {
 				t.Fatalf("handoff changed order, missed its refresh or read GitHub: %+v, seen %s, reads %d", m, seen, *asked)
 			}
 		})
@@ -194,17 +194,17 @@ func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := &gateRun{a: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true, queued: true}
+	g := &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true, Queued: true}
 	for _, cap := range []int{5, 12} {
 		raw := fmt.Sprintf("merge:\n  cap: %d\nlanes:\n  - name: %s\n    repositories: [%s, o/other]\n", cap, "shared", scratchRepo)
 		if err := os.WriteFile(a.loadedCfg, []byte(raw), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if why, err := g.step(); err != nil || why == "" || !g.passive {
+		if why, err := g.Step(); err != nil || why == "" || !g.Passive {
 			t.Fatalf("poll: %q, %v", why, err)
 		}
-		if g.a.cfg.Merge.Cap != cap || len(g.lane.Repositories) != 2 {
-			t.Fatalf("stale settings: cap %d, lane %+v", g.a.cfg.Merge.Cap, g.lane)
+		if g.Host.cfg.Merge.Cap != cap || len(g.Lane.Repositories) != 2 {
+			t.Fatalf("stale settings: cap %d, lane %+v", g.Host.cfg.Merge.Cap, g.Lane)
 		}
 	}
 }

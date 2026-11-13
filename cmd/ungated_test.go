@@ -34,9 +34,9 @@ func ungatedTable() *proc.Table {
 		p(10, 1, claudeComm, claudeComm),
 		p(11, 10, "bash", "bash", "/home/u/scratch/merge.sh"),
 		p(12, 11, merge.Tool, "devctl", "pr", "merge", "o/r", "1"),
-		p(20, 1, project.Name, "/home/u/.go/bin/beekeeper", mergeChildCmd, "/home/u/.local/state/beekeeper/merges/o-r-2"),
+		p(20, 1, project.Name, "/home/u/.go/bin/beekeeper", MergeChildCmd, "/home/u/.local/state/beekeeper/merges/o-r-2"),
 		p(21, 20, merge.Tool, "/home/u/.go/bin/devctl", "pr", "merge", "--timeout", "30m", "o/r", "2"),
-		p(30, 10, project.Name, "/home/u/.go/bin/beekeeper", gateCmdName, "--", "devctl", "release", "promote", "o/r"),
+		p(30, 10, project.Name, "/home/u/.go/bin/beekeeper", GateCmdName, "--", "devctl", "release", "promote", "o/r"),
 		p(31, 30, merge.Tool, "devctl", "release", "promote", "o/r", "--dry-run"),
 		p(40, 10, merge.Tool, "devctl", "release", "promote", "o/r"),
 		p(41, 10, merge.Tool, "devctl", "release", "promote", "--team", "x"),
@@ -205,7 +205,7 @@ func runnerTable() *proc.Table {
 		p(65, 64, "sh", "/bin/sh", "-c", "devctl pr merge o/r 13"),
 		p(66, 65, merge.Tool, "devctl", "pr", "merge", "o/r", "13"),
 		p(67, 10, "xargs", "xargs", "-n1", "/home/u/.go/bin/beekeeper", "gate", "--", "devctl", "pr", "merge", "o/r"),
-		p(68, 67, project.Name, "/home/u/.go/bin/beekeeper", mergeChildCmd, "/home/u/.local/state/beekeeper/merges/o-r-14"),
+		p(68, 67, project.Name, "/home/u/.go/bin/beekeeper", MergeChildCmd, "/home/u/.local/state/beekeeper/merges/o-r-14"),
 		p(69, 68, merge.Tool, "devctl", "pr", "merge", "o/r", "14"),
 	} {
 		tb.ByPID[pr.PID] = pr

@@ -450,7 +450,7 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 // its turn or following its devctl, and a merge-child.
 func reexecs(p *proc.Process) bool {
 	sub := claude.BeekeeperSubcommand(p)
-	return sub == gateCmdName || sub == mergeChildCmd
+	return sub == GateCmdName || sub == MergeChildCmd
 }
 
 func (a *app) selfUpdateStore() state.Store {

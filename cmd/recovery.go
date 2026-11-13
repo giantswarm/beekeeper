@@ -412,7 +412,7 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 	// Streaks only: a loop that died must not read as unknown here.
 	status, _ := evaluateThroughput(now, time.Hour, throughputObservation{At: now, Candidate: version}, outcomes, false)
 	switch {
-	case status == unknownState:
+	case status == UnknownState:
 		s.Unproven = "an operation's outcome is unknown"
 	case strings.HasPrefix(status, "failed-"):
 		if recoveryGitHubUp(ctx) {

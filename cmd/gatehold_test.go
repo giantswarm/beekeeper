@@ -35,9 +35,9 @@ func heldApp(t *testing.T, merges ...state.Merge) *app {
 }
 
 // placedGate is the queued run of o/r#pr, which has its place in the lane.
-func placedGate(a *app, pr int, pid int) *gateRun {
-	return &gateRun{a: a, ctx: context.Background(), argv: prArgv(pr), repo: scratchRepo, pr: pr,
-		lane: a.cfg.LaneOf(scratchRepo), me: state.Party{Session: "s1", Name: ownerName}, pid: pid, queued: true, placed: true}
+func placedGate(a *app, pr int, pid int) *GateRun {
+	return &GateRun{Host: a, Ctx: context.Background(), Argv: prArgv(pr), Repo: scratchRepo, Pr: pr,
+		Lane: a.cfg.LaneOf(scratchRepo), Me: state.Party{Session: "s1", Name: ownerName}, Pid: pid, Queued: true, Placed: true}
 }
 
 // prArgv merges o/r#pr.
@@ -90,7 +90,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 	setHold(t, a, state.Hold{Target: scratchRepo, Except: scratchRepo + "#6", By: state.Party{Name: supervisorName}, At: time.Now(), Reason: "#6 first"})
 
 	held := placedGate(a, 7, os.Getpid())
-	why, err := held.step()
+	why, err := held.Step()
 	if err != nil || !strings.Contains(why, "held in lane o/r (o/r except o/r#6)") || !strings.Contains(why, "o/r#7 keeps its place") {
 		t.Fatalf("o/r#7 under the hold: %q, %v; want a wait in its place", why, err)
 	}
@@ -99,7 +99,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 	}
 
 	exception := placedGate(a, 6, other)
-	if why, err := exception.step(); err != nil || !strings.Contains(why, "merges and promotes run machine-wide") || !strings.Contains(why, "o/r#6 is next in lane o/r") {
+	if why, err := exception.Step(); err != nil || !strings.Contains(why, "merges and promotes run machine-wide") || !strings.Contains(why, "o/r#6 is next in lane o/r") {
 		t.Errorf("o/r#6, the hold's exception: %q, %v; want it the lane's next, ahead of the held o/r#7", why, err)
 	}
 
@@ -119,7 +119,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if why, err := held.step(); err != nil || !strings.Contains(why, "o/r#7 is next in lane o/r") {
+	if why, err := held.Step(); err != nil || !strings.Contains(why, "o/r#7 is next in lane o/r") {
 		t.Errorf("o/r#7 after the hold: %q, %v; want it the lane's next", why, err)
 	}
 	if m, ok := mergeOf(readState(t, a), 7); !ok || !m.Joined.Equal(joined) {
@@ -139,7 +139,7 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	child := sleeper(t)
 	a := heldApp(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
 		Child: child, Phase: state.Running, Joined: joined, Seen: time.Now(), Started: time.Now().Add(-time.Minute)})
-	base := mergeBase(a.store.Dir(), scratchRepo, 7)
+	base := MergeBase(a.store.Dir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -151,18 +151,18 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	endChild = func(pid int) error { ended = append(ended, pid); return nil }
 	t.Cleanup(func() { endChild = was })
 	g := placedGate(a, 7, os.Getpid())
-	g.queued = false
+	g.Queued = false
 
-	if _, ok := g.preemptChild(); ok || len(ended) != 0 {
+	if _, ok := g.PreemptChild(); ok || len(ended) != 0 {
 		t.Fatalf("no hold: ended %v", ended)
 	}
 	setHold(t, a, state.Hold{Target: scratchRepo, Except: scratchRepo + "#6", By: state.Party{Name: supervisorName}, At: time.Now(), Reason: "#6 first"})
-	h, ok := g.preemptChild()
+	h, ok := g.PreemptChild()
 	if !ok || !slices.Equal(ended, []int{child}) {
 		t.Fatalf("the hold's exception: preempted %v, ended %v; want o/r#7's devctl ended", ok, ended)
 	}
-	var p *preemptedError
-	if err := g.requeue(base, h); !errors.As(err, &p) || !strings.Contains(p.why, "o/r#6 goes first; o/r#7 keeps its place") || !g.requeued {
+	var p *PreemptedError
+	if err := g.Requeue(base, h); !errors.As(err, &p) || !strings.Contains(p.Why, "o/r#6 goes first; o/r#7 keeps its place") || !g.Requeued {
 		t.Fatalf("requeue: %v", err)
 	}
 	m, ok := mergeOf(readState(t, a), 7)
@@ -178,7 +178,7 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.requeue(base, h); err != nil {
+	if err := g.Requeue(base, h); err != nil {
 		t.Errorf("a merged run was requeued: %v", err)
 	}
 }
@@ -191,12 +191,12 @@ func TestTwoQueuedMergesKeepTheirOrderThroughToolWindow(t *testing.T) {
 	a := heldApp(t,
 		state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: pids[0], Phase: state.Waiting, Joined: joined, Seen: time.Now()},
 		state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, PID: pids[1], Phase: state.Waiting, Joined: joined.Add(time.Second), Seen: time.Now()})
-	gates := []*gateRun{placedGate(a, 7, pids[0]), placedGate(a, 8, pids[1])}
+	gates := []*GateRun{placedGate(a, 7, pids[0]), placedGate(a, 8, pids[1])}
 	setHold(t, a, state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, Tool: merge.Tool, ToolMerged: true,
 		ToolPR: 1, ToolChecked: time.Now(), At: time.Now(), Reason: "devctl release"})
 	for _, g := range gates {
-		if why, err := g.step(); err != nil || !strings.Contains(why, "keeps its place") {
-			t.Fatalf("queued #%d during window: %q, %v", g.pr, why, err)
+		if why, err := g.Step(); err != nil || !strings.Contains(why, "keeps its place") {
+			t.Fatalf("queued #%d during window: %q, %v", g.Pr, why, err)
 		}
 	}
 	var out bytes.Buffer
@@ -211,19 +211,19 @@ func TestTwoQueuedMergesKeepTheirOrderThroughToolWindow(t *testing.T) {
 	if strings.Contains(out.String(), "waiting for the devctl window") {
 		t.Fatalf("lanes after window:\n%s", out.String())
 	}
-	if why, err := gates[1].step(); err != nil || !strings.Contains(why, "o/r#7") {
+	if why, err := gates[1].Step(); err != nil || !strings.Contains(why, "o/r#7") {
 		t.Fatalf("second merge must still wait behind first: %q, %v", why, err)
 	}
 	for i, g := range gates {
-		if why, err := g.step(); err != nil || !strings.Contains(why, g.key()+" is next in lane") {
-			t.Fatalf("queued #%d after window: %q, %v", g.pr, why, err)
+		if why, err := g.Step(); err != nil || !strings.Contains(why, g.Key()+" is next in lane") {
+			t.Fatalf("queued #%d after window: %q, %v", g.Pr, why, err)
 		}
-		m, ok := mergeOf(readState(t, a), g.pr)
+		m, ok := mergeOf(readState(t, a), g.Pr)
 		if !ok || !m.Joined.Equal(joined.Add(time.Duration(i)*time.Second)) {
-			t.Fatalf("queued #%d lost its original place: %+v", g.pr, m)
+			t.Fatalf("queued #%d lost its original place: %+v", g.Pr, m)
 		}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == g.pr })
+			st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == g.Pr })
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)

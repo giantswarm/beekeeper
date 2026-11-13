@@ -22,7 +22,7 @@ func TestFatalMainGateRefusesOrdinaryMergeAndPromotion(t *testing.T) {
 			stubFatalBranches(t, fatalScopeBase, nil)
 			g := placedGate(a, pr, os.Getpid())
 			var err error
-			out := gateStderr(t, func() { _, err = g.step() })
+			out := gateStderr(t, func() { _, err = g.Step() })
 			if Code(err) != ExitGateRefused || !strings.Contains(out, "scope: default-branch merges and releases in "+scratchRepo) {
 				t.Fatalf("gate did not refuse: %v %s", err, out)
 			}
@@ -37,8 +37,8 @@ func TestFatalMainRepairStillPassesNormalGateAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := placedGate(a, 7, os.Getpid())
-	g.placed, g.queued = false, false
-	why, err := g.step()
+	g.Placed, g.Queued = false, false
+	why, err := g.Step()
 	if err != nil || !strings.Contains(why, "merges and promotes run machine-wide") {
 		t.Fatalf("repair bypassed cap or did not reach normal admission: %s %v", why, err)
 	}

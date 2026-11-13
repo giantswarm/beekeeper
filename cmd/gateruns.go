@@ -20,10 +20,10 @@ import (
 )
 
 // writeRunInfo leaves i for gate runs in base.run, written whole.
-func writeRunInfo(base string, i runInfo) {
+func writeRunInfo(base string, i RunInfo) {
 	raw, _ := json.Marshal(i)
-	if os.WriteFile(base+runInfoExt+".tmp", raw, 0o600) == nil { //nolint:gosec // the gate's own file
-		_ = os.Rename(base+runInfoExt+".tmp", base+runInfoExt) //nolint:gosec // as above
+	if os.WriteFile(base+RunInfoExt+".tmp", raw, 0o600) == nil { //nolint:gosec // the gate's own file
+		_ = os.Rename(base+RunInfoExt+".tmp", base+RunInfoExt) //nolint:gosec // as above
 	}
 }
 
@@ -31,7 +31,7 @@ func writeRunInfo(base string, i runInfo) {
 // nobody.
 func readStopped(base string) state.Party {
 	var p state.Party
-	if raw, err := os.ReadFile(base + stoppedExt); err == nil { //nolint:gosec // the gate's own file
+	if raw, err := os.ReadFile(base + StoppedExt); err == nil { //nolint:gosec // the gate's own file
 		_ = json.Unmarshal(raw, &p)
 	}
 	return p
@@ -82,7 +82,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 		if m.Run != "" {
 			covered[m.Run] = true
 		}
-		base := mergeBase(dir, m.Repo, m.PR)
+		base := MergeBase(dir, m.Repo, m.PR)
 		r := detachedRun{ID: filepath.Base(base), Kind: runMerge, Phase: m.Phase, Repo: m.Repo, PR: m.PR,
 			Owner: m.By.Name, Session: m.By.Session, base: base}
 		switch {
@@ -98,7 +98,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 		if m.Phase == state.Waiting {
 			info = m.Run
 		}
-		if i, ok := readRunInfo(info); ok {
+		if i, ok := ReadRunInfo(info); ok {
 			r.Command = i.Command
 		}
 		r.Devctl = devctlUnder(t, r.PID)
@@ -118,7 +118,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 		if leftToRunOn(base) {
 			r.Phase = runLeft
 		}
-		if i, ok := readRunInfo(base); ok {
+		if i, ok := ReadRunInfo(base); ok {
 			r.Command, r.Owner, r.Session, r.Since = i.Command, i.Owner.Name, i.Owner.Session, i.Started
 		} else if info, err := os.Stat(f); err == nil {
 			r.Since = info.ModTime().UTC()
@@ -283,26 +283,26 @@ func (a *app) stopWait(by state.Party, r detachedRun) (string, error) {
 		return "", refused("%s ended before the stop: beekeeper gate runs lists what runs", r.ID)
 	}
 	raw, _ := json.Marshal(by)
-	if err := os.WriteFile(r.base+stoppedExt, raw, 0o600); err != nil { //nolint:gosec // the gate's own file
+	if err := os.WriteFile(r.base+StoppedExt, raw, 0o600); err != nil { //nolint:gosec // the gate's own file
 		return "", err
 	}
 	if err := endChild(r.PID); err != nil {
 		return "", err
 	}
 	how := "is ended"
-	if !waitGone(r.PID, stopWait) {
+	if !WaitGone(r.PID, StopWait) {
 		killed := 0
 		if t, err := plat.Machine.Processes(); err == nil {
 			for _, p := range t.Descendants(r.PID) {
 				if p.Comm == merge.Tool {
-					signalPID(p.PID, syscall.SIGKILL)
+					SignalPID(p.PID, syscall.SIGKILL)
 					killed++
 				}
 			}
 		}
-		how = fmt.Sprintf("did not end within %s, its devctl was killed", stopWait)
-		if killed == 0 || !waitGone(r.PID, stopWait) {
-			how = fmt.Sprintf("still runs %s after SIGTERM", 2*stopWait)
+		how = fmt.Sprintf("did not end within %s, its devctl was killed", StopWait)
+		if killed == 0 || !WaitGone(r.PID, StopWait) {
+			how = fmt.Sprintf("still runs %s after SIGTERM", 2*StopWait)
 		}
 	}
 	owner := cmp.Or(r.Owner, "nobody")
@@ -325,7 +325,7 @@ func runProcessAlive(base string, pid int, t *proc.Table) bool {
 	if p == nil {
 		return false
 	}
-	i, _ := readRunInfo(base)
+	i, _ := ReadRunInfo(base)
 	if !i.ProcessStarted.IsZero() {
 		return p.Start.Equal(i.ProcessStarted)
 	}
@@ -339,7 +339,7 @@ func runProcessAlive(base string, pid int, t *proc.Table) bool {
 		return false
 	}
 	for n, arg := range p.Args {
-		if arg == mergeChildCmd && n+1 < len(p.Args) && p.Args[n+1] == base {
+		if arg == MergeChildCmd && n+1 < len(p.Args) && p.Args[n+1] == base {
 			return true
 		}
 	}
@@ -360,11 +360,11 @@ func cleanupDeadRuns(dir string, st *state.State, now time.Time) {
 		if runProcessAlive(r.base, r.PID, nil) {
 			continue
 		}
-		target := filepath.Join(dir, keptOutputs, r.ID+"-dead-"+now.UTC().Format("20060102T150405Z"))
+		target := filepath.Join(dir, KeptOutputs, r.ID+"-dead-"+now.UTC().Format("20060102T150405Z"))
 		if os.MkdirAll(target, 0o700) != nil {
 			continue
 		}
-		for _, ext := range mergeExts {
+		for _, ext := range MergeExts {
 			_ = os.Rename(r.base+ext, filepath.Join(target, r.ID+ext))
 		}
 	}

@@ -15,29 +15,29 @@ import (
 // holds, dropped places, paired refusals and the turn itself are still
 // decided by the ordinary gate. claimed says this PID already owns the
 // place; a queued handoff still needs the ordinary step's registration.
-func (g *gateRun) waitBehindLive() (why string, claimed bool) {
-	if !g.placed {
+func (g *GateRun) waitBehindLive() (why string, claimed bool) {
+	if !g.Placed {
 		return "", false
 	}
-	st, err := g.a.store.Read()
+	st, err := g.Host.store.Read()
 	if err != nil {
 		return "", false // the ordinary step reports or re-executes a stale writer
 	}
-	i := g.mine(st, state.Waiting)
+	i := g.Mine(st, state.Waiting)
 	if i < 0 || g.pairRefusal(st) != "" {
 		return "", false
 	}
-	claimed = st.Merges[i].PID == g.pid
-	if !claimed && (g.from == 0 || st.Merges[i].PID != g.from) {
+	claimed = st.Merges[i].PID == g.Pid
+	if !claimed && (g.From == 0 || st.Merges[i].PID != g.From) {
 		return "", false
 	}
-	q := merge.Queue(st, g.lane.Name)
-	ahead, behind := q.Ahead(g.repo, g.pr, merge.Unheld(st, g.a.now, g.lane, g.a.present))
+	q := merge.Queue(st, g.Lane.Name)
+	ahead, behind := q.Ahead(g.Repo, g.Pr, merge.Unheld(st, g.Host.now, g.Lane, g.Host.present))
 	if q.Running != nil {
 		ahead, behind = *q.Running, true
 	}
 	if !behind || !proc.Alive(ahead.PID) {
 		return "", false
 	}
-	return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", q.Position(g.repo, g.pr), g.lane.Name, ahead.Key(), ahead.By.Name, ahead.Phase), claimed
+	return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", q.Position(g.Repo, g.Pr), g.Lane.Name, ahead.Key(), ahead.By.Name, ahead.Phase), claimed
 }

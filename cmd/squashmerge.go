@@ -37,7 +37,7 @@ func (a *app) squashMergeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n, err := strconv.Atoi(args[1])
 			if err != nil || n <= 0 {
-				return exitCode(github.SquashTooling)
+				return ExitCode(github.SquashTooling)
 			}
 			if head != "" {
 				if err := a.load(); err != nil {
@@ -46,7 +46,7 @@ func (a *app) squashMergeCmd() *cobra.Command {
 				doc := completeReviewedRelease(cmd.Context(), a.reviewedMerge(cmd.Context(), args[0], n, head), waitRelease)
 				raw, _ := json.Marshal(doc)
 				_, _ = os.Stdout.Write(append(raw, '\n'))
-				return exitCode(doc.ExitCode)
+				return ExitCode(doc.ExitCode)
 			}
 			skip := os.Getenv(github.DevctlSkipVersionCheckEnv) == "true"
 			if a.cfgPath != "" || os.Getenv(beekeeperConfigEnv) != "" {
@@ -57,7 +57,7 @@ func (a *app) squashMergeCmd() *cobra.Command {
 				Progress: os.Stderr, Now: time.Now, Sleep: time.Sleep}.Run(cmd.Context())
 			raw, _ := json.MarshalIndent(doc, "", "  ")
 			_, _ = os.Stdout.Write(append(raw, '\n'))
-			return exitCode(doc.ExitCode)
+			return ExitCode(doc.ExitCode)
 		},
 	}
 	c.Flags().BoolVar(&waitRelease, "release-wait", false, "confirm this merge's auto-release before saving the child outcome")

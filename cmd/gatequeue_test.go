@@ -93,7 +93,7 @@ func devctlArgv(n int, sub string) [][]string {
 
 // stubSelf stands in for this binary as merge-child: it records its pid and
 // the spec it was given, which launched returns.
-func stubSelf(t *testing.T) (self string, launched func() childSpec) {
+func stubSelf(t *testing.T) (self string, launched func() ChildSpec) {
 	t.Helper()
 	noSystemd(t)
 	dir := t.TempDir()
@@ -104,16 +104,16 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
-	was := selfExe
-	selfExe = func() (string, error) { return self, nil }
-	t.Cleanup(func() { selfExe = was })
-	return self, func() childSpec {
+	was := SelfExe
+	SelfExe = func() (string, error) { return self, nil }
+	t.Cleanup(func() { SelfExe = was })
+	return self, func() ChildSpec {
 		t.Helper()
 		raw, err := os.ReadFile(filepath.Join(dir, "spec")) //nolint:gosec // the test's file
 		if err != nil {
 			t.Fatal(err)
 		}
-		var spec childSpec
+		var spec ChildSpec
 		if err := json.Unmarshal(raw, &spec); err != nil {
 			t.Fatalf("no spec: %v", err)
 		}
@@ -139,7 +139,7 @@ func TestQueuedChildAcknowledgesFixtureWrites(t *testing.T) {
 	t.Run("handoff", func(t *testing.T) {
 		self, launched := stubSelf(t)
 		base := filepath.Join(t.TempDir(), "child")
-		if _, err := launchChild(childSpec{Argv: []string{self}}, base); err != nil {
+		if _, err := LaunchChild(ChildSpec{Argv: []string{self}}, base); err != nil {
 			t.Fatal(err)
 		}
 		spec := launched()
@@ -196,7 +196,7 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	if spec.Owner.Session != "s1" || spec.Gate != os.Getpid() {
 		t.Errorf("owner %+v, gate %d", spec.Owner, spec.Gate)
 	}
-	if !slices.Contains(spec.Env, gateFromEnv+"="+strconv.Itoa(os.Getpid())) {
+	if !slices.Contains(spec.Env, GateFromEnv+"="+strconv.Itoa(os.Getpid())) {
 		t.Errorf("the queued run does not know the gate it takes the place from")
 	}
 	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.queued" })
@@ -248,7 +248,7 @@ func TestASecondMergeOfAQueuedOneReusesItsPlace(t *testing.T) {
 	}
 
 	a = seed()
-	t.Setenv(gateFromEnv, strconv.Itoa(queued))
+	t.Setenv(GateFromEnv, strconv.Itoa(queued))
 	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, true)
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
@@ -280,10 +280,10 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 		state.Merge{Repo: scratchRepo, PR: 4, Lane: scratchRepo, Phase: state.Waiting, PID: alive, Seen: now},
 		state.Merge{Repo: scratchRepo, PR: 5, Lane: scratchRepo, Phase: state.Waiting, Seen: now, Checked: now.Add(-time.Second)})
 	pulls := map[int]github.Pull{1: {State: github.Closed}, 2: {State: github.Merged, MergedAt: now}, 3: {State: github.Open}, 4: {State: github.Merged, MergedAt: now}}
-	was := pullState
-	t.Cleanup(func() { pullState = was })
+	was := PullState
+	t.Cleanup(func() { PullState = was })
 	var asked []int
-	pullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
+	PullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
 		asked = append(asked, n)
 		return pulls[n], nil
 	}
@@ -339,9 +339,9 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 		t.Errorf("queued event %q", d)
 	}
 	// The queued run waits under the floor instead of refusing.
-	g := &gateRun{a: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	if why, err := g.step(); err != nil || !strings.Contains(why, "under the floor") {
+	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "under the floor") {
 		t.Errorf("queued run: %q, %v; want a wait for the reset", why, err)
 	}
 }

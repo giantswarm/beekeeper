@@ -61,9 +61,9 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 				platMgrOn("0.69.0"),
 				{Key: "flux-giantswarm/giantswarm-repo-manager", Chart: "giantswarm-repo-manager", Version: "0.33.4", Ready: true, Range: platMgrRange},
 			}
-			read := readHelmReleases
-			t.Cleanup(func() { readHelmReleases = read })
-			readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
+			read := ReadHelmReleases
+			t.Cleanup(func() { ReadHelmReleases = read })
+			ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
 
 			now := time.Now()
 			a := queueApp(t,
@@ -84,11 +84,11 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 			i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repoMgr })
 			argv := promoteArgv()
 			argv[len(argv)-1] = repoMgr
-			next := &gateRun{a: a, ctx: context.Background(), argv: argv, repo: repoMgr,
-				lane: a.cfg.LaneOf(repoMgr), me: st.Merges[i].By, pid: os.Getpid(), queued: true, placed: true, from: st.Merges[i].PID}
+			next := &GateRun{Host: a, Ctx: context.Background(), Argv: argv, Repo: repoMgr,
+				Lane: a.cfg.LaneOf(repoMgr), Me: st.Merges[i].By, Pid: os.Getpid(), Queued: true, Placed: true, From: st.Merges[i].PID}
 
 			endDevctl(t, a, platMgr, 548, c.doc, c.rc)
-			why, err := next.step()
+			why, err := next.Step()
 			if err != nil || why != c.held {
 				t.Fatalf("the next merge: %q, %v, want %q", why, err, c.held)
 			}
@@ -112,9 +112,9 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 	)
 	stubGitHub(t, github.Open, "")
 	hrs := []merge.HelmRelease{platMgrOn("0.69.0")}
-	read := readHelmReleases
-	t.Cleanup(func() { readHelmReleases = read })
-	readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
+	read := ReadHelmReleases
+	t.Cleanup(func() { ReadHelmReleases = read })
+	ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
 	for _, c := range []struct {
 		name    string
 		release string

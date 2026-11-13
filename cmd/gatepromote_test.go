@@ -31,7 +31,7 @@ func TestPromoteCandidateKeepsKilledChildStderr(t *testing.T) {
 exec sleep 30`)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	candidate, err := promoteCandidate(ctx, scratchRepo)
+	candidate, err := PromoteCandidate(ctx, scratchRepo)
 	if candidate != "" || err == nil {
 		t.Fatalf("candidate %q, error %v; want the killed child's error", candidate, err)
 	}
@@ -53,7 +53,7 @@ func TestPromoteCandidateRejectsFailedDryRunDocument(t *testing.T) {
 	const cause = "reading the repository: GET https://api.github.com/repos/o/r: dial tcp: lookup api.github.com: no such host"
 	fakeDevctl(t, `echo '{"exitCode":1,"verdict":"red","reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","candidate":"`+candidateA+`","state":"failed","message":"`+cause+`"}]}'
 exit 1`)
-	candidate, err := promoteCandidate(context.Background(), scratchRepo)
+	candidate, err := PromoteCandidate(context.Background(), scratchRepo)
 	if candidate != "" || err == nil {
 		t.Fatalf("candidate %q, error %v; want failed dry-run document rejected", candidate, err)
 	}
@@ -96,9 +96,9 @@ func promoteArgv(extra ...string) []string {
 func stubCandidate(t *testing.T, newest *string) *int {
 	t.Helper()
 	asked := new(int)
-	was := promoteCandidate
-	t.Cleanup(func() { promoteCandidate = was })
-	promoteCandidate = func(context.Context, string) (string, error) {
+	was := PromoteCandidate
+	t.Cleanup(func() { PromoteCandidate = was })
+	PromoteCandidate = func(context.Context, string) (string, error) {
 		*asked++
 		return *newest, nil
 	}
@@ -107,7 +107,7 @@ func stubCandidate(t *testing.T, newest *string) *int {
 
 // promotePlace is o/r's waiting promotion in a free lane with a fresh
 // budget, queued for candidateA, and the queued run that waits for it.
-func promotePlace(t *testing.T) (*app, *gateRun) {
+func promotePlace(t *testing.T) (*app, *GateRun) {
 	t.Helper()
 	me, gatePID := state.Party{Session: "s1", Name: ownerName}, sleeper(t)
 	a := queueApp(t, state.Merge{Repo: scratchRepo, Lane: scratchRepo, By: me, PID: gatePID, Phase: state.Waiting,
@@ -120,8 +120,8 @@ func promotePlace(t *testing.T) (*app, *gateRun) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return a, &gateRun{a: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: a.cfg.LaneOf(scratchRepo),
-		me: me, pid: os.Getpid(), queued: true, placed: true, from: gatePID}
+	return a, &GateRun{Host: a, Ctx: context.Background(), Argv: promoteArgv(), Repo: scratchRepo, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: me, Pid: os.Getpid(), Queued: true, Placed: true, From: gatePID}
 }
 
 // A pinned promotion behind a busy lane waits on in a run of its own (exit
@@ -191,8 +191,8 @@ func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	asked := stubCandidate(t, &newest)
 
 	a, g := promotePlace(t)
-	g.argv, g.pinned = promoteArgv("--version", candidateA), true
-	why, err := g.step()
+	g.Argv, g.Pinned = promoteArgv("--version", candidateA), true
+	why, err := g.Step()
 	if Code(err) != ExitGateRefused || why != "" {
 		t.Fatalf("step: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
@@ -211,9 +211,9 @@ func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	}
 
 	a, g = promotePlace(t)
-	g.argv, g.pinned = promoteArgv("--version", candidateA), true
+	g.Argv, g.Pinned = promoteArgv("--version", candidateA), true
 	newest = candidateA
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("step with current candidate: %q, %v", why, err)
 	}
 	if raw, _ := os.ReadFile(args); !strings.Contains(string(raw), "--version "+candidateA) { //nolint:gosec // the test's file
@@ -240,7 +240,7 @@ func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 
 	a, g := promotePlace(t)
 	setHold(t, a, hold("devctl pr wait "+scratchRepo+" 6"))
-	if why, err := g.step(); err != nil || !strings.HasPrefix(why, "held in lane o/r") {
+	if why, err := g.Step(); err != nil || !strings.HasPrefix(why, "held in lane o/r") {
 		t.Fatalf("under a hold waiting on no release: %q, %v, want held", why, err)
 	}
 
@@ -249,7 +249,7 @@ func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateRefused {
 		t.Errorf("a merge into the held repository: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("its own promote: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
@@ -268,7 +268,7 @@ func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 	a, g := promotePlace(t)
 	newest := candidateB
 	stubCandidate(t, &newest)
-	why, err := g.step()
+	why, err := g.Step()
 	if Code(err) != ExitGateRefused || why != "" {
 		t.Fatalf("step: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
@@ -285,7 +285,7 @@ func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 
 	a, g = promotePlace(t)
 	newest = candidateA
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("its own candidate: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
@@ -308,7 +308,7 @@ func TestLanesDropTakesAPromotionOut(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if why, err := g.step(); err != nil || !strings.Contains(why, "behind o/r#6") {
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "behind o/r#6") {
 		t.Fatalf("step before the drop: %q, %v", why, err)
 	}
 
@@ -327,7 +327,7 @@ func TestLanesDropTakesAPromotionOut(t *testing.T) {
 		t.Fatalf("the promotion kept its place: %+v", st.Merges)
 	}
 
-	why, err := g.step()
+	why, err := g.Step()
 	if Code(err) != ExitGateRefused || why != "" {
 		t.Fatalf("step after the drop: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
@@ -364,14 +364,14 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"not_built"}]}'; exit 1`)
 	a, g := promotePlace(t)
 	var err error
-	stderr := gateStderr(t, func() { _, err = g.step() })
+	stderr := gateStderr(t, func() { _, err = g.Step() })
 	if Code(err) != 1 {
 		t.Fatalf("refused promotion: exit %d (%v), want 1", Code(err), err)
 	}
-	if d := lastEventOf(t, a, verbPromoting); d != "o/r in lane o/r" {
+	if d := lastEventOf(t, a, VerbPromoting); d != "o/r in lane o/r" {
 		t.Errorf("promoting event %q", d)
 	}
-	if d := lastEventOf(t, a, verbMerging); d != "" {
+	if d := lastEventOf(t, a, VerbMerging); d != "" {
 		t.Errorf("a promotion logged merging: %q", d)
 	}
 	if d := lastEventOf(t, a, "merge.failed"); !strings.Contains(d, "nothing promoted (not_built)") {
@@ -383,35 +383,35 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 
 	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
 	a, g = promotePlace(t)
-	stderr = gateStderr(t, func() { _, err = g.step() })
+	stderr = gateStderr(t, func() { _, err = g.Step() })
 	if err != nil {
 		t.Fatalf("dispatched promotion: %v", err)
 	}
 	if !strings.Contains(stderr, GatePrefix+"promoted o/r: release v1.2.4 dispatched") || strings.Contains(stderr, "merg") {
 		t.Errorf("stderr %q, want the dispatched promotion", stderr)
 	}
-	if d := lastEventOf(t, a, verbMerging); d != "" {
+	if d := lastEventOf(t, a, VerbMerging); d != "" {
 		t.Errorf("a promotion logged merging: %q", d)
 	}
 
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a, g = promotePlace(t)
-	g.pr, g.argv, g.candidate = 7, mergeArgv(scratchRepo), ""
+	g.Pr, g.Argv, g.Candidate = 7, mergeArgv(scratchRepo), ""
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PR, st.Merges[0].Candidate = 7, ""
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stderr = gateStderr(t, func() { _, err = g.step() })
+	stderr = gateStderr(t, func() { _, err = g.Step() })
 	if err != nil {
 		t.Fatalf("merge: exit %d (%v), stderr %q", Code(err), err, stderr)
 	}
-	if d := lastEventOf(t, a, verbMerging); d != "o/r#7 in lane o/r" {
+	if d := lastEventOf(t, a, VerbMerging); d != "o/r#7 in lane o/r" {
 		t.Errorf("merging event %q", d)
 	}
-	if d := lastEventOf(t, a, verbPromoting); d != "" || strings.Contains(stderr, "promot") {
+	if d := lastEventOf(t, a, VerbPromoting); d != "" || strings.Contains(stderr, "promot") {
 		t.Errorf("a merge said promoting: event %q, stderr %q", d, stderr)
 	}
 }
@@ -431,10 +431,10 @@ func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 
 	a, g := promotePlace(t)
 	setHold(t, a, hold)
-	other := &gateRun{a: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: g.lane,
-		me: state.Party{Session: "s2", Name: aheadName}, pid: os.Getpid()}
+	other := &GateRun{Host: a, Ctx: context.Background(), Argv: promoteArgv(), Repo: scratchRepo, Lane: g.Lane,
+		Me: state.Party{Session: "s2", Name: aheadName}, Pid: os.Getpid()}
 	var err error
-	stderr := gateStderr(t, func() { _, err = other.step() })
+	stderr := gateStderr(t, func() { _, err = other.Step() })
 	if Code(err) != ExitGateRefused || !strings.Contains(stderr, GatePrefix+"refused") || !strings.Contains(stderr, admitted) {
 		t.Errorf("another session's promote: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, ExitGateRefused, admitted)
 	}
@@ -445,7 +445,7 @@ func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 	if Code(err) != ExitGateRefused || !strings.Contains(stderr, admitted) {
 		t.Errorf("another session's merge: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, ExitGateRefused, admitted)
 	}
-	if why, err := g.step(); err != nil || why != "" {
+	if why, err := g.Step(); err != nil || why != "" {
 		t.Fatalf("the admitted promoter's promote: %q, %v", why, err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
@@ -565,7 +565,7 @@ func TestPromoteUsageExitIsARefusal(t *testing.T) {
 			fakeDevctl(t, `echo '`+doc+`'; echo '`+message+`' >&2; exit 7`)
 			a, g := promotePlace(t)
 			var err error
-			stderr := gateStderr(t, func() { _, err = g.step() })
+			stderr := gateStderr(t, func() { _, err = g.Step() })
 			if Code(err) != 3 || !strings.Contains(stderr, message) || strings.Contains(stderr, "unknown") {
 				t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
 			}
@@ -599,7 +599,7 @@ func TestPromoteRefusesBareVersionBeforeDevctl(t *testing.T) {
 
 func TestPromoteUsageOutcomeNeedsNoJudging(t *testing.T) {
 	for _, rc := range []int{7, 1, 143} {
-		out, ok, got := parseRunOutcome(0, nil, rc)
+		out, ok, got := ParseRunOutcome(0, nil, rc)
 		if rc == 7 {
 			if got != 3 || out.Merged || merge.NeedsJudging(ok, got) {
 				t.Fatalf("usage: %+v, %t, %d", out, ok, got)
