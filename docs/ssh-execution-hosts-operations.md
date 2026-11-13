@@ -992,6 +992,14 @@ commit locally, then publish. No source checkout is modified and no host GitHub
 credential or SSH agent is forwarded. This command creates no review or merge
 authorization; park on the returned PR and follow the independent review gate.
 
+Only the default branch's commits beyond the execution's pinned commit travel.
+A workspace whose pinned commit already holds the default branch, as a
+continuation pinned at its pull request's head can, is up to date: the answer
+names the default branch's head, carries no bundle and merges nothing. A shallow
+workspace, or one that lacks the pinned commit, receives the whole history, which
+heals it; a non-shallow workspace whose sync fails retries that way once, and when
+the retry fails as well the command reports both failures.
+
 Each transfer uses authenticated 256 KiB chunks, within the existing wire bound,
 and a SHA-256 digest over the complete bundle. A bundle is bounded to 64 MiB;
 a larger transfer is explicitly refused rather than truncated or sent with a
