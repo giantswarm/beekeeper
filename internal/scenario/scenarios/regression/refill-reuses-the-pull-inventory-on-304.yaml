@@ -1,0 +1,96 @@
+name: refill-reuses-the-pull-inventory-on-304
+description: >
+  The refill reads a repository's open pull requests before it starts a
+  worker there, and keeps the answer for five minutes. After that it asks
+  GitHub whether anything changed, with the ETag of the last answer. GitHub
+  answers 304 Not Modified, for which gh exits 1: that is no failure. The
+  cached inventory stands and the second item of the repository gets its
+  worker. Live, the 304 was read as a failed observation and held every
+  start of the desk.
+issue: https://github.com/giantswarm/beekeeper/issues/3772
+flow: regression
+tags: [regression, refill, github, etag]
+timeout: 90s
+
+# The bug's fix is on main already, so the scenario passes on this change's
+# base. Its control is a run on the code before the fix, linked on the pull
+# request that added the scenario.
+control:
+  none: >-
+    the fix https://github.com/giantswarm/beekeeper/pull/3773 is on main
+    already; the run that fails on the code before it is linked on the pull
+    request that adds this scenario
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      # One reading of the loop's watch admits starts for the whole
+      # scenario: its next one is an hour away.
+      watch: {interval: 1h}
+      supervisor: {loopInterval: 1m}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+          - {number: 2, title: Second item, board: Ready, blocked_by: [3]}
+          - {number: 3, title: What the second item waits for}
+  calls:
+    # The gh login is the desk's only GitHub identity.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The loop's watch reads the journal: nothing there.
+    - program: journalctl
+      respond: {stdout: ""}
+    # The desk has no open pull request.
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  # The loop's first refill runs before its watch has read the GitHub
+  # budget, and starts nothing. The watch's first reading admits starts;
+  # the next refill tick is one loop interval later.
+  - name: admitted
+    wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: tick
+    advance: 1m
+  # 09:01: the refill reads the repository's pull requests in full and
+  # starts the first item's worker. The second item is blocked.
+  - name: first
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, turns: 1}
+        - github: {calls: {path: repos/example/app/pulls, caller: loop, conditional: false, status: 200, min: 1}}
+  # The refill's tick ends with a board read that finds nothing free; only
+  # then does the second item become free.
+  - name: settled
+    advance: {by: 1s, quiet: 500ms}
+  - name: unblock
+    github: {close: {repo: example/app, issue: 3}}
+  # 09:07: the inventory is older than five minutes, so the start of the
+  # second item asks GitHub again, conditionally.
+  - name: later
+    advance: 6m
+  - name: second
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 2, turns: 1}
+  - stop: loop
+
+then:
+  - github: {calls: {path: repos/example/app/pulls, caller: loop, conditional: true, status: 304, min: 1}}
+  - worker: {name: app 1, turns: 1}
+  - worker: {name: app 2, turns: 1}
+  - events: {contains: [agents.start]}

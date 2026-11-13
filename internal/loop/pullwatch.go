@@ -1,6 +1,8 @@
 package loop
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +25,19 @@ const (
 	loopPullBackoff   = 10 * time.Minute
 	LoopPullMaxAge    = 5 * time.Minute
 	loopPullBatchSize = 60
-	LoopPullWatchFile = "supervisor-pull-observations.json"
+	// loopPullDetailBatchSize bounds a batch of pull requests read on first
+	// sight, with their files, reviews and closing issues: the heaviest
+	// query the watch asks. GitHub answered a restarted loop's first batch,
+	// sixty of them, with 504 (#3809).
+	loopPullDetailBatchSize = 20
+	// LoopPullMinBatch is the smallest batch a fault of GitHub's halves the
+	// watch's batches to: below it, the failure is GitHub's, not the
+	// batch's size.
+	LoopPullMinBatch = 5
+	// loopPullBatchRegrow is how long a halved batch size holds without a
+	// fault before it doubles again.
+	loopPullBatchRegrow = 30 * time.Minute
+	LoopPullWatchFile   = "supervisor-pull-observations.json"
 )
 
 const (
@@ -53,6 +67,19 @@ type LoopPullSnapshot struct {
 	Open       []string                   `json:"open,omitempty"`
 	ListedAt   time.Time                  `json:"listedAt"`
 	Incomplete bool                       `json:"incomplete,omitempty"`
+	// PolledAt is when a poll last read every pull request it asked for.
+	PolledAt time.Time `json:"polledAt,omitzero"`
+	// Failing is the episode of failed polls the watch is in, nil once a
+	// poll succeeds.
+	Failing *LoopPullFailing `json:"failing,omitempty"`
+}
+
+// LoopPullFailing is an episode of failed polls: since when, how many
+// tries, and what the last one failed on.
+type LoopPullFailing struct {
+	Since time.Time `json:"since"`
+	Tries int       `json:"tries"`
+	Error string    `json:"error"`
 }
 
 type loopPullWatcher struct {
@@ -62,6 +89,13 @@ type loopPullWatcher struct {
 	extra    map[string]bool
 	changed  chan struct{}
 	ready    chan struct{}
+	// Started is when the continuous watch started, zero for a pass's
+	// single poll (--once, --dry-run): the stall alarm measures from it.
+	Started time.Time
+	// batch is how many pull requests a query asks for, 0 for
+	// loopPullBatchSize; halved is when a fault of GitHub's last halved it.
+	batch  int
+	halved time.Time
 	// Configuration is copied by the pass, never read concurrently from app.cfg.
 	configured           bool
 	authors, orgs, never []string
@@ -98,7 +132,40 @@ func (w *loopPullWatcher) View() LoopPullSnapshot {
 	s := w.Snapshot
 	s.Pulls = maps.Clone(s.Pulls)
 	s.Open = slices.Clone(s.Open)
+	if s.Failing != nil {
+		f := *s.Failing
+		s.Failing = &f
+	}
 	return s
+}
+
+// batchSize is how many pull requests one query asks for: halved by a
+// fault of GitHub's, doubled again after each loopPullBatchRegrow without
+// one.
+func (w *loopPullWatcher) batchSize(now time.Time) int {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	if w.batch > 0 && now.Sub(w.halved) >= loopPullBatchRegrow {
+		w.batch, w.halved = min(loopPullBatchSize, 2*w.batch), now
+		if w.batch == loopPullBatchSize {
+			w.batch = 0
+		}
+	}
+	return cmp.Or(w.batch, loopPullBatchSize)
+}
+
+// halve takes a batch of n that GitHub failed: the watch's batches hold
+// half of it from now on. It is false at LoopPullMinBatch, where a smaller
+// batch would not help.
+func (w *loopPullWatcher) halve(n int, now time.Time) (int, bool) {
+	if n <= LoopPullMinBatch {
+		return n, false
+	}
+	size := max(LoopPullMinBatch, (n+1)/2)
+	w.Mu.Lock()
+	w.batch, w.halved = size, now
+	w.Mu.Unlock()
+	return size, true
 }
 
 func signalPullWatch(c chan struct{}) {
@@ -258,6 +325,9 @@ var StartLoopPullWatcher = func(ctx context.Context, l *Loop) func() {
 	w.Set(nil, l.Host.Cfg().Supervisor.Ownership.Authors, l.Host.Cfg().GitHub.AllowedOrgs, l.Host.Cfg().GitHub.Floor, l.Host.Cfg().Supervisor.Ownership.Never)
 	own := l.Host.Cfg().Supervisor.Ownership
 	w.SetBots(own.Bots, superloop.Desk{Orgs: l.Host.Cfg().GitHub.AllowedOrgs, Team: own.Team, Review: own.Review, Never: own.Never}, nil, false)
+	w.Mu.Lock()
+	w.Started = clk.Now()
+	w.Mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -300,23 +370,54 @@ var PollOncePullWatcher = func(ctx context.Context, l *Loop) {
 	schedule.After(l, next, err)
 }
 
-type LoopPullSchedule struct{ Failures int }
+// LoopPullSchedule is the watch's episode of failed polls: how many, since
+// when.
+type LoopPullSchedule struct {
+	Failures int
+	since    time.Time
+}
 
+// After schedules the next poll. A failed poll is said at every try, with
+// its count and the next try, and the poll that ends the episode says so: a
+// watch whose later failures went unsaid looked dead for a day while it
+// retried (#3809). A budget hold, which ends on its own, is said once.
 func (s *LoopPullSchedule) After(l *Loop, next time.Duration, err error) time.Duration {
+	w, now := l.PullWatcher(), clk.Now()
 	if err == nil {
-		s.Failures = 0
+		if s.Failures > 0 {
+			_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH recovered: the poll reads the desk's pull requests again after %d failed tries since %s\n", s.Failures, s.since.UTC().Format(time.RFC3339))
+		}
+		s.Failures, s.since = 0, time.Time{}
+		w.failing(l, nil)
 		l.ClearSaid(pullWatchKey)
 		return next
 	}
 	s.Failures++
+	if s.since.IsZero() {
+		s.since = now
+	}
+	w.failing(l, &LoopPullFailing{Since: s.since, Tries: s.Failures, Error: Cmd.OneLine(err.Error())})
 	var hold *PullBudgetHold
 	if errors.As(err, &hold) {
 		retry := pullBudgetRetry(hold, s.Failures)
 		l.SayOnce(pullWatchKey, "SUPERVISOR PULL WATCH held: %v; next try in %s", err, retry)
 		return retry
 	}
-	l.SayOnce(pullWatchKey, "SUPERVISOR PULL WATCH held: %v; retrying with backoff up to %s", err, loopPullBackoff)
-	return PullWatchRetry(s.Failures)
+	retry := PullWatchRetry(s.Failures)
+	_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH held: try %d failed (failing since %s): %v; next try in %s\n", s.Failures, s.since.UTC().Format(time.RFC3339), Cmd.OneLine(err.Error()), retry)
+	return retry
+}
+
+// failing keeps the watch's episode of failed polls, nil when a poll ends
+// it, in its saved snapshot for supervisor status.
+func (w *loopPullWatcher) failing(l *Loop, f *LoopPullFailing) {
+	w.Mu.Lock()
+	changed := f != nil || w.Snapshot.Failing != nil
+	w.Snapshot.Failing = f
+	w.Mu.Unlock()
+	if changed && !l.DryRun {
+		_ = l.Host.Store().WriteFile(LoopPullWatchFile, w.View())
+	}
 }
 
 func PullWatchRetry(failures int) time.Duration {
@@ -401,6 +502,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	}
 	before := w.Snapshot
 	before.Pulls, before.Open = maps.Clone(before.Pulls), slices.Clone(before.Open)
+	listed := LoopPullSnapshot{Open: slices.Clone(before.Open), ListedAt: before.ListedAt, Incomplete: before.Incomplete}
 	w.Mu.Unlock()
 	now := clk.Now()
 	// Polling PRs never holds the pass's GraphQL admission lock during
@@ -467,13 +569,19 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 			query = append(query, ref)
 		}
 	}
-	slices.Sort(query)
-	found, err := ReadLoopPullBatch(ctx, query, before.Pulls, floor)
-	if err != nil {
-		return 0, err
-	}
+	// The oldest observations first, those never read before them: what a
+	// poll cut short left unread is read first by the next.
+	slices.SortFunc(query, func(a, b string) int {
+		return cmp.Or(before.Pulls[a].At.Compare(before.Pulls[b].At), strings.Compare(a, b))
+	})
+	found, faults, err := w.readBatches(ctx, l, query, before.Pulls, floor)
 	for ref, p := range found {
 		before.Pulls[ref] = p
+	}
+	// A new listing stands with a poll that read what it listed: passes
+	// would otherwise take each pull request it found as unread.
+	if err != nil {
+		before.Open, before.ListedAt, before.Incomplete = listed.Open, listed.ListedAt, listed.Incomplete
 	}
 	// Stop watching removed references; keep final observations for active parks.
 	for ref := range before.Pulls {
@@ -491,6 +599,11 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 			next = LoopPullShort
 		}
 	}
+	if err == nil {
+		before.PolledAt = clk.Now()
+	}
+	// What a failed poll read stands: a batch GitHub fails no longer
+	// discards the batches it answered.
 	w.Mu.Lock()
 	w.Snapshot = before
 	for ref := range found {
@@ -500,8 +613,105 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	if !l.DryRun {
 		_ = l.Host.Store().WriteFile(LoopPullWatchFile, before)
 	}
-	signalPullWatch(w.ready)
+	if faults > 0 && err == nil {
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH read the %d pull requests it asked for; GitHub failed %d of its batches, which hold %d from now on\n", len(query), faults, w.batchSize(clk.Now()))
+	}
+	if err == nil || len(found) > 0 {
+		signalPullWatch(w.ready)
+	}
+	if err != nil {
+		return 0, err
+	}
 	return next, discoveryErr
+}
+
+// readBatches reads refs in batches of the watch's size, those read on
+// first sight in batches of at most loopPullDetailBatchSize, the others
+// first. A batch GitHub fails (PullBatchFault: a 5xx, no answer in time, a
+// body that is not JSON) is asked again in halves, down to
+// LoopPullMinBatch; one that still fails is skipped, and the rest are
+// read. It returns what it read, how many batches GitHub failed, and its
+// first error: a batch GitHub kept failing, or any other failure, which
+// ends the poll.
+func (w *loopPullWatcher) readBatches(ctx context.Context, l *Loop, refs []string, previous map[string]WatchedLoopPull, floor int) (map[string]WatchedLoopPull, int, error) {
+	found := map[string]WatchedLoopPull{}
+	var light, detail []string
+	for _, ref := range refs {
+		if pullNeedsDetails(previous, ref) {
+			detail = append(detail, ref)
+		} else {
+			light = append(light, ref)
+		}
+	}
+	var skipped error
+	faults := 0
+	for _, group := range []struct {
+		refs  []string
+		limit int
+	}{{light, loopPullBatchSize}, {detail, loopPullDetailBatchSize}} {
+		for rest := group.refs; len(rest) > 0; {
+			n := min(len(rest), group.limit, w.batchSize(clk.Now()))
+			got, err := ReadLoopPullBatch(ctx, rest[:n], previous, floor)
+			var fault *PullBatchFault
+			switch {
+			case err == nil:
+				maps.Copy(found, got)
+			case errors.As(err, &fault) && ctx.Err() == nil:
+				faults++
+				if size, ok := w.halve(n, clk.Now()); ok {
+					_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH GitHub failed a batch of %d pull requests (%v); asking again in batches of %d\n", n, Cmd.OneLine(err.Error()), size)
+					continue
+				}
+				_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH GitHub failed a batch of %d pull requests from %s at the smallest size (%v); reading the rest\n", n, rest[0], Cmd.OneLine(err.Error()))
+				skipped = cmp.Or(skipped, err)
+			default:
+				return found, faults, err
+			}
+			rest = rest[n:]
+		}
+	}
+	return found, faults, skipped
+}
+
+// pullNeedsDetails says whether a batch reads ref's details (author, body,
+// files, reviews, closing issues): on first sight, and after an error or an
+// unknown state.
+func pullNeedsDetails(previous map[string]WatchedLoopPull, ref string) bool {
+	p, exists := previous[ref]
+	return !exists || p.Pull.State == "" || p.Error != "" || p.Pull.Updated.IsZero()
+}
+
+// PullBatchFault is GitHub failing a pull batch rather than refusing it: a
+// 5xx, no answer in time, or a body that is not JSON (GitHub's HTML error
+// page, an empty or a cut-off body). A smaller batch may pass where this one
+// failed.
+type PullBatchFault struct{ Err error }
+
+func (f *PullBatchFault) Error() string { return f.Err.Error() }
+
+func (f *PullBatchFault) Unwrap() error { return f.Err }
+
+// errNoJSON stands for gh's error when it exited 0 on a body that is not
+// JSON.
+var errNoJSON = errors.New("gh exited 0")
+
+// pullBatchErr is gh's error of a pull batch, a PullBatchFault when GitHub
+// kept failing it (github.Transient).
+func pullBatchErr(err error) error {
+	if github.Transient(err) {
+		return &PullBatchFault{Err: err}
+	}
+	return err
+}
+
+// bodyHead is the start of a body that is not JSON, on one line.
+func bodyHead(body []byte) string {
+	const most = 60
+	head := []rune(strings.Join(strings.Fields(string(body[:min(len(body), 4*most)])), " "))
+	if len(head) > most {
+		return string(head[:most]) + "…"
+	}
+	return string(head)
 }
 
 // Light fields change independently of updatedAt (notably CI and mergeability).
@@ -528,8 +738,7 @@ func FetchLoopPullBatch(ctx context.Context, refs []string, previous map[string]
 		chunk := refs[start:min(start+loopPullBatchSize, len(refs))]
 		details := map[string]bool{}
 		for _, ref := range chunk {
-			_, exists := previous[ref]
-			details[ref] = !exists || previous[ref].Pull.State == "" || previous[ref].Error != "" || previous[ref].Pull.Updated.IsZero()
+			details[ref] = pullNeedsDetails(previous, ref)
 		}
 		first, err := queryLoopPullBatch(ctx, chunk, details, floor)
 		if err != nil {
@@ -783,10 +992,31 @@ func (s LoopPullSnapshot) AgeLine(now time.Time) string {
 	return fmt.Sprintf("pull observations: %d, oldest %s, %d stale (limit %s)", count, max(0, now.Sub(oldest)).Round(time.Second), stale, LoopPullMaxAge)
 }
 
+// FailingLine says the watch's episode of failed polls, "" while it reads.
+func (s LoopPullSnapshot) FailingLine(now time.Time) string {
+	f := s.Failing
+	if f == nil {
+		return ""
+	}
+	read := "never"
+	if !s.PolledAt.IsZero() {
+		read = max(0, now.Sub(s.PolledAt)).Round(time.Second).String() + " ago"
+	}
+	return fmt.Sprintf("pull watch failing since %s, %d tries (last complete poll %s): %s", f.Since.UTC().Format(time.RFC3339), f.Tries, read, f.Error)
+}
+
+// runLoopPullGraphQL asks GitHub one pull batch. What GitHub fails to
+// answer is a PullBatchFault: a 5xx or no answer in time after gh's tries,
+// GraphQL's own timeout, and a body that is not JSON, which names gh's
+// error (with its HTTP status) and the body's start rather than the JSON
+// decoder's "invalid character '<'" (#3809).
 func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[string]json.RawMessage, error) {
 	raw, err := github.RunGH(ctx, workerGitHubAPIGroup, inventoryGraphQLCommand, "-f", "query="+query)
+	if body := bytes.TrimSpace(raw); len(body) > 0 && !json.Valid(body) {
+		return nil, &PullBatchFault{Err: fmt.Errorf("pull batch: GitHub answered no JSON (%q): %w", bodyHead(body), cmp.Or(err, errNoJSON))}
+	}
 	if err != nil && len(raw) == 0 {
-		return nil, err
+		return nil, pullBatchErr(err)
 	}
 	var response struct {
 		Data   map[string]json.RawMessage
@@ -797,11 +1027,17 @@ func runLoopPullGraphQL(ctx context.Context, query string, floor int) (map[strin
 	}
 	for _, e := range response.Errors {
 		if e.Type != "NOT_FOUND" {
-			return nil, fmt.Errorf("pull batch: %s", e.Message)
+			err := fmt.Errorf("pull batch: %s", e.Message)
+			// "Something went wrong while executing your query. This may
+			// be the result of a timeout, …"
+			if strings.Contains(strings.ToLower(e.Message), "timeout") {
+				return nil, &PullBatchFault{Err: err}
+			}
+			return nil, err
 		}
 	}
 	if err != nil && len(response.Errors) == 0 {
-		return nil, err
+		return nil, pullBatchErr(err)
 	}
 	var budget struct{ Remaining int }
 	if err := json.Unmarshal(response.Data["rateLimit"], &budget); err != nil {

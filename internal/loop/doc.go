@@ -12,8 +12,8 @@
 //   - vocabulary.go: the command's names, flags, verbs and exit codes the
 //     loop writes and reads, kept equal by the command's TestLoopVocabulary.
 //   - the forwarders that say "runs in the command": steps whose bodies
-//     need the command's own types (capacity views, timers, the roster's
-//     chores) stay there as functions over the Loop.
+//     need the command's own types (timers, the roster's chores,
+//     harnesses) stay there as functions over the Loop.
 //
 // A seam entry goes when what it names has moved to a package the loop can
 // import.

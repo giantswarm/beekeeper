@@ -295,7 +295,7 @@ func adapter(args []string) error {
 					return fmt.Errorf("unknown board status")
 				}
 				return data(map[string]any{"updateProjectV2ItemFieldValue": map[string]any{"projectV2Item": map[string]any{"id": "ITEM"}}})
-			case strings.Contains(q, "issue(number:$n){id projectItems"):
+			case strings.Contains(q, "issue(number:$n){id state projectItems"):
 				return data(map[string]any{"repository": map[string]any{"issue": map[string]any{"id": "ISSUE", "projectItems": map[string]any{"nodes": []any{item(a)}}}}})
 			case strings.Contains(q, "closingIssuesReferences(first:20)"):
 				return data(map[string]any{"r0": map[string]any{"issueOrPullRequest": map[string]any{"closingIssuesReferences": map[string]any{"nodes": []any{map[string]any{"number": 10, "repository": map[string]any{"nameWithOwner": "o/r"}}}}}}})

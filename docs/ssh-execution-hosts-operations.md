@@ -578,9 +578,13 @@ reads the assigned PR and its closing issues, `beekeeper agents review --diff`
 reads its diff, and `beekeeper agents review --body-file <file>` posts a comment
 review through the coordinator. The body must begin with `Review: approved` or
 `Review: changes requested` and include `Head reviewed: <full SHA>` for the
-assigned head. Report the returned review URL in the authenticated completion
+assigned head, or for the head of the fix the reviewer pushed (the pull
+request's current head, a fast-forward of the assigned one; see
+[Publish a branch and pull request](#publish-a-branch-and-pull-request)).
+Report the returned review URL in the authenticated completion
 report. If the supervisor has not recorded the assignment yet, retry the read.
-The relay requires a live execution lease and refuses a moved or closed PR;
+The relay requires a live execution lease and refuses a closed PR, or one whose
+head moved by anything but the reviewer's own fix;
 retrying an identical review reconciles a lost response. No host GitHub
 credential is needed. The coordinator authenticates the reviewer session,
 exact head and reported review before a merge.
@@ -919,6 +923,20 @@ a shared title, brief line or mere mention of an issue is no task identity, and 
 PR no execution published is never touched. The merge does not wait for this
 cleanup. When GitHub cannot be read or a close fails, the loop logs `SUPERVISOR
 SUPERSEDED PULLS of <PR> stay open` and the merge goes on.
+
+A desk reviewer on the host fixes its own findings the same way: it commits in its
+workspace, which holds the assigned head of the pull request's branch, and runs
+`beekeeper agents publish` without `--title` or `--body-file`. The coordinator
+pushes the fast-forward to that pull request's own branch, not to an execution
+branch, and opens or edits no pull request. Only the loop's recorded review
+assignment grants the branch: a review session gets it while its round is
+open, its lease is live and the pull request is open on the branch it was
+started on. Before the assignment is recorded, after the round has a result,
+when it is released or superseded, or with a title or body, the publication
+is refused. `--sync-base` brings the default branch in for a conflict the
+reviewer resolves, and a scoped `git push origin HEAD:refs/heads/<branch>`
+through the host's worker credential gets the same grant. The reviewer then
+approves the head it pushed (see the review relay above).
 
 To bring the latest default branch into the workspace before publishing again
 (before the desk review approves the PR; after approval only the merge moves the

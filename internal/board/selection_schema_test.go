@@ -291,7 +291,7 @@ func TestCheckGQLRejectsWhatGitHubRejects(t *testing.T) {
 		{`query{repository(owner:"o",name:"r"){issue(number:5){...I}}}`, []string{"Fragment I was used, but not defined"}},
 		{`query{repository(owner:"o",name:"r"){issue(number:5){...I}}}` + issueFields, nil},
 		{`mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{` + itemFields + `}}}`, nil},
-		{`query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
+		{`query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id state projectItems(first:50){nodes{
 ` + itemFields + `}}}}}`, nil},
 		{`query{s1:search(query:"repo:o/r \"a\" is:open",type:ISSUE,first:50){nodes{...on Issue{number} __typename}}}`, nil},
 	} {

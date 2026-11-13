@@ -38,7 +38,7 @@ const (
 	originsDir   = workDir + "/origins"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
-	worldSocket  = workDir + "/world.sock"
+	worldSocket  = DefaultWorldSocket
 	deskIdentity = "scenario"
 	scenarioFile = workDir + "/scenario.yaml"
 	resultFile   = workDir + "/result.json"
@@ -185,6 +185,9 @@ func (d *driver) run() {
 		err = d.setup(ctx)
 	}
 	if err == nil {
+		err = d.seedState()
+	}
+	if err == nil {
 		err = d.tagReleases(ctx)
 	}
 	if err == nil {
@@ -282,10 +285,37 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	cfg := baseConfig(orgs)
+	if b := d.s.Given.Builder; b != nil {
+		// The desk's remote builds go to the scenario's builder, through
+		// the fake kubectl on its PATH.
+		remote, err := harness.ProvisionBuilder(b, binDir+"/"+fakeBinary)
+		if err != nil {
+			return fmt.Errorf("given.builder: %w", err)
+		}
+		if err := os.Symlink(fakeBinary, filepath.Join(binDir, harness.Kubectl)); err != nil {
+			return err
+		}
+		overlay(cfg, map[string]any{"run": map[string]any{"remote": remote}})
+	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
+	}
+	if len(d.s.Given.Hosts) > 0 {
+		// The hosts are provisioned against this first configuration, and
+		// their agents.hosts entries come with that: until then it names
+		// none, so supervisor.hosts of the scenario's desk waits as well.
+		var first map[string]any
+		if err := yaml.Unmarshal(raw, &first); err != nil {
+			return err
+		}
+		if sup, ok := first["supervisor"].(map[string]any); ok {
+			delete(sup, "hosts")
+		}
+		if raw, err = yaml.Marshal(first); err != nil {
+			return err
+		}
 	}
 	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
 		return err
@@ -352,7 +382,7 @@ func codexCatalog(cfg map[string]any, models []string) error {
 func (d *driver) startFakes() error {
 	var err error
 	d.fakes, err = harness.NewWorld(harness.Options{
-		Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: d.stepEnv(deskCaller, nil), Artifacts: artifactsDir,
+		Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Builder: d.s.Given.Builder, Env: d.stepEnv(deskCaller, nil), Artifacts: artifactsDir,
 		Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
 			r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
 			return r.Stdout, r.Stderr, r.Exit, r.Given

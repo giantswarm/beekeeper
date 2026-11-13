@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -101,6 +102,31 @@ func (a *app) adoptContinuation(by state.Party, p state.Park, message string) er
 func continuationName(ag state.Agent) string {
 	id := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%s/%d", ag.Name, ag.Session, ag.HostSession, ag.Park.At.UnixNano())))
 	return fmt.Sprintf("%s next-%x", truncate(ag.Name, 60), id[:8])
+}
+
+// continuedPark is the park of the worker whose fresh continuation the start
+// named name is: the loop marks that park Continuing before it starts the
+// session continuationName names. Nil for any other start.
+func continuedPark(st *state.State, name string) *state.Park {
+	for _, ag := range st.Agents {
+		if ag.Park != nil && ag.Park.Continuing && continuationName(ag) == name {
+			return ag.Park
+		}
+	}
+	return nil
+}
+
+// parkedPull is the pull request p waits on, owner/repo#n: "" when p waits
+// on an issue, a note or nothing GitHub names.
+func parkedPull(p *state.Park) string {
+	if p == nil || p.RefKind != github.RefPullRequest && p.ReviewHead == "" {
+		return ""
+	}
+	r, ok := parseRef(p.On)
+	if !ok {
+		return ""
+	}
+	return refName(r)
 }
 
 func loopFinishContinuation(l *loop.Loop, old state.Agent, name string) error {

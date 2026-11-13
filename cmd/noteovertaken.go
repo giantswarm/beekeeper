@@ -71,13 +71,22 @@ func overtakable(n state.Note, asking int) bool {
 	return n.For != "" && n.Kind != noteLogin && n.ID != asking
 }
 
-// overtakeRefs are the distinct issues and pull requests the overtakable
-// notes of st are linked to.
+// refsSettle reports whether n's refs close it once each is closed or
+// merged: an overtakable note with refs, except a person's to-do, which is
+// theirs whatever happens to the issue it names, and a note reopened by
+// hand, which said its settled refs do not settle it. Only an answer, a
+// default or a close by hand ends either.
+func refsSettle(n state.Note, asking int) bool {
+	return overtakable(n, asking) && len(n.Refs) > 0 && n.Kind != noteTodo && n.Reopened.IsZero()
+}
+
+// overtakeRefs are the distinct issues and pull requests of the notes of
+// st whose refs settle them.
 func overtakeRefs(st *state.State) []github.PR {
 	var out []github.PR
 	asking := st.GuideRole().LocalAsking()
 	for _, n := range st.Notes {
-		if !overtakable(n, asking) {
+		if !refsSettle(n, asking) {
 			continue
 		}
 		for _, s := range n.Refs {
@@ -156,11 +165,11 @@ func runningWorker(st *state.State, n state.Note) *state.Agent {
 // that merge cannot settle a question about the merged PR.
 // A note without refs is never overtaken: its filing session
 // archived says the asker is gone, not that the question is settled
-// (findOrphaned).
+// (findOrphaned). Nor is a to-do or a reopened note (refsSettle).
 func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over, kept []overtake) {
 	asking := st.GuideRole().LocalAsking()
 	for _, n := range st.Notes {
-		if !overtakable(n, asking) || len(n.Refs) == 0 {
+		if !refsSettle(n, asking) {
 			continue
 		}
 		settled, keyword := settledRefs(n.Refs, states)
@@ -298,9 +307,13 @@ func heldAmong(notes []state.Note, over []overtake) []state.Note {
 	return out
 }
 
-// overtakenEvent is the note.overtaken event of n closed for reason.
+// overtakenEvent is the note.overtaken event of n closed for reason. It
+// retains the whole note, which note show and note reopen read back from a
+// file store's history.
 func overtakenEvent(by state.Party, n state.Note, reason string) state.Event {
-	return event(by, noteOvertaken, "#%d overtaken: %s%s%s", n.ID, oneLine(reason), overtakenSep, n.Text)
+	e := event(by, noteOvertaken, "#%d overtaken: %s%s%s", n.ID, oneLine(reason), overtakenSep, n.Text)
+	e.NoteSnapshot = &n
+	return e
 }
 
 // overtakenReason is the reason an overtaken event records.
@@ -308,6 +321,27 @@ func overtakenReason(e state.Event) string {
 	_, rest, _ := strings.Cut(e.Detail, " overtaken: ")
 	reason, _, _ := strings.Cut(rest, overtakenSep)
 	return reason
+}
+
+// overtakenNote is the note an overtaken event closed, with its reason: the
+// event's snapshot, or the id and text alone of an event written before
+// overtaken events retained the note, whose person is then unknown. nil for
+// any other event.
+func overtakenNote(e state.Event) *shownNote {
+	if e.Verb != noteOvertaken {
+		return nil
+	}
+	var n state.Note
+	if e.NoteSnapshot != nil {
+		n = *e.NoteSnapshot
+	} else {
+		head, text, ok := strings.Cut(e.Detail, overtakenSep)
+		if _, err := fmt.Sscanf(head, "#%d overtaken:", &n.ID); err != nil || !ok {
+			return nil
+		}
+		n.Text = text
+	}
+	return &shownNote{Note: n, Status: noteStatusClosed, Reason: overtakenReason(e), Closure: &e}
 }
 
 // wouldOvertake says, for a watch that writes nothing (--once), each note

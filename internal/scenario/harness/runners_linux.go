@@ -4,10 +4,12 @@ package harness
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -143,6 +145,14 @@ func codexAppServer(c *client) int {
 				out.emit(map[string]any{"id": *msg.ID, "error": map[string]any{"code": -32000, "message": "usage unavailable"}})
 				continue
 			}
+			if f := rep.Fail; f != nil && f.Hang {
+				holdOutput()
+				forever()
+			}
+			if f := rep.Fail; f != nil {
+				out.emit(map[string]any{"id": *msg.ID, "error": map[string]any{"code": cmp.Or(f.Code, -32603), "message": f.Message}})
+				continue
+			}
 			now := time.Now()
 			out.emit(map[string]any{"id": *msg.ID, "result": map[string]any{"rateLimits": map[string]any{
 				"primary":          map[string]any{"usedPercent": rep.Usage.Session, "windowDurationMins": 300, "resetsAt": now.Add(2 * time.Hour).Unix()},
@@ -154,6 +164,19 @@ func codexAppServer(c *client) int {
 		}
 	}
 	return 0
+}
+
+// holdOutput starts a helper that keeps the app-server's standard output
+// open after the app-server ends, as a helper of the real one can.
+func holdOutput() {
+	for _, sleep := range []string{"/usr/bin/sleep", "/bin/sleep"} {
+		if _, err := os.Stat(sleep); err == nil {
+			c := exec.Command(sleep, "3600") //nolint:gosec // a fixed system program
+			c.Stdout = os.Stdout
+			_ = c.Start()
+			return
+		}
+	}
 }
 
 // The fake agy.

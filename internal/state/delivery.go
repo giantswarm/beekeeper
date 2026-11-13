@@ -108,6 +108,34 @@ func (s *State) StartDelivery(ref, agent, waits string, at time.Time) {
 	}
 }
 
+// ContinueDelivery hands ref's delivery to agent, the fresh session that
+// continues a parked worker's task. It is the same task: a delivery still
+// active or ended merged keeps its pulls, step and outcome, so the merged
+// pull request its post-merge work follows still proves the outcome. Any
+// other delivery starts again as StartDelivery starts one. pull, the pull
+// request the worker parked on (owner/repo#n, "" for none), joins the
+// delivery's pulls: a pull request that only says "Part of" the issue
+// reaches it through that park alone, which the fresh session does not repeat.
+func (s *State) ContinueDelivery(ref, agent, pull string, at time.Time) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if ref == "" {
+		return
+	}
+	i := slices.IndexFunc(s.Deliveries, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) })
+	if i < 0 || !s.Deliveries[i].Active() && s.Deliveries[i].Outcome != OutcomeMerged {
+		s.StartDelivery(ref, agent, "", at)
+		if i = slices.IndexFunc(s.Deliveries, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) }); i < 0 {
+			return
+		}
+	}
+	d := &s.Deliveries[i]
+	d.Agent = agent
+	if pull != "" && !slices.ContainsFunc(d.Pulls, func(p string) bool { return strings.EqualFold(p, pull) }) {
+		d.Pulls = append(slices.Clone(d.Pulls), pull)
+		slices.Sort(d.Pulls)
+	}
+}
+
 // DeliveryStallReport retains the identity needed to recover one batched alert.
 type DeliveryStallReport struct {
 	Episodes []string `json:"episodes"`

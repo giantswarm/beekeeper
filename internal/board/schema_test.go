@@ -47,10 +47,12 @@ Query.repository Repository
 Query.search SearchResultItemConnection
 Mutation.addProjectV2ItemById AddProjectV2ItemByIdPayload
 Mutation.archiveProjectV2Item ArchiveProjectV2ItemPayload
+Mutation.unarchiveProjectV2Item UnarchiveProjectV2ItemPayload
 Mutation.updateProjectV2ItemFieldValue UpdateProjectV2ItemFieldValuePayload
 Mutation.clearProjectV2ItemFieldValue ClearProjectV2ItemFieldValuePayload
 AddProjectV2ItemByIdPayload.item ProjectV2Item
 ArchiveProjectV2ItemPayload.item ProjectV2Item
+UnarchiveProjectV2ItemPayload.item ProjectV2Item
 UpdateProjectV2ItemFieldValuePayload.projectV2Item ProjectV2Item
 ClearProjectV2ItemFieldValuePayload.projectV2Item ProjectV2Item
 Repository.issue Issue
@@ -267,7 +269,7 @@ func TestCheckSchemaRejectsWhatGitHubRejects(t *testing.T) {
 
 func TestCheckSchemaPassesTheBoardsQueries(t *testing.T) {
 	for name, q := range map[string]string{
-		"an item":      `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{` + itemFields + `}}}}}`,
+		"an item":      `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id state projectItems(first:50){nodes{` + itemFields + `}}}}}`,
 		"an added one": `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{` + itemFields + `}}}`,
 		"the board": `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
 items(first:80,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{` + boardFields + `

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -102,11 +103,6 @@ func assignedExecutionReviewRound(st *state.State, ref execution.Ref) *state.Des
 		}
 	}
 	return nil
-}
-
-// Reviewers have no branch write grant, even when their assignment is live.
-func executionReviewWriteBranch(_ context.Context, _ *state.State, _ execution.Ref) (string, error) {
-	return "", refused("%s", reviewWriteRefusal)
 }
 
 func publicationCommit(s string) bool {
@@ -427,9 +423,19 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if p.SyncBase && (p.BundleDigest != "" || p.Title != "" || p.Body != "") {
 		return result, refused("base synchronization cannot publish a PR")
 	}
+	// A reviewer publishes to the pull request it reviews: its round names the
+	// branch, and it neither opens a pull request nor edits one.
 	reviewRound := assignedExecutionReviewRound(st, ref)
-	if _, i := executionRecord(st, ref); reviewRound != nil || i >= 0 && reviewerSession(st, st.Starts[i].Party) {
-		return result, refused("%s", reviewWriteRefusal)
+	var reviewBranch string
+	if reviewRound != nil {
+		if strings.TrimSpace(p.Title) != "" || strings.TrimSpace(p.Body) != "" {
+			return result, refused("%s", reviewWriteNoMetadata)
+		}
+		if reviewBranch, err = executionReviewWriteBranch(ctx, st, ref); err != nil {
+			return result, err
+		}
+	} else if _, i := executionRecord(st, ref); i >= 0 && reviewerSession(st, st.Starts[i].Party) {
+		return result, refused("%s", reviewWriteUnassigned)
 	}
 	write := func() (context.Context, context.CancelFunc, error) {
 		if _, err := checkAuthority(st, ref); err != nil {
@@ -488,7 +494,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	}
 	keepInPublicationCache(ctx, cache, repo, "refs/heads/base", "refs/heads/"+base)
 	bundlePath := filepath.Join(dir, "commits.bundle")
-	result.Branch = executionOwnedBranch(r)
+	result.Branch = cmp.Or(reviewBranch, executionOwnedBranch(r))
 	ensureCommit := func(commit string) {
 		if !publicationCommit(commit) {
 			return
@@ -612,6 +618,14 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		}
 		if listErr != nil {
 			return result, listErr
+		}
+		if reviewRound != nil {
+			if len(pulls) != 1 || pulls[0].State != github.Open {
+				return result, refused("a reviewer's publication requires its assigned pull request open on the branch")
+			}
+			if pr, ok := parseRef(pulls[0].URL); !ok || !strings.EqualFold(refName(pr), reviewRound.Ref) {
+				return result, refused("a reviewer's publication must go to its assigned pull request")
+			}
 		}
 		if len(pulls) == 1 && pulls[0].State != github.Open {
 			return result, refused("owned pull request is already closed; a new execution is required")

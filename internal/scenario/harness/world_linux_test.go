@@ -107,6 +107,24 @@ func TestWorldHandsOutTurnsAndRecordsReports(t *testing.T) {
 	}
 }
 
+// A failing stretch of codex's usage probe refuses the requests after the
+// first answered ones, then the account answers again; claude's probe is
+// not counted with it.
+func TestWorldFailsAStretchOfUsageRequests(t *testing.T) {
+	fail := &UsageFail{After: 1, Times: 2, Message: "GET x failed: 401 Unauthorized; content-type=; body="}
+	w := testWorld(t, Options{Given: Given{Usage: map[string]Usage{Codex: {Week: 23, Fail: fail}, Claude: {Week: 40}}}})
+	for i, want := range []bool{false, true, true, false, false} {
+		w.handle(request{Op: opUsage, Harness: Claude})
+		rep := w.handle(request{Op: opUsage, Harness: Codex})
+		if rep.Usage == nil || rep.Usage.Week != 23 || (rep.Fail != nil) != want || want && rep.Fail.Message != fail.Message {
+			t.Fatalf("request %d: %+v, want failing %t", i, rep, want)
+		}
+	}
+	if rep := w.handle(request{Op: opUsage, Harness: Claude}); rep.Fail != nil {
+		t.Fatalf("claude's probe failed: %+v", rep)
+	}
+}
+
 // The world's answer to a call is the scenario's given call when one
 // answers, and the fake's own model otherwise.
 func TestWorldLeavesAModeledCallToItsFake(t *testing.T) {
