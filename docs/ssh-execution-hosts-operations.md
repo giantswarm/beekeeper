@@ -605,6 +605,15 @@ refused with those reasons instead. A review, a timer's start, `--desktop`, a `-
 `supervisor.hostsFirst: false`. The fatal sentinel's repair passes `--host local`: it works in the
 coordinator's checkout and proves its probe there. `--dry-run` shows the placement without starting.
 
+The loop's fresh continuation of a parked worker (`<name> next-<id>`) is placed the same way,
+whether the parked worker ran on the coordinator or on a host. On a host it continues the worker's
+open pull request at its head and publishes to its branch (see [Publish a branch and pull
+request](#publish-a-branch-and-pull-request)), so it stays on the coordinator, with a `SUPERVISOR
+CONTINUATION STAYS HERE` line saying why, when the pull request is no longer open (post-merge work
+keeps the desk's checkout and leases) or the previous worker's workspace on the coordinator holds
+uncommitted changes to tracked files or commits on no remote branch. With no room on any host or
+here, `SUPERVISOR CONTINUATION WAITS` says so and the continuation waits for the next pass.
+
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against

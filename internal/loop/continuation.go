@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -77,12 +78,15 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 		}
 		i := slices.IndexFunc(current.Agents, func(cur state.Agent) bool { return cur.Name == name })
 		if i < 0 {
-			// Keep the existing branch and any unpublished workspace on the
-			// coordinator. A new managed execution owns a new publish branch,
-			// so it cannot safely continue the original pull request. agents
-			// start still applies current local headroom and provider pace.
+			// The continuation is placed as the loop places its starts
+			// (supervisor.hostsFirst). On an execution host it continues the
+			// open pull request at its head, the start gate's repair of this
+			// park, so what keeps it on the coordinator is work only the
+			// coordinator holds (continuationPlacement). agents start still
+			// applies the chosen machine's headroom and provider pace.
 			url := Cmd.IssueURL(ref)
 			branch, head := "", ag.Park.ReviewHead
+			pullOpen := true
 			if ag.Park.RefKind == github.RefPullRequest || head != "" {
 				pull, err := readLoopContextPull(ctx, ref)
 				if err != nil {
@@ -90,20 +94,36 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 				}
 				url, branch, head = pull.URL, pull.Branch, pull.Head
 				if pull.State != superloop.Open {
-					branch = pull.Base
+					branch, pullOpen = pull.Base, false
 				}
 				if url == "" {
 					url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
 				}
 			}
-
-			context := fmt.Sprintf("Previous wait: %s\nReference: %s\nPublished head: %s\nEvents:\n%s", ag.Park.Waits, ref, head, strings.Join(ag.Park.Continuation, "\n"))
-			context += "\nExisting branch: " + branch
 			workspace := ag.Park.Worktree
 			if k := st.StartIndex(ag.Party); workspace == "" && k >= 0 {
 				workspace = st.Starts[k].Dir
 			}
-			context += "\nPrevious workspace (inspect for unpublished work): " + workspace
+			place, here, err := l.continuationPlacement(ctx, name, r.Repo, workspace, pullOpen)
+			if err != nil {
+				if errors.Is(err, ErrLoopLater) {
+					l.SayOnce("continue room "+ag.Name, "SUPERVISOR CONTINUATION WAITS %s: no room for a start yet on any host or here (beekeeper capacity and the SUPERVISOR HOST WAITS lines name the limit)", ag.Name)
+					continue
+				}
+				return err
+			}
+			l.LifecyclePhase(loopPhaseContinueParks)
+			if here != "" {
+				l.SayOnce("continue here "+ag.Name, "SUPERVISOR CONTINUATION STAYS HERE %s: %s", ag.Name, here)
+			}
+
+			context := fmt.Sprintf("Previous wait: %s\nReference: %s\nPublished head: %s\nEvents:\n%s", ag.Park.Waits, ref, head, strings.Join(ag.Park.Continuation, "\n"))
+			context += "\nExisting branch: " + branch
+			if place.remote() {
+				context += fmt.Sprintf("\nThis continuation runs on execution host %s, in a workspace of its own at the pull request's head; the previous worker's workspace (%s) is not reachable from it.", place.Selector, workspace)
+			} else {
+				context += "\nPrevious workspace (inspect for unpublished work): " + workspace
+			}
 			for _, rp := range st.ReviewParks {
 				if rp.Party.Is(ag.Party) {
 					pr, ok := Cmd.ParseRef(rp.On)
@@ -142,6 +162,8 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			if len(l.Host.Cfg().Capacity.Choices) > 0 {
 				args = append(args, "--harness", harnessAuto)
 			}
+			args = append(args, place.remoteStartFlags()...)
+			args = append(args, place.excludeFlags()...)
 			if err := l.Host.Store().Update(func(st *state.State) ([]state.Event, error) {
 				for k := range st.Agents {
 					cur := &st.Agents[k]
@@ -200,6 +222,58 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 		}
 	}
 	return nil
+}
+
+// continuationPlacement places a fresh continuation as the loop places its
+// starts (startPlacement, supervisor.hostsFirst). A host continues the open
+// pull request from its head, so the continuation stays here, with here
+// saying why, when the pull request is no longer open (post-merge work may
+// need the desk's checkout, leases and proofs) or the previous workspace on
+// this machine holds work no remote has.
+func (l *Loop) continuationPlacement(ctx context.Context, name, repo, workspace string, pullOpen bool) (place startHost, here string, err error) {
+	if !l.PlacesRemotely() {
+		return startHost{}, "", nil
+	}
+	if !pullOpen {
+		return startHost{}, "its pull request is no longer open: the post-merge work stays with the desk's checkout and leases", nil
+	}
+	if what := ContinuationUnpublished(ctx, workspace); what != "" {
+		return startHost{}, fmt.Sprintf("its previous workspace %s holds %s, which a host would not see", workspace, what), nil
+	}
+	place, err = l.startPlacement(ctx, name, repo, false, false)
+	return place, "", err
+}
+
+// ContinuationUnpublished names what a previous worker's workspace on this
+// machine holds that no remote has: uncommitted changes to tracked files, or
+// commits on no remote-tracking branch. "" when it holds none, or there is no
+// checkout here to read.
+var ContinuationUnpublished = func(ctx context.Context, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	out, err := Cmd.RunGit(ctx, dir, "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return ""
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		return "uncommitted changes"
+	}
+	out, err = Cmd.RunGit(ctx, dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
+	if err != nil {
+		return ""
+	}
+	switch n := strings.TrimSpace(string(out)); n {
+	case "", "0":
+	case "1":
+		return "a commit on no remote branch"
+	default:
+		return n + " commits on no remote branch"
+	}
+	return ""
 }
 
 // FinishContinuation runs in the command, which holds what it needs (loopFinishContinuation).
