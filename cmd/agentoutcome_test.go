@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -117,5 +118,41 @@ func TestNoChangeIsNotAReleaseStatistic(t *testing.T) {
 	stats := deliveryStatistics(events, a.now, a.now)
 	if stats.Released != 0 || stats.Outcomes[state.OutcomeNoChange] != 1 {
 		t.Fatalf("statistics: %+v", stats)
+	}
+}
+
+// TestReviewerOwnsNoDelivery: a review started by hand, without the loop's
+// assignment, serves the pull request it reviews, whose delivery no issue
+// holds. Its --done needs no merge and reads nothing; its --no-change and
+// --blocked end nothing.
+func TestReviewerOwnsNoDelivery(t *testing.T) {
+	a, _ := stubApp(t)
+	reviewer := state.Party{Session: "outcome-reviewer", HostSession: "local_outcome-reviewer", Name: "Review r 1 r1"}
+	ag := state.Agent{Party: reviewer, Task: "Review " + refOne, AssignedAt: a.now}
+	st := &state.State{
+		Starts:  []state.Start{{Kind: capacity.TaskKindReview, Party: reviewer, At: a.now}},
+		Records: []state.Record{{Session: reviewer, Issue: refOne, At: a.now}},
+	}
+	st.StartDelivery(refOne, reviewer.Name, "", a.now)
+	st.Deliveries[0].Pulls = []string{refOne}
+	reads := 0
+	lookup := func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		reads++
+		return map[github.PR]github.RefState{refs[0]: {Kind: github.RefPullRequest, State: github.Open}}, nil
+	}
+	if _, err := a.completionOutcomeWith(t.Context(), st, ag, true, "", false, "", lookup); err != nil {
+		t.Fatalf("the reviewer's --done: %v", err)
+	}
+	if _, err := a.completionOutcomeWith(t.Context(), st, ag, true, "no findings", false, "", lookup); err != nil {
+		t.Fatalf("the reviewer's --no-change: %v", err)
+	}
+	if _, err := a.completionOutcomeWith(t.Context(), st, ag, false, "", true, "#7", lookup); err == nil {
+		t.Fatal("the reviewer blocked a delivery it does not own")
+	}
+	if d := st.Deliveries[0]; d.Outcome != "" || !d.Active() || reads != 0 {
+		t.Fatalf("the review ended the delivery: %+v after %d reads", d, reads)
+	}
+	if got := workerDeliveries(st, ag); len(got) != 0 {
+		t.Fatalf("the reviewer owns deliveries %v", got)
 	}
 }

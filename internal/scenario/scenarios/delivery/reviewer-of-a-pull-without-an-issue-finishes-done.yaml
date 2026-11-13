@@ -1,0 +1,110 @@
+name: reviewer-of-a-pull-without-an-issue-finishes-done
+description: >
+  A reviewer never owns the delivery of the pull request it reviews. A
+  worker opens a pull request that closes no issue and parks on it for the
+  desk review. The loop starts a local reviewer for its green head, who
+  approves it and reports agents idle --done without --no-change. The pass
+  after applies that report: the reviewer is done, and nothing rejects its
+  report for a delivery without a merged pull request.
+issue: https://github.com/giantswarm/beekeeper/issues/3705
+flow: delivery
+tags: [delivery, loop, review]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Headless workers and reviewers, as capacity picks them.
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    # No issue: the worker's pull request is example/app#1 and closes none.
+    repositories:
+      - name: example/app
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app-worker
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-worker]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "chore: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-worker]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-worker, --title, "chore: the worker's change", --body, "A change without an issue."]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#1', --post-merge, '', desk review]
+                dir: app
+      - name: 'Review app 1 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '1', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '1', --repo, example/app, --comment, --body, "Desk review (codex): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (codex): approved https://github.com/example/app/pull/1", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # A worker whose task names no issue: its pull request closes none.
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, app-worker, /work/worker.txt, --harness, codex, --model, gpt-5.2-codex]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app-worker, outcome: finish}
+        - github: {pull: {repo: example/app, number: 1, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 1, name: build, state: green}}
+  # Green: the loop starts the reviewer of that head on this machine.
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 1 r1', outcome: finish}
+  - advance: 2s
+  # The pass applies the reviewer's queued report.
+  - name: apply
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+
+then:
+  - worker: {name: app-worker, turns: 1, outcome: finish}
+  - worker: {name: 'Review app 1 r1', turns: 1, outcome: finish}
+  - events: {contains: [agents.park, supervisor.review, agents.done], not_contains: [session.report-rejected]}
