@@ -36,6 +36,7 @@ const (
 	repoDir      = workDir + "/repo"
 	stateDir     = workDir + "/state"
 	originsDir   = workDir + "/origins"
+	checkoutsDir = workDir + "/checkouts"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
 	worldSocket  = DefaultWorldSocket
@@ -285,6 +286,10 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	cfg := baseConfig(orgs)
+	if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+		// A hand start's --dir is agents.dir or a checkout under agents.roots.
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": []any{checkoutsDir}}})
+	}
 	if b := d.s.Given.Builder; b != nil {
 		// The desk's remote builds go to the scenario's builder, through
 		// the fake kubectl on its PATH.
@@ -326,6 +331,14 @@ func (d *driver) setup(ctx context.Context) error {
 	for _, name := range repos {
 		if err := origin(ctx, name); err != nil {
 			return fmt.Errorf("origin %s: %w", name, err)
+		}
+	}
+	for _, r := range d.s.Given.Repositories {
+		if r.Checkout == nil {
+			continue
+		}
+		if err := checkout(ctx, r.Name, r.Checkout.Config); err != nil {
+			return fmt.Errorf("checkout %s: %w", r.Name, err)
 		}
 	}
 	if board, ok := cfg["board"].(map[string]any); ok {
@@ -533,6 +546,25 @@ func origin(ctx context.Context, name string) error {
 		{"-C", seed, "push", bare, "main"},
 	} {
 		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // real git on the scenario's own paths
+		c.Env = env(nil)
+		if out, err := c.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return nil
+}
+
+// checkout clones the origin of owner/name under its GitHub URL to
+// /work/checkouts/<owner>/<name>, as a person's main checkout is, and sets
+// the checkout's own Git configuration.
+func checkout(ctx context.Context, name string, config map[string]string) error {
+	dir := filepath.Join(checkoutsDir, name)
+	cmds := [][]string{{"clone", "--quiet", harness.GitHub + name + ".git", dir}}
+	for _, key := range slices.Sorted(maps.Keys(config)) {
+		cmds = append(cmds, []string{"-C", dir, "config", key, config[key]})
+	}
+	for _, args := range cmds {
+		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // the scenario's git on its own paths
 		c.Env = env(nil)
 		if out, err := c.CombinedOutput(); err != nil {
 			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
