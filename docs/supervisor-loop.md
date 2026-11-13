@@ -90,6 +90,12 @@ CI and merge-result validation, independent review, and the normal stop and hold
 checks. Infrastructure outages retain the global ordinary-start barrier. A
 successful probe clears only its own outage; an unreadable probe clears none.
 
+A default branch is red when a completed check run on its head failed, or a status context did in
+every run of it on the head. CircleCI reports a job of each pipeline that builds a commit, the
+branch's and a tag's, under one context, and GitHub's combined status keeps only the newest report:
+a red context whose other run passed is no outage, one whose other run is still pending is unknown
+until it ends, and a job that runs once, such as a release's push, is red when it fails.
+
 On the person's explicit emergency authorization, the current guide can run `beekeeper emergency on --reason
 "<their verbatim words>" --until 30m`, then `beekeeper emergency merge owner/repo 123`. The merge
 requires GitHub approval and matches the observed head; it bypasses desk review and the merge lane

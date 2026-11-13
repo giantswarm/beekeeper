@@ -45,6 +45,9 @@ const (
 	webHost       = "https://github.com"
 )
 
+// statusStates are the states a commit status takes.
+var statusStates = []string{statusPending, statusSuccess, statusFailure, statusError}
+
 // Account is a user, an organization or a bot.
 type Account struct {
 	Login  string

@@ -54,7 +54,7 @@ func TestParseRejects(t *testing.T) {
 		{"state that seeds nothing", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {}\nwhen:", 1), "given.state without generate"},
 		{"generated desk with an unknown key", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {generate: {workers: 3}}\nwhen:", 1), "field workers not found"},
 		{"github step without given.github", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}}", 1), "a github step needs given.github"},
-		{"github step with two actions", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}, close: {repo: example/app, pull: 1}}", 1), "exactly one of push, check, review, merge, close, comment and budget"},
+		{"github step with two actions", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}, close: {repo: example/app, pull: 1}}", 1), "exactly one of push, check, status, review, merge, close, comment and budget"},
 		{"fault step that neither arms nor clears", strings.Replace(validScenario, "run: {args: [version]}", "fault: {}", 1), "exactly one of arm and clear"},
 		{"github expectation without given.github", strings.Replace(validScenario, "exit: 0", "github: {calls: {min: 1}}", 1), "a github expectation needs given.github"},
 		{"github expectation without a kind", strings.Replace(validScenario, "exit: 0", "github: {}", 1), "exactly one of calls, budget, pull and issue"},
