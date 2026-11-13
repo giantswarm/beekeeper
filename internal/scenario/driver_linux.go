@@ -448,11 +448,34 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 		return fmt.Errorf("the scenario's GitHub: %w", err)
 	}
 	d.github = srv
-	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
-		res := srv.GH(context.Background(), fakegithub.GHCall{Args: req.Args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
+	gh := func(args []string, req CallRequest) (CallResponse, bool, string) {
+		res := srv.GH(context.Background(), fakegithub.GHCall{Args: args, Stdin: req.Stdin, Dir: req.Dir, Env: req.Env})
 		return CallResponse{Stdout: res.Stdout, Stderr: res.Stderr, Exit: res.Exit}, res.Handled, res.Reason
+	}
+	d.world.Handle("gh", func(req CallRequest) (CallResponse, bool, string) {
+		return gh(req.Args, req)
+	})
+	// devctl auth exec runs its command as devctl's GitHub login: the gh it
+	// runs (the reviewed merge of a merge.devctlOwners repository) reaches
+	// the scenario's GitHub. Every other devctl call is the scenario's to
+	// answer.
+	d.world.Handle("devctl", func(req CallRequest) (CallResponse, bool, string) {
+		args, ok := devctlExecsGH(req.Args)
+		if !ok {
+			return CallResponse{}, false, ""
+		}
+		return gh(args, req)
 	})
 	return nil
+}
+
+// devctlExecsGH is the gh arguments of `devctl auth exec -- gh <args>`,
+// false for any other devctl call.
+func devctlExecsGH(args []string) ([]string, bool) {
+	if len(args) < 4 || args[0] != "auth" || args[1] != "exec" || args[2] != "--" || filepath.Base(args[3]) != "gh" {
+		return nil, false
+	}
+	return args[4:], true
 }
 
 // stepEnv is the environment of a step's candidate: the allowlist, the

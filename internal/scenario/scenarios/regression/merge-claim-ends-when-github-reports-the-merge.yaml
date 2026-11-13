@@ -1,13 +1,14 @@
 name: merge-claim-ends-when-github-reports-the-merge
 description: >
   The loop's merge claim ends when GitHub reports the merge, not when the
-  release is out. example/app releases with Auto-release, and devctl's
-  release wait for the merged pull request answers only 40 seconds after
-  the merge. The loop's pass that merges the approved head returns at the
-  merge: its merge gate leaves the release wait to its merge-child, which
-  records the release with the run once devctl answers. A claim that lasted
-  until the release held the loop's restart and, with it, every merge
-  decision.
+  release is out. example/app is a merge.devctlOwners repository that
+  releases with Auto-release, so its reviewed merge awaits the release, and
+  devctl's release wait for the merged pull request answers only 25 seconds
+  after the merge. The loop's pass that merges the approved head returns at
+  the merge: its merge gate leaves the release wait to its merge-child,
+  which records the release with the run once devctl answers. A claim that
+  lasted until the release held the loop's restart and, with it, every
+  merge decision.
 issue: https://github.com/giantswarm/beekeeper/issues/3907
 flow: regression
 tags: [regression, loop, merge, release]
@@ -18,6 +19,9 @@ given:
     config:
       # The budget probe reads a repository the scenario's GitHub has.
       github: {probeRepo: example/app}
+      # devctl serves example's repositories: the gate reads how the base
+      # releases and the reviewed merge awaits its Auto-release.
+      merge: {devctlOwners: [example]}
   github:
     repositories:
       - name: example/app
@@ -65,12 +69,16 @@ given:
     - program: journalctl
       args: ['-u', systemd-oomd]
       respond: {stdout: ""}
-    # The merge's release is out 40 seconds after the merge.
+    # The gate brings devctl up to date before a merge it serves.
+    - program: devctl
+      args: [version, update]
+      respond: {stdout: ""}
+    # The merge's release is out 25 seconds after the merge.
     - program: devctl
       args: [release, wait, example/app, --pr, '2']
       respond:
         stdout: '{"verdict":"available","tag":"v0.1.0","reason":"every artifact is available"}'
-        delay: 40s
+        delay: 25s
 
 when:
   # example/app's main releases with Auto-release: every push to it tags.
@@ -110,7 +118,7 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-      - duration: {max: 25s}
+      - duration: {max: 15s}
       - events: {contains: [merge.authorized, merge.finished, merge.left], not_contains: [merge.failed, merge.pending]}
       - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   # The merge-child confirms the release outside the pass and records it
@@ -128,5 +136,6 @@ then:
   - events:
       contains: [merge.authorized, merge.start, merge.left, merge.finished, merged]
       not_contains: [merge.failed, merge.pending]
-  - calls: {program: gh, args: [pr, merge, --squash, --match-head-commit], min: 1, max: 1}
+  # The merge runs as devctl's GitHub login.
+  - calls: {program: devctl, args: [auth, exec, '--', gh, pr, merge, --squash, --match-head-commit], min: 1, max: 1}
   - calls: {program: devctl, args: [release, wait, example/app, --pr, '2'], min: 1, max: 1}
