@@ -396,7 +396,8 @@ over a model, so a scenario can override any call.
   `--version` and `login status` answer a host's probes.
 - **`agy`**: `--input-format stream-json --output-format stream-json` under
   `agy-run`, with `init` naming the conversation, a `user_input` step per
-  message and `result`. Also `models` and `--version`.
+  message and `result`. Also `models`, `--version` and the usage probe
+  `-p /usage` (`harness.usage.agy`, the Gemini models' bucket).
 - **`omp`**: `--mode rpc` with its standard input on its inbox, one turn per
   `steer` command. Also `models --json` and `--version`.
 - **`systemd-run`, `systemctl`**: the user's service manager. The world runs
@@ -441,6 +442,7 @@ given:
   harness:
     usage:                           # what a harness's usage probe reports
       claude: {session: 40, week: 20}  # percent of the 5-hour and 7-day windows
+      agy: {session: 10, week: 5}      # the Gemini models' windows
       codex:
         session: 10
         week: 5

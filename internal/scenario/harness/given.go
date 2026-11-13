@@ -210,8 +210,8 @@ func (g *Given) Validate(hosts []Host) error {
 	var errs []error
 	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 	for name := range g.Usage {
-		if name != Claude && name != Codex {
-			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex)", name)
+		if name != Claude && name != Codex && name != Agy {
+			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex, agy)", name)
 		}
 	}
 	for name, u := range g.Usage {

@@ -16,7 +16,8 @@ the prepared policy digest in beekeeper's state, which the supervisor loop does 
 coordinator update settles probation. Compatible older hosts keep taking starts during probation or
 release lookup failures; failed installations or policy checks still hold the host. With
 `supervisor.hosts`, workers prefer the first host with room by default and fall back to the
-coordinator within its ordinary capacity guards. Starts by hand without `--host` (`agents start`,
+coordinator within its ordinary capacity guards. A host whose pick spends another provider than the
+coordinator's leaves the start to the coordinator while that pick is behind its weekly pace. Starts by hand without `--host` (`agents start`,
 `emergency start`) are placed the same way and say where they went; `--host local` keeps one on the
 coordinator.
 
