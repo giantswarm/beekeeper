@@ -9,11 +9,13 @@ description: >
   third issue and still holds the fourth. Every delivery step is recorded:
   implementing, ci, review-queued, fixing, releasing and done.
   Moved from internal/loopworkflow TestSupervisorWorkflowDeliveryLimit.
+  It shows board next weighing the delivery limit on the world's clock:
+  on the system clock the observation the loop dated after the advances
+  lies in its future, every pick is held as "wip stale" and the third
+  issue never starts.
 issue: https://github.com/giantswarm/beekeeper/issues/3797
 flow: workflow
 tags: [workflow, delivery, review, loop, github, claude, release]
-control:
-  none: moves internal/loopworkflow TestSupervisorWorkflowDeliveryLimit; states behavior main already has
 timeout: 180s
 
 given:
