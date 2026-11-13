@@ -29,6 +29,11 @@ An environment failure (quota, clone, missing tools, transport or timeout) recor
 its own supervisor finding and retries once with a fresh worktree and builder.
 CI completing on the exact merge result can satisfy the check after that failure.
 Without successful validation the merge remains refused; no gate is bypassed.
+A `go test` whose only failures are builds stopped by a native dependency the checker host
+lacks (a C header the base and head do not track, a pkg-config package, a library or a tool
+such as the C compiler) shows nothing about the branch, since its CI has them: the finding is
+recorded once, not retried, and the pull request's own checks stand. A failing test or any
+other build error beside it still goes back to the branch.
 Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or
 `.golangci.json` explicitly (in that order), without additional linters or a separate
 goconst pre-check. Without a repository config it uses `--no-config` and the tool's

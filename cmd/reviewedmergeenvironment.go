@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -42,7 +45,14 @@ var mergeLocalHeadroom = func(dir string) error {
 	return nil
 }
 
-func (a *app) recordMergeEnvironment(p superloop.Pull, head, reason string) error {
+// What the desk does after an environment finding of the merge-result check.
+const (
+	mergeEnvironmentRetry      = "retrying once in a clean environment, or accepting CI on the exact merge result"
+	mergeEnvironmentDependency = "retrying cannot provide it, so the pull request's own checks stand; " +
+		"provide it where the merge-result check runs (the desk host, or run.remote's builder image)"
+)
+
+func (a *app) recordMergeEnvironment(p superloop.Pull, head, reason, then string) error {
 	if a.store == nil {
 		return fmt.Errorf("no store for merge environment finding")
 	}
@@ -54,7 +64,7 @@ func (a *app) recordMergeEnvironment(p superloop.Pull, head, reason string) erro
 		return err
 	}
 	ref, _ := parseRef(p.Ref)
-	finding := fmt.Sprintf("Merge-result check environment failed for https://github.com/%s/pull/%d at head %s: %s. This is a checker environment finding, not a branch repair; retrying once in a clean environment, or accepting CI on the exact merge result.", ref.Repo, ref.N, head, reason)
+	finding := fmt.Sprintf("Merge-result check environment failed for https://github.com/%s/pull/%d at head %s: %s. This is a checker environment finding, not a branch repair; %s.", ref.Repo, ref.N, head, reason, then)
 	return a.store.Record(about(event(loop.LoopParty, loop.LoopFileVerb, "[%s] %s%s%s", key, loop.LoopParty.Name, loop.FileReportSeparator, finding), p.Ref))
 }
 
@@ -112,4 +122,108 @@ func (a *app) runReviewedMergeChecks(ctx context.Context, dir, baseSHA, base, he
 		return runMergeCheckCmdEnv(ctx, dir, env, name, args...)
 	}
 	return runReviewedMergeChecksWith(ctx, dir, baseSHA, base, head, run, true)
+}
+
+// A native build dependency named by the C toolchain, pkg-config or the linker.
+var (
+	mergeCheckMissingHeader = []*regexp.Regexp{
+		regexp.MustCompile(`fatal error: ([^\s:']+): No such file or directory`), // gcc
+		regexp.MustCompile(`fatal error: '([^']+)' file not found`),              // clang
+	}
+	mergeCheckMissingDependency = []struct {
+		pattern *regexp.Regexp
+		name    string
+	}{
+		{regexp.MustCompile(`Package (\S+) was not found in the pkg-config search path`), "pkg-config package %s"},
+		{regexp.MustCompile(`cannot find -l([\w+.-]+)`), "library lib%s"},
+		{regexp.MustCompile(`exec: "([^"]+)": executable file not found in \$PATH`), "tool %s"},
+	}
+	// A package whose tests ran and failed, rather than one that did not build.
+	goTestRanAndFailed = regexp.MustCompile(`^(--- FAIL|FAIL\s+\S+\s+[^\s\[])`)
+)
+
+// mergeCheckHostDependency names the native build dependencies the checker
+// host lacks when they are all that failed in go test's output: no test ran
+// and failed, and every build failure (a "# <package>" block) names a missing
+// C header, pkg-config package, library or tool. The repository's CI has them,
+// since the reviewed head and its base passed it. A header the repository
+// itself tracks (tracked) is the merge result's own breakage, never the host's.
+func mergeCheckHostDependency(out string, tracked func(string) bool) string {
+	var missing []string
+	block, blockMissing, blockOther := false, false, false
+	// A block that reports anything but a missing dependency is a build
+	// failure the branch may have caused.
+	closeBlock := func() bool {
+		ok := !block || blockMissing || !blockOther
+		block, blockMissing, blockOther = false, false, false
+		return ok
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case goTestRanAndFailed.MatchString(line):
+			return ""
+		case strings.HasPrefix(line, "# "):
+			if !closeBlock() {
+				return ""
+			}
+			block = true
+		case line == "FAIL", strings.HasPrefix(line, "FAIL\t"), strings.HasPrefix(line, "ok "), strings.HasPrefix(line, "?"):
+			if !closeBlock() {
+				return ""
+			}
+		case block && strings.TrimSpace(line) != "":
+			if dependency := missingBuildDependency(line, tracked); dependency != "" {
+				missing = append(missing, dependency)
+				blockMissing = true
+			} else {
+				blockOther = true
+			}
+		}
+	}
+	if !closeBlock() {
+		return ""
+	}
+	slices.Sort(missing)
+	return strings.Join(slices.Compact(missing), ", ")
+}
+
+func missingBuildDependency(line string, tracked func(string) bool) string {
+	for _, pattern := range mergeCheckMissingHeader {
+		if m := pattern.FindStringSubmatch(line); m != nil {
+			if tracked(m[1]) {
+				return ""
+			}
+			return "C header " + m[1]
+		}
+	}
+	for _, d := range mergeCheckMissingDependency {
+		if m := d.pattern.FindStringSubmatch(line); m != nil {
+			return fmt.Sprintf(d.name, m[1])
+		}
+	}
+	return ""
+}
+
+// mergeCheckTrackedFile reports whether the base or the head tracks a file at
+// name or ending in /name; trees that cannot be listed count as tracking it.
+func mergeCheckTrackedFile(ctx context.Context, dir string, revs ...string) func(string) bool {
+	list := sync.OnceValues(func() ([]string, error) {
+		var paths []string
+		for _, rev := range revs {
+			out, err := runGit(ctx, dir, "ls-tree", "-r", "--name-only", "-z", rev)
+			if err != nil {
+				return nil, err
+			}
+			paths = append(paths, strings.Split(string(out), "\x00")...)
+		}
+		return paths, nil
+	})
+	return func(name string) bool {
+		for strings.HasPrefix(name, "./") || strings.HasPrefix(name, "../") {
+			_, name, _ = strings.Cut(name, "/")
+		}
+		paths, err := list()
+		return err != nil || slices.ContainsFunc(paths, func(p string) bool { return p == name || strings.HasSuffix(p, "/"+name) })
+	}
 }

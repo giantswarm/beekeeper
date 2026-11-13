@@ -53,10 +53,13 @@ func (a *app) checkReviewedMergeResult(ctx context.Context, p superloop.Pull, he
 			return reasonMergeHeld, github.SquashNotApplicable
 		}
 	}
-	return "", 0
+	return reason, 0
 }
 
-const reasonMergeValidationUnavailable = "merge-result validation unavailable"
+const (
+	reasonMergeValidationUnavailable = "merge-result validation unavailable"
+	reasonMergeValidationSkipped     = "merge-result validation skipped"
+)
 
 // mergeValidationUnavailable is the refusal naming the condition that failed.
 func mergeValidationUnavailable(format string, args ...any) string {
@@ -81,7 +84,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	repoDir, searched := a.findReviewedRepoDir(ctx, ref.Repo)
 	if repoDir == "" {
-		return false, fmt.Sprintf("merge-result validation skipped: no checkout of %s in %s; the pull request's own checks stand", ref.Repo, strings.Join(searched, ", ")), 0
+		return false, fmt.Sprintf("%s: no checkout of %s in %s; the pull request's own checks stand", reasonMergeValidationSkipped, ref.Repo, strings.Join(searched, ", ")), 0
 	}
 	baseSHA, err := fetchReviewedMergeRefs(ctx, repoDir, p.Base, head, ref.N)
 	if err != nil {
@@ -104,11 +107,19 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	for attempt := 0; ; attempt++ {
 		reason, code := a.checkReviewedMergeAttempt(ctx, repoDir, baseSHA, p, head)
+		if code == 0 && reason != "" {
+			// The host cannot build the repository: no retry provides the
+			// dependency, and nothing found the branch wrong.
+			if err := a.recordMergeEnvironment(p, head, reason, mergeEnvironmentDependency); err != nil {
+				return true, mergeValidationUnavailable("recording environment finding: %v", err), github.SquashTooling
+			}
+			return true, reason, 0
+		}
 		if code != github.SquashTooling {
 			return true, reason, code
 		}
 		if attempt == 0 {
-			if err := a.recordMergeEnvironment(p, head, reason); err != nil {
+			if err := a.recordMergeEnvironment(p, head, reason, mergeEnvironmentRetry); err != nil {
 				return true, mergeValidationUnavailable("recording environment finding: %v", err), github.SquashTooling
 			}
 		}
@@ -309,6 +320,11 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 	if out, err := run(ctx, worktreeDir, "go", goTestSubcmd, "-short", "./..."); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
+		}
+		// Code 0 with a reason: the validation could not run on this host.
+		if missing := mergeCheckHostDependency(out, mergeCheckTrackedFile(ctx, worktreeDir, baseSHA, head)); missing != "" {
+			return fmt.Sprintf("%s: the checker host lacks the build dependency %s that go test of %s + %s needs; the pull request's own checks stand",
+				reasonMergeValidationSkipped, missing, baseBranch, shortSHA(head)), 0
 		}
 		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
