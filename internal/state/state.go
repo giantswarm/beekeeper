@@ -583,6 +583,9 @@ type Timer struct {
 	Checked    time.Time `json:"checked,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
 	Unreadable bool      `json:"unreadable,omitempty"`
+	// Failing is the first of the checks in a row whose probe could not
+	// run: the guide was told of them once, and is told when it runs again.
+	Failing time.Time `json:"failing,omitzero"`
 	// Since is the first check that found the condition not holding; Stuck
 	// is set once the watch said it has not held for a day.
 	Since time.Time `json:"since,omitzero"`
