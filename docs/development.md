@@ -1011,6 +1011,16 @@ remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, includin
 pulls without saved review metadata and stale serve records from relieved or
 off-roster sessions.
 
+One session repairs a conflicting head. The loop claims a pull request's conflict repair (its
+wake or fixer start, keyed `conflict <pull request>@<head> …`) for one session. That session, or
+the fresh continuation that took its task, holds the claim while it is on the roster, busy with a
+task, not done and not parked again since. While the claim stands, no other session is woken,
+started or continued for that pull request: the loop logs one
+`leave <pull request> conflict-held@<head>` line instead. A fresh continuation for that pull
+request (plain overlap waits on another worker's pull request aside) is not started either: a
+session beekeeper started is retired with the reason (`supervisor.done`), and one its person
+started stays parked with its events until the claim is released.
+
 The guide defaults to a 200k relay point. When a feed line arrives after an hour
 of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
 before the expired cache is warmed again. Unknown activity times and active

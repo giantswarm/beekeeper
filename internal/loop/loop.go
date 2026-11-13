@@ -1729,14 +1729,15 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			return err
 		}
 	}
-	taken, err := state.FollowSnapshot(a.Store(), "supervisor-loop-taken", "v1", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
+	folded, err := l.foldTaken()
 	if err != nil {
 		return err
 	}
-	folded := l.takenFold.Fold(taken)
 	in.Taken = folded.Taken
 	claims, stages, stageDetail := folded.Claims, folded.Stages, folded.stageDetail
 	ownerless, failures, stuckFiled := folded.ownerless, folded.failures, folded.stuckFiled
+	// The conflict claims hold while their sessions live, taken or not.
+	conflicts := heldConflicts(st, claims)
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
@@ -2020,7 +2021,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		l.Recording = &LoopRecording{Agents: st.Agents, Deliveries: st.Deliveries}
 		in = l.Recording.Capture(in)
 	}
-	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	actions := holdConflictRepairs(append(superloop.Plan(in), orphanedReviewClaims(claims, in)...), conflicts, in.Taken)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
