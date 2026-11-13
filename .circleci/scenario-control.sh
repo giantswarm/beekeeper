@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
-# The scenario control (docs/scenarios.md): every behavioral scenario a pull
-# request adds or changes must fail on an assertion against the candidate
-# built from the pull request's merge base with main, so the scenario shows
-# the change. A scenario that passes there, or fails only in the harness,
-# fails this step; control: {none: <reason>} in the scenario opts it out for
-# the review to check. A branch that adds or changes no scenario, main and
-# tags pass at once without a build.
+# The scenario control (docs/scenarios.md): what a pull request adds or
+# changes to show its change must fail without it, on the pull request's
+# merge base with main.
+#
+# - Every behavioral scenario it adds or changes must fail on an assertion
+#   against the candidate built from the merge base. A scenario that passes
+#   there, or fails only in the harness, fails this step;
+#   control: {none: <reason>} in the scenario opts it out for the review to
+#   check.
+# - The Test functions it adds or changes in any _test.go run against the
+#   merge base's code with its test files applied (internal/testcontrol): at
+#   least one must fail there and pass on the pull request's code. A package
+#   that does not build on the base is reported; a "control: none: <reason>"
+#   paragraph in a test's doc comment opts the test out for the review to
+#   check. A pull request that changes the Go-test control also runs it on
+#   the clock fix of https://github.com/giantswarm/beekeeper/pull/3832.
+#
+# A branch that adds or changes neither, main and tags pass at once without
+# a build. Both parts run before the step fails, so one round reports both.
 #
 # Usage: scenario-control.sh [base branch, default main]
 set -euo pipefail
@@ -22,15 +34,46 @@ if [ "$base" = "$(git rev-parse HEAD)" ]; then
   echo "control: HEAD is on ${branch}; no pull request to control"
   exit 0
 fi
+
+trees=()
+cleanup() {
+  local tree
+  for tree in ${trees[@]+"${trees[@]}"}; do
+    git worktree remove --force "$tree" || true
+  done
+}
+trap cleanup EXIT
+status=0
+
 if git diff --quiet "$base" HEAD -- "$scenarios"; then
   echo "control: the pull request adds or changes no scenario under ${scenarios}"
-  exit 0
+else
+  git diff --stat "$base" HEAD -- "$scenarios"
+  src="$(mktemp -d)"
+  git worktree add --quiet --detach "$src" "$base"
+  trees+=("$src")
+  mkdir -p "$report/control"
+  BEEKEEPER_SCENARIO_CONTROL_BASE="$src" BEEKEEPER_SCENARIO_REPORT="$report" \
+    go test -tags scenario ./internal/scenario -run '^TestScenarioControl$' -count=1 -timeout=15m -v ||
+    status=1
 fi
-git diff --stat "$base" HEAD -- "$scenarios"
 
-src="$(mktemp -d)"
-git worktree add --quiet --detach "$src" "$base"
-trap 'git worktree remove --force "$src"' EXIT
-mkdir -p "$report/control"
-BEEKEEPER_SCENARIO_CONTROL_BASE="$src" BEEKEEPER_SCENARIO_REPORT="$report" \
-  go test -tags scenario ./internal/scenario -run '^TestScenarioControl$' -count=1 -timeout=15m -v
+if ! git diff --quiet "$base" HEAD -- internal/testcontrol .circleci/scenario-control.sh go.mod; then
+  echo "control: the pull request changes the Go-test control; proving it on the clock fix first"
+  BEEKEEPER_TEST_CONTROL_HISTORY=1 BEEKEEPER_TEST_CONTROL_REPORT="$report/go-control-history" \
+    go test ./internal/testcontrol -run '^TestControlProvesTheClockFix$' -count=1 -timeout=10m -v ||
+    status=1
+fi
+
+if git diff --quiet "$base" HEAD -- '*_test.go'; then
+  echo "control: the pull request adds or changes no Go test file"
+else
+  git diff --stat "$base" HEAD -- '*_test.go'
+  gosrc="$(mktemp -d)"
+  git worktree add --quiet --detach "$gosrc" "$base"
+  trees+=("$gosrc")
+  BEEKEEPER_TEST_CONTROL_BASE="$gosrc" BEEKEEPER_TEST_CONTROL_REPORT="$report/go-control" \
+    go test ./internal/testcontrol -run '^TestGoTestControl$' -count=1 -timeout=15m -v ||
+    status=1
+fi
+exit "$status"
