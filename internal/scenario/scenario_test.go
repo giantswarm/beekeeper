@@ -25,6 +25,10 @@ then:
 
 // The loader is strict: what muster learned, assertion-free or mistyped
 // scenarios pass vacuously otherwise.
+//
+// control: none: only updates the action list in an existing rejection
+// message for the new release step; the merge base lacks that harness
+// extension and cannot compile the accompanying mutation control
 func TestParseRejects(t *testing.T) {
 	if _, err := Parse("valid.yaml", []byte(validScenario)); err != nil {
 		t.Fatalf("the valid scenario: %v", err)

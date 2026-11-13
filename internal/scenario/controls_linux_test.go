@@ -44,6 +44,10 @@ var mutationControls = []mutationControl{
 // the candidate (TestScenarios) and fails on its mutant. It runs after the
 // suite, whose wall-time budget is the scenarios', and takes its mutants
 // from the suite's release builds.
+//
+// control: none: migrates TestHistoricalParserRegression to a mutation of
+// behavior main already has; the merge base lacks the Mutations registry
+// and ReleaseBuild.Mutation that this new harness control requires
 func TestMutationControls(t *testing.T) {
 	t.Parallel()
 	r := runner(t)

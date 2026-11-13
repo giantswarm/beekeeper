@@ -88,6 +88,10 @@ func isolated() error {
 // started survives an interrupted run while another run stays untouched.
 // It was the interrupted case and the isolation checks of the retired
 // TestSupervisorWorkflow.
+//
+// control: none: retains TestSupervisorWorkflow's isolation and interrupted
+// teardown checks against the unchanged sandbox; this behavior already
+// works on the merge base
 func TestSandbox(t *testing.T) {
 	if testing.Short() {
 		t.Skip("enters Linux namespaces")
