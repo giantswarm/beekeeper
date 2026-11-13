@@ -67,15 +67,22 @@ func (a *app) startCheckout(dir string) (string, error) {
 	return "", usageErr("--dir must be exactly one repository checkout (not a parent folder or worktree); accepted checkouts: %s", strings.Join(accepted, ", "))
 }
 
-func singleTaskRepository(brief string) error {
-	repos := map[string]bool{}
+// briefRepositories are the repositories a brief names, by URL or by
+// owner/repo#n, lower-cased and sorted, each once.
+func briefRepositories(brief string) []string {
+	var repos []string
 	for _, m := range taskRepository.FindAllStringSubmatch(brief, -1) {
-		repos[strings.ToLower(m[1])] = true
+		repos = append(repos, strings.ToLower(m[1]))
 	}
 	for _, m := range taskRepositoryReference.FindAllStringSubmatch(brief, -1) {
-		repos[strings.ToLower(m[1])] = true
+		repos = append(repos, strings.ToLower(m[1]))
 	}
-	if len(repos) > 1 {
+	slices.Sort(repos)
+	return slices.Compact(repos)
+}
+
+func singleTaskRepository(brief string) error {
+	if len(briefRepositories(brief)) > 1 {
 		return usageErr("task names multiple repositories; split it into one task per repository")
 	}
 	return nil

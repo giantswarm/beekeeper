@@ -1,10 +1,11 @@
 # Operating SSH execution hosts
 
-Managed, headless Claude Code sessions run on an explicitly selected SSH host.
+Managed, headless Claude Code sessions run on a selected SSH host.
 Each execution gets its own linked worktree and branch backed by an isolated
 bare repository copy, an owned user service,
-a conversation identifier, and one coordinator roster registration. Omitting
-`--host`, or selecting `--host local`, keeps the local launch path.
+a conversation identifier, and one coordinator roster registration. `--host local` keeps the
+local launch path. A start without `--host` is placed as the supervisor loop places its own
+(`supervisor.hostsFirst`, see [placement](#placement-of-starts)).
 
 Read the [design](ssh-execution-hosts.md) for the ownership and failure contract.
 Remote wake and resume use durable message receipts as described below. New
@@ -556,6 +557,8 @@ reservation, workspace, or process. Remote starts require `--repo` and `--ref`;
 coordinator's existing provider and bucket pool across hosts and the selected
 host's physical guards. A host does not create another subscription budget.
 
+### Placement of starts
+
 `supervisor loop` places its worker starts on execution hosts. With
 `supervisor.hosts` naming execution hosts (in order of preference), a start
 whose repository a host maps, and for which `capacity --host <selector>` has
@@ -584,6 +587,17 @@ The relay requires a live execution lease and refuses a moved or closed PR;
 retrying an identical review reconciles a lost response. No host GitHub
 credential is needed. The coordinator authenticates the reviewer session,
 exact head and reported review before a merge.
+
+A start by hand, `agents start` or `emergency start` without `--host`, is placed the same way:
+on the first of `supervisor.hosts` that maps its repository, lists its harness and has room
+(`capacity --host`), pinned to `--ref`, else to the repository's default branch. Its repository is
+`--repo`, else the one its brief names, else the origin of its checkout; the host's workspace takes
+the place of `--dir` and `--branch`. Its first line says where it went: `placed on <host> by
+supervisor.hostsFirst: …`, or `on this machine: <why>` with each host's reason when none takes it,
+and the start then runs here within the coordinator's guards. One that names `--repo` or `--ref` is
+refused with those reasons instead. A review, a timer's start, `--desktop`, a `--mode` other than
+`headless` and `--host local` stay on the coordinator; so does every hand start under
+`supervisor.hostsFirst: false`. `--dry-run` shows the placement without starting.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
