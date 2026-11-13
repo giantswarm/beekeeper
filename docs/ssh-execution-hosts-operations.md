@@ -616,6 +616,30 @@ its start gate refuses more) or the previous worker's workspace on the coordinat
 uncommitted changes to tracked files or commits on no remote branch. With no room on any host or
 here, `SUPERVISOR CONTINUATION WAITS` says so and the continuation waits for the next pass.
 
+#### Tasks that need the coordinator
+
+A task whose remaining work needs data, devices or commands only the coordinator has, such as a
+proof on production data that lives there, is marked to stay on the coordinator with `beekeeper
+agents move`. No start of a marked task is placed on a host again: the loop's board start, fresh
+continuation, fixer and quota restart run here, with a `SUPERVISOR NEXT STAYS HERE`, `SUPERVISOR
+CONTINUATION STAYS HERE`, `SUPERVISOR FIXER STAYS HERE` or `SUPERVISOR QUOTA … STAYS HERE` line
+naming the task and the reason, once the coordinator's capacity has room; a hand start without
+`--host` whose brief names it stays here too. Reviewers are placed as before.
+
+```sh
+beekeeper agents move "the timing proof needs the production projects on the coordinator"
+beekeeper agents move --ref example/app#12 "the 300-clip proof needs the production projects"
+beekeeper agents move --ref example/app#12 --clear
+```
+
+A worker on a host that finds itself on the wrong machine runs the first form from its workspace
+instead of parking. The coordinator marks its task (the issue it serves and the pull requests it
+waits on or asked a desk review of), records `agents.move`, and queues the task for a fresh
+worker, which the loop's next pass starts on the coordinator. That worker continues from what is
+published, never from the host's workspace, so the worker publishes first (`agents publish`),
+then moves and ends its turn. A worker on the coordinator marks its task the same way and keeps
+working. `--ref` marks a task before any start, the desk's own word; `--clear` lifts the mark.
+
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against

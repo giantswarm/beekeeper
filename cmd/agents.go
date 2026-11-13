@@ -485,7 +485,7 @@ started is never archived nor stopped.`,
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
 	c.AddCommand(a.agentReviewCmd())
-	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
+	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.agentMoveCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
 	c.AddCommand(a.executionHostCmds()...)
 	return c
 }

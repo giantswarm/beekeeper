@@ -59,7 +59,8 @@ type handPlacement struct {
 // repository's default branch. The loop's own starts come placed. A start
 // stays on this machine, saying why, when it is a review (the loop records a
 // host review's assignment), a timer's start, a desktop or background
-// session, names no repository, or no host takes it; with hostsFirst false or
+// session, names no repository, its brief names a task marked to stay on the
+// coordinator (agents move), or no host takes it; with hostsFirst false or
 // no host configured it stays there as before.
 func (a *app) placeHandStart(ctx context.Context, s handStart) handPlacement {
 	k := a.cfg.Supervisor
@@ -92,6 +93,9 @@ func (a *app) placeHandStart(ctx context.Context, s handStart) handPlacement {
 	st, err := a.readSnapshot()
 	if err != nil {
 		return local("state unreadable for host placement: %v", err)
+	}
+	if t, ok := st.LocalTaskFor(namedRefs(s.brief, a.cfg.Board.Owner)...); ok {
+		return local("its task %s needs the coordinator (agents move): %s", t.Ref, t.Why)
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {

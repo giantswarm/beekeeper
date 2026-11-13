@@ -238,6 +238,7 @@ type (
 	plainStop              Stop
 	plainHostPlacement     HostPlacement
 	plainHostPin           HostPin
+	plainLocalTask         LocalTask
 	plainTranscriptGrant   TranscriptGrant
 	plainTranscriptRequest TranscriptRequest
 )
@@ -391,6 +392,10 @@ func (v *Stop) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plai
 func (v Stop) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainStop(v), v.rest) }
 func (v *HostPin) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainHostPin)(v), &v.rest) }
 func (v HostPin) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainHostPin(v), v.rest) }
+func (v *LocalTask) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainLocalTask)(v), &v.rest)
+}
+func (v LocalTask) MarshalJSON() ([]byte, error) { return encodeKeeping(plainLocalTask(v), v.rest) }
 func (v *TranscriptGrant) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainTranscriptGrant)(v), &v.rest)
 }
