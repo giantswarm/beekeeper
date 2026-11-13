@@ -3900,7 +3900,10 @@ func (l *Loop) PlacesRemotely() bool {
 
 // startPlacement prefers configured execution hosts by default. If none can
 // take the repository and selected task kind, ordinary local capacity is the
-// fallback. Explicit hostsFirst: false retains local-first placement.
+// fallback. Explicit hostsFirst: false retains local-first placement. A host
+// whose pick is another provider than the coordinator's does not take the
+// start while the coordinator's pick is behind its weekly pace and the
+// coordinator has room (PaceYield).
 func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
 	kind := workerRole
 	if review {
@@ -3966,6 +3969,14 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		if reason := HostCapacityReason(hostOut, hostCode, hostErr); reason != "" {
 			l.RecordHostPlacement(selector, repo, reason)
 			l.SayOnce("host capacity "+selector+" "+reason, "SUPERVISOR HOST WAITS %s: %s", selector, reason)
+			continue
+		}
+		// The coordinator's pick decides which subscription a start spends
+		// while it is behind its weekly pace: a host that would spend
+		// another provider passes the start to the coordinator's room.
+		if reason := PaceYield(out, hostOut); localReady && reason != "" {
+			l.RecordHostPlacement(selector, repo, reason)
+			l.SayOnce("host pace "+selector+" "+repo, "SUPERVISOR HOST SKIPPED %s for %s: %s", selector, repo, reason)
 			continue
 		}
 		ref, err := l.defaultBranch(ctx, repo)

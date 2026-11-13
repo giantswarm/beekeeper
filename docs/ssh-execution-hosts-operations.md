@@ -571,6 +571,11 @@ room, runs there pinned to the repository's default branch. This is the default
 When no host can take the start, the coordinator is the fallback within its
 ordinary local, provider, model and resource guards. Fallback preserves the
 eligible model choices. A host's check weighs only the harnesses it can run.
+While the coordinator's own pick is a subscription behind its weekly pace and
+the coordinator has room, a host whose pick spends another provider passes the
+loop's start on to the next host, else to the coordinator on the coordinator's
+pick, so a subscription no host runs (agy) still gets its starts. The host's
+placement reason names both picks.
 `beekeeper capacity` and `beekeeper supervisor status` include each configured
 host's last dated placement reason, repository and any update failure. A dated
 placement is an observation, not a fresh capacity or admission grant. Hosts
@@ -598,7 +603,9 @@ exact head and reported review before a merge.
 
 A start by hand, `agents start` or `emergency start` without `--host`, is placed the same way:
 on the first of `supervisor.hosts` that maps its repository, lists its harness and has room
-(`capacity --host`), pinned to `--ref`, else to the repository's default branch. Its repository is
+(`capacity --host`), pinned to `--ref`, else to the repository's default branch. Unlike the loop's
+starts, it does not pass to the coordinator's behind-pace pick: the host runs it on its own pick.
+Its repository is
 `--repo`, else the origin of the checkout `--dir` names, else the one its brief names, else the
 origin of `agents.dir` or the current directory; the host's workspace takes the place of `--dir`
 and `--branch`. Its first line says where it went: `placed on <host> by

@@ -186,15 +186,22 @@ func holdOutput() {
 //     standard input is a turn, accepted with a user_input step and ended
 //     with a result.
 //   - agy models lists the models, agy --version its version.
+//   - agy -p /usage is the usage probe: the Gemini models' weekly and
+//     five-hour windows, as harness.usage.agy gives them.
 
 func agyModeled(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	if args[0] == "models" || len(args) == 1 && args[0] == "--version" {
+	if args[0] == "models" || len(args) == 1 && args[0] == "--version" || agyUsageProbe(args) {
 		return true
 	}
 	return argValue(args, "--input-format") == "stream-json"
+}
+
+// agyUsageProbe reports whether args are agy's usage probe, agy -p /usage.
+func agyUsageProbe(args []string) bool {
+	return len(args) == 2 && args[0] == "-p" && strings.TrimSpace(args[1]) == "/usage"
 }
 
 // agyQuota is the error agy reports when the account's quota is used up.
@@ -215,6 +222,8 @@ func agy(c *client) int {
 			fmt.Println(m)
 		}
 		return 0
+	case agyUsageProbe(args):
+		return agyUsage(c)
 	}
 	conv := argValue(args, "--conversation")
 	if conv == "" {
@@ -259,6 +268,21 @@ func agy(c *client) int {
 		out.emit(map[string]any{"event": "result", "conversation_id": conv, "result": map[string]any{"conversation_id": conv, "status": "ok",
 			"usage": map[string]any{"input_tokens": plan.Tokens.Input, "output_tokens": plan.Tokens.Output}}})
 	}
+	return 0
+}
+
+// agyUsage answers agy -p /usage as the CLI does: per model bucket, the
+// remaining share of each window and its reset, tab-separated. The week
+// resets in 72 hours and the five hours in 2, as the claude and codex
+// probes say.
+func agyUsage(c *client) int {
+	rep, err := c.ask(request{Op: opUsage, Harness: Agy})
+	if err != nil || rep.Usage == nil {
+		return c.end(rep, err)
+	}
+	now := time.Now().UTC()
+	fmt.Printf("Gemini Models\tWeekly Limit Remaining\t%.0f%%\t%s\n", 100-rep.Usage.Week, now.Add(72*time.Hour).Format(time.RFC3339))
+	fmt.Printf("Gemini Models\tFive Hour Limit Remaining\t%.0f%%\t%s\n", 100-rep.Usage.Session, now.Add(2*time.Hour).Format(time.RFC3339))
 	return 0
 }
 
