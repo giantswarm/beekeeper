@@ -307,6 +307,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &capacity.Headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
 	counts := countAgents(st, sessions, a.now, a.cfg)
+	withPaceOffs(readings, st, a.now)
 	var v *capacity.View
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		choicesCap := k

@@ -755,6 +755,7 @@ func (a *app) guideSubscriptionLines(ctx context.Context, st *state.State, sessi
 		if !anySubscription {
 			return nil
 		}
+		withPaceOffs(readings, st, a.now)
 		pa := countProviderAgents(st, sessions, k, a.now, a.cfg)
 		providers := make(map[string]*capacity.ProviderView, len(k.Providers))
 		var lines []string
