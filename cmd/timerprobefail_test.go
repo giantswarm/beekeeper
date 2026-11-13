@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -140,11 +141,27 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 // which must not bring the failure back: timer list says nothing of a probe
 // that ran.
 func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
+	// Read the persisted field so this regression also compiles on the
+	// merge base, where Timer has no Failing field yet.
+	failingSince := func(timer state.Timer) time.Time {
+		t.Helper()
+		data, err := json.Marshal(timer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved struct {
+			Failing time.Time `json:"failing"`
+		}
+		if err := json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+		return saved.Failing
+	}
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
 	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, Every: 10 * time.Minute,
 		Wake: "app deploy", What: probeResumeDeploy}}}
 	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
-	if len(st.Timers) != 1 || st.Timers[0].Failing.IsZero() {
+	if len(st.Timers) != 1 || failingSince(st.Timers[0]).IsZero() {
 		t.Fatalf("a probe that could not run: %+v", st.Timers)
 	}
 	heldAt := relayNow.Add(10 * time.Minute)
@@ -156,7 +173,7 @@ func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 		t.Fatalf("held: fires %+v, open %+v, events %+v", fires, st.Timers, evs)
 	}
 	rearmTimerInState(st, fires[0], "wake not delivered; retrying", heldAt)
-	if len(st.Timers) != 1 || !st.Timers[0].Failing.IsZero() {
+	if len(st.Timers) != 1 || !failingSince(st.Timers[0]).IsZero() {
 		t.Fatalf("re-armed after the probe held: %+v", st.Timers)
 	}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
