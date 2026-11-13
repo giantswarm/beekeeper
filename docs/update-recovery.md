@@ -9,6 +9,15 @@ local integrity record, not a replacement for release signature verification
 or the trusted release evidence gate tracked in
 https://github.com/giantswarm/beekeeper/issues/2257.
 
+An executable directory this account cannot write keeps its recovery directory in this account's
+state instead: `$XDG_STATE_HOME/beekeeper/update/<hash>/`, the hash the first 16 bytes of the
+SHA-256 of the executable's path, in hexadecimal. A recovery directory already there keeps its
+place. A failed update names the journal, `journal.json` in the recovery directory, when the
+failure is the journal's: it disagrees with the installed binary, or its transaction (settling a
+probation, a replacement, a rollback) was refused or interrupted. A refusal before the
+replacement (the signature, the release evidence, the canary checks, the dry-run comparison)
+leaves the journal as it was: it says that nothing was replaced and that a retry is safe.
+
 The journal records the displaced version and digest, previous verified recovery
 target, candidate version and digest, UTC installation time, probation phase,
 and durable quarantine reasons. Writes sync their temporary file before rename

@@ -356,7 +356,9 @@ func TestDeliveryDroppedPRSeedPreservesTombstoneWhenLinked(t *testing.T) {
 	}
 }
 
-func TestReviewerPublishedFixesNeedRepair(t *testing.T) {
+// The reviewer's published fixes, approved, wait for their CI without
+// another park of the worker (https://github.com/giantswarm/beekeeper/issues/3861).
+func TestReviewerPublishedFixesCountAsCIWithoutAnotherWorkerPark(t *testing.T) {
 	in := deliveryInput()
 	in.Workers[0].ReviewRequested = true
 	in.Taken = []Taken{{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliveryFirstHead), At: in.Now}}
@@ -365,7 +367,7 @@ func TestReviewerPublishedFixesNeedRepair(t *testing.T) {
 	p.Reviews = []Review{{Head: p.Head, Verdict: Approved, At: in.Now.Add(time.Minute)}}
 	in.Pulls[deliveryPR] = p
 	got := Deliveries(in, nil)
-	if len(got) != 1 || got[0].Step != state.DeliveryFixing {
+	if len(got) != 1 || got[0].Step != state.DeliveryCI {
 		t.Fatalf("reviewer fixes with pending CI: %+v", got)
 	}
 }

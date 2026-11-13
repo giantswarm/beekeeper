@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,26 @@ import (
 // hostDrainRetry paces the next update of a host that answered busy while
 // the coordinator recorded no execution on it.
 const hostDrainRetry = 10 * time.Minute
+
+// HostBehindBound is how long an execution host may stay behind the
+// coordinator's release, draining or waiting, before the supervisor loop
+// hands it on as a fault.
+const HostBehindBound = time.Hour
+
+// HostDrains says the execution host pinned by pin drains for the
+// coordinator's release version: it is pinned to another release, so it
+// takes no new start until its update succeeds, and the executions on it
+// reach the turn boundary the update waits for. A host never pinned to a
+// release is not behind one, and a host whose update waits on the
+// coordinator's failed lookup of version keeps taking starts until that
+// lookup is due again. The caller checks that the coordinator runs a
+// release that is ready for its hosts (CoordinatorHostUpdateReady).
+func HostDrains(pin state.HostPin, version string, b *state.Budget, now time.Time) bool {
+	if pin.Version == "" || pin.Version == version {
+		return false
+	}
+	return pin.UpdateError == "" || pin.UpdateVersion != version || !HostHoldWait(state.HostPin{Held: pin.UpdateError, Tried: pin.Tried}, b, now)
+}
 
 // Legacy lookup and probation holds never changed the installed host. Actual
 // installation, preparation and policy failures remain start-blocking.
@@ -59,10 +80,12 @@ func hostHoldRateReset(held string) (time.Time, bool) {
 // this coordinator runs, with agents hosts update, once the coordinator
 // runs a newer one than the host's pin: a host on which executions are in a
 // turn drains first (a parked worker's execution between turns does not hold
-// it back), a held host is tried again hourly, and a development build
-// updates none. Nothing is updated while beekeeper stop stands. Each new
-// hold is handed on once as the loop's finding, and so is a host that stays
-// behind for more than one release, with why.
+// it back), taking no new start (HostDrains), so it updates at the first
+// pass that finds them between turns; a held host is tried again hourly,
+// and a development build updates none. Nothing is updated while beekeeper
+// stop stands. Each new hold is handed on once as the loop's finding, and
+// so is a host that stays behind for more than one release or for longer
+// than HostBehindBound, with why.
 func (l *Loop) UpdateHosts(ctx context.Context, st *state.State) {
 	a := l.Host
 	version := Cmd.CoordinatorVersion()
@@ -132,9 +155,11 @@ func drainingWorkerNames(st *state.State, selector string) []string {
 // noteBehind records that the host selector did not follow the
 // coordinator's release version (drains or waits, for reason), and hands it
 // on once as the loop's finding when the host stays behind past the first
-// release it missed. A held host is handed on by its hold instead.
+// release it missed or for longer than HostBehindBound. A held host is
+// handed on by its hold instead.
 func (l *Loop) noteBehind(selector, version, reason string) {
 	a := l.Host
+	now := a.TimeNow()
 	var finding string
 	err := a.Store().Update(func(st *state.State) ([]state.Event, error) {
 		finding = ""
@@ -146,10 +171,12 @@ func (l *Loop) noteBehind(selector, version, reason string) {
 		switch {
 		case pin.Version == version || pin.Held != "":
 			return nil, nil
-		case pin.Behind == "":
-			pin.Behind = version
+		case pin.Behind == "" || pin.BehindSince.IsZero():
+			// A pin recorded behind before BehindSince was kept starts
+			// its bound now.
+			pin.Behind, pin.BehindSince = cmp.Or(pin.Behind, version), now
 			return nil, nil
-		case pin.Behind == version || pin.BehindReported:
+		case pin.BehindReported || pin.Behind == version && now.Sub(pin.BehindSince) < HostBehindBound:
 			return nil, nil
 		}
 		pin.BehindReported = true
@@ -157,7 +184,14 @@ func (l *Loop) noteBehind(selector, version, reason string) {
 		if on == "" {
 			on = "a release it was never pinned to"
 		}
-		finding = fmt.Sprintf("Execution host %s stays on %s for more than one release: it did not follow %s and does not follow %s either, its current policy remains subject to admission checks: %s. beekeeper agents hosts update %s retries it at once.", selector, on, pin.Behind, version, reason, selector)
+		missed := pin.Behind
+		if pin.Behind != version {
+			missed += " and does not follow " + version + " either"
+		}
+		if pin.Version != "" {
+			missed += ", and takes no new start until it updates"
+		}
+		finding = fmt.Sprintf("Execution host %s stays on %s, behind the coordinator for %s: it did not follow %s: %s. beekeeper agents hosts update %s retries it at once.", selector, on, Cmd.ShortDur(now.Sub(pin.BehindSince).Round(time.Minute)), missed, reason, selector)
 		return []state.Event{Cmd.Event(LoopParty, "supervisor."+superloop.KindFile, "[host-behind %s %s] execution host %s behind since %s%s%s", selector, version, selector, pin.Behind, FileReportSeparator, finding)}, nil
 	})
 	if err != nil {

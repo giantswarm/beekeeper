@@ -29,6 +29,14 @@ An environment failure (quota, clone, missing tools, transport or timeout) recor
 its own supervisor finding and retries once with a fresh worktree and builder.
 CI completing on the exact merge result can satisfy the check after that failure.
 Without successful validation the merge remains refused; no gate is bypassed.
+A `go test` whose only failures are builds stopped by a native dependency the checker host
+lacks (a C header the base and head do not track, a pkg-config package, a library or a tool
+such as the C compiler) shows nothing about the branch, since its CI has them: the finding is
+recorded once, not retried, and the pull request's own checks stand. A failing test or any
+other build error beside it still goes back to the branch. Lint runs first and reports such a
+package, and each package importing it, as a new `typecheck` finding quoting that build output.
+When those are all its new findings, lint refuses nothing and `go test` decides as above; if
+`go test` passes, the lint finding alone is recorded the same way.
 Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or
 `.golangci.json` explicitly (in that order), without additional linters or a separate
 goconst pre-check. Without a repository config it uses `--no-config` and the tool's
@@ -916,31 +924,31 @@ a branch repair an older loop requested for such a refusal closes it on start
 (`supervisor.unstage` for the repair stage, `supervisor.unclaim` for the go it completed),
 so the unchanged approved head rejoins the merge lane; any other repair stage stands.
 
-After approval only the merge moves the head. A branch that is only behind its base merges
-at the reviewed head as it stands: GitHub merges it onto the current base, with no branch
-update and no second CI run. Only a base that requires up-to-date branches refuses that
-merge (GitHub's merge state `BEHIND`). Unless the repository is in `merge.admin`, the
-mutation child updates the branch itself, once its authority, stop and hold checks pass:
-GitHub's update-branch
-merges the base into it, pinned to the reviewed head, and the child waits up to the squash
-timeout for the new head's checks (every check the reviewed head had, all green), confirms
-that the approval covers the new head (`github.BaseMergeCovers`: a two-parent base merge with
-the PR patch unchanged; rebases and changed conflict resolutions need a new review),
-checks the stop and holds again and merges that head. The loop accepts a merged head the
-approval covers, including when `merge.requireReview` is enabled; its planner gives the go
-for such a head without a fresh park. Emergency review-only admin merges also allow an
-unchanged green head behind its base when effective rules do not require up-to-date
-branches. They recognize review dismissal restrictions without bypassing strict status
-checks or other non-review requirements. A rebase
-merge method cannot take a base merge, so its branch behind such a base, a conflicting or
-draft branch,
-red checks on the updated head or an updated head the approval does not cover go back to the
-worker for repair and another green published head. A restart reads GitHub before repeating
+After approval only the merge moves the head. A pull request gets one desk review
+([#3861](https://github.com/giantswarm/beekeeper/issues/3861)), and nobody updates an
+approved branch with its base: no worker, fixer, reviewer or the loop merges the base into
+it or rebases it to make it current, since that only runs CI again. A branch that is only
+behind its base merges at the reviewed head as it stands: GitHub merges it onto the current
+base, with no branch update and no second CI run, and the merge-result check of base plus
+head is its gate. A base that requires up-to-date branches refuses that merge (GitHub's
+merge state `BEHIND`): a configuration refusal for the repository's owner, never a branch
+update. A conflicting branch goes back to the reviewer; a draft branch or a red merge result
+goes back to the worker for repair and another green published head. That head keeps the
+approval when it only brings the base into the approved one (`github.ApprovalCovers`: a merge
+of the base, a conflict's resolution with lines of either side, or a rebase, with no change
+of its own), and the loop
+accepts such a head, including when `merge.requireReview` is enabled; its planner gives the
+go for it without a fresh park. Any other repaired head gets the go once its worker parked
+on it, never a second review; with `merge.requireReview` the gate merges only a head an
+approval covers. Emergency review-only admin merges also allow an unchanged
+green head behind its base when effective rules do not require up-to-date branches. They
+recognize review dismissal restrictions without bypassing strict status checks or other
+non-review requirements. A restart reads GitHub before repeating
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
 not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
 the configuration refusal above retries each round. Neither grants a direct worker merge
 around queue validation. No person is asked whether to merge: the loop merges after its
-reviews and their fixes, and `note add` refuses a decision that asks whether to merge.
+one review and its fixes, and `note add` refuses a decision that asks whether to merge.
 For an SSH worker's fixes, the loop retains the authenticated independent review result
 and its original head, author, verdict and body digest. The loop records its exact-head
 authorization before the executor accepts the new green head without another approval

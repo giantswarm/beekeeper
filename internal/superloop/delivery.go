@@ -338,9 +338,6 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 	rs := l.rounds[p.Ref]
 	if len(rs) > 0 {
 		rd := rs[len(rs)-1]
-		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && !sameHead(v.Head, rd.head) {
-			return state.DeliveryFixing
-		}
 		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested && (sameHead(v.Head, p.Head) || !requested) {
 			return state.DeliveryFixing
 		}

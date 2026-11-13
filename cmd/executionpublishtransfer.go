@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -93,8 +94,40 @@ func (a *app) transferPublication(st *state.State, ref execution.Ref, p publicat
 		if err := f.Sync(); err != nil {
 			return result, err
 		}
+		if err := advancePublicationTransferTime(path); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
+}
+
+// advancePublicationTransferTime keeps a written transfer's modification time
+// strictly after every other transfer already in its directory, even when
+// two transfers land in the same coarse filesystem clock tick.
+func advancePublicationTransferTime(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(path)
+	var latest time.Time
+	for _, entry := range entries {
+		if entry.Name() == base {
+			continue
+		}
+		if other, statErr := entry.Info(); statErr == nil && other.ModTime().After(latest) {
+			latest = other.ModTime()
+		}
+	}
+	if !latest.IsZero() && !info.ModTime().After(latest) {
+		next := latest.Add(time.Millisecond)
+		return os.Chtimes(path, next, next)
+	}
+	return nil
 }
 
 func (a *app) loadPublicationTransfer(ref execution.Ref, digest string) ([]byte, error) {
@@ -121,8 +154,10 @@ func (a *app) storePublicationTransfer(ref execution.Ref, data []byte) (string, 
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
-	err = os.WriteFile(path, data, 0o600)
-	return digest, err
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	return digest, advancePublicationTransferTime(path)
 }
 
 func publicationTransferCall(ctx context.Context, s *execution.Server, j execution.Journal, p publicationChunk) (publicationChunk, error) {

@@ -45,7 +45,7 @@ func EntryRules(home, projects string, worktrees, places []string, scratch strin
 		". Create no new entry directly in these folders. Drafts go in the session scratchpad, " + scratch +
 		"; state, logs and backups in home.places: " + strings.Join(places, ", ") +
 		". Worktrees and scratch checkouts go in projects.worktrees: " + strings.Join(worktrees, ", ") +
-		", with layout <repo>/<branch>. Use `git -C <clone> worktree add <place>/<repo>/<branch> -b <branch> origin/main`. " +
+		", with layout <repo>/<branch>. Use `git -C <clone> worktree add <place>/<repo>/<branch> --no-track -b <branch> origin/main`. " +
 		"A path the person named for the task is created by the person or with their go-ahead. " +
 		"Stop on an empty directory variable: `cd \"${dir:?}\"`."
 }
