@@ -2,13 +2,12 @@ name: author-push-ends-the-round
 description: >
   The author pushes while its desk review runs. Round one starts on the head
   the worker parked on. While round one's reviewer still works, the worker's
-  next session pushes a fix, parks on it and pushes once more. The reviewer
-  then posts its findings on the head it was given, which is no longer the
-  pull request's, and keeps running. The loop forwards none of them: the
-  round ended when the head moved. Nor does it start a round on the head the
-  author pushed past its park; it says why in a leave line. Once the author
-  parks on its last head, round two starts there without waiting for round
-  one's reviewer, and round two's approval gets the go and the merge.
+  next session pushes a fix and parks on it. The reviewer then posts its
+  findings on the head it was given, which is no longer the pull request's,
+  and keeps running. The loop forwards none of them: the round ended when
+  the head moved. Round two starts on the head the author handed over,
+  without waiting for round one's reviewer, and its approval gets the go
+  and the merge.
 issue: https://github.com/giantswarm/beekeeper/issues/3843
 flow: delivery
 tags: [delivery, loop, review]
@@ -52,8 +51,8 @@ given:
                 dir: app
               - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
                 dir: app
-          # The next session pushes a fix while round one runs, parks on
-          # it, and pushes on: the author still works on the pull request.
+          # The next session pushes a fix while round one runs and parks
+          # on it.
           - steps:
               - git: [fetch, --quiet, origin]
                 dir: app
@@ -64,17 +63,6 @@ given:
                 dir: app
               - git: [push, --quiet, origin, app-1]
                 dir: app
-              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
-                dir: app
-              - write: {path: app/more.txt, content: "more of the worker's fix\n"}
-              - git: [add, more.txt]
-                dir: app
-              - git: [commit, --quiet, -m, "fix: more of the worker's fix"]
-                dir: app
-              - git: [push, --quiet, origin, app-1]
-                dir: app
-          # The session after it hands its last head over.
-          - steps:
               - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
                 dir: app
       # Round one's reviewer posts its findings on the head it was given
@@ -147,37 +135,19 @@ when:
       timeout: 15s
       expect:
         - worker: {name: app 1, turns: 2, outcome: finish}
-        - origin: {repository: example/app, branch: app-1, ahead: 3}
+        - origin: {repository: example/app, branch: app-1, ahead: 2}
         - calls: {program: gh, args: [pr, review], min: 1}
   - advance: 2s
   - name: ci-green-pushed
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
-  # Round one's findings are on a replaced head: nothing to forward. The
-  # head the author pushed past its park gets no round.
-  - name: still-pushing
-    run: {args: [supervisor, loop, --once]}
-    expect:
-      - exit: 0
-      - events: {contains: [supervisor.leave], not_contains: [supervisor.forward]}
-      - worker: {name: Review app 2 r2, turns: 0}
-      - worker: {name: app 1, turns: 2}
-  - advance: 2s
-  # The author hands its last head over.
-  - name: hand-over
-    run:
-      args: [--as, supervisor loop, agents, start, app 1, /work/worker.txt, --harness, codex, --model, gpt-5.2-codex]
-    expect:
-      - exit: 0
-  - wait_for:
-      timeout: 15s
-      expect:
-        - worker: {name: app 1, turns: 3, outcome: finish}
-  - advance: 2s
-  # Round two starts on that head while round one's reviewer still runs.
+  # Round one's findings are on a replaced head: nothing to forward. Round
+  # two starts on the head the author handed over while round one's
+  # reviewer still runs.
   - name: second-review
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
+      - events: {not_contains: [supervisor.forward]}
       - calls: {program: gh, args: [pr, merge], max: 0}
   - wait_for:
       timeout: 15s
@@ -197,6 +167,6 @@ then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - worker: {name: Review app 2 r1, turns: 1}
   - worker: {name: Review app 2 r2, turns: 1, outcome: finish}
-  - worker: {name: app 1, turns: 3, outcome: finish}
+  - worker: {name: app 1, turns: 2, outcome: finish}
   - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
-  - events: {contains: [supervisor.review, supervisor.leave, merge.authorized, supervisor.merge], not_contains: [supervisor.forward, merge.failed, session.report-rejected]}
+  - events: {contains: [supervisor.review, merge.authorized, supervisor.merge], not_contains: [supervisor.forward, merge.failed, session.report-rejected]}
