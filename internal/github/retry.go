@@ -127,6 +127,13 @@ func Retrying(gh GH, backoff time.Duration) GH {
 	}
 }
 
+// Transient says whether err is a read's failure Retrying asks again: a
+// 5xx, no answer in time, a killed gh, an empty or a cut-off body. The read
+// returned it once its tries were spent, so GitHub kept failing it.
+func Transient(err error) bool {
+	return err != nil && (errors.Is(err, errNoBody) || transient(nil, nil, err) != "")
+}
+
 // orNoBody is err, errNoBody for none.
 func orNoBody(err error) error {
 	if err == nil {

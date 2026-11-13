@@ -1374,6 +1374,18 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			l.ClearSaid("flow waits")
 		}
 	}()
+	// Every pass measures the pull watch, wherever it ends: a watch that
+	// stopped reading is what holds the passes' reviews and merges.
+	defer func() {
+		if l.DryRun || ctx.Err() != nil {
+			return
+		}
+		if err := l.CheckPullStall(); err != nil {
+			l.SayOnce("pull stall", "SUPERVISOR STALL alarm for the pull watch failed: %v", err)
+		} else {
+			l.ClearSaid("pull stall")
+		}
+	}()
 	l.LifecyclePhase("reload configuration")
 	l.ReloadConfig()
 	a := l.Host.SnapshotAtNow()
