@@ -1,0 +1,49 @@
+name: idle-desk-bounds-child-processes
+description: >
+  A long-running supervisor and its watch sample an idle desk for a minute.
+  Credential discovery is shared across their probes, and all child command
+  starts together stay below 100, including the cold start. Repeated auth
+  helpers previously consumed that budget on their own.
+issue: https://github.com/giantswarm/beekeeper/issues/3984
+flow: regression
+tags: [regression, performance, loop, budget]
+timeout: 90s
+
+given:
+  clock:
+    start: "2026-11-13T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 2s, releaseEvery: 24h, workerBrief: ""}
+      watch: {interval: 2s}
+  github:
+    repositories:
+      - name: example/app
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 20s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: minute
+    advance: {by: 1m, step: 2s, quiet: 200ms}
+    expect:
+      - process: {name: loop, running: true}
+  - stop: loop
+
+then:
+  - calls: {max: 100}
+  - calls: {program: gh, args: [auth, token], min: 1, max: 1}
+  - calls: {program: devctl, args: [auth, status], min: 1, max: 2}

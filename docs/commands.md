@@ -327,6 +327,10 @@ Read-only per-owner GraphQL probe: prints each resolved repository and its owner
 
 ### `beekeeper budget`
 
+Long-running processes acquire each GitHub credential once and keep it in memory. HTTP 401
+invalidates that identity; failed or unavailable providers retry at most once per minute. Network
+failures and rate limits do not rerun credential helpers. Tokens are never saved in desk state.
+
 The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), the
 GraphQL limit from a real `rateLimit` query (one point, read again after `merge.budgetFresh`), a row
 each for the code-search and search limits from `/rate_limit` (free) with remaining, limit and

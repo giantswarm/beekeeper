@@ -3,6 +3,8 @@ package worktrees
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +76,9 @@ func TestRemoteStatusUsesCurrentPublicationAndRequiresBranchHistory(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			git := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if args[0] == "rev-list" {
+					return []byte("work\n"), nil
+				}
 				if args[0] == "merge-base" {
 					return nil, errors.New("not an ancestor")
 				}
@@ -85,6 +90,47 @@ func TestRemoteStatusUsesCurrentPublicationAndRequiresBranchHistory(t *testing.T
 			gone, published, err := RemoteStatus(context.Background(), git, Tree{Branch: automaticFeature, Head: "work", Pushed: tc.tracked}, tc.hadPull)
 			if gone != tc.wantGone || published != tc.wantPublished || (err != nil) != (tc.err != nil) {
 				t.Fatalf("gone=%v published=%v err=%v", gone, published, err)
+			}
+		})
+	}
+}
+
+// Hundreds of remote branches must not become hundreds of ancestry processes
+// for each retained worktree. Both published and unpublished heads are bounded.
+func TestRemoteStatusForkBudget(t *testing.T) {
+	for _, published := range []bool{false, true} {
+		t.Run(fmt.Sprint(published), func(t *testing.T) {
+			var refs strings.Builder
+			for i := range 323 {
+				fmt.Fprintf(&refs, "%040x refs/heads/branch-%d\n", i+1, i)
+			}
+			calls := 0
+			git := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				calls++
+				switch args[0] {
+				case "ls-remote":
+					return []byte(refs.String()), nil
+				case "merge-base":
+					if published {
+						return nil, nil
+					}
+					return nil, errors.New("not an ancestor")
+				case "rev-list":
+					if published {
+						return nil, nil
+					}
+					return []byte("local-head\n"), nil
+				default:
+					t.Fatalf("unexpected git: %v", args)
+					return nil, nil
+				}
+			}
+			gone, got, err := RemoteStatus(t.Context(), git, Tree{Head: "local-head", Branch: "work", Pushed: "work"}, true)
+			if err != nil || !gone || got != published {
+				t.Fatalf("gone=%t published=%t err=%v", gone, got, err)
+			}
+			if calls > 2 {
+				t.Fatalf("one worktree forked %d git processes; budget is 2", calls)
 			}
 		})
 	}

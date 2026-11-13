@@ -415,6 +415,15 @@ func (a *app) trimWorktrees(dryRun bool, read func() (worktreeMachine, error)) w
 		runner := remotebuild.Runner{StateDir: a.cfg.StateDir, Stdout: a.out}
 		m.retire = runner.Sweep
 	}
+	if m.automatic {
+		cache := worktrees.PublicationCache{}
+		_, err := a.store.ReadFile("worktree-publication.json", &cache)
+		if err != nil || cache == nil || len(cache) > 4096 {
+			cache = worktrees.PublicationCache{}
+		}
+		m.git = cache.Wrap(m.git)
+		defer func() { _ = a.store.WriteFile("worktree-publication.json", cache) }()
+	}
 	r.trim(ctx, m)
 	if !dryRun && (r.acted() || len(r.failed) > 0) {
 		_ = a.store.Log(event(watchParty, worktreesVerb, "%s\n%s", r, strings.Join(r.paths(), "\n")))
@@ -490,6 +499,12 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if p, ok := pulls[github.Head{Repo: t.Repo, Branch: t.HeadBranch()}]; ok {
 			pull = &p
 		}
+		harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
+		if m.automatic && (t.Locked || pull == nil && !harness && (t.Pushed == "" || t.Pushed != t.HeadBranch())) {
+			v := worktrees.AutomaticPressure(t, pull, false, harness, false, false, m.now, m.pressure)
+			r.kept[v.Kept]++
+			continue
+		}
 		if m.automatic && pull != nil && (pull.State == github.Open || !m.pressure && m.now.Sub(pull.ClosedAt) < worktrees.Grace) {
 			v := worktrees.Automatic(t, pull, false, false, false, false, m.now)
 			r.kept[v.Kept]++
@@ -498,7 +513,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if pull != nil && pull.State == github.Merged {
 			finished = append(finished, t.Dir)
 		}
-		knownPushed := pull != nil && pushed(ctx, m.git, t, pull.HeadOid)
+		knownPushed := !m.automatic && pull != nil && pushed(ctx, m.git, t, pull.HeadOid)
 		v := worktrees.Decide(t, pull, false, knownPushed, m.now)
 		if m.automatic {
 			gone := false
@@ -516,7 +531,6 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 					knownPushed = err == nil
 				}
 			}
-			harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
 			v = worktrees.AutomaticPressure(t, pull, gone, harness, live.Holds(t.Dir), knownPushed, m.now, m.pressure)
 		}
 		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {

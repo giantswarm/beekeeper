@@ -52,6 +52,10 @@ does. When the running release's own run does not pass either, the host is judge
 the candidate: the update is refused and retried later, the release is never skipped and
 probation stays pending.
 
+Before installation, the candidate also runs its isolated workflow fixture through
+`self-update --installation-probe`, without the live configuration. This proves a reviewed merge
+against a scratch origin. Recovery never repeats that fixture or its GitHub searches.
+
 ## Automatic recovery
 
 An update launches a recovery controller before it replaces the binary, so a
@@ -68,7 +72,7 @@ either binary starts it again after a reboot. `Elapsed` counts evaluations, not
 wall-clock time: a machine that slept proves nothing and fails nothing meanwhile.
 
 - Three consecutive same-reason merge or start failures of this candidate: Roll back at once
-- Three consecutive failed isolated workflow probes: Roll back at once
+- Three consecutive failed executable probes: Roll back at once
 - A machine whose loop ran lately, no heartbeat from the candidate's loop 10 minutes after that loop
   started (the old loop hands over only at its next quiet pass; one that never hands over is judged
   at the window's end): Roll back
@@ -83,16 +87,14 @@ existing heartbeat format. A blocked read stops reporting progress; no backgroun
 keepalive or longer probation window masks a stalled reader. Planning eligibility
 remains unknown until the planner completes its observation.
 
-The probe needs no backlog, account or network, so an idle desk is judged too. It
-drives the candidate through real `supervisor loop --once` passes against a scratch
-origin and a fixture GitHub played by the candidate's own bytes, and proves the merge
-in the origin. It repeats every five minutes after a pass, and at once after a
-failure or inconclusive run. A probe that cannot be built is inconclusive and
-clears the current pass while retaining prior pass history, so a candidate cannot
-promote on a stale probe pass. A counted probe failure retains a bounded, single-line cause in the installation
+The recovery probe runs just the installed executable's `version` command, without a fixture,
+supervisor or GitHub child process. It repeats every five minutes after a pass, and on the next
+minute after a failure. Live heartbeat and failure-streak checks still run every minute.
+The controller is bound to one candidate and installation time: a replacement ends it, and a
+rollback leaves only notification and process restart work, with no further probes.
+A counted probe failure retains a bounded, single-line cause in the installation
 journal and includes it in the rollback notification and quarantine reason. A
-passing probe clears that cause. Older journals without the field keep their
-original generic failure wording. This diagnostic is supplied by the controller,
+passing probe clears that cause. This diagnostic is supplied by the controller,
 so updating a candidate alone does not upgrade a retained controller.
 
 A failed or timed-out candidate probe is repeated on
