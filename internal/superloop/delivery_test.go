@@ -107,6 +107,34 @@ func TestDeliveryLifecycle(t *testing.T) {
 		})
 	}
 }
+
+// A head its author moved past a running round's ends that round: the
+// delivery is implementing until the author parks on the new head, then
+// queued for its review.
+// https://github.com/giantswarm/beekeeper/issues/3843
+func TestDeliveryOfAHeadMovedDuringItsRound(t *testing.T) {
+	in := deliveryInput()
+	in.Workers[0].ReviewRequested = true
+	in.Workers[0].ParkedAt = in.Now
+	p := in.Pulls[deliveryPR]
+	p.Green = true
+	in.Pulls[deliveryPR] = p
+	in.Taken = []Taken{{Kind: KindReview, Ref: deliveryPR, Key: reviewKey(deliveryPR, deliveryFirstHead), At: in.Now}}
+	step := func(want string) {
+		t.Helper()
+		in.Now = in.Now.Add(time.Minute)
+		if got := Deliveries(in, nil); len(got) != 1 || got[0].Step != want {
+			t.Fatalf("got %+v, want %s", got, want)
+		}
+	}
+	step(state.DeliveryReviewing)
+	p.Head = "bbb"
+	in.Pulls[deliveryPR] = p
+	step(state.DeliveryImplementing)
+	in.Workers[0].ParkedHead = "bbb"
+	step(state.DeliveryReviewQueued)
+}
+
 func TestDeliveryBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

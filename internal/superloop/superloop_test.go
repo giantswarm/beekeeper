@@ -1143,6 +1143,10 @@ func TestAnOldParkOfTheCurrentHeadGetsItsReview(t *testing.T) {
 	}
 }
 
+// unhandedKey is the key of the leave line of a head pr's author pushed past
+// its park.
+func unhandedKey(head string) string { return leaveKey(pr, "unhanded@"+short(head)) }
+
 // A park hands over the head it verified, and a head that only brings the
 // base into it: a head its author pushed past the park is still being worked
 // on, so no review round and no merge go starts on it, only one leave line,
@@ -1151,7 +1155,7 @@ func TestAnOldParkOfTheCurrentHeadGetsItsReview(t *testing.T) {
 func TestAParkHandsOverOnlyTheHeadItVerified(t *testing.T) {
 	in := Input{Workers: parkedOn(head1, t0), Pulls: pull(head2, true), Rounds: 1}
 	l := only(t, Plan(in), KindLeave)
-	if l.Key != leaveKey(pr, leftUnhanded(head2)) || l.Agent != worker || !strings.Contains(l.Message, "still works on it") {
+	if l.Key != unhandedKey(head2) || l.Agent != worker || !strings.Contains(l.Message, "still works on it") {
 		t.Errorf("leave = %+v", l)
 	}
 	in.Taken = taken(t, t1, l)
@@ -1177,7 +1181,7 @@ func TestAParkHandsOverOnlyTheHeadItVerified(t *testing.T) {
 	}
 	for _, rounds := range []int{1, 2} {
 		in = Input{Workers: parkedOn(head2, t0.Add(time.Hour)), Pulls: pull(head3, true, changes), Rounds: rounds, Taken: taken(t, t0, acts...)}
-		if l := only(t, Plan(in), KindLeave); l.Key != leaveKey(pr, leftUnhanded(head3)) {
+		if l := only(t, Plan(in), KindLeave); l.Key != unhandedKey(head3) {
 			t.Errorf("rounds %d: leave = %+v", rounds, l)
 		}
 		in.Workers = parkedOn(head3, t0.Add(2*time.Hour))
@@ -1188,7 +1192,7 @@ func TestAParkHandsOverOnlyTheHeadItVerified(t *testing.T) {
 	// An approved head the worker pushed past after parking again: the leave.
 	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
 	in = Input{Workers: parkedOn(head2, t0.Add(time.Hour)), Pulls: pull(head3, true, approved), Rounds: 1, Taken: taken(t, t0, acts[0])}
-	if l := only(t, Plan(in), KindLeave); l.Key != leaveKey(pr, leftUnhanded(head3)) {
+	if l := only(t, Plan(in), KindLeave); l.Key != unhandedKey(head3) {
 		t.Errorf("past an approval: leave = %+v", l)
 	}
 }
@@ -1225,6 +1229,11 @@ func TestAReviewOfAReplacedHeadIsNoVerdict(t *testing.T) {
 	in = Input{Workers: append(parkedOn(head1, t0.Add(-time.Minute)), reviewer), Pulls: pull(head3, true, stale), Rounds: 1, Taken: tk}
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("a head not handed over got %+v", got)
+	}
+	// Parked since the round, then pushed on: the leave says so.
+	in = Input{Workers: append(parkedOn(head2, t0.Add(30*time.Second)), reviewer), Pulls: pull(head3, true, stale), Rounds: 1, Taken: tk}
+	if l := only(t, Plan(in), KindLeave); l.Key != unhandedKey(head3) {
+		t.Errorf("pushed past the park: leave = %+v", l)
 	}
 	// Posted before the push, the same review is the round's verdict.
 	posted := stale

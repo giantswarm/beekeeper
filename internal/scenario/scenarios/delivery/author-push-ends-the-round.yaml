@@ -1,0 +1,202 @@
+name: author-push-ends-the-round
+description: >
+  The author pushes while its desk review runs. Round one starts on the head
+  the worker parked on. While round one's reviewer still works, the worker's
+  next session pushes a fix, parks on it and pushes once more. The reviewer
+  then posts its findings on the head it was given, which is no longer the
+  pull request's, and keeps running. The loop forwards none of them: the
+  round ended when the head moved. Nor does it start a round on the head the
+  author pushed past its park; it says why in a leave line. Once the author
+  parks on its last head, round two starts there without waiting for round
+  one's reviewer, and round two's approval gets the go and the merge.
+issue: https://github.com/giantswarm/beekeeper/issues/3843
+flow: delivery
+tags: [delivery, loop, review]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Headless workers: a continuation is a fresh session's next turn.
+      # Round one's reviewer keeps its slot while round two runs.
+      capacity:
+        providers: {codex: {ceiling: 3}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+          # The next session pushes a fix while round one runs, parks on
+          # it, and pushes on: the author still works on the pull request.
+          - steps:
+              - git: [fetch, --quiet, origin]
+                dir: app
+              - write: {path: app/fix.txt, content: "the worker's fix\n"}
+              - git: [add, fix.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "fix: the worker's fix"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+              - write: {path: app/more.txt, content: "more of the worker's fix\n"}
+              - git: [add, more.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "fix: more of the worker's fix"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+          # The session after it hands its last head over.
+          - steps:
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      # Round one's reviewer posts its findings on the head it was given
+      # once the author has pushed past it, and runs on.
+      - name: Review app 2 r1
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - run: [sh, -c, 'while :; do r=$(git ls-remote https://github.com/example/app.git refs/heads/app-1) || exit 1; case "$r" in ${head}*) ;; *) exit 0 ;; esac; done']
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): changes requested\nHead reviewed: `${head}`\n\nchange.txt:1: the change is stale → write it anew"]
+            outcome: hang
+      - name: Review app 2 r2
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review], not_contains: [session.report-rejected]}
+  # Round one's reviewer has read the head it was given.
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: Review app 2 r1, turns: 1, running: true}
+        - calls: {program: gh, args: [pr, view, '\.headRefOid'], min: 1}
+  - advance: 2s
+  # The author's next session pushes while round one runs.
+  - name: push
+    run:
+      args: [--as, supervisor loop, agents, start, app 1, /work/worker.txt, --harness, codex, --model, gpt-5.2-codex]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 2, outcome: finish}
+        - origin: {repository: example/app, branch: app-1, ahead: 3}
+        - calls: {program: gh, args: [pr, review], min: 1}
+  - advance: 2s
+  - name: ci-green-pushed
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  # Round one's findings are on a replaced head: nothing to forward. The
+  # head the author pushed past its park gets no round.
+  - name: still-pushing
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.leave], not_contains: [supervisor.forward]}
+      - worker: {name: Review app 2 r2, turns: 0}
+      - worker: {name: app 1, turns: 2}
+  - advance: 2s
+  # The author hands its last head over.
+  - name: hand-over
+    run:
+      args: [--as, supervisor loop, agents, start, app 1, /work/worker.txt, --harness, codex, --model, gpt-5.2-codex]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 3, outcome: finish}
+  - advance: 2s
+  # Round two starts on that head while round one's reviewer still runs.
+  - name: second-review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - calls: {program: gh, args: [pr, merge], max: 0}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: Review app 2 r2, outcome: finish}
+  - advance: 2s
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged}}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - worker: {name: Review app 2 r1, turns: 1}
+  - worker: {name: Review app 2 r2, turns: 1, outcome: finish}
+  - worker: {name: app 1, turns: 3, outcome: finish}
+  - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
+  - events: {contains: [supervisor.review, supervisor.leave, merge.authorized, supervisor.merge], not_contains: [supervisor.forward, merge.failed, session.report-rejected]}

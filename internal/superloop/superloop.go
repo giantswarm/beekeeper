@@ -403,14 +403,18 @@ func (in Input) baseMerged(p Pull, approved string) bool {
 	return in.BaseMerged != nil && approved != "" && !sameHead(approved, p.Head) && in.BaseMerged(p, approved)
 }
 
-// replaced reports whether r, a review of p, judged a head its author had
+// Replaced reports whether r, a review of p, judged a head its author had
 // replaced when r came: GitHub attached r to another head than the one its
 // "Head reviewed:" line names, and p's head carries a change past the judged
 // one. Its round ended when the head moved, without a verdict. A head that
-// only brings the base into the judged one is still that head.
-func (in Input) replaced(p Pull, r Review) bool {
-	return r.Verdict != "" && r.Commit != "" && r.Head != "" && !sameHead(r.Commit, r.Head) && !sameHead(r.Head, p.Head) && !in.baseMerged(p, r.Head)
+// only brings the base into the judged one (baseMerged; nil: none does) is
+// still that head.
+func Replaced(p Pull, r Review, baseMerged func(Pull, string) bool) bool {
+	return r.Verdict != "" && r.Commit != "" && r.Head != "" && !sameHead(r.Commit, r.Head) && !sameHead(r.Head, p.Head) && (baseMerged == nil || !baseMerged(p, r.Head))
 }
+
+// replaced is Replaced with the input's BaseMerged.
+func (in Input) replaced(p Pull, r Review) bool { return Replaced(p, r, in.BaseMerged) }
 
 // markReplaced marks the reviews of in.Pulls that judged a replaced head
 // (replaced), on copies: the caller's pulls stay as they are.
@@ -1462,7 +1466,17 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return strings.EqualFold(o.Name, reviewer)
 		})
 		same := sameHead(p.Head, last.head)
-		if !p.Green || !isParked || !requested {
+		if !p.Green || !isParked {
+			return
+		}
+		if !requested {
+			// A park since the round opened whose head the author pushed
+			// past: it still works on the pull request. A park from
+			// before the round (a reviewer's own published fix moved the
+			// head) is the round's, which runs on.
+			if !same && w.ParkedAt.After(last.at) {
+				unhanded()
+			}
 			return
 		}
 		// A head its author moved past the round's with a change of its

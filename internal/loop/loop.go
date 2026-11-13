@@ -3661,9 +3661,11 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 		if p.Head != act.Head || !p.Green {
 			return "", Cmd.Refused("review head moved or CI is not green")
 		}
+		// A review of a head its author replaced before it came ended its
+		// round without a verdict: its findings are no last round's.
 		previous := ""
 		for _, review := range p.Reviews {
-			if review.Verdict != "" {
+			if review.Verdict != "" && !superloop.Replaced(p, review, func(pull superloop.Pull, head string) bool { return l.baseMerged(ctx, pull, head) }) {
 				previous = review.Body
 			}
 		}
