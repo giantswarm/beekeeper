@@ -1099,3 +1099,41 @@ func TestUpdateUnprovenHealthCanRetry(t *testing.T) {
 		t.Fatalf("retry failed to retain healthy candidate: %+v", j)
 	}
 }
+
+// TestInstallFailureNamesTheJournalOnlyWhenItHoldsSomething checks both
+// wordings of a failed update. A refusal before the replacement left the
+// journal as it was: it says nothing was replaced and a retry is safe. A
+// candidate whose watched probation is pending is the journal's: the failure
+// names the journal's path.
+func TestInstallFailureNamesTheJournalOnlyWhenItHoldsSomething(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, content := installed(t)
+	refused := WithOptions(context.Background(), Options{Canary: func(context.Context, string, string) error {
+		return errors.New("candidate dry-run unavailable (retryable): its pass failed")
+	}})
+	_, err := Run(refused, io.Discard, false)
+	if err == nil || !strings.Contains(err.Error(), "failed, nothing was replaced (a retry is safe): candidate dry-run unavailable (retryable)") ||
+		strings.Contains(err.Error(), "recovery journal") {
+		t.Fatalf("refused update: %v", err)
+	}
+	assertUnchanged(t, exe, content)
+
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	if err := CompleteProbation(context.Background(), exe, latestV); err != nil {
+		t.Fatal(err)
+	}
+	acceptRelease(t, thirdV, thirdBinary, latestV)
+	watched := WithOptions(context.Background(), Options{Recovery: func(context.Context, Binary, string, string) error { return nil }})
+	if _, err := InstallVersion(watched, io.Discard, thirdV); err != nil {
+		t.Fatal(err)
+	}
+	acceptRelease(t, latestV, newBinary, thirdV)
+	_, err = InstallVersion(context.Background(), io.Discard, latestV)
+	want := "failed (inspect the recovery journal " + filepath.Join(exe+".update", "journal.json") + " before retrying): " + ErrProbationWatched.Error()
+	if !errors.Is(err, ErrProbationWatched) || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "nothing was replaced") {
+		t.Fatalf("watched update = %v, want %q", err, want)
+	}
+	assertUnchanged(t, exe, []byte(thirdBinary))
+}

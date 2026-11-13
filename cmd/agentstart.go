@@ -2119,7 +2119,9 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 // serving an issue (owner/repo#n, briefIssue) is the session's serve record
 // from the start, so board next never offers that item again. The loop's
 // fresh continuation of a parked worker continues that task's delivery
-// (state.ContinueDelivery) rather than starting a new one.
+// (state.ContinueDelivery) rather than starting a new one. A review start
+// serves the pull request it reviews and starts no delivery: a reviewer
+// never owns the delivery of what it reviews.
 func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
@@ -2138,6 +2140,9 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 					return o.Session.Is(s.Party) && strings.EqualFold(o.Issue, iss)
 				}) {
 					st.Records = append(st.Records, state.Record{Session: s.Party, Issue: iss, By: s.By, At: s.At})
+					if s.Kind == capacity.TaskKindReview {
+						continue
+					}
 					if continued != nil {
 						st.ContinueDelivery(iss, ag.Name, parkedPull(continued), s.At)
 					} else {

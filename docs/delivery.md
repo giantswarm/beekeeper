@@ -166,7 +166,11 @@ request seeds, abandoned ended-worker deliveries, closed issues or pull
 requests, and manual `delivery drop` commands. Unexplained legacy terminal
 events are counted as dropped, never inferred as merged. An independent
 reviewer reports its review without claiming that the implementation delivery
-is complete.
+is complete. A review session owns no delivery, whoever started it (the loop,
+`agents start --review` or `emergency start --review`) and whatever it reviews,
+a pull request without an issue among them: its start serves the pull request
+and opens no delivery, and its `agents idle --done` needs no merge, while a
+`--no-change` or `--blocked` of it ends no delivery.
 
 An unfinished headless turn receives its task again, with the valid endings,
 up to three times per assignment. When the third continuation also ends
