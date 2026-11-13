@@ -687,7 +687,7 @@ work, which takes no choice on a self-hosted provider.`,
 							return err
 						}
 					}
-					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
+					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), pulls: briefServedPulls(brief, issues), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
 					if byTimer {
 						if timerLine == "" {
 							var err error
@@ -894,6 +894,9 @@ type agentStart struct {
 	// serves is the issue the task works (briefIssue), recorded as the
 	// session's serve record with the task; empty: none.
 	serves string
+	// pulls are those of serves the brief names as pull requests
+	// (briefServedPulls): their deliveries hold them as pulls.
+	pulls []string
 	// replaces is the running session a hand-over ends: its roster entry,
 	// task and session record go to the new session.
 	replaces *state.Party
@@ -1046,7 +1049,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live, sp.pulls...)
 		if err != nil {
 			return nil, err
 		}
@@ -2119,8 +2122,12 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 // serving an issue (owner/repo#n, briefIssue) is the session's serve record
 // from the start, so board next never offers that item again. The loop's
 // fresh continuation of a parked worker continues that task's delivery
-// (state.ContinueDelivery) rather than starting a new one.
-func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+// (state.ContinueDelivery) rather than starting a new one. pulls are the
+// served refs that are pull requests (briefServedPulls): a worker's task of
+// a pull request has that pull request in its delivery's pulls
+// (state.PullDelivery), so its merge proves the task's outcome. A review
+// start works no pull request; it reviews one.
+func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool, pulls ...string) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
 		return registration{}, err
@@ -2142,6 +2149,9 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 						st.ContinueDelivery(iss, ag.Name, parkedPull(continued), s.At)
 					} else {
 						st.StartDelivery(iss, ag.Name, "", s.At)
+					}
+					if s.Kind != capacity.TaskKindReview && slices.ContainsFunc(pulls, func(p string) bool { return strings.EqualFold(p, iss) }) {
+						st.PullDelivery(iss)
 					}
 				}
 			}
@@ -2297,6 +2307,16 @@ func briefPulls(brief string) []string {
 		}
 	}
 	return out
+}
+
+// briefServedPulls is those of serves, the refs a start serves (briefIssues),
+// that brief names by a pull request URL: an issue and a pull request of a
+// repository never share a number, so such a ref is a pull request.
+func briefServedPulls(brief string, serves []string) []string {
+	named := briefPulls(brief)
+	return slices.DeleteFunc(slices.Clone(serves), func(ref string) bool {
+		return !slices.ContainsFunc(named, func(p string) bool { return strings.EqualFold(p, ref) })
+	})
 }
 
 // briefContextIntro matches a line prefix that cites a related or follow-up
@@ -2607,9 +2627,9 @@ func unitEnded(ctx context.Context, unit string) bool {
 	return s == "inactive" || s == "failed"
 }
 
-func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool, pulls ...string) (registration, error) {
 	s.Kind = cmp.Or(s.Kind, a.selectionKind)
-	reg, err := recordStart(st, s, task, serves, live)
+	reg, err := recordStart(st, s, task, serves, live, pulls...)
 	if err != nil {
 		return reg, err
 	}

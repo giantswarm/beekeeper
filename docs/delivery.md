@@ -141,7 +141,12 @@ its release step. A worker finishes with one of these commands:
   one) continues that task's delivery: a delivery still active or ended merged
   keeps its pull requests and outcome, and the pull request the worker parked
   on joins them, also when it only says "Part of" the issue. Its own
-  `--done` then rests on that merge without a park of its own.
+  `--done` then rests on that merge without a park of its own. A worker whose
+  brief names its task by a pull request URL (no issue) works that pull
+  request: its delivery holds the pull request from the start, as the loop's
+  observation of an issue-less pull request has it, so its merge proves the
+  task although the loop's sweep of the desk's open pull requests never read
+  it (another author's, or merged before a sweep).
 - `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
   explicitly explain an already fixed issue, an operation with its proof, or
   an answer recorded on the issue. This counts as no change, not a release.

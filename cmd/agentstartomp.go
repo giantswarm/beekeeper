@@ -105,7 +105,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		reg, err = a.recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok }, sp.pulls...)
 		if err != nil {
 			return nil, err
 		}

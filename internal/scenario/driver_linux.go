@@ -323,6 +323,15 @@ func (d *driver) setup(ctx context.Context) error {
 	if err := os.WriteFile(filepath.Join(workDir, "worker.txt"), []byte("Work {{.URL}}\n"), 0o600); err != nil {
 		return err
 	}
+	for _, f := range d.s.Given.Files {
+		path := filepath.Join(workDir, f.Path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(f.Content), 0o600); err != nil {
+			return fmt.Errorf("given.files %s: %w", f.Path, err)
+		}
+	}
 	for _, name := range repos {
 		if err := origin(ctx, name); err != nil {
 			return fmt.Errorf("origin %s: %w", name, err)

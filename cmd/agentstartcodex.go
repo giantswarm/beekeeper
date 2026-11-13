@@ -150,7 +150,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live, sp.pulls...)
 		if err != nil {
 			return nil, err
 		}

@@ -120,8 +120,9 @@ fail on the fix's parent (`go-control-history/`). To run the step on a branch:
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
    `given.repositories` and of `given.github`'s repositories under
-   `/work/origins/<owner>/<name>.git`, and a root for each of
-   `given.hosts` (see [Execution hosts](#execution-hosts)).
+   `/work/origins/<owner>/<name>.git`, a root for each of
+   `given.hosts` (see [Execution hosts](#execution-hosts)), and each of
+   `given.files` at its path under `/work`.
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -170,6 +171,9 @@ given:
   clock:
     start: "2026-11-12T09:00:00Z"   # the world's time at the start; default now
   tools: [go, golangci-lint]         # further programs on PATH, answered by given.calls only
+  files:                             # written under /work before the desk starts
+    - path: briefs/fix.md            # relative to /work: a brief a start by hand reads
+      content: "Fix https://github.com/example/app/pull/2\n"
 
 when:
   - name: next
