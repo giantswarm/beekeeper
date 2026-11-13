@@ -580,6 +580,12 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if err != nil {
 			return "", nil, err
 		}
+		if v.Finished && strings.TrimSpace(v.NoChange) != "" {
+			// Before clearRecords: the serve records name the task's issues.
+			closed, failed := a.closeNoChangeIssues(ctx, st, *ag, me, v.NoChange)
+			outcomes = append(outcomes, closed...)
+			problems = append(problems, failed...)
+		}
 		problems = freshWorkerProblems(ag, problems)
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)

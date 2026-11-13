@@ -145,6 +145,11 @@ its release step. A worker finishes with one of these commands:
 - `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
   explicitly explain an already fixed issue, an operation with its proof, or
   an answer recorded on the issue. This counts as no change, not a release.
+  For a worker on an SSH execution host, which can neither close the issue nor
+  move its board item, the coordinator closes the open issues its task served
+  (`agents.no-change-closed`), with the reason as the comment, so refill does
+  not offer them again. A failed close leaves the issue open and reaches the
+  guide as one of the report's problems.
 - `agents idle --blocked --by <issue URL|#note>`: the blocker must be open.
   An issue dependency moves the item to Blocked / Waiting; a note holds its
   board status until the note is answered. This ends the worker assignment,
