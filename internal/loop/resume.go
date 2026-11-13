@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -202,7 +201,7 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	}
 	var brief string
 	if review != nil {
-		brief = filepath.Join(l.Host.Store().Dir(), "supervisor-loop", briefName.ReplaceAllString(review.key, "-")+".md")
+		brief = l.briefPath(review.key)
 		if _, err := os.Stat(brief); err != nil {
 			return fmt.Errorf("the brief of review round %d: %w", review.round, err)
 		}
