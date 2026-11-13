@@ -21,14 +21,14 @@ var core = []string{"cmd", "internal", "pkg"}
 
 // harnesses are the test harnesses under internal/: they start the real
 // binary, its fakes and Go itself on purpose, and none of their code runs in
-// a desk's processes but loopworkflow's fixture servers, which retire with
-// https://github.com/giantswarm/beekeeper/issues/3797. internal/proc is the
-// seam itself.
+// a desk's processes. internal/proc is the seam itself. internal/loopworkflow
+// is core, not a harness: self-update's canary and the candidate and
+// recovery probes run it on a desk, and the release binary serves its
+// fixtures.
 var harnesses = []string{
 	"internal/proc",
 	"internal/scenario",
 	"internal/testenv",
-	"internal/loopworkflow",
 	"internal/perfsuite",
 	"internal/testcontrol",
 }

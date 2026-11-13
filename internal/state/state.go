@@ -583,6 +583,9 @@ type Timer struct {
 	Checked    time.Time `json:"checked,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
 	Unreadable bool      `json:"unreadable,omitempty"`
+	// Failing is the first of the checks in a row whose probe could not
+	// run: the guide was told of them once, and is told when it runs again.
+	Failing time.Time `json:"failing,omitzero"`
 	// Since is the first check that found the condition not holding; Stuck
 	// is set once the watch said it has not held for a day.
 	Since time.Time `json:"since,omitzero"`
@@ -1491,6 +1494,11 @@ type HostPin struct {
 	PolicyDigest string            `json:"policyDigest,omitempty"`
 	Tools        map[string]string `json:"tools,omitempty"`
 	PinnedAt     time.Time         `json:"pinnedAt,omitzero"`
+	// Configured is the digest the agents.hosts entry named when the host
+	// was last pinned, empty for none. An entry that names another digest
+	// than this and PolicyDigest is a changed host policy: the host is due
+	// for an update, as for a new release.
+	Configured string `json:"configured,omitempty"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
 	// UpdateError is a release lookup failure before contacting the host.

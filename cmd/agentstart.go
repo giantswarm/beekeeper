@@ -216,8 +216,9 @@ A worker start requires --dir to name exactly one main repository checkout
 and --branch to name a new branch. Parent folders and linked worktrees are
 refused with the available checkout paths. The session starts in the checkout
 so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
-created from the freshly fetched origin default branch. A --review start
-instead requires a pull request URL in its brief and creates a detached
+created from the freshly fetched origin default branch, with origin/<branch>
+as the branch's upstream, so a push never goes to the default branch. A
+--review start instead requires a pull request URL in its brief and creates a detached
 <state>/worktrees/<repo>/review-<number>-<unique-id>. Old review worktrees
 are preserved; each review start gets its own detached checkout.
 A brief spanning repositories must be split into one task per repository.

@@ -1014,6 +1014,12 @@ beside a finding, it is refused (exit 3). beekeeper delivers them itself: both a
 supervisor to file and hand to a worker; a finding that names its issue's URL
 (`https://github.com/<owner>/<repo>/issues/<n>`) is filed already, and its line says so.
 
+`idle --done` (not `--blocked`) also retires the park of every other worker on the same task
+issue, the one its serve record or else its task names: that worker's task ends as done, its serve
+records and the timers that wake it go (`timer.done`), and an `agents.park-retired` event says so.
+Its wake would only start a session that finds the work done
+([Parking](worker-sessions.md#parking)).
+
 The supervisor loop logs unfiled findings intact in `supervisor.file`; `guide watch` delivers them
 once as `GUIDE PROBLEM` to file in their owning repositories, before the agent leaves the roster.
 These status reports create no decision notes and need no thread reference. Printed reports escape
@@ -1380,7 +1386,18 @@ keeps waiting; `timer list -v` says since when. A reference the watch cannot rea
 context, no access, no such kind or object) is one `TIMER UNREADABLE` line, again when the reason
 changes, and the timer keeps waiting; `timer list -v` shows what each timer's last check found,
 `timer check <id>` runs it now. `--until` ends the wait: the timer then fires as timed out, or with
-`--expire` closes unfired (`TIMER EXPIRED`).
+`--expire` closes unfired (`TIMER EXPIRED`), each saying whether the last check found the condition
+false or could not make it.
+
+Only a probe that ran and exits non-zero is "not yet". A probe that could not run says nothing of
+its condition: it exits 126 or 127 (a command not executable or not found) or 255 (ssh could not
+reach or log in to its host), its stderr says a host name did not resolve (`Could not resolve
+hostname`, `Name or service not known`, `no such host`, …), or it spends its 10 s budget. Such a
+check is a `TIMER UNREADABLE` line (`… could not run (<error>)`), and the guide hears of it once
+for the checks in a row that fail so: a `TIMER PROBE FAILED` report with the error, which its feed
+says as `GUIDE PROBLEM` and which the next clean check closes (`RECOVERED`). `timer list` shows such
+a probe's error and since when without `-v`, and so does a handover. Its `TIMER STUCK` line says its
+condition has not been seen to hold, not that it has not held.
 
 `--wake <agent>` wakes the agent with the timer's text (as `agents wake`; `TIMER WAKE FAILED` when
 it cannot), `--run "<command>"` runs a command, its output in `timers/<id>.log` of the state

@@ -18,8 +18,8 @@ import (
 // The builder of a scenario is the desk's run.remote without a cluster:
 //
 //	/work/builder/bin         the image's tool directory: the system's shell
-//	                          and coreutils, and the fake go and golangci-lint
-//	                          the scenario names
+//	                          and coreutils, and the fake go, golangci-lint
+//	                          and jq the scenario names
 //	/work/builder/kubeconfig  the kubeconfig the desk's run.remote names
 //	/work/runs, /work/src, …  the pod's /work, where the desk's own scripts
 //	                          keep a run's source, journal and exit code
@@ -295,7 +295,8 @@ func (w *World) kube(req request) reply {
 			var job kubeJob
 			_ = json.Unmarshal([]byte(w.jobs[jobName]), &job)
 			home := filepath.Join(BuilderRoot, "home")
-			env := []string{"PATH=" + filepath.Join(BuilderRoot, "bin"), "HOME=" + home, "LANG=C.UTF-8", builderEnv + "=1"}
+			env := []string{"PATH=" + filepath.Join(BuilderRoot, "bin"), "HOME=" + home, "LANG=C.UTF-8", builderEnv + "=1",
+				builderTestsCallEnv + "=" + strings.Join(w.opts.Builder.TestsCall, " ")}
 			if cs := job.Spec.Template.Spec.Containers; len(cs) > 0 {
 				for _, e := range cs[0].Env {
 					env = append(env, e.Name+"="+e.Value)
@@ -313,8 +314,20 @@ func inBuilder() bool { return os.Getenv(builderEnv) != "" }
 
 // The image's fake go. go install puts the fake of the tool it names into
 // GOBIN, as the real one puts the tool there; every build, vet and test
-// passes unless a given call of the scenario answers it.
+// passes unless a given call of the scenario answers it, or, for a test,
+// a program the repository's tests call (builder.testsCall) is not on the
+// pod's PATH.
 func builderGo(c *client) int {
+	if len(c.args) >= 1 && c.args[0] == "test" {
+		for _, program := range strings.Fields(os.Getenv(builderTestsCallEnv)) {
+			if _, err := exec.LookPath(program); err != nil {
+				// What go test prints for a test whose script calls a
+				// program the machine lacks.
+				fmt.Printf("--- FAIL: TestScript (0.00s)\n    script_test.go:21: verify step failed: exit status 127; bash: line 1: %s: command not found\nFAIL\nFAIL\texample.invalid/app\t0.002s\nFAIL\n", program)
+				return 1
+			}
+		}
+	}
 	if len(c.args) >= 2 && c.args[0] == "install" {
 		pkg, _, _ := strings.Cut(c.args[len(c.args)-1], "@")
 		tool := path.Base(pkg)
@@ -347,3 +360,7 @@ func builderLint(_ *client) int {
 	fmt.Println("0 issues.")
 	return 0
 }
+
+// The image's, or an installed, fake jq (gojq is the one a checker
+// installs): a test that calls it finds it; it prints nothing.
+func builderJQ(_ *client) int { return 0 }

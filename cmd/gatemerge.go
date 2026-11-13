@@ -410,8 +410,9 @@ type childRun struct {
 	held bool
 	// left says the follow reached its leave time while the run went on;
 	// cut that it left as its caller's timeout cut the connection
-	// (timedCaller).
-	left, cut bool
+	// (timedCaller), merged that it left at the merge, the run awaiting
+	// its release (leaveMerged).
+	left, cut, merged bool
 	// ended says the follow returned as its caller went away, for a run that
 	// ends with it (withCaller): its merge-child stops the command.
 	ended bool
@@ -483,7 +484,15 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 // (the gate's tool limit), its files in place for its merge-child and the
 // watch. sig, when given, hears the signals from before devctl started
 // (gateRun.followSignals); else the follow hears them from its start on.
-func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) (r childRun) {
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) childRun {
+	return followChildUntil(base, pid, offset, bin, hold, leave, false, withCaller, sig)
+}
+
+// followChildUntil is followChild that, with leaveMerged, also returns with
+// left and merged set once the run merged and awaits its release
+// (awaitsRelease): its merge-child confirms the release and records the run
+// without the caller (the gate's --until-merged).
+func followChildUntil(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, leaveMerged, withCaller bool, sig <-chan os.Signal) (r childRun) {
 	r.rc = guard.ExitNotFound
 	if sig == nil {
 		own := make(chan os.Signal, 1)
@@ -549,6 +558,10 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 		}
 		if !leave.IsZero() && !clk.Now().Before(leave) {
 			r.left = true
+			return r
+		}
+		if leaveMerged && awaitsRelease(base) {
+			r.left, r.merged = true, true
 			return r
 		}
 		select {

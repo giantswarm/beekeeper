@@ -771,46 +771,44 @@ func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
 	}
 }
 
-func TestParkRefusesMismatchedWaitTarget(t *testing.T) {
-	for _, tc := range []struct{ waits, hint string }{
-		{"waiting for the merge hold to lift", litOnHoldTarget},
-		{"merges are HELD for the release", "--on hold:<target>"},
-		{"the devctl release window", "--on hold:<target>"},
-		{"waiting for gate-run completion", "beekeeper gate runs"},
-		{"the gated run's outcome", "beekeeper gate runs"},
+// TestParkReasonMaySayAnything: --on alone says what a park waits on. A
+// park on a pull request whose reason speaks of a hold, something held, a
+// release window or a gate run is recorded on that pull request, by the
+// command and directly, and refuses nothing.
+func TestParkReasonMaySayAnything(t *testing.T) {
+	for _, waits := range []string{
+		"the editor's held-still source for the opening shot",
+		"waiting for the merge hold to lift",
+		"merges are HELD for the release",
+		"the devctl release window",
+		"waiting for gate-run completion",
+		"the gated run's outcome",
 	} {
-		t.Run(tc.waits, func(t *testing.T) {
-			w := parkingWatch(t, nil)
+		t.Run(waits, func(t *testing.T) {
 			for _, direct := range []bool{false, true} {
+				w := parkingWatch(t, map[string]string{refOne: github.Open})
 				var err error
 				if direct {
-					_, err = w.park(state.Party{Name: agentOne}, refOne, tc.waits)
+					_, err = w.park(state.Party{Name: agentOne}, refOne, waits)
 				} else {
-					err = park(t, w, "--on", refOne, tc.waits)
+					err = park(t, w, "--on", refOne, waits)
 				}
-				if err == nil || !strings.Contains(err.Error(), tc.hint) {
-					t.Fatalf("park: %v; want %s", err, tc.hint)
+				if err != nil {
+					t.Fatalf("direct %t: park refused: %v", direct, err)
 				}
-				if agentOf(t, w).Park != nil {
-					t.Fatal("refused park was recorded")
+				if p := agentOf(t, w).Park; p == nil || p.On != refOne || p.Waits != waits {
+					t.Fatalf("direct %t: park %+v, want on %s waiting for %q", direct, p, refOne, waits)
 				}
 			}
 		})
 	}
-	for _, waits := range []string{deskReviewWait, "waiting for this PR to merge", "the shareholder review"} {
-		if err := validateParkWait(refOne, waits); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, on := range []string{"", "#3", "hold merges"} {
-		if err := validateParkWait(on, "waiting for the hold or gate run"); err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
-func TestMergedPRDoesNotSettleMismatchedPark(t *testing.T) {
-	for _, waits := range []string{"the merge hold lifting", "gate run completion"} {
+// TestMergedPRSettlesAParkWhateverItsReason: the watch settles a park on a
+// pull request by that pull request, whatever its reason says, roster and
+// off-roster parks alike.
+func TestMergedPRSettlesAParkWhateverItsReason(t *testing.T) {
+	for _, waits := range []string{"the held-still source", "the merge hold lifting", "gate run completion"} {
 		t.Run(waits, func(t *testing.T) {
 			w := parkingWatch(t, nil)
 			old := refStates
@@ -823,7 +821,6 @@ func TestMergedPRDoesNotSettleMismatchedPark(t *testing.T) {
 				return out, nil
 			}
 			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-				// Both roster and off-roster parks may predate validation.
 				st.Agents[0].Park = &state.Park{On: refOne, Waits: waits, At: relayNow}
 				st.Parks = []state.Park{{By: state.Party{Name: "other-worker"}, On: refOne, Waits: waits, At: relayNow}}
 				return nil, nil
@@ -831,11 +828,18 @@ func TestMergedPRDoesNotSettleMismatchedPark(t *testing.T) {
 				t.Fatal(err)
 			}
 			w.pending(context.Background(), nil)
-			if out := w.out.(*bytes.Buffer).String(); strings.Contains(out, "AGENT RESUMABLE") {
-				t.Fatalf("PR merge settled an unrelated condition: %s", out)
+			if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, "AGENT RESUMABLE") {
+				t.Fatalf("the merge did not settle the park:\n%s", out)
 			}
-			if !agentOf(t, w).Park.Resumable.IsZero() {
-				t.Fatal("mismatched park marked resumable")
+			st, err := w.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Agents[0].Park == nil || st.Agents[0].Park.Resumable.IsZero() {
+				t.Fatalf("roster park not resumable: %+v", st.Agents[0].Park)
+			}
+			if len(st.Parks) != 1 || st.Parks[0].Resumable.IsZero() {
+				t.Fatalf("off-roster park not resumable: %+v", st.Parks)
 			}
 		})
 	}

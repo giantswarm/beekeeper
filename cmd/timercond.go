@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -70,6 +71,67 @@ func timerCond(t state.Timer) string {
 		return t.When
 	}
 	return "probe `" + truncate(t.Probe, 80) + "`"
+}
+
+// unchecked says why a check of t's condition found no answer: its probe
+// could not run, its reference cannot be read.
+func unchecked(t state.Timer) string {
+	if t.Probe != "" {
+		return "could not run"
+	}
+	return "cannot be read"
+}
+
+// notHeld says how t's condition failed to hold by its end: a clean check
+// found it false, or the last check found no answer (unchecked).
+func notHeld(t state.Timer) string {
+	switch {
+	case !t.Unreadable:
+		return "did not hold"
+	case t.Probe != "":
+		return "could not run"
+	}
+	return "could not be read"
+}
+
+// notHeldSince says how long t's condition has not held, for its TIMER
+// STUCK line: a probe that could not run since Failing was not seen to hold,
+// which says nothing of its condition.
+func notHeldSince(now time.Time, t state.Timer) string {
+	if t.Failing.IsZero() {
+		return "has not held since " + clock(now, t.Since)
+	}
+	return fmt.Sprintf("has not been seen to hold since %s, could not run since %s", clock(now, t.Since), clock(now, t.Failing))
+}
+
+// timerProbeKey keys the guide's report of t's checks whose probe could not
+// run, by the first of them.
+func timerProbeKey(t state.Timer) string {
+	return fmt.Sprintf("timer-probe #%d %s", t.ID, t.Failing.UTC().Format(time.RFC3339Nano))
+}
+
+// timerProbeFailed is the guide's report that t's probe could not run at
+// now: once for the checks in a row that fail so, with the first one's
+// reason.
+func timerProbeFailed(t state.Timer, now time.Time) state.Event {
+	var acts string
+	switch {
+	case t.Wake != "":
+		acts = fmt.Sprintf(" to wake %q", t.Wake)
+	case t.Run != "":
+		acts = fmt.Sprintf(" to run `%s`", truncate(t.Run, 80))
+	}
+	finding := fmt.Sprintf("TIMER PROBE FAILED: #%d, %s could not run at %s (%s): its condition is unknown, not false. The timer keeps waiting%s: %s",
+		t.ID, timerCond(t), clockZone(now, now), t.Reason, acts, truncate(t.What, 200))
+	return event(watchParty, loop.LoopFileVerb, "[%s] %s reported at %s%s%s",
+		timerProbeKey(t), watchParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, finding)
+}
+
+// timerProbeRecovered closes the guide's report of t's probe once a check
+// runs it again at now.
+func timerProbeRecovered(t state.Timer, now time.Time) state.Event {
+	return event(watchParty, loop.LoopFileVerb, "[%s] %s reported at %s%sRECOVERED: timer #%d's probe runs again at %s",
+		timerProbeKey(t), watchParty.Name, now.UTC().Format(time.RFC3339), loop.FileReportSeparator, t.ID, clockZone(now, now))
 }
 
 // runProbe reports whether a probe command exits 0; a seam for the tests.
@@ -145,9 +207,11 @@ func (f timerFire) message() string {
 // timed out, or closed unfired when it expires; a fired or expired timer is
 // closed, a repeating one re-armed at its next time. A check that found the
 // condition not holding is recorded with its reason; a reference that could
-// not be read is a line once, until the reason changes, and a condition that
-// has not held for timerStuckAfter is a line once. It returns the
-// lines, events and fires, and whether it changed st.
+// not be read or a probe that could not run is a line once, until the reason
+// changes, and a condition that has not held for timerStuckAfter is a line
+// once. A probe that could not run is also the guide's report once for the
+// checks in a row that fail so, closed by the next clean check. It returns
+// the lines, events and fires, and whether it changed st.
 func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]string, []state.Event, []timerFire, bool) {
 	return settleTimersMatching(st, found, now, timerTick, nil)
 }
@@ -206,26 +270,43 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 			if r.reason != "" {
 				f.reason += ": " + r.reason
 			}
+			if !t.Failing.IsZero() {
+				evs = append(evs, timerProbeRecovered(t, now))
+				// A wake not delivered re-arms the timer from its firing
+				// (rearmTimerInState): its probe ran there too.
+				t.Failing, f.t.Failing = time.Time{}, time.Time{}
+			}
 		case over && t.Expire:
 			changed = true
-			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s did not hold by %s%s: %s", t.ID, timerCond(t), clock(now, t.Until), lastFound(t), truncate(t.What, 200)))
+			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s %s by %s%s: %s", t.ID, timerCond(t), notHeld(t), clock(now, t.Until), lastFound(t), truncate(t.What, 200)))
 			evs = append(evs, event(watchParty, "timer.expired", "#%d %s: %s", t.ID, timerCond(t), t.What))
 			continue
 		case over:
-			f.timedOut, f.reason = true, fmt.Sprintf("timed out at %s, %s did not hold%s", clock(now, t.Until), timerCond(t), lastFound(t))
+			f.timedOut, f.reason = true, fmt.Sprintf("timed out at %s, %s %s%s", clock(now, t.Until), timerCond(t), notHeld(t), lastFound(t))
 		default:
 			if checked {
 				if r.unreadable && (!t.Unreadable || t.Reason != r.reason) {
-					lines = append(lines, fmt.Sprintf("TIMER UNREADABLE: #%d, %s cannot be read (%s); it keeps waiting: %s", t.ID, timerCond(t), r.reason, truncate(t.What, 200)))
+					lines = append(lines, fmt.Sprintf("TIMER UNREADABLE: #%d, %s %s (%s); it keeps waiting: %s", t.ID, timerCond(t), unchecked(t), r.reason, truncate(t.What, 200)))
 					evs = append(evs, event(watchParty, "timer.unreadable", "#%d %s: %s", t.ID, timerCond(t), r.reason))
 				}
 				t.Checked, t.Reason, t.Unreadable, changed = now.UTC(), r.reason, r.unreadable, true
+				// A probe that could not run is the guide's to hear of once
+				// for the checks in a row that fail so; a clean check ends
+				// them. Only a clean false is "not yet".
+				switch {
+				case t.Probe != "" && r.unreadable && t.Failing.IsZero():
+					t.Failing = now.UTC()
+					evs = append(evs, timerProbeFailed(t, now))
+				case !r.unreadable && !t.Failing.IsZero():
+					evs = append(evs, timerProbeRecovered(t, now))
+					t.Failing = time.Time{}
+				}
 				if t.Since.IsZero() {
 					t.Since = now.UTC()
 				}
 				if !t.Stuck && now.Sub(t.Since) >= timerStuckAfter {
 					t.Stuck = true
-					lines = append(lines, fmt.Sprintf("TIMER STUCK: #%d, %s has not held since %s%s; it keeps waiting: %s", t.ID, timerCond(t), clock(now, t.Since), lastFound(t), truncate(t.What, 200)))
+					lines = append(lines, fmt.Sprintf("TIMER STUCK: #%d, %s %s%s; it keeps waiting: %s", t.ID, timerCond(t), notHeldSince(now, t), lastFound(t), truncate(t.What, 200)))
 					evs = append(evs, event(watchParty, "timer.stuck", "#%d %s since %s: %s", t.ID, timerCond(t), t.Since.Format(time.RFC3339), t.Reason))
 				}
 			}

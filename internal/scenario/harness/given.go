@@ -212,8 +212,8 @@ func (g *Given) Validate(hosts []Host) error {
 	var errs []error
 	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 	for name := range g.Usage {
-		if name != Claude && name != Codex {
-			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex)", name)
+		if name != Claude && name != Codex && name != Agy {
+			bad("harness.usage: %q has no usage probe the harness fakes (claude, codex, agy)", name)
 		}
 	}
 	for name, u := range g.Usage {
@@ -440,7 +440,7 @@ func ValidateHosts(hosts []Host, repositories []string) error {
 }
 
 // HostStep is the host step of a scenario: it changes one host's faults
-// while the scenario runs.
+// or its policy while the scenario runs.
 type HostStep struct {
 	// Name is the host.
 	Name string `yaml:"name"`
@@ -448,6 +448,11 @@ type HostStep struct {
 	Fault string   `yaml:"fault"`
 	Slow  Duration `yaml:"slow"`
 	Clear bool     `yaml:"clear"`
+	// Config changes the host's policy as an operator does: it is laid
+	// over the host's own configuration, the host's beekeeper prepares its
+	// policy again, and the desk's agents.hosts entry names the digest
+	// prepare printed.
+	Config map[string]any `yaml:"config"`
 }
 
 // Validate checks the step against the scenario's hosts.
@@ -462,13 +467,13 @@ func (h HostStep) Validate(hosts []Host) error {
 		return errors.New("older-go is a host's provisioning: name it in given.hosts")
 	}
 	n := 0
-	for _, set := range []bool{h.Fault != "", h.Slow.Duration > 0, h.Clear} {
+	for _, set := range []bool{h.Fault != "", h.Slow.Duration > 0, len(h.Config) > 0, h.Clear} {
 		if set {
 			n++
 		}
 	}
 	if n == 0 || h.Clear && n > 1 {
-		return errors.New("one of fault, slow and clear (clear alone)")
+		return errors.New("one of fault, slow, config and clear (clear alone)")
 	}
 	return nil
 }

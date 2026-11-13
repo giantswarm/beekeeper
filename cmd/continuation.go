@@ -162,53 +162,11 @@ func loopFinishContinuation(l *loop.Loop, old state.Agent, name string) error {
 				}
 			}
 		}
-		for k := range st.ReviewParks {
-			if st.ReviewParks[k].Party.Is(prev.Party) {
-				st.ReviewParks[k].Party, st.ReviewParks[k].Agent = next.Party, next.Name
-				st.ReviewParks[k].Execution = next.Execution
-			}
-		}
-		for k := range st.Timers {
-			t := &st.Timers[k]
-			if t.Wake == prev.Name || t.Wake == prev.Session && prev.Session != "" || t.Wake == prev.HostSession && prev.HostSession != "" {
-				t.Wake = next.Name
-			}
-		}
-		for k := range st.Owed {
-			if st.Owed[k].Owner.Is(prev.Party) {
-				st.Owed[k].Owner = next.Party
-			}
-		}
-		for k := range st.Notes {
-			if st.Notes[k].By.Is(prev.Party) {
-				st.Notes[k].By = next.Party
-			}
-		}
-		for k := range st.AlertOwners {
-			if st.AlertOwners[k].By.Is(prev.Party) && st.AlertOwners[k].Ended.IsZero() {
-				st.AlertOwners[k].By = next.Party
-			}
-		}
-		for k := range st.Merges {
-			if st.Merges[k].By.Is(prev.Party) {
-				st.Merges[k].By = next.Party
-			}
-		}
-		if _, err := handClaims(st, lease.Dir(asApp(l.Host).cfg.LeaseDir), prev.Party, next.Party); err != nil {
-			return nil, err
-		}
 		e := event(loop.LoopParty, "agents.continuation", "%s: fresh worker %s; previous transcript stays parked", prev.Name, next.Name)
-		successor := next.Party
+		successor := *next
 		removeAgent(st, j)
-		for k := range st.Starts {
-			if st.Starts[k].Is(prev.Party) {
-				st.Starts[k].Successor = &successor
-			}
-		}
-		for k := range st.EndedWorkers {
-			if st.EndedWorkers[k].Is(prev.Party) {
-				st.EndedWorkers[k].Successor = &successor
-			}
+		if err := handToSuccessor(st, lease.Dir(asApp(l.Host).cfg.LeaseDir), prev.Party, successor); err != nil {
+			return nil, err
 		}
 		finished = true
 		return []state.Event{e}, nil
@@ -220,4 +178,100 @@ func loopFinishContinuation(l *loop.Loop, old state.Agent, name string) error {
 		_, _ = fmt.Fprintf(asApp(l.Host).out, "SUPERVISOR CONTINUATION %s: fresh worker %s\n", old.Name, name)
 	}
 	return err
+}
+
+// takeOverReviewPark makes the roster agent name, the fresh worker the loop
+// started for the pull request rp waits on (red CI, a review's findings, a
+// rework), the successor of rp's worker, which left the roster for the desk
+// review: the fresh worker takes its serve record and what the desk keeps
+// for the old session (handToSuccessor). An answer to the old session's
+// note or a timer it set then reaches the fresh worker, and the old
+// transcript is never resumed beside it.
+func takeOverReviewPark(h loop.Host, st *state.State, rp state.ReviewPark, name string) ([]state.Event, error) {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) })
+	if i < 0 {
+		return nil, nil
+	}
+	inheritReviewParkOnAgent(st, &st.Agents[i], rp, h.TimeNow().UTC())
+	next, prev := st.Agents[i], rp.Party
+	if prev.Session == "" && prev.HostSession == "" || prev.Is(next.Party) || onRoster(st, prev) {
+		return nil, nil
+	}
+	served := map[string]bool{}
+	for _, r := range st.Records {
+		if r.Session.Is(next.Party) && r.Ended.IsZero() {
+			served[strings.ToLower(r.Issue)] = true
+		}
+	}
+	st.Records = slices.DeleteFunc(st.Records, func(r state.Record) bool {
+		return r.Session.Is(prev) && r.Ended.IsZero() && served[strings.ToLower(r.Issue)]
+	})
+	for k := range st.Records {
+		if r := &st.Records[k]; r.Session.Is(prev) && r.Ended.IsZero() {
+			r.Session, r.Waits = next.Party, ""
+		}
+	}
+	if err := handToSuccessor(st, lease.Dir(h.Cfg().LeaseDir), prev, next); err != nil {
+		return nil, err
+	}
+	return []state.Event{event(loop.LoopParty, "agents.continuation", "%s: fresh worker %s (%s) takes its task after the desk review of %s; previous transcript (%s) stays parked",
+		prev.Name, next.Name, wakeID(next.Party), rp.On, wakeID(prev))}, nil
+}
+
+// handToSuccessor gives next, the session that took prev's task, what the
+// desk keeps for prev: its desk-review parks, its notes, the timers it set
+// or that wake it, what is owed to it, the alerts and merges it owns, its
+// leases and grants. prev's start names next as its successor
+// (continuationTarget), so a late answer, timer or message for prev reaches
+// next. prev is off the roster.
+func handToSuccessor(st *state.State, leases lease.Dir, prev state.Party, next state.Agent) error {
+	for k := range st.ReviewParks {
+		if rp := &st.ReviewParks[k]; rp.Party.Is(prev) {
+			rp.Party, rp.Agent, rp.Execution = next.Party, next.Name, next.Execution
+		}
+	}
+	for k := range st.Timers {
+		if t := &st.Timers[k]; wakesAgent(*t, state.Agent{Party: prev}) {
+			t.Wake = next.Name
+		}
+		// A timer prev set is next's own: its probe settles next's park.
+		if t := &st.Timers[k]; t.By.Is(prev) {
+			t.By = next.Party
+		}
+	}
+	for k := range st.Owed {
+		if st.Owed[k].Owner.Is(prev) {
+			st.Owed[k].Owner = next.Party
+		}
+	}
+	for k := range st.Notes {
+		if st.Notes[k].By.Is(prev) {
+			st.Notes[k].By = next.Party
+		}
+	}
+	for k := range st.AlertOwners {
+		if st.AlertOwners[k].By.Is(prev) && st.AlertOwners[k].Ended.IsZero() {
+			st.AlertOwners[k].By = next.Party
+		}
+	}
+	for k := range st.Merges {
+		if st.Merges[k].By.Is(prev) {
+			st.Merges[k].By = next.Party
+		}
+	}
+	if _, err := handClaims(st, leases, prev, next.Party); err != nil {
+		return err
+	}
+	successor := next.Party
+	for k := range st.Starts {
+		if st.Starts[k].Is(prev) {
+			st.Starts[k].Successor = &successor
+		}
+	}
+	for k := range st.EndedWorkers {
+		if st.EndedWorkers[k].Is(prev) {
+			st.EndedWorkers[k].Successor = &successor
+		}
+	}
+	return nil
 }

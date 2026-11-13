@@ -101,6 +101,102 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 	}
 }
 
+// A worker whose SSH execution ended for good keeps its roster entry, and
+// agents wake refuses it on every pass: the rework gives the entry to a fresh
+// fixer, as for a worker off the roster. An execution whose conversation can
+// go on, or that still runs, is woken, and so is a fresh fixer that took the
+// name since the pass read the roster (two pull requests of one worker in one
+// pass): it is never dropped for the ended execution the pass read.
+func TestReworkReplacesEndedSSHWorker(t *testing.T) {
+	retire := func(r *state.ExecutionRecord) {
+		r.Retirement = &state.ExecutionRetirement{ID: "retirement", Trigger: execution.RetireTriggerCrash}
+	}
+	for _, tc := range []struct {
+		name    string
+		end     func(*state.ExecutionRecord)
+		between func(*state.State)
+		replace bool
+	}{
+		{name: "retired execution", replace: true, end: retire},
+		{name: "a fresh fixer took the name since the pass read it", end: retire, between: func(st *state.State) {
+			fresh := execution.Ref{Host: paramHost, Execution: "fresh-fixer-execution", Generation: 1}
+			i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+			st.Agents[i].Execution = &fresh
+			st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, Execution: &state.ExecutionRecord{
+				Handle:      execution.Handle{Ref: fresh},
+				Phase:       execution.Running,
+				Request:     execution.StartRequest{Harness: execution.HarnessClaude, Messaging: true},
+				Observation: execution.Observation{ProcessState: execution.Running, Ready: true},
+			}})
+		}},
+		{name: "stopped execution", replace: true, end: func(r *state.ExecutionRecord) {
+			r.StopRequest = &execution.StopRequest{ID: "hand-stop", Reason: "stopped by hand"}
+			r.Observation.StopAcknowledged = true
+		}},
+		{name: "released reservation", replace: true, end: func(r *state.ExecutionRecord) { r.ReleasedAt = time.Now() }},
+		{name: "ended, its conversation goes on", end: func(*state.ExecutionRecord) {}},
+		{name: "execution still running", end: func(r *state.ExecutionRecord) { r.Observation.ProcessState = execution.Running }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			ref := execution.Ref{Host: paramHost, Execution: "retired-fixer-execution", Generation: 1}
+			party := state.Party{Name: loopWorker}
+			rec := &state.ExecutionRecord{
+				Handle:      execution.Handle{Ref: ref},
+				Phase:       execution.Running,
+				Request:     execution.StartRequest{Harness: execution.HarnessClaude, Messaging: true},
+				Observation: execution.Observation{ProcessState: execution.Failed, Ready: true},
+			}
+			tc.end(rec)
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: party, Execution: &ref, Task: "fix the pull request"})
+				st.Starts = append(st.Starts, state.Start{Party: party, Execution: rec})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Branch: testFixWord}, nil
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.between != nil {
+				if err := r.a.store.Update(func(current *state.State) ([]state.Event, error) {
+					tc.between(current)
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			act := superloop.Action{Kind: superloop.KindRework, Agent: loopWorker, Ref: loopPR, URL: loopURL, Head: loopHead, Key: "rework", Message: "current findings"}
+			if err := l.WakeOrStartFixer(t.Context(), st, act); err != nil {
+				t.Fatalf("rework: %v\n%s", err, r.out)
+			}
+			woke := r.called(agentsName, agentWakeName, loopWorker) != nil
+			started := r.called(agentsName, agentStartName, loopWorker) != nil
+			if woke == tc.replace || started != tc.replace {
+				t.Fatalf("woke = %t, started = %t, want a fresh fixer = %t: %v\n%s", woke, started, tc.replace, r.calls, r.out)
+			}
+			after, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kept := slices.ContainsFunc(after.Agents, func(ag state.Agent) bool { return ag.Is(party) }); kept == tc.replace {
+				t.Fatalf("ended entry kept = %t, want a fresh fixer = %t: %+v", kept, tc.replace, after.Agents)
+			}
+			if removed := r.logged(t, "agents.remove"); (len(removed) == 1) != tc.replace {
+				t.Fatalf("agents.remove = %+v, want a fresh fixer = %t", removed, tc.replace)
+			}
+		})
+	}
+}
+
 func TestReviewFixTerminalParksWakeRemainingTasks(t *testing.T) {
 	for _, scenario := range []string{"merged with open issue", "merged with unread issue", "closed pull request"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -318,8 +414,18 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 				if call != nil || !strings.Contains(r.out.String(), "SUPERVISOR MERGE POLICY REFUSED") || !strings.Contains(r.out.String(), reason) {
 					t.Fatalf("policy refusal requested repair or lost its reason: %v\n%s", r.calls, r.out)
 				}
-			} else if call == nil || !strings.Contains(call[3], reason) {
-				t.Fatalf("gate diagnostics hid the mutation result: %v\n%s", r.calls, r.out)
+			} else {
+				if call != nil {
+					t.Fatalf("conflict returned to the author: %v", call)
+				}
+				start := r.called(agentsName, agentStartName, loopReviewer)
+				if start == nil {
+					t.Fatalf("no reviewer repair turn: %v\n%s", r.calls, r.out)
+				}
+				brief, err := os.ReadFile(start[3])
+				if err != nil || !strings.Contains(string(brief), reason) {
+					t.Fatalf("reviewer repair lost the gate diagnostic: %v: %s", err, brief)
+				}
 			}
 		})
 	}
@@ -374,7 +480,11 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 				t.Fatalf("fixer brief missing branch or findings:\n%s", briefText)
 			}
 
-			// Pass 3: the fixer pushes loopFixed and parks for desk review; it ends and R2 starts.
+			// Pass 3: the fixer pushes loopFixed and parks for desk review; it
+			// ends, and the loop merges the fixed head through the gate
+			// (--reviewed-head) with no worker waiting: the pull request had its
+			// one review, whatever supervisor.reviewRounds says, and no second
+			// round starts (https://github.com/giantswarm/beekeeper/issues/3861).
 			r.pull.Head = loopFixed
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				party := state.Party{Name: loopWorker, Session: "worker-session-2"}
@@ -388,16 +498,11 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 			if r.called(agentsName, loop.LoopRemove, loopWorker) == nil {
 				t.Fatalf("fixer worker was not ended on review park: %v\n%s", r.calls, r.out)
 			}
-			reviewer2 := superloop.ReviewerName(loopPR, 2)
-			if r.called(agentsName, agentStartName, reviewer2) == nil {
-				t.Fatalf("second review round did not start: %v\n%s", r.calls, r.out)
+			if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 2)) != nil {
+				t.Fatalf("a second review round started: %v\n%s", r.calls, r.out)
 			}
-
-			// Pass 4: R2 approves; the loop merges through gate (--reviewed-head) with no worker waiting.
-			r.verdict("R2", loopFixed, superloop.Approved, "")
-			r.pass(t)
 			if r.called(gateCmdName) == nil || r.lastMerged != loopFixed {
-				t.Fatalf("approved second round did not merge: %v\n%s", r.calls, r.out)
+				t.Fatalf("the fixed head did not merge: %v\n%s", r.calls, r.out)
 			}
 		})
 	}
@@ -489,8 +594,9 @@ func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t
 		t.Fatalf("plain fixer park lost original Serves or PostMerge: %+v", st.ReviewParks)
 	}
 
-	// Pass 4: R2 approves and merges. The continuation waits for local
-	// room even though the execution host has room.
+	// Pass 4: the fixed head merges on the loop's go (a later approval of
+	// it changes nothing). The continuation waits for local room even
+	// though the execution host has room.
 	r.verdict("R2", loopFixed, superloop.Approved, "")
 	r.pass(t)
 	r.pull.State = superloop.Merged

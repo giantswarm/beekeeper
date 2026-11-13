@@ -159,6 +159,7 @@ func (w *World) Answer(req CallRequest) CallResponse {
 	defer w.inFlight.Add(-1)
 	rec := CallRecord{At: time.Now().UTC(), Program: req.Program, Args: req.Args, Dir: req.Dir, Answer: -1}
 	resp := CallResponse{Exit: 1}
+	var delay time.Duration
 	w.mu.Lock()
 	for i, a := range w.answers {
 		if a.call.Program != req.Program || (a.call.Times > 0 && a.used >= a.call.Times) || !matchArgs(a.args, req.Args) {
@@ -167,6 +168,7 @@ func (w *World) Answer(req CallRequest) CallResponse {
 		a.used++
 		rec.Answer, rec.Answered = i, true
 		resp = CallResponse{Stdout: a.call.Respond.Stdout, Stderr: a.call.Respond.Stderr, Exit: a.call.Respond.Exit, Given: true}
+		delay = a.call.Respond.Delay.Duration
 		break
 	}
 	if !rec.Answered && req.Modeled {
@@ -175,6 +177,9 @@ func (w *World) Answer(req CallRequest) CallResponse {
 	}
 	handler := w.handlers[req.Program]
 	w.mu.Unlock()
+	// A slow given answer holds only its own call: the others are answered
+	// meanwhile.
+	time.Sleep(delay)
 	if !rec.Answered && handler != nil {
 		// A handler may hold its answer (a slow GitHub): the other fakes
 		// are answered meanwhile.

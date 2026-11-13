@@ -77,7 +77,7 @@ var timerConditions = map[string]timerCondition{
 
 // timerCheck is how a timer's condition is checked: the command that reads
 // it, whether it reads GitHub and, for a typed condition, what its output
-// says; a --probe's exit code says it itself.
+// says; a --probe's exit code says it itself, unless the probe could not run.
 type timerCheck struct {
 	cmd    string
 	github bool
@@ -85,7 +85,7 @@ type timerCheck struct {
 }
 
 // checkResult is one check of a timer's condition: whether it holds and, if
-// not, why, or why its reference could not be read.
+// not, why, or why its reference could not be read or its probe not run.
 type checkResult struct {
 	holds, unreadable bool
 	reason            string
@@ -93,11 +93,15 @@ type checkResult struct {
 
 // result judges the output and error of c's command.
 func (c timerCheck) result(out []byte, err error) checkResult {
+	var cannotRun probeRunError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return checkResult{unreadable: true, reason: "probe timed out after 10 s"}
+	case c.judge == nil && errors.As(err, &cannotRun):
+		// A probe that could not run says nothing of its condition.
+		return checkResult{unreadable: true, reason: err.Error()}
 	case err != nil && c.judge == nil:
-		// A probe that exits non-zero says "not yet".
+		// A probe that ran and exits non-zero says "not yet".
 		return checkResult{reason: err.Error()}
 	case err != nil:
 		return checkResult{unreadable: true, reason: err.Error()}
@@ -149,8 +153,27 @@ var readProbe = probeOutput
 // watch, not necessarily the timer setter. Lease claims must refuse this identity.
 const envTimerCommand = "BEEKEEPER_TIMER_COMMAND"
 
+// probeCannotRunCodes are the exit codes of a probe that could not run its
+// check: the shell's 126 and 127 (a command not executable, not found) and
+// ssh's 255 (it could not reach or log in to its host).
+var probeCannotRunCodes = []int{126, 127, 255}
+
+// resolverFailure is a host name that did not resolve, as ssh, curl, the C
+// library and Go's resolver say it.
+var resolverFailure = regexp.MustCompile(`(?i)could not resolve host|name or service not known|temporary failure in name resolution|` +
+	`no address associated with hostname|nodename nor servname provided|lookup \S+.*: (no such host|server misbehaving)`)
+
+// probeRunError is a probe that could not run its check, so its exit code
+// says nothing of its condition (probeCannotRunCodes, resolverFailure).
+type probeRunError struct{ err error }
+
+func (e probeRunError) Error() string { return e.err.Error() }
+func (e probeRunError) Unwrap() error { return e.err }
+
 // probeOutput runs cmd within probeTimeout and returns its output; its error
-// says how it failed in the command's last line on stderr.
+// says how it failed in the command's last line on stderr, or in its line
+// naming a host that did not resolve, and is a probeRunError for a probe
+// that could not run.
 func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
@@ -166,8 +189,18 @@ func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 		return out, fmt.Errorf("probe timed out after 10 s: %w", context.DeadlineExceeded)
 	}
 	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
-	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
-		return out, fmt.Errorf("%v: %s", err, truncate(last, 200))
+	said := strings.TrimSpace(lines[len(lines)-1])
+	i := slices.IndexFunc(lines, resolverFailure.MatchString)
+	if i >= 0 {
+		said = strings.TrimSpace(lines[i])
+	}
+	var exit *proc.ExitError
+	cannotRun := i >= 0 || errors.As(err, &exit) && slices.Contains(probeCannotRunCodes, exit.ExitCode())
+	if said != "" {
+		err = fmt.Errorf("%w: %s", err, truncate(said, 200))
+	}
+	if cannotRun {
+		return out, probeRunError{err}
 	}
 	return out, err
 }

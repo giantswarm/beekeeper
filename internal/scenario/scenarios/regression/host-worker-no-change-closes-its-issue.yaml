@@ -1,0 +1,103 @@
+name: host-worker-no-change-closes-its-issue
+description: >
+  The loop starts a board item's worker on an SSH execution host. The item's
+  work merged already, in a pull request that is only "Part of" the issue,
+  so the worker ends its task with agents idle --done --no-change. The
+  worker's host can neither close the issue nor move its board item, so its
+  coordinator closes the issue with the worker's proof, and board next no
+  longer offers it. Live, the coordinator only cleared the serve record: the
+  issue stayed open on the board and refill dispatched it again.
+issue: https://github.com/giantswarm/beekeeper/issues/3893
+flow: regression
+tags: [regression, hosts, delivery, refill, no-change]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+        pulls:
+          # The item's change merged: "Part of" closes no issue.
+          - number: 2
+            title: "feat: the first item"
+            head: item-1
+            body: "Part of https://github.com/example/app/issues/1"
+            state: merged
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # The worker finds the item done on main and ends its task without a
+      # pull request. Its agents idle runs with exit 0: a refused one fails
+      # the turn.
+      - name: app 1
+        host: builder
+        turns:
+          - steps:
+              - beekeeper:
+                  - agents
+                  - idle
+                  - --done
+                  - --no-change
+                  - "https://github.com/example/app/pull/2 merged the item's change on main; nothing is left"
+                  - --report
+                  - "https://github.com/example/app/issues/1 needs no change: https://github.com/example/app/pull/2 merged it; open items: none"
+                  - --problem
+                  - none
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The refill places the item's worker on the host.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - name: done
+    wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, outcome: finish}
+  # What refill would take next: the item is no longer offered.
+  - name: next
+    run: {args: [board, next, --json]}
+
+then:
+  - worker: {name: app 1, host: builder, harness: claude, turns: 1, outcome: finish}
+  # The coordinator closed the issue once, for the host's worker.
+  - github: {issue: {repo: example/app, number: 1, state: closed}}
+  - calls: {program: gh, args: [issue, close, 'https://github\.com/example/app/issues/1'], min: 1, max: 1}
+  - events: {contains: [agents.done, agents.no-change-closed]}
+  # No free board item: exit 3.
+  - {step: next, exit: 3}
