@@ -71,6 +71,7 @@ func TestParseRejects(t *testing.T) {
 		{"tool that is the builder's kubectl", strings.Replace(validScenario, "when:", "given:\n  tools: [kubectl]\nwhen:", 1), `"kubectl" is on the desk's PATH already`},
 		{"given call of a program that is no tool", strings.Replace(validScenario, "when:", "given:\n  calls: [{program: go, respond: {exit: 0}}]\nwhen:", 1), `program "go" is none of`},
 		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
+		{"checkout of no repository", strings.Replace(validScenario, "when:", "given:\n  checkouts: [example/app]\nwhen:", 1), `given.checkouts: "example/app" is no repository of the scenario`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))

@@ -36,6 +36,7 @@ const (
 	repoDir      = workDir + "/repo"
 	stateDir     = workDir + "/state"
 	originsDir   = workDir + "/origins"
+	checkoutsDir = workDir + "/src"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
 	worldSocket  = DefaultWorldSocket
@@ -297,6 +298,10 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 		overlay(cfg, map[string]any{"run": map[string]any{"remote": remote}})
 	}
+	if len(d.s.Given.Checkouts) > 0 {
+		// A session's --dir must be a checkout under agents.dir or agents.roots.
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": []any{checkoutsDir}}})
+	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -326,6 +331,11 @@ func (d *driver) setup(ctx context.Context) error {
 	for _, name := range repos {
 		if err := origin(ctx, name); err != nil {
 			return fmt.Errorf("origin %s: %w", name, err)
+		}
+	}
+	for _, name := range d.s.Given.Checkouts {
+		if err := checkout(ctx, name); err != nil {
+			return fmt.Errorf("checkout %s: %w", name, err)
 		}
 	}
 	if board, ok := cfg["board"].(map[string]any); ok {
@@ -513,6 +523,21 @@ func overlay(dst, src map[string]any) {
 		}
 		dst[k] = v
 	}
+}
+
+// checkout clones owner/name onto the desk under checkoutsDir. It names its
+// origin as GitHub does; the scenario's git leads that URL to the origin.
+func checkout(ctx context.Context, name string) error {
+	dst := filepath.Join(checkoutsDir, name)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	c := exec.CommandContext(ctx, binDir+"/git", "clone", "--quiet", "https://github.com/"+name+".git", dst) //nolint:gosec // real git on the scenario's own paths
+	c.Env = env(nil)
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone: %w: %s", err, out)
+	}
+	return nil
 }
 
 // origin creates the bare origin of owner/name with one commit on main.

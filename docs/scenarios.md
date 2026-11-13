@@ -120,7 +120,10 @@ fail on the fix's parent (`go-control-history/`). To run the step on a branch:
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
    `given.repositories` and of `given.github`'s repositories under
-   `/work/origins/<owner>/<name>.git`, and a root for each of
+   `/work/origins/<owner>/<name>.git`, a clone of each of
+   `given.checkouts` at `/work/src/<owner>/<name>` (its origin the
+   repository's GitHub URL, `/work/src` in `agents.roots`, so a start's
+   `--dir` may name it), and a root for each of
    `given.hosts` (see [Execution hosts](#execution-hosts)).
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
@@ -160,6 +163,7 @@ given:
       capacity: {ceiling: 4}
   repositories:
     - name: example/app
+  checkouts: [example/app]           # cloned on the desk at /work/src/example/app
   calls:
     - program: gh
       # Every pattern must match one argument whole (a regular expression;

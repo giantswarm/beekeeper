@@ -90,6 +90,14 @@ CI and merge-result validation, independent review, and the normal stop and hold
 checks. Infrastructure outages retain the global ordinary-start barrier. A
 successful probe clears only its own outage; an unreadable probe clears none.
 
+The fatal sentinel (`beekeeper fatal scan`, once a minute) starts one repair
+session per outage at a time, at most three per outage, ten minutes apart. A
+repair start that fails runs no repair: the incident keeps its error
+(`startError` and the outcome in `fatal status`, the `fatal.repair` event and
+the sentinel's journal), and the next pass starts the next attempt without the
+ten minutes. When the last start fails, the guide gets a GUIDE PROBLEM with that
+error, and the sentinel starts no further repair of the outage.
+
 On the person's explicit emergency authorization, the current guide can run `beekeeper emergency on --reason
 "<their verbatim words>" --until 30m`, then `beekeeper emergency merge owner/repo 123`. The merge
 requires GitHub approval and matches the observed head; it bypasses desk review and the merge lane
