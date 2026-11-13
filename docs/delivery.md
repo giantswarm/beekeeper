@@ -43,8 +43,14 @@ WIP place: implementation, CI, review, merge, release and automatic timers
 under a day. An open decision addressed to the guide's person and linked to
 the delivery (or its worker's note park) is **waiting on the person** and
 appears in the existing guide queue. A missing decision note is reported as
-a defect; file it with `note add --for <person> --ref <issue>` and include
-the question, default and deadline.
+a defect (`DELIVERY WAITING WITHOUT A NOTE`); file it with
+`note add --for <person> --ref <issue>` and include the question, default
+and deadline. Only a park with no target whose wait names the person, or
+what only a person gives (a decision, an answer, an approval, a reply), is
+missing its note. A park on a note is covered by it: an open note is in its
+addressee's queue, and an answered one's park resumes at the watch's next
+look. A park on an issue or pull request, a hold, a lease, an alert or a
+release waits on that target, whatever its words say.
 
 Use `agents park --external "<what must happen>"` for any external event
 that no current decision can resolve. It needs an explicit wake when the
@@ -145,6 +151,12 @@ its release step. A worker finishes with one of these commands:
 - `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
   explicitly explain an already fixed issue, an operation with its proof, or
   an answer recorded on the issue. This counts as no change, not a release.
+  For a worker on an SSH execution host, which can neither close the issue nor
+  move its board item, the coordinator closes the open issues of the serve
+  records it gave the task (`agents.no-change-closed`), with the reason as the
+  comment, so refill does not offer them again. The reason then names every
+  issue and pull request by its full URL, as the report does. A failed close
+  leaves the issue open and reaches the guide as one of the report's problems.
 - `agents idle --blocked --by <issue URL|#note>`: the blocker must be open.
   An issue dependency moves the item to Blocked / Waiting; a note holds its
   board status until the note is answered. This ends the worker assignment,
@@ -160,7 +172,11 @@ request seeds, abandoned ended-worker deliveries, closed issues or pull
 requests, and manual `delivery drop` commands. Unexplained legacy terminal
 events are counted as dropped, never inferred as merged. An independent
 reviewer reports its review without claiming that the implementation delivery
-is complete.
+is complete. A review session owns no delivery, whoever started it (the loop,
+`agents start --review` or `emergency start --review`) and whatever it reviews,
+a pull request without an issue among them: its start serves the pull request
+and opens no delivery, and its `agents idle --done` needs no merge, while a
+`--no-change` or `--blocked` of it ends no delivery.
 
 An unfinished headless turn receives its task again, with the valid endings,
 up to three times per assignment. When the third continuation also ends

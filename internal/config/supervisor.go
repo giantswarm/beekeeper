@@ -48,14 +48,15 @@ type Supervisor struct {
 
 	// Effort is the default for sessions started by the supervisor loop.
 	Effort string `yaml:"effort"`
-	// ReviewRounds caps the review rounds that ask for changes (default 1);
-	// an approved round counts for none, and superloop.MaxReviews bounds all
-	// rounds. Under the cap a green head with fixes gets the next review.
-	// Once the cap is used it gets the merge go with no new review: fixes
-	// pushed after a review need no review of their own. A head that only
-	// brings the base into the findings' head carries no fixes and goes back
-	// to rework; one that only brings the base into an approved head stays
-	// covered by that approval.
+	// ReviewRounds no longer adds review rounds (default 1, the only
+	// behavior): a pull request gets one desk review
+	// (https://github.com/giantswarm/beekeeper/issues/3861). After its
+	// verdict a green head with fixes gets the merge go with no new review:
+	// fixes pushed after a review need no review of their own. A head that
+	// only brings the base into the findings' head carries no fixes and goes
+	// back to rework; one that only brings the base into an approved head (a
+	// merge, a conflict's resolution, a rebase) stays covered by that
+	// approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next

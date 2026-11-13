@@ -428,8 +428,15 @@ func TestTheSweepReviewsAnOwnerlessBotPullRequest(t *testing.T) {
 	in.Now = q.Updated.Add(OrphanWait)
 	in.Ownerless = map[string]time.Time{pr: q.Updated}
 	in.BaseMerged = func(Pull, string) bool { return false }
-	if r := only(t, Plan(in), KindReview); r.Head != head2 || KeyHead(r.Key) != head2 {
-		t.Errorf("review of the moved head = %+v", r)
+	// It had its one desk review: a worker takes the moved head over and
+	// parks for the go, and no second review starts
+	// (https://github.com/giantswarm/beekeeper/issues/3861).
+	got := Plan(in)
+	if r := only(t, got, KindRework); r.Head != head2 || KeyHead(r.Key) != head2 || !strings.Contains(r.Message, "no second review runs") {
+		t.Errorf("owner of the moved head = %+v", r)
+	}
+	if slices.Contains(kinds(got), KindReview) {
+		t.Errorf("a second review of the moved head: %+v", got)
 	}
 
 	// Without the bot named, nobody's.

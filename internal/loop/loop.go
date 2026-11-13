@@ -97,6 +97,14 @@ var BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error
 	return out + errOut, code, err
 }
 
+// decodeRun reads the JSON document a BeekeeperRun printed into v. The
+// output is stdout and then stderr, so the document is its first value: a
+// diagnostic after it (a stale state snapshot's) is no failed read, and
+// output without a document is.
+func decodeRun(out string, v any) error {
+	return json.NewDecoder(strings.NewReader(out)).Decode(v)
+}
+
 // LoopCommand runs a configured command (the classifier, the post-install)
 // with stdin: its stdout, its stderr and its exit code.
 var LoopCommand = RunArgv
@@ -235,7 +243,11 @@ func ApplyLoopWorkflowRuns(p *superloop.Pull, raw []byte, rollup []LoopCheck) er
 }
 
 // ReadBaseMerge reads whether the approval of approved covers p's head: it
-// only merges its base into approved with the reviewed patch unchanged.
+// only brings its base into approved (github.ApprovalCovers), by a merge, a
+// merge whose conflicts it resolves, or a rebase, with no change of its
+// own. A pull request gets one desk review
+// (https://github.com/giantswarm/beekeeper/issues/3861): the merge-result
+// check against the current base is such a head's gate, never a new review.
 var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
 	r, ok := Cmd.ParseRef(p.Ref)
 	if !ok || p.Base == "" {
@@ -243,8 +255,8 @@ var ReadBaseMerge = func(ctx context.Context, p superloop.Pull, approved string)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	only, _, err := github.BaseMergeCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
-	return only, err
+	covered, _, err := github.ApprovalCovers(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return covered, err
 }
 
 // ReadDeskLogin is the login gh acts as: the one the desk's agents open
@@ -2356,9 +2368,9 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	return err
 }
 
-// baseMerged reports whether p's head only merges its base into approved,
+// baseMerged reports whether p's head only brings its base into approved,
 // read once per pair of heads; a read that fails is said once and counts as
-// no: the new head gets its review.
+// no: the new head waits for its worker's park before its go.
 func (l *Loop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
 	key := p.Ref + " " + approved + " " + p.Head
 	l.Mu.Lock()
@@ -2547,7 +2559,10 @@ func (l *Loop) claim(act superloop.Action, target string) error {
 
 // Reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
-// remove, note add, all logged as the loop), else not, and it runs.
+// remove, note add, all logged as the loop), else not, and it runs. A start
+// on an execution host logs its line at the reservation; one whose
+// reservation was released after it, unacknowledged by the host, started
+// nothing.
 func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Action, c LoopClaim) (string, bool, error) {
 	// Reconciliation runs in background action streams. Its history reads must
 	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
@@ -2567,10 +2582,21 @@ func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Act
 		return slices.ContainsFunc(evs, func(e state.Event) bool { return e.Verb == verb && match(e.Detail) })
 	}
 	opens := func(d string) bool { return strings.HasPrefix(d, c.Target+":") }
+	started := func() bool {
+		last := -1
+		for i, e := range evs {
+			if e.Verb == verbStart && opens(e.Detail) {
+				last = i
+			}
+		}
+		return last >= 0 && !slices.ContainsFunc(evs[last+1:], func(e state.Event) bool {
+			return e.Verb == executionReleasedEvent && opens(e.Detail)
+		})
+	}
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged(verbStart, opens)
+		done = started()
 	case superloop.KindGo:
 		l.Mu.Lock()
 		repairing := l.Stages[act.Key+" repair"]
@@ -3326,6 +3352,12 @@ func (l *Loop) WakeOrStartFixer(ctx context.Context, st *state.State, act superl
 		return fmt.Errorf("its repository is unread (%s): %w", why, ErrLoopLater)
 	}
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 {
+		// A finished reviewer's execution no longer has publication authority.
+		// Let its done report retire it before starting its repair turn, rather
+		// than enqueueing work on the completed execution.
+		if act.Agent == act.RepairAgent && st.Agents[i].Done {
+			return fmt.Errorf("the reviewer is finishing its report before its repair: %w", ErrLoopLater)
+		}
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
 			p, err := l.readPull(ctx, act.Ref)
 			if err != nil {
@@ -3356,7 +3388,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately hand CI and review to the loop with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately hand CI, the one desk review if it has not had it yet, and the merge to the loop with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -3366,7 +3398,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch without running local tests or lints, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), immediately park from the worktree so the loop owns CI:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
-If the new head only merges the base branch with the PR patch unchanged, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review. A rebase or a conflict resolution that changes the patch needs a new review.
+A pull request gets one desk review: once it had it, the supervisor merges the repaired head once CI is green without a new review. Bring the base into the branch only for this repair (a conflict, or a merge result that is red against the base), never just to bring it up to date.
 `
 
 const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
@@ -3427,7 +3459,7 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		var capacity struct {
 			Room int `json:"room"`
 		}
-		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+		if readErr != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
 			err = ErrLoopLater
 		}
 	} else {
@@ -3545,25 +3577,31 @@ Trust green CI on the exact reviewed head. Do not run local tests, lints, builds
 Inspect the code and tests. For a full review use your own worktree at the pinned head;
 for a light review read the diff, issue and CI. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. Review only:
-never edit, commit or push fixes to the reviewed branch ({{.Branch}}). Post findings and
-request changes; report the verdict and review URL with beekeeper agents idle --done --report
-so the supervisor forwards them to the implementing worker. Approve only the assigned,
-unchanged head when it needs no fixes. Open an issue
+This is the pull request's one desk review: no second review runs for it.
+Every finding is blocking or a nit to fix in this round; drop anything else. Fix your own
+findings yourself in your worktree at the pinned head (a light review creates one only for its
+fixes): fix them in code, tests or docs, commit them as one commit and push it once to the pull request's branch (git push origin
+HEAD:refs/heads/{{.Branch}}; never force-push), then approve the head you pushed at once,
+without waiting for its CI: the loop waits for green CI on that head and merges it. Never merge the base into the branch or rebase it to bring it up to date: the loop
+merges the approved head as it is, and its merge-result check against the current base is the
+gate. Request changes only for a finding that needs a product or design decision or cannot be
+fixed on the branch, or when your publication is refused: the
+worker fixes those, and the loop merges its green fix without another review. Open an issue
 only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
 leave it unranked in the backlog and do not attach it as an epic sub-issue.
-An approval's nit-only push is checked by the supervisor against the approved head; do not
-start another independent review for it. Other changes require review of the new head.
 
 Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
 First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
-regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (the assigned head only).
-Each finding: <file>:<line>: <what is wrong> → <what would be right>.
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `" (or, when you
+pushed fixes, the full SHA of the head you pushed, in backticks, even while its CI runs).
+Each finding: <file>:<line>: <what is wrong> → <what would be right>; say which you fixed.
 Never use gh pr review --approve. Report to the supervisor:
 beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
 and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>"
-for each problem encountered). The supervisor relays findings to the worker and gives the
-merge go only after approval. Do not review an unchanged approved head again.
+for each problem encountered). The supervisor gives the merge go after your approval once CI
+is green, or relays the findings you could not fix to the worker.
+A real conflict or red CI after your approval returns to you for a repair turn, never a
+second review verdict. Push the repair and park for the loop to wait for CI and merge.
 `
 
 // Brief renders the template in file (def when file is empty) with d into
@@ -3661,13 +3699,7 @@ func (l *Loop) StartReviewer(ctx context.Context, act superloop.Action) (string,
 		if p.Head != act.Head || !p.Green {
 			return "", Cmd.Refused("review head moved or CI is not green")
 		}
-		previous := ""
-		for _, review := range p.Reviews {
-			if review.Verdict != "" {
-				previous = review.Body
-			}
-		}
-		act.Message, err = Cmd.ReviewContext(ctx, p, previous, l.Host.Cfg().Supervisor.ReviewLightLines)
+		act.Message, err = Cmd.ReviewContext(ctx, p, l.Host.Cfg().Supervisor.ReviewLightLines)
 		if err != nil {
 			return "", err
 		}
@@ -3841,7 +3873,7 @@ func roomOpen(out string) bool {
 	var v struct {
 		Room int `json:"room"`
 	}
-	if json.Unmarshal([]byte(out), &v) != nil {
+	if decodeRun(out, &v) != nil {
 		return true
 	}
 	return v.Room > 0
@@ -3878,7 +3910,10 @@ func (l *Loop) PlacesRemotely() bool {
 
 // startPlacement prefers configured execution hosts by default. If none can
 // take the repository and selected task kind, ordinary local capacity is the
-// fallback. Explicit hostsFirst: false retains local-first placement.
+// fallback. Explicit hostsFirst: false retains local-first placement. A host
+// whose pick is another provider than the coordinator's does not take the
+// start while the coordinator's pick is behind its weekly pace and the
+// coordinator has room (PaceYield).
 func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
 	kind := workerRole
 	if review {
@@ -3919,11 +3954,20 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		}
 		return startHost{}, nil
 	}
+	var unacknowledged map[execution.HostID]bool
+	if review {
+		unacknowledged = l.unacknowledgedHosts(name, repo)
+	}
 	for i, selector := range k.Hosts {
 		h, err := l.Host.ExecutionHost(selector)
 		if err != nil {
 			l.RecordHostPlacement(selector, repo, err.Error())
 			l.SayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
+			continue
+		}
+		if unacknowledged[h.Identity] {
+			l.RecordHostPlacement(selector, repo, "never acknowledged the start of "+name)
+			l.SayOnce("host unacknowledged "+selector+" "+name, "SUPERVISOR HOST SKIPPED %s: it never acknowledged the start of %q, which starts elsewhere", selector, name)
 			continue
 		}
 		if !h.AdmitsRepository(repo) {
@@ -3935,6 +3979,14 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		if reason := HostCapacityReason(hostOut, hostCode, hostErr); reason != "" {
 			l.RecordHostPlacement(selector, repo, reason)
 			l.SayOnce("host capacity "+selector+" "+reason, "SUPERVISOR HOST WAITS %s: %s", selector, reason)
+			continue
+		}
+		// The coordinator's pick decides which subscription a start spends
+		// while it is behind its weekly pace: a host that would spend
+		// another provider passes the start to the coordinator's room.
+		if reason := PaceYield(out, hostOut); localReady && reason != "" {
+			l.RecordHostPlacement(selector, repo, reason)
+			l.SayOnce("host pace "+selector+" "+repo, "SUPERVISOR HOST SKIPPED %s for %s: %s", selector, repo, reason)
 			continue
 		}
 		ref, err := l.defaultBranch(ctx, repo)
@@ -3953,6 +4005,24 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		return startHost{}, ErrLoopLater
 	}
 	return startHost{}, nil
+}
+
+// unacknowledgedHosts are the execution hosts that never acknowledged a
+// start of name for repo: its reservation there was released. A reviewer's
+// name is its pull request's round, so the round's next start goes to
+// another host or the coordinator, never back to the host that failed it.
+func (l *Loop) unacknowledgedHosts(name, repo string) map[execution.HostID]bool {
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return nil
+	}
+	hosts := map[execution.HostID]bool{}
+	for _, s := range st.Starts {
+		if r := s.Execution; r != nil && r.Released() && strings.EqualFold(s.Name, name) && strings.EqualFold(r.Request.Repository, repo) {
+			hosts[r.Handle.Ref.Host] = true
+		}
+	}
+	return hosts
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:
@@ -4176,13 +4246,12 @@ func (l *Loop) readNextItemSkipping(ctx context.Context, exemptOnly bool, skip [
 		}
 		return nil, failed()
 	}
-	// The output is stdout and then stderr: the document is its first value.
 	var next struct {
 		Pick      json.RawMessage   `json:"pick"`
 		Skipped   []board.Candidate `json:"skipped"`
 		AfterPick []board.Candidate `json:"after_pick"`
 	}
-	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
+	if err := decodeRun(out, &next); err != nil {
 		if code != 0 {
 			return nil, failed()
 		}

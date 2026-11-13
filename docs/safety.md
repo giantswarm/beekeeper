@@ -14,7 +14,9 @@ Existing targets and paths deeper inside a folder pass this protection.
 
 `projects.worktrees` defaults to `[~/projects/worktrees]`; put worktrees and scratch
 checkouts there with layout `<repo>/<branch>`. For example, use
-`git -C <clone> worktree add <place>/<repo>/<branch> -b <branch> origin/main`.
+`git -C <clone> worktree add <place>/<repo>/<branch> --no-track -b <branch> origin/main`:
+without `--no-track` the branch tracks `origin/main`, and under `push.default=upstream`
+`git push -u origin <branch>` updates main.
 `agents.roots` defaults to these places when unset. `home.places` defaults to
 `[~/.local/state]` for state, logs and backups; drafts use the session scratchpad.
 The refusal and the worker rules supplied by `agents start` name these paths.

@@ -1,16 +1,15 @@
-name: push-after-approval-gets-a-new-review
+name: push-after-approval-merges-without-a-second-review
 description: >
-  A push after the approval is not covered by it. Review round one approves
-  the head the worker parked on. Before the merge the worker's next session
-  pushes another commit and parks again. The loop does not merge on the
-  approval of the old head: the new head, once green, gets review round
-  two, and only its approval gets the go and the merge.
-issue: https://github.com/giantswarm/beekeeper/issues/3793
+  A pull request gets one desk review. Review round one approves the head
+  the worker parked on. Before the merge the worker's next session pushes
+  another commit and parks again. The loop starts no second review: once
+  the new head is green it gives that head the merge go and merges it, on
+  the one approval. No round two is ever assigned, by the loop or by
+  agents review by hand.
+issue: https://github.com/giantswarm/beekeeper/issues/3862
 flow: delivery
 tags: [delivery, loop, review, merge]
 timeout: 180s
-control:
-  none: states the delivery behavior main already has; this change only adds the scenario
 
 given:
   desk:
@@ -125,19 +124,14 @@ when:
   - advance: 2s
   - name: ci-green-again
     github: {check: {repo: example/app, pull: 2, name: build, state: green}}
-  # The approval was of the old head: no merge, a second review round.
-  - name: second-review
-    run: {args: [supervisor, loop, --once]}
+  # Nor does a review by hand start: the pull request had its one review.
+  - name: review-by-hand
+    run: {args: [agents, review, 'example/app#2']}
     expect:
-      - exit: 0
-      - calls: {program: gh, args: [pr, merge], max: 0}
-      - github: {pull: {repo: example/app, number: 2, state: open}}
-      - events: {not_contains: [merge.authorized]}
-  - wait_for:
-      timeout: 15s
-      expect:
-        - worker: {name: 'Review app 2 r2', outcome: finish}
-  - advance: 2s
+      - exit: 3
+      - stderr: {contains: ["example/app#2 had its one desk review", "no second review starts"]}
+  # One review per pull request: the new head merges on the approval, with
+  # no second review round.
   - name: go
     run: {args: [supervisor, loop, --once]}
     expect:
@@ -155,7 +149,8 @@ when:
 then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - github: {issue: {repo: example/app, number: 1, state: closed, pulls: 1, open_pulls: 0}}
+  # Exactly one review session ever: no round two.
+  - worker: {name: 'Review app 2 r\d+', turns: 1, outcome: finish}
   - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
-  - worker: {name: 'Review app 2 r2', turns: 1, outcome: finish}
   - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
   - events: {contains: [supervisor.review, merge.authorized, supervisor.merge, supervisor.end], not_contains: [merge.failed, session.report-rejected]}

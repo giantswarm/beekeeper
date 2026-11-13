@@ -5,6 +5,7 @@ package harness
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -140,10 +141,51 @@ func ssh(c *client) int {
 		fmt.Fprintf(os.Stderr, "ssh: %v\n", err)
 		return 255
 	}
+	if r.Fault == DropsSource && strings.Contains(command, hostRPCCommand) {
+		return dropSource(dest, command, r.Env)
+	}
 	if err := syscall.Exec("/bin/sh", []string{"sh", "-c", command}, r.Env); err != nil {
 		fmt.Fprintf(os.Stderr, "ssh: %v\n", err)
 	}
 	return 255
+}
+
+// A host's RPC: the command the coordinator calls a host with, its request
+// on standard input, and the operation a start uploads its source bundle
+// with.
+const (
+	hostRPCCommand        = "host-rpc"
+	sourceUploadOperation = "source-chunk"
+)
+
+// dropSource runs a host-rpc call on a host with the drops-source fault:
+// the request is read first, and a source upload's connection is dropped
+// as OpenSSH reports a closed one; every other call runs as on a healthy
+// host.
+func dropSource(dest, command string, env []string) int {
+	in, err := io.ReadAll(io.LimitReader(os.Stdin, 16<<20))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssh: %v\n", err)
+		return 255
+	}
+	var req struct {
+		Operation string `json:"operation"`
+	}
+	if json.Unmarshal(in, &req) == nil && req.Operation == sourceUploadOperation {
+		fmt.Fprintf(os.Stderr, "Connection to %s closed by remote host.\n", dest)
+		return 255
+	}
+	c := exec.Command("/bin/sh", "-c", command) //nolint:gosec // the scenario's own remote command, as ssh runs it
+	c.Env = env
+	c.Stdin, c.Stdout, c.Stderr = bytes.NewReader(in), os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+			return exit.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "ssh: %v\n", err)
+		return 255
+	}
+	return 0
 }
 
 // Desk is what provisioning the hosts needs of the scenario's desk.

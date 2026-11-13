@@ -1,0 +1,95 @@
+name: busy-host-behind-the-release-drains
+description: >
+  The coordinator runs a newer release than its execution host is pinned
+  to, and a worker the older coordinator started is in a turn on the host.
+  The host takes no new start until it has updated: a further start on it
+  is refused and says the host drains, so the executions on it reach the
+  turn boundary its update waits for. A host that stays behind for longer
+  than an hour is handed on once as the loop's finding, with the
+  executions that keep it there. Live, sputnik stayed on an older release
+  across two releases: new starts kept being placed on it, so its
+  executions were never all between turns and its update never came.
+issue: https://github.com/giantswarm/beekeeper/issues/3897
+flow: regression
+tags: [regression, hosts, update]
+timeout: 180s
+
+given:
+  clock:
+    start: "2026-11-13T05:00:00Z"
+  releases:
+    # The desk runs rc.2. The host was brought to rc.1, which also started
+    # the busy worker.
+    installed: v1.0.0-rc.2
+    published: [v1.0.0-rc.1, v1.0.0-rc.2]
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  hosts:
+    - name: builder
+      pinned: v1.0.0-rc.1
+  github:
+    repositories:
+      - name: example/app
+  harness:
+    workers:
+      # In a turn that does not end while the scenario runs.
+      - name: busy-worker
+        host: builder
+        turns:
+          - outcome: hang
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The coordinator on rc.1 started the worker: the host ran its release.
+  - name: busy
+    run:
+      release: v1.0.0-rc.1
+      args: [--as, supervisor loop, agents, start, busy-worker, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: busy-worker, host: builder, turns: 1, running: true}
+  # The coordinator runs rc.2 now. A further start on the host would keep
+  # it busy: it is refused.
+  - name: next
+    run:
+      args: [--as, supervisor loop, agents, start, next-worker, /work/worker.txt, --host, builder, --repo, example/app, --ref, main, --harness, claude, --model, sonnet]
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The loop's pass finds the worker in its turn: the host drains.
+  - name: drains
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 61m
+  # Behind for more than an hour: the loop hands the host on.
+  - name: behind
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+
+then:
+  - {step: next, exit: 3}
+  - {step: next, stderr: {contains: ["execution host builder drains, it takes no start", "updates to the coordinator's v1.0.0-rc.2"]}}
+  - {step: drains, output: {contains: ["SUPERVISOR HOST DRAINS builder", "busy-worker"]}}
+  - {step: drains, output: {not_contains: ["SUPERVISOR HOST BEHIND"]}}
+  - {step: behind, output: {contains: ["SUPERVISOR HOST BEHIND Execution host builder stays on v1.0.0-rc.1, behind the coordinator for 1h", "(busy-worker)"]}}
+  - events: {contains: [supervisor.file]}

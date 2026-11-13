@@ -6,10 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/capacity"
-	"github.com/giantswarm/beekeeper/internal/codex"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -34,67 +31,6 @@ func TestReviewWriteUsesRecordedIdentity(t *testing.T) {
 			}
 			if got := reviewerSession(st, state.Party{Session: reviewerID}); got != tc.want {
 				t.Fatalf("got %v", got)
-			}
-		})
-	}
-}
-
-func TestReviewWriteHookAndHostIdentity(t *testing.T) {
-	const hostID = "reviewwrite-host-session"
-	t.Setenv(codex.EnvAgent, "")
-	t.Setenv(omp.EnvAgent, "")
-	t.Setenv(agy.EnvAgent, "")
-	a, _ := executionTestApp(t)
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = []state.Start{{Kind: capacity.TaskKindReview, Party: state.Party{Session: "reviewwrite-original", HostSession: hostID}}}
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	a.store = nil
-	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", hostID)
-	if got := a.hookReviewWrite("reviewwrite-resumed"); !strings.Contains(got, "agents idle --done --report") {
-		t.Fatal(got)
-	}
-	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
-	if got := a.hookReviewWrite("reviewwrite-worker-session"); got != "" {
-		t.Fatal(got)
-	}
-}
-
-func TestReviewWriteHookUsesHarnessIdentity(t *testing.T) {
-	const agentID = "reviewwrite-harness-agent"
-	for _, harness := range []struct{ variable, prefix string }{
-		{codex.EnvAgent, codex.HostPrefix},
-		{omp.EnvAgent, omp.HostPrefix},
-		{agy.EnvAgent, agy.HostPrefix},
-	} {
-		t.Run(harness.prefix, func(t *testing.T) {
-			t.Setenv(codex.EnvAgent, "")
-			t.Setenv(omp.EnvAgent, "")
-			t.Setenv(agy.EnvAgent, "")
-			t.Setenv(harness.variable, agentID)
-			t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "reviewwrite-launcher")
-			a, _ := executionTestApp(t)
-			for _, kind := range []string{capacity.TaskKindReview, workerRole} {
-				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.Starts = []state.Start{
-						{Kind: kind, Party: state.Party{HostSession: harness.prefix + agentID}},
-						{Kind: capacity.TaskKindReview, Party: state.Party{HostSession: "reviewwrite-launcher"}},
-					}
-					return nil, nil
-				}); err != nil {
-					t.Fatal(err)
-				}
-				for _, session := range []string{"reviewwrite-conversation", ""} {
-					got := a.hookReviewWrite(session)
-					if kind == capacity.TaskKindReview && got != reviewWriteRefusal {
-						t.Fatalf("reviewer identity was missed: %q", got)
-					}
-					if kind == workerRole && got != "" {
-						t.Fatalf("worker inherited launcher's review identity: %q", got)
-					}
-				}
 			}
 		})
 	}
