@@ -142,11 +142,13 @@ func (d *timerDispatchSession) close() {
 }
 
 func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
-	st, err := a.store.Read()
+	// Stop intent is read from the atomic snapshot: a locked read would queue
+	// this pass behind every writer before any due timer is even looked at.
+	stopped, err := timerStopRequested(a.store)
 	if err != nil {
 		return nil, err
 	}
-	if st.Stop != nil {
+	if stopped {
 		d.close()
 		d.ctx, d.cancel = context.WithCancel(d.parent)
 		return &watcher{app: a.snapshotAtNow()}, nil
@@ -158,7 +160,7 @@ func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
 	d.active.Add(1)
 	d.batches.Go(func() { defer d.active.Add(-1); w.timerActs.Wait() })
 	// Stop may have arrived while checks were running.
-	stopped, err := timerStopRequested(a.store)
+	stopped, err = timerStopRequested(a.store)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +171,14 @@ func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
 	return w, nil
 }
 
+// A pass decides what to check from the atomically replaced snapshot, without
+// the state lock. A shared read waits behind every queued writer, and under
+// load those waits delayed settlement past the fatal timer deadline although
+// the dispatcher was ticking. Only the settlement below takes the lock, and it
+// settles against the current state, so a snapshot that a writer has just
+// superseded costs at most a repeated check, never a double claim.
 func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
-	st, err := a.store.Read()
+	st, err := a.store.Peek()
 	if err != nil {
 		return nil, err
 	}
