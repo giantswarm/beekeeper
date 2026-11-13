@@ -50,12 +50,11 @@ window callers include admitted worker shell calls and native beekeeper calls
 by source function, retained after processes exit. Counts are invocations,
 not measured requests (pagination and retries can spend more); arguments,
 endpoints and credentials are never recorded. Recorded
-background invocations also share a durable allowance, capped at 2000 or
-less than half the observed REST limit. Unknown windows admit only 100
-bootstrap calls. Background reads stop at the shared floor or half the
-window's limit, whichever protects more requests. Worker calls keep their
-existing gate. The background_rest ledger lists each source's calls;
-pagination and retries mean invocation counts are not measured REST points.
+background invocations reserve the measured REST headroom above github.floor
+until a newer reading settles them. Readings older than a minute or past their
+reset hold background calls; unknown windows admit only 100 bootstrap calls.
+Worker calls keep their existing gate. The background_rest ledger lists each
+source's calls; pagination and retries mean invocations are not measured REST points.
 Repository default-branch commits are cached for an hour in each process;
 file reads cache for a minute, then refresh using ETags. Missing files cache
 for five minutes. Caches are bounded and scoped by repository, ref, path and
@@ -202,7 +201,7 @@ unread core budget:
 					_, _ = fmt.Fprintln(a.out, l)
 				}
 				if backgroundPtr != nil {
-					_, _ = fmt.Fprintf(a.out, "background REST invocations: %d of %d, resets %s\n", backgroundSpend.Calls, backgroundSpend.Limit, clock(a.now, backgroundSpend.Reset))
+					_, _ = fmt.Fprintf(a.out, "background REST invocations: %d total, %d reserved of %d since reading, resets %s\n", backgroundSpend.Calls, backgroundSpend.Reserved, backgroundSpend.Limit, clock(a.now, backgroundSpend.Reset))
 				}
 				if l := a.heldLine(loopSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)

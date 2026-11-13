@@ -76,6 +76,14 @@ or unreadable sample keeps it. Concurrent callers' spending during a batch count
 Exhausting this allowance holds background scans until reset; tracked PR reads, reviews and merges
 retain their own admission. Supervisor status names the scan hold.
 
+All native background REST callers also reserve invocations against the latest measured REST
+headroom above `github.floor`. A newer reading settles those reservations; a changed identity or
+window starts a new ledger. There is no fixed 2,000-call cap or implicit half-window reserve.
+Unknown readings permit 100 bootstrap invocations per hour; readings older than a minute or past
+reset hold calls until refreshed. Holds name the cause, reading, threshold and reset. Caller totals
+are diagnostics, not per-caller quotas. This gate counts invocations, so pagination and retries can
+spend more REST points; the measured scan allowance still applies separately.
+
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
