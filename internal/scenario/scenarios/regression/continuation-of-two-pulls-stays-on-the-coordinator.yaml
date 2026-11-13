@@ -1,0 +1,138 @@
+name: continuation-of-two-pulls-stays-on-the-coordinator
+description: >
+  The loop starts a task's worker on the coordinator while its execution
+  host is down. The worker opens two pull requests in the repository and
+  parks on each for the desk review. The host is back when the worker is
+  woken. A host continues exactly one pull request, and its start gate
+  refuses a continuation that carries two, on every pass: the loop's fresh
+  continuation stays on the coordinator, says why, and starts there.
+issue: https://github.com/giantswarm/beekeeper/issues/3866
+flow: regression
+tags: [regression, hosts, continuation, placement]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    # Down at first: the task's worker starts on the coordinator.
+    - {name: builder, fault: unreachable}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # The first worker opens the task's pull request and a second one
+      # beside it, and parks on each for the desk review, the first one's
+      # last. Its continuation has no script: it ends its turn idle.
+      - name: app 1
+        host: local
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - git: [checkout, --quiet, -b, app-1-docs, main]
+                dir: app
+              - write: {path: app/docs.txt, content: "the worker's docs\n"}
+              - git: [add, docs.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "docs: the worker's docs"]
+                dir: app
+              - git: [push, --quiet, origin, app-1-docs]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1-docs, --title, "docs: the worker's docs", --body, "Part of https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#3', --post-merge, '', desk review]
+                dir: app
+              - git: [checkout, --quiet, app-1]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The host does not answer: the refill starts the worker on the
+  # coordinator.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, host: local, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+        - github: {pull: {repo: example/app, number: 3, state: open}}
+  # The loop's next pass applies the worker's two parks from its inbox.
+  - advance: 2s
+  - name: parked
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park]}
+  - host: {name: builder, clear: true}
+  - advance: 2s
+  # The parked worker is woken: its task goes to a fresh continuation.
+  - name: wake
+    run: {args: [--as, guide, agents, wake, app 1, "CI is red on https://github.com/example/app/pull/2: fix it"]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.continuation-queued]}
+  # The host has room, but the continuation carries both pull requests:
+  # it stays here and says why.
+  - name: continue
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ["SUPERVISOR CONTINUATION STAYS HERE app 1: it carries 2 pull requests of example/app"]}
+      - events: {contains: [agents.continuation]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app 1 next-[0-9a-f]+', host: local, turns: 1}
+
+then:
+  - worker: {name: 'app 1 next-[0-9a-f]+', host: local, harness: claude, turns: 1}
+  - worker: {name: app 1, host: local, turns: 1, outcome: finish}
+  - github: {pull: {repo: example/app, number: 2, state: open}}
+  - github: {pull: {repo: example/app, number: 3, state: open}}
