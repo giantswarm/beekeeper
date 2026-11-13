@@ -19,6 +19,10 @@
 # A branch that adds or changes neither, main and tags pass at once without
 # a build. Both parts run before the step fails, so one round reports both.
 #
+# Under BEEKEEPER_SCENARIO_SHARD=<index>/<total> (each container of the CI
+# job) the scenario part controls that shard's scenarios, and only shard 0
+# runs the Go-test part, so each runs once per pull request.
+#
 # Usage: scenario-control.sh [base branch, default main]
 set -euo pipefail
 branch="${1:-main}"
@@ -56,6 +60,12 @@ else
   BEEKEEPER_SCENARIO_CONTROL_BASE="$src" BEEKEEPER_SCENARIO_REPORT="$report" \
     go test -tags scenario ./internal/scenario -run '^TestScenarioControl$' -count=1 -timeout=15m -v ||
     status=1
+fi
+
+shard="${BEEKEEPER_SCENARIO_SHARD:-}"
+if [ -n "$shard" ] && [ "${shard%%/*}" != 0 ]; then
+  echo "control: shard ${shard} leaves the Go-test control to shard 0"
+  exit "$status"
 fi
 
 if ! git diff --quiet "$base" HEAD -- internal/testcontrol .circleci/scenario-control.sh go.mod; then
