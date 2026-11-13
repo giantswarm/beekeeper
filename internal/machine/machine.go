@@ -12,7 +12,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -21,6 +20,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Mem is /proc/meminfo in MiB, with zswap's writeback from /proc/vmstat.
@@ -453,7 +454,7 @@ type Cluster struct {
 
 // KindClusters lists the kind clusters from the node containers docker runs.
 func KindClusters(ctx context.Context) ([]Cluster, error) {
-	out, err := exec.CommandContext(ctx, "docker", "ps", "--no-trunc", "--filter", "label=io.x-k8s.kind.cluster",
+	out, err := proc.CommandContext(ctx, "docker", "ps", "--no-trunc", "--filter", "label=io.x-k8s.kind.cluster",
 		"--format", `{{.ID}}\t{{.Label "io.x-k8s.kind.cluster"}}\t{{.RunningFor}}`).Output()
 	if err != nil {
 		return nil, err

@@ -8,11 +8,12 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // agyTurnFailure is the journal's reason for a turn that failed after its
@@ -309,7 +310,7 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 // when user_input step_update confirms acceptance on that conversation.
 func (s *Server) agyTurn(ctx context.Context, ref Ref, h HarnessConfig, env []string, log io.Writer, j Journal, prompt, thread string, onStart func() error) (string, bool, error) {
 	args := agyArgs(j.Request.Model, thread)
-	c := exec.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments
+	c := proc.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments
 	c.Dir, c.Env = j.Handle.Workspace, env
 	// Authentication diagnostics must not leak values into logs or replies.
 	c.Stderr = io.Discard

@@ -9,7 +9,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -45,7 +44,7 @@ var (
 	// runHostPrepare runs the release an update installed at path and
 	// returns its standard output: its answer, never its diagnostics.
 	runHostPrepare = func(ctx context.Context, path string, args ...string) ([]byte, error) {
-		return exec.CommandContext(ctx, path, args...).Output() //nolint:gosec // the release this update verified and installed
+		return proc.CommandContext(ctx, path, args...).Output() //nolint:gosec // the release this update verified and installed
 	}
 	// restartOnInstalled moves this host's watches, waiting reopens and
 	// sandbox broker onto the release installed at path, as self-update

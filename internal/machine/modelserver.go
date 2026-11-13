@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	neturl "net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The host's model servers, which load models into the iGPU's memory.
@@ -111,7 +112,7 @@ func serverCall(ctx context.Context, url, path string, body, into any) error {
 // kindNodeIPs maps the kind network's addresses to their containers' names.
 func kindNodeIPs(ctx context.Context) map[string]string {
 	out := map[string]string{}
-	raw, err := exec.CommandContext(ctx, "docker", "network", "inspect", "kind",
+	raw, err := proc.CommandContext(ctx, "docker", "network", "inspect", "kind",
 		"-f", `{{range .Containers}}{{.IPv4Address}} {{.Name}}{{"\n"}}{{end}}`).Output()
 	if err != nil {
 		return out

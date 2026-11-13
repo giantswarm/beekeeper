@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -49,7 +49,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 		return usageErr("--dir %s: not a directory", dir)
 	}
 	sp.brief = projectPrompt(dir, sp.brief)
-	bin, err := exec.LookPath(omp.Comm)
+	bin, err := proc.LookPath(omp.Comm)
 	if err != nil {
 		return err
 	}
@@ -521,7 +521,7 @@ func (a *app) ompListed(ctx context.Context) ([]string, error) {
 	if a.ompModelList != nil {
 		return a.ompModelList(ctx)
 	}
-	bin, err := exec.LookPath(omp.Comm)
+	bin, err := proc.LookPath(omp.Comm)
 	if err != nil {
 		return nil, err
 	}
@@ -532,7 +532,7 @@ func (a *app) ompListed(ctx context.Context) ([]string, error) {
 func ompModels(ctx context.Context, bin string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, inboxWait)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "models", "--json").Output() //nolint:gosec // omp from PATH
+	out, err := proc.CommandContext(ctx, bin, "models", "--json").Output() //nolint:gosec // omp from PATH
 	if err != nil {
 		return nil, err
 	}

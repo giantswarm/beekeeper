@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/gocache"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // A Go cache cleared under a running build breaks it: a compile reads an
@@ -128,7 +128,7 @@ func (a *app) clearGoCache(ctx context.Context, modcache bool, say func(string))
 // goClean runs go clean with flag on the build cache dir and the module
 // cache mod ("" for the go command's own), in dir, outside any module.
 func goClean(ctx context.Context, dir, mod, flag string) error {
-	c := exec.CommandContext(ctx, "go", "clean", flag) //nolint:gosec // a fixed go clean flag
+	c := proc.CommandContext(ctx, "go", "clean", flag) //nolint:gosec // a fixed go clean flag
 	c.Dir, c.Env = dir, append(os.Environ(), "GOCACHE="+dir, "GOFLAGS=", "GO111MODULE=")
 	if mod != "" {
 		c.Env = append(c.Env, "GOMODCACHE="+mod)

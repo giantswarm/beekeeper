@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -155,7 +155,7 @@ func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(pctx, "sh", "-c", cmd) //nolint:gosec // the condition its timer's setter gave on this machine
+	c := proc.CommandContext(pctx, "sh", "-c", cmd) //nolint:gosec // the condition its timer's setter gave on this machine
 	c.Env = append(os.Environ(), envTimerCommand+"=probe")
 	c.Stderr = &stderr
 	out, err := c.Output()

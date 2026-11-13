@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -545,7 +544,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	path := filepath.Join(w.store.Dir(), "timers", fmt.Sprintf("%d.log", f.t.ID))
 	rctx, cancel := context.WithTimeout(ctx, timerRunTimeout)
 	defer cancel()
-	c := exec.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
+	c := proc.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
 	mergeCheckGroup(c)                                  // cancellation ends the shell and its child commands
 	// An agents start the command runs says which timer started it, its
 	// time and how late it fired (agentStartTimer).

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/runrecord"
 )
 
@@ -83,7 +83,7 @@ func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args .
 	if r.Command != nil {
 		return r.Command(ctx, in, out, args...)
 	}
-	c := exec.CommandContext(ctx, "kubectl", args...) //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
+	c := proc.CommandContext(ctx, "kubectl", args...) //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
 	c.Stdin, c.Stdout, c.Stderr = in, out, io.Discard
 	// Credential helpers may outlive kubectl with an inherited output pipe.
 	// Bound draining after exit/cancellation; incomplete output is an error.
@@ -184,7 +184,7 @@ func (r Runner) try(ctx context.Context, argv []string, tool string) (handled bo
 			return fallback("working directory unavailable")
 		}
 	}
-	rootBytes, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel").Output() //nolint:gosec // explicit caller-owned worktree
+	rootBytes, err := proc.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel").Output() //nolint:gosec // explicit caller-owned worktree
 	if err != nil {
 		return fallback("not a git worktree")
 	}

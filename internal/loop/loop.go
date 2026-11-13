@@ -12,7 +12,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -36,6 +35,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/findings"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -114,13 +114,13 @@ func RunArgv(ctx context.Context, stdin string, argv []string) (string, string, 
 	if len(argv) == 0 {
 		return "", "", 0, errors.New("no command")
 	}
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
+	c := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // the loop's own binary or a configured command
 	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdin = strings.NewReader(stdin)
 	var out, errOut bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errOut
 	err := c.Run()
-	var ee *exec.ExitError
+	var ee *proc.ExitError
 	if errors.As(err, &ee) {
 		return out.String(), errOut.String(), ee.ExitCode(), nil
 	}

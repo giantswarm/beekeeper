@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -72,7 +71,7 @@ func (a *app) backgroundAgent(ctx context.Context, st *state.State, p state.Part
 // daemonRan reports whether the claude daemon lists session id as a
 // background session, running or stopped.
 func daemonRan(ctx context.Context, id string) bool {
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return false
 	}
@@ -83,7 +82,7 @@ func daemonRan(ctx context.Context, id string) bool {
 // daemonRunning returns the session ids the claude daemon lists as running
 // right now (claude agents --json without --all).
 func daemonRunning(ctx context.Context, config string) map[string]bool {
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return nil
 	}
@@ -210,7 +209,7 @@ var bgRun = func(ctx context.Context, dir string, env, argv []string) (string, e
 	ctx, cancel := context.WithTimeout(ctx, bgWait)
 	defer cancel()
 	argv = bgCommand(argv, time.Now())
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // claude's own command line
+	cmd := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // claude's own command line
 	cmd.Dir, cmd.Env = dir, env
 	// the daemon it hands the session to may keep the output open
 	cmd.WaitDelay = 5 * time.Second
@@ -236,7 +235,7 @@ var bgList = func(ctx context.Context, bin string, env []string, all bool) ([]bg
 	if all {
 		args = append(args, "--all")
 	}
-	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // claude's own command line
+	cmd := proc.CommandContext(ctx, bin, args...) //nolint:gosec // claude's own command line
 	cmd.Env = env
 	out, err := cmd.Output()
 	if err != nil {
@@ -300,7 +299,7 @@ func firstLines(out string) string {
 // launchBackground starts sp as a background session in dir with none of
 // the caller's session variables and returns its session id.
 func (a *app) launchBackground(ctx context.Context, sp agentStart, dir string, profiled []string) (string, error) {
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return "", err
 	}
@@ -375,7 +374,7 @@ func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) er
 		return err
 	}
 
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return err
 	}
@@ -652,7 +651,7 @@ func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, 
 // bgStop stops the background session id (claude stop, which keeps its
 // conversation for claude --bg --resume).
 func (a *app) bgStop(ctx context.Context, id string) error {
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return err
 	}
