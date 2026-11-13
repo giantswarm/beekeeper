@@ -30,7 +30,6 @@ const (
 	deliveryFlowing                  = "flowing"
 	devctlBinary                     = "devctl"
 	diskHoldingFile                  = "disk-holding.json"
-	effortFlag                       = "--effort"
 	epicOwnerTask                    = "Epic owner: "
 	epicSnapshotFile                 = "epic-delivery.json"
 	excludeFlag                      = "exclude"
@@ -53,7 +52,6 @@ const (
 	reviewedMergeRoute               = "reviewed merge"
 	runMerge                         = "merge"
 	selfUpdateCmdName                = "self-update"
-	taskKindArg                      = "--kind"
 	taskKindReview                   = "review"
 	throughputCadence                = time.Minute
 	throughputObservationFile        = "throughput-observation.json"
@@ -88,7 +86,6 @@ func Vocabulary() map[string]any {
 		"deliveryFlowing":                  deliveryFlowing,
 		"devctlBinary":                     devctlBinary,
 		"diskHoldingFile":                  diskHoldingFile,
-		"effortFlag":                       effortFlag,
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
@@ -111,7 +108,6 @@ func Vocabulary() map[string]any {
 		"reviewedMergeRoute":               reviewedMergeRoute,
 		"runMerge":                         runMerge,
 		"selfUpdateCmdName":                selfUpdateCmdName,
-		"taskKindArg":                      taskKindArg,
 		"taskKindReview":                   taskKindReview,
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,

@@ -255,9 +255,22 @@ agents:
     - {match: '.*', kind: review, harness: codex, effort: high}
 ```
 
-An explicit `agents start --effort` wins, followed by the first matching effort
-rule, then the selected capacity choice's effort. A rule's optional `harness`
-limits its effort; its model selector remains independent of harness selection.
+Every start, the loop's workers, reviewers, epic owners, continuations and
+resumes and the SSH executions alike, takes the first of:
+
+1. an explicit `agents start --effort`;
+2. the first matching effort rule;
+3. the capacity choice's effort: the choice `--harness auto` picked, or the
+   choice of the harness and model the start names;
+4. the effort of the session the start continues, on that session's harness:
+   the parked worker a fresh continuation continues, or the roster agent a
+   start of the same name resumes or replaces;
+5. `supervisor.effort`, for the sessions the loop starts.
+
+None of them leaves the harness default; agy gets no effort from 4 or 5. The
+`agents.start` event of each start names the effort it applied. A rule's
+optional `harness` limits its effort; its model selector remains independent
+of harness selection.
 Unscoped rules retain their existing behavior. Local and SSH starts resolve the
 effort after choosing the harness, including dry runs and quota retries. Codex
 checks the selected model's `supported_reasoning_levels` in `models_cache.json`

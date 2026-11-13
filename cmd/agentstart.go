@@ -714,7 +714,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
+				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s, effort %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(level, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
 			}
 		},
 	}

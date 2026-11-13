@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
@@ -86,75 +87,85 @@ func TestEffortDryRunAndWake(t *testing.T) {
 	}
 }
 
-func TestEffortLoopStartDefault(t *testing.T) {
+// TestEffortLoopLeavesEffortToTheStart checks that the loop passes no
+// --effort of its own: supervisor.effort is the start's last default, after
+// the rule, the choice and the continued session, which an explicit flag
+// from the loop would mask.
+func TestEffortLoopLeavesEffortToTheStart(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
 	l := &loop.Loop{Host: r.a}
-	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief"); err != nil {
+	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", "--harness", capacity.HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
-	call := r.called(agentsName, agentStartName)
-	i := slices.Index(call, effortFlag)
-	if i < 0 || call[i+1] != testEffortHigh {
-		t.Fatalf("start omitted supervisor effort: %q", call)
+	if call := r.called(agentsName, agentStartName); slices.Contains(call, effortFlag) {
+		t.Fatalf("the loop's default masks the start's resolution: %q", call)
 	}
 	r.calls = nil
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", effortFlag, testEffortLow); err != nil {
 		t.Fatal(err)
 	}
-	call = r.called(agentsName, agentStartName)
+	call := r.called(agentsName, agentStartName)
 	if strings.Count(strings.Join(call, " "), effortFlag) != 1 || call[len(call)-1] != testEffortLow {
 		t.Fatalf("explicit effort overridden: %q", call)
 	}
 }
 
-func TestEffortRulePrecedence(t *testing.T) {
+// TestEffortLoopDefaultYieldsToRuleAndChoice checks the order of a loop
+// start's effort: a matching rule, then the choice's effort, then
+// supervisor.effort; agy gets none, and a start not of the loop gets no
+// loop default.
+func TestEffortLoopDefaultYieldsToRuleAndChoice(t *testing.T) {
 	a, _ := stubApp(t)
-	a.cfg.Agents.Models = []config.AgentModelRule{
-		{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortX},
-		{Match: testScanRule, Effort: testEffortHigh},
-	}
-	for _, tc := range []struct{ name, kind, flag, want string }{
-		{testScanName, workerRole, "", testEffortHigh},
-		{testScanName, capacity.TaskKindReview, "", testEffortX},
-		{testScanName, workerRole, testEffortLow, testEffortLow},
-		{testFixWord, workerRole, "", ""},
+	a.as = loop.LoopParty.Name
+	a.cfg.Supervisor.Effort = testEffortHigh
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortLow}}
+	a.cfg.Capacity.Choices = []config.Choice{{Harness: claudeComm, Model: bgModel, Effort: testEffortX}, {Harness: claudeComm, Model: "sonnet"}}
+	for _, tc := range []struct{ name, kind, harness, model, choice, want string }{
+		{"scan-review", capacity.TaskKindReview, claudeComm, "sonnet", "", testEffortLow},
+		{"scan-worker", workerRole, claudeComm, "sonnet", "", testEffortHigh},
+		{"auto pick", workerRole, claudeComm, bgModel, testEffortX, testEffortX},
+		{"named choice", workerRole, claudeComm, bgModel, "", testEffortX},
+		{"agy pick", workerRole, capacity.HarnessAgy, "gemini", "", ""},
 	} {
-		got, err := a.startEffort(tc.name, tc.kind, tc.flag)
+		got, err := a.selectedEffort(tc.name, tc.kind, tc.harness, tc.model, "", tc.choice)
 		if err != nil || got != tc.want {
 			t.Errorf("%+v: got %q, %v", tc, got, err)
 		}
 	}
-	if _, err := a.startEffort(testFixWord, workerRole, "extreme"); err == nil {
-		t.Fatal("invalid flag accepted")
-	}
-	a.cfg.Guide.Effort = testEffortMax
-	if got := a.sessionEffort(agentStart{name: "scan guide", role: guideName}); got != testEffortMax {
-		t.Fatalf("guide effort: %q", got)
-	}
-	if got := a.sessionEffort(agentStart{name: testScanName, role: workerRole}); got != testEffortHigh {
-		t.Fatalf("rule effort: %q", got)
+	a.as = agentOne
+	if got, err := a.selectedEffort("scan-worker", workerRole, claudeComm, "sonnet", "", ""); err != nil || got != "" {
+		t.Fatalf("a start not of the loop took the loop's default: %q, %v", got, err)
 	}
 }
 
-func TestEffortLoopYieldsToRule(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Supervisor.Effort = testEffortHigh
-	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortLow}}
-	l := &loop.Loop{Host: r.a}
-	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
+// TestEffortContinuationKeepsTheContinuedSession checks that a fresh
+// continuation of a parked worker, and a start that resumes a roster agent
+// under its name, keep the effort that worker was started with on its
+// harness when no rule or choice names one, and that a choice's effort
+// still wins.
+func TestEffortContinuationKeepsTheContinuedSession(t *testing.T) {
+	a, _ := stubApp(t)
+	parked := state.Agent{Party: state.Party{Name: "app 1", Session: "parked-session"}, Task: "Continue example/app#1", Park: &state.Park{At: a.now.Add(-time.Hour), Continuing: true}}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, parked)
+		st.Starts = append(st.Starts, state.Start{Party: parked.Party, Model: "sonnet", Effort: testEffortMax, At: a.now.Add(-2 * time.Hour)})
+		return nil, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if call := r.called(agentsName, agentStartName); slices.Contains(call, effortFlag) {
-		t.Fatalf("loop default masked the matching rule: %q", call)
-	}
-	r.calls = nil
-	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-worker", "brief"); err != nil {
-		t.Fatal(err)
-	}
-	call := r.called(agentsName, agentStartName)
-	if i := slices.Index(call, effortFlag); i < 0 || call[i+1] != testEffortHigh {
-		t.Fatalf("worker without a rule lost the loop default: %q", call)
+	next := continuationName(parked)
+	for _, tc := range []struct{ name, harness, choice, want string }{
+		{next, claudeComm, "", testEffortMax},
+		{parked.Name, claudeComm, "", testEffortMax},
+		{next, codex.Harness, "", ""},
+		{next, claudeComm, testEffortHigh, testEffortHigh},
+		{"app 2", claudeComm, "", ""},
+	} {
+		got, err := a.selectedEffort(tc.name, workerRole, tc.harness, "sonnet", "", tc.choice)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %q, %v", tc, got, err)
+		}
 	}
 }
 

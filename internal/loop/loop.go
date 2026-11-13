@@ -2965,9 +2965,6 @@ func isLoopGitHubHeldOutput(line string) bool {
 // Run runs a beekeeper command as the loop; a non-zero exit is an error
 // with its output.
 func (l *Loop) Run(ctx context.Context, args ...string) (string, error) {
-	if len(args) >= 4 && args[0] == agentsName && args[1] == agentStartName && !slices.Contains(args, effortFlag) {
-		args = append(args, l.startEffort(args)...)
-	}
 	out, code, err := BeekeeperRun(ctx, l.As(args...)...)
 	if err != nil {
 		return out, err
@@ -4838,22 +4835,6 @@ func (l *Loop) WakeReleased(ctx context.Context, release superloop.Action) error
 		l.Mu.Unlock()
 	}
 	return nil
-}
-
-// startEffort keeps a matching agents.models effort ahead of the loop's
-// default; the start resolves that rule itself.
-func (l *Loop) startEffort(args []string) []string {
-	kind := workerRole
-	if slices.Contains(args, "--"+reviewFlag) || slices.Contains(args, "--"+reviewOfSelfHostedFlag) {
-		kind = taskKindReview
-	}
-	if i := slices.Index(args, taskKindArg); i >= 0 && i+1 < len(args) {
-		kind = args[i+1]
-	}
-	if l.Host.Cfg().Agents.EffortFor(args[2], kind) != "" {
-		return nil
-	}
-	return Cmd.EffortFlags(l.Host.Cfg().Supervisor.Effort)
 }
 
 func (l *Loop) HoldingStarts() bool {

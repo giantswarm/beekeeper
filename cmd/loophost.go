@@ -49,7 +49,6 @@ func init() {
 		DeliveryExempt:             deliveryExempt,
 		DeliveryURL:                deliveryURL,
 		DevctlCommandEnv:           devctlCommandEnv,
-		EffortFlags:                effortFlags,
 		EndNotes:                   endNotes,
 		EndedParkCandidate:         endedParkCandidate,
 		EpicChildStatus: func(st *state.State, child board.Item, now time.Time, policy any) string {

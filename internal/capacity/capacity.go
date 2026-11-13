@@ -1823,6 +1823,22 @@ func ChoicesHaveModel(choices []config.Choice, model string) bool {
 	})
 }
 
+// ChoiceEffort is the effort of the first choice of harness and model: a
+// start that names both takes the effort of the choice that would have
+// picked them. "" without a model or a matching choice.
+func ChoiceEffort(choices []config.Choice, harness, model string) string {
+	h, m := cmp.Or(strings.TrimSpace(harness), claudeComm), strings.TrimSpace(model)
+	if m == "" {
+		return ""
+	}
+	for _, ch := range choices {
+		if strings.EqualFold(ch.Harness, h) && choiceModelMatches(ch, m) {
+			return strings.TrimSpace(ch.Effort)
+		}
+	}
+	return ""
+}
+
 func FilterChoiceModel(k config.Capacity, model string) config.Capacity {
 	m := strings.TrimSpace(model)
 	if k.AuthorFamily == "" {

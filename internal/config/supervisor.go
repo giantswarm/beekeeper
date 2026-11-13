@@ -46,7 +46,9 @@ type Supervisor struct {
 	// Zero defaults to 150; negative disables the size shortcut.
 	ReviewLightLines int `yaml:"reviewLightLines"`
 
-	// Effort is the default for sessions started by the supervisor loop.
+	// Effort is the last default of the sessions the supervisor loop starts:
+	// a matching agents.models rule, the capacity choice's effort and the
+	// effort of the session a start continues win over it; agy gets none.
 	Effort string `yaml:"effort"`
 	// ReviewRounds caps the review rounds that ask for changes (default 1);
 	// an approved round counts for none, and superloop.MaxReviews bounds all
