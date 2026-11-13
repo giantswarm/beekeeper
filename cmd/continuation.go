@@ -106,34 +106,22 @@ func continuationName(ag state.Agent) string {
 
 // continuedPark is the park of the worker whose fresh continuation the start
 // named name is: the loop marks that park Continuing before it starts the
-// session continuationName names. Nil for any other start.
+// session continuationName names. The session the loop starts for a review
+// park whose pull request ended continues that task too: the loop names it
+// in the review park's Continuing, and its park is the wait on that pull
+// request. Nil for any other start.
 func continuedPark(st *state.State, name string) *state.Park {
 	for _, ag := range st.Agents {
 		if ag.Park != nil && ag.Park.Continuing && continuationName(ag) == name {
 			return ag.Park
 		}
 	}
-	return nil
-}
-
-// continuesPull says whether the start named name continues a task whose
-// delivery it keeps, and the pull request that joins that delivery: a parked
-// worker's fresh continuation (continuedPark, with the pull it parked on) or
-// the session the loop starts for a review park whose pull request ended
-// (state.ReviewPark.Continuing, with that pull request).
-func continuesPull(st *state.State, name string) (string, bool) {
-	if p := continuedPark(st, name); p != nil {
-		return parkedPull(p), true
-	}
 	for _, rp := range st.ReviewParks {
 		if rp.Continuing != "" && strings.EqualFold(rp.Continuing, name) {
-			if r, ok := parseRef(rp.On); ok {
-				return refName(r), true
-			}
-			return "", true
+			return &state.Park{On: rp.On, At: rp.At, RefKind: github.RefPullRequest, ReviewHead: rp.ReviewHead, PostMerge: rp.PostMerge}
 		}
 	}
-	return "", false
+	return nil
 }
 
 // parkedPull is the pull request p waits on, owner/repo#n: "" when p waits
