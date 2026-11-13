@@ -22,9 +22,12 @@ coordinator.
 
 Explicit `supervisor.hostsFirst: false` retains local-first placement. `capacity` and `supervisor
 status` show dated per-host placement reasons. Reviewers follow the same host preferences, including
-Codex reviewers without a worker GitHub App. On an execution host, `beekeeper agents review` reads
-the assigned PR and its closing issues, `--diff` reads the diff, and `--body-file <file>` posts the
-exact-head comment review through the coordinator for merge authorization.
+Codex reviewers without a worker GitHub App. A reviewer start its host never acknowledged (the
+reservation released) starts no round: the loop's next pass starts that reviewer again on another
+host or the coordinator, never on the host that failed it. On an execution host,
+`beekeeper agents review` reads the assigned PR and its closing issues, `--diff` reads the diff,
+and `--body-file <file>` posts the exact-head comment review through the coordinator for merge
+authorization.
 
 These execution forms take no PR reference: the assigned review supplies the target. On the
 coordinator, `beekeeper agents review <owner/repo>#<n>` starts an independent review; its flags
