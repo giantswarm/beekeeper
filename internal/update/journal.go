@@ -21,6 +21,8 @@ import (
 )
 
 const (
+	// journalFile is the journal's name in the recovery directory.
+	journalFile              = "journal.json"
 	outdatedJudgeProbeReason = "isolated workflow probe failed 3 times"
 	probationPrepared        = "prepared"
 	probationPending         = "pending"
@@ -125,7 +127,7 @@ func openInstallation(ctx context.Context, path string) (*installation, error) {
 		return nil, err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("unsafe update directory")
+		return nil, fmt.Errorf("unsafe update directory %s", dir)
 	}
 	if err := syncDir(filepath.Dir(dir)); err != nil {
 		return nil, err
@@ -144,6 +146,10 @@ func openInstallation(ctx context.Context, path string) (*installation, error) {
 	return &installation{target: target, dir: dir, external: external, lock: l, ctx: ctx}, nil
 }
 func (i *installation) close() { _ = i.lock.Unlock() }
+
+// journal is the path of the installation's journal.
+func (i *installation) journal() string { return filepath.Join(i.dir, journalFile) }
+
 func regularOrMissing(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -194,7 +200,7 @@ func (i *installation) verify(b Binary) (string, error) {
 	return p, nil
 }
 func (i *installation) read() (*Journal, error) {
-	p := filepath.Join(i.dir, "journal.json")
+	p := i.journal()
 	if err := regularOrMissing(p); err != nil {
 		return nil, err
 	}
@@ -269,7 +275,7 @@ func (i *installation) write(j *Journal) error {
 	if err != nil {
 		return err
 	}
-	return durableFile(filepath.Join(i.dir, "journal.json"), append(raw, '\n'), 0o600)
+	return durableFile(i.journal(), append(raw, '\n'), 0o600)
 }
 func (i *installation) retain(path string, b Binary) error {
 	p, err := i.artifact(b)

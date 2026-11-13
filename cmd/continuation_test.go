@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/capacity"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -547,6 +548,60 @@ func TestParkedPullNamesOnlyAPullRequest(t *testing.T) {
 	} {
 		if got := parkedPull(tc.park); got != tc.want {
 			t.Errorf("parkedPull(%+v) = %q, want %q", tc.park, got, tc.want)
+		}
+	}
+}
+
+// The fresh worker the loop starts for a pull request whose worker left the
+// roster for the desk review takes that worker's place: the note it filed,
+// the timer it set, its serve record and its desk-review park name the
+// fresh worker, and a late answer or wake for the old session reaches the
+// fresh worker instead of resuming the old transcript beside it.
+//
+// control: none: takeOverReviewPark is new, so the merge base cannot build this test
+func TestFixerTakesOverTheWorkerItsReviewParkLeft(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	old := state.Party{Name: holderParked, HostSession: codex.HostPrefix + continuationOldSession}
+	fixer := state.Agent{Party: state.Party{Name: holderParked, HostSession: codex.HostPrefix + continuationNewSession}, Task: "Fix the findings on https://github.com/o/r/pull/13"}
+	rp := state.ReviewPark{On: "o/r#13", ReviewHead: "abc123", Agent: holderParked, Party: old, Serves: continuationTaskRef}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{fixer}
+		st.EndedWorkers = []state.Start{{Party: old, Task: recoveryTask}}
+		st.ReviewParks = []state.ReviewPark{rp}
+		st.Records = []state.Record{{Session: old, Issue: continuationTaskRef}}
+		st.Notes = []state.Note{{ID: 7, By: old, Text: "May the desk buy the larger build cache?"}}
+		st.Timers = []state.Timer{{ID: 3, Wake: old.HostSession, By: old, What: "look at the cache again"}}
+		st.Grants = []state.Grant{{Resource: labOne, To: old}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		return takeOverReviewPark(a, st, rp, holderParked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch {
+	case !st.Notes[0].By.Is(fixer.Party):
+		t.Errorf("the old session's note stays its own: %+v", st.Notes[0].By)
+	case st.Timers[0].Wake != fixer.Name || !st.Timers[0].By.Is(fixer.Party):
+		t.Errorf("the old session's timer wakes %q, set by %+v", st.Timers[0].Wake, st.Timers[0].By)
+	case len(st.Records) != 1 || !st.Records[0].Session.Is(fixer.Party) || !strings.EqualFold(st.Records[0].Issue, continuationTaskRef):
+		t.Errorf("serve records %+v", st.Records)
+	case !st.ReviewParks[0].Party.Is(fixer.Party):
+		t.Errorf("the desk-review park stays the old session's: %+v", st.ReviewParks[0].Party)
+	case !st.Grants[0].To.Is(fixer.Party):
+		t.Errorf("the old session's grant stays its own: %+v", st.Grants[0].To)
+	}
+	for _, q := range []string{old.HostSession, old.Name} {
+		ag, rostered, err := a.wakeParty(st, q)
+		if err != nil || !rostered || !ag.Is(fixer.Party) {
+			t.Errorf("a wake of %q reaches %+v (rostered %v, %v), not the fresh worker", q, ag.Party, rostered, err)
 		}
 	}
 }

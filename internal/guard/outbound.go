@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/policycontent"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The outbound guard refuses a tool call that would send a secret value off
@@ -470,7 +470,7 @@ func (o Outbound) pushed(dir string, refs []string) string {
 func runGit(dir string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // git with fixed subcommands
+	c := proc.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // git with fixed subcommands
 	out, err := c.StdoutPipe()
 	if err != nil {
 		return nil, err

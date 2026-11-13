@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -25,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -492,7 +492,7 @@ func brokeredCall(exe, procDir string, timeout time.Duration, env []string, argv
 			ctx, cancel = context.WithTimeout(ctx, timeout)
 			defer cancel()
 		}
-		c := exec.CommandContext(ctx, exe, args...) //nolint:gosec // this binary, the arguments checked by argv
+		c := proc.CommandContext(ctx, exe, args...) //nolint:gosec // this binary, the arguments checked by argv
 		// ended as a terminal ends it: a watch says nothing more, a start
 		// leaves no half-written state
 		c.Cancel = func() error { return c.Process.Signal(syscall.SIGTERM) }
@@ -512,7 +512,7 @@ func brokeredCall(exe, procDir string, timeout time.Duration, env []string, argv
 			c.Stdout = w
 		}
 		err = c.Run()
-		var exit *exec.ExitError
+		var exit *proc.ExitError
 		if err != nil && !errors.As(err, &exit) {
 			return sandbox.Reply{}, err
 		}
@@ -534,7 +534,7 @@ func sandboxScopeCmd() *cobra.Command {
 			if err := sandbox.EnterScope(spool, unit, cp); err != nil {
 				return err
 			}
-			path, err := exec.LookPath(argv[0])
+			path, err := proc.LookPath(argv[0])
 			if err != nil {
 				return &exitError{code: guard.ExitNotFound, msg: err.Error()}
 			}

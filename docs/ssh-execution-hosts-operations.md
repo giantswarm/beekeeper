@@ -190,7 +190,13 @@ agents:
 ```
 
 An entry's own `policyDigest` is deprecated: it still pins a host beekeeper
-never updated, and beekeeper's recorded pin replaces it.
+never updated, and beekeeper's recorded pin replaces it. The pin also records
+the digest the entry named. When the host's policy changes without a new
+release (its configuration, such as its repository map), setting the entry's
+`policyDigest` to the digest `prepare` printed is enough: the supervisor loop
+updates the host once its turns drain, as for a new release, and pins the
+digest the host prepares. An entry still naming a stale digest is updated for
+once, and the update's line says the host did not prepare that digest.
 
 ### Host updates follow the coordinator
 
@@ -214,20 +220,24 @@ on the SSH command's standard input: the host downloads the binary and its
 bundle from the release's public download URLs and asks GitHub's API nothing,
 so a host without a GitHub login updates all the same, and no token leaves the
 coordinator. A lookup failure delays the update, with a rate limit named with
-its reset; the current host policy remains admitted. A host whose installed release predates this looks the release up
-on its own once more.
+its reset; the current host policy remains admitted, and the host takes starts until the lookup is
+retried. A host whose installed release predates this looks the release up on its own once more.
 The coordinator then runs `hosts check` with the digest the host answered and
 records the release and digest in its state (`hostPins`): every start on the
 host is pinned to it. No configuration change and no person is involved.
 
 The supervisor loop runs the update for every `agents.hosts` entry whose pin
-is not the coordinator's release, so a coordinator self-update carries the
-hosts with it. During coordinator probation only updates wait. Starts continue
+is not the coordinator's release, or whose `policyDigest` changed since the
+pin, so a coordinator self-update carries the hosts with it. During
+coordinator probation only updates wait, and starts continue
 on older releases that pass the live protocol, capability, identity and pinned
-policy checks; release equality is not the compatibility boundary:
+policy checks; release equality is not the compatibility boundary. Once the
+coordinator's probation passed, a host pinned to an older release drains:
 
-- a host with an execution in a turn waits to update; compatible starts remain
-  admitted. It updates once no execution is in a turn. An execution between turns (a
+- a host with an execution in a turn waits to update and takes no new start, so a busy
+  host is not kept busy by starts placed on it: the executions on it reach a turn
+  boundary, and the loop updates it at the first pass that finds no execution in a turn.
+  The start goes to another host or to the coordinator, and says why. An execution between turns (a
   parked worker waiting for its wake: ready, no turn running, no wake
   stored, no delivery uncertain) does not hold the update back. The host
   holds its admission through the install, so the next turn begins only
@@ -247,8 +257,9 @@ policy checks; release equality is not the compatibility boundary:
   `guide watch`) and tries the host again hourly; the other hosts keep
   running. `beekeeper agents hosts update <host>` retries it at once;
 - a host that drains or waits past more than one coordinator release (it did
-  not follow one release and does not follow the next either) is handed on
-  once as a finding, with the executions or the error that keep it behind.
+  not follow one release and does not follow the next either), or for longer than an hour,
+  is handed on once as a finding (`[host-behind <host> <release>]`), with the executions or
+  the error that keep it behind.
 
 A host first needs a release with `agents hosts self-update` installed by
 hand; from then on it follows the coordinator. A development build of the
@@ -567,6 +578,11 @@ room, runs there pinned to the repository's default branch. This is the default
 When no host can take the start, the coordinator is the fallback within its
 ordinary local, provider, model and resource guards. Fallback preserves the
 eligible model choices. A host's check weighs only the harnesses it can run.
+While the coordinator's own pick is a subscription behind its weekly pace and
+the coordinator has room, a host whose pick spends another provider passes the
+loop's start on to the next host, else to the coordinator on the coordinator's
+pick, so a subscription no host runs (agy) still gets its starts. The host's
+placement reason names both picks.
 `beekeeper capacity` and `beekeeper supervisor status` include each configured
 host's last dated placement reason, repository and any update failure. A dated
 placement is an observation, not a fresh capacity or admission grant. Hosts
@@ -594,7 +610,9 @@ exact head and reported review before a merge.
 
 A start by hand, `agents start` or `emergency start` without `--host`, is placed the same way:
 on the first of `supervisor.hosts` that maps its repository, lists its harness and has room
-(`capacity --host`), pinned to `--ref`, else to the repository's default branch. Its repository is
+(`capacity --host`), pinned to `--ref`, else to the repository's default branch. Unlike the loop's
+starts, it does not pass to the coordinator's behind-pace pick: the host runs it on its own pick.
+Its repository is
 `--repo`, else the origin of the checkout `--dir` names, else the one its brief names, else the
 origin of `agents.dir` or the current directory; the host's workspace takes the place of `--dir`
 and `--branch`. Its first line says where it went: `placed on <host> by
@@ -679,6 +697,20 @@ A final report, a stop, a failed start and a crash all enter it; the watch
 advances it, each execution on its own backoff, and records it under the
 execution's `retirement`. A parked worker, an open desk review or a finished
 round of an unfinished task does not enter it: the worktree and thread stay.
+
+Only the newest publication transfer can hold retirement; earlier pushes are
+superseded. A successful publication marks its transfer recovered. When host
+reconciliation confirms that the worker ended and collects its transcript,
+the watch advances retirement again in that same pass.
+
+A message cannot reach an execution that ended for good: one that is retired, stopped or
+released, whose host holds no journal of it, that never accepted its task, takes no messages, or
+runs a harness with no way back into its conversation. When the loop has work for such a worker on
+the roster (a review's findings, a red check, a conflict, a post-merge step), it does not wake it.
+It takes the entry off the roster, with an `agents.remove` line that names why, and starts a fresh
+fixer under the same name on the pull request's branch, as it does for a worker off the roster. A
+fixer that took the name since the loop's pass read the roster, such as one started for another
+pull request of the same worker, is woken and keeps its entry.
 
 The execution's inventory is in its host journal under `resources`, recorded
 before the resources exist: the worktree, its repository and branch, scratch,

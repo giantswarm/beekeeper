@@ -9,12 +9,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const handoverName = "beekeeper-vault"
@@ -61,7 +62,7 @@ func (k *Keeper) PrepareHandover() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemctl", "--user", "show", BrokerUnit, "--property=NFileDescriptorStore", "--value").Output()
+	out, err := proc.CommandContext(ctx, "systemctl", "--user", "show", BrokerUnit, "--property=NFileDescriptorStore", "--value").Output()
 	if err != nil || strings.TrimSpace(string(out)) != "1" {
 		_ = f.Truncate(0)
 		return errors.New("service manager did not retain the vault handover; restart refused")

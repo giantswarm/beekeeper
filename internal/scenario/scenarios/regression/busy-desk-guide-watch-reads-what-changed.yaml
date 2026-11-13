@@ -1,0 +1,44 @@
+name: busy-desk-guide-watch-reads-what-changed
+description: >
+  A busy desk rewrites its state about once a second: every session, runner
+  and command writes it, and most writes append an event. The guide's feed
+  (guide watch) runs as long as the desk does and wakes on every change.
+  Live, beside about 30 workers and an 8.9 MB state rewritten 28 times in 30
+  seconds, it took 45% of a core and read the whole state 1.7 times a
+  second: each rewrite was read and decoded in full, as the loop's and the
+  desktop watch's reads were. On a generated desk of 12 MB rewritten once a
+  second, guide watch takes at most 5% of a core: a reader decodes only the
+  entries a rewrite changed, and the feed polls a change at most every two
+  seconds.
+issue: https://github.com/giantswarm/beekeeper/issues/3847
+flow: regression
+tags: [regression, guide, performance]
+timeout: 150s
+
+given:
+  repositories:
+    - name: example/app
+  state:
+    generate:
+      agents: 120
+      records: 5000
+      deliveries: 1200
+      reports: 8000
+      events: 20000
+    rewrite: 1s
+
+when:
+  - name: guide
+    background: {args: [--as, scenario guide, guide, watch]}
+  # Its first polls read the whole desk once and say what is new on it; the
+  # budget is for the rewrites after.
+  - name: settle
+    measure: {for: 15s}
+  - name: busy
+    measure: {for: 30s}
+    expect:
+      - cpu: {name: guide, max: 0.05}
+
+then:
+  - process: {name: guide, running: true}
+  - events: {contains: [scenario.rewrite]}

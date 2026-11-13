@@ -27,8 +27,9 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 		modeCodeFailure    = "code failure"
 		modeRunnerDown     = "runner unavailable"
 		modeCIAlreadyGreen = "CI already green"
+		modeCIPackage      = "builder lacks a CI package"
 	)
-	for _, mode := range []string{modeQuotaPass, modeQuotaCI, modeQuotaPersists, modeCodeFailure, modeRunnerDown, modeCIAlreadyGreen} {
+	for _, mode := range []string{modeQuotaPass, modeQuotaCI, modeQuotaPersists, modeCodeFailure, modeRunnerDown, modeCIAlreadyGreen, modeCIPackage} {
 		t.Run(mode, func(t *testing.T) {
 			repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, map[string]string{golangCILintYAML: "version: '2'\n"})
 			base := repo.advanceMain(t, repo.head1)
@@ -65,6 +66,14 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 					}
 					_, _ = fmt.Fprintln(runner.Stdout, "--- FAIL: TestCombinedRegression")
 					return true, 1
+				case mode == modeCIPackage:
+					// The builder image lacks a package the repository's CI
+					// installs: the cgo build of the tests fails for it.
+					if argv[0] == mergeLintCommand {
+						return true, 0
+					}
+					_, _ = fmt.Fprintln(runner.Stdout, "beekeeper run: checker environment lacks libasound2-dev, which the repository CI installs\n# example.invalid/midi\nmidi.go:4:10: fatal error: alsa/asoundlib.h: No such file or directory\nFAIL\texample.invalid/midi [build failed]")
+					return true, 1
 				case mode == modeQuotaPersists || len(commands) == 1:
 					_, _ = fmt.Fprintln(runner.Stdout, "compile: writing output: disk quota exceeded (typecheck)")
 					return true, 1
@@ -83,7 +92,7 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 			switch mode {
 			case modeCodeFailure:
 				wantCode, wantDirs = github.SquashRed, 1
-			case modeQuotaPersists, modeRunnerDown:
+			case modeQuotaPersists, modeRunnerDown, modeCIPackage:
 				wantCode = github.SquashTooling
 			case modeQuotaCI:
 				wantDirs = 1
@@ -92,6 +101,9 @@ func TestMergeEnvironmentRetryAndCIProof(t *testing.T) {
 			}
 			if !checked || code != wantCode || len(dirs) != wantDirs {
 				t.Fatalf("checked=%v code=%d dirs=%v: %s", checked, code, dirs, reason)
+			}
+			if mode == modeCIPackage && !strings.Contains(reason, "checker environment lacks libasound2-dev") {
+				t.Fatalf("the refusal does not name what the builder lacks: %s", reason)
 			}
 			if mode == modeQuotaPass && (len(commands) != 3 || commands[2] != "go test -short ./...") {
 				t.Fatalf("missing full-module check: %v", commands)

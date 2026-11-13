@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -36,7 +36,7 @@ func (a *app) listLabDirs() (map[string]string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	raw, err := exec.CommandContext(ctx, agentlabCmd, "list", "-o", "json").Output()
+	raw, err := proc.CommandContext(ctx, agentlabCmd, "list", "-o", "json").Output()
 	if err != nil {
 		return nil, fmt.Errorf("agentlab list: %w", err)
 	}

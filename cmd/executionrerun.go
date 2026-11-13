@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -76,14 +76,14 @@ var runExecutionCIRerun = func(ctx context.Context, binary, repository string, p
 	if binary == "" {
 		binary = devctlBinary
 	}
-	child := exec.CommandContext(ctx, binary, "pr", "rerun", repository, strconv.Itoa(pr)) //nolint:gosec // configured coordinator devctl, fixed verb and validated repository/PR
+	child := proc.CommandContext(ctx, binary, "pr", "rerun", repository, strconv.Itoa(pr)) //nolint:gosec // configured coordinator devctl, fixed verb and validated repository/PR
 	child.Env = devctlCommandEnv("")
 	var out, errOut bytes.Buffer
 	child.Stdout, child.Stderr = &out, &errOut
 	err := child.Run()
 	result := executionRerunResult{Output: out.String(), ErrorOutput: errOut.String()}
 	if err != nil {
-		var status *exec.ExitError
+		var status *proc.ExitError
 		if !errors.As(err, &status) {
 			return result, fmt.Errorf("CI rerun failed: %w", err)
 		}

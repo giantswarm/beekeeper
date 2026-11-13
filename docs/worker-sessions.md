@@ -200,16 +200,18 @@ session that started a review gets its verdict: the watch wakes it with the revi
 final report.
 
 `beekeeper agents review <owner/repo>#<n>` starts a fresh independent reviewer
-in a checkout of that repository. It requires green CI at the pinned head and
-refuses a second review of a head already reviewed or requested, including after
-a restart. An assigned reviewer that is gone without a result (done or off the
+in a checkout of that repository. It requires green CI at the pinned head. A
+pull request gets one desk review
+([#3861](https://github.com/giantswarm/beekeeper/issues/3861)): the command refuses
+(exit 3) once the pull request has a desk verdict on any head, or an assigned round
+reported one, and refuses a second session while its review runs, even after a push, including
+after a restart. An assigned reviewer that is gone without a result (done or off the
 roster, no live process, no running remote execution) no longer holds its head: the loop's
 next start of that review releases the assignment, logs `review.released` and starts
-the next round's reviewer. For a pull request parked for desk review, the loop starts that
-round itself 15 minutes after the gone reviewer's round opened (a failed remote start, too),
-within the two rounds a pull request gets. Past them, a head such a reviewer left gets no merge go
-on an earlier round's verdict, only a leave line. The brief includes closing issues, their parent
-epic, the round and previous findings. The shipped [review skill](../plugin/skills/review/SKILL.md)
+the next round's reviewer, since the one review has still to come. For a pull request parked
+for desk review, the loop starts that round itself 15 minutes after the gone reviewer's round
+opened (a failed remote start, too), within the rounds a pull request gets while none gave a
+verdict. The brief includes closing issues, their parent epic and the round. The shipped [review skill](../plugin/skills/review/SKILL.md)
 checks acceptance criteria and behavioural coverage as well as correctness.
 `--model` overrides `supervisor.reviewModel` (default `opus`).
 `--light-lines` overrides `supervisor.reviewLightLines` (default 150): smaller
@@ -219,12 +221,19 @@ head; only the reviewer's own probes need local builds.
 
 The comment's first line is always `Desk review (opus): approved` or
 `Desk review (opus): changes requested`, regardless of model. The next line pins
-`Head reviewed:` to the SHA. Workers fix findings, push and park again; the
-supervisor gives the merge go after approval. For a push fixing only approval
-nits, the supervisor checks its delta against the approved head, then attests
-with `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`.
-That attestation covers just the new head, and the loop can merge it without a
-second independent review. Workers cannot attest their own fixes.
+`Head reviewed:` to the SHA. The reviewer fixes its own findings on the branch,
+pushes one commit and approves the head it pushed, naming that SHA, without waiting
+for its CI; the loop gives that head the merge go once it is green. Findings the
+reviewer cannot fix (a product or design decision, or a refused publication) go
+back to the worker, who fixes them, pushes and parks again; its green fix gets the
+merge go without a second review. Nobody merges the base into an approved branch or
+rebases it to bring it up to date: the loop merges the approved head as it is, and
+the merge-result check against the current base is the gate. A real conflict or red CI on the
+reviewed branch returns to the reviewer for a repair turn; a red merge result goes
+back to the worker. The repaired head merges on the same approval. The supervisor may still
+attest a nit-only push with
+`beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`,
+for a head no park asks the go for. Workers cannot attest their own fixes.
 `merge.requireReview: true` requires the fixed approval comment covering the
 head (including a supervisor-attested nit delta); a merge go alone is insufficient.
 Review-raised issues use the `follow-up` label, stay unranked in backlog and are
@@ -247,6 +256,14 @@ holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|<contex
 in `agents` (KEPT) and `capacity`, not busy, and it ends its turn; an agent without a task is
 refused. `lease claim <resource> --park` parks it on the lease its queued claim waits for.
 
+`--on` selects the wait target. Mentioning `hold`, `held`, `release window` or `gate run` in the
+reason does not change that target or refuse a park on an issue or pull request. For example,
+`--on example/app#2 "the editor's held-still source"` waits on that reference; its closure settles
+the park, including a park recorded by an older version. To wait on a hold, use `--on hold:<target>`
+with the target named by the gate's exit 77 or `beekeeper hold`. Gate runs have no automatic park
+target: find the run with `beekeeper gate runs`, park without `--on`, and arrange an explicit wake
+when the run ends.
+
 A GitHub target is resolved once when parking; a confirmed missing reference is refused. A failed
 read still records the park with an unresolved type, classified later with retries at most every
 five minutes. A pull request enters the usual review flow. An issue is a plain wait, checked at most
@@ -267,6 +284,14 @@ FAILED`); `agents idle` ends the park with the task. A parked background session
 transcript and its subagents' quiet for 30 seconds), the watch stops it (`claude stop`, which keeps
 its conversation; `PARKED SESSION STOPPED` and an `agents.parkstop` event), and the wake or resume
 that ends the park continues it from its transcript (`claude --bg --resume`).
+
+A task has one worker. When two hold it (a hand start beside the loop's, a relay, a continuation)
+and one reports it done (`agents idle --done`), the parks of the others on the same task issue are
+retired with that report: their tasks end as done, their serve records and the timers that wake
+them go, an `agents.park-retired` event says so and the doctor takes them off the roster. The
+issue's close then wakes nobody, also a park it made resumable before the report, and no fresh
+continuation starts. A park whose continuation is already starting, a desk review or CI park (the
+loop owns that pull request's flow) and a role holder's park stay.
 
 The stop and every wake of the session hold one lock per session: under it the stop looks again (the
 same park, still quiet, not woken in the last 30 seconds, and the transcript's last message of its

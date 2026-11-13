@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 )
@@ -77,7 +77,7 @@ forgotten by itself.`,
 			if account != "" {
 				args = append(args, "--account", account)
 			}
-			op := exec.CommandContext(cmd.Context(), "op", args...) //nolint:gosec // op's own sign-in, on the person's terminal
+			op := proc.CommandContext(cmd.Context(), "op", args...) //nolint:gosec // op's own sign-in, on the person's terminal
 			var out bytes.Buffer
 			op.Stdin, op.Stdout, op.Stderr = os.Stdin, &out, os.Stderr
 			op.Env = withoutVaultEnv(os.Environ())

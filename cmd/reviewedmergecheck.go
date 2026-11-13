@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -53,10 +53,13 @@ func (a *app) checkReviewedMergeResult(ctx context.Context, p superloop.Pull, he
 			return reasonMergeHeld, github.SquashNotApplicable
 		}
 	}
-	return "", 0
+	return reason, 0
 }
 
-const reasonMergeValidationUnavailable = "merge-result validation unavailable"
+const (
+	reasonMergeValidationUnavailable = "merge-result validation unavailable"
+	reasonMergeValidationSkipped     = "merge-result validation skipped"
+)
 
 // mergeValidationUnavailable is the refusal naming the condition that failed.
 func mergeValidationUnavailable(format string, args ...any) string {
@@ -81,7 +84,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	repoDir, searched := a.findReviewedRepoDir(ctx, ref.Repo)
 	if repoDir == "" {
-		return false, fmt.Sprintf("merge-result validation skipped: no checkout of %s in %s; the pull request's own checks stand", ref.Repo, strings.Join(searched, ", ")), 0
+		return false, fmt.Sprintf("%s: no checkout of %s in %s; the pull request's own checks stand", reasonMergeValidationSkipped, ref.Repo, strings.Join(searched, ", ")), 0
 	}
 	baseSHA, err := fetchReviewedMergeRefs(ctx, repoDir, p.Base, head, ref.N)
 	if err != nil {
@@ -104,11 +107,19 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	for attempt := 0; ; attempt++ {
 		reason, code := a.checkReviewedMergeAttempt(ctx, repoDir, baseSHA, p, head)
+		if code == 0 && reason != "" {
+			// The host cannot build the repository: no retry provides the
+			// dependency, and nothing found the branch wrong.
+			if err := a.recordMergeEnvironment(p, head, reason, mergeEnvironmentDependency); err != nil {
+				return true, mergeValidationUnavailable("recording environment finding: %v", err), github.SquashTooling
+			}
+			return true, reason, 0
+		}
 		if code != github.SquashTooling {
 			return true, reason, code
 		}
 		if attempt == 0 {
-			if err := a.recordMergeEnvironment(p, head, reason); err != nil {
+			if err := a.recordMergeEnvironment(p, head, reason, mergeEnvironmentRetry); err != nil {
 				return true, mergeValidationUnavailable("recording environment finding: %v", err), github.SquashTooling
 			}
 		}
@@ -266,7 +277,7 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 	// Whole-module checks include unchanged tests, reverse dependents and
 	// dependency-only changes. Filename correspondence cannot prove coverage.
 	pkgs := []string{"./..."}
-	if _, err := exec.LookPath(mergeLintCommand); local && err != nil {
+	if _, err := proc.LookPath(mergeLintCommand); local && err != nil {
 		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
 	}
 	// Never approximate a repository's linter policy with a separate check or
@@ -289,15 +300,22 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 	// Avoid the host-wide runner lock without suppressing lint findings.
 	lintArgs = append(lintArgs, "--allow-parallel-runners")
 	lintArgs = append(lintArgs, pkgs...)
+	tracked := mergeCheckTrackedFile(ctx, worktreeDir, baseSHA, head)
+	// The native build dependencies lint could not type-check a package
+	// without; go test decides about the rest.
+	var lintMissing []string
 	if out, err := run(ctx, worktreeDir, mergeLintCommand, lintArgs...); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
 		if baseSHA != "" {
-			var baselineErr error
-			out, baselineErr = reviewedLintRegressions(ctx, worktreeDir, baseSHA, lintArgs, run, local)
+			fresh, baselineErr := reviewedLintRegressions(ctx, worktreeDir, baseSHA, lintArgs, run, local)
 			if baselineErr != nil {
 				return mergeValidationUnavailable("lint baseline: %v", baselineErr), github.SquashTooling
+			}
+			out = ""
+			if lintMissing = mergeLintHostDependencies(fresh, tracked); len(lintMissing) == 0 {
+				out = formatMergeLintIssues(fresh)
 			}
 		}
 		if baseSHA == "" || out != "" {
@@ -310,10 +328,23 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
+		// Code 0 with a reason: the validation could not run on this host.
+		if missing := mergeCheckHostDependencies(out, tracked); len(missing) > 0 {
+			return mergeValidationSkippedOnHost("go test", baseBranch, head, missing), 0
+		}
 		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
-
+	if len(lintMissing) > 0 {
+		return mergeValidationSkippedOnHost(mergeLintCommand, baseBranch, head, lintMissing), 0
+	}
 	return "", 0
+}
+
+// mergeValidationSkippedOnHost is the note of a merge result whose check
+// stopped on native build dependencies the checker host lacks.
+func mergeValidationSkippedOnHost(check, baseBranch, head string, missing []string) string {
+	return fmt.Sprintf("%s: the checker host lacks the build dependency %s that %s of %s + %s needs; the pull request's own checks stand",
+		reasonMergeValidationSkipped, strings.Join(missing, ", "), check, baseBranch, shortSHA(head))
 }
 
 const (
@@ -348,7 +379,7 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 	ctx, cancel := context.WithTimeout(ctx, mergeCheckTimeout)
 	defer cancel()
 	var buf bytes.Buffer
-	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
+	c := proc.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
 	c.Dir = dir
 	// Git diagnostics and tests must not inherit the desk's language.
 	c.Env = append(append(os.Environ(), "LC_ALL=C", "LANGUAGE=C"), env...)
@@ -360,7 +391,7 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 		err = fmt.Errorf("%w: %s after %s", errMergeCheckTimeout, name, mergeCheckTimeout)
 	}
 	if err != nil {
-		var exit *exec.ExitError
+		var exit *proc.ExitError
 		// Starting a missing/unusable tool, cancellation and a killed process
 		// describe this checker, not a defect in the reviewed branch.
 		if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() < 0 || mergeCheckHostFailure(buf.String()) {
@@ -375,6 +406,11 @@ func runMergeCheckCmdEnv(ctx context.Context, dir string, env []string, name str
 func mergeCheckHostFailure(out string) bool { return mergeCheckHostDiagnostic(out) != "" }
 
 func mergeCheckHostDiagnostic(out string) string {
+	// The checker's own line names what its environment lacks of what the
+	// repository's CI installs: a check failing there is no branch's finding.
+	if lacks := remotebuild.EnvironmentLacking(out); lacks != "" {
+		return lacks
+	}
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",
 		"cannot allocate memory", "signal: killed",

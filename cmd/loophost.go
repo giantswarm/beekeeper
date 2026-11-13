@@ -49,7 +49,6 @@ func init() {
 		DeliveryExempt:             deliveryExempt,
 		DeliveryURL:                deliveryURL,
 		DevctlCommandEnv:           devctlCommandEnv,
-		EffortFlags:                effortFlags,
 		EndNotes:                   endNotes,
 		EndedParkCandidate:         endedParkCandidate,
 		EpicChildStatus: func(st *state.State, child board.Item, now time.Time, policy any) string {
@@ -59,13 +58,13 @@ func init() {
 		ErrGone:                    func() error { return errGone },
 		EscapedLine:                escapedLine,
 		Event:                      event,
+		ExecutionCannotContinue:    executionCannotContinue,
 		ExecutionRecord:            executionRecord,
 		FreshPark:                  freshPark,
 		FreshSessions:              func(p0 loop.Host) ([]*claude.Session, *proc.Table, error) { return freshSessions(asApp(p0)) },
 		HeldBy:                     heldBy,
 		HostExecutions:             hostExecutions,
 		IncidentExempt:             incidentExempt,
-		InheritReviewParkOnAgent:   inheritReviewParkOnAgent,
 		IsDeskReviewWait:           isDeskReviewWait,
 		IssueURL:                   issueURL,
 		LoopBroker:                 func(ctx context.Context) (string, error) { return loopBroker(ctx) },
@@ -126,6 +125,7 @@ func init() {
 		ShortDur:              shortDur,
 		ShortSHA:              shortSHA,
 		StopMerges:            stopMerges,
+		TakeOverReviewPark:    takeOverReviewPark,
 		Truncate:              truncate,
 		Unactivated:           unactivated,
 		UnmergedHoldReason:    unmergedHoldReason,
@@ -221,6 +221,10 @@ func (a *app) Now() time.Time { return a.now }
 
 func (a *app) OperationOutcome(operation string, reason string, rawURL string, success bool) error {
 	return a.operationOutcome(operation, reason, rawURL, success)
+}
+
+func (a *app) OtherDeskClaim(ctx context.Context, issue string) (string, error) {
+	return a.otherDeskClaim(ctx, issue)
 }
 
 func (a *app) Out() io.Writer { return a.out }

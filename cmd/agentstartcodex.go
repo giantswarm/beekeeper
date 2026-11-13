@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -91,7 +91,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
-	bin, err := exec.LookPath(codex.Comm)
+	bin, err := proc.LookPath(codex.Comm)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live, sp.pulls...)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +265,7 @@ func (a *app) continueCodexAgent(ctx context.Context, by state.Party, ag state.A
 	if err != nil {
 		return goneRefusal("%s: its codex agent no longer runs (%s ended): %s", ag.Name, unit, a.transcriptHint(ctx, s))
 	}
-	bin, err := exec.LookPath(codex.Comm)
+	bin, err := proc.LookPath(codex.Comm)
 	if err != nil {
 		return err
 	}
@@ -354,7 +354,7 @@ func (a *app) resumeCodexUnit(ctx context.Context, id, name, msg string) error {
 	if !plat.Launcher.Available() {
 		return codex.ErrNotRunning
 	}
-	bin, err := exec.LookPath(codex.Comm)
+	bin, err := proc.LookPath(codex.Comm)
 	if err != nil {
 		return codex.ErrNotRunning
 	}

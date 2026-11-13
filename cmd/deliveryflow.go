@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -100,12 +99,34 @@ func deliveryFlowSeen(st *state.State, d state.Delivery, now time.Time, p delive
 				}
 			}
 		}
-		if park.Checks || park.RefKind == github.RefPullRequest || strings.HasPrefix(on, "hold:") || strings.HasPrefix(on, "lease:") || strings.Contains(on, "@v") {
-			continue
-		}
-		if parkOnPerson(park, p.person) {
-			return deliveryFlow{Class: deliveryPerson, Reason: park.Waits, MissingNote: true}
+		if flow, ok := deliveryPersonWait(st, on, park.Waits, p.person); ok {
+			return flow
 		}
 	}
 	return flowing
+}
+
+// deliveryPersonWords are what only a person gives. A wait's other words are
+// no evidence of one: a worker keeps its continuation in an agents note,
+// finishes a release note or asks for the loop's review.
+var deliveryPersonWords = regexp.MustCompile(`(?i)\b(?:persons?|decisions?|answers?|approvals?|repl(?:y|ies))\b`)
+
+// deliveryPersonWait classifies a park that waits on a person. A note covers
+// its wait: an open one is in its addressee's queue, and a closed one was
+// answered or closed, so the watch resumes the park. Any other target (an
+// issue or pull request, a hold, a lease, an alert or a release) settles the
+// park, whatever its words say. Only an untargeted wait that names the person,
+// or what only a person gives, is missing its note.
+func deliveryPersonWait(st *state.State, on, waits, person string) (deliveryFlow, bool) {
+	if id, ok := parkNote(on); ok {
+		open := slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id })
+		return deliveryFlow{Class: deliveryPerson, Reason: waits}, open
+	}
+	if _, _, ok := parkCentralNote(on); ok {
+		return deliveryFlow{Class: deliveryPerson, Reason: waits}, true
+	}
+	if on != "" || !deliveryPersonWords.MatchString(waits) && !namesPerson(waits, person) {
+		return deliveryFlow{}, false
+	}
+	return deliveryFlow{Class: deliveryPerson, Reason: waits, MissingNote: true}, true
 }

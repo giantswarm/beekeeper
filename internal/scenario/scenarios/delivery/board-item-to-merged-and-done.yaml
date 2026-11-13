@@ -4,15 +4,13 @@ description: >
   loop. A Ready item starts a worker; the worker pushes its branch, opens a
   pull request that closes the item and parks on it for the desk review.
   While CI is pending the loop starts no reviewer. Once the head is green it
-  starts an independent reviewer, who approves that head in a review
-  comment. The loop then gives the merge go for exactly that head, merges
+  starts an independent reviewer, who fixes a finding and approves its new
+  head. The author never returns. After CI on the fix the loop merges
   through the gate, closes the task and moves the item to Done.
-issue: https://github.com/giantswarm/beekeeper/issues/3793
+issue: https://github.com/giantswarm/beekeeper/issues/3862
 flow: delivery
 tags: [delivery, loop, review, merge]
 timeout: 150s
-control:
-  none: states the delivery behavior main already has; this change only adds the scenario
 
 given:
   desk:
@@ -51,7 +49,18 @@ given:
       - name: 'Review app 2 r\d+'
         turns:
           - steps:
-              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+              - git: [clone, --quiet, https://github.com/example/app.git, review]
+              - git: [checkout, --quiet, app-1]
+                dir: review
+              - write: {path: review/review-fix.txt, content: "the reviewer's fix\n"}
+              - git: [add, review-fix.txt]
+                dir: review
+              - git: [commit, --quiet, -m, "fix: the review finding"]
+                dir: review
+              - git: [push, --quiet, origin, 'HEAD:refs/heads/app-1']
+                dir: review
+              - git: [rev-parse, HEAD]
+                dir: review
                 save: head
               - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
               - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
@@ -120,7 +129,17 @@ when:
       expect:
         - worker: {name: 'Review app 2 r1', outcome: finish}
   - advance: 2s
-  # The approval of the head gets the go and the merge of that head.
+  # The reviewer pushed a fix. Its CI is the remaining gate, with no
+  # author continuation and no second review.
+  - name: fix-pending
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - origin: {repository: example/app, branch: app-1, ahead: 2}
+      - calls: {program: gh, args: [pr, merge], max: 0}
+  - name: fix-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - advance: 2s
   - name: go
     run: {args: [supervisor, loop, --once]}
     expect:

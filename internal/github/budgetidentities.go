@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const IdentityApp = "app"
@@ -92,7 +93,7 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	})
 	if devctlErr == nil {
 		wg.Go(func() {
-			status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
+			status := proc.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
 			status.Env = env
 			status.WaitDelay = 100 * time.Millisecond
 			// The overall exit status covers other providers too (for example CircleCI).
@@ -129,14 +130,14 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 // The loop service may have a smaller PATH than a worker. The sibling of
 // the installed beekeeper and the gh link are also explicit App providers.
 func budgetDevctl() (string, error) {
-	if path, err := exec.LookPath("devctl"); err == nil {
+	if path, err := proc.LookPath("devctl"); err == nil {
 		return path, nil
 	}
 	for _, dir := range filepath.SplitList(os.Getenv(pathEnv)) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
-		found, err := exec.LookPath(filepath.Join(dir, "gh"))
+		found, err := proc.LookPath(filepath.Join(dir, "gh"))
 		if err != nil {
 			continue
 		}
@@ -146,15 +147,15 @@ func budgetDevctl() (string, error) {
 	}
 	if exe, err := os.Executable(); err == nil {
 		path := filepath.Join(filepath.Dir(strings.TrimSuffix(exe, " (deleted)")), "devctl")
-		if found, err := exec.LookPath(path); err == nil {
+		if found, err := proc.LookPath(path); err == nil {
 			return found, nil
 		}
 	}
-	return "", exec.ErrNotFound
+	return "", proc.ErrNotFound
 }
 
 func budgetCredential(ctx context.Context, identity, bin string, args, env []string) BudgetCredential {
-	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // fixed auth commands and executable resolved on PATH
+	c := proc.CommandContext(ctx, bin, args...) //nolint:gosec // fixed auth commands and executable resolved on PATH
 	c.Env = env
 	c.WaitDelay = 100 * time.Millisecond
 	raw, err := c.Output()
@@ -187,7 +188,7 @@ func budgetGH() (string, error) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
-		found, err := exec.LookPath(filepath.Join(dir, "gh"))
+		found, err := proc.LookPath(filepath.Join(dir, "gh"))
 		if err != nil {
 			continue
 		}

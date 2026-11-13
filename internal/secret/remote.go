@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os/exec"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // SSHRef starts a remote file target: ssh://[<user>@]<host>[:<port>]/<path>.
@@ -225,7 +225,7 @@ func (o *Ops) CopyToRemote(ctx context.Context, src Ref, f RemoteFile) (RemoteRe
 	body := f.content(v)
 	argv := f.Argv(len(body))
 	if _, err := o.Run(ctx, "", nil, strings.NewReader(body), argv[0], argv[1:]...); err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 255 {
 			return RemoteResult{}, fmt.Errorf("%s: target state unknown after SSH connection failure; use secret fingerprint to check it: %s", f, redact(err.Error(), v, src.String()))
 		}

@@ -687,6 +687,84 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 	}
 }
 
+// TestEmergencyMergeInAdminRepositoryPassesAdmin checks that a merge.admin
+// repository's emergency merge of a desk-approved, green head passes --admin
+// at that head, as the loop's merge does, and only there: behind its base,
+// which GitHub reports as BLOCKED while a review is missing, or in the
+// BEHIND state it is refused; GitHub's own approval, a base with a merge
+// queue and any other repository take the plain merge.
+func TestEmergencyMergeInAdminRepositoryPassesAdmin(t *testing.T) {
+	for name, tc := range map[string]struct {
+		admin, queue, approved bool
+		mergeState             string
+		behind                 int
+		refused, wantsAdmin    bool
+	}{
+		"admin repository": {admin: true, mergeState: emergencyBlocked, wantsAdmin: true},
+		"behind its base":  {admin: true, mergeState: emergencyBlocked, behind: 2, refused: true},
+		"behind state":     {admin: true, mergeState: mergeStateBehind, refused: true},
+		"github approval":  {admin: true, approved: true, mergeState: emergencyClean},
+		"merge queue":      {admin: true, queue: true, mergeState: emergencyBlocked},
+		"other repository": {mergeState: emergencyBlocked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := emergencyApp(t)
+			if tc.admin {
+				a.cfg.Merge.Admin = []string{emergencyTestRepo}
+			}
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge approved work.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			oldRead, oldQueue, oldBehind, oldGH := loop.ReadLoopPull, readReviewedMergeQueue, readReviewedBehind, github.RunGH
+			t.Cleanup(func() {
+				loop.ReadLoopPull, readReviewedMergeQueue, readReviewedBehind, github.RunGH = oldRead, oldQueue, oldBehind, oldGH
+			})
+			review := superloop.Review{Head: emergencyAdminHead, Verdict: superloop.Approved, Member: true, Body: loopApproved}
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: emergencyTestRepo + "#7", State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
+					ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: tc.mergeState, Reviews: []superloop.Review{review}}, nil
+			}
+			readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return tc.queue, nil }
+			readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return tc.behind, nil }
+			decision := emergencyReviewRequired
+			if tc.approved {
+				decision = emergencyApproved
+			}
+			var merges [][]string
+			github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+				if args[1] == emergencyViewCommand {
+					return []byte(`{"state":"OPEN","reviewDecision":"` + decision + `","headRefOid":"` + emergencyAdminHead + `"}`), nil
+				}
+				merges = append(merges, slices.Clone(args))
+				return nil, nil
+			}
+			err := emergencyCall(a, gitMerge, emergencyTestRepo, "7")
+			if tc.refused {
+				if Code(err) != ExitRefused || len(merges) != 0 {
+					t.Fatalf("want a refusal without a merge: %v, merges %v", err, merges)
+				}
+				return
+			}
+			want := strings.Fields("pr merge 7 " + loop.LoopRepoFlag + " " + emergencyTestRepo + " --squash")
+			if tc.wantsAdmin {
+				want = append(want, "--admin")
+			}
+			want = append(want, "--match-head-commit", emergencyAdminHead)
+			if err != nil || len(merges) != 1 || !slices.Equal(merges[0], want) {
+				t.Fatalf("err %v, merges %v, want %v", err, merges, want)
+			}
+			actions, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "emergency.action" })
+			if err != nil {
+				t.Fatal(err)
+			}
+			logged := actions[len(actions)-1].Detail
+			if tc.wantsAdmin != strings.HasPrefix(logged, "admin merge https://github.com/o/r/pull/7 at "+emergencyAdminHead) || !strings.Contains(logged, "Merge approved work.") {
+				t.Fatalf("logged action: %s", logged)
+			}
+		})
+	}
+}
+
 func TestMergeReviewRequirementAcceptsCurrentDeskReviewFormat(t *testing.T) {
 	previous := loop.ReadBaseMerge
 	t.Cleanup(func() { loop.ReadBaseMerge = previous })

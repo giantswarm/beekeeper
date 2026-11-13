@@ -9,13 +9,13 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The plain squash merge's exit codes and verdicts, devctl pr merge's own
@@ -74,7 +74,7 @@ func execGH(ctx context.Context, args ...string) ([]byte, error) {
 		}
 	}
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number
+	c := proc.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number
 	c.Env = DevctlEnv(ghEnv(os.Environ(), Repo(ctx)), DevctlSkipVersionCheck())
 	c.Stderr = &stderr
 	out, err := c.Output()
