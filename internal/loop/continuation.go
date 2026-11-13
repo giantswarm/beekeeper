@@ -100,6 +100,25 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 					url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
 				}
 			}
+			// Another live session repairs this head's conflict: a
+			// second repair of it is not started.
+			if pullOpen && head != "" {
+				folded, err := l.foldTaken()
+				if err != nil {
+					return err
+				}
+				if c, held := heldConflicts(current, folded.Claims).holder(ref, head); held && !c.of(ag.Name) {
+					if err := l.retireContinuation(ctx, current, ag, ref, url, c); err != nil {
+						if errors.Is(err, state.ErrRecoveryWriterFenced) {
+							return err
+						}
+						if !errors.Is(err, ErrLoopLater) {
+							l.SayOnce("continue retire "+ag.Name, "SUPERVISOR CONTINUATION RETIRE WAITS %s: %v", ag.Name, err)
+						}
+					}
+					continue
+				}
+			}
 			workspace := ag.Park.Worktree
 			if k := st.StartIndex(ag.Party); workspace == "" && k >= 0 {
 				workspace = st.Starts[k].Dir
@@ -229,6 +248,25 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 		}
 	}
 	return nil
+}
+
+// retireContinuation takes ag off the roster instead of starting its fresh
+// continuation: its pull request's conflict at c's head is c's session's to
+// resolve. A session its person started stays parked with its events, and
+// its continuation waits until the claim is released.
+func (l *Loop) retireContinuation(ctx context.Context, st *state.State, ag state.Agent, ref, url string, c conflictClaim) error {
+	why := conflictHeldWhy(url, ag.Name, c)
+	if st.StartIndex(ag.Party) < 0 {
+		l.SayOnce("continue held "+ag.Name, "SUPERVISOR CONTINUATION HELD %s: %s", ag.Name, why)
+		return nil
+	}
+	act := superloop.Action{Key: fmt.Sprintf("done %s %s", ref, ag.Name), Kind: superloop.KindDone, Ref: ref, URL: url, Agent: ag.Name, Head: c.Head,
+		Message: why + "; its continuation is not started"}
+	what, err := l.act(ctx, st, act)
+	if err != nil {
+		return err
+	}
+	return l.completeAction(act, what)
 }
 
 // continuationPlacement places a fresh continuation as the loop places its

@@ -44,6 +44,15 @@ type foldedTaken struct {
 	stuckFiled  map[string]time.Time
 }
 
+// foldTaken reads the loop's supervisor.* history and folds it.
+func (l *Loop) foldTaken() (foldedTaken, error) {
+	taken, err := state.FollowSnapshot(l.Host.Store(), "supervisor-loop-taken", "v1", l.eventHistoryFilter(func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.") }))
+	if err != nil {
+		return foldedTaken{}, err
+	}
+	return l.takenFold.Fold(taken), nil
+}
+
 func (f *TakenFold) reset() {
 	f.n, f.last, f.taken = 0, state.Event{}, nil
 	f.claims, f.stages, f.stageDetail = map[string]LoopClaim{}, map[string]bool{}, map[string]string{}

@@ -1,0 +1,147 @@
+name: conflict-repair-goes-to-one-session
+description: >
+  One live session repairs a pull request's conflict with its base. Two
+  sessions park on the same pull request at the same head, which conflicts
+  with its base. The loop gives the conflict's repair to the first one,
+  whose fresh continuation takes it and is at it. The second park at that
+  head gets no second repair: the loop says once that the claim is held and
+  does not wake it. When someone else wakes it for the same conflict, its
+  continuation is not started; it is retired with the reason.
+issue: https://github.com/giantswarm/beekeeper/issues/3869
+flow: duplicate-pr
+tags: [duplicate-pr, loop, conflict, continuation]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        pulls:
+          # Its base moved on: the pull request conflicts with it.
+          - {number: 2, title: "feat: the change", head: app-1, mergeable: CONFLICTING}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # The continuation that took the repair: its turn is still running.
+      - name: 'app 2 first next-[0-9a-f]+'
+        turns:
+          - outcome: hang
+      # Two sessions park on the pull request's head for the desk review,
+      # each from a clone of its own.
+      - name: app 2 first
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, first]
+              - git: [checkout, --quiet, app-1]
+                dir: first
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: first
+      - name: app 2 second
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, second]
+              - git: [checkout, --quiet, app-1]
+                dir: second
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: second
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The loop's first start: a park from before it is no review request.
+  - name: loop-start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 2s
+  - name: start-first
+    run:
+      args: [--as, supervisor loop, agents, start, app 2 first, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 2 first, outcome: finish}
+  - advance: 2s
+  # The pass applies the first park and claims the conflict's repair for
+  # it: the wake queues its fresh continuation.
+  - name: claim
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {contains: ['SUPERVISOR REWORK [conflict example/app#2@']}
+      - events: {contains: [agents.park, supervisor.claim, supervisor.rework, agents.continuation-queued]}
+  - advance: 2s
+  - name: start-second
+    run:
+      args: [--as, supervisor loop, agents, start, app 2 second, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 2 second, outcome: finish}
+  - advance: 2s
+  # The pass applies the second park at the same head and starts the
+  # first one's continuation. The conflict's claim is held: the second
+  # park is not woken for a second repair.
+  - name: held
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.continuation, supervisor.leave]}
+      - output:
+          contains: ['SUPERVISOR LEAVE [leave example/app#2 conflict-held@']
+          not_contains: ['SUPERVISOR REWORK']
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: 'app 2 first next-[0-9a-f]+', turns: 1, running: true}
+  - advance: 2s
+  # Someone else wakes the second session for the same conflict.
+  - name: wake
+    run: {args: [--as, guide, agents, wake, app 2 second, "https://github.com/example/app/pull/2 conflicts with main: merge main into it"]}
+    expect:
+      - exit: 0
+  # Its continuation is not started: it is retired with the reason.
+  - name: retire
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ['SUPERVISOR DONE [done example/app#2 app 2 second] app 2 second: off the roster: ', 'holds its conflict claim since']
+          not_contains: ['SUPERVISOR REWORK', 'fresh worker app 2 second next-']
+      - events: {contains: [supervisor.done, agents.remove]}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  # The first one's continuation is the only session at the conflict.
+  - {step: roster, exit: 0}
+  - {step: roster, json_path: {path: ., len: 1}}
+  - worker: {name: 'app 2 first next-[0-9a-f]+', turns: 1, running: true}
+  - worker: {name: 'app 2 second next-[0-9a-f]+', turns: 0}
+  - worker: {name: app 2 second, turns: 1, outcome: finish}
+  - github: {pull: {repo: example/app, number: 2, state: open}}
