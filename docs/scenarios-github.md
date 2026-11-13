@@ -49,6 +49,7 @@ given:
             blocked_by: [2]
             board: Ready               # its Status on the scenario's board
             fields: {Kind: Bug}        # the board's other single-select fields
+            archived: false            # true: that board item is archived
             comments: [{author: alice, body: hello}]
         pulls:
           - number: 4
@@ -183,7 +184,7 @@ then:
 | `calls` | the calls matching `method`, `path`, `operation`, `caller`, `via`, `status`, `conditional` and `fault` number `min` to `max` |
 | `budget` | what `caller` (everyone when empty) `spent` of `bucket`, and what `remaining` of it |
 | `pull` | a pull request (`number`, or the newest of `head`): `state`, `draft`, `labels`, `checks`, `review_decision`, `merged_into`, `comments`, `ahead` (an open one's commits beyond its base) |
-| `issue` | an issue: `state`, `labels`, `board`, `comments`, and the `pulls` and `open_pulls` that close it |
+| `issue` | an issue: `state`, `labels`, `board` (an archived item is `none`), `archived`, `comments`, and the `pulls` and `open_pulls` that close it |
 
 A number is exact (`spent: 1`) or a range (`spent: {min: 1, max: 5}`). A `github` expectation is
 observed for every step kind, in `then`, inline and in `wait_for`. The call log is in the
