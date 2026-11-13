@@ -106,11 +106,19 @@ func continuationName(ag state.Agent) string {
 
 // continuedPark is the park of the worker whose fresh continuation the start
 // named name is: the loop marks that park Continuing before it starts the
-// session continuationName names. Nil for any other start.
+// session continuationName names. The session the loop starts for a review
+// park whose pull request ended continues that task too: the loop names it
+// in the review park's Continuing, and its park is the wait on that pull
+// request. Nil for any other start.
 func continuedPark(st *state.State, name string) *state.Park {
 	for _, ag := range st.Agents {
 		if ag.Park != nil && ag.Park.Continuing && continuationName(ag) == name {
 			return ag.Park
+		}
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.Continuing != "" && strings.EqualFold(rp.Continuing, name) {
+			return &state.Park{On: rp.On, At: rp.At, RefKind: github.RefPullRequest, ReviewHead: rp.ReviewHead, PostMerge: rp.PostMerge}
 		}
 	}
 	return nil

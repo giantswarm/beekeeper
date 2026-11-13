@@ -3664,6 +3664,15 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
+	if act.Kind == superloop.KindEnd && hasRP {
+		// The session continues the review park's task: its start keeps the
+		// task's delivery with the ended pull request (recordStart). Only
+		// this start does, so the mark goes once it returned.
+		if err := l.markReviewParkContinuing(act.Ref, name); err != nil {
+			return err
+		}
+		defer func() { _ = l.markReviewParkContinuing(act.Ref, "") }()
+	}
 	if _, err := l.RunStart(ctx, act, args...); err != nil {
 		if Cmd.Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
@@ -3688,6 +3697,19 @@ func (l *Loop) StartFixer(ctx context.Context, st *state.State, act superloop.Ac
 		}
 	}
 	return nil
+}
+
+// markReviewParkContinuing names name as the fresh session that continues
+// the task of on's review park (state.ReviewPark.Continuing); "" clears it.
+func (l *Loop) markReviewParkContinuing(on, name string) error {
+	return l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
+		for i := range current.ReviewParks {
+			if strings.EqualFold(current.ReviewParks[i].On, on) {
+				current.ReviewParks[i].Continuing = name
+			}
+		}
+		return nil, nil
+	})
 }
 
 // BriefData is what a brief template renders.
