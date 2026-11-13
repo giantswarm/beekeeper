@@ -16,8 +16,8 @@ import (
 // gatewayTimeoutPage is the start of GitHub's HTML page for a 504.
 const gatewayTimeoutPage = "<!DOCTYPE html>\n<html>\n  <head>\n    <title>Unicorn! &middot; GitHub</title>"
 
-// pullBatch504 is gh's error for GitHub's 504, once its tries are spent.
-var pullBatch504 = errors.New("gh api graphql (rateLimit): HTTP 504 after 3 tries: gh api graphql -f: exit status 1: gh: HTTP 504")
+// errPullBatch504 is gh's error for GitHub's 504, once its tries are spent.
+var errPullBatch504 = errors.New("gh api graphql (rateLimit): HTTP 504 after 3 tries: gh api graphql -f: exit status 1: gh: HTTP 504")
 
 // faultPullBatches answers the pull batches fail says fail as GitHub
 // answers a query it cannot finish: gh's 504 with the HTML page. The others
@@ -34,7 +34,7 @@ func faultPullBatches(t *testing.T, fail func(query string, size int) bool) *[]i
 		n := strings.Count(query, ": repository(")
 		*sizes = append(*sizes, n)
 		if fail(query, n) {
-			return []byte(gatewayTimeoutPage), pullBatch504
+			return []byte(gatewayTimeoutPage), errPullBatch504
 		}
 		return answer(ctx, args...)
 	}
@@ -146,13 +146,14 @@ func TestPullWatcherReadsTheRestPastABatchGitHubKeepsFailing(t *testing.T) {
 		t.Errorf("batches %v, want %v", *sizes, want)
 	}
 	v := w.View()
-	for _, ref := range []string{"o/r#6", "o/r#7", "o/r#8"} {
+	refs := pullRefs(8)
+	for _, ref := range refs[5:] {
 		if _, err := w.Read(ref, time.Now()); err != nil {
 			t.Errorf("%s not read past the failed batch: %v", ref, err)
 		}
 	}
-	if _, ok := v.Pulls["o/r#3"]; ok || !v.PolledAt.IsZero() {
-		t.Errorf("the failed batch counts as read: %+v, polled at %v", v.Pulls["o/r#3"], v.PolledAt)
+	if _, ok := v.Pulls[refs[2]]; ok || !v.PolledAt.IsZero() {
+		t.Errorf("the failed batch counts as read: %+v, polled at %v", v.Pulls[refs[2]], v.PolledAt)
 	}
 	if !strings.Contains(r.out.String(), "reading the rest") {
 		t.Errorf("skip unsaid:\n%s", r.out.String())
@@ -174,13 +175,13 @@ func TestPullBatchFaultIsGitHubFailingNotRefusing(t *testing.T) {
 		fault bool
 		says  []string
 	}{
-		"html 504":      {body: gatewayTimeoutPage, err: errors.New("gh api graphql -f: exit status 1: gh: HTTP 504"), fault: true, says: []string{"GitHub answered no JSON", "Unicorn!", "HTTP 504 after 3 tries"}},
-		"html exit 0":   {body: "<html>proxy</html>", fault: true, says: []string{"GitHub answered no JSON", "<html>proxy</html>", "a cut-off body after 3 tries"}},
-		"empty 502":     {err: errors.New("gh api graphql -f: exit status 1: gh: HTTP 502"), fault: true, says: []string{"HTTP 502 after 3 tries"}},
-		"empty exit 0":  {fault: true, says: []string{"an empty body after 3 tries"}},
-		"timeout":       {body: `{"data":null,"errors":[{"message":"Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug."}]}`, fault: true, says: []string{"timeout"}},
-		"secondary 403": {body: `{"message":"You have exceeded a secondary rate limit."}`, err: errors.New("gh api graphql -f: exit status 1: gh: You have exceeded a secondary rate limit. (HTTP 403)"), says: []string{"secondary rate limit"}},
-		"graphql error": {body: `{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}`, says: []string{"not accessible"}},
+		"html 504":        {body: gatewayTimeoutPage, err: errors.New("gh api graphql -f: exit status 1: gh: HTTP 504"), fault: true, says: []string{"GitHub answered no JSON", "Unicorn!", "HTTP 504 after 3 tries"}},
+		"html exit 0":     {body: "<html>proxy</html>", fault: true, says: []string{"GitHub answered no JSON", "<html>proxy</html>", "a cut-off body after 3 tries"}},
+		"empty 502":       {err: errors.New("gh api graphql -f: exit status 1: gh: HTTP 502"), fault: true, says: []string{"HTTP 502 after 3 tries"}},
+		"empty exit 0":    {fault: true, says: []string{"an empty body after 3 tries"}},
+		"graphql timeout": {body: `{"data":null,"errors":[{"message":"Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug."}]}`, fault: true, says: []string{"result of a timeout"}},
+		"secondary 403":   {body: `{"message":"You have exceeded a secondary rate limit."}`, err: errors.New("gh api graphql -f: exit status 1: gh: You have exceeded a secondary rate limit. (HTTP 403)"), says: []string{"secondary rate limit"}},
+		"graphql error":   {body: `{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}`, says: []string{"not accessible"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			old := github.RunGH
