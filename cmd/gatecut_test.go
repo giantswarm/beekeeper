@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -131,15 +132,18 @@ func TestADevctlEndedBySignalSaysWhatGitHubSays(t *testing.T) {
 }
 
 // A requested cancellation recovered by the watch must not invite a retry.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheWatchDoesNotRetryARequestedCancellation(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubPull(t, github.Pull{State: github.Open}, nil)
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Child: deadPID(t), Phase: state.Running, Started: relayNow})
-	base := mergeBase(w.store.Dir(), scratchRepo, 7)
+	base := gate.MergeBase(w.store.Dir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(base+stoppedExt, []byte(`{"name":"supervisor","session":"s9"}`), 0o600); err != nil {
+	if err := os.WriteFile(base+gate.StoppedExt, []byte(`{"name":"supervisor","session":"s9"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	polls(w, 3)

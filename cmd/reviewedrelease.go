@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -41,12 +42,12 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	// The line marks the merge's release wait (mergeProgress), which a
 	// gate called --until-merged leaves to this child.
 	_, _ = fmt.Fprintf(os.Stderr, "release: waiting for the release of %s#%d, merged as %s (%s release wait %s --pr %d)\n",
-		doc.Repo, doc.Number, shortSHA(doc.MergeCommitSha), merge.Tool, doc.Repo, doc.Number)
-	ctx, cancel := context.WithTimeout(ctx, releasePRWait)
+		doc.Repo, doc.Number, gate.ShortSHA(doc.MergeCommitSha), merge.Tool, doc.Repo, doc.Number)
+	ctx, cancel := context.WithTimeout(ctx, gate.ReleasePRWait)
 	defer cancel()
 	raw, err := waitReviewedRelease(ctx, doc.Repo, doc.Number)
 	out, reason, ok := merge.ParseReleaseWait(raw)
-	result.Release = &reviewedRelease{Verdict: verdictUnconfirmed}
+	result.Release = &reviewedRelease{Verdict: gate.VerdictUnconfirmed}
 	switch {
 	case !ok:
 		result.ExitCode = 9
@@ -64,7 +65,7 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	case out.Unconfirmed || out.Release == "":
 		result.ExitCode = 9
 	default:
-		result.Release.Verdict = verdictAvailable
+		result.Release.Verdict = gate.VerdictAvailable
 		result.Release.Tag = out.Release
 		result.ExitCode = 0
 	}

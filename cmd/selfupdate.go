@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -474,7 +475,7 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 // its turn or following its devctl, and a merge-child.
 func reexecs(p *proc.Process) bool {
 	sub := claude.BeekeeperSubcommand(p)
-	return sub == gateCmdName || sub == mergeChildCmd
+	return sub == gate.GateCmdName || sub == gate.MergeChildCmd
 }
 
 func (a *app) selfUpdateStore() state.Store {

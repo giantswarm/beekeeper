@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -27,6 +28,9 @@ const (
 // install while it waited, its binary not replaced at its path) is refused
 // before it touches the lane: the lane and the writer stay as the newer
 // release left them, and the refusal names both versions.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	waiting := state.Merge{Repo: scratchRepo, PR: 3, Lane: scratchRepo, Phase: state.Waiting, By: state.Party{Session: "s2", Name: agentTwo},
@@ -43,8 +47,8 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.HasPrefix(d, "o/r#7: this call runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state") || !strings.Contains(d, "the lane is untouched") {
 		t.Errorf("refused event %q, want both versions named", d)
@@ -65,6 +69,9 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 // not decode (a field the newer release changed) re-executes its replaced
 // binary, and refuses (77) naming both releases only when the new binary
 // does not start, the state untouched.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	a := queueApp(t)
@@ -79,18 +86,18 @@ func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 	}
 	bin := &fakeBinary{replaced: true, execErr: errBusy}
 	was := runningBinary
-	runningBinary = func() binary { return bin }
+	runningBinary = func() gate.Binary { return bin }
 	t.Cleanup(func() { runningBinary = was })
 	stderr := capture(t, &os.Stderr)
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
 	said := stderr()
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, ExitGateRefused, said)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, gate.ExitGateRefused, said)
 	}
 	if len(bin.execs) != 2 {
 		t.Errorf("re-exec attempts %q, want two", bin.execs)
 	}
-	if !strings.Contains(said, GatePrefix+"refused, o/r#7: this call runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state, which it does not load (") ||
+	if !strings.Contains(said, gate.GatePrefix+"refused, o/r#7: this call runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state, which it does not load (") ||
 		!strings.Contains(said, "the lane is untouched") {
 		t.Errorf("the refusal does not name the skew:\n%s", said)
 	}
@@ -102,13 +109,16 @@ func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 // A merge whose turn came while a newer release wrote the state hands the
 // refused save to the wait loop, which re-executes or names the skew,
 // instead of refusing it as a state that does not load.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 	store, err := state.OpenVersion(t.TempDir(), "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
 	g := runningMergeIn(t, store, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	newer, err := state.OpenVersion(g.store.Dir(), newerRelease)
+	newer, err := state.OpenVersion(gateApp(g.Host).store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,15 +128,15 @@ func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if g.store, err = state.OpenVersion(g.store.Dir(), olderRelease); err != nil {
+	if gateApp(g.Host).store, err = state.OpenVersion(gateApp(g.Host).store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
-	_, err = g.start("", nil)
+	_, err = g.Start("", nil)
 	var stale *state.StaleWriterError
 	if !errors.As(err, &stale) || stale.Version != olderRelease || stale.Newer != newerRelease {
 		t.Fatalf("start: %v, want the stale writer", err)
 	}
-	if d := lastEventOf(t, g.app, "merge.refused"); d != "" {
+	if d := lastEventOf(t, gateApp(g.Host), "merge.refused"); d != "" {
 		t.Errorf("refused as it is: %q", d)
 	}
 }

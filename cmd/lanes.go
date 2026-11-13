@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -48,7 +49,7 @@ type laneView struct {
 const paceMerges = 10
 
 // lanePace is how long a place of lane held it, the median over its latest
-// paceMerges merges in events (oldest first): from its start (verbMerging,
+// paceMerges merges in events (oldest first): from its start (gate.VerbMerging,
 // "<key> in lane <lane>") to its merge (verbMerged, "<key> exit …"), and on
 // to the lane's settle when one followed (verbLaneSettled, "<lane>: <key> …"),
 // the roll an installation's lane waits for. A start-to-merge time holds the
@@ -61,7 +62,7 @@ func lanePace(events []state.Event, lane string) (time.Duration, bool) {
 	last := map[string]int{} // a merged key's index in held
 	for _, e := range events {
 		switch e.Verb {
-		case verbMerging:
+		case gate.VerbMerging:
 			if key, ok := strings.CutSuffix(e.Detail, " in lane "+lane); ok {
 				started[key] = e.At
 			}
@@ -489,7 +490,7 @@ func (a *app) laneViews(st *state.State) []laneView {
 		// Followed: the watch asks every poll, and a search would read the
 		// whole history each time for the few lines appended since.
 		events, _ = a.store.Follow("lane-views", func(e state.Event) bool {
-			return e.Verb == verbMerging || e.Verb == verbMerged || e.Verb == verbLaneSettled
+			return e.Verb == gate.VerbMerging || e.Verb == verbMerged || e.Verb == verbLaneSettled
 		})
 	}
 	add := func(name, installation string) {
@@ -499,8 +500,8 @@ func (a *app) laneViews(st *state.State) []laneView {
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
 		if v.Running != nil {
-			v.Progress = readMergeProgress(mergeBase(a.store.Dir(), v.Running.Repo, v.Running.PR))
-			v.Stale = staleMerge(st, *v.Running)
+			v.Progress = readMergeProgress(gate.MergeBase(a.store.Dir(), v.Running.Repo, v.Running.PR))
+			v.Stale = gate.StaleMerge(st, *v.Running)
 		}
 		for _, m := range v.Waiting {
 			if h, held := merge.BlockingFor(st, a.now, m.By.Name, m.Repo, m.PR, a.cfg.LaneOf(m.Repo)); held && h.Tool != "" {
@@ -573,7 +574,7 @@ func (a *app) mergeWaitReason(st *state.State, m state.Merge) string {
 	if !proc.Alive(m.PID) {
 		return "gate not running; waiting for arrival"
 	}
-	g := &gateRun{app: a, repo: m.Repo, pr: m.PR, lane: lane, me: m.By}
+	g := &gate.GateRun{Host: a, Repo: m.Repo, Pr: m.PR, Lane: lane, Me: m.By}
 	need := 1
 	if i := st.PairOf(m.Key()); i >= 0 {
 		p := st.Pairs[i]
@@ -581,15 +582,15 @@ func (a *app) mergeWaitReason(st *state.State, m state.Merge) string {
 			need = 0
 		} else {
 			need = 2
-			if a.now.Sub(p.Ready[p.Sibling(m.Key())]) > pairFresh {
+			if a.now.Sub(p.Ready[p.Sibling(m.Key())]) > gate.PairFresh {
 				return "paired merge not ready: " + p.Sibling(m.Key())
 			}
 		}
 	}
-	if why := g.sessionWaitFor(st, need); why != "" {
+	if why := g.SessionWaitFor(st, need); why != "" {
 		return why
 	}
-	if why := g.capWaitFor(st, m, need); why != "" {
+	if why := g.CapWaitFor(st, m, need); why != "" {
 		var holders []string
 		for _, run := range st.Merges {
 			if run.Phase == state.Running {
@@ -736,7 +737,7 @@ func (a *app) printLanes(views []laneView) {
 		}
 		for _, f := range v.Failed {
 			p("  failed %s by %s at %s, %s, %s; shown until its next attempt", f.Key(), quotedOwner(f.By), clock(a.now, f.At),
-				nothingDone(f.PR, merge.Outcome{}), exitText(f.Exit, f.Reason))
+				gate.NothingDone(f.PR, merge.Outcome{}), gate.ExitText(f.Exit, f.Reason))
 		}
 	}
 }
@@ -758,7 +759,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 			(m.Repo == repo && m.PR == pr) || now.Sub(m.Checked) < every {
 			continue
 		}
-		p, err := pullState(ctx, m.Repo, m.PR)
+		p, err := gate.PullState(ctx, m.Repo, m.PR)
 		if err != nil {
 			if m.Outside {
 				return err
@@ -821,24 +822,24 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		return nil, nil, nil
 	}
 	gone := func(m state.Merge) bool {
-		return m.Phase == state.Running && !proc.Alive(m.PID) && (!proc.Alive(m.Child) || exited(mergeBase(a.store.Dir(), m.Repo, m.PR)))
+		return m.Phase == state.Running && !proc.Alive(m.PID) && (!proc.Alive(m.Child) || exited(gate.MergeBase(a.store.Dir(), m.Repo, m.PR)))
 	}
 	isCut := func(m state.Merge) bool { return cutRun(a.store.Dir(), m, proc.Alive) }
 	var cutBases, recordedBases []string
-	runs := map[string]runOutcome{}
+	runs := map[string]gate.RunOutcome{}
 	for _, m := range st.Merges {
 		if !gone(m) {
 			continue
 		}
-		base := mergeBase(a.store.Dir(), m.Repo, m.PR)
-		doc, rc := finishedRun(base)
-		r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
+		base := gate.MergeBase(a.store.Dir(), m.Repo, m.PR)
+		doc, rc := gate.FinishedRun(base)
+		r := gate.RunOutcome{Rc: rc, Reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
 		var ok bool
-		r.out, ok, rc = parseRunOutcome(m.PR, doc, rc)
-		r.rc = rc
+		r.Out, ok, rc = gate.ParseRunOutcome(m.PR, doc, rc)
+		r.Rc = rc
 		if merge.NeedsJudging(ok, rc) {
-			r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1)
-			if r.unanswered != nil && !workerStopped {
+			r.Out, r.Unanswered = gate.JudgeRun(ctx, m.Repo, m.PR, 1)
+			if r.Unanswered != nil && !workerStopped {
 				continue
 			}
 		}
@@ -863,7 +864,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			e := event(watchParty, "merge.cut", "%s in lane %s: %s", m.Key(), m.Lane, cutText(m))
 			if m.By.Session != "" || m.By.HostSession != "" {
 				o := cutOwed(m, now)
-				o.Cancelled = readStopped(mergeBase(a.store.Dir(), m.Repo, m.PR)) != (state.Party{})
+				o.Cancelled = readStopped(gate.MergeBase(a.store.Dir(), m.Repo, m.PR)) != (state.Party{})
 				if o.Cancelled {
 					o.Line = fmt.Sprintf("%s was cancelled on request: do not rerun it", o.Command)
 				}
@@ -884,7 +885,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			ev := recordRun(st, i, lane, watchParty, r, now, fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
 			evs = append(evs, ev...)
 			recorded = append(recorded, ev[len(ev)-1].Detail)
-			recordedBases = append(recordedBases, mergeBase(a.store.Dir(), m.Repo, m.PR))
+			recordedBases = append(recordedBases, gate.MergeBase(a.store.Dir(), m.Repo, m.PR))
 		}
 		lost = merge.Lost(st, a.now, proc.Alive)
 		for _, m := range lost {
@@ -896,7 +897,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		return nil, nil, nil
 	}
 	for _, base := range append(cutBases, recordedBases...) {
-		removeMergeFiles(base)
+		gate.RemoveMergeFiles(base)
 	}
 	return recorded, cut, lost
 }
@@ -914,7 +915,7 @@ func cutRun(stateDir string, m state.Merge, alive func(int) bool) bool {
 	}
 	switch m.Phase {
 	case state.Running:
-		return !alive(m.PID) && !alive(m.Child) && !exited(mergeBase(stateDir, m.Repo, m.PR)) && (m.Run == "" || queuedCut())
+		return !alive(m.PID) && !alive(m.Child) && !exited(gate.MergeBase(stateDir, m.Repo, m.PR)) && (m.Run == "" || queuedCut())
 	case state.Waiting:
 		return m.Run != "" && !alive(m.PID) && queuedCut()
 	}
@@ -971,7 +972,7 @@ func (a *app) dropRunning(ctx context.Context, by state.Party, repo string, pr i
 	}
 	h := ended[0]
 	for deadline := time.Now().Add(dropWait); merge.Runs(h.merge, proc.Alive) && time.Now().Before(deadline); {
-		time.Sleep(followPoll)
+		time.Sleep(gate.FollowPoll)
 	}
 	if merge.Runs(h.merge, proc.Alive) {
 		_, err := fmt.Fprintf(a.out, "ended the devctl of %s (%s): its gate (pid %d) records it once devctl is gone\n", h.merge.Key(), a.pullText(h.pull), h.merge.PID)
@@ -1026,13 +1027,13 @@ func (a *app) endHung(ctx context.Context, by state.Party, now time.Time, after 
 	var ended []hungRun
 	for _, m := range st.Merges {
 		if m.Phase != state.Running || m.PR == 0 || !proc.Alive(m.Child) || !pick(m) ||
-			readPID(mergeBase(a.store.Dir(), m.Repo, m.PR)) != m.Child {
+			readPID(gate.MergeBase(a.store.Dir(), m.Repo, m.PR)) != m.Child {
 			continue
 		}
-		if after > 0 && !silentMerge(mergeBase(a.store.Dir(), m.Repo, m.PR), m.Started, now, after) {
+		if after > 0 && !silentMerge(gate.MergeBase(a.store.Dir(), m.Repo, m.PR), m.Started, now, after) {
 			continue
 		}
-		p, err := pullState(ctx, m.Repo, m.PR)
+		p, err := gate.PullState(ctx, m.Repo, m.PR)
 		if err != nil || !merge.Hung(p, now, after) || endChild(m.Child) != nil {
 			continue
 		}

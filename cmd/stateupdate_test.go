@@ -83,8 +83,8 @@ func updateSlowCalls(filename string, source any) ([]token.Position, error) {
 }
 
 // updateGuardedDirs are the packages whose state updates the guard checks:
-// the commands and the supervisor loop they run.
-var updateGuardedDirs = []string{".", filepath.Join("..", "internal", "loop")}
+// the commands and the supervisor loop and gate they run.
+var updateGuardedDirs = []string{".", filepath.Join("..", "internal", "gate"), filepath.Join("..", "internal", "loop")}
 
 func TestUpdateCallbacksHaveNoExplicitSlowCalls(t *testing.T) {
 	for _, dir := range updateGuardedDirs {

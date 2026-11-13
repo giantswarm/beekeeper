@@ -12,16 +12,19 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixReviewedGateKeepsAutoReleaseWait(t *testing.T) {
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
-	g.reviewedHead = loopHead
-	g.release = &github.BaseRelease{Base: mainBranch, Auto: true}
-	argv, err := g.mergeArgv()
+	g.ReviewedHead = loopHead
+	g.Release = &github.BaseRelease{Base: mainBranch, Auto: true}
+	argv, err := g.MergeArgv()
 	if err != nil || !slices.Contains(argv, "--release-wait") {
 		t.Fatalf("reviewed child lost release tracking: %v %v", argv, err)
 	}
@@ -29,6 +32,8 @@ func TestReviewFixReviewedGateKeepsAutoReleaseWait(t *testing.T) {
 
 const reviewFixCandidate = "v1.2.4-rc.1"
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
@@ -48,7 +53,7 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 				}
 				return []byte(tc.raw), nil
 			}
-			result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.repo, Number: g.pr, MergeCommitSha: loopFixed}, true)
+			result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.Repo, Number: g.Pr, MergeCommitSha: loopFixed}, true)
 			raw, err := json.Marshal(result)
 			if err != nil {
 				t.Fatal(err)
@@ -57,8 +62,8 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 			if !ok || !out.Merged || out.NoRelease != tc.noRelease || tc.candidate && out.Release != reviewFixCandidate {
 				t.Fatalf("lost durable release metadata: %s %+v", raw, out)
 			}
-			if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-				return recordRun(st, 0, g.lane, g.me, runOutcome{out: out, rc: result.ExitCode}, time.Now(), ""), nil
+			if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+				return recordRun(st, 0, g.Lane, g.Me, gate.RunOutcome{Out: out, Rc: result.ExitCode}, time.Now(), ""), nil
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -70,6 +75,8 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Installation: gazelle, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
@@ -78,7 +85,7 @@ func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	waitReviewedRelease = func(context.Context, string, int) ([]byte, error) {
 		return []byte(`{"verdict":"available","tag":"v1.2.4"}`), nil
 	}
-	result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.repo, Number: g.pr, MergeCommitSha: loopFixed}, true)
+	result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.Repo, Number: g.Pr, MergeCommitSha: loopFixed}, true)
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -89,9 +96,9 @@ func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	}
 	const rollKey = "flux-system/r"
 	now := time.Now()
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Roll = []string{rollKey}
-		return recordRun(st, 0, lane, g.me, runOutcome{out: out}, now, ""), nil
+		return recordRun(st, 0, lane, g.Me, gate.RunOutcome{Out: out}, now, ""), nil
 	}); err != nil {
 		t.Fatal(err)
 	}

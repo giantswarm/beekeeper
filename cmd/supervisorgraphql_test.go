@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -176,6 +177,8 @@ func TestLoopAllowanceHoldReleasesWhenLiveBudgetAboveFloor(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500
@@ -240,7 +243,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 	if err := l.Pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if r.called(agentsName, agentStartName) != nil || r.called(gateCmdName) != nil {
+	if r.called(agentsName, agentStartName) != nil || r.called(gate.GateCmdName) != nil {
 		t.Fatalf("held loop started review or gave merge go: %v", r.calls)
 	}
 	if failures := r.logged(t, loop.LoopFailureVerb); len(failures) != 0 {
@@ -271,7 +274,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 	if start == nil || start[2] != reviewer8 || !slices.Contains(start, "--review") {
 		t.Fatalf("next round did not start review for %s: calls=%v\n%s", reviewPR, r.calls, r.out)
 	}
-	mergeCall := r.called(gateCmdName)
+	mergeCall := r.called(gate.GateCmdName)
 	if mergeCall == nil || !slices.Contains(mergeCall, loopHead) {
 		t.Fatalf("next round did not give merge go for %s: calls=%v\n%s", loopPR, r.calls, r.out)
 	}

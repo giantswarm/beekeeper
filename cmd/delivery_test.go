@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -25,18 +26,20 @@ const deliveryCompareBehind = "behind"
 const deliveryFailedTag = "v8.1.1"
 const deliveryAvailableTag = "v2.0.0-rc.1"
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
 		out                 merge.Outcome
 		hand, step, verdict string
 	}{
-		{"available", merge.Outcome{Merged: true, Release: "v1.2.3-rc.1"}, "", state.DeliveryDone, verdictAvailable},
+		{"available", merge.Outcome{Merged: true, Release: "v1.2.3-rc.1"}, "", state.DeliveryDone, gate.VerdictAvailable},
 		{"no-release verdict", merge.Outcome{Merged: true, NoRelease: true}, "", state.DeliveryDone, state.DeliveryNoRelease},
 		{"hand cut", merge.Outcome{Merged: true}, "maintenance", state.DeliveryDone, state.DeliveryNoRelease},
 		{"release failure", merge.Outcome{Merged: true, ReleaseFailed: true, Release: "v9.0.1"}, "", state.DeliveryReleasing, state.DeliveryReleaseFailed},
-		{"unconfirmed", merge.Outcome{Merged: true, Unconfirmed: true}, "", state.DeliveryReleasing, verdictUnconfirmed},
-		{"missing verdict", merge.Outcome{Merged: true}, "", state.DeliveryReleasing, verdictUnconfirmed},
+		{"unconfirmed", merge.Outcome{Merged: true, Unconfirmed: true}, "", state.DeliveryReleasing, gate.VerdictUnconfirmed},
+		{"missing verdict", merge.Outcome{Merged: true}, "", state.DeliveryReleasing, gate.VerdictUnconfirmed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := supervisorApp(t)
@@ -47,7 +50,7 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 				st.Merges = []state.Merge{{Repo: deliveryFixtureRepo, PR: 20, HandCut: tc.hand}}
 			})
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				return recordRun(st, 0, config.Lane{}, loop.LoopParty, runOutcome{out: tc.out}, now, ""), nil
+				return recordRun(st, 0, config.Lane{}, loop.LoopParty, gate.RunOutcome{Out: tc.out}, now, ""), nil
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -78,6 +81,8 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -127,7 +132,7 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 	}
 	in.Now = now.Add(loop.DeliveryReleaseEvery)
 	loop.ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
-		return verdictAvailable, deliveryAvailableTag, nil
+		return gate.VerdictAvailable, deliveryAvailableTag, nil
 	}
 	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
@@ -320,6 +325,8 @@ func TestDeliveryLimitLeavesCapacityJSONUnchanged(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryRESTTagMustContainActualMerge(t *testing.T) {
 	old := github.RunGH
 	t.Cleanup(func() { github.RunGH = old })
@@ -347,7 +354,7 @@ func TestDeliveryRESTTagMustContainActualMerge(t *testing.T) {
 	}
 	status = "ahead"
 	verdict, tag, err := loop.ReadDeliveryRelease(t.Context(), p)
-	if err != nil || verdict != verdictAvailable || tag != "v3.1.0-rc.2" {
+	if err != nil || verdict != gate.VerdictAvailable || tag != "v3.1.0-rc.2" {
 		t.Fatalf("tag contains merge: %s %s %v", verdict, tag, err)
 	}
 	if len(calls) != 6 {
@@ -415,6 +422,8 @@ func TestDeliveryClaimRecordsSameAtomicUpdate(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -422,14 +431,14 @@ func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 		st.Merges = []state.Merge{{Repo: deliveryFixtureRepo, PR: 20, Phase: state.Settling, Releasing: true}}
 		st.Deliveries = []state.Delivery{{Ref: epicTen, Pulls: []string{blockerRef}, Step: state.DeliveryReleasing, Started: now, Since: now}}
 	})
-	old := releaseWait
-	t.Cleanup(func() { releaseWait = old })
-	releaseWait = func(context.Context, string, ...string) []byte {
+	old := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = old })
+	gate.ReleaseWait = func(context.Context, string, ...string) []byte {
 		return []byte(`{"verdict":"available","tag":"v2.3.4-rc.1"}`)
 	}
-	g := &gateRun{ctx: t.Context(), app: a, repo: deliveryFixtureRepo, pr: 20, lane: config.Lane{Name: "delivery-lane"}}
+	g := &gate.GateRun{Ctx: t.Context(), Host: a, Repo: deliveryFixtureRepo, Pr: 20, Lane: config.Lane{Name: "delivery-lane"}}
 	out := merge.Outcome{Merged: true}
-	_, code := g.confirmRelease(&out, 0)
+	_, code := g.ConfirmRelease(&out, 0)
 	if code != 0 {
 		t.Fatal(code)
 	}
@@ -439,6 +448,8 @@ func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryFailedTagDoesNotBecomeReleaseProof(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -448,7 +459,7 @@ func TestDeliveryFailedTagDoesNotBecomeReleaseProof(t *testing.T) {
 	old := loop.ReadDeliveryRelease
 	t.Cleanup(func() { loop.ReadDeliveryRelease = old })
 	tag := deliveryFailedTag
-	loop.ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return verdictAvailable, tag, nil }
+	loop.ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return gate.VerdictAvailable, tag, nil }
 	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{idleRef: {Ref: idleRef, State: superloop.Merged}}}
 	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
@@ -576,6 +587,9 @@ func TestDeliveryMeanCycleTimeUsesFullCompletedAges(t *testing.T) {
 // A pass can take longer than the per-release retry interval. Ledger-order
 // probing then retries the same failures forever, leaving published releases
 // at the tail counted in WIP even though they could finish immediately.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -594,7 +608,7 @@ func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	loop.ReadDeliveryRelease = func(_ context.Context, p superloop.Pull) (string, string, error) {
 		probed = append(probed, p.Ref)
 		if p.Ref == tail {
-			return verdictAvailable, deliveryAvailableTag, nil
+			return gate.VerdictAvailable, deliveryAvailableTag, nil
 		}
 		return "", "", errors.New("release observation unavailable")
 	}

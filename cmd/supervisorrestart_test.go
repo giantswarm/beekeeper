@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
@@ -17,6 +18,9 @@ import (
 // replaced binary that waits for a claim in flight still runs the merge
 // decision of an approved head, through a gate that ends at the merge, and
 // nothing else of the pass (https://github.com/giantswarm/beekeeper/issues/3907).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopGivesTheMergeGoWhileItsRestartWaits(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -48,12 +52,12 @@ func TestLoopGivesTheMergeGoWhileItsRestartWaits(t *testing.T) {
 	if r.execs != 0 {
 		t.Fatalf("re-executed while a claim was in flight: %d", r.execs)
 	}
-	gate := r.called(gateCmdName)
-	if gate == nil || !slices.Contains(gate, loopHead) {
+	gateCall := r.called(gate.GateCmdName)
+	if gateCall == nil || !slices.Contains(gateCall, loopHead) {
 		t.Fatalf("no merge go while the restart waits: %v\n%s", r.calls, r.out)
 	}
-	if !slices.Contains(gate, "--until-merged") {
-		t.Errorf("the merge's gate call waits for the release: %v", gate)
+	if !slices.Contains(gateCall, "--until-merged") {
+		t.Errorf("the merge's gate call waits for the release: %v", gateCall)
 	}
 	if alertReads != 0 {
 		t.Errorf("the pass read alerts while its restart waits: %d", alertReads)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -76,7 +77,7 @@ func deadPID(t *testing.T) int {
 // launchedMerge is o/r#7's merge running devctl (fakeDevctl's script) in a
 // merge-child of the gate's, its stderr captured, once devctl has printed
 // its first line.
-func launchedMerge(t *testing.T, script string) (g *gateRun, base string, pid int, stderr func() string) {
+func launchedMerge(t *testing.T, script string) (g *gate.GateRun, base string, pid int, stderr func() string) {
 	t.Helper()
 	noSystemd(t)
 	fakeDevctl(t, script)
@@ -84,14 +85,14 @@ func launchedMerge(t *testing.T, script string) (g *gateRun, base string, pid in
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", ownerName)
 	g = runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	base, err := g.mergeFiles()
+	base, err := g.MergeFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pid, err = launchChild(childSpec{Argv: mergeArgv(scratchRepo), Owner: g.me}, base); err != nil {
+	if pid, err = gate.LaunchChild(gate.ChildSpec{Argv: mergeArgv(scratchRepo), Owner: g.Me}, base); err != nil {
 		t.Fatal(err)
 	}
-	g.started(pid)
+	g.Started(pid)
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if info, err := os.Stat(base + ".log"); err == nil && info.Size() > 0 {
 			break
@@ -107,14 +108,17 @@ const devctlFirstLine = "merging\n"
 // where the stderr was copied and records the outcome: the merge's lane
 // entry leaves with the real outcome, nothing is copied twice, and the
 // re-exec that does not start is followed on under the old binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 	script := `echo merging >&2; sleep 1; echo "waiting for the release" >&2; echo '` + mergedDoc + `'`
 	t.Run("the installed binary follows on", func(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
-		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{}, false, nil)
-		if !run.replaced || run.offset != int64(len(devctlFirstLine)) {
-			t.Fatalf("replaced %v at offset %d, want %d", run.replaced, run.offset, len(devctlFirstLine))
+		run := gate.FollowChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{}, false, nil)
+		if !run.Replaced || run.Offset != int64(len(devctlFirstLine)) {
+			t.Fatalf("replaced %v at offset %d, want %d", run.Replaced, run.Offset, len(devctlFirstLine))
 		}
 		for _, ext := range []string{".log", ".pid"} {
 			if _, err := os.Stat(base + ext); err != nil {
@@ -122,9 +126,9 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 			}
 		}
 		// The re-executed gate: the same process, arguments and stdio.
-		t.Setenv(gateRunningEnv, fmt.Sprintf("%d:%d", pid, run.offset))
+		t.Setenv(gate.GateRunningEnv, fmt.Sprintf("%d:%d", pid, run.Offset))
 		stdout := capture(t, &os.Stdout)
-		err := g.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
+		err := gateApp(g.Host).gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -136,7 +140,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 			!strings.Contains(said, "continuing under beekeeper") || !strings.Contains(said, fmt.Sprintf("following o/r#7's devctl (pid %d) on", pid)) {
 			t.Errorf("stderr:\n%s", said)
 		}
-		if _, ok := os.LookupEnv(gateRunningEnv); ok {
+		if _, ok := os.LookupEnv(gate.GateRunningEnv); ok {
 			t.Error("the running marker is left in the environment, devctl would inherit it")
 		}
 		if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
@@ -153,14 +157,14 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
 		bin := &fakeBinary{replaced: true, execErr: errBusy}
-		g.bin = bin
+		g.Bin = bin
 		stdout := capture(t, &os.Stdout)
-		err := g.follow(base, pid, 0)
+		err := g.Follow(base, pid, 0)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
 		}
-		want := fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, len(devctlFirstLine))
+		want := fmt.Sprintf("%s=%d:%d", gate.GateRunningEnv, pid, len(devctlFirstLine))
 		if len(bin.execs) != 1 || !slices.Contains(bin.execs[0], want) {
 			t.Errorf("re-exec attempts %q, want one with %s", bin.execs, want)
 		}
@@ -186,6 +190,9 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 // with devctl's own code: 0 for a merge, and a refusal's code unchanged, never
 // the re-executed process's own. The gate is this test binary run as
 // beekeeper from a copy that the test renames another copy over.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 	if runningBinary().Path() == "" {
 		t.Skip("the running binary cannot be read here")
@@ -209,34 +216,34 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			base := mergeBase(store.Dir(), scratchRepo, 7)
+			base := gate.MergeBase(store.Dir(), scratchRepo, 7)
 			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			pid, err := launchChild(childSpec{Argv: mergeArgv(scratchRepo)}, base)
+			pid, err := gate.LaunchChild(gate.ChildSpec{Argv: mergeArgv(scratchRepo)}, base)
 			if err != nil {
 				t.Fatal(err)
 			}
 			self := filepath.Join(dir, "bin", "beekeeper")
 			copyTestBinary(t, self)
-			gate := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
-			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
-				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gateRunningEnv, pid))
+			gateCmd := exec.Command(self, append([]string{gate.GateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
+			gateCmd.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
+				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gate.GateRunningEnv, pid))
 			var stdout strings.Builder
-			gate.Stdout = &stdout
+			gateCmd.Stdout = &stdout
 			stderr := &lines{}
-			gate.Stderr = stderr
-			if err := gate.Start(); err != nil {
+			gateCmd.Stderr = stderr
+			if err := gateCmd.Start(); err != nil {
 				t.Fatal(err)
 			}
 			exited := make(chan error, 1)
-			go func() { exited <- gate.Wait() }()
+			go func() { exited <- gateCmd.Wait() }()
 			t.Cleanup(func() {
 				_ = os.WriteFile(proceed, nil, 0o600)
-				_ = gate.Process.Kill()
+				_ = gateCmd.Process.Kill()
 			})
 			err = store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: gate.Process.Pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
+				st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: gateCmd.Process.Pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
 				return nil, nil
 			})
 			if err != nil {
@@ -263,7 +270,7 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 				t.Fatalf("the gate did not end\n%s", stderr)
 			}
 			said := stderr.String()
-			if rc := gate.ProcessState.ExitCode(); rc != c.rc {
+			if rc := gateCmd.ProcessState.ExitCode(); rc != c.rc {
 				t.Fatalf("the gate exited %d, want devctl's %d\n%s", rc, c.rc, said)
 			}
 			if strings.TrimSpace(stdout.String()) != c.doc {
@@ -337,6 +344,9 @@ func (l *lines) await(t *testing.T, s string, n int) {
 // the outcome: it leaves the run's document and exit code, and the watch
 // records the real outcome from them at its next poll, without asking
 // GitHub, so no running entry stays for a finished merge.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo merged >&2; echo '`+mergedDoc+`'`)
@@ -347,24 +357,24 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 	}
 	g := runningMergeIn(t, store, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	// The gate's process is gone once its devctl ended, as the watch sees it.
-	g.pid = deadPID(t)
+	g.Pid = deadPID(t)
 	newer, err := state.OpenVersion(store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = newer.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].PID = g.pid
+		st.Merges[0].PID = g.Pid
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
+	if gateApp(g.Host).store, err = state.OpenVersion(store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
 	stderr := capture(t, &os.Stderr)
 	stdout := capture(t, &os.Stdout)
-	err = g.runMerge()
+	err = g.RunMerge()
 	doc, said := stdout(), stderr()
 	if err != nil {
 		t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -376,7 +386,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 		!strings.Contains(said, "which records the run at its next poll") {
 		t.Errorf("stderr:\n%s", said)
 	}
-	base := mergeBase(store.Dir(), scratchRepo, 7)
+	base := gate.MergeBase(store.Dir(), scratchRepo, 7)
 	if raw, err := os.ReadFile(base + ".rc"); err != nil || strings.TrimSpace(string(raw)) != "0" { //nolint:gosec // the test's file
 		t.Errorf("the run's exit code is not left for the watch: %q, %v", raw, err)
 	}
@@ -394,7 +404,7 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 		t.Errorf("stale-writer event %q", d)
 	}
 
-	w := &app{cfg: g.cfg, store: newer, now: time.Now()}
+	w := &app{cfg: gateApp(g.Host).cfg, store: newer, now: time.Now()}
 	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)
@@ -414,6 +424,9 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 // the installed one with the outcome, which hands it to the owner running
 // nothing again; a re-exec that does not start hands it over under the old
 // binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReplacedMergeChildHandsItsOutcomeOverUnderTheInstalledOne(t *testing.T) {
 	owner := state.Party{Session: "s1", Name: ownerName}
 	a, _, woke := tellOwnerRun(t, owner)
@@ -421,7 +434,7 @@ func TestAReplacedMergeChildHandsItsOutcomeOverUnderTheInstalledOne(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	spec := childSpec{Argv: []string{"/bin/sh", "-c", "echo '" + greenDoc + "'; echo 'checks pending' >&2; exit 4"},
+	spec := gate.ChildSpec{Argv: []string{"/bin/sh", "-c", "echo '" + greenDoc + "'; echo 'checks pending' >&2; exit 4"},
 		Command: strings.Fields("devctl pr wait o/r 7"), Owner: owner, Gate: deadPID(t)}
 	raw, _ := json.Marshal(spec)
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
@@ -477,6 +490,9 @@ func TestAReplacedMergeChildHandsItsOutcomeOverUnderTheInstalledOne(t *testing.T
 // A waiting gate whose step's save the newer release refuses re-executes
 // its replaced binary, keeping its place and deadline, and refuses (77)
 // only when the new binary does not start.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStaleStepReExecutesAReplacedGate(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	waiting := state.Merge{Repo: scratchRepo, PR: 3, Lane: scratchRepo, Phase: state.Waiting, By: state.Party{Session: "s2", Name: agentTwo},
@@ -494,11 +510,11 @@ func TestAStaleStepReExecutesAReplacedGate(t *testing.T) {
 	}
 	bin := &fakeBinary{replaced: true, execErr: errBusy}
 	was := runningBinary
-	runningBinary = func() binary { return bin }
+	runningBinary = func() gate.Binary { return bin }
 	t.Cleanup(func() { runningBinary = was })
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	// Before the step and again after its refused save.
 	if len(bin.execs) != 2 {

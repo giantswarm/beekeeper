@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -156,6 +157,9 @@ func parkMergeCheckPR(t *testing.T, r *loopRig, worker, on, url, head string) {
 // never both reach main: the first merges and advances
 // main, while the second is refused on the combined merge result (PR + current
 // main) and returned to its owner with the failing check.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(t *testing.T) {
 	for name, tc := range map[string]struct {
 		baseFiles map[string]string
@@ -265,7 +269,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			prevRun := loop.BeekeeperRun
 			t.Cleanup(func() { loop.BeekeeperRun = prevRun })
 			loop.BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
-				if g := slices.Index(args, gateCmdName); g >= 0 && slices.Contains(args, "8") {
+				if g := slices.Index(args, gate.GateCmdName); g >= 0 && slices.Contains(args, "8") {
 					clean := args[g:]
 					r.calls = append(r.calls, clean)
 					idx := slices.Index(clean, "--reviewed-head")
@@ -610,13 +614,15 @@ func TestMergeResultValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeResultUnreadableGateCannotDelegateAnUnsafeMerge(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == gateCmdName {
+		if len(args) > 0 && args[0] == gate.GateCmdName {
 			return "unreadable gate result", github.SquashTooling
 		}
 		return "", 0
@@ -662,13 +668,15 @@ func TestMergeCheckEnvironmentFailures(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeCheckHostFailureDoesNotRequestBranchRepair(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == gateCmdName {
+		if len(args) > 0 && args[0] == gate.GateCmdName {
 			doc := github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, Reason: mergeValidationUnavailable("host resources exhausted")}
 			body, _ := json.Marshal(doc)
 			return string(body), github.SquashTooling

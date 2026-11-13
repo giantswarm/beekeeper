@@ -9,10 +9,6 @@ import (
 // its TestLoopVocabulary keeps each equal to the command's own.
 const (
 	ExitError                        = 1
-	ExitGateDuplicate                = 3
-	ExitGateQueued                   = 76
-	ExitGateRefused                  = 77
-	ExitGateUnread                   = 74
 	ExitOutdated                     = 125
 	ExitRefused                      = 3
 	agentStartName                   = "start"
@@ -36,7 +32,6 @@ const (
 	epicSnapshotFile                 = "epic-delivery.json"
 	excludeFlag                      = "exclude"
 	executionReleasedEvent           = "execution.released"
-	gateCmdName                      = "gate"
 	harnessAuto                      = "auto"
 	hostUpdateCmdName                = "update"
 	hostUpdateDeferred               = "host update deferred"
@@ -59,7 +54,6 @@ const (
 	throughputCadence                = time.Minute
 	throughputObservationFile        = "throughput-observation.json"
 	verbStart                        = "agents.start"
-	verdictAvailable                 = "available"
 	workerGitHubAPIGroup             = "api"
 	workerRole                       = "worker"
 )
@@ -68,10 +62,6 @@ const (
 func Vocabulary() map[string]any {
 	return map[string]any{
 		"ExitError":                        ExitError,
-		"ExitGateDuplicate":                ExitGateDuplicate,
-		"ExitGateQueued":                   ExitGateQueued,
-		"ExitGateRefused":                  ExitGateRefused,
-		"ExitGateUnread":                   ExitGateUnread,
 		"ExitOutdated":                     ExitOutdated,
 		"ExitRefused":                      ExitRefused,
 		"agentStartName":                   agentStartName,
@@ -95,7 +85,6 @@ func Vocabulary() map[string]any {
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
 		"executionReleasedEvent":           executionReleasedEvent,
-		"gateCmdName":                      gateCmdName,
 		"harnessAuto":                      harnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
 		"hostUpdateDeferred":               hostUpdateDeferred,
@@ -118,7 +107,6 @@ func Vocabulary() map[string]any {
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,
 		"verbStart":                        verbStart,
-		"verdictAvailable":                 verdictAvailable,
 		"workerGitHubAPIGroup":             workerGitHubAPIGroup,
 		"workerRole":                       workerRole,
 	}

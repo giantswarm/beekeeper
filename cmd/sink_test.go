@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -201,13 +202,16 @@ func TestTheWatchDispatchesNothingWithoutASink(t *testing.T) {
 
 // A merge the gate recorded as merged carries its pull request as the
 // subject the sink dispatches; a promotion, which has none, carries none.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergedEventCarriesItsPullRequestAsItsSubject(t *testing.T) {
 	for _, tc := range []struct {
 		pr   int
 		want string
 	}{{7, decisionRef}, {0, ""}} {
 		st := &state.State{Merges: []state.Merge{{Repo: scratchRepo, PR: tc.pr, Lane: scratchRepo, Phase: state.Running}}}
-		evs := recordRun(st, 0, config.Lane{Name: scratchRepo}, sinkParty, runOutcome{out: merge.Outcome{Merged: true, Release: "v1.2.0"}}, time.Now(), "")
+		evs := recordRun(st, 0, config.Lane{Name: scratchRepo}, sinkParty, gate.RunOutcome{Out: merge.Outcome{Merged: true, Release: "v1.2.0"}}, time.Now(), "")
 		i := slices.IndexFunc(evs, func(e state.Event) bool { return e.Verb == verbMerged })
 		if i < 0 || evs[i].Subject != tc.want {
 			t.Fatalf("PR %d: events %+v, want subject %q", tc.pr, evs, tc.want)

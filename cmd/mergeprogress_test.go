@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -79,6 +80,8 @@ func TestActiveMergeOutputPreventsHungDetection(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeChildCapturesProgress(t *testing.T) {
 	base := filepath.Join(t.TempDir(), gitMerge)
 	out, err := os.Create(filepath.Clean(base + ".json"))
@@ -94,7 +97,7 @@ func TestMergeChildCapturesProgress(t *testing.T) {
 	var current atomic.Pointer[proc.Child]
 	var stop atomic.Value
 	var gone atomic.Bool
-	rc := runSpec(base, childSpec{Argv: []string{"sh", "-c", "printf 'release: waiting for the release of abc\\npipeline 123: workflow build running\\n' >&2"}}, out, log, &current, &stop, &gone)
+	rc := runSpec(base, gate.ChildSpec{Argv: []string{"sh", "-c", "printf 'release: waiting for the release of abc\\npipeline 123: workflow build running\\n' >&2"}}, out, log, &current, &stop, &gone)
 	if rc != 0 {
 		t.Fatalf("exit %d", rc)
 	}

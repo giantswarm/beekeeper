@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -152,7 +153,7 @@ func (a *app) owedLine(ctx context.Context, o state.Owed) (string, bool) {
 	if !o.Ask {
 		return o.Line, true
 	}
-	p, err := pullState(ctx, o.Repo, o.PR)
+	p, err := gate.PullState(ctx, o.Repo, o.PR)
 	if err != nil {
 		if time.Since(o.Since) < owedAsk {
 			a.failedPay(o, fmt.Sprintf("GitHub does not answer for %s#%d (%v)", o.Repo, o.PR, err))

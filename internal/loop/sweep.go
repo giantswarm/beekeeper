@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -212,7 +213,7 @@ func (l *Loop) markElsewhere(ctx context.Context, in superloop.Input) map[string
 			}
 			out[ref] = says + " on " + issue
 			l.SayOnce("elsewhere "+ref+"@"+p.Head, "SUPERVISOR SWEEP %s is the pull request of another desk's worker (%s on %s), which parks on its own desk: the loop reviews its green head %s now",
-				cmp.Or(p.URL, ref), says, issue, Cmd.ShortSHA(p.Head))
+				cmp.Or(p.URL, ref), says, issue, gate.ShortSHA(p.Head))
 			break
 		}
 	}
