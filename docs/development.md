@@ -33,7 +33,10 @@ A `go test` whose only failures are builds stopped by a native dependency the ch
 lacks (a C header the base and head do not track, a pkg-config package, a library or a tool
 such as the C compiler) shows nothing about the branch, since its CI has them: the finding is
 recorded once, not retried, and the pull request's own checks stand. A failing test or any
-other build error beside it still goes back to the branch.
+other build error beside it still goes back to the branch. Lint runs first and reports such a
+package, and each package importing it, as a new `typecheck` finding quoting that build output.
+When those are all its new findings, lint refuses nothing and `go test` decides as above; if
+`go test` passes, the lint finding alone is recorded the same way.
 Lint uses the merge result's `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or
 `.golangci.json` explicitly (in that order), without additional linters or a separate
 goconst pre-check. Without a repository config it uses `--no-config` and the tool's

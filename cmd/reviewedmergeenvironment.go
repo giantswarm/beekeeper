@@ -143,15 +143,19 @@ var (
 	}
 	// A package whose tests ran and failed, rather than one that did not build.
 	goTestRanAndFailed = regexp.MustCompile(`^(--- FAIL|FAIL\s+\S+\s+[^\s\[])`)
+	// The go build output a golangci-lint typecheck finding quotes: after ": "
+	// for the package that did not build, inside "could not import <package>
+	// (-: …)" for each package importing it.
+	mergeLintQuotedBuild = regexp.MustCompile(`^(?:: |could not import \S+ \(-: )(# [\s\S]*?)\)?$`)
 )
 
-// mergeCheckHostDependency names the native build dependencies the checker
+// mergeCheckHostDependencies names the native build dependencies the checker
 // host lacks when they are all that failed in go test's output: no test ran
 // and failed, and every build failure (a "# <package>" block) names a missing
 // C header, pkg-config package, library or tool. The repository's CI has them,
 // since the reviewed head and its base passed it. A header the repository
 // itself tracks (tracked) is the merge result's own breakage, never the host's.
-func mergeCheckHostDependency(out string, tracked func(string) bool) string {
+func mergeCheckHostDependencies(out string, tracked func(string) bool) []string {
 	var missing []string
 	block, blockMissing, blockOther := false, false, false
 	// A block that reports anything but a missing dependency is a build
@@ -165,15 +169,15 @@ func mergeCheckHostDependency(out string, tracked func(string) bool) string {
 		line = strings.TrimRight(line, "\r")
 		switch {
 		case goTestRanAndFailed.MatchString(line):
-			return ""
+			return nil
 		case strings.HasPrefix(line, "# "):
 			if !closeBlock() {
-				return ""
+				return nil
 			}
 			block = true
 		case line == "FAIL", strings.HasPrefix(line, "FAIL\t"), strings.HasPrefix(line, "ok "), strings.HasPrefix(line, "?"):
 			if !closeBlock() {
-				return ""
+				return nil
 			}
 		case block && strings.TrimSpace(line) != "":
 			if dependency := missingBuildDependency(line, tracked); dependency != "" {
@@ -185,10 +189,32 @@ func mergeCheckHostDependency(out string, tracked func(string) bool) string {
 		}
 	}
 	if !closeBlock() {
-		return ""
+		return nil
 	}
 	slices.Sort(missing)
-	return strings.Join(slices.Compact(missing), ", ")
+	return slices.Compact(missing)
+}
+
+// mergeLintHostDependencies names the native build dependencies the checker
+// host lacks when they are all the merge result's new lint findings report:
+// golangci-lint reports a package whose cgo build stops (and each package
+// importing it) as a typecheck finding quoting go's build output. Any other
+// new finding is the merge result's own.
+func mergeLintHostDependencies(fresh []mergeLintIssue, tracked func(string) bool) []string {
+	var missing []string
+	for _, issue := range fresh {
+		quoted := mergeLintQuotedBuild.FindStringSubmatch(issue.Text)
+		if issue.FromLinter != "typecheck" || quoted == nil {
+			return nil
+		}
+		found := mergeCheckHostDependencies(quoted[1], tracked)
+		if len(found) == 0 {
+			return nil
+		}
+		missing = append(missing, found...)
+	}
+	slices.Sort(missing)
+	return slices.Compact(missing)
 }
 
 func missingBuildDependency(line string, tracked func(string) bool) string {

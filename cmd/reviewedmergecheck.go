@@ -300,15 +300,22 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 	// Avoid the host-wide runner lock without suppressing lint findings.
 	lintArgs = append(lintArgs, "--allow-parallel-runners")
 	lintArgs = append(lintArgs, pkgs...)
+	tracked := mergeCheckTrackedFile(ctx, worktreeDir, baseSHA, head)
+	// The native build dependencies lint could not type-check a package
+	// without; go test decides about the rest.
+	var lintMissing []string
 	if out, err := run(ctx, worktreeDir, mergeLintCommand, lintArgs...); err != nil {
 		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
 		if baseSHA != "" {
-			var baselineErr error
-			out, baselineErr = reviewedLintRegressions(ctx, worktreeDir, baseSHA, lintArgs, run, local)
+			fresh, baselineErr := reviewedLintRegressions(ctx, worktreeDir, baseSHA, lintArgs, run, local)
 			if baselineErr != nil {
 				return mergeValidationUnavailable("lint baseline: %v", baselineErr), github.SquashTooling
+			}
+			out = ""
+			if lintMissing = mergeLintHostDependencies(fresh, tracked); len(lintMissing) == 0 {
+				out = formatMergeLintIssues(fresh)
 			}
 		}
 		if baseSHA == "" || out != "" {
@@ -322,14 +329,22 @@ func runReviewedMergeChecksWith(ctx context.Context, worktreeDir, baseSHA, baseB
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
 		// Code 0 with a reason: the validation could not run on this host.
-		if missing := mergeCheckHostDependency(out, mergeCheckTrackedFile(ctx, worktreeDir, baseSHA, head)); missing != "" {
-			return fmt.Sprintf("%s: the checker host lacks the build dependency %s that go test of %s + %s needs; the pull request's own checks stand",
-				reasonMergeValidationSkipped, missing, baseBranch, shortSHA(head)), 0
+		if missing := mergeCheckHostDependencies(out, tracked); len(missing) > 0 {
+			return mergeValidationSkippedOnHost("go test", baseBranch, head, missing), 0
 		}
 		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
-
+	if len(lintMissing) > 0 {
+		return mergeValidationSkippedOnHost(mergeLintCommand, baseBranch, head, lintMissing), 0
+	}
 	return "", 0
+}
+
+// mergeValidationSkippedOnHost is the note of a merge result whose check
+// stopped on native build dependencies the checker host lacks.
+func mergeValidationSkippedOnHost(check, baseBranch, head string, missing []string) string {
+	return fmt.Sprintf("%s: the checker host lacks the build dependency %s that %s of %s + %s needs; the pull request's own checks stand",
+		reasonMergeValidationSkipped, strings.Join(missing, ", "), check, baseBranch, shortSHA(head))
 }
 
 const (

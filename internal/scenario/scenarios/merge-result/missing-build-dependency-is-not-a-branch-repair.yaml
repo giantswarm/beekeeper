@@ -4,8 +4,9 @@ description: >
   native build dependency of the repository is an environment finding, and
   the pull request's own checks stand. The approved head is green, but its
   base moved on, so the gate tests base plus head on the desk host, where
-  the cgo build stops on a missing system header the repository's CI has.
-  The loop files the finding once as the checker's environment, retries
+  the cgo build stops on a missing system header the repository's CI has:
+  golangci-lint reports it as a new typecheck finding, go test as a build
+  failure. The loop files the finding once as the checker's environment, retries
   nothing, hands nothing back to the worker, and merges the head.
 issue: https://github.com/giantswarm/beekeeper/issues/3892
 flow: merge-result
@@ -64,9 +65,23 @@ given:
               - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
               - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
   calls:
+    # Lint type-checks the merge result before go test: on the desk host the
+    # cgo package stops on the missing header, which golangci-lint reports as
+    # a typecheck finding quoting go's build output. The base, without the
+    # cgo package, has no finding, so the finding is new.
+    - program: golangci-lint
+      args: [run, --output.json.path=stdout]
+      times: 1
+      respond:
+        stdout: '{"Issues":[{"FromLinter":"typecheck","Text":": # example.invalid/app\n# [example.invalid/app]\n./midi.go:4:10: fatal error: alsa/asoundlib.h: No such file or directory\n    4 | // #include <alsa/asoundlib.h>\n      |          ^~~~~~~~~~~~~~~~~~\ncompilation terminated.","SourceLines":["package app"],"Pos":{"Filename":"b.go","Line":1,"Column":0}}]}'
+    - program: golangci-lint
+      args: [run, --output.json.path=stdout]
+      respond: {stdout: '{"Issues":[]}'}
     - program: golangci-lint
       args: [run]
-      respond: {stdout: "0 issues.\n"}
+      respond:
+        stdout: "b.go:1: : # example.invalid/app\n# [example.invalid/app]\n./midi.go:4:10: fatal error: alsa/asoundlib.h: No such file or directory\ncompilation terminated. (typecheck)\npackage app\n1 issues:\n* typecheck: 1\n"
+        exit: 1
     # The desk host has no ALSA development headers.
     - program: go
       args: [test, -short, ./...]
@@ -138,7 +153,7 @@ when:
     run: {args: [log, --verb, merge.failed, --json]}
     expect:
       - exit: 0
-      - output: {not_contains: ["branch repair requested", "failed go test"]}
+      - output: {not_contains: ["branch repair requested", "failed golangci-lint", "failed go test"]}
   - advance: 2s
   - name: end
     run: {args: [supervisor, loop, --once]}
@@ -148,7 +163,9 @@ when:
 then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - github: {issue: {repo: example/app, number: 1, state: closed}}
-  # The test ran once: no retry provides a missing system header.
+  # Lint compared the merge result with the base, and the test ran once:
+  # no retry provides a missing system header.
+  - calls: {program: golangci-lint, args: [run, --output.json.path=stdout], min: 2, max: 2}
   - calls: {program: go, args: [test, -short, ./...], min: 1, max: 1}
   - calls: {program: gh, args: [pr, merge, --match-head-commit], min: 1, max: 1}
   # No repair is asked of the worker: no repair stage opens.
