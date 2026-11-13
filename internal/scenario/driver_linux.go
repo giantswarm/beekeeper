@@ -129,7 +129,15 @@ type driver struct {
 	githubLog   *os.File
 	boardOwner  string
 	boardNumber int
+	// cfg is the desk's configuration as setup wrote it, orgs its
+	// github.allowedOrgs: the hosts are provisioned against them.
+	cfg  map[string]any
+	orgs []string
 }
+
+// deskCaller names the desk itself to the scenario's GitHub: what a unit
+// of its service manager or a host's coordinator spends.
+const deskCaller = "desk"
 
 // Drive runs the scenario at /work/scenario.yaml inside the sandbox and
 // writes its result to /work/result.json.
@@ -174,18 +182,6 @@ func (d *driver) run() {
 		err = d.startClock()
 	}
 	if err == nil {
-		d.fakes, err = harness.NewWorld(harness.Options{
-			Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: env(nil), Artifacts: artifactsDir,
-			Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
-				r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
-				return r.Stdout, r.Stderr, r.Exit, r.Given
-			},
-		})
-	}
-	if err == nil {
-		err = d.fakes.Serve(harness.DefaultSocket)
-	}
-	if err == nil {
 		err = d.setup(ctx)
 	}
 	if err == nil {
@@ -193,6 +189,12 @@ func (d *driver) run() {
 	}
 	if err == nil {
 		err = d.startGitHub(&logMu)
+	}
+	if err == nil {
+		err = d.startFakes()
+	}
+	if err == nil {
+		err = d.provisionHosts(ctx)
 	}
 	if err != nil {
 		if d.fakes != nil {
@@ -300,18 +302,82 @@ func (d *driver) setup(ctx context.Context) error {
 		d.boardOwner, _ = board["owner"].(string)
 		d.boardNumber, _ = board["project"].(int)
 	}
-	// The hosts are provisioned against the desk's configuration, which
-	// then names each with the policy digest its host prepared.
+	d.cfg, d.orgs = cfg, orgs
+	return codexCatalog(cfg, d.s.Given.Harness.Models[harness.Codex])
+}
+
+// codexCatalog writes the model catalog the codex CLI keeps beside its
+// configuration. Beekeeper validates the effort of a codex start against
+// it, and the loop's starts carry supervisor.effort. It lists the models of
+// the desk's codex choices and of given.harness.models, each with every
+// effort.
+func codexCatalog(cfg map[string]any, models []string) error {
+	slugs := slices.Clone(models)
+	if capacity, ok := cfg["capacity"].(map[string]any); ok {
+		choices, _ := capacity["choices"].([]any)
+		for _, c := range choices {
+			choice, _ := c.(map[string]any)
+			if model, _ := choice["model"].(string); choice["harness"] == harness.Codex && model != "" && !slices.Contains(slugs, model) {
+				slugs = append(slugs, model)
+			}
+		}
+	}
+	type level struct {
+		Effort string `json:"effort"`
+	}
+	type model struct {
+		Slug   string  `json:"slug"`
+		Levels []level `json:"supported_reasoning_levels"`
+	}
+	catalog := struct {
+		Models []model `json:"models"`
+	}{Models: []model{}}
+	for _, slug := range slugs {
+		catalog.Models = append(catalog.Models, model{Slug: slug, Levels: []level{{"low"}, {"medium"}, {"high"}, {"xhigh"}, {"max"}}})
+	}
+	raw, err := json.Marshal(catalog)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(homeDir, ".codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "models_cache.json"), raw, 0o600)
+}
+
+// startFakes starts the world of the fake harnesses, units and hosts. Its
+// environment is the desk's with the scenario's GitHub, so a unit or a
+// host's coordinator reaches the same GitHub as the step that started it.
+func (d *driver) startFakes() error {
+	var err error
+	d.fakes, err = harness.NewWorld(harness.Options{
+		Given: d.s.Given.Harness, Hosts: d.s.Given.Hosts, Env: d.stepEnv(deskCaller, nil), Artifacts: artifactsDir,
+		Answer: func(program string, args []string, stdin, dir string, modeled bool) (string, string, int, bool) {
+			r := d.world.Answer(CallRequest{Program: program, Args: args, Stdin: stdin, Dir: dir, Modeled: modeled})
+			return r.Stdout, r.Stderr, r.Exit, r.Given
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return d.fakes.Serve(harness.DefaultSocket)
+}
+
+// provisionHosts provisions the hosts against the desk's configuration,
+// which then names each with the policy digest its host prepared.
+func (d *driver) provisionHosts(ctx context.Context) error {
 	hosts, err := harness.Provision(ctx, harness.Desk{
 		Candidate: candidate, Fake: binDir + "/" + fakeBinary, Git: binDir + "/git", Config: configFile,
-		Identity: deskIdentity, Orgs: orgs, Env: env(nil),
-	}, d.s.Given.Hosts, repos)
+		Identity: deskIdentity, Orgs: d.orgs, Env: d.stepEnv(deskCaller, nil),
+	}, d.s.Given.Hosts, d.repositories())
 	if err != nil || len(hosts) == 0 {
 		return err
 	}
-	overlay(cfg, map[string]any{"agents": map[string]any{"hosts": hosts}})
-	overlay(cfg, d.s.Given.Desk.Config)
-	if raw, err = yaml.Marshal(cfg); err != nil {
+	overlay(d.cfg, map[string]any{"agents": map[string]any{"hosts": hosts}})
+	overlay(d.cfg, d.s.Given.Desk.Config)
+	raw, err := yaml.Marshal(d.cfg)
+	if err != nil {
 		return err
 	}
 	return os.WriteFile(configFile, raw, 0o600)
@@ -319,20 +385,7 @@ func (d *driver) setup(ctx context.Context) error {
 
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
-func (d *driver) repositories() []string {
-	var out []string
-	for _, r := range d.s.Given.Repositories {
-		out = append(out, r.Name)
-	}
-	if g := d.s.Given.GitHub; g != nil {
-		for _, name := range g.RepositoryNames() {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
+func (d *driver) repositories() []string { return d.s.repositoryNames() }
 
 // startGitHub builds the scenario's GitHub from given.github over the
 // origins, serves it on a loopback port and makes it answer gh.
@@ -373,11 +426,15 @@ func (d *driver) startGitHub(logMu *sync.Mutex) error {
 }
 
 // stepEnv is the environment of a step's candidate: the allowlist, the
-// scenario's GitHub with the step as its caller, and the step's own.
+// scenario's GitHub with the step as its caller, the scenario's tools and
+// the step's own.
 func (d *driver) stepEnv(caller string, extra map[string]string) []string {
 	vars := map[string]string{}
 	if d.github != nil {
 		maps.Copy(vars, d.github.Env(caller))
+	}
+	if tools := d.s.Given.Tools; len(tools) > 0 {
+		vars[ToolsEnv] = strings.Join(tools, ",")
 	}
 	maps.Copy(vars, extra)
 	return env(vars)

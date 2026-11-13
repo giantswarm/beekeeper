@@ -92,6 +92,9 @@ type Given struct {
 	Hosts []harness.Host `yaml:"hosts"`
 	// Clock is the world's clock.
 	Clock Clock `yaml:"clock"`
+	// Tools are further programs on the desk's PATH (go, golangci-lint):
+	// fakes like Fakes, which only given.calls answer.
+	Tools []string `yaml:"tools"`
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
@@ -323,7 +326,21 @@ func (e Expect) Kind() string {
 // dispatching on its name.
 var Fakes = []string{"gh", "claude", "codex", "agy", "omp", "ssh", "devctl", "systemctl", "systemd-run", "journalctl"}
 
+// ToolsEnv names a scenario's given.tools to the fake executable, which
+// serves them beside Fakes.
+const ToolsEnv = "BEEKEEPER_SCENARIO_TOOLS"
+
+// reservedPrograms are the names on the desk's PATH no tool may take.
+var reservedPrograms = []string{"beekeeper", "git", "sh", "real-git", "real-git-core", "git-core", "scenario-fake"}
+
+// programs are the programs the scenario's world answers: Fakes and
+// given.tools.
+func (s *Scenario) programs() []string {
+	return append(slices.Clone(Fakes), s.Given.Tools...)
+}
+
 var (
+	toolRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 	nameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	issueRE = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
 	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -362,6 +379,23 @@ func Parse(file string, raw []byte) (*Scenario, error) {
 	return &s, nil
 }
 
+// repositoryNames are the scenario's repositories: given.repositories and
+// given.github's, each once. Every one has an origin.
+func (s *Scenario) repositoryNames() []string {
+	var out []string
+	for _, r := range s.Given.Repositories {
+		out = append(out, r.Name)
+	}
+	if g := s.Given.GitHub; g != nil {
+		for _, name := range g.RepositoryNames() {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
 // Validate checks what the decoder cannot: required fields, exactly one
 // kind per step and expectation, references and patterns.
 func (s *Scenario) Validate() error {
@@ -398,12 +432,22 @@ func (s *Scenario) Validate() error {
 			bad("given.github: %v", err)
 		}
 	}
+	for i, tool := range s.Given.Tools {
+		switch {
+		case !toolRE.MatchString(tool):
+			bad("given.tools[%d]: %q is no program name", i, tool)
+		case slices.Contains(Fakes, tool) || slices.Contains(reservedPrograms, tool):
+			bad("given.tools[%d]: %q is on the desk's PATH already", i, tool)
+		case slices.Index(s.Given.Tools, tool) != i:
+			bad("given.tools[%d]: %q is named twice", i, tool)
+		}
+	}
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
 	}
 	for i, c := range s.Given.Calls {
-		if !slices.Contains(Fakes, c.Program) {
-			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(Fakes, ", "))
+		if !slices.Contains(s.programs(), c.Program) {
+			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(s.programs(), ", "))
 		}
 		if c.Times < 0 {
 			bad("given.calls[%d]: times %d", i, c.Times)
@@ -412,11 +456,7 @@ func (s *Scenario) Validate() error {
 			bad("given.calls[%d]: %v", i, err)
 		}
 	}
-	repositories := make([]string, 0, len(s.Given.Repositories))
-	for _, r := range s.Given.Repositories {
-		repositories = append(repositories, r.Name)
-	}
-	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, repositories), s.Given.Harness.Validate(s.Given.Hosts)} {
+	for _, err := range []error{harness.ValidateHosts(s.Given.Hosts, s.repositoryNames()), s.Given.Harness.Validate(s.Given.Hosts)} {
 		if err == nil {
 			continue
 		}
@@ -613,7 +653,7 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if o := e.Origin; o != nil {
-		if !slices.ContainsFunc(s.Given.Repositories, func(r Repository) bool { return r.Name == o.Repository }) {
+		if !slices.Contains(s.repositoryNames(), o.Repository) {
 			bad("origin: repository %q is none of given.repositories", o.Repository)
 		}
 		if o.Branch == "" {
@@ -631,8 +671,8 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 	}
 	if c := e.Calls; c != nil {
-		if c.Program != "" && !slices.Contains(Fakes, c.Program) {
-			bad("calls: program %q is none of %s", c.Program, strings.Join(Fakes, ", "))
+		if c.Program != "" && !slices.Contains(s.programs(), c.Program) {
+			bad("calls: program %q is none of %s", c.Program, strings.Join(s.programs(), ", "))
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("calls: %v", err)

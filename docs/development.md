@@ -542,6 +542,13 @@ timer from the running watches.
 - `internal/github`: The budget from rate-limit headers, the GraphQL limit and its refusal from a
   `rateLimit` query, the search limits from `/rate_limit` (`BEEKEEPER_GITHUB_API` points the probes
   at a test's server); a pull request's state from `gh pr view`.
+- `internal/capacity`: What a start is judged by: the views `capacity` prints and writes as JSON,
+  the usage data model they are derived from, and the math from the roster's counts, the usage
+  readings and the machine's headroom to a verdict and a choice. `cmd` counts the roster, reads
+  usage and headroom, and holds the commands and the start gate. What the package still needs of
+  the command is named in `command.go` (`Cmd`, six text helpers) and `vocabulary.go` (three of the
+  command's constants, kept equal by `cmd`'s `TestCapacityVocabulary`). A seam entry goes when its
+  target moves to a package capacity can import.
 - `internal/loop`: The supervisor loop: the pass, the streams its actions run in, the refill and
   the stall alarms. `cmd` runs it and is its `Host`. What it still needs of the command is named in
   `host.go` (`Host` for the app, `Cmd` for the package's functions) and `vocabulary.go` (the

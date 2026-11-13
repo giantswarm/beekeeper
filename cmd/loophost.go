@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -30,7 +31,7 @@ func asApp(h loop.Host) *app {
 func init() {
 	loop.Cmd = loop.Command{
 		About:                about,
-		AgentHarnessModel:    agentHarnessModel,
+		AgentHarnessModel:    capacity.AgentHarnessModel,
 		AgyAgentStartID:      agyAgentStartID,
 		AgyQuotaError:        agyQuotaError,
 		AlertOwnerKey:        alertOwnerKey,
@@ -89,7 +90,7 @@ func init() {
 		LowBudget:                 lowBudget,
 		NamedRefs:                 namedRefs,
 		NewExitError:              newExitError,
-		OmpChoiceModel:            ompChoiceModel,
+		OmpChoiceModel:            capacity.OmpChoiceModel,
 		OneLine:                   oneLine,
 		ParkMessage:               parkMessage,
 		ParkedBetweenTurns:        parkedBetweenTurns,
@@ -116,8 +117,10 @@ func init() {
 		RefStates: func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 			return refStates(ctx, refs)
 		},
-		RefURL:                func() *regexp.Regexp { return refURL },
-		RefreshLoopBudget:     func(a loop.Host, ctx context.Context) error { return refreshLoopBudget(asApp(a), ctx) },
+		RefURL: func() *regexp.Regexp { return refURL },
+		RefreshLoopBudget: func(a loop.Host, ctx context.Context) (*state.Budget, error) {
+			return refreshLoopBudget(asApp(a), ctx)
+		},
 		Refused:               refused,
 		ReleaseVersion:        releaseVersion,
 		RemoveAgent:           removeAgent,

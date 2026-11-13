@@ -207,8 +207,8 @@ func deliveryRepoHeld(st *state.State, ref string, now time.Time) bool {
 }
 
 // deliveryReviewAsked says whether every pull of d already has a review
-// request or a desk review at its current head (at any head when its head is
-// unknown): the loop starts no reviewer for it.
+// request or a desk review not released at its current head (at any head
+// when its head is unknown): the loop starts no reviewer for it.
 func deliveryReviewAsked(st *state.State, d state.Delivery) bool {
 	if len(d.Pulls) == 0 {
 		return false
@@ -217,7 +217,7 @@ func deliveryReviewAsked(st *state.State, d state.Delivery) bool {
 		head := d.Heads[pull]
 		at := func(ref, h string) bool { return strings.EqualFold(ref, pull) && (head == "" || h == head) }
 		if !slices.ContainsFunc(st.ReviewRequests, func(r state.ReviewRequest) bool { return at(r.Ref, r.Head) }) &&
-			!slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool { return at(r.Ref, r.Head) }) {
+			!slices.ContainsFunc(st.DeskReviews, func(r state.DeskReview) bool { return r.Released.IsZero() && at(r.Ref, r.Head) }) {
 			return false
 		}
 	}

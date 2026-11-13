@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -44,7 +45,7 @@ type Host interface {
 	FinishReviewRequest(act superloop.Action, started bool)
 	HoldOn(ctx context.Context, notes []state.Note, ref string) (*state.ItemHold, error)
 	HostPinToolsCurrent(pin state.HostPin, h execution.Host) bool
-	HostPlacementViews(st *state.State) []HostPlacementView
+	HostPlacementViews(st *state.State) []capacity.HostPlacementView
 	LastNoteContext(ctx context.Context, p state.Party, since time.Time, progress ...func()) (string, bool, error)
 	LoadedCfg() string
 	LoopGitHub(ctx context.Context, step string, run func() error) error
@@ -153,7 +154,7 @@ type Command struct {
 	RefName                    func(r github.PR) string
 	RefStates                  func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error)
 	RefURL                     func() *regexp.Regexp
-	RefreshLoopBudget          func(a Host, ctx context.Context) error
+	RefreshLoopBudget          func(a Host, ctx context.Context) (*state.Budget, error)
 	Refused                    func(format string, a ...any) error
 	ReleaseVersion             func(v string) bool
 	RemoveAgent                func(st *state.State, i int)

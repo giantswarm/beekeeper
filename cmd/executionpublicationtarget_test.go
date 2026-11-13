@@ -116,7 +116,7 @@ func TestContinuationPublicationRejectsInvalidTargets(t *testing.T) {
 		repairs []string
 		readErr bool
 	}{
-		{name: "closed pull request", change: func(pull, _ map[string]any) { pull["state"] = noteStatusClosed }},
+		{name: "pull request closed", change: func(pull, _ map[string]any) { pull["state"] = noteStatusClosed }},
 		{name: "head in a fork", change: func(_, head map[string]any) {
 			head["repo"] = map[string]string{continuationFixtureRepoKey: "other/beekeeper"}
 		}},
