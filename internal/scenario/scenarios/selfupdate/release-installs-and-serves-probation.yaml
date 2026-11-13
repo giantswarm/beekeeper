@@ -13,11 +13,15 @@ description: >
   minutes of probation, in which the candidate's loop sends its heartbeat
   and the isolated workflow probe passes, and then promotes it to last
   known good. The controller's unit is the scenario's to run: it runs the
-  same command with the controller's cadence flags, so an evaluation that
-  counts for a minute comes every 500 ms.
+  same command with the controller's cadence flags, so one evaluation
+  counts for the full probation window and runs the real workflow probe.
 issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: selfupdate
 tags: [selfupdate, release, canary, probation]
+control:
+  none: >-
+    only shortens the simulated healthy probation of behavior main already
+    has; the recovery unit tests cover the repeated five-minute probes
 timeout: 360s
 
 given:
@@ -127,14 +131,13 @@ when:
       expect:
         - log: {name: loop, contains: ["SUPERVISOR REFILL started 0: no free board item"]}
   # The controller's unit, run by the scenario: the last known good
-  # release judges the candidate, an evaluation every 500 ms that counts
-  # for a minute of probation.
+  # release judges the candidate, one evaluation counting for the full
+  # probation window. The real probe and the live heartbeat must pass.
   - name: controller
     background:
       release: v1.0.0-rc.2
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
-  # About a minute on a CI runner: 30 evaluations, six of them with the
-  # workflow probe. The bound leaves room for a busier runner.
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 30m]
+  # Wait for the actual verdict, including the isolated workflow probe.
   - wait_for:
       timeout: 240s
       interval: 200ms

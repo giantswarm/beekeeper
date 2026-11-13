@@ -28,6 +28,12 @@ given:
   install:
     candidate: {version: v1.0.0-rc.2, mutation: pull-parser-drops-the-base}
     previous: v1.0.0-rc.1
+  calls:
+    # Recovery can check the available GitHub identities after a failed
+    # probe. This desk has only the scenario's gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
 
 when:
   - name: work
@@ -45,7 +51,7 @@ when:
   - name: half-way
     run: {args: [timer, list]}
     expect:
-      - install: {installed: v1.0.0-rc.2+pull-parser-drops-the-base, probation: pending}
+      - install: {installed: v1.0.0-rc.2+pull-parser-drops-the-base, probation: pending, probe_failures: {min: 1, max: 2}}
   - name: second
     run:
       args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
@@ -77,4 +83,4 @@ when:
 
 then:
   - install: {installed: v1.0.0-rc.1, probation: rolled-back, quarantined: v1.0.0-rc.2+pull-parser-drops-the-base, notified: true}
-  - install: {probe_failures: {min: 1}}
+  - install: {probe_failures: {min: 3, max: 3}}

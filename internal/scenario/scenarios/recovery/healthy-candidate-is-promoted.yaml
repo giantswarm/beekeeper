@@ -27,9 +27,11 @@ given:
     previous: v1.0.0-rc.1
 
 when:
+  # One evaluation spans the probation window and runs the real probe.
+  # The controller's unit tests cover its repeated five-minute probes.
   - name: controller
     run:
-      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 30m]
     expect:
       - exit: 0
       - output: {not_contains: [RELEASE ROLLED BACK]}

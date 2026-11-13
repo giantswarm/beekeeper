@@ -11,11 +11,16 @@ description: >
   later compatible release, is not fenced: it installs, serves its probation with
   a loop that sends its heartbeat, and is promoted. With that the fence is
   lifted for every process. Each controller's unit is the scenario's to
-  run: it runs the same command with the controller's cadence flags, so an
-  evaluation that counts for a minute comes every 500 ms.
+  run: it runs the same command with the controller's cadence flags. The
+  silent candidate is evaluated a simulated minute at a time; the later
+  healthy candidate serves its full probation window in one evaluation.
 issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: selfupdate
 tags: [selfupdate, release, probation, rollback, fence]
+control:
+  none: >-
+    only shortens the later healthy candidate's simulated probation of
+    behavior main already has; the missing-heartbeat grace is unchanged
 timeout: 480s
 
 given:
@@ -155,8 +160,8 @@ when:
   - name: later-controller
     background:
       release: v1.0.0-rc.2
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
-  # About a minute on a CI runner; the bound leaves room for a busier one.
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 30m]
+  # The live heartbeat and real workflow probe must pass before promotion.
   - wait_for:
       timeout: 240s
       interval: 200ms
