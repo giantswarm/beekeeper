@@ -247,6 +247,14 @@ holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|<contex
 in `agents` (KEPT) and `capacity`, not busy, and it ends its turn; an agent without a task is
 refused. `lease claim <resource> --park` parks it on the lease its queued claim waits for.
 
+`--on` selects the wait target. Mentioning `hold`, `held`, `release window` or `gate run` in the
+reason does not change that target or refuse a park on an issue or pull request. For example,
+`--on example/app#2 "the editor's held-still source"` waits on that reference; its closure settles
+the park, including a park recorded by an older version. To wait on a hold, use `--on hold:<target>`
+with the target named by the gate's exit 77 or `beekeeper hold`. Gate runs have no automatic park
+target: find the run with `beekeeper gate runs`, park without `--on`, and arrange an explicit wake
+when the run ends.
+
 A GitHub target is resolved once when parking; a confirmed missing reference is refused. A failed
 read still records the park with an unresolved type, classified later with retries at most every
 five minutes. A pull request enters the usual review flow. An issue is a plain wait, checked at most
