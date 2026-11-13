@@ -581,6 +581,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			return "", nil, err
 		}
 		problems = freshWorkerProblems(ag, problems)
+		issue := taskIssue(st, *ag)
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished || v.Blocked
@@ -595,6 +596,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			clearRecords(st, me)
 		}
 		events := append(outcomes, event(me, verb, "%s done: %s", ag.Name, ag.LastTask))
+		if v.Finished && !v.Blocked {
+			events = append(events, retireTaskParks(st, me, *ag, issue, a.now)...)
+		}
 		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems, TellTo: reviewStarter(st, *ag, v.Text)})
 		if v.Text != "" {
 			events = append(events, event(me, "agents.report", "%s: %s", ag.Name, v.Text))

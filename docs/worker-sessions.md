@@ -268,6 +268,14 @@ transcript and its subagents' quiet for 30 seconds), the watch stops it (`claude
 its conversation; `PARKED SESSION STOPPED` and an `agents.parkstop` event), and the wake or resume
 that ends the park continues it from its transcript (`claude --bg --resume`).
 
+A task has one worker. When two hold it (a hand start beside the loop's, a relay, a continuation)
+and one reports it done (`agents idle --done`), the parks of the others on the same task issue are
+retired with that report: their tasks end as done, their serve records and the timers that wake
+them go, an `agents.park-retired` event says so and the doctor takes them off the roster. The
+issue's close then wakes nobody, also a park it made resumable before the report, and no fresh
+continuation starts. A park whose continuation is already starting, a desk review or CI park (the
+loop owns that pull request's flow) and a role holder's park stay.
+
 The stop and every wake of the session hold one lock per session: under it the stop looks again (the
 same park, still quiet, not woken in the last 30 seconds, and the transcript's last message of its
 own answers the last message and stopped — a model thinking over a wake's or resume's message writes

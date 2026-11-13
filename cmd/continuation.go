@@ -169,8 +169,7 @@ func loopFinishContinuation(l *loop.Loop, old state.Agent, name string) error {
 			}
 		}
 		for k := range st.Timers {
-			t := &st.Timers[k]
-			if t.Wake == prev.Name || t.Wake == prev.Session && prev.Session != "" || t.Wake == prev.HostSession && prev.HostSession != "" {
+			if t := &st.Timers[k]; wakesAgent(*t, prev) {
 				t.Wake = next.Name
 			}
 		}
