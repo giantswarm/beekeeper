@@ -101,6 +101,79 @@ func TestReworkRecoversUnactivatedSSHWorker(t *testing.T) {
 	}
 }
 
+// A worker whose SSH execution ended for good keeps its roster entry, and
+// agents wake refuses it on every pass: the rework gives the entry to a fresh
+// fixer, as for a worker off the roster. An execution whose conversation can
+// go on, or that still runs, is woken.
+func TestReworkReplacesEndedSSHWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		end     func(*state.ExecutionRecord)
+		replace bool
+	}{
+		{name: "retired", replace: true, end: func(r *state.ExecutionRecord) {
+			r.Retirement = &state.ExecutionRetirement{ID: "retirement", Trigger: execution.RetireTriggerCrash}
+		}},
+		{name: "stopped", replace: true, end: func(r *state.ExecutionRecord) {
+			r.StopRequest = &execution.StopRequest{ID: "stop", Reason: "stopped by hand"}
+			r.Observation.StopAcknowledged = true
+		}},
+		{name: "released", replace: true, end: func(r *state.ExecutionRecord) { r.ReleasedAt = time.Now() }},
+		{name: "ended, its conversation goes on", end: func(*state.ExecutionRecord) {}},
+		{name: "running", end: func(r *state.ExecutionRecord) { r.Observation.ProcessState = execution.Running }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			ref := execution.Ref{Host: paramHost, Execution: "ended-worker", Generation: 1}
+			party := state.Party{Name: loopWorker}
+			rec := &state.ExecutionRecord{
+				Handle:      execution.Handle{Ref: ref},
+				Phase:       execution.Running,
+				Request:     execution.StartRequest{Harness: execution.HarnessClaude, Messaging: true},
+				Observation: execution.Observation{ProcessState: execution.Failed, Ready: true},
+			}
+			tc.end(rec)
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: party, Execution: &ref, Task: "the task"})
+				st.Starts = append(st.Starts, state.Start{Party: party, Execution: rec})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Branch: "fix"}, nil
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			act := superloop.Action{Kind: superloop.KindRework, Agent: loopWorker, Ref: loopPR, URL: loopURL, Head: loopHead, Key: "rework", Message: "current findings"}
+			if err := l.WakeOrStartFixer(t.Context(), st, act); err != nil {
+				t.Fatalf("rework: %v\n%s", err, r.out)
+			}
+			woke := r.called(agentsName, agentWakeName, loopWorker) != nil
+			started := r.called(agentsName, agentStartName, loopWorker) != nil
+			if woke == tc.replace || started != tc.replace {
+				t.Fatalf("woke = %t, started = %t, want a fresh fixer = %t: %v\n%s", woke, started, tc.replace, r.calls, r.out)
+			}
+			after, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kept := slices.ContainsFunc(after.Agents, func(ag state.Agent) bool { return ag.Is(party) }); kept == tc.replace {
+				t.Fatalf("ended entry kept = %t, want a fresh fixer = %t: %+v", kept, tc.replace, after.Agents)
+			}
+			if removed := r.logged(t, "agents.remove"); (len(removed) == 1) != tc.replace {
+				t.Fatalf("agents.remove = %+v, want a fresh fixer = %t", removed, tc.replace)
+			}
+		})
+	}
+}
+
 func TestReviewFixTerminalParksWakeRemainingTasks(t *testing.T) {
 	for _, scenario := range []string{"merged with open issue", "merged with unread issue", "closed pull request"} {
 		t.Run(scenario, func(t *testing.T) {

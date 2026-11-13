@@ -59,6 +59,7 @@ func init() {
 		ErrGone:                    func() error { return errGone },
 		EscapedLine:                escapedLine,
 		Event:                      event,
+		ExecutionCannotContinue:    executionCannotContinue,
 		ExecutionRecord:            executionRecord,
 		FreshPark:                  freshPark,
 		FreshSessions:              func(p0 loop.Host) ([]*claude.Session, *proc.Table, error) { return freshSessions(asApp(p0)) },

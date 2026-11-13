@@ -680,6 +680,12 @@ advances it, each execution on its own backoff, and records it under the
 execution's `retirement`. A parked worker, an open desk review or a finished
 round of an unfinished task does not enter it: the worktree and thread stay.
 
+A message cannot reach an execution that ended for good: one that is retired, stopped, released
+or never accepted its task. When the loop has work for such a worker on the roster (a review's
+findings, a red check, a conflict, a post-merge step), it does not wake it. It takes the entry off
+the roster, with an `agents.remove` line that names why, and starts a fresh fixer under the same
+name on the pull request's branch, as it does for a worker off the roster.
+
 The execution's inventory is in its host journal under `resources`, recorded
 before the resources exist: the worktree, its repository and branch, scratch,
 temporary files, caches, Go module and toolchain downloads, source bundle and

@@ -3341,15 +3341,69 @@ func (l *Loop) WakeOrStartFixer(ctx context.Context, st *state.State, act superl
 		// activate that execution. Recover the original start before telling
 		// it the current findings, and keep the action pending on failure.
 		if ref := st.Agents[i].Execution; ref != nil {
-			if rec, _ := Cmd.ExecutionRecord(st, *ref); rec != nil && Cmd.Unactivated(rec) {
+			rec, _ := Cmd.ExecutionRecord(st, *ref)
+			if rec != nil && Cmd.Unactivated(rec) {
 				if _, err := l.remoteStartRefused(ctx, act.Agent); err != nil {
 					return err
+				}
+			}
+			// An SSH execution that ended for good (retired with its
+			// workspace moved aside, released, stopped) takes no message,
+			// and its entry holds the name a new start needs: the entry
+			// gives way to a fresh fixer, as a worker off the roster does.
+			if why := endedExecution(rec); why != "" {
+				free, err := l.dropEndedExecution(st.Agents[i], *ref, why, act)
+				if err != nil {
+					return err
+				}
+				if free {
+					current, err := l.Host.Store().Read()
+					if err != nil {
+						return err
+					}
+					return l.StartFixer(ctx, current, act)
 				}
 			}
 		}
 		return l.wake(ctx, act)
 	}
 	return l.StartFixer(ctx, st, act)
+}
+
+// endedExecution says why the SSH execution of rec ended for good, "" while
+// a message can still reach it: it runs, or its conversation can go on.
+func endedExecution(rec *state.ExecutionRecord) string {
+	if rec == nil || !rec.Terminal() {
+		return ""
+	}
+	return Cmd.ExecutionCannotContinue(rec)
+}
+
+// dropEndedExecution takes ag off the roster, whose SSH execution ref ended
+// for good (why), so that a fresh fixer of act can take its name. It reports
+// whether the name is free: false when the name went to another entry or
+// the execution changed since the pass read it.
+func (l *Loop) dropEndedExecution(ag state.Agent, ref execution.Ref, why string, act superloop.Action) (bool, error) {
+	free := false
+	err := l.Host.Store().Update(func(current *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(current.Agents, func(x state.Agent) bool { return strings.EqualFold(x.Name, ag.Name) })
+		if i < 0 {
+			free = true
+			return nil, nil
+		}
+		x := current.Agents[i]
+		if !x.Is(ag.Party) || x.Execution == nil || *x.Execution != ref {
+			return nil, nil
+		}
+		if rec, _ := Cmd.ExecutionRecord(current, ref); endedExecution(rec) == "" {
+			return nil, nil
+		}
+		Cmd.RemoveAgent(current, i)
+		free = true
+		return []state.Event{Cmd.Event(LoopParty, "agents.remove", "%s: its SSH execution ended for good (%s); a fresh fixer takes over %s",
+			ag.Name, why, cmp.Or(act.URL, act.Ref))}, nil
+	})
+	return free, err
 }
 
 const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{else}}Fix{{end}} the findings on {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
