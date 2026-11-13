@@ -131,7 +131,3 @@ func (a *app) recordFatalRepair(owner, ref string) error {
 	}
 	return nil
 }
-
-func (g *gateRun) fatalPublicationBarrier() error {
-	return g.a.fatalPublicationBarrier(g.ctx, nil, g.repo, g.pr)
-}

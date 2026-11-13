@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -21,9 +20,6 @@ import (
 const taskOutputExt = ".output"
 
 var (
-	// stopWait is how long a TaskStop waits for an ended devctl's
-	// merge-child to exit before it asks GitHub how the merge stands.
-	stopWait = 5 * time.Second
 	// stopRead bounds that question.
 	stopRead = 15 * time.Second
 )
@@ -181,14 +177,4 @@ func stopOutcome(s stopped) string {
 	default:
 		return fmt.Sprintf("%s cancelled, GitHub reports it %s: %s, nothing merged; it leaves lane %s", m.Key(), strings.ToLower(p.State), devctl, m.Lane)
 	}
-}
-
-// waitGone says whether pid exits within d.
-func waitGone(pid int, d time.Duration) bool {
-	for end := clk.Now().Add(d); proc.Alive(pid); clk.Sleep(50 * time.Millisecond) {
-		if !clk.Now().Before(end) {
-			return false
-		}
-	}
-	return true
 }
