@@ -168,8 +168,8 @@ type Response struct {
 const MaxCallDelay = 50 * time.Second
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
-// advance, github, fault and host, with optional expectations of its own
-// response.
+// advance, measure, github, fault and host, with optional expectations of its
+// own response.
 type Step struct {
 	Name string `yaml:"name"`
 	// Run runs the candidate to its exit.
@@ -188,8 +188,18 @@ type Step struct {
 	GitHub *fakegithub.Step      `yaml:"github"`
 	Fault  *fakegithub.FaultStep `yaml:"fault"`
 	// Host changes an execution host's faults.
-	Host   *harness.HostStep `yaml:"host"`
-	Expect []Expect          `yaml:"expect"`
+	Host *harness.HostStep `yaml:"host"`
+	// Measure waits its time and measures what the background steps cost
+	// in it (a cpu expectation).
+	Measure *Measure `yaml:"measure"`
+	Expect  []Expect `yaml:"expect"`
+}
+
+// Measure is a stretch of real time, For long, over which the background
+// steps' processes are measured: a busy desk's cost is a share of a core
+// over time, which no single moment shows.
+type Measure struct {
+	For Duration `yaml:"for"`
 }
 
 // Run is a call of the candidate binary, or with Release of that release's
@@ -219,6 +229,7 @@ const (
 	KindGitHub     = "github"
 	KindFault      = "fault"
 	KindHost       = "host"
+	KindMeasure    = "measure"
 )
 
 // Kind is the step's kind, "" unless exactly one is set.
@@ -248,6 +259,9 @@ func (s Step) Kind() string {
 	if s.Host != nil {
 		kinds = append(kinds, KindHost)
 	}
+	if s.Measure != nil {
+		kinds = append(kinds, KindMeasure)
+	}
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -275,6 +289,17 @@ type Expect struct {
 	Origin *OriginExpect         `yaml:"origin"`
 	// Log checks what a background step has written so far.
 	Log *LogExpect `yaml:"log"`
+	// CPU bounds the share of a core a background step used in a measure
+	// step.
+	CPU *CPUExpect `yaml:"cpu"`
+}
+
+// CPUExpect bounds the CPU the background step Name's process used itself
+// (its user and system time, not its children's) during a measure step, as a
+// share of one core: at most Max.
+type CPUExpect struct {
+	Name string  `yaml:"name"`
+	Max  float64 `yaml:"max"`
 }
 
 // TextExpect checks a text: every Contains is in it, no NotContains is,
@@ -342,7 +367,7 @@ func (e Expect) kinds() []string {
 		"exit": e.Exit != nil, "output": e.Output != nil, "stderr": e.Stderr != nil,
 		"json_path": e.JSONPath != nil, "events": e.Events != nil, "duration": e.Duration != nil,
 		"process": e.Process != nil, "calls": e.Calls != nil, "github": e.GitHub != nil,
-		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil,
+		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil, "cpu": e.CPU != nil,
 	} {
 		if set {
 			k = append(k, name)
@@ -551,7 +576,7 @@ func (s *Scenario) Validate() error {
 		kind := st.Kind()
 		switch kind {
 		case "":
-			bad("%s: exactly one of run, background, stop, wait_for, advance, github, fault and host", where)
+			bad("%s: exactly one of run, background, stop, wait_for, advance, measure, github, fault and host", where)
 		case KindGitHub, KindFault:
 			var err error
 			if kind == KindGitHub {
@@ -602,6 +627,12 @@ func (s *Scenario) Validate() error {
 			}
 		case KindAdvance:
 			errs = append(errs, s.validateAdvance(where, st.Advance, background)...)
+		case KindMeasure:
+			if st.Measure.For.Duration == 0 {
+				bad("%s: measure without for", where)
+			} else if st.Measure.For.Duration > s.Timeout.Duration {
+				bad("%s: measure for %s exceeds the scenario's %s", where, st.Measure.For, s.Timeout)
+			}
 		}
 		if st.Name != "" {
 			names[st.Name] = kind
@@ -639,6 +670,7 @@ var stepObserves = map[string][]string{
 	KindGitHub:     {"duration"},
 	KindFault:      {"duration"},
 	KindHost:       {"duration"},
+	KindMeasure:    {"duration", "cpu"},
 }
 
 func (s *Scenario) validateExpect(where string, e Expect, stepKind string, background []string, inThen bool) []error {
@@ -649,7 +681,7 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	kind := e.Kind()
 	if kind == "" {
-		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin and log (has %v)", e.kinds())
+		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin, log and cpu (has %v)", e.kinds())
 		return errs
 	}
 	switch kind {
@@ -702,6 +734,14 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 		}
 		if (p.Running == nil) == (p.Exit == nil) {
 			bad("process: exactly one of running and exit")
+		}
+	}
+	if c := e.CPU; c != nil {
+		if !slices.Contains(background, c.Name) {
+			bad("cpu %q names no earlier background step", c.Name)
+		}
+		if c.Max <= 0 {
+			bad("cpu without a positive max")
 		}
 	}
 	if g := e.GitHub; g != nil {

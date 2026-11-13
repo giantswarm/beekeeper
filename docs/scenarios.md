@@ -232,6 +232,7 @@ then:
 | `fault` | arms or clears a [fault](scenarios-github.md#faults) of the scenario's GitHub |
 | `advance` | moves the world's clock forward and wakes what is due ([The clock](#the-clock)) |
 | `host` | changes an execution host's faults (`fault`, `slow`, `clear`) or policy (`config`), see [Execution hosts](#execution-hosts) |
+| `measure` | waits `for` real time and measures what the background steps' processes cost in it (`cpu`) |
 
 ### Expectations
 
@@ -252,6 +253,7 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome` (none while a begun turn has not reported), whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
 | `log` | what the background step `name` wrote so far: `contains`, `not_contains`, `matches` | every step |
+| `cpu` | the share of one core the background step `name`'s process used itself in the step: at most `max` | `measure` |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
@@ -259,6 +261,12 @@ sessions; `name` and an `origin`'s `branch` are regular expressions that
 match the whole name. A `log` reads a background step's standard output and
 error as one text: the lines a running loop and its watch say
 (`SUPERVISOR STARTS HELD`, `HIGH LOAD`), which no event records.
+
+A `cpu` reads the user and system time of the background step's own process (its children's do
+not count, as the loop's probes and workers do not) at the start and the end of a `measure` step,
+over the step's real time: `{cpu: {name: guide, max: 0.05}}` is at most 5% of one core. A process
+that did not run through the whole step has no share and fails the expectation. The step's `args`
+in `report.json` name every running background step's share and the state's rewrites in it.
 
 ### The clock
 
@@ -635,8 +643,15 @@ given:
       deliveries: 1200               # deliveries in flight
       reports: 3000                  # reports, about a kibibyte each
       events: 20000                  # events, about 400 bytes each
+    rewrite: 1s                      # a busy desk: rewrite the state this often
 ```
 
 The issues and pull requests it names (numbers from 10000 on) are not on the
 scenario's GitHub. A scenario that runs a loop on a generated desk sees that
 loop read them and find nothing.
+
+`rewrite` makes the desk busy, as its sessions, runners and commands make a coordinator's: from
+the first step to the last the driver rewrites the state at that interval (at most ten times a
+second) through the state's own lock, each time changing one generated worker's activity and
+appending one `scenario.rewrite` event. It needs `generate.agents`. A `measure` step then shows
+what the desk's long-running processes cost while the state changes under them.

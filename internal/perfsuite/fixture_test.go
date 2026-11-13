@@ -363,8 +363,12 @@ func (d *desk) keepArtifacts() {
 		}
 		_ = os.WriteFile(filepath.Join(dest, name), []byte(strings.ReplaceAll(string(raw), d.dir, "<fixture>")), 0o600)
 	}
-	if raw, err := os.ReadFile(filepath.Join(d.dir, "loop.pprof")); err == nil && len(raw) > 0 { //nolint:gosec // fixture file
-		_ = os.WriteFile(filepath.Join(dest, "loop.pprof"), raw, 0o600)
+	// The CPU profiles of the loop and the feeds.
+	profiles, _ := filepath.Glob(filepath.Join(d.dir, "*.pprof"))
+	for _, p := range profiles {
+		if raw, err := os.ReadFile(p); err == nil && len(raw) > 0 { //nolint:gosec // fixture file
+			_ = os.WriteFile(filepath.Join(dest, filepath.Base(p)), raw, 0o600)
+		}
 	}
 	if n := d.httpMiss.Load(); n > 0 {
 		d.missMu.Lock()

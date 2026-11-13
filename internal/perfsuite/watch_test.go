@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -45,7 +46,9 @@ func (d *desk) startFeed(t *testing.T, name string, args []string) *runningFeed 
 		t.Fatal(err)
 	}
 	c := exec.Command(d.bin, args...) //nolint:gosec // binary under test, stopped by stop
-	c.Env, c.Dir, c.Stdout, c.Stderr = d.env, d.dir, logFile, logFile
+	// Its CPU profile names the code behind its CPU, as the loop's does.
+	profile := filepath.Join(d.dir, strings.ReplaceAll(name, " ", "-")+".pprof")
+	c.Env, c.Dir, c.Stdout, c.Stderr = append(slices.Clone(d.env), "BEEKEEPER_CPUPROFILE="+profile), d.dir, logFile, logFile
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}

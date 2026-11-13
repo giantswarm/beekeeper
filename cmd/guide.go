@@ -1005,13 +1005,16 @@ lines that save would have recorded, again only when those lines change.`,
 				if once {
 					return nil
 				}
+				polled := time.Now()
 				select {
 				case <-ctx.Done():
 					return nil
 				case <-tick.C:
 				case <-changes:
-					// Coalesce a transaction's outbox writes before rereading.
-					if !pauseChange(ctx) {
+					// Coalesce a transaction's outbox writes before rereading,
+					// and on a busy desk, whose state is rewritten about once a
+					// second, poll at most once a feedChangeGap.
+					if !pauseChangeFor(ctx, feedChangeGap-time.Since(polled)) {
 						return nil
 					}
 				}
