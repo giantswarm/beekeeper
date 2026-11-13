@@ -1,0 +1,132 @@
+name: merge-claim-ends-when-github-reports-the-merge
+description: >
+  The loop's merge claim ends when GitHub reports the merge, not when the
+  release is out. example/app releases with Auto-release, and devctl's
+  release wait for the merged pull request answers only 40 seconds after
+  the merge. The loop's pass that merges the approved head returns at the
+  merge: its merge gate leaves the release wait to its merge-child, which
+  records the release with the run once devctl answers. A claim that lasted
+  until the release held the loop's restart and, with it, every merge
+  decision.
+issue: https://github.com/giantswarm/beekeeper/issues/3907
+flow: regression
+tags: [regression, loop, merge, release]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The merge's release is out 40 seconds after the merge.
+    - program: devctl
+      args: [release, wait, example/app, --pr, '2']
+      respond:
+        stdout: '{"verdict":"available","tag":"v0.1.0","reason":"every artifact is available"}'
+        delay: 40s
+
+when:
+  # example/app's main releases with Auto-release: every push to it tags.
+  - name: auto-release
+    github: {push: {repo: example/app, branch: main, file: .github/workflows/zz_generated.auto_release.yaml, content: "on: push\n"}}
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - advance: 2s
+  # The approval gets the go. The pass ends at the merge while devctl still
+  # waits for the release: the gate left the release wait to its
+  # merge-child, and the loop's claim ended with GitHub's merged.
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - duration: {max: 25s}
+      - events: {contains: [merge.authorized, merge.finished, merge.left], not_contains: [merge.failed, merge.pending]}
+      - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  # The merge-child confirms the release outside the pass and records it
+  # with the run, which settles the lane.
+  - name: released
+    wait_for:
+      timeout: 60s
+      interval: 500ms
+      expect:
+        - calls: {program: devctl, args: [release, wait, example/app, --pr, '2'], min: 1}
+        - events: {contains: [merged]}
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - events:
+      contains: [merge.authorized, merge.start, merge.left, merge.finished, merged]
+      not_contains: [merge.failed, merge.pending]
+  - calls: {program: gh, args: [pr, merge, --squash, --match-head-commit], min: 1, max: 1}
+  - calls: {program: devctl, args: [release, wait, example/app, --pr, '2'], min: 1, max: 1}

@@ -956,6 +956,13 @@ release and roll target, a no-release merge frees its lane, and a candidate or n
 merge lifts the devctl tool-release hold. An unreadable release result remains explicitly
 unconfirmed. The wait never repeats the merge.
 
+The loop's merge claim ends when GitHub reports the merge, not when the release is out: the loop
+calls the gate with `--until-merged`, and the gate ends that call (exit 0, `merge.left`) once the
+child says `release: waiting`, after the merge. The child then confirms the release outside the
+call and records it with the run, which settles the lane as before (the gate's `recordLeft`). The
+loop tracks the delivery's release on its own (`DeliveryReleasing`), so no release wait holds
+the loop's merge stream or its restart.
+
 A review park declares remaining work with `--post-merge "<release, rollout or proof>"`.
 Omitting it on a new park declares that the task ends at merge: the loop records the final
 report and closes the task without waking its worker. Older parks retain their existing
