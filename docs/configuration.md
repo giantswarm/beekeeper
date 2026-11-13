@@ -98,7 +98,8 @@ The organisation and desk keys, and their defaults:
   repositories `devctl pr merge` serves
 - `merge.admin` (default none): The repositories (`owner/repo`) the desk merges with `--admin` past
   their branch ruleset after the approved desk review; only their merge go names `--admin --match-head-commit <head>`,
-  and the guide's `emergency merge` of such a repository's approved, green head passes `--admin` too
+  and the guide's `emergency merge` of such a repository's desk-approved, green head passes
+  `--admin` too
 - `guide.skill`, `guide.person` (default unset): The guide's skill and the person it walks through
   their notes
 - `claude.desktopApp` (default `claude-desktop`): The desktop app's executable, which opens

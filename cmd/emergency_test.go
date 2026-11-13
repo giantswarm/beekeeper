@@ -689,17 +689,21 @@ func TestEmergencyMergeAcceptsOnlyTrustedExactHeadDeskApproval(t *testing.T) {
 
 // TestEmergencyMergeInAdminRepositoryPassesAdmin checks that a merge.admin
 // repository's emergency merge of a desk-approved, green head passes --admin
-// at that head, as the loop's merge does, and only there: behind its base it
-// is refused, a base with a merge queue and any other repository take the
-// plain merge.
+// at that head, as the loop's merge does, and only there: behind its base,
+// which GitHub reports as BLOCKED while a review is missing, or in the
+// BEHIND state it is refused; GitHub's own approval, a base with a merge
+// queue and any other repository take the plain merge.
 func TestEmergencyMergeInAdminRepositoryPassesAdmin(t *testing.T) {
 	for name, tc := range map[string]struct {
-		admin, queue        bool
-		mergeState          string
-		refused, wantsAdmin bool
+		admin, queue, approved bool
+		mergeState             string
+		behind                 int
+		refused, wantsAdmin    bool
 	}{
-		"merge.admin":      {admin: true, mergeState: emergencyBlocked, wantsAdmin: true},
-		"behind":           {admin: true, mergeState: mergeStateBehind, refused: true},
+		"admin repository": {admin: true, mergeState: emergencyBlocked, wantsAdmin: true},
+		"behind its base":  {admin: true, mergeState: emergencyBlocked, behind: 2, refused: true},
+		"behind state":     {admin: true, mergeState: mergeStateBehind, refused: true},
+		"github approval":  {admin: true, approved: true, mergeState: emergencyClean},
 		"merge queue":      {admin: true, queue: true, mergeState: emergencyBlocked},
 		"other repository": {mergeState: emergencyBlocked},
 	} {
@@ -711,18 +715,25 @@ func TestEmergencyMergeInAdminRepositoryPassesAdmin(t *testing.T) {
 			if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge approved work.", untilFlag, "10m"); err != nil {
 				t.Fatal(err)
 			}
-			oldRead, oldQueue, oldGH := loop.ReadLoopPull, readReviewedMergeQueue, github.RunGH
-			t.Cleanup(func() { loop.ReadLoopPull, readReviewedMergeQueue, github.RunGH = oldRead, oldQueue, oldGH })
+			oldRead, oldQueue, oldBehind, oldGH := loop.ReadLoopPull, readReviewedMergeQueue, readReviewedBehind, github.RunGH
+			t.Cleanup(func() {
+				loop.ReadLoopPull, readReviewedMergeQueue, readReviewedBehind, github.RunGH = oldRead, oldQueue, oldBehind, oldGH
+			})
 			review := superloop.Review{Head: emergencyAdminHead, Verdict: superloop.Approved, Member: true, Body: loopApproved}
 			loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
 				return superloop.Pull{Ref: emergencyTestRepo + "#7", State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
 					ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: tc.mergeState, Reviews: []superloop.Review{review}}, nil
 			}
 			readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return tc.queue, nil }
+			readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return tc.behind, nil }
+			decision := emergencyReviewRequired
+			if tc.approved {
+				decision = emergencyApproved
+			}
 			var merges [][]string
 			github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
 				if args[1] == emergencyViewCommand {
-					return []byte(`{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","headRefOid":"` + emergencyAdminHead + `"}`), nil
+					return []byte(`{"state":"OPEN","reviewDecision":"` + decision + `","headRefOid":"` + emergencyAdminHead + `"}`), nil
 				}
 				merges = append(merges, slices.Clone(args))
 				return nil, nil
