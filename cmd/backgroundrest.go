@@ -67,11 +67,8 @@ func (a *app) admitBackgroundREST(ctx context.Context, class string) error {
 }
 
 func (s *backgroundRESTSpend) admit(now time.Time, budget *state.Budget, floor int, class string) error {
-	known := budget != nil && budget.Limit > 0
-	if known && (budget.At.IsZero() || now.Sub(budget.At) > time.Minute || !now.Before(budget.Reset)) {
-		return fmt.Errorf("background REST held: stale reading at %s, remaining %d of %d, floor %d, reset %s; caller %s", budget.At.UTC().Format(time.RFC3339), budget.Remaining, budget.Limit, floor, budget.Reset.UTC().Format(time.RFC3339), class)
-	}
-	if !now.Before(s.Reset) || known && (s.Identity != budget.Identity || s.Login != budget.Login || !s.Reset.Equal(budget.Reset)) {
+	known := budget != nil && budget.Limit > 0 && now.Before(budget.Reset)
+	if !now.Before(s.Reset) || known && (s.Identity != budget.Identity || s.Login != budget.Login || !s.Reset.Equal(budget.Reset)) || !known && !s.Reading.IsZero() {
 		*s = backgroundRESTSpend{Reset: now.Add(time.Hour), Callers: map[string]int{}}
 		if known {
 			s.Reset, s.Identity, s.Login = budget.Reset, budget.Identity, budget.Login

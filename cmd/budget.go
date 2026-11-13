@@ -52,8 +52,8 @@ by source function, retained after processes exit. Counts are invocations,
 not measured requests (pagination and retries can spend more); arguments,
 endpoints and credentials are never recorded. Recorded
 background invocations reserve the measured REST headroom above github.floor
-until a newer reading settles them. Readings older than a minute or past their
-reset hold background calls; unknown windows admit only 100 bootstrap calls.
+until a newer reading settles them; unknown or expired windows admit only 100
+bootstrap calls.
 Worker calls keep their existing gate. The background_rest ledger lists each
 source's calls; pagination and retries mean invocations are not measured REST points.
 Repository default-branch commits are cached for an hour in each process;
