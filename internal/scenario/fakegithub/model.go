@@ -993,7 +993,9 @@ func (m *Model) MergeableState(p *Pull) string {
 		return p.Mergeable
 	}
 	if m.Origins.Has(p.Repo) {
-		if base, head := m.BaseSHA(p), m.HeadSHA(p); base != "" && head != "" {
+		// One git call for both heads: every read of a pull request asks.
+		heads := m.Origins.Heads(p.Repo, p.Base, p.Head)
+		if base, head := heads[p.Base], cmpOr(heads[p.Head], p.headSHA); base != "" && head != "" {
 			if conflicts, err := m.Origins.Conflicts(p.Repo, base, head); err == nil && conflicts {
 				return "CONFLICTING"
 			}

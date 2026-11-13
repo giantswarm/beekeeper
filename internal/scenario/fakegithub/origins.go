@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,10 @@ type Origins struct {
 	Git  string
 	Root string
 	Env  []string
+
+	// conflicts memoizes Conflicts by repository, base and head: commits
+	// never change, and every read of a pull request's mergeable asks.
+	conflicts sync.Map
 }
 
 // Dir is the origin of a repository.
@@ -295,6 +300,18 @@ func (o *Origins) CompareFiles(r *Repo, base, head string) ([]CompareFile, error
 // Conflicts reports whether head does not merge into base without
 // conflicts: what GitHub's mergeable reports as CONFLICTING.
 func (o *Origins) Conflicts(r *Repo, base, head string) (bool, error) {
+	key := o.Dir(r) + " " + base + " " + head
+	if known, ok := o.conflicts.Load(key); ok {
+		return known.(bool), nil
+	}
+	conflicts, err := o.mergeTreeConflicts(r, base, head)
+	if err == nil {
+		o.conflicts.Store(key, conflicts)
+	}
+	return conflicts, err
+}
+
+func (o *Origins) mergeTreeConflicts(r *Repo, base, head string) (bool, error) {
 	c := exec.Command(o.Git, "--git-dir", o.Dir(r), "merge-tree", "--write-tree", base, head) //nolint:gosec // real git on the scenario's own origin
 	c.Env = append([]string(nil), o.Env...)
 	err := c.Run()
@@ -433,6 +450,49 @@ func (o *Origins) Push(r *Repo, branch, from, path, content, message string) (st
 func (o *Origins) SetRef(r *Repo, ref, sha string) error {
 	_, err := o.git(r, "update-ref", ref, sha)
 	return err
+}
+
+// Heads resolves branches to their commits: a branch that does not exist
+// is missing from the map. It reads the origin's ref files (a loose ref,
+// else packed-refs) without starting git, since every read of a pull
+// request's mergeable asks; git resolves what the files do not answer.
+func (o *Origins) Heads(r *Repo, branches ...string) map[string]string {
+	heads := map[string]string{}
+	dir := o.Dir(r)
+	var packed []byte
+	for _, b := range branches {
+		ref := "refs/heads/" + b
+		if raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ref))); err == nil {
+			if sha := strings.TrimSpace(string(raw)); isSHA(sha) {
+				heads[b] = sha
+				continue
+			}
+		}
+		if packed == nil {
+			packed, _ = os.ReadFile(filepath.Join(dir, "packed-refs"))
+		}
+		if sha, ok := packedRef(packed, ref); ok {
+			heads[b] = sha
+		} else if sha, ok := o.Resolve(r, ref); ok {
+			heads[b] = sha
+		}
+	}
+	return heads
+}
+
+// packedRef is ref's commit in a packed-refs file.
+func packedRef(packed []byte, ref string) (string, bool) {
+	for _, line := range strings.Split(string(packed), "\n") {
+		if sha, name, ok := strings.Cut(line, " "); ok && name == ref && isSHA(sha) {
+			return sha, true
+		}
+	}
+	return "", false
+}
+
+// isSHA reports whether s is a full hexadecimal object name.
+func isSHA(s string) bool {
+	return (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0123456789abcdef") == ""
 }
 
 // PullRef is the ref GitHub keeps at pull request n's head.
