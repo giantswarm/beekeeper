@@ -1,0 +1,78 @@
+name: doctor-keeps-a-gone-worker-until-its-report-applies
+description: >
+  A worker on claude reports its task done (agents idle --done), which
+  queues the report in the inbox for the loop, and its CLI ends. Once
+  agents.staleAfter has passed, the watch's doctor finds it gone while the
+  report still waits: it leaves the worker on the roster, and its dry run
+  names the report. The loop's next pass then applies the report as the
+  worker's completion instead of rejecting it as one of an ended
+  assignment.
+issue: https://github.com/giantswarm/beekeeper/issues/3625
+flow: reports
+tags: [reports, doctor, roster, claude]
+timeout: 90s
+
+given:
+  desk:
+    config:
+      agents: {staleAfter: 3s}
+  harness:
+    workers:
+      - name: report-worker
+        turns:
+          - steps:
+              - beekeeper: [agents, idle, --done, --report, the fixture task is done, --problem, none]
+            outcome: crash
+  calls:
+    - program: gh
+      args: [auth, token]
+      respond: {stderr: "no oauth token found for github.com\n", exit: 1}
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+    # The doctor's disk care and the loop's watch read the journal (the
+    # kernel's, systemd-oomd's) and devctl's login.
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: devctl
+      args: [auth, status]
+      respond: {stderr: "not logged in\n", exit: 1}
+
+when:
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, report-worker, /work/worker.txt, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  # The report is queued and the CLI has ended; no loop has applied it.
+  - wait_for:
+      timeout: 20s
+      expect:
+        - worker: {name: report-worker, outcome: crash, running: false}
+        - events: {not_contains: [agents.done]}
+  # Past agents.staleAfter: the session's transcript keeps the system's
+  # time, so the worker now reads as gone.
+  - name: past-stale-after
+    advance: 2m
+  # The doctor runs directly: a loop pass applies the reports before its
+  # watch's doctor tidies the roster, so a loop alone does not show it.
+  - name: dry-run
+    run: {args: [--as, beekeeper watch, doctor, --dry-run]}
+    expect:
+      - exit: 0
+      - output: {contains: ['would leave "report-worker" on the roster', 'waits for the supervisor loop']}
+  - name: doctor
+    run: {args: [--as, beekeeper watch, doctor]}
+    expect:
+      - exit: 0
+      - events: {not_contains: [agents.gone, agents.remove]}
+  - name: roster
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: '[0].name', equals: report-worker}
+  - name: pass
+    run: {args: [supervisor, loop, --once]}
+
+then:
+  - {step: pass, exit: 0}
+  - events: {contains: [agents.done, agents.report], not_contains: [session.report-rejected, agents.gone]}
