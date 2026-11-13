@@ -1,0 +1,97 @@
+name: another-desks-pull-is-reviewed-at-once
+description: >
+  Another desk's worker opened a pull request in a repository this desk
+  reviews and parks on its own desk for this desk's review. That desk claims
+  the issue the pull request closes on GitHub. No session of this desk owns
+  the pull request, so before the fix only the orphan sweep acted on it,
+  once it had been quiet for 15 minutes; any edit of the other worker's
+  restarted that wait, and the guide started the review by hand. The loop
+  reads the other desk's claim and reviews the green head in the first pass
+  that reads the pull request, and says why.
+issue: https://github.com/giantswarm/beekeeper/issues/3904
+flow: delivery
+tags: [delivery, loop, review, claims, sweep]
+timeout: 90s
+
+given:
+  clock:
+    start: "2026-11-13T05:00:00Z"
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # The desk honours the other desks' claims and signs none of its own.
+      board: {claims: {off: false}}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - number: 1
+            title: Place continuations on the hosts
+            # The other desk's claim, refreshed five minutes ago.
+            comments:
+              - author: desk
+                body: |
+                  <!-- beekeeper:claim desk=work session=w-1 at=2026-11-13T04:00:00Z seen=2026-11-13T04:55:00Z -->
+                  Claimed by beekeeper desk work for session "w-1" since 2026-11-13 04:00 UTC.
+        # The other desk's worker's pull request: the desk's login, green.
+        pulls:
+          - number: 2
+            title: "fix: place fresh continuations on the hosts"
+            head: work-1
+            author: desk
+            body: "Closes https://github.com/example/app/issues/1"
+            checks: [{name: build, state: green}]
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The first pass lists the desk's open pull requests and reads the new
+  # one: nobody here owns it, and the claim on the issue it closes is the
+  # other desk's. Its green head gets the reviewer at once, not 15 minutes
+  # later.
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.ownerless, supervisor.review]}
+      - output: {contains: ["is the pull request of another desk's worker (desk work"]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+
+then:
+  - events: {contains: [supervisor.review], not_contains: [session.report-rejected]}
+  - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
+  # The claim was read from the issue's comments by the loop's pass.
+  - github: {calls: {path: repos/example/app/issues/1/comments, caller: review, min: 1}}
+  - github: {pull: {repo: example/app, number: 2, state: open}}

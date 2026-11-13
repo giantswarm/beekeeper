@@ -156,7 +156,10 @@ its key first in the detail):
             a green head awaiting its review. Running checks wait; an open
             escalation or ownership question is the person's. One action per stretch,
             at most superloop.MaxSweeps (2) per head, then a leave for the
-            guide
+            guide. One that closes, or is "Part of", an issue another desk
+            claims (board.claims) is that desk's worker's, which parks
+            there: its green head awaiting its first review gets the
+            reviewer at once, without the wait
   override  the person's answer Override (the option, or a bare override):
             that one pull request is the desk's from then on, reviewed and
             given the go as its own team's; any other answer goes to the

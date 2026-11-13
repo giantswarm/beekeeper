@@ -89,6 +89,12 @@ Claimed by beekeeper desk platform-desk for session "0b5c1d2e-…" since 2026-11
 - `agents start` refuses a brief whose issue another desk claims, with that claim's desk, session
   and time (exit 3); `--force` starts it anyway and the event log records the claim overridden
   (`agents.start`).
+- The supervisor loop reviews another desk's worker's pull request at once. A pull request of the
+  desk that no session of the desk owns and that closes, or is `Part of`, an issue another desk
+  claims is that desk's worker's, which parks on its own desk. Its green head awaiting its first
+  review gets the reviewer in the pass that reads it, without the orphan sweep's 15 minutes, and
+  the loop says so (`SUPERVISOR SWEEP … is the pull request of another desk's worker`). Only such
+  pull requests' issues are read; a red, conflicting or running head waits for the sweep.
 - A claim unrefreshed for `board.claims.staleAfter` (24h) is stale: shown with the pick or the
   start, never honoured. A read GitHub fails is a warning (`claims unread`), the pick or start going
   on as if unclaimed. `board.claims.off` publishes and reads none.

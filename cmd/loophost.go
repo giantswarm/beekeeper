@@ -223,6 +223,10 @@ func (a *app) OperationOutcome(operation string, reason string, rawURL string, s
 	return a.operationOutcome(operation, reason, rawURL, success)
 }
 
+func (a *app) OtherDeskClaim(ctx context.Context, issue string) (string, error) {
+	return a.otherDeskClaim(ctx, issue)
+}
+
 func (a *app) Out() io.Writer { return a.out }
 
 func (a *app) ParkIsPull(ctx context.Context, st *state.State, ref string) bool {
