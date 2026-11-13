@@ -167,6 +167,5 @@ then:
   - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
   - worker: {name: Review app 2 r1, turns: 1}
   - worker: {name: Review app 2 r2, turns: 1, outcome: finish}
-  - worker: {name: app 1, turns: 2, outcome: finish}
   - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
   - events: {contains: [supervisor.review, merge.authorized, supervisor.merge], not_contains: [supervisor.forward, merge.failed, session.report-rejected]}
