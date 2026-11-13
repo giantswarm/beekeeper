@@ -54,6 +54,10 @@ type Host interface {
 	NextMonitoredIssue(ctx context.Context, skip ...string) (*LoopBoardItem, error)
 	Now() time.Time
 	OperationOutcome(operation string, reason string, rawURL string, success bool) error
+	// OtherDeskClaim is another desk's live claim on issue (owner/repo#n)
+	// in a line ("desk <name> (session …) since …"), "" when none holds it
+	// or the desk reads no claims (board.claims.off).
+	OtherDeskClaim(ctx context.Context, issue string) (string, error)
 	Out() io.Writer
 	ParkIsPull(ctx context.Context, st *state.State, ref string) bool
 	PrepareEventSegmentation() error
