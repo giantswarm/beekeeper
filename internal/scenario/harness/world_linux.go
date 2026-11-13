@@ -49,6 +49,7 @@ type World struct {
 	workers  map[string]*workerState
 	order    []string
 	usage    map[string]Usage
+	probes   map[string]int
 	full     map[string]bool
 	hosts    map[string]*hostState
 	// jobs are the builder Jobs the desk created through kubectl, as it
@@ -81,7 +82,7 @@ type workerState struct {
 func NewWorld(opts Options) (*World, error) {
 	w := &World{
 		opts: opts, units: map[string]*unit{}, daemons: map[string]*daemon{},
-		workers: map[string]*workerState{}, usage: map[string]Usage{}, full: map[string]bool{}, hosts: map[string]*hostState{},
+		workers: map[string]*workerState{}, usage: map[string]Usage{}, probes: map[string]int{}, full: map[string]bool{}, hosts: map[string]*hostState{},
 	}
 	for name, u := range opts.Given.Usage {
 		w.usage[name] = u
@@ -232,7 +233,12 @@ func (w *World) handle(req request) reply {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		u := w.usage[req.Harness]
-		return reply{Usage: &u, Full: w.full[req.Harness]}
+		rep := reply{Usage: &u, Full: w.full[req.Harness]}
+		if f := w.opts.Given.Usage[req.Harness].Fail; f.fails(w.probes[req.Harness]) {
+			rep.Fail = f
+		}
+		w.probes[req.Harness]++
+		return rep
 	case opModels:
 		models := w.opts.Given.Models[req.Harness]
 		if len(models) == 0 {

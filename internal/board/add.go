@@ -46,11 +46,11 @@ func (c *Client) Show(ctx context.Context, ref string) (*Fields, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, item, _, err := c.lookup(ctx, m, ref, owner, repo, n)
+	is, err := c.lookup(ctx, m, ref, owner, repo, n)
 	if err != nil {
 		return nil, err
 	}
-	return fieldsOf(ref, item), nil
+	return fieldsOf(ref, is.Found), nil
 }
 
 // Add ensures the issue is on the board and sets the requested fields.

@@ -95,6 +95,7 @@ func TestScenariosLoad(t *testing.T) {
 		"smoke/version", "smoke/capacity-json-empty-desk", "smoke/board-next-fake-board",
 		"harness/claude-worker-parks-on-its-pull", "harness/codex-worker-parks-on-its-pull", "harness/agy-worker-parks-on-its-pull",
 		"harness/omp-worker-parks-on-its-pull", "harness/execution-host-worker-publishes-its-branch", "harness/execution-host-faults",
+		"harness/execution-host-reviewer-publishes-its-fix",
 		"harness/crashed-worker-is-retired-hung-worker-holds-its-slot", "harness/claude-turn-reports-usage-and-hits-the-limit",
 	} {
 		if !names[want] {
@@ -104,7 +105,7 @@ func TestScenariosLoad(t *testing.T) {
 	if got := Filter(all, []string{"smoke"}, []string{"board"}); len(got) != 1 || got[0].Name != "board-next-fake-board" {
 		t.Errorf("filter smoke+board: %v", got)
 	}
-	if got := Filter(all, []string{"harness"}, []string{"hosts"}); len(got) != 2 {
+	if got := Filter(all, []string{"harness"}, []string{"hosts"}); len(got) != 3 {
 		t.Errorf("filter harness+hosts: %v", got)
 	}
 	if got := Filter(all, []string{"no-such-flow"}, nil); len(got) != 0 {

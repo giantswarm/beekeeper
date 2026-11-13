@@ -3,6 +3,7 @@
 package fakegithub
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -237,6 +238,52 @@ organization(login:"example"){projectV2(number:1){field(name:"Status"){...on Pro
 	}
 	if un := s.Unsupported(); len(un) != 0 {
 		t.Fatalf("unsupported: %+v", un)
+	}
+}
+
+// A given issue's archived item is on the board, archived: no Status to
+// read, GitHub's refusal for a move, and the expectation of it holds until
+// the item is restored.
+func TestArchivedItems(t *testing.T) {
+	s, _ := build(t, `
+repositories:
+  - name: example/app
+    issues:
+      - {number: 1, state: closed, board: Done, archived: true}
+      - {number: 2, board: Ready}
+`)
+	for _, want := range []IssueExpect{
+		{Repo: "example/app", Number: 1, Board: "none", Archived: ptr(true)},
+		{Repo: "example/app", Number: 2, Board: "Ready", Archived: ptr(false)},
+	} {
+		if err := s.Check(&Expect{Issue: &want}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Check(&Expect{Issue: &IssueExpect{Repo: "example/app", Number: 1, Archived: ptr(false)}}); err == nil ||
+		!strings.Contains(err.Error(), "example/app#1: board item archived true, want false") {
+		t.Fatalf("a wrong expectation: %v", err)
+	}
+	ids := graphql(t, s, "test", `{repository(owner:"example",name:"app"){issue(number:1){id state projectItems(first:5){nodes{id isArchived project{id}}}}}}`, nil)
+	item := at(t, ids, "data", "repository", "issue", "projectItems", "nodes", 0)
+	if at(t, ids, "data", "repository", "issue", "state") != "CLOSED" || at(t, item, "isArchived") != true {
+		t.Fatalf("the closed issue's item: %v", ids)
+	}
+	vars := map[string]any{"p": at(t, item, "project", "id"), "i": at(t, item, "id")}
+	moved := graphql(t, s, "test", `mutation($p:ID!,$i:ID!){updateProjectV2ItemPosition(input:{projectId:$p,itemId:$i}){clientMutationId}}`, vars)
+	if !strings.Contains(fmt.Sprint(moved["errors"]), "The item is archived and cannot be updated") {
+		t.Fatalf("moving an archived item: %v", moved)
+	}
+	restored := graphql(t, s, "test", `mutation($p:ID!,$i:ID!){unarchiveProjectV2Item(input:{projectId:$p,itemId:$i}){item{id}}}`, vars)
+	if restored["errors"] != nil {
+		t.Fatalf("restoring the item: %v", restored)
+	}
+	if err := s.Check(&Expect{Issue: &IssueExpect{Repo: "example/app", Number: 1, Board: "Done", Archived: ptr(false)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(parseGiven(t, "repositories: [{name: example/app, issues: [{number: 1, archived: true}]}]"), Options{BoardOwner: "example", BoardNumber: 1}); err == nil ||
+		!strings.Contains(err.Error(), "archived, but not on the board") {
+		t.Fatalf("an archived issue off the board: %v", err)
 	}
 }
 

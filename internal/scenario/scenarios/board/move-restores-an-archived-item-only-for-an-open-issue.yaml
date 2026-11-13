@@ -1,0 +1,39 @@
+name: move-restores-an-archived-item-only-for-an-open-issue
+description: >
+  board move of an issue whose board item is archived, which GitHub refuses to update: when the
+  issue is closed the move leaves the item archived, says so and writes nothing; when the issue is
+  open the move restores the item to the board and sets its Status.
+issue: https://github.com/giantswarm/beekeeper/issues/3731
+flow: board
+tags: [board, move]
+timeout: 30s
+
+given:
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 2, title: Reopened after board tidy archived it, board: Done, archived: true}
+          - {number: 3, title: Finished, state: closed, board: Done, archived: true}
+
+when:
+  - name: closed
+    run: {args: [board, move, example/app#3, in progress]}
+    expect:
+      - exit: 0
+      - output: {contains: ["left example/app#3 archived in Done: the issue is closed"]}
+      - github: {issue: {repo: example/app, number: 3, archived: true}}
+      - events: {not_contains: [board.move]}
+  - name: open
+    run: {args: [board, move, example/app#2, in progress]}
+    expect:
+      - exit: 0
+      - output: {contains: ["moved example/app#2: Done → In Progress, restored from the archive"]}
+      - github: {issue: {repo: example/app, number: 2, board: In Progress, archived: false}}
+      - events: {contains: [board.move]}
+
+then:
+  - github: {calls: {path: graphql, operation: updateProjectV2ItemFieldValue, caller: closed, max: 0}}
+  - github: {calls: {path: graphql, operation: unarchiveProjectV2Item, caller: closed, max: 0}}
+  - github: {calls: {path: graphql, operation: unarchiveProjectV2Item, caller: open, min: 1, max: 1}}
+  - github: {issue: {repo: example/app, number: 3, state: closed, board: none, archived: true}}

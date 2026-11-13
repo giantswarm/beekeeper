@@ -67,10 +67,11 @@ func (c *Client) setHeld(ctx context.Context, ref string, to func(*meta, *Moved)
 		return nil, err
 	}
 	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
-	_, item, _, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	is, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return nil, err
 	}
+	item := is.Found
 	if item == nil {
 		return nil, &Refusal{fmt.Sprintf("%s is not on the board %s/%d: a hold sets a board item's Status", mv.Ref, c.Board.Owner, c.Board.Project)}
 	}

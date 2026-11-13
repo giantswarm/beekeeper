@@ -172,9 +172,6 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 	if round == nil || roundHead != reviewed || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
-	if round.Result != nil && round.Result.Head != "" && round.Result.Head != round.Head {
-		return refused("reviewer changed the assigned head; findings must go to the implementing worker")
-	}
 	result := round.Result
 	if result == nil || !sameReviewSession(result.By, round.Reviewer) || (!fixes && result.Verdict != superloop.Approved) {
 		return refused("assigned independent reviewer has not approved this head")
@@ -243,6 +240,12 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 			return err
 		}
 		headOK := review.Head != "" && review.Head == review.Commit && review.Head == round.Head
+		if !headOK && review.Head != "" && review.Head == review.Commit {
+			// The reviewer's verdict on the fix it pushed is the round's.
+			if pull, pullErr := loop.ReadLoopPull(ctx, round.Ref); pullErr == nil {
+				headOK = reviewerFixedHead(ctx, round, pull, review.Head)
+			}
+		}
 		if review.ID == "" || review.Author == "" || review.URL != links[0][0] || !headOK || review.At.Before(round.AssignedAt.Add(-30*time.Second)) || review.Verdict != verdict {
 			return refused("reported desk review does not match its assigned head and round")
 		}

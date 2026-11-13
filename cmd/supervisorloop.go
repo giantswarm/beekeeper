@@ -292,9 +292,14 @@ overridden pull requests.
 
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
 .Worker. One watcher reads tracked deliveries, parks and sweep pull requests
-outside the pass, in aliased GraphQL batches of up to 60. It polls every 30s
+outside the pass, in aliased GraphQL batches of up to 60, 20 for pull requests
+on first sight. A batch GitHub fails (a 5xx, no answer in time, an HTML or
+empty body) is asked again in halves, down to 5; the halved size doubles
+after each 30m without a fault. It polls every 30s
 while checks or mergeability are pending and every 2m when settled, with
-exponential failure backoff capped at 10m. Details are fetched only when the
+exponential failure backoff capped at 10m; every failed poll and the recovery
+are said, and a watch that has not read all its pull requests for 30m raises
+one alarm for the guide. Details are fetched only when the
 head or updatedAt changes. Observations older than 5m are unknown; status
 shows their age. --once and --dry-run consume the saved observations. A plain wait
 starts no review and receives no go or forwarded findings; the watch

@@ -149,7 +149,7 @@ func defineMutations() {
 				return gerr
 			}
 			if it.Archived {
-				return unprocessable("Archived items cannot be moved")
+				return unprocessable("The item is archived and cannot be updated")
 			}
 			p := it.Project
 			items := slices.DeleteFunc(slices.Clone(p.Items), func(o *ProjectItem) bool { return o == it })
