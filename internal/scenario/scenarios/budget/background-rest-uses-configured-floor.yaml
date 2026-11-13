@@ -1,0 +1,60 @@
+name: background-rest-uses-configured-floor
+description: >
+  Pull discovery continues with 1844 REST points left and a configured
+  floor of 200, even though less than half the window remains. Previously
+  the background gate refused discovery while claiming a 2000-call cap,
+  despite having admitted only a few calls. Fresh readings continue to
+  admit discovery in the next window.
+issue: https://github.com/giantswarm/beekeeper/issues/3950
+flow: budget
+tags: [budget, github, loop, pullwatch]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      github: {floor: 200, probeRepo: example/app}
+      supervisor: {loopInterval: 30m, releaseEvery: 24h, workerBrief: ""}
+      watch: {interval: 30m}
+  github:
+    repositories:
+      - name: example/app
+    budgets:
+      core: {limit: 5000, remaining: 1844, reset_in: 10m}
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  # Save the low-but-healthy reading before discovery can bootstrap.
+  - name: budget
+    run: {args: [budget, --gate]}
+    expect:
+      - exit: 0
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - calls: {program: gh, args: [search, prs], min: 1}
+  - name: polls
+    advance:
+      by: 12m
+      step: 6m
+      quiet: 200ms
+      settle:
+        timeout: 10s
+        interval: 20ms
+        expect:
+          - calls: {program: gh, args: [search, prs], min: 1}
+  - stop: loop
+
+then:
+  - calls: {program: gh, args: [search, prs], min: 3}
+  - log: {name: loop, not_contains: ["background REST held"]}
