@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -37,10 +37,10 @@ func parseReleaseTarget(on string) (repo, version string, ok bool) {
 var readParkRelease = func(ctx context.Context, repo, version string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "release", "wait", repo, version, "--timeout", "5s") //nolint:gosec // validated repository and version, no shell
+	c := proc.CommandContext(ctx, merge.Tool, "release", "wait", repo, version, "--timeout", "5s") //nolint:gosec // validated repository and version, no shell
 	c.Env = devctlCommandEnv("")
 	raw, err := c.Output()
-	var exit *exec.ExitError
+	var exit *proc.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 2 {
 		// devctl's normal timeout means the release is still pending.
 		return raw, nil

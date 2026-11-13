@@ -48,6 +48,14 @@ and event. Stops, holds and capacity still apply. Role holders use their relay
 lifecycle. A park without a recorded task reference stays parked rather than
 resuming a transcript to reconstruct the task.
 
+The fresh worker takes its predecessor's place: the continuation of a parked worker, and the
+worker the loop starts for a pull request whose worker left the roster for the desk review (red
+CI, a review's findings, a rework). It takes over the serve record, the desk-review park, the
+notes the old session filed, the timers it set or that wake it, what is owed to it, the alerts
+and merges it owns, its leases and grants, and the old session's start names it as successor. An
+answer to the old session's note, a timer or a message for it reaches the fresh worker (a parked
+one gets its own continuation); the old transcript is never resumed beside it.
+
 The coordinator handles successful owned CI waits directly as desk-review
 requests, and already owns approved merges and its GitHub budget retries.
 Use a timer's `--run` for a known authorized mechanical next command; release
@@ -65,7 +73,9 @@ organisation folders and linked worktrees are refused with accepted checkout
 paths. The session launches in the checkout to load its repository instructions,
 then works in `<stateDir>/worktrees/<repo>/<branch>`, created from the freshly
 fetched origin default branch (`agents.worktreesDir` overrides the worktree
-place). Review starts require a PR URL in the brief and
+place). The branch's upstream is `origin/<branch>`, never the default branch, so
+`git push` and `git push -u origin <branch>` create the branch on origin whatever
+the checkout's `push.default`. Review starts require a PR URL in the brief and
 use a detached `<stateDir>/worktrees/<repo>/review-<number>` instead. Existing
 worktree destinations are refused. The prompt forbids commits, stashes and
 checkouts in the main checkout. Split tasks spanning repositories into one task

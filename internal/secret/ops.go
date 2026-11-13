@@ -11,13 +11,13 @@ import (
 	"io/fs"
 	"math/big"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The states compare answers per key.
@@ -622,13 +622,13 @@ func consume(ctx context.Context, v, ref string, argv []string, in Stdin) (int, 
 	if err != nil {
 		return 0, "", err
 	}
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // an allow-listed consumer
+	c := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // an allow-listed consumer
 	c.Stdin = strings.NewReader(input)
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
 	code := 0
 	if err := c.Run(); err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if !errors.As(err, &ee) {
 			return 0, "", err
 		}

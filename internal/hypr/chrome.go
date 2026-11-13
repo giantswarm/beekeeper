@@ -20,12 +20,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Ctl runs hyprctl with args and returns what it prints; tests replace it.
@@ -33,7 +34,7 @@ type Ctl func(ctx context.Context, args ...string) ([]byte, error)
 
 // Hyprctl is the Ctl of the running compositor.
 func Hyprctl(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "hyprctl", args...).Output() //nolint:gosec // hyprctl on PATH, arguments beekeeper builds
+	return proc.CommandContext(ctx, "hyprctl", args...).Output() //nolint:gosec // hyprctl on PATH, arguments beekeeper builds
 }
 
 // Running reports whether the session is a Hyprland one.

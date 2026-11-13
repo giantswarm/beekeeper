@@ -80,6 +80,7 @@ func TestParseRejects(t *testing.T) {
 		{"contents of a file that is not there", strings.Replace(validScenario, "exit: 0", "file: {path: cpu.pprof, exists: false, contains: [x]}", 1), "exists false with checks of the contents"},
 		{"file with a bad pattern", strings.Replace(validScenario, "exit: 0", "file: {path: out.txt, matches: '('}", 1), "file: matches:"},
 		{"unknown key in a file expectation", strings.Replace(validScenario, "exit: 0", "file: {path: out.txt, size: 3}", 1), "field size not found"},
+		{"checkout of no repository", strings.Replace(validScenario, "when:", "given:\n  checkouts: [example/app]\nwhen:", 1), `given.checkouts: "example/app" is no repository of the scenario`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))

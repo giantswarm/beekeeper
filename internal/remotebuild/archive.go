@@ -6,16 +6,17 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // archive snapshots git's tracked and nonignored untracked files, including
 // uncommitted edits and symlinks, excluding deleted tracked files. It never
 // traverses symlinks or includes repository administration/ignored credentials.
 func archive(ctx context.Context, root, dir string) (_ *os.File, err error) {
-	names, err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").Output() //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
+	names, err := proc.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").Output() //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
 	if err != nil {
 		return nil, err
 	}

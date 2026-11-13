@@ -183,7 +183,7 @@ func (c *restCtx) pullShape(p *Pull) obj {
 		return obj{"label": r.Owner + ":" + branch, "ref": branch, "sha": sha, "user": c.user(r.Owner), "repo": c.repoShape(r)}
 	}
 	var mergeable any
-	switch p.MergeableState() {
+	switch c.m.MergeableState(p) {
 	case "MERGEABLE":
 		mergeable = true
 	case "CONFLICTING":

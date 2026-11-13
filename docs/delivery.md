@@ -147,10 +147,26 @@ its release step. A worker finishes with one of these commands:
   one) continues that task's delivery: a delivery still active or ended merged
   keeps its pull requests and outcome, and the pull request the worker parked
   on joins them, also when it only says "Part of" the issue. Its own
-  `--done` then rests on that merge without a park of its own.
+  `--done` then rests on that merge without a park of its own. A worker whose
+  brief names its task by a pull request URL (no issue) works that pull
+  request: its delivery holds the pull request from the start, as the loop's
+  observation of an issue-less pull request has it, so its merge proves the
+  task although the loop's sweep of the desk's open pull requests never read
+  it (merged before a sweep). Held so, the loop reads the pull request while
+  the delivery is active: one the desk does not own (its author is neither in
+  `supervisor.ownership.authors`, which defaults to the gh login, nor in
+  `supervisor.ownership.bots`, or another team owns its repository) leaves
+  the deliveries at the next pass as outside desk ownership, and the worker's
+  `--done` then rests on no merge.
 - `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
   explicitly explain an already fixed issue, an operation with its proof, or
   an answer recorded on the issue. This counts as no change, not a release.
+  For a worker on an SSH execution host, which can neither close the issue nor
+  move its board item, the coordinator closes the open issues of the serve
+  records it gave the task (`agents.no-change-closed`), with the reason as the
+  comment, so refill does not offer them again. The reason then names every
+  issue and pull request by its full URL, as the report does. A failed close
+  leaves the issue open and reaches the guide as one of the report's problems.
 - `agents idle --blocked --by <issue URL|#note>`: the blocker must be open.
   An issue dependency moves the item to Blocked / Waiting; a note holds its
   board status until the note is answered. This ends the worker assignment,

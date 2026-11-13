@@ -17,7 +17,10 @@ import (
 
 var taskRepositoryReference = regexp.MustCompile(`(?:^|[\s(])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+`)
 
-var taskRepository = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/(issues|pull)/(\d+))?`)
+// taskRepository is a GitHub URL in a brief. A name never ends in a period:
+// a URL that ends a sentence (the fatal sentinel's repair brief) names the
+// repository the URLs after it name.
+var taskRepository = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]*[A-Za-z0-9_-])(?:/(issues|pull)/(\d+))?`)
 
 // checkoutDir deliberately rejects linked worktrees and subdirectories: the
 // harness must load the repository's own instructions from its main checkout.
@@ -189,12 +192,31 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 			}
 		}
 	}
-	args := []string{"worktree", loop.LoopAdd, branchFlag, branch, target, ref}
 	if review {
-		args = []string{"worktree", loop.LoopAdd, "--detach", target, ref}
+		if _, err := runGit(ctx, checkout, "worktree", loop.LoopAdd, "--detach", target, ref); err != nil {
+			return "", err
+		}
+		return rules, nil
 	}
-	if _, err := runGit(ctx, checkout, args...); err != nil {
+	// The worker branch never tracks the default branch it starts from:
+	// under push.default=upstream, git push and git push -u origin <branch>
+	// would update main. Its upstream is its own name on origin, which also
+	// repairs a reused local branch that still tracks main.
+	if _, err := runGit(ctx, checkout, "worktree", loop.LoopAdd, "--no-track", branchFlag, branch, target, ref); err != nil {
+		return "", err
+	}
+	if err := setWorkerUpstream(ctx, checkout, branch); err != nil {
 		return "", err
 	}
 	return rules, nil
+}
+
+// setWorkerUpstream makes origin/<branch> the upstream of a worker branch,
+// whether or not origin has the branch yet.
+func setWorkerUpstream(ctx context.Context, checkout, branch string) error {
+	if _, err := runGit(ctx, checkout, "config", "branch."+branch+".remote", workerGitHubOrigin); err != nil {
+		return err
+	}
+	_, err := runGit(ctx, checkout, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	return err
 }

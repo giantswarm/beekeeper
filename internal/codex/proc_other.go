@@ -2,7 +2,7 @@
 
 package codex
 
-import "os/exec"
+import "github.com/giantswarm/beekeeper/internal/proc"
 
-func configureTurnCmd(*exec.Cmd)     {}
-func stopTurnProcessGroup(*exec.Cmd) {}
+func configureTurnCmd(*proc.Cmd)     {}
+func stopTurnProcessGroup(*proc.Cmd) {}

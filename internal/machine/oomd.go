@@ -3,10 +3,11 @@ package machine
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // OOMDSwap is what systemd-oomd does about swap: its SwapUsedLimit and the
@@ -43,7 +44,7 @@ func (o OOMDSwap) Line(m Mem) string {
 func ReadOOMDSwap(ctx context.Context) (OOMDSwap, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "oomctl", "dump").Output()
+	out, err := proc.CommandContext(ctx, "oomctl", "dump").Output()
 	if err != nil {
 		return OOMDSwap{}, fmt.Errorf("oomctl dump: %w", err)
 	}

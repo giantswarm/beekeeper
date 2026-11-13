@@ -42,7 +42,8 @@ reading a page are refused, with the hint to file the work in that turn as an is
 Only on the person's explicit emergency word, quote it verbatim in
 `beekeeper emergency on --reason "<words>" --until <time-or-duration>`.
 While that grant is active, use `beekeeper emergency merge <owner/repo> <number>`
-to merge a GitHub-approved pull request past desk review at its exact head,
+to merge a pull request approved by GitHub or a desk review at its exact head (on a desk
+review in a `merge.admin` repository with `--admin`, as the loop merges it),
 `beekeeper emergency hold set/lift` for holds, `beekeeper emergency start` for
 a forced capacity start, and `beekeeper emergency capacity <capacity.key> <value>`
 for validated capacity limits. These commands log each action and result with

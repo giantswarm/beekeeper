@@ -150,8 +150,9 @@ func reviews(ref, name string, rounds int) bool {
 // head that conflicts, is red, carries a review's unfixed changes request,
 // or is behind a base its merge does not update; the merge go again for a
 // green head whose go was given and never carried out; a reviewer for a
-// green head awaiting its review; a worker to take it over and park once
-// its reviews are used. A head with checks still running waits. Each
+// green head awaiting its one review; a worker to take it over and park
+// once that review gave its verdict, for the loop's go without a second
+// review. A head with checks still running waits. Each
 // stretch without an owner gets one action, a head at most MaxSweeps; an
 // ownership question still open is the person's.
 func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave func(string, string, string, string, string), add func(Action)) {
@@ -202,10 +203,18 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		v = p.verdict(rs[len(rs)-1], l.pushed(p))
 	}
 	reviewedHere := slices.ContainsFunc(rs, func(rd round) bool { return sameHead(rd.head, p.Head) })
+	// once is the pull request's one desk review, when a round gave it:
+	// no second review starts, whoever pushed past it.
+	onceRound, once := p.reviewed(rs, l.pushed(p))
+	if once != nil && once.Verdict == Approved {
+		base.RepairAgent = ReviewerName(ref, onceRound)
+	}
 	switch {
 	case p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty:
+		base.Agent = cmp.Or(base.RepairAgent, base.Agent)
 		fix(fmt.Sprintf("head %s conflicts with %s: merge %s into the branch and resolve the conflicts", short(p.Head), baseName(p), baseName(p)))
 	case len(p.Red) > 0:
+		base.Agent = cmp.Or(base.RepairAgent, base.Agent)
 		var names []string
 		for _, c := range p.Red {
 			names = append(names, strings.TrimSpace(c.Name+" "+c.URL))
@@ -223,6 +232,14 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		add(a)
 	case v != nil && v.Verdict == Approved && (sameHead(v.Head, p.Head) || in.baseMerged(p, v.Head)):
 		// planPull gives its go.
+	case once != nil:
+		// Commits past the one review that nobody parked on: a worker
+		// takes them over and parks, and the loop merges the head
+		// without a second review.
+		a := base
+		a.Key, a.Kind = sweepKey("fix", ref, p.Head, since), KindRework
+		a.Message = fmt.Sprintf("%s: its one desk review, round %d, %s head %s (%s), and head %s carries commits past it that nobody parked on. You own it now: finish them (fix every finding the review left), bring head %s to green CI without conflicts, then park from its worktree (beekeeper agents park --on %s \"desk review\"): no second review runs, the loop merges it. Never force-push.", idle, onceRound, once.Verdict, short(once.Head), cmp.Or(once.URL, p.URL), short(p.Head), short(p.Head), ref)
+		add(a)
 	case reviewedHere || l.has(reviewKey(ref, p.Head)):
 		// A review of this head started and ended without a verdict.
 		review(sweepKey("review", ref, p.Head, since))

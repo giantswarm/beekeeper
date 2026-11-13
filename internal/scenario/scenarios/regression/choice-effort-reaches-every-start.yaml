@@ -1,0 +1,162 @@
+name: choice-effort-reaches-every-start
+description: >
+  The desk's one capacity choice runs claude on sonnet at effort xhigh, and
+  supervisor.effort, the loop's default for the sessions it starts, is low.
+  Every start runs at the choice's effort: a start that names the choice's
+  harness and model, the loop's worker of a Ready item, its reviewer, and
+  the fresh continuation it starts for the worker's post-merge work. Each
+  start's agents.start event names the effort it applied. Live, the loop
+  passed its default as an explicit --effort that beat the choice's, and a
+  start naming its harness and model ran at the harness default.
+issue: https://github.com/giantswarm/beekeeper/issues/3838
+flow: regression
+tags: [regression, effort, capacity, loop, review, continuation]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      capacity:
+        choices: [{harness: claude, model: sonnet, effort: xhigh}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # The fresh session the loop starts for the post-merge work.
+      - name: 'app 1 next-[0-9a-f]+'
+        turns:
+          - steps:
+              - beekeeper: [agents, idle, --done, --report, "https://github.com/example/app/pull/2 merged; the change is on main; open items: none", --problem, none]
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Part of https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, 'prove the change on main', desk review]
+                dir: app
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # A start that names the choice's harness and model takes its effort,
+  # ahead of the loop's default.
+  - name: named
+    run: {args: [--as, supervisor loop, agents, start, by-hand, /work/worker.txt, --harness, claude, --model, sonnet, --dry-run]}
+    expect:
+      - exit: 0
+      - output: {contains: [--effort xhigh], not_contains: [--effort low]}
+  # The refill starts the item's worker.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  # Green: the loop starts the reviewer of the head.
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 2 r1', outcome: finish}
+  - advance: 2s
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - advance: 2s
+  # The merged pull request's post-merge work goes to a fresh session.
+  - name: end
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.continuation-queued]}
+  - advance: 2s
+  - name: continue
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.continuation]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'app 1 next-[0-9a-f]+', outcome: finish}
+  - name: starts
+    run: {args: [log, --verb, agents.start]}
+
+then:
+  - worker: {name: app 1, turns: 1, outcome: finish}
+  - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
+  - worker: {name: 'app 1 next-[0-9a-f]+', turns: 1, outcome: finish}
+  # The worker, the reviewer and the continuation, each by its session's
+  # name: each claude session ran at the choice's effort, none at the loop's
+  # default.
+  - calls: {program: claude, args: [--bg, 'app 1', --effort, xhigh], min: 1, max: 1}
+  - calls: {program: claude, args: [--bg, 'Review app 2 r1', --effort, xhigh], min: 1, max: 1}
+  - calls: {program: claude, args: [--bg, 'app 1 next-[0-9a-f]+', --effort, xhigh], min: 1, max: 1}
+  - calls: {program: claude, args: [--bg, --effort, low], max: 0}
+  # Each start's event names the effort it applied.
+  - {step: starts, exit: 0}
+  - step: starts
+    output:
+      matches: 'app 1: kind worker, harness claude, model sonnet, effort xhigh;'
+  - step: starts
+    output:
+      matches: 'Review app 2 r1: kind review, harness claude, model sonnet, effort xhigh;'
+  - step: starts
+    output:
+      matches: 'app 1 next-[0-9a-f]+: kind worker, harness claude, model sonnet, effort xhigh;'

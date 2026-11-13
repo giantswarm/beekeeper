@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -62,13 +61,38 @@ var canaryChecks = [][]string{
 	{"capacity"},
 }
 
-// runCanaryCheck runs one canary command on the staged binary at path and
-// returns its combined output; the tests replace it.
+// canaryDeadline bounds a canary check's first run on the candidate.
+// canaryCeiling bounds the running release's run of a check the candidate ran
+// out of time on, and the candidate's second run of it: a check takes eleven
+// minutes at most, which the loop's own self-update waits for in its pass.
+const (
+	canaryDeadline = time.Minute
+	canaryCeiling  = 5 * time.Minute
+)
+
+// runCanaryCheck runs one canary command on the binary at path until ctx ends
+// and returns its combined output; its error wraps ctx's error when ctx ended
+// the run, context.DeadlineExceeded for a deadline. The tests replace it.
 var runCanaryCheck = func(ctx context.Context, path string, args ...string) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	out, err := proc.Command(cctx, path, args...).CombinedOutput()
+	out, err := proc.Command(ctx, path, args...).CombinedOutput()
+	if cerr := ctx.Err(); err != nil && cerr != nil {
+		err = fmt.Errorf("%w: %v", cerr, err)
+	}
 	return strings.TrimSpace(string(out)), err
+}
+
+// runCanaryCheckWithin runs one canary command on the binary at path within d
+// of the desk's clock.
+func runCanaryCheckWithin(ctx context.Context, d time.Duration, path string, args []string) (string, error) {
+	ctx, cancel := clk.WithTimeout(ctx, d)
+	defer cancel()
+	return runCanaryCheck(ctx, path, args...)
+}
+
+// ranOutOfTime says a canary run's own deadline ended it, not the update's
+// context: on a loaded host a healthy binary does too.
+func ranOutOfTime(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)
 }
 
 // syncPluginsFlag runs only the plugin sync of the binary installed at the
@@ -78,7 +102,7 @@ const syncPluginsFlag = "sync-plugins"
 // runInstalled runs the binary at path with args, its output to w; the
 // tests replace it.
 var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...string) error {
-	c := exec.CommandContext(ctx, path, args...) //nolint:gosec // the binary this update installed
+	c := proc.CommandContext(ctx, path, args...) //nolint:gosec // the binary this update installed
 	c.Stdout, c.Stderr = w, w
 	return c.Run()
 }
@@ -521,13 +545,14 @@ func (a *app) noteUncompared(w io.Writer, version, why string) {
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
-	name, why := canaryCheck(ctx, a.cfgPath, path)
+	name, why, busy := canaryCheck(ctx, w, a.cfgPath, path)
 	if why == "" {
 		return nil
 	}
-	// Live budget, status and capacity failures can be transient. Only
+	// Live budget, status and capacity failures can be transient, and a
+	// check the running release cannot pass either judges the host. Only
 	// the offline version probe diagnoses a broken local candidate.
-	if name == hostVersionFlag && ctx.Err() == nil {
+	if name == hostVersionFlag && !busy && ctx.Err() == nil {
 		a.skipRelease(version, why)
 	}
 	_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
@@ -535,13 +560,14 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 }
 
 // probationHealth distinguishes a broken offline version probe from unavailable
-// live evidence. A busy state lock or budget outage must remain retryable.
+// live evidence. A busy state lock, a budget outage or a host too loaded to
+// run a check must remain retryable.
 func probationHealth(ctx context.Context, cfgPath, path string) error {
-	name, why := canaryCheck(ctx, cfgPath, path)
+	name, why, busy := canaryCheck(ctx, io.Discard, cfgPath, path)
 	if why == "" {
 		return nil
 	}
-	if name != hostVersionFlag || ctx.Err() != nil {
+	if name != hostVersionFlag || busy || ctx.Err() != nil {
 		return fmt.Errorf("%w: %s", update.ErrHealthUnproven, why)
 	}
 	return errors.New(why)
@@ -550,27 +576,75 @@ func probationHealth(ctx context.Context, cfgPath, path string) error {
 // canaryFailure runs the canary checks on the binary at path and says why the
 // first failed, "" when all passed.
 func canaryFailure(ctx context.Context, cfgPath, path string) string {
-	_, why := canaryCheck(ctx, cfgPath, path)
+	_, why, _ := canaryCheck(ctx, io.Discard, cfgPath, path)
 	return why
 }
 
-func canaryCheck(ctx context.Context, cfgPath, path string) (string, string) {
+// canaryCheck runs the canary checks on the binary at path and returns the
+// name of the first that did not pass and why, "" when all passed. busy says
+// that check ran out of its deadline and the running release's same check
+// did not pass either: the host is judged, not the binary.
+func canaryCheck(ctx context.Context, w io.Writer, cfgPath, path string) (name, why string, busy bool) {
 	for _, check := range canaryChecks {
-		name := strings.Join(check, " ")
+		name = strings.Join(check, " ")
 		args := check
 		if cfgPath != "" {
 			args = append([]string{"--" + configFlag, cfgPath}, check...)
 		}
-		out, err := runCanaryCheck(ctx, path, args...)
-		if err != nil {
-			detail := oneLine(out)
-			if detail == "" {
-				detail = oneLine(err.Error())
-			}
-			return name, fmt.Sprintf("canary %s failed: %s", name, detail)
+		out, err := runCanaryCheckWithin(ctx, canaryDeadline, path, args)
+		if ranOutOfTime(ctx, err) {
+			why, busy = rerunCanaryCheck(ctx, w, name, path, args)
+		} else if err != nil {
+			why = fmt.Sprintf("canary %s failed: %s", name, canaryDetail(out, err))
+		}
+		if why != "" {
+			return name, why, busy
 		}
 	}
-	return "", ""
+	return "", "", false
+}
+
+// rerunCanaryCheck takes up a check whose run on the binary at path ran out
+// of canaryDeadline. A loaded host slows every binary, so the running
+// release runs the same check, within canaryCeiling, and the binary at path
+// runs it again within twice the running release's time, canaryDeadline at
+// least. It says why the check did not pass, "" when it did; busy when the
+// running release's own run did not pass either, which judges the host.
+func rerunCanaryCheck(ctx context.Context, w io.Writer, name, path string, args []string) (why string, busy bool) {
+	first := fmt.Sprintf("canary %s ran out of its %s deadline", name, canaryDeadline)
+	running, err := os.Executable()
+	if err != nil {
+		return fmt.Sprintf("%s, and the running release cannot be found to run it: %v", first, err), true
+	}
+	started := clk.Now()
+	out, err := runCanaryCheckWithin(ctx, canaryCeiling, running, args)
+	took := clk.Since(started).Round(time.Millisecond)
+	switch {
+	case ranOutOfTime(ctx, err):
+		return fmt.Sprintf("%s, and the running release's same check ran out of %s: the host is too busy to judge a release", first, canaryCeiling), true
+	case err != nil && ctx.Err() != nil:
+		return fmt.Sprintf("%s: %v", first, ctx.Err()), true
+	case err != nil:
+		return fmt.Sprintf("%s, and the running release's same check failed: %s", first, canaryDetail(out, err)), true
+	}
+	within := min(max(canaryDeadline, 2*took), canaryCeiling)
+	_, _ = fmt.Fprintf(w, "Canary %s ran out of its %s deadline; the running release's same check took %s, so it runs again within %s.\n", name, canaryDeadline, took, within)
+	out, err = runCanaryCheckWithin(ctx, within, path, args)
+	switch {
+	case ranOutOfTime(ctx, err):
+		return fmt.Sprintf("%s, and of %s on its second run, where the running release's same check took %s", first, within, took), false
+	case err != nil:
+		return fmt.Sprintf("canary %s failed: %s", name, canaryDetail(out, err)), false
+	}
+	return "", false
+}
+
+// canaryDetail is a failed canary run's output on one line, else its error.
+func canaryDetail(out string, err error) string {
+	if detail := oneLine(out); detail != "" {
+		return detail
+	}
+	return oneLine(err.Error())
 }
 
 // warnUpdateConfig runs before handing control to a newer binary, which may

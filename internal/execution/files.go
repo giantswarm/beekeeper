@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sshagent"
 )
 
@@ -179,7 +179,7 @@ type HostCommand func(context.Context, string, []string, string, ...string) ([]b
 const commandDrainWait = time.Second
 
 func hostCommand(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c := proc.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
 	c.WaitDelay = commandDrainWait
 	c.Dir, c.Env = dir, env
 	out := &boundedBuffer{limit: MaxWire}
@@ -193,7 +193,7 @@ func hostCommand(ctx context.Context, dir string, env []string, bin string, args
 // hostCombined is hostCommand with stderr kept: for status lines a harness
 // prints there. Callers compare it and never return it.
 func hostCombined(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c := proc.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
 	c.WaitDelay = commandDrainWait
 	c.Dir, c.Env = dir, env
 	out := &boundedBuffer{limit: MaxWire}

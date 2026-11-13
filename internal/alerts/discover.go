@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -232,7 +231,7 @@ func (d Discoverer) login(ctx context.Context, name string) error {
 
 // tsh is a tsh command on the profile, with KUBECONFIG=kubeconfig unless
 // it is empty.
-func (d Discoverer) tsh(ctx context.Context, kubeconfig string, args ...string) *exec.Cmd {
+func (d Discoverer) tsh(ctx context.Context, kubeconfig string, args ...string) *proc.Cmd {
 	cmd := proc.Command(ctx, d.Tsh, args...) //nolint:gosec // tsh from the configuration
 	cmd.Env = os.Environ()
 	if d.TeleportHome != "" {
@@ -267,7 +266,7 @@ func (d Discoverer) releases(ctx context.Context, kubeContext string) ([]string,
 // cmdError is the last line a failed command wrote to stderr, else the
 // error.
 func cmdError(err error) string {
-	var ee *exec.ExitError
+	var ee *proc.ExitError
 	if errors.As(err, &ee) {
 		if lines := strings.Split(strings.TrimSpace(string(ee.Stderr)), "\n"); lines[len(lines)-1] != "" {
 			return lines[len(lines)-1]
