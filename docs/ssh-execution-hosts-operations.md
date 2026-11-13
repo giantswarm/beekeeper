@@ -190,7 +190,13 @@ agents:
 ```
 
 An entry's own `policyDigest` is deprecated: it still pins a host beekeeper
-never updated, and beekeeper's recorded pin replaces it.
+never updated, and beekeeper's recorded pin replaces it. The pin also records
+the digest the entry named. When the host's policy changes without a new
+release (its configuration, such as its repository map), setting the entry's
+`policyDigest` to the digest `prepare` printed is enough: the supervisor loop
+updates the host once its turns drain, as for a new release, and pins the
+digest the host prepares. An entry still naming a stale digest is updated for
+once, and the update's line says the host did not prepare that digest.
 
 ### Host updates follow the coordinator
 
@@ -221,8 +227,9 @@ records the release and digest in its state (`hostPins`): every start on the
 host is pinned to it. No configuration change and no person is involved.
 
 The supervisor loop runs the update for every `agents.hosts` entry whose pin
-is not the coordinator's release, so a coordinator self-update carries the
-hosts with it. During coordinator probation only updates wait, and starts continue
+is not the coordinator's release, or whose `policyDigest` changed since the
+pin, so a coordinator self-update carries the hosts with it. During
+coordinator probation only updates wait, and starts continue
 on older releases that pass the live protocol, capability, identity and pinned
 policy checks; release equality is not the compatibility boundary. Once the
 coordinator's probation passed, a host pinned to an older release drains:
