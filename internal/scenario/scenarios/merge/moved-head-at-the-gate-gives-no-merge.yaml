@@ -2,7 +2,7 @@ name: moved-head-at-the-gate-gives-no-merge
 description: >
   The pass plans the merge of the approved head and the gate's turn comes
   (merging). Before the gate re-reads the pull request, the worker's branch
-  moves to a new commit: the gate's reads are slowed by two seconds while a
+  moves to a new commit: the gate's reads are slowed by a second while a
   push lands, so they see the new head. The merge of the reviewed head is
   refused, the merge API is never called and the pull request stays open on
   the new head.
@@ -102,7 +102,7 @@ when:
       arm:
         name: pull-reads
         match: {path: graphql, operation: PullRequestByNumber, caller: merge}
-        respond: {delay: 2s}
+        respond: {delay: 1s}
   - name: merge
     background: {args: [supervisor, loop, --once]}
   - wait_for:

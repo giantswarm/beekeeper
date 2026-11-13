@@ -12,15 +12,16 @@ description: >
   a loop that sends its heartbeat, and is promoted. With that the fence is
   lifted for every process. Each controller's unit is the scenario's to
   run: it runs the same command with the controller's cadence flags. The
-  silent candidate is evaluated a simulated minute at a time; the later
-  healthy candidate serves its full probation window in one evaluation.
+  silent candidate is evaluated at its ten-minute heartbeat grace; the
+  later healthy candidate serves its full probation window in one
+  evaluation.
 issue: https://github.com/giantswarm/beekeeper/issues/3794
 flow: selfupdate
 tags: [selfupdate, release, probation, rollback, fence]
 control:
   none: >-
-    only shortens the later healthy candidate's simulated probation of
-    behavior main already has; the missing-heartbeat grace is unchanged
+    only shortens the simulated probations of behavior main already has;
+    the recovery unit tests cover the repeated probes
 timeout: 480s
 
 given:
@@ -96,10 +97,10 @@ when:
   - name: controller
     background:
       release: v1.0.0-rc.2
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 1m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 50ms, --recovery-step, 10m]
   - wait_for:
       timeout: 120s
-      interval: 200ms
+      interval: 50ms
       expect:
         - process: {name: controller, exit: 0}
         - events: {contains: [self-update.canary]}
@@ -160,11 +161,11 @@ when:
   - name: later-controller
     background:
       release: v1.0.0-rc.2
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 30m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 50ms, --recovery-step, 30m]
   # The live heartbeat and real workflow probe must pass before promotion.
   - wait_for:
       timeout: 240s
-      interval: 200ms
+      interval: 50ms
       expect:
         - process: {name: later-controller, exit: 0}
         - events: {contains: [self-update.recovery]}

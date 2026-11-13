@@ -107,7 +107,7 @@ when:
       arm:
         name: pull-reads
         match: {path: graphql, operation: PullRequestByNumber, caller: merge}
-        respond: {delay: 2s}
+        respond: {delay: 1s}
   - name: merge
     background: {args: [supervisor, loop, --once]}
   - wait_for:

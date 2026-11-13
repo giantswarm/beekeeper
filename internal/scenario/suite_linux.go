@@ -53,7 +53,7 @@ func Namespaces() error {
 // Build builds the candidate from the repository at repo with the
 // scenario build tag into out.
 func Build(ctx context.Context, repo, out string) error {
-	c := exec.CommandContext(ctx, "go", "build", "-tags", "scenario", "-o", out, ".") //nolint:gosec // the repository's own build
+	c := exec.CommandContext(ctx, "go", "build", "-tags", "scenario", "-ldflags", "-s -w", "-o", out, ".") //nolint:gosec // the repository's own build
 	c.Dir = repo
 	if b, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("build candidate: %w\n%s", err, b)

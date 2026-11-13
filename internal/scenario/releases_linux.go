@@ -24,7 +24,7 @@ import (
 // (out + ".bundle"): what the scenario's GitHub publishes next to the
 // binary and a scenario build verifies a download against.
 func BuildRelease(ctx context.Context, repo, out string, b ReleaseBuild) error {
-	stamp := "-X " + project.Module + "/pkg/project.version=" + b.Version
+	stamp := "-s -w -X " + project.Module + "/pkg/project.version=" + b.Version
 	args := []string{"build", "-tags", "scenario", "-ldflags", stamp}
 	if b.Mutation != "" {
 		m, ok := Mutations[b.Mutation]

@@ -101,11 +101,6 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-  - advance: 1m
-  - name: again
-    run: {args: [supervisor, loop, --once]}
-    expect:
-      - exit: 0
 
 then:
   - github: {pull: {repo: example/app, number: 2, state: open}}

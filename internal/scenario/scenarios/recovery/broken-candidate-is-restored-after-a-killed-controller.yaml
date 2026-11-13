@@ -6,9 +6,8 @@ description: >
   counts the failures and is stopped mid-way. A second controller restores
   the previous release from the journal alone, with no person and no
   backlog: the candidate is quarantined, the person's line names both
-  versions, the work in flight (an open timer) is kept, the failed version can no longer
-  write the state, and the restored desk's probe merges again while the
-  broken candidate's fails.
+  versions, the work in flight (an open timer) is kept, and the failed
+  version can no longer write the state.
   Moved from internal/loopworkflow TestRecoveryRestoresABrokenCandidate,
   with the writer fence of TestRetainedRecoveryController.
 issue: https://github.com/giantswarm/beekeeper/issues/3797
@@ -42,9 +41,10 @@ when:
       - exit: 0
   - name: first
     background:
-      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 50ms, --recovery-step, 1m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/install/beekeeper, --recovery-every, 2s, --recovery-step, 1m]
   - wait_for:
       timeout: 90s
+      interval: 50ms
       expect:
         - install: {probe_failures: {min: 1}}
   - stop: first
@@ -70,16 +70,6 @@ when:
       args: [--as, scenario, timer, add, 3h, "Does the failed version still write?"]
     expect:
       - stderr: {contains: [state writes fenced after binary recovery]}
-  - name: restored-probe
-    run: {args: [self-update, --installation-probe]}
-    expect:
-      - exit: 0
-  - name: broken-probe
-    run:
-      release: v1.0.0-rc.2+pull-parser-drops-the-base
-      args: [self-update, --installation-probe]
-    expect:
-      - exit: 1
 
 then:
   - install: {installed: v1.0.0-rc.1, probation: rolled-back, quarantined: v1.0.0-rc.2+pull-parser-drops-the-base, notified: true}

@@ -70,10 +70,14 @@ test-gh-contract: ## On demand: compare the scenarios' fake gh with the real gh 
 install-cosign-retry: ## Retry Rekor's conflict lookup race in the later steps of this CircleCI job.
 	bash .circleci/install-cosign-retry.sh
 
+.PHONY: warm-cmd-test
+warm-cmd-test: ## Compile ./cmd's test binary before go test ./... buffers output behind it, keeping go-build within CircleCI's 10m silence limit.
+	go test -ldflags "$(LDFLAGS)" $(RACE) -run '^$$' ./cmd
+
 # The generated go-build job runs make test before it signs the binaries, and
 # align owns that job: this is where the repository can reach its later steps.
 ifeq ($(CIRCLE_JOB),go-build)
-test: install-cosign-retry
+test: install-cosign-retry warm-cmd-test
 endif
 
 .PHONY: browse-upload-live

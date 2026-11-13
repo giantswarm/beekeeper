@@ -136,11 +136,11 @@ when:
   - name: controller
     background:
       release: v1.0.0-rc.2
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 30m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 50ms, --recovery-step, 30m]
   # Wait for the actual verdict, including the isolated workflow probe.
   - wait_for:
       timeout: 240s
-      interval: 200ms
+      interval: 50ms
       expect:
         - process: {name: controller, exit: 0}
         - events: {contains: [self-update.recovery]}
