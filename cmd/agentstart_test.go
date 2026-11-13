@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -127,6 +128,26 @@ func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
 	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: reviewedStoppedCase, Name: worker.Name}, Task: staleTask}}}
 	if _, err := recordStart(st, s, briefTask(brief), briefIssue(brief), live); err != nil || len(st.Records) != 0 {
 		t.Errorf("take over: records %+v, %v", st.Records, err)
+	}
+}
+
+// TestReviewStartOpensNoDelivery: a review start serves the pull request it
+// reviews, so the board and the sweep see it taken, and opens no delivery: a
+// reviewer never owns the delivery of what it reviews.
+func TestReviewStartOpensNoDelivery(t *testing.T) {
+	now := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	const pull = "example/app#98"
+	reviewer := state.Party{Session: "rv", HostSession: "local_rv", Name: "Review app 98"}
+	s := state.Start{Kind: capacity.TaskKindReview, Party: reviewer, Mode: state.ModeBypass, Dir: "/w", At: now}
+	st := &state.State{}
+	if _, err := recordStart(st, s, "Review https://github.com/example/app/pull/98", pull, func(p state.Party) bool { return p.Is(reviewer) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Records) != 1 || st.Records[0].Issue != pull || !st.Records[0].Session.Is(reviewer) {
+		t.Fatalf("records = %+v", st.Records)
+	}
+	if len(st.Deliveries) != 0 {
+		t.Fatalf("the review start opened a delivery: %+v", st.Deliveries)
 	}
 }
 
