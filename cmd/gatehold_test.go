@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -35,8 +36,8 @@ func heldApp(t *testing.T, merges ...state.Merge) *app {
 }
 
 // placedGate is the queued run of o/r#pr, which has its place in the lane.
-func placedGate(a *app, pr int, pid int) *GateRun {
-	return &GateRun{Host: a, Ctx: context.Background(), Argv: prArgv(pr), Repo: scratchRepo, Pr: pr,
+func placedGate(a *app, pr int, pid int) *gate.GateRun {
+	return &gate.GateRun{Host: a, Ctx: context.Background(), Argv: prArgv(pr), Repo: scratchRepo, Pr: pr,
 		Lane: a.cfg.LaneOf(scratchRepo), Me: state.Party{Session: "s1", Name: ownerName}, Pid: pid, Queued: true, Placed: true}
 }
 
@@ -107,7 +108,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 	fresh := gateStderr(t, func() {
 		refused = a.gate(context.Background(), prArgv(8), time.Minute, 0, false)
 	})
-	if Code(refused) != ExitGateRefused || !strings.Contains(fresh, "refused, o/r is held") {
+	if Code(refused) != gate.ExitGateRefused || !strings.Contains(fresh, "refused, o/r is held") {
 		t.Errorf("a new merge during the hold: exit %d, %q; want it refused", Code(refused), fresh)
 	}
 
@@ -139,7 +140,7 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	child := sleeper(t)
 	a := heldApp(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
 		Child: child, Phase: state.Running, Joined: joined, Seen: time.Now(), Started: time.Now().Add(-time.Minute)})
-	base := MergeBase(a.store.Dir(), scratchRepo, 7)
+	base := gate.MergeBase(a.store.Dir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +162,7 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	if !ok || !slices.Equal(ended, []int{child}) {
 		t.Fatalf("the hold's exception: preempted %v, ended %v; want o/r#7's devctl ended", ok, ended)
 	}
-	var p *PreemptedError
+	var p *gate.PreemptedError
 	if err := g.Requeue(base, h); !errors.As(err, &p) || !strings.Contains(p.Why, "o/r#6 goes first; o/r#7 keeps its place") || !g.Requeued {
 		t.Fatalf("requeue: %v", err)
 	}
@@ -191,7 +192,7 @@ func TestTwoQueuedMergesKeepTheirOrderThroughToolWindow(t *testing.T) {
 	a := heldApp(t,
 		state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: pids[0], Phase: state.Waiting, Joined: joined, Seen: time.Now()},
 		state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, PID: pids[1], Phase: state.Waiting, Joined: joined.Add(time.Second), Seen: time.Now()})
-	gates := []*GateRun{placedGate(a, 7, pids[0]), placedGate(a, 8, pids[1])}
+	gates := []*gate.GateRun{placedGate(a, 7, pids[0]), placedGate(a, 8, pids[1])}
 	setHold(t, a, state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, Tool: merge.Tool, ToolMerged: true,
 		ToolPR: 1, ToolChecked: time.Now(), At: time.Now(), Reason: "devctl release"})
 	for _, g := range gates {

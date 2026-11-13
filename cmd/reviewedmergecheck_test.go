@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -261,7 +262,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			prevRun := loop.BeekeeperRun
 			t.Cleanup(func() { loop.BeekeeperRun = prevRun })
 			loop.BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
-				if g := slices.Index(args, GateCmdName); g >= 0 && slices.Contains(args, "8") {
+				if g := slices.Index(args, gate.GateCmdName); g >= 0 && slices.Contains(args, "8") {
 					clean := args[g:]
 					r.calls = append(r.calls, clean)
 					idx := slices.Index(clean, "--reviewed-head")
@@ -604,7 +605,7 @@ func TestMergeResultUnreadableGateCannotDelegateAnUnsafeMerge(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == GateCmdName {
+		if len(args) > 0 && args[0] == gate.GateCmdName {
 			return "unreadable gate result", github.SquashTooling
 		}
 		return "", 0
@@ -656,7 +657,7 @@ func TestMergeCheckHostFailureDoesNotRequestBranchRepair(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == GateCmdName {
+		if len(args) > 0 && args[0] == gate.GateCmdName {
 			doc := github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, Reason: mergeValidationUnavailable("host resources exhausted")}
 			body, _ := json.Marshal(doc)
 			return string(body), github.SquashTooling

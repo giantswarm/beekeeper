@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -334,7 +335,7 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 		return err
 	}
 	if p.State != superloop.Open || p.Draft || !strings.EqualFold(p.Head, head) || !p.Green {
-		return refused("admin merge requires %s open, non-draft and green at %s; it is %s at %s, green %v", ref, ShortSHA(head), p.State, ShortSHA(p.Head), p.Green)
+		return refused("admin merge requires %s open, non-draft and green at %s; it is %s at %s, green %v", ref, gate.ShortSHA(head), p.State, gate.ShortSHA(p.Head), p.Green)
 	}
 	if why := adminMergeBlock(p); why != "" {
 		return refused("admin merge of %s: %s", ref, why)

@@ -1,5 +1,9 @@
 package cmd
 
+import (
+	"github.com/giantswarm/beekeeper/internal/gate"
+)
+
 func (w *watcher) staleMerges() {
 	st, err := w.store.Peek()
 	if err != nil {
@@ -7,7 +11,7 @@ func (w *watcher) staleMerges() {
 	}
 	found := map[string]bool{}
 	for _, m := range st.Merges {
-		if why := StaleMerge(st, m); why != "" {
+		if why := gate.StaleMerge(st, m); why != "" {
 			key := "stale-merge " + m.Key()
 			found[key] = true
 			if !w.isActive(key) {

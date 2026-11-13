@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -432,7 +433,7 @@ func TestStopEndsARunningMergesDevctl(t *testing.T) {
 		go func() { _ = c.Wait(); close(done) }()
 		t.Cleanup(func() { _ = c.Process.Kill(); <-done })
 		children[pr] = c.Process.Pid
-		base := MergeBase(a.store.Dir(), scratchRepo, pr)
+		base := gate.MergeBase(a.store.Dir(), scratchRepo, pr)
 		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -450,14 +451,14 @@ func TestStopEndsARunningMergesDevctl(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged := time.Now().Add(-time.Minute)
-	orig := PullState
-	PullState = func(_ context.Context, _ string, pr int) (github.Pull, error) {
+	orig := gate.PullState
+	gate.PullState = func(_ context.Context, _ string, pr int) (github.Pull, error) {
 		if pr == 9 {
 			return github.Pull{State: github.Merged, MergedAt: merged}, nil
 		}
 		return github.Pull{State: github.Open}, nil
 	}
-	t.Cleanup(func() { PullState = orig })
+	t.Cleanup(func() { gate.PullState = orig })
 	if err := a.stop(context.Background(), "stop"); err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"bytes"
@@ -186,7 +186,7 @@ func (g *GateRun) stateRefused(err error) error {
 
 // ResumeMerge carries a running merge on after the re-exec of a replaced
 // binary: running names its merge-child and how far its stderr was copied
-// (gateRunningEnv). The merge keeps its place, its devctl runs on, and this
+// (GateRunningEnv). The merge keeps its place, its devctl runs on, and this
 // release follows and records it; a merge the state no longer runs is
 // followed to its end all the same, its outcome the caller's.
 func (g *GateRun) ResumeMerge(running string) error {
@@ -213,7 +213,7 @@ func (g *GateRun) ResumeMerge(running string) error {
 }
 
 // Enqueue hands the merge's wait to a run of its own outside the caller
-// (launchChild), the same gate under --queued: it keeps the merge's place, merges
+// (LaunchChild), the same gate under --queued: it keeps the merge's place, merges
 // when its turn comes and wakes the owner with the outcome (tellOwner), as
 // this gate leaves without its heard marker. It returns exit 76, for a
 // merge that waited its turn and for one under the budget floor alike. An
@@ -724,7 +724,7 @@ func (g *GateRun) spentWhy(what string, reset time.Time) string {
 const RebaseReads = 3
 
 // readRebase reads whether the pull request rebases onto its base, again
-// while GitHub has not computed it, up to rebaseReads reads.
+// while GitHub has not computed it, up to RebaseReads reads.
 func (g *GateRun) readRebase() (github.Rebase, error) {
 	for try := 1; ; try++ {
 		var r github.Rebase
@@ -765,7 +765,7 @@ const replacementPR = "Open a replacement PR (a fresh branch from the base with 
 // devctl would refuse the first only at its turn (exit 3, "This branch can't
 // be rebased"), and a base merged into the branch hides the conflict from
 // the pull request and breaks the line's linear history. GitHub not
-// answering refuses; a rebase GitHub has not computed after rebaseReads
+// answering refuses; a rebase GitHub has not computed after RebaseReads
 // reads queues, devctl judging it at its turn.
 func (g *GateRun) CheckRebase() error {
 	r, err := g.readRebase()
@@ -937,7 +937,7 @@ func (g *GateRun) releasePRFlow() string {
 // awaitReleasePR awaits the release a merge into a release-PR branch cuts:
 // none for a pull request other than the release pull request, which
 // warrants none; the release pull request's tag and its pipeline through
-// devctl release wait, within releasePRWait, out's release. It returns the
+// devctl release wait, within ReleasePRWait, out's release. It returns the
 // gate's line on it.
 func (g *GateRun) awaitReleasePR(out *merge.Outcome) string {
 	v := g.Release.Version
@@ -1363,7 +1363,7 @@ func (g *GateRun) unstart() {
 	})
 }
 
-// RunMerge runs devctl once, detached from its caller (launchChild), its
+// RunMerge runs devctl once, detached from its caller (LaunchChild), its
 // document and exit code unchanged, and follows it to its end (follow). A
 // run that does not start is recorded as one without a document.
 func (g *GateRun) RunMerge() error {
@@ -1442,7 +1442,7 @@ func (g *GateRun) MergeArgv() ([]string, error) {
 	return merge.AcceptRed(argv, g.acceptRed), nil
 }
 
-// launch starts the merge's merge-child (launchChild) and records it as the
+// launch starts the merge's merge-child (LaunchChild) and records it as the
 // merge's child; rc is the exit to record when it does not start.
 func (g *GateRun) launch(base string) (pid, rc int) {
 	argv, err := g.MergeArgv()
@@ -1508,7 +1508,7 @@ func (g *GateRun) retryServerError(base string, pid int, run ChildRun) (ChildRun
 	return run, pid
 }
 
-// retried is followChild's hold for a run after try retries: a document of
+// retried is FollowChild's hold for a run after try retries: a document of
 // a 5xx on the merge call while a retry is left, and a red one while the
 // gate may judge it (acceptRedRun).
 func (g *GateRun) retried(try int) func([]byte) bool {
@@ -1576,7 +1576,7 @@ func (g *GateRun) followRun(base string, pid int, offset int64, bin Binary) (Chi
 }
 
 // followSignals has g.sig hear SIGINT, SIGTERM and SIGHUP from now on, for
-// every followChild of the merge's devctl: a signal sent while devctl
+// every FollowChild of the merge's devctl: a signal sent while devctl
 // starts waits there for the follow; the returned func stops it.
 func (g *GateRun) followSignals() func() {
 	sig := make(chan os.Signal, 4)
@@ -1864,7 +1864,7 @@ func (g *GateRun) CheckMergeRoute() error {
 }
 
 // judgeTries is how often the gate asks GitHub about a run without its
-// document, judgeWait the pause between the tries.
+// document, JudgeWait the pause between the tries.
 const judgeTries = 3
 
 var JudgeWait = 10 * time.Second
@@ -1907,7 +1907,7 @@ type RunOutcome struct {
 	Reason     string
 	Unanswered error
 	// confirming marks a merge whose release its gate confirms after the
-	// merge (gateRun.overlaps): the verdict follows as merge.release.
+	// merge (GateRun.overlaps): the verdict follows as merge.release.
 	Confirming bool
 }
 

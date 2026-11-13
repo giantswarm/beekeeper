@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -72,7 +73,7 @@ func (a *app) stopTask(session, task string) string {
 	if err != nil || len(said) == 0 {
 		return ""
 	}
-	return GatePrefix + "TaskStop " + task + " sends its gate SIGTERM: " + strings.Join(said, "; ")
+	return gate.GatePrefix + "TaskStop " + task + " sends its gate SIGTERM: " + strings.Join(said, "; ")
 }
 
 // stopMerges ends the merges pick takes, logged as by's merge.stopped with
@@ -102,7 +103,7 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 				evs = append(evs, event(by, "merge.stopped", "%s: %s, it %s", m.Key(), how(m), what))
 				return !keep
 			case state.Running:
-				end := m.Child != 0 && proc.Alive(m.Child) && readPID(MergeBase(store.Dir(), m.Repo, m.PR)) == m.Child
+				end := m.Child != 0 && proc.Alive(m.Child) && readPID(gate.MergeBase(store.Dir(), m.Repo, m.PR)) == m.Child
 				waiting := m.Child == 0 && m.PID != 0 && proc.Alive(m.PID)
 				running = append(running, stopped{merge: m, end: end, waiting: waiting})
 				switch {
@@ -126,12 +127,12 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 	}
 	for _, s := range running {
 		if s.end || s.waiting {
-			base := MergeBase(store.Dir(), s.merge.Repo, s.merge.PR)
+			base := gate.MergeBase(store.Dir(), s.merge.Repo, s.merge.PR)
 			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 				return said, err
 			}
 			raw, _ := json.Marshal(by)
-			if err := os.WriteFile(base+StoppedExt, raw, 0o600); err != nil {
+			if err := os.WriteFile(base+gate.StoppedExt, raw, 0o600); err != nil {
 				return said, err
 			}
 		}
@@ -139,7 +140,7 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 		case s.end:
 			_ = endChild(s.merge.Child)
 		case s.waiting:
-			SignalPID(s.merge.PID, os.Interrupt)
+			gate.SignalPID(s.merge.PID, os.Interrupt)
 		}
 	}
 	for _, s := range running {
@@ -149,26 +150,26 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 }
 
 // stopOutcome says how a running merge a TaskStop reached ended: its ended
-// devctl gone (stopWait), whether the pull request merged before the stop
+// devctl gone (gate.StopWait), whether the pull request merged before the stop
 // or the stop cancelled it, as GitHub reports it.
 func stopOutcome(s stopped) string {
 	m := s.merge
 	if s.waiting {
 		gateStatus := fmt.Sprintf("its gate (pid %d) is interrupted", m.PID)
-		if !WaitGone(m.PID, StopWait) {
-			gateStatus = fmt.Sprintf("its gate (pid %d) is interrupted and still runs after %s", m.PID, StopWait)
+		if !gate.WaitGone(m.PID, gate.StopWait) {
+			gateStatus = fmt.Sprintf("its gate (pid %d) is interrupted and still runs after %s", m.PID, gate.StopWait)
 		}
 		return fmt.Sprintf("%s cancelled while it waited for lane %s's release, before its devctl started: %s, nothing merged; it leaves the lane", m.Key(), m.Lane, gateStatus)
 	}
 	devctl := fmt.Sprintf("its devctl (merge-child pid %d) is ended", m.Child)
 	if !s.end {
 		devctl = "its devctl had ended before the stop"
-	} else if !WaitGone(m.Child, StopWait) {
-		devctl = fmt.Sprintf("its devctl (merge-child pid %d) is sent SIGTERM and still runs after %s", m.Child, StopWait)
+	} else if !gate.WaitGone(m.Child, gate.StopWait) {
+		devctl = fmt.Sprintf("its devctl (merge-child pid %d) is sent SIGTERM and still runs after %s", m.Child, gate.StopWait)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), stopRead)
 	defer cancel()
-	p, err := PullState(ctx, m.Repo, m.PR)
+	p, err := gate.PullState(ctx, m.Repo, m.PR)
 	switch {
 	case err != nil:
 		return fmt.Sprintf("%s: %s; whether it merged before the stop is unread (%v): its gate records the run", m.Key(), devctl, err)

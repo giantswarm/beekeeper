@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
@@ -29,12 +30,12 @@ echo '`+mergedDoc+`'`)
 
 // busyGate is a running merge of o/r#7 with --update-branch under budget,
 // devctl's next run after a busy base pause later.
-func busyGate(t *testing.T, budget, pause time.Duration) *GateRun {
+func busyGate(t *testing.T, budget, pause time.Duration) *gate.GateRun {
 	t.Helper()
 	noSystemd(t)
-	was := BusyPauses
-	BusyPauses = []time.Duration{pause}
-	t.Cleanup(func() { BusyPauses = was })
+	was := gate.BusyPauses
+	gate.BusyPauses = []time.Duration{pause}
+	t.Cleanup(func() { gate.BusyPauses = was })
 	stubGitHub(t, github.Open, "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	g.Argv = mergeArgv(scratchRepo, "--update-branch")

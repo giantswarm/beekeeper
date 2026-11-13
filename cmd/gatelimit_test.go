@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -55,8 +56,8 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	start := time.Now()
 	err := g.Follow(base, pid, 0)
 	took, doc, said := time.Since(start), stdout(), stderr()
-	if Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, ExitGateQueued, said)
+	if Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, gate.ExitGateQueued, said)
 	}
 	if took >= 2*time.Second {
 		t.Errorf("the gate left after %s, at devctl's end rather than its limit", took)
@@ -119,11 +120,11 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		base := MergeBase(gateApp(g.Host).store.Dir(), scratchRepo, 7)
+		base := gate.MergeBase(gateApp(g.Host).store.Dir(), scratchRepo, 7)
 		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		spec := ChildSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gatePID}
+		spec := gate.ChildSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gatePID}
 		raw, _ := json.Marshal(spec)
 		if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 			t.Fatal(err)
@@ -149,7 +150,7 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	if st, _ := a.store.Read(); len(st.Merges) != 0 {
 		t.Errorf("merges left: %+v", st.Merges)
 	}
-	if d := lastEvent(t, &GateRun{Host: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, &gate.GateRun{Host: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 		t.Errorf("merged event %q", d)
 	}
 	if _, err := os.Stat(base + ".rc"); err == nil {
@@ -180,8 +181,8 @@ func TestAWaitingMergeLeavesAtItsToolLimit(t *testing.T) {
 	a := busyLaneApp(t)
 	start := time.Now()
 	err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Hour, 200*time.Millisecond, false)
-	if Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	if took := time.Since(start); took > 30*time.Second {
 		t.Errorf("the gate left after %s, not at its limit", took)
@@ -207,11 +208,11 @@ func TestLeaveAt(t *testing.T) {
 		}
 	}
 	carried := now.Add(-time.Minute)
-	t.Setenv(GateLimitEnv, carried.Format(time.RFC3339Nano))
+	t.Setenv(gate.GateLimitEnv, carried.Format(time.RFC3339Nano))
 	if got := leaveAt(now, 9*time.Minute, false); !got.Equal(carried) {
 		t.Errorf("re-executed: %s, want the call's own %s", got, carried)
 	}
-	if _, ok := os.LookupEnv(GateLimitEnv); ok {
-		t.Errorf("%s is left for devctl", GateLimitEnv)
+	if _, ok := os.LookupEnv(gate.GateLimitEnv); ok {
+		t.Errorf("%s is left for devctl", gate.GateLimitEnv)
 	}
 }

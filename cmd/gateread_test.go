@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -60,9 +61,9 @@ func TestABudgetUnreadInTransitExitsRetryableNotRefused(t *testing.T) {
 		says  []string
 	}{
 		{"every try times out in transit", errors.New(`Get "https://api.github.com/repos/giantswarm/devctl": dial tcp: lookup api.github.com: i/o timeout`),
-			ExitGateUnread, 1 + len(ReadBackoff), []string{"reading the GitHub budget failed in transit", "i/o timeout", "4 tries failed in transit", "was not judged"}},
+			gate.ExitGateUnread, 1 + len(gate.ReadBackoff), []string{"reading the GitHub budget failed in transit", "i/o timeout", "4 tries failed in transit", "was not judged"}},
 		{"gh without a token", errors.New("gh auth token: no oauth token found"),
-			ExitGateRefused, 1, []string{"the GitHub budget is unknown", "gh auth status"}},
+			gate.ExitGateRefused, 1, []string{"the GitHub budget is unknown", "gh auth status"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := heldApp(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
@@ -103,9 +104,9 @@ func TestTheHelmReleaseReadRefusesOnlyAfterItsRetries(t *testing.T) {
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	for _, answerAt := range []int{0, 3} {
 		reads := 0
-		was := ReadHelmReleases
-		t.Cleanup(func() { ReadHelmReleases = was })
-		ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+		was := gate.ReadHelmReleases
+		t.Cleanup(func() { gate.ReadHelmReleases = was })
+		gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 			if reads++; reads == answerAt {
 				return nil, nil
 			}
@@ -119,8 +120,8 @@ func TestTheHelmReleaseReadRefusesOnlyAfterItsRetries(t *testing.T) {
 			}
 			continue
 		}
-		if Code(err) != ExitGateRefused || reads != 1+len(ReadBackoff) {
-			t.Fatalf("exit %d (%v) after %d reads, want %d after %d", Code(err), err, reads, ExitGateRefused, 1+len(ReadBackoff))
+		if Code(err) != gate.ExitGateRefused || reads != 1+len(gate.ReadBackoff) {
+			t.Fatalf("exit %d (%v) after %d reads, want %d after %d", Code(err), err, reads, gate.ExitGateRefused, 1+len(gate.ReadBackoff))
 		}
 		d := lastEvent(t, g, "merge.refused")
 		for _, want := range []string{"cannot read the HelmReleases of " + gazelle, "signal: killed", "4 tries failed in transit", "once it answers"} {

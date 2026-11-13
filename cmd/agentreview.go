@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -357,9 +358,9 @@ func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
 	}
 	for _, r := range reviews {
 		reviewed := cmp.Or(r.Head, r.Commit)
-		line := fmt.Sprintf("%s: %s at head %s by %s, %s", p.Ref, r.Verdict, ShortSHA(reviewed), r.Author, r.At.UTC().Format(time.RFC3339))
+		line := fmt.Sprintf("%s: %s at head %s by %s, %s", p.Ref, r.Verdict, gate.ShortSHA(reviewed), r.Author, r.At.UTC().Format(time.RFC3339))
 		if !loop.SameCommit(reviewed, p.Head) {
-			line += fmt.Sprintf(" (head is now %s)", ShortSHA(p.Head))
+			line += fmt.Sprintf(" (head is now %s)", gate.ShortSHA(p.Head))
 		}
 		if _, err := fmt.Fprintln(a.out, line); err != nil {
 			return err
@@ -435,7 +436,7 @@ func releaseGoneReviews(st *state.State, ref, head string, live func(state.Party
 			continue
 		}
 		round.Released = now
-		events = append(events, about(event(loop.LoopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (done or off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, ShortSHA(round.Head), round.Reviewer.Name), round.Ref))
+		events = append(events, about(event(loop.LoopParty, reviewReleasedVerb, "%s round %d at %s: reviewer %q is gone (done or off the roster, no live process, no running execution) without a result; the head gets a new reviewer", round.Ref, round.Round, gate.ShortSHA(round.Head), round.Reviewer.Name), round.Ref))
 	}
 	return events
 }

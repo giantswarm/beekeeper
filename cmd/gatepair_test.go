@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -27,13 +28,13 @@ const (
 
 // pairedGate is the waiting merge o/r#7 of a queue app, paired with
 // o/s#7, and the app's state; merges are the other places.
-func pairedGate(t *testing.T, merges ...state.Merge) (*GateRun, *state.State) {
+func pairedGate(t *testing.T, merges ...state.Merge) (*gate.GateRun, *state.State) {
 	t.Helper()
 	me := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
 		Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()}
 	a := queueApp(t, append([]state.Merge{me}, merges...)...)
 	a.cfg.Merge.Cap, a.cfg.Merge.SessionCap = 5, 2
-	g := &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}
 	if err := g.DeclarePair(siblingKey); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestAPairStartsBackToBack(t *testing.T) {
 	}
 
 	hostDevctl(t, devctlArgv(9, prMerge)...)
-	s := &GateRun{Host: g.Host, Ctx: context.Background(), Repo: siblingRepo, Pr: 7, Lane: gateApp(g.Host).cfg.LaneOf(siblingRepo), Me: sib.By, Pid: sib.PID, Argv: mergeArgv(siblingRepo)}
+	s := &gate.GateRun{Host: g.Host, Ctx: context.Background(), Repo: siblingRepo, Pr: 7, Lane: gateApp(g.Host).cfg.LaneOf(siblingRepo), Me: sib.By, Pid: sib.PID, Argv: mergeArgv(siblingRepo)}
 	_ = gateApp(s.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{sib}
 		return nil, nil
@@ -154,9 +155,9 @@ func TestARefusalOfEitherRefusesBoth(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(GateFromEnv, strconv.Itoa(queued))
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, true); Code(err) != ExitGateRefused {
-		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	t.Setenv(gate.GateFromEnv, strconv.Itoa(queued))
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, true); Code(err) != gate.ExitGateRefused {
+		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	st, _ := a.store.Read()
 	if len(st.Pairs) != 1 || st.Pairs[0].RefusedKey != pairedKey || !strings.Contains(st.Pairs[0].Refused, "waited 0s for its turn") {
@@ -167,8 +168,8 @@ func TestARefusalOfEitherRefusesBoth(t *testing.T) {
 	stderr := gateStderr(t, func() {
 		err = a.gate(context.Background(), mergeArgv(siblingRepo), 0, 0, false)
 	})
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("the sibling: exit %d (%v), want %d; stderr %s", Code(err), err, ExitGateRefused, stderr)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("the sibling: exit %d (%v), want %d; stderr %s", Code(err), err, gate.ExitGateRefused, stderr)
 	}
 	if !strings.Contains(stderr, "o/s#7 lands with o/r#7, which was refused: waited 0s for its turn") {
 		t.Errorf("stderr %q", stderr)
@@ -185,8 +186,8 @@ func TestAPairedMergeQueuesWithoutTheFlag(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
 	a := busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo, merge.PairFlag, siblingKey), 0, 0, false); Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo, merge.PairFlag, siblingKey), 0, 0, false); Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	if spec := launched(); slices.Contains(spec.Argv, merge.PairFlag) || !slices.Equal(spec.Command, mergeArgv(scratchRepo)) {
 		t.Errorf("argv %q, command %q, want neither with %s", spec.Argv, spec.Command, merge.PairFlag)
@@ -211,13 +212,13 @@ func TestAPairDeclaration(t *testing.T) {
 	if err := g.DeclarePair(siblingKey); err != nil {
 		t.Errorf("the same pair again: %v", err)
 	}
-	if err := g.DeclarePair("o/t#4"); Code(err) != ExitGateRefused {
+	if err := g.DeclarePair("o/t#4"); Code(err) != gate.ExitGateRefused {
 		t.Errorf("a second sibling: %v, want refused", err)
 	}
-	if err := g.DeclarePair(pairedKey); Code(err) != ExitGateRefused {
+	if err := g.DeclarePair(pairedKey); Code(err) != gate.ExitGateRefused {
 		t.Errorf("itself: %v, want refused", err)
 	}
-	if err := g.DeclarePair("nothing"); Code(err) != ExitGateRefused {
+	if err := g.DeclarePair("nothing"); Code(err) != gate.ExitGateRefused {
 		t.Errorf("no pull request: %v, want refused", err)
 	}
 	_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {

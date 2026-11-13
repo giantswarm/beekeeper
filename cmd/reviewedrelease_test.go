@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -58,7 +59,7 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 				t.Fatalf("lost durable release metadata: %s %+v", raw, out)
 			}
 			if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
-				return recordRun(st, 0, g.Lane, g.Me, RunOutcome{Out: out, Rc: result.ExitCode}, time.Now(), ""), nil
+				return recordRun(st, 0, g.Lane, g.Me, gate.RunOutcome{Out: out, Rc: result.ExitCode}, time.Now(), ""), nil
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -91,7 +92,7 @@ func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	now := time.Now()
 	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Roll = []string{rollKey}
-		return recordRun(st, 0, lane, g.Me, RunOutcome{Out: out}, now, ""), nil
+		return recordRun(st, 0, lane, g.Me, gate.RunOutcome{Out: out}, now, ""), nil
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"context"
@@ -27,7 +27,7 @@ func (g *GateRun) CentralTurn() (string, error) {
 	if g.centralWhy != "" && time.Since(g.CentralAsked) < every {
 		return g.centralWhy, nil
 	}
-	var t laneTurn
+	var t LaneTurn
 	_, err := g.Host.CallCentralRaw(g.Ctx, g.Me, "lane_queue", g.prArgs(), &t)
 	g.CentralAsked, g.centralWhy = time.Now(), ""
 	if err := g.centralRefusal(err); err != nil {

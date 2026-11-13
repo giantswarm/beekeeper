@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -123,7 +124,7 @@ func init() {
 		RoleRun:               roleRun,
 		RunGit:                runGit,
 		ShortDur:              shortDur,
-		ShortSHA:              ShortSHA,
+		ShortSHA:              gate.ShortSHA,
 		StopMerges:            stopMerges,
 		Truncate:              truncate,
 		Unactivated:           unactivated,

@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"cmp"
@@ -34,7 +34,7 @@ var (
 	// reads the state.
 	ReleasesPoll = 5 * time.Second
 	// ReleasesWait bounds that wait: past the confirming gate's own release
-	// wait (releasePRWait), its settle and a margin, a gate that still
+	// wait (ReleasePRWait), its settle and a margin, a gate that still
 	// confirms is wedged.
 	ReleasesWait = func(settle time.Duration) time.Duration { return ReleasePRWait + settle + 5*time.Minute }
 )
@@ -74,8 +74,8 @@ func (g *GateRun) LanePending() string {
 // devctl: a stop (SIGINT, a SIGTERM aimed at the run, the gate's context
 // ending, beekeeper gate stop) ends it with nothing merged and the place out
 // of the lane; a hold that preempts the merge puts it back to waiting
-// (preemptedError); a place taken out of the lane refuses; a release still
-// unknown past releasesWait refuses rather than merging ahead of its verdict.
+// (PreemptedError); a place taken out of the lane refuses; a release still
+// unknown past ReleasesWait refuses rather than merging ahead of its verdict.
 // The reviews are read again before devctl starts.
 func (g *GateRun) AwaitReleases() error {
 	if g.Lane.Installation != "" {
@@ -135,7 +135,7 @@ func (g *GateRun) AwaitReleases() error {
 }
 
 // stillRunning says whether the waiting merge may go on: nil while its
-// place runs, preemptedError (its place back to waiting) when a hold set
+// place runs, PreemptedError (its place back to waiting) when a hold set
 // since lets another pull request through first (merge.Preempts), a
 // refusal when its place left the lane.
 func (g *GateRun) stillRunning() error {
@@ -190,7 +190,7 @@ func (g *GateRun) WarmUp(ctx context.Context) {
 
 // ConfirmRelease confirms the release of the merge devctl ended at the
 // merge (overlaps), its lane place releasing meanwhile, within
-// releasePRWait: an available release or none warranted frees the place;
+// ReleasePRWait: an available release or none warranted frees the place;
 // a failed release keeps its verdict for settling without a roll, and an
 // unconfirmed one settles the lane by the settle rule from
 // now. It records the release in out and returns the gate's line and the

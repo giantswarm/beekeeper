@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -107,7 +108,7 @@ unread core budget:
 				ctx = context.WithValue(ctx, budgetGateKey{}, true)
 			}
 			b, err := readBudget(a, ctx)
-			if err = UnsavedBudget(err); err != nil {
+			if err = gate.UnsavedBudget(err); err != nil {
 				if !a.json {
 					for _, warning := range b.Warnings {
 						_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)

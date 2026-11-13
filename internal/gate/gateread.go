@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ var ReadBackoff = []time.Duration{10 * time.Second, 30 * time.Second, 80 * time.
 
 // ReadRetrying runs read, the gate's read of what (the GitHub budget, an
 // installation's HelmReleases, a pull request), again after each
-// readBackoff pause while it fails in transit (merge.Transient), a line per
+// ReadBackoff pause while it fails in transit (merge.Transient), a line per
 // retry. Any other failure returns at once. The error after the last try
 // names the last failure and the tries.
 func (g *GateRun) ReadRetrying(what string, read func() error) error {

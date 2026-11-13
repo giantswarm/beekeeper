@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -27,7 +28,7 @@ const (
 )
 
 // capGate is the waiting merge o/r#7 of a queue app with merge.cap 5.
-func capGate(t *testing.T) (*GateRun, *state.State, state.Merge) {
+func capGate(t *testing.T) (*gate.GateRun, *state.State, state.Merge) {
 	t.Helper()
 	me := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
 		Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()}
@@ -37,7 +38,7 @@ func capGate(t *testing.T) (*GateRun, *state.State, state.Merge) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}, st, me
+	return &gate.GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Me: me.By, Pid: os.Getpid()}, st, me
 }
 
 // merge.cap counts the merges and promotes only: nine waits running leave a

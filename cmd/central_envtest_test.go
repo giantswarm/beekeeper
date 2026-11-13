@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -203,7 +204,7 @@ func TestCentralEnvtest(t *testing.T) {
 }
 
 // gate is the person's gate on backstage#pr, its central calls only.
-func (p *person) gate(pr int) *GateRun {
+func (p *person) gate(pr int) *gate.GateRun {
 	p.t.Helper()
 	a := &app{cfgPath: p.cfg, as: p.agent, out: &bytes.Buffer{}}
 	if err := a.load(); err != nil {
@@ -213,7 +214,7 @@ func (p *person) gate(pr int) *GateRun {
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	g := &GateRun{Host: a, Ctx: context.Background(), Repo: backstage, Pr: pr, Lane: a.cfg.LaneOf(backstage), Me: me}
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Repo: backstage, Pr: pr, Lane: a.cfg.LaneOf(backstage), Me: me}
 	g.Central = a.cfg.CentralLane(g.Lane)
 	return g
 }
@@ -232,7 +233,7 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	if !first.Central {
 		t.Fatal("the lane on gazelle, a central installation, is not central")
 	}
-	turn := func(g *GateRun) string {
+	turn := func(g *gate.GateRun) string {
 		t.Helper()
 		g.CentralAsked = time.Time{}
 		why, err := g.CentralTurn()
@@ -276,8 +277,8 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	if out, code := pia.run(verbHold, "list"); code != 0 || !strings.Contains(out, "central (muster context lab)") || !strings.Contains(out, "proving window") {
 		t.Errorf("hold list: exit %d: %s", code, out)
 	}
-	if _, err := pia.gate(2).CentralTurn(); Code(err) != ExitGateRefused {
-		t.Errorf("a held lane's gate: %v (exit %d), want %d", err, Code(err), ExitGateRefused)
+	if _, err := pia.gate(2).CentralTurn(); Code(err) != gate.ExitGateRefused {
+		t.Errorf("a held lane's gate: %v (exit %d), want %d", err, Code(err), gate.ExitGateRefused)
 	}
 	if out, code := ana.run(verbHold, "lift", "--lane", portalLane); code != 0 {
 		t.Fatalf("hold lift: exit %d: %s", code, out)

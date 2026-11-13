@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -409,7 +410,7 @@ func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 	// stage stands, and the worker left the roster with its review park.
 	l.Mu.Lock()
 	l.Stages = map[string]bool{act.Key + " repair": true}
-	l.StageDetail = map[string]string{act.Key + " repair": "(exit 1): merge result (main + " + ShortSHA(loopHead) + ") failed go test: --- FAIL: TestOfTheHost"}
+	l.StageDetail = map[string]string{act.Key + " repair": "(exit 1): merge result (main + " + gate.ShortSHA(loopHead) + ") failed go test: --- FAIL: TestOfTheHost"}
 	l.Mu.Unlock()
 	st, err := r.a.store.Read()
 	if err != nil {
@@ -557,7 +558,7 @@ func TestLoopClaimedMergeWithAnUnreadPullWaitsNamed(t *testing.T) {
 	if note.Class != loop.WaitUnread || !strings.Contains(note.Cause, "observation is 19m43s old") {
 		t.Fatalf("the wait is not named: %+v", note)
 	}
-	if r.called(GateCmdName) != nil || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
+	if r.called(gate.GateCmdName) != nil || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
 		t.Fatalf("an unread claim ran the gate or recorded a failure: %v\n%s", r.calls, r.out)
 	}
 }

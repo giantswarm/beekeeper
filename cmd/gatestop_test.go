@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -37,9 +38,9 @@ echo '`+mergedDoc+`'`)
 // quickRetries sends a merge again at once.
 func quickRetries(t *testing.T) {
 	t.Helper()
-	was := ServerRetries
-	ServerRetries = []time.Duration{0, 0, 0}
-	t.Cleanup(func() { ServerRetries = was })
+	was := gate.ServerRetries
+	gate.ServerRetries = []time.Duration{0, 0, 0}
+	t.Cleanup(func() { gate.ServerRetries = was })
 }
 
 // gateStdout catches the gate's stdout in a file and returns its reader.
@@ -111,8 +112,8 @@ func TestAMergeCallsServerErrorEndsAfterTheRetries(t *testing.T) {
 	if err := g.RunMerge(); Code(err) != 7 {
 		t.Fatalf("exit %d, want 7", Code(err))
 	}
-	if n := runs(t, count); n != 1+len(ServerRetries) {
-		t.Errorf("devctl ran %d times, want %d", n, 1+len(ServerRetries))
+	if n := runs(t, count); n != 1+len(gate.ServerRetries) {
+		t.Errorf("devctl ran %d times, want %d", n, 1+len(gate.ServerRetries))
 	}
 	if got := stdout(); got != badGateway {
 		t.Errorf("the caller read %q, want the last document alone", got)
@@ -133,9 +134,9 @@ func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	gateStdout(t)
 	// The release recovery reads, it is no merge retry: keep it off the count.
-	was := ReleaseWait
-	t.Cleanup(func() { ReleaseWait = was })
-	ReleaseWait = func(context.Context, string, ...string) []byte { return nil }
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(context.Context, string, ...string) []byte { return nil }
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	if err := g.RunMerge(); Code(err) != 7 {
 		t.Fatalf("exit %d, want devctl's 7", Code(err))
@@ -151,7 +152,7 @@ func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 // writeRC leaves the exit code a merge's devctl wrote for repo#pr.
 func writeRC(t *testing.T, dir, repo string, pr, rc int) {
 	t.Helper()
-	base := MergeBase(dir, repo, pr)
+	base := gate.MergeBase(dir, repo, pr)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +367,7 @@ func stopGate(t *testing.T, output string) string {
 	fakeDevctl(t, `echo $$ >`+devpid+`; exec sleep 60`)
 	stubGitHub(t, github.Open, "")
 	// The hook and the gate ask at once: a stub without stubGitHub's count.
-	PullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
+	gate.PullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
 	gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	gateApp(g.Host).cfg.StateDir = gateApp(g.Host).store.Dir()

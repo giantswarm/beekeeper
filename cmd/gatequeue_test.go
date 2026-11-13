@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -93,7 +94,7 @@ func devctlArgv(n int, sub string) [][]string {
 
 // stubSelf stands in for this binary as merge-child: it records its pid and
 // the spec it was given, which launched returns.
-func stubSelf(t *testing.T) (self string, launched func() ChildSpec) {
+func stubSelf(t *testing.T) (self string, launched func() gate.ChildSpec) {
 	t.Helper()
 	noSystemd(t)
 	dir := t.TempDir()
@@ -104,16 +105,16 @@ func stubSelf(t *testing.T) (self string, launched func() ChildSpec) {
 	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
-	was := SelfExe
-	SelfExe = func() (string, error) { return self, nil }
-	t.Cleanup(func() { SelfExe = was })
-	return self, func() ChildSpec {
+	was := gate.SelfExe
+	gate.SelfExe = func() (string, error) { return self, nil }
+	t.Cleanup(func() { gate.SelfExe = was })
+	return self, func() gate.ChildSpec {
 		t.Helper()
 		raw, err := os.ReadFile(filepath.Join(dir, "spec")) //nolint:gosec // the test's file
 		if err != nil {
 			t.Fatal(err)
 		}
-		var spec ChildSpec
+		var spec gate.ChildSpec
 		if err := json.Unmarshal(raw, &spec); err != nil {
 			t.Fatalf("no spec: %v", err)
 		}
@@ -121,7 +122,7 @@ func stubSelf(t *testing.T) (self string, launched func() ChildSpec) {
 	}
 }
 
-// Returning from launchChild must mean that the fake child's last fixture
+// Returning from gate.LaunchChild must mean that the fake child's last fixture
 // write is complete, including when a caller immediately ends its subtest.
 func TestQueuedChildAcknowledgesFixtureWrites(t *testing.T) {
 	// Delay cp past awaitPID's poll so publishing the PID before the copy
@@ -139,7 +140,7 @@ func TestQueuedChildAcknowledgesFixtureWrites(t *testing.T) {
 	t.Run("handoff", func(t *testing.T) {
 		self, launched := stubSelf(t)
 		base := filepath.Join(t.TempDir(), "child")
-		if _, err := LaunchChild(ChildSpec{Argv: []string{self}}, base); err != nil {
+		if _, err := gate.LaunchChild(gate.ChildSpec{Argv: []string{self}}, base); err != nil {
 			t.Fatal(err)
 		}
 		spec := launched()
@@ -185,8 +186,8 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	a := busyLaneApp(t)
 
 	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false)
-	if Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	spec := launched()
 	want := append(queuedGate(self), mergeArgv(scratchRepo)...)
@@ -196,7 +197,7 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	if spec.Owner.Session != "s1" || spec.Gate != os.Getpid() {
 		t.Errorf("owner %+v, gate %d", spec.Owner, spec.Gate)
 	}
-	if !slices.Contains(spec.Env, GateFromEnv+"="+strconv.Itoa(os.Getpid())) {
+	if !slices.Contains(spec.Env, gate.GateFromEnv+"="+strconv.Itoa(os.Getpid())) {
 		t.Errorf("the queued run does not know the gate it takes the place from")
 	}
 	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.queued" })
@@ -217,8 +218,8 @@ func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
 	a := busyLaneApp(t)
 
 	argv := mergeArgv(scratchRepo, "--detach", "--on-done", "beekeeper agents wake x")
-	if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	spec := launched()
 	want := append(queuedGate(self), mergeArgv(scratchRepo)...)
@@ -239,8 +240,8 @@ func TestASecondMergeOfAQueuedOneReusesItsPlace(t *testing.T) {
 			state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: queued, Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
 	}
 	a := seed()
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	st, _ := a.store.Read()
 	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 && m.PID == queued }); i < 0 {
@@ -248,10 +249,10 @@ func TestASecondMergeOfAQueuedOneReusesItsPlace(t *testing.T) {
 	}
 
 	a = seed()
-	t.Setenv(GateFromEnv, strconv.Itoa(queued))
+	t.Setenv(gate.GateFromEnv, strconv.Itoa(queued))
 	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, true)
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "waited 0s for its turn, position 2 in lane o/r behind o/r#6") {
 		t.Errorf("refusal %q", d)
@@ -280,10 +281,10 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 		state.Merge{Repo: scratchRepo, PR: 4, Lane: scratchRepo, Phase: state.Waiting, PID: alive, Seen: now},
 		state.Merge{Repo: scratchRepo, PR: 5, Lane: scratchRepo, Phase: state.Waiting, Seen: now, Checked: now.Add(-time.Second)})
 	pulls := map[int]github.Pull{1: {State: github.Closed}, 2: {State: github.Merged, MergedAt: now}, 3: {State: github.Open}, 4: {State: github.Merged, MergedAt: now}}
-	was := PullState
-	t.Cleanup(func() { PullState = was })
+	was := gate.PullState
+	t.Cleanup(func() { gate.PullState = was })
 	var asked []int
-	PullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
+	gate.PullState = func(_ context.Context, _ string, n int) (github.Pull, error) {
 		asked = append(asked, n)
 		return pulls[n], nil
 	}
@@ -325,10 +326,10 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 	}
 	var err error
 	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false) })
-	if Code(err) != ExitGateQueued {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if Code(err) != gate.ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
-	if !strings.Contains(stderr, GatePrefix+"queued, the GitHub budget 40 is under the floor 100") ||
+	if !strings.Contains(stderr, gate.GatePrefix+"queued, the GitHub budget 40 is under the floor 100") ||
 		!strings.Contains(stderr, "its outcome wakes") || strings.Contains(stderr, "refused") {
 		t.Errorf("stderr %q, want the queued line", stderr)
 	}
@@ -339,7 +340,7 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 		t.Errorf("queued event %q", d)
 	}
 	// The queued run waits under the floor instead of refusing.
-	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
 		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
 	if why, err := g.Step(); err != nil || !strings.Contains(why, "under the floor") {
 		t.Errorf("queued run: %q, %v; want a wait for the reset", why, err)
@@ -360,10 +361,10 @@ func TestAHeldMergeIsRefusedNotQueued(t *testing.T) {
 	}
 	var err error
 	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false) })
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
-	if !strings.Contains(stderr, GatePrefix+"refused, o/r is held") || !strings.Contains(stderr, "a test hold") || strings.Contains(stderr, "queued") ||
+	if !strings.Contains(stderr, gate.GatePrefix+"refused, o/r is held") || !strings.Contains(stderr, "a test hold") || strings.Contains(stderr, "queued") ||
 		!strings.Contains(stderr, "beekeeper agents park --on hold:"+scratchRepo+" ") {
 		t.Errorf("stderr %q, want the refusal with its reason and its park", stderr)
 	}

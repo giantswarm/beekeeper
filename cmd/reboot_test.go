@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -68,7 +69,7 @@ func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := MergeBase(w.store.Dir(), "o/doc", 1)
+	base := gate.MergeBase(w.store.Dir(), "o/doc", 1)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}

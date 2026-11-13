@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/codex"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -74,7 +75,7 @@ func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.
 				}); err != nil {
 					t.Fatal(err)
 				}
-				base := MergeBase(a.store.Dir(), m.Repo, m.PR)
+				base := gate.MergeBase(a.store.Dir(), m.Repo, m.PR)
 				if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 					t.Fatal(err)
 				}

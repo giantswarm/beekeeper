@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -43,7 +44,7 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	if err := g.RunMerge(); Code(err) != 1 {
 		t.Fatalf("exit %d, want devctl's 1", Code(err))
 	}
-	base := MergeBase(gateApp(g.Host).store.Dir(), g.Repo, g.Pr)
+	base := gate.MergeBase(gateApp(g.Host).store.Dir(), g.Repo, g.Pr)
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err == nil {
 		t.Fatal("a red merge left the heard marker: its merge-child wakes nobody")
 	}
@@ -68,7 +69,7 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { wakeOwner = was })
-	gateApp(g.Host).tellOwner(context.Background(), childResult{spec: ChildSpec{Argv: g.Argv, Owner: owner}, base: base, rc: 1, doc: []byte(redDoc)})
+	gateApp(g.Host).tellOwner(context.Background(), childResult{spec: gate.ChildSpec{Argv: g.Argv, Owner: owner}, base: base, rc: 1, doc: []byte(redDoc)})
 	want := "beekeeper gate → s1: devctl pr merge o/r 7 exit 1: " + redReason
 	if len(woke) != 1 || woke[0] != want {
 		t.Errorf("woke %q, want %q", woke, want)
@@ -121,7 +122,7 @@ func TestAGreenMergeIsHeardAndLeavesNoFailedAttempt(t *testing.T) {
 	if err := g.RunMerge(); err != nil {
 		t.Fatalf("exit %d: %v", Code(err), err)
 	}
-	base := MergeBase(gateApp(g.Host).store.Dir(), g.Repo, g.Pr)
+	base := gate.MergeBase(gateApp(g.Host).store.Dir(), g.Repo, g.Pr)
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err != nil {
 		t.Errorf("no heard marker: %v", err)
 	}

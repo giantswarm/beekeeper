@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -303,35 +304,35 @@ func TestCheckExcept(t *testing.T) {
 	}
 }
 
-// stubGitHub answers pullState with state and devctlVersion with version.
+// stubGitHub answers gate.PullState with state and gate.DevctlVersion with version.
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
 	release := toolRelease
 	t.Cleanup(func() { toolRelease = release })
 	toolRelease = func(context.Context, string) (string, error) { return devctlTo, nil }
-	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := PullState, DevctlVersion, devctlUpdate, JudgeWait, BaseChecks, DevctlAcceptsRed, InfraReds, toolCandidate, ReviewGuard, mergeAuthority
+	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := gate.PullState, gate.DevctlVersion, devctlUpdate, gate.JudgeWait, gate.BaseChecks, gate.DevctlAcceptsRed, gate.InfraReds, toolCandidate, gate.ReviewGuard, mergeAuthority
 	t.Cleanup(func() {
-		PullState, DevctlVersion, devctlUpdate, JudgeWait, BaseChecks, DevctlAcceptsRed, InfraReds, toolCandidate, ReviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
+		gate.PullState, gate.DevctlVersion, devctlUpdate, gate.JudgeWait, gate.BaseChecks, gate.DevctlAcceptsRed, gate.InfraReds, toolCandidate, gate.ReviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
 	})
-	ReviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	gate.ReviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
 	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	toolCandidate = func(context.Context, time.Time) (string, error) { return "", nil }
-	InfraReds = func(context.Context, []byte) []merge.Infra { return nil }
+	gate.InfraReds = func(context.Context, []byte) []merge.Infra { return nil }
 	devctlUpdate = func(context.Context) error { return nil }
-	BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
+	gate.BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
 		return github.BaseChecks{}, fmt.Errorf("no network")
 	}
-	DevctlAcceptsRed = func(context.Context) bool { return false }
-	JudgeWait = 0
-	PullState = func(context.Context, string, int) (github.Pull, error) {
+	gate.DevctlAcceptsRed = func(context.Context) bool { return false }
+	gate.JudgeWait = 0
+	gate.PullState = func(context.Context, string, int) (github.Pull, error) {
 		*asked++
 		if pullAt == "" {
 			return github.Pull{}, fmt.Errorf("no network")
 		}
 		return github.Pull{State: pullAt}, nil
 	}
-	DevctlVersion = func(context.Context) string { return version }
+	gate.DevctlVersion = func(context.Context) string { return version }
 	return asked
 }
 

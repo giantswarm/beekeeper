@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -77,7 +78,7 @@ func TestThroughputStreaksAndSuccesses(t *testing.T) {
 	outcomes = append(outcomes, failure, throughputOutcome{Operation: runMerge, Reason: "different"})
 	check(throughputHealthy)
 	obs.Unknown = true
-	check(UnknownState)
+	check(gate.UnknownState)
 }
 
 func TestThroughputEligibleWaitAndStale(t *testing.T) {
@@ -97,7 +98,7 @@ func TestThroughputEligibleWaitAndStale(t *testing.T) {
 	}
 	obs.At = now.Add(-4 * time.Minute)
 	status, _ = evaluateThroughput(now, 2*time.Hour, obs, nil, false)
-	if status != UnknownState {
+	if status != gate.UnknownState {
 		t.Fatal(status)
 	}
 }
@@ -222,7 +223,7 @@ func TestThroughputDetachedMergeDurableReasons(t *testing.T) {
 	now := r.a.timeNow()
 	for i := 0; i < 3; i++ {
 		st := &state.State{Merges: []state.Merge{{Repo: devctlRepo, PR: i + 1, By: loop.LoopParty, Phase: state.Running}}}
-		events := recordRun(st, 0, config.Lane{Name: devctlRepo}, loop.LoopParty, RunOutcome{Rc: 7, Reason: fmt.Sprintf("tool failed with incidental text %d", i)}, now, "")
+		events := recordRun(st, 0, config.Lane{Name: devctlRepo}, loop.LoopParty, gate.RunOutcome{Rc: 7, Reason: fmt.Sprintf("tool failed with incidental text %d", i)}, now, "")
 		if err := r.a.store.Record(events...); err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +291,7 @@ func TestThroughputStallEscalatesAndRecoversAfterUnknown(t *testing.T) {
 		t.Fatal("duplicate", line)
 	}
 	now = now.Add(4 * time.Minute)
-	if line := check(); !strings.Contains(line, UnknownState) {
+	if line := check(); !strings.Contains(line, gate.UnknownState) {
 		t.Fatal(line)
 	}
 	now = now.Add(time.Minute)

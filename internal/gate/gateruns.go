@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 
 const (
 	// RunInfoExt is the extension of what gate runs shows of a detached run
-	// (runInfo), which its merge-child writes before it starts the command.
+	// (RunInfo), which its merge-child writes before it starts the command.
 	RunInfoExt = ".run"
 	// StoppedExt marks a run gate stop stopped, with who did.
 	StoppedExt = ".stopped"

@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-// verdictUnconfirmed is a merge whose release nobody could confirm.
+// VerdictUnconfirmed is a merge whose release nobody could confirm.
 const (
 	VerdictUnconfirmed = "unconfirmed"
 	VerdictAvailable   = "available"

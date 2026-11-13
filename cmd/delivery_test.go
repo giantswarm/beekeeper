@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -31,12 +32,12 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 		out                 merge.Outcome
 		hand, step, verdict string
 	}{
-		{"available", merge.Outcome{Merged: true, Release: "v1.2.3-rc.1"}, "", state.DeliveryDone, VerdictAvailable},
+		{"available", merge.Outcome{Merged: true, Release: "v1.2.3-rc.1"}, "", state.DeliveryDone, gate.VerdictAvailable},
 		{"no-release verdict", merge.Outcome{Merged: true, NoRelease: true}, "", state.DeliveryDone, state.DeliveryNoRelease},
 		{"hand cut", merge.Outcome{Merged: true}, "maintenance", state.DeliveryDone, state.DeliveryNoRelease},
 		{"release failure", merge.Outcome{Merged: true, ReleaseFailed: true, Release: "v9.0.1"}, "", state.DeliveryReleasing, state.DeliveryReleaseFailed},
-		{"unconfirmed", merge.Outcome{Merged: true, Unconfirmed: true}, "", state.DeliveryReleasing, VerdictUnconfirmed},
-		{"missing verdict", merge.Outcome{Merged: true}, "", state.DeliveryReleasing, VerdictUnconfirmed},
+		{"unconfirmed", merge.Outcome{Merged: true, Unconfirmed: true}, "", state.DeliveryReleasing, gate.VerdictUnconfirmed},
+		{"missing verdict", merge.Outcome{Merged: true}, "", state.DeliveryReleasing, gate.VerdictUnconfirmed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := supervisorApp(t)
@@ -47,7 +48,7 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 				st.Merges = []state.Merge{{Repo: deliveryFixtureRepo, PR: 20, HandCut: tc.hand}}
 			})
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				return recordRun(st, 0, config.Lane{}, loop.LoopParty, RunOutcome{Out: tc.out}, now, ""), nil
+				return recordRun(st, 0, config.Lane{}, loop.LoopParty, gate.RunOutcome{Out: tc.out}, now, ""), nil
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -127,7 +128,7 @@ func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 	}
 	in.Now = now.Add(loop.DeliveryReleaseEvery)
 	loop.ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) {
-		return VerdictAvailable, deliveryAvailableTag, nil
+		return gate.VerdictAvailable, deliveryAvailableTag, nil
 	}
 	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
 		t.Fatal(err)
@@ -347,7 +348,7 @@ func TestDeliveryRESTTagMustContainActualMerge(t *testing.T) {
 	}
 	status = "ahead"
 	verdict, tag, err := loop.ReadDeliveryRelease(t.Context(), p)
-	if err != nil || verdict != VerdictAvailable || tag != "v3.1.0-rc.2" {
+	if err != nil || verdict != gate.VerdictAvailable || tag != "v3.1.0-rc.2" {
 		t.Fatalf("tag contains merge: %s %s %v", verdict, tag, err)
 	}
 	if len(calls) != 6 {
@@ -422,12 +423,12 @@ func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 		st.Merges = []state.Merge{{Repo: deliveryFixtureRepo, PR: 20, Phase: state.Settling, Releasing: true}}
 		st.Deliveries = []state.Delivery{{Ref: epicTen, Pulls: []string{blockerRef}, Step: state.DeliveryReleasing, Started: now, Since: now}}
 	})
-	old := ReleaseWait
-	t.Cleanup(func() { ReleaseWait = old })
-	ReleaseWait = func(context.Context, string, ...string) []byte {
+	old := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = old })
+	gate.ReleaseWait = func(context.Context, string, ...string) []byte {
 		return []byte(`{"verdict":"available","tag":"v2.3.4-rc.1"}`)
 	}
-	g := &GateRun{Ctx: t.Context(), Host: a, Repo: deliveryFixtureRepo, Pr: 20, Lane: config.Lane{Name: "delivery-lane"}}
+	g := &gate.GateRun{Ctx: t.Context(), Host: a, Repo: deliveryFixtureRepo, Pr: 20, Lane: config.Lane{Name: "delivery-lane"}}
 	out := merge.Outcome{Merged: true}
 	_, code := g.ConfirmRelease(&out, 0)
 	if code != 0 {
@@ -448,7 +449,7 @@ func TestDeliveryFailedTagDoesNotBecomeReleaseProof(t *testing.T) {
 	old := loop.ReadDeliveryRelease
 	t.Cleanup(func() { loop.ReadDeliveryRelease = old })
 	tag := deliveryFailedTag
-	loop.ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return VerdictAvailable, tag, nil }
+	loop.ReadDeliveryRelease = func(context.Context, superloop.Pull) (string, string, error) { return gate.VerdictAvailable, tag, nil }
 	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{idleRef: {Ref: idleRef, State: superloop.Merged}}}
 	if err := l.ObserveDeliveries(t.Context(), in, nil); err != nil {
@@ -594,7 +595,7 @@ func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	loop.ReadDeliveryRelease = func(_ context.Context, p superloop.Pull) (string, string, error) {
 		probed = append(probed, p.Ref)
 		if p.Ref == tail {
-			return VerdictAvailable, deliveryAvailableTag, nil
+			return gate.VerdictAvailable, deliveryAvailableTag, nil
 		}
 		return "", "", errors.New("release observation unavailable")
 	}

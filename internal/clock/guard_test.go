@@ -27,7 +27,7 @@ var migrated = []string{
 	// The GitHub budget.
 	"cmd/budget*.go", "cmd/backgroundrest.go", "cmd/githubcalls.go", "internal/github",
 	// The gate.
-	"cmd/gate*.go", "cmd/ungated.go", "internal/merge",
+	"cmd/gate*.go", "cmd/ungated.go", "internal/merge", "internal/gate/gate*.go",
 	// Self-update and probation.
 	"cmd/selfupdate*.go", "cmd/recovery.go", "internal/update",
 	// The state every flow records in.

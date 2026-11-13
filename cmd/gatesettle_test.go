@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -21,7 +22,7 @@ import (
 // document, when it printed one, and its exit code.
 func endDevctl(t *testing.T, a *app, repo string, pr int, doc, rc string) {
 	t.Helper()
-	base := MergeBase(a.store.Dir(), repo, pr)
+	base := gate.MergeBase(a.store.Dir(), repo, pr)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +78,9 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 		{Key: "flux-giantswarm/giantswarm-repo-manager", Chart: "giantswarm-repo-manager", Version: "0.33.4", Ready: true, Range: ">=0.17.0 <1.0.0"},
 		{Key: "flux-giantswarm/giantswarm-platform-manager", Chart: "giantswarm-platform-manager", Version: "0.70.0", Ready: true, Range: ">=0.17.0 <1.0.0"},
 	}
-	read := ReadHelmReleases
-	t.Cleanup(func() { ReadHelmReleases = read })
-	ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
+	read := gate.ReadHelmReleases
+	t.Cleanup(func() { gate.ReadHelmReleases = read })
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
 
 	now := time.Now()
 	me := state.Party{Session: "s1", Name: ownerName}
@@ -100,12 +101,12 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	gateOf := func(repo string) *GateRun {
+	gateOf := func(repo string) *gate.GateRun {
 		st, _ := a.store.Read()
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repo })
 		argv := promoteArgv()
 		argv[len(argv)-1] = repo
-		return &GateRun{Host: a, Ctx: context.Background(), Argv: argv, Repo: repo,
+		return &gate.GateRun{Host: a, Ctx: context.Background(), Argv: argv, Repo: repo,
 			Lane: a.cfg.LaneOf(repo), Me: st.Merges[i].By, Pid: os.Getpid(), Queued: true, Placed: true, From: st.Merges[i].PID}
 	}
 
@@ -120,7 +121,7 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 			t.Fatalf("while the merge ahead runs: %q, %v", why, err)
 		}
 	}
-	if i := indexOf(verbsOf(t, a), VerbPromoting); i >= 0 {
+	if i := indexOf(verbsOf(t, a), gate.VerbPromoting); i >= 0 {
 		t.Fatalf("promoted while the merge ahead runs: %v", verbsOf(t, a))
 	}
 
@@ -130,7 +131,7 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 		t.Fatalf("after the merge ahead settled: %q, %v", why, err)
 	}
 	lines := verbsOf(t, a)
-	merged, promoting := indexOf(lines, verbMerged+" "+backstage+"#2885 exit 0, release v2.95.1-rc.1"), indexOf(lines, VerbPromoting+" "+repoMgr)
+	merged, promoting := indexOf(lines, verbMerged+" "+backstage+"#2885 exit 0, release v2.95.1-rc.1"), indexOf(lines, gate.VerbPromoting+" "+repoMgr)
 	if merged < 0 || promoting < merged {
 		t.Fatalf("the promotion did not start after the merge ahead was recorded merged (%d, %d):\n%s", merged, promoting, strings.Join(lines, "\n"))
 	}
@@ -220,7 +221,7 @@ func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	settle := 5 * time.Minute
 	a.cfg.Merge.Settle = config.Duration{Duration: settle}
 	mergedAt := time.Now().Add(-3 * time.Minute).UTC().Truncate(time.Second)
-	PullState = func(context.Context, string, int) (github.Pull, error) {
+	gate.PullState = func(context.Context, string, int) (github.Pull, error) {
 		return github.Pull{State: github.Merged, MergedAt: mergedAt}, nil
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {

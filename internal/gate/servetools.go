@@ -1,7 +1,7 @@
-package cmd
+package gate
 
-// laneTurn is where a merge stands in its lane.
-type laneTurn struct {
+// LaneTurn is where a merge stands in its lane.
+type LaneTurn struct {
 	Lane     string   `json:"lane"`
 	Merge    string   `json:"merge"`
 	Phase    string   `json:"phase"`

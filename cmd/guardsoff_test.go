@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -153,7 +154,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx := context.Background()
-	if got := strings.TrimSpace(string(ReleaseWait(ctx, repo, ver))); got != wantSkip {
+	if got := strings.TrimSpace(string(gate.ReleaseWait(ctx, repo, ver))); got != wantSkip {
 		t.Fatalf("releaseWait with guards=false got %q, want %s", got, wantSkip)
 	}
 	if raw, err := waitReviewedRelease(ctx, repo, 1); err != nil || strings.TrimSpace(string(raw)) != wantSkip {
@@ -186,7 +187,7 @@ func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	if env := devctlCommandEnv(a.cfgPath); slices.Contains(env, optOut) {
 		t.Fatalf("devctlCommandEnv with guards=true kept %s: %v", optOut, env)
 	}
-	if got := strings.TrimSpace(string(ReleaseWait(ctx, repo, ver))); got != wantEnf {
+	if got := strings.TrimSpace(string(gate.ReleaseWait(ctx, repo, ver))); got != wantEnf {
 		t.Fatalf("releaseWait with guards=true got %q, want %s", got, wantEnf)
 	}
 	if tok, err := devctlToken(ctx, fakeDevctl); err != nil || tok != wantEnf {

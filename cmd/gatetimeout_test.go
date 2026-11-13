@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -21,7 +22,7 @@ import (
 func TestACallersTimeoutCutsTheCallNotTheWait(t *testing.T) {
 	// coreutils' timeout runs the command as its child; busybox's execs it
 	// and times it from a child of its own, no ancestor the gate can see.
-	timeout, err := exec.LookPath(TimeoutComm)
+	timeout, err := exec.LookPath(gate.TimeoutComm)
 	if err != nil {
 		t.Skip("no timeout")
 	}
@@ -75,7 +76,7 @@ echo '` + doc + `'
 	self := filepath.Join(dir, "beekeeper")
 	copyTestBinary(t, self)
 	wakes := filepath.Join(dir, "wakes")
-	call := exec.Command(timeout, "2", self, GateCmdName, "--", "devctl", "release", "wait", "o/r", "v1.2.3") //nolint:gosec // this test binary's copy
+	call := exec.Command(timeout, "2", self, gate.GateCmdName, "--", "devctl", "release", "wait", "o/r", "v1.2.3") //nolint:gosec // this test binary's copy
 	call.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", testWakesEnv+"="+wakes, "PATH="+bin,
 		"BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
 		"CLAUDE_CODE_SESSION_ID=s1", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME="+ownerName)
@@ -127,7 +128,7 @@ echo '` + doc + `'
 func TestUnderTimeout(t *testing.T) {
 	// table is the gate, pid 1, below its ancestors' comms, nearest first.
 	table := func(comms ...string) *proc.Table {
-		tb := &proc.Table{ByPID: map[int]*proc.Process{1: {PID: 1, PPID: 2, Comm: GateCmdName}}}
+		tb := &proc.Table{ByPID: map[int]*proc.Process{1: {PID: 1, PPID: 2, Comm: gate.GateCmdName}}}
 		for i, c := range comms {
 			tb.ByPID[i+2] = &proc.Process{PID: i + 2, PPID: i + 3, Comm: c}
 		}
@@ -137,12 +138,12 @@ func TestUnderTimeout(t *testing.T) {
 		comms []string
 		want  bool
 	}{
-		{[]string{TimeoutComm, "sh", claudeComm}, true},
-		{[]string{"sh", TimeoutComm, claudeComm}, true},
-		{[]string{"sh", claudeComm, TimeoutComm}, false},
+		{[]string{gate.TimeoutComm, "sh", claudeComm}, true},
+		{[]string{"sh", gate.TimeoutComm, claudeComm}, true},
+		{[]string{"sh", claudeComm, gate.TimeoutComm}, false},
 		{[]string{"sh"}, false},
 	} {
-		if got := UnderTimeout(table(c.comms...), 1); got != c.want {
+		if got := gate.UnderTimeout(table(c.comms...), 1); got != c.want {
 			t.Errorf("%v: %t, want %t", c.comms, got, c.want)
 		}
 	}

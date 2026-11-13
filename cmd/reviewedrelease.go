@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 )
@@ -38,11 +39,11 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	if !wait || doc.MergeCommitSha == "" {
 		return result
 	}
-	ctx, cancel := context.WithTimeout(ctx, ReleasePRWait)
+	ctx, cancel := context.WithTimeout(ctx, gate.ReleasePRWait)
 	defer cancel()
 	raw, err := waitReviewedRelease(ctx, doc.Repo, doc.Number)
 	out, reason, ok := merge.ParseReleaseWait(raw)
-	result.Release = &reviewedRelease{Verdict: VerdictUnconfirmed}
+	result.Release = &reviewedRelease{Verdict: gate.VerdictUnconfirmed}
 	switch {
 	case !ok:
 		result.ExitCode = 9
@@ -60,7 +61,7 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	case out.Unconfirmed || out.Release == "":
 		result.ExitCode = 9
 	default:
-		result.Release.Verdict = VerdictAvailable
+		result.Release.Verdict = gate.VerdictAvailable
 		result.Release.Tag = out.Release
 		result.ExitCode = 0
 	}

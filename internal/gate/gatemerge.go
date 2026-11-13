@@ -1,4 +1,4 @@
-package cmd
+package gate
 
 import (
 	"bytes"
@@ -118,7 +118,7 @@ type Binary interface {
 	Exec(env ...string) error
 }
 
-// MergeFiles is the base of the merge's files (mergeBase), its directory
+// MergeFiles is the base of the merge's files (MergeBase), its directory
 // created.
 func (g *GateRun) MergeFiles() (string, error) {
 	base := MergeBase(g.Host.Store().Dir(), g.Repo, g.Pr)
@@ -151,8 +151,8 @@ func RemoveMergeFiles(base string) {
 	}
 }
 
-// keptOutputs is the directory under the state directory that keeps each
-// finished merge run's output (keptOutput), keptFor how long.
+// KeptOutputs is the directory under the state directory that keeps each
+// finished merge run's output (keptOutput), KeptFor how long.
 const (
 	KeptOutputs = "merge-output"
 	KeptFor     = 7 * 24 * time.Hour
@@ -160,7 +160,7 @@ const (
 
 // KeepOutput keeps a finished run's stderr and document for its owner in
 // <state>/merge-output/<repo>-<n>-<UTC time>.log, as its files under merges/
-// are removed with the run, and prunes the kept outputs older than keptFor.
+// are removed with the run, and prunes the kept outputs older than KeptFor.
 // It returns the kept file, "" when there was nothing to keep.
 func KeepOutput(base string, doc []byte, now time.Time) string {
 	dir := filepath.Join(filepath.Dir(filepath.Dir(base)), KeptOutputs)
@@ -286,8 +286,8 @@ func MergeKillReason(log []byte) string {
 	return "SIGKILL (exit 137): external signal or session end possible; no cap kill confirmed (OOM evidence may be unavailable)"
 }
 
-// followPoll is how often the gate copies devctl's new stderr lines and
-// looks for its exit code; childStart how long the merge's child may take to
+// FollowPoll is how often the gate copies devctl's new stderr lines and
+// looks for its exit code; ChildStart how long the merge's child may take to
 // start.
 const (
 	FollowPoll = 200 * time.Millisecond
@@ -302,7 +302,7 @@ const (
 // beekeeper's own (a queued merge, a wait that follows another's poller),
 // HandCut a merge's base branch that no Auto-release run tags. WithCaller
 // says the run ends with its gate (a wait): merge-child stops the command
-// once the gate is gone without leaving the run to run on (leftExt).
+// once the gate is gone without leaving the run to run on (LeftExt).
 type ChildSpec struct {
 	Argv    []string    `json:"argv"`
 	Command []string    `json:"command,omitempty"`
@@ -334,12 +334,12 @@ type ChildRun struct {
 	Unheard  bool
 	Replaced bool
 	Offset   int64
-	// held says the document was kept off the gate's stdout (followChild's
+	// held says the document was kept off the gate's stdout (FollowChild's
 	// hold): a run the gate may send again, whose caller reads one document.
 	held bool
 	// left says the follow reached its leave time while the run went on;
 	// cut that it left as its caller's timeout cut the connection
-	// (timedCaller).
+	// (TimedCaller).
 	Left, cut bool
 	// ended says the follow returned as its caller went away, for a run that
 	// ends with it (withCaller): its merge-child stops the command.
@@ -375,7 +375,7 @@ func (r ChildRun) emit() ChildRun {
 // command's process tree) does not stop devctl (outliveCaller keeps it from
 // ending the gate), unless withCaller: then the follow returns at once with
 // ended set, and the run's merge-child stops devctl as the gate is gone. A SIGTERM from a timeout the gate runs under
-// (timedCaller) cuts the connection, not the run: the follow returns at once
+// (TimedCaller) cuts the connection, not the run: the follow returns at once
 // with left and cut set, the run's files in place for its merge-child, which
 // hands the outcome to its owner. bin, when given, is the gate's binary: replaced while
 // the run goes on, the follow returns at once with replaced set and the
@@ -385,7 +385,7 @@ func (r ChildRun) emit() ChildRun {
 // when set, is when the follow returns with left set while the run goes on
 // (the gate's tool limit), its files in place for its merge-child and the
 // watch. sig, when given, hears the signals from before devctl started
-// (gateRun.followSignals); else the follow hears them from its start on.
+// (GateRun.followSignals); else the follow hears them from its start on.
 func FollowChild(base string, pid int, offset int64, bin Binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) (r ChildRun) {
 	r.Rc = guard.ExitNotFound
 	if sig == nil {
@@ -430,7 +430,7 @@ func FollowChild(base string, pid int, offset int64, bin Binary, hold func(doc [
 		_, err := os.Stat(base + ".rc")
 		gone := err != nil && !proc.Alive(pid)
 		if gone {
-			// The rc file is written before the runner exits: finishedRun reads it.
+			// The rc file is written before the runner exits: FinishedRun reads it.
 			if _, err := os.Stat(base + ".rc"); err != nil {
 				GateLine("devctl's runner (pid %d) is gone without devctl's exit code", pid)
 			}
@@ -582,7 +582,7 @@ func startChild(base string) error {
 	return nil
 }
 
-// awaitPID waits up to childStart for merge-child to record its pid.
+// awaitPID waits up to ChildStart for merge-child to record its pid.
 func awaitPID(base string) (int, error) {
 	deadline := clk.Now().Add(ChildStart)
 	for clk.Now().Before(deadline) {

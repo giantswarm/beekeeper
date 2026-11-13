@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -20,12 +21,12 @@ const rebaseClean = "clean"
 
 const rebaseOtherRepo = "other/repo"
 
-// stubMergeCommits answers pullMergeCommits with merges and err.
+// stubMergeCommits answers gate.PullMergeCommits with merges and err.
 func stubMergeCommits(t *testing.T, merges []string, err error) {
 	t.Helper()
-	was := PullMergeCommits
-	t.Cleanup(func() { PullMergeCommits = was })
-	PullMergeCommits = func(_ context.Context, repo string, n int) ([]string, error) {
+	was := gate.PullMergeCommits
+	t.Cleanup(func() { gate.PullMergeCommits = was })
+	gate.PullMergeCommits = func(_ context.Context, repo string, n int) ([]string, error) {
 		if repo != scratchRepo || n != 7 {
 			t.Errorf("read the commits of %s#%d", repo, n)
 		}
@@ -33,16 +34,16 @@ func stubMergeCommits(t *testing.T, merges []string, err error) {
 	}
 }
 
-// stubPullRebase answers pullRebase with r and err and counts the reads, and
-// pullMergeCommits with none.
+// stubPullRebase answers gate.PullRebase with r and err and counts the reads, and
+// gate.PullMergeCommits with none.
 func stubPullRebase(t *testing.T, r github.Rebase, err error) *int {
 	t.Helper()
 	stubMergeCommits(t, nil, nil)
 	asked := new(int)
-	was, retry := PullRebase, RebaseRetry
-	t.Cleanup(func() { PullRebase, RebaseRetry = was, retry })
-	RebaseRetry = 0
-	PullRebase = func(context.Context, string, int) (github.Rebase, error) {
+	was, retry := gate.PullRebase, gate.RebaseRetry
+	t.Cleanup(func() { gate.PullRebase, gate.RebaseRetry = was, retry })
+	gate.RebaseRetry = 0
+	gate.PullRebase = func(context.Context, string, int) (github.Rebase, error) {
 		*asked++
 		return r, err
 	}
@@ -72,8 +73,8 @@ func TestANonRebaseableMergeIsRefusedBeforeItQueues(t *testing.T) {
 			asked := stubPullRebase(t, r, nil)
 			a := busyLaneApp(t)
 			err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false)
-			if Code(err) != ExitGateRefused {
-				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+			if Code(err) != gate.ExitGateRefused {
+				t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 			}
 			if *asked != 1 {
 				t.Errorf("GitHub was read %d times, want once", *asked)
@@ -109,8 +110,8 @@ func TestARebaseMergeCarryingAMergeCommitIsRefusedBeforeItQueues(t *testing.T) {
 			stubMergeCommits(t, c.merges, c.err)
 			a := busyLaneApp(t)
 			err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false)
-			if Code(err) != ExitGateRefused {
-				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+			if Code(err) != gate.ExitGateRefused {
+				t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 			}
 			if placeOf(t, a) >= 0 {
 				t.Errorf("the refused merge took a lane place")
@@ -130,7 +131,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 		reads int
 	}{
 		"rebaseable":   {github.Rebase{Known: true, Rebaseable: true, State: "blocked"}, 1},
-		"not computed": {github.Rebase{State: "unknown"}, RebaseReads},
+		"not computed": {github.Rebase{State: "unknown"}, gate.RebaseReads},
 	} {
 		t.Run(name, func(t *testing.T) {
 			stubGitHub(t, github.Open, "")
@@ -138,8 +139,8 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 			asked := stubPullRebase(t, c.r, nil)
 			a := busyLaneApp(t)
 			argv := mergeArgv(scratchRepo, "--rebase")
-			if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != ExitGateQueued {
-				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+			if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != gate.ExitGateQueued {
+				t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 			}
 			spec := launched()
 			if !slices.Equal(spec.Argv, append(queuedGate(self), argv...)) || !slices.Equal(spec.Command, argv) {
@@ -147,7 +148,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 			}
 			// The queued gate receives everything after -- unchanged. At its
 			// turn it must still launch devctl with the rebase merge method.
-			g := &GateRun{Host: a, Argv: spec.Command, Repo: scratchRepo, Pr: 7,
+			g := &gate.GateRun{Host: a, Argv: spec.Command, Repo: scratchRepo, Pr: 7,
 				Release: &github.BaseRelease{Base: mainBranch, Auto: true}}
 			run, err := g.MergeArgv()
 			want := merge.NoReleaseWait(append(slices.Clone(argv), "--progress")) // the lane confirms the release itself
@@ -172,23 +173,23 @@ func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 	stubSelf(t)
 	asked := stubPullRebase(t, github.Rebase{}, errors.New("connection reset"))
 	a := busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false); Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false); Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "connection reset") || placeOf(t, a) >= 0 {
 		t.Errorf("refusal %q, place %d", d, placeOf(t, a))
 	}
 
 	a = busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateQueued {
-		t.Fatalf("the squash merge: exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != gate.ExitGateQueued {
+		t.Fatalf("the squash merge: exit %d (%v), want %d", Code(err), err, gate.ExitGateQueued)
 	}
 	a = busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, true); Code(err) != ExitGateRefused ||
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, true); Code(err) != gate.ExitGateRefused ||
 		strings.Contains(lastEventOf(t, a, "merge.refused"), mergeMethodRebase) {
 		t.Fatalf("the queued run: exit %d (%v), want the wait's own refusal", Code(err), err)
 	}
-	if *asked != 1+len(ReadBackoff) {
+	if *asked != 1+len(gate.ReadBackoff) {
 		t.Errorf("GitHub was read %d times, want once with its retries", *asked)
 	}
 }
@@ -197,7 +198,7 @@ func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 // reads in order (the last one repeated), the rebase update with updateErr,
 // and devctl merges, its arguments written to the returned file. It returns
 // the gate run, the reads and updates asked, and devctl's arguments file.
-func rebaseTurn(t *testing.T, updateErr error, reads ...github.Rebase) (g *GateRun, asked, updates *int, args string) {
+func rebaseTurn(t *testing.T, updateErr error, reads ...github.Rebase) (g *gate.GateRun, asked, updates *int, args string) {
 	t.Helper()
 	noSystemd(t)
 	args = t.TempDir() + "/args"
@@ -206,10 +207,10 @@ func rebaseTurn(t *testing.T, updateErr error, reads ...github.Rebase) (g *GateR
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	stubMergeCommits(t, nil, nil)
 	asked, updates = new(int), new(int)
-	was, update, retry := PullRebase, updateRebase, RebaseRetry
-	t.Cleanup(func() { PullRebase, updateRebase, RebaseRetry = was, update, retry })
-	RebaseRetry = 0
-	PullRebase = func(context.Context, string, int) (github.Rebase, error) {
+	was, update, retry := gate.PullRebase, updateRebase, gate.RebaseRetry
+	t.Cleanup(func() { gate.PullRebase, updateRebase, gate.RebaseRetry = was, update, retry })
+	gate.RebaseRetry = 0
+	gate.PullRebase = func(context.Context, string, int) (github.Rebase, error) {
 		r := reads[min(*asked, len(reads)-1)]
 		*asked++
 		return r, nil
@@ -265,8 +266,8 @@ func TestARebaseMergeThatCannotCatchUpAtItsTurnIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			g, _, updates, args := rebaseTurn(t, c.updateErr, c.r)
-			if err := startMerge(t, g); Code(err) != ExitGateRefused {
-				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+			if err := startMerge(t, g); Code(err) != gate.ExitGateRefused {
+				t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 			}
 			if *updates != c.updates {
 				t.Errorf("%d rebase updates, want %d", *updates, c.updates)
@@ -290,8 +291,8 @@ func TestARebaseMergeThatCannotCatchUpAtItsTurnIsRefused(t *testing.T) {
 func TestARebaseMergeCarryingAMergeCommitAtItsTurnIsRefused(t *testing.T) {
 	g, _, updates, args := rebaseTurn(t, nil, github.Rebase{Known: true, Rebaseable: true, State: github.BehindState})
 	stubMergeCommits(t, []string{"cccccccccccc"}, nil)
-	if err := startMerge(t, g); Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if err := startMerge(t, g); Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	if *updates != 0 {
 		t.Errorf("%d rebase updates, want none", *updates)
@@ -346,7 +347,7 @@ func TestGateRepositoryMergeMethod(t *testing.T) {
 			asked := stubPullRebase(t, github.Rebase{Known: true, Rebaseable: true, State: rebaseClean}, nil)
 			a := busyLaneApp(t)
 			a.cfg.Merge.Methods = map[string]string{scratchRepo: method, rebaseOtherRepo: mergeMethodRebase}
-			if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateQueued {
+			if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != gate.ExitGateQueued {
 				t.Fatalf("exit %d (%v), want queued", Code(err), err)
 			}
 			want := method == mergeMethodRebase
@@ -354,7 +355,7 @@ func TestGateRepositoryMergeMethod(t *testing.T) {
 			if got := slices.Contains(spec.Argv, "--rebase"); got != want {
 				t.Errorf("queued child %v: rebase = %v, want %v", spec.Argv, got, want)
 			}
-			g := &GateRun{Host: a, Repo: scratchRepo, Pr: 7, Argv: spec.Command}
+			g := &gate.GateRun{Host: a, Repo: scratchRepo, Pr: 7, Argv: spec.Command}
 			child, err := g.MergeArgv()
 			if err != nil {
 				t.Fatal(err)
@@ -378,7 +379,7 @@ func TestGateConfiguredRebaseRefusesConflictsWithoutWorkerFlag(t *testing.T) {
 	stubPullRebase(t, github.Rebase{Known: true, State: github.DirtyState}, nil)
 	a := busyLaneApp(t)
 	a.cfg.Merge.Methods = map[string]string{scratchRepo: mergeMethodRebase}
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateRefused {
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != gate.ExitGateRefused {
 		t.Fatalf("exit %d (%v), want refused", Code(err), err)
 	}
 	if placeOf(t, a) >= 0 {

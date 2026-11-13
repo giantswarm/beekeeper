@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -97,9 +98,9 @@ func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 			a, use, pull := mergeReviewRig(t)
 			completeMergeReview(t, a, use, &pull.Reviews[0])
 			a.cfg.Lanes = []config.Lane{{Name: "selected", Repositories: []string{use.Repository}, Installation: installationA}}
-			old := ReadHelmReleases
-			t.Cleanup(func() { ReadHelmReleases = old })
-			ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
+			old := gate.ReadHelmReleases
+			t.Cleanup(func() { gate.ReadHelmReleases = old })
+			gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				if test.hold.ExceptSession != "" {
 					test.hold.ExceptSession = st.Starts[0].Name
@@ -199,9 +200,9 @@ func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 	}
 	st.Holds = []state.Hold{{Target: merge.LanePrefix + lane.Name, Except: fmt.Sprintf("%s#%d", use.Repository, use.PR)}}
 	st.Merges = []state.Merge{{Repo: "other/repository", PR: 8, Lane: lane.Name, Phase: state.Settling, Finished: time.Now()}}
-	old := ReadHelmReleases
-	t.Cleanup(func() { ReadHelmReleases = old })
-	ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	old := gate.ReadHelmReleases
+	t.Cleanup(func() { gate.ReadHelmReleases = old })
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		t.Fatal("fix window read blocked installation readiness")
 		return nil, nil
 	}
@@ -209,7 +210,7 @@ func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 		t.Fatal("explicit repair window denied", err)
 	}
 	st.Holds = nil
-	ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		return nil, fmt.Errorf("installation unavailable")
 	}
 	if err := a.executionMergeLive(context.Background(), st, use); err == nil {

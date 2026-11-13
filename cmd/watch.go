@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -616,7 +617,7 @@ func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.H
 	if w.readHRs != nil {
 		return w.readHRs(ctx, lane)
 	}
-	return ReadHelmReleases(ctx, lane)
+	return gate.ReadHelmReleases(ctx, lane)
 }
 
 // watchClock is a watch's time: its loops wait on its timers.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -21,9 +22,9 @@ func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
-	was := ReleaseWait
-	t.Cleanup(func() { ReleaseWait = was })
-	ReleaseWait = func(ctx context.Context, repo string, target ...string) []byte {
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 		if repo != scratchRepo || strings.Join(target, " ") != "--pr 7" {
 			t.Fatalf("lookup: %s %v", repo, target)
 		}

@@ -554,6 +554,13 @@ timer from the running watches.
   the command is named in `command.go` (`Cmd`, six text helpers) and `vocabulary.go` (three of the
   command's constants, kept equal by `cmd`'s `TestCapacityVocabulary`). A seam entry goes when its
   target moves to a package capacity can import.
+- `internal/gate`: The merge and promotion gate (`GateRun` and its steps: lane admission, queue,
+  overlap, pairing, takeover, preemption, urgent cut-in, child runs and release confirmation,
+  central lane turns). `cmd` holds the CLI commands, the detached child entrypoint and the lane
+  views, and is its `Host`. What the package still needs of the command is named in `host.go`
+  (`Host` for the app, `Cmd` for the package's functions) and `vocabulary.go` (six of the
+  command's constants, kept equal by `cmd`'s `TestGateVocabulary`). A seam entry goes when its
+  target moves to a package the gate can import.
 - `internal/loop`: The supervisor loop: the pass, the streams its actions run in, the refill and
   the stall alarms. `cmd` runs it and is its `Host`. What it still needs of the command is named in
   `host.go` (`Host` for the app, `Cmd` for the package's functions) and `vocabulary.go` (the

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -53,9 +54,9 @@ func TestFatalMainBoardStartsInBothRepositories(t *testing.T) {
 
 func stubFatalBranches(t *testing.T, base string, readErr error) {
 	t.Helper()
-	oldBase, oldDefault := PullBase, fatalDefaultBranch
-	t.Cleanup(func() { PullBase, fatalDefaultBranch = oldBase, oldDefault })
-	PullBase = func(context.Context, string, int) (github.PullBase, error) {
+	oldBase, oldDefault := gate.PullBase, fatalDefaultBranch
+	t.Cleanup(func() { gate.PullBase, fatalDefaultBranch = oldBase, oldDefault })
+	gate.PullBase = func(context.Context, string, int) (github.PullBase, error) {
 		return github.PullBase{Base: base}, readErr
 	}
 	fatalDefaultBranch = func(context.Context, string) (string, error) { return fatalScopeBase, nil }
@@ -138,7 +139,7 @@ func TestFatalMainLoopWaitsBeforeMergeGo(t *testing.T) {
 	if _, err := l.MergePull(t.Context(), &state.State{}, act); !errors.Is(err, loop.ErrLoopLater) {
 		t.Fatalf("merge not held: %v", err)
 	}
-	if len(r.logged(t, loop.LoopGoVerb)) != 0 || r.called(GateCmdName) != nil {
+	if len(r.logged(t, loop.LoopGoVerb)) != 0 || r.called(gate.GateCmdName) != nil {
 		t.Fatal("red main issued merge go or entered gate")
 	}
 }

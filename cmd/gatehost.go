@@ -4,20 +4,21 @@ import (
 	"context"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // gateApp is the app behind a host; nil for none.
-func gateApp(h Host) *app {
+func gateApp(h gate.Host) *app {
 	a, _ := h.(*app)
 	return a
 }
 
 // The gate calls the command through Cmd.
 func init() {
-	Cmd = Command{
+	gate.Cmd = gate.Command{
 		BinaryVersion:    binaryVersion,
 		Clock:            clock,
 		DevctlCommandEnv: devctlCommandEnv,
@@ -27,7 +28,7 @@ func init() {
 		HoldTarget:       holdTarget,
 		LastLine:         lastLine,
 		LastOf:           lastOf,
-		MergeAuthority: func(ctx context.Context, a Host, repo string, pr int, targetHead string) (string, bool, error) {
+		MergeAuthority: func(ctx context.Context, a gate.Host, repo string, pr int, targetHead string) (string, bool, error) {
 			return mergeAuthority(ctx, gateApp(a), repo, pr, targetHead)
 		},
 		NewExitError:          newExitError,
@@ -35,14 +36,14 @@ func init() {
 		OwnedBase:             ownedBase,
 		ParseRef:              parseRef,
 		Plat:                  func() platform.Platform { return plat },
-		ReadBudget:            func(a Host, ctx context.Context) (github.Budget, error) { return readBudget(gateApp(a), ctx) },
+		ReadBudget:            func(a gate.Host, ctx context.Context) (github.Budget, error) { return readBudget(gateApp(a), ctx) },
 		ReadPID:               readPID,
 		RecordDeliveryRelease: recordDeliveryRelease,
 		RecordRun:             recordRun,
 		ReplacedBinary:        replacedBinary,
 		RunFailure:            runFailure,
 		StoredGraphQL:         storedGraphQL,
-		UntilText:             func(a Host, h state.Hold) string { return untilText(gateApp(a), h) },
+		UntilText:             func(a gate.Host, h state.Hold) string { return untilText(gateApp(a), h) },
 		UserSystemd:           func() bool { return userSystemd() },
 		WakeID:                wakeID,
 		WithInfra:             withInfra,

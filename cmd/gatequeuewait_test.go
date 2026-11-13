@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -40,7 +41,7 @@ func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true}
+			g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true}
 			if tc.handoff {
 				g.From, g.Queued = pid, true
 				if why, err := g.Step(); err != nil || why == "" || *asked != 0 {
@@ -77,7 +78,7 @@ func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true}
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true}
 	if why, err := g.Step(); err != nil || why == "" || !g.Passive {
 		t.Fatalf("not waiting behind predecessor: %q, %v", why, err)
 	}
@@ -94,7 +95,7 @@ func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
 		reads++
 		return github.Budget{}, fmt.Errorf("no budget in this test")
 	}
-	if _, err := g.Step(); Code(err) != ExitGateRefused || g.Passive || reads != 1 {
+	if _, err := g.Step(); Code(err) != gate.ExitGateRefused || g.Passive || reads != 1 {
 		t.Fatalf("head skipped normal checks: %v, passive %v, budget reads %d", err, g.Passive, reads)
 	}
 }
@@ -131,7 +132,7 @@ func TestQueuedFollowerCancellationDoesNotWaitForItsSleep(t *testing.T) {
 }
 
 func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
-	t.Setenv(GateFromEnv, "")
+	t.Setenv(gate.GateFromEnv, "")
 	for _, seeded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("seeded=%v", seeded), func(t *testing.T) {
 			asked := stubGitHub(t, github.Open, "")
@@ -147,7 +148,7 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7,
+			g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7,
 				Lane: a.cfg.LaneOf(scratchRepo), Pid: parent, Placed: true}
 			before, err := a.store.Read()
 			if err != nil {
@@ -158,7 +159,7 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 				t.Fatal("fixture does not reproduce an expired place whose parent is gone")
 			}
 			handoff := time.Now()
-			if err := g.Enqueue("a long passive wait"); Code(err) != ExitGateQueued {
+			if err := g.Enqueue("a long passive wait"); Code(err) != gate.ExitGateQueued {
 				t.Fatalf("handoff: %v", err)
 			}
 			launched()
@@ -194,7 +195,7 @@ func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true, Queued: true}
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo), Pid: os.Getpid(), Placed: true, Queued: true}
 	for _, cap := range []int{5, 12} {
 		raw := fmt.Sprintf("merge:\n  cap: %d\nlanes:\n  - name: %s\n    repositories: [%s, o/other]\n", cap, "shared", scratchRepo)
 		if err := os.WriteFile(a.loadedCfg, []byte(raw), 0o600); err != nil {

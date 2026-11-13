@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -42,9 +43,9 @@ func TestStopInterruptsMergeAwaitingRelease(t *testing.T) {
 
 func TestStopReportsReleaseWaiterThatIgnoresInterrupt(t *testing.T) {
 	a, _, _ := stopDesk(t)
-	was := StopWait
-	StopWait = 20 * time.Millisecond
-	t.Cleanup(func() { StopWait = was })
+	was := gate.StopWait
+	gate.StopWait = 20 * time.Millisecond
+	t.Cleanup(func() { gate.StopWait = was })
 	gate := exec.Command("sh", "-c", "trap '' INT; echo interrupt-handler-ready; exec sleep 60")
 	ready, err := gate.StdoutPipe()
 	if err != nil {

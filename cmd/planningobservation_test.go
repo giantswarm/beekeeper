@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -122,7 +123,7 @@ func TestDeliveryIssueReadsLeaveReleasePlanningTime(t *testing.T) {
 			t.Fatal("issue reads left no release observation allowance")
 		}
 		releaseRead = true
-		return VerdictAvailable, deliveryAvailableTag, nil
+		return gate.VerdictAvailable, deliveryAvailableTag, nil
 	}
 	l := &loop.Loop{Host: a, Said: map[string]bool{}}
 	in := superloop.Input{Now: now, Pulls: map[string]superloop.Pull{planningPull: {Ref: planningPull, State: superloop.Merged, MergeCommit: loopHead}}}

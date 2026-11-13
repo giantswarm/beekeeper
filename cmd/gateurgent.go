@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -46,8 +47,8 @@ other and its mark is dropped.`,
 			u := state.Urgent{Repo: args[0], PR: pr, By: me, Reason: reason, At: a.now.UTC()}
 			var why string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				PruneUrgent(st, a.now, a.cfg.Merge.SeedTTL.Duration)
-				if why = UrgentTaken(a, st, u.Key()); why != "" {
+				gate.PruneUrgent(st, a.now, a.cfg.Merge.SeedTTL.Duration)
+				if why = gate.UrgentTaken(a, st, u.Key()); why != "" {
 					return []state.Event{event(me, "merge.urgent.refused", "%s: %s", u.Key(), why)}, nil
 				}
 				st.Urgent = slices.DeleteFunc(st.Urgent, func(o state.Urgent) bool { return o.Key() == u.Key() })
@@ -72,7 +73,7 @@ other and its mark is dropped.`,
 // urgentLines are beekeeper budget's lines on the urgent merges: the one that
 // ran under the floor in this reset window, or the one marked and waiting.
 func urgentLines(a *app, st *state.State) []string {
-	PruneUrgent(st, a.now, a.cfg.Merge.SeedTTL.Duration)
+	gate.PruneUrgent(st, a.now, a.cfg.Merge.SeedTTL.Duration)
 	var out []string
 	for _, u := range st.Urgent {
 		if !u.Ran() {

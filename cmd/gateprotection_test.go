@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 )
 
 // classicDeclineDoc is devctl pr merge's document of a merge GitHub declined
@@ -40,7 +41,7 @@ func TestAClassicProtectionDeclineNamesTheAlignment(t *testing.T) {
 		"(no token of ours may change it: HTTP 403): align the repository, align: true on the entry r in repositories/team-o.yaml of giantswarm/github (devctl repo status o/r)"
 	lines := 0
 	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, GatePrefix+"nothing merged") {
+		if strings.HasPrefix(l, gate.GatePrefix+"nothing merged") {
 			lines++
 			if !strings.Contains(l, want) {
 				t.Errorf("the gate line %q does not name the cause and the fix %q", l, want)

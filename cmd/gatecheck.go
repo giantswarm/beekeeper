@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -35,10 +36,10 @@ the reviews let through. Nothing queues, merges or reaches the state.`,
 // gateCheck runs the gate's reviews read for repo#n, its refusal the gate's
 // line and exit code.
 func (a *app) gateCheck(ctx context.Context, repo string, n int) error {
-	g := &GateRun{Host: a, Ctx: ctx, Repo: repo, Pr: n}
-	if err := g.CheckReviews(GateRefusedWith); err != nil {
+	g := &gate.GateRun{Host: a, Ctx: ctx, Repo: repo, Pr: n}
+	if err := g.CheckReviews(gate.GateRefusedWith); err != nil {
 		return err
 	}
-	GateLine("dry path: %s would merge as far as its reviews go", state.Merge{Repo: repo, PR: n}.Key())
+	gate.GateLine("dry path: %s would merge as far as its reviews go", state.Merge{Repo: repo, PR: n}.Key())
 	return nil
 }

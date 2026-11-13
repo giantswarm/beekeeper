@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -91,7 +92,7 @@ func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, u
 		var releases []merge.HelmRelease
 		if lane.Installation != "" {
 			var err error
-			releases, err = ReadHelmReleases(ctx, lane)
+			releases, err = gate.ReadHelmReleases(ctx, lane)
 			if err != nil {
 				return refused("merge lane readiness unavailable")
 			}
@@ -205,7 +206,7 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 					if !grant.Consumed {
 						return nil, refused("authorization has no merge attempt to reconcile")
 					}
-					grant.Outcome = VerdictUnconfirmed
+					grant.Outcome = gate.VerdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {
 						grant.Outcome = execution.MergeSucceeded
 					}

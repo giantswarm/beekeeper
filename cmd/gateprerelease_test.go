@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -61,9 +62,9 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 				platMgrOn("0.69.0"),
 				{Key: "flux-giantswarm/giantswarm-repo-manager", Chart: "giantswarm-repo-manager", Version: "0.33.4", Ready: true, Range: platMgrRange},
 			}
-			read := ReadHelmReleases
-			t.Cleanup(func() { ReadHelmReleases = read })
-			ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
+			read := gate.ReadHelmReleases
+			t.Cleanup(func() { gate.ReadHelmReleases = read })
+			gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
 
 			now := time.Now()
 			a := queueApp(t,
@@ -84,7 +85,7 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 			i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repoMgr })
 			argv := promoteArgv()
 			argv[len(argv)-1] = repoMgr
-			next := &GateRun{Host: a, Ctx: context.Background(), Argv: argv, Repo: repoMgr,
+			next := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: argv, Repo: repoMgr,
 				Lane: a.cfg.LaneOf(repoMgr), Me: st.Merges[i].By, Pid: os.Getpid(), Queued: true, Placed: true, From: st.Merges[i].PID}
 
 			endDevctl(t, a, platMgr, 548, c.doc, c.rc)
@@ -112,9 +113,9 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 	)
 	stubGitHub(t, github.Open, "")
 	hrs := []merge.HelmRelease{platMgrOn("0.69.0")}
-	read := ReadHelmReleases
-	t.Cleanup(func() { ReadHelmReleases = read })
-	ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
+	read := gate.ReadHelmReleases
+	t.Cleanup(func() { gate.ReadHelmReleases = read })
+	gate.ReadHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
 	for _, c := range []struct {
 		name    string
 		release string

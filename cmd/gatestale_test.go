@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -43,8 +44,8 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, gate.ExitGateRefused)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.HasPrefix(d, "o/r#7: this call runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state") || !strings.Contains(d, "the lane is untouched") {
 		t.Errorf("refused event %q, want both versions named", d)
@@ -79,18 +80,18 @@ func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 	}
 	bin := &fakeBinary{replaced: true, execErr: errBusy}
 	was := runningBinary
-	runningBinary = func() Binary { return bin }
+	runningBinary = func() gate.Binary { return bin }
 	t.Cleanup(func() { runningBinary = was })
 	stderr := capture(t, &os.Stderr)
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
 	said := stderr()
-	if Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, ExitGateRefused, said)
+	if Code(err) != gate.ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d\n%s", Code(err), err, gate.ExitGateRefused, said)
 	}
 	if len(bin.execs) != 2 {
 		t.Errorf("re-exec attempts %q, want two", bin.execs)
 	}
-	if !strings.Contains(said, GatePrefix+"refused, o/r#7: this call runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state, which it does not load (") ||
+	if !strings.Contains(said, gate.GatePrefix+"refused, o/r#7: this call runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state, which it does not load (") ||
 		!strings.Contains(said, "the lane is untouched") {
 		t.Errorf("the refusal does not name the skew:\n%s", said)
 	}

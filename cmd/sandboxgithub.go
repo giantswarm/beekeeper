@@ -16,6 +16,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
@@ -140,7 +141,7 @@ func devctlTokenEnv(ctx context.Context, devctl string, env []string) (string, e
 // exit code.
 func (a *app) gateBrokered(argv []string, wait time.Duration, queued bool) error {
 	if queued {
-		return GateRefused("a queued merge runs on the host only")
+		return gate.GateRefused("a queued merge runs on the host only")
 	}
 	return a.brokeredReplyWithin(sandbox.Request{Op: sandbox.OpGate, Args: argv, Wait: wait.String()}, gateBrokeredTimeout+time.Minute)
 }
@@ -159,7 +160,7 @@ func brokeredGateArgv(req sandbox.Request, _ bool) ([]string, error) {
 	if err != nil || wait <= 0 || wait > gateBrokeredTimeout {
 		return nil, fmt.Errorf("wait %q: want a duration up to %s", req.Wait, gateBrokeredTimeout)
 	}
-	return append([]string{GateCmdName, "--wait", wait.String(), "--"}, argv...), nil
+	return append([]string{gate.GateCmdName, "--wait", wait.String(), "--"}, argv...), nil
 }
 
 // devctlPath is PATH with the configured devctl's directory first, for a

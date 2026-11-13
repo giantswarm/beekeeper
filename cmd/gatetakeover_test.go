@@ -11,17 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-func takeoverGate(t *testing.T, pid int, phase string) *GateRun {
+func takeoverGate(t *testing.T, pid int, phase string) *gate.GateRun {
 	t.Helper()
 	now := time.Now()
 	a := queueApp(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: pid,
 		Phase: phase, By: state.Party{Session: "stale owner", Name: "previous worker"}, Joined: now, Seen: now, Started: now})
-	return &GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.Lanes[0],
+	return &gate.GateRun{Host: a, Ctx: context.Background(), Repo: scratchRepo, Pr: 7, Lane: a.cfg.Lanes[0],
 		Me: state.Party{Session: "taking over", Name: "current worker"}, Pid: os.Getpid(), Argv: mergeArgv(scratchRepo)}
 }
 
@@ -49,15 +50,15 @@ func TestGateTakesOverMergedPRAndConfirmsRelease(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			stubGitHub(t, github.Merged, "")
 			g := takeoverGate(t, sleeper(t), phase)
-			PullState = func(context.Context, string, int) (github.Pull, error) {
+			gate.PullState = func(context.Context, string, int) (github.Pull, error) {
 				p := github.Pull{State: github.Merged, MergedAt: time.Now().Add(-time.Minute)}
 				p.MergeCommit.OID = "merge-abc"
 				return p, nil
 			}
-			was := ReleaseWait
-			t.Cleanup(func() { ReleaseWait = was })
+			was := gate.ReleaseWait
+			t.Cleanup(func() { gate.ReleaseWait = was })
 			calls := 0
-			ReleaseWait = func(_ context.Context, repo string, target ...string) []byte {
+			gate.ReleaseWait = func(_ context.Context, repo string, target ...string) []byte {
 				calls++
 				q := merge.Queue(gateState(t, g), scratchRepo)
 				if q.Running != nil || q.Settling == nil || !q.Settling.Releasing {
@@ -144,7 +145,7 @@ func TestSameSessionReusesWaitingPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := gateState(t, g).Merges[0]
-	if why, err := g.Step(); why != "" || Code(err) != ExitGateQueued {
+	if why, err := g.Step(); why != "" || Code(err) != gate.ExitGateQueued {
 		t.Fatalf("step: %q, %v", why, err)
 	}
 	st := gateState(t, g)
@@ -166,9 +167,9 @@ func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	// The original gate observes the overtaken place and returns the merged
 	// outcome rather than running devctl or refusing the removed queue entry.
 	g.Placed = true
-	was := ReleaseWait
-	t.Cleanup(func() { ReleaseWait = was })
-	ReleaseWait = func(context.Context, string, ...string) []byte {
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(context.Context, string, ...string) []byte {
 		return []byte(`{"verdict":"available","tag":"v1.2.4"}`)
 	}
 	if why, err := g.Step(); why != "" || err != nil {
@@ -180,7 +181,7 @@ func TestGateDoesNotTakeOverLiveOpenPR(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	g := takeoverGate(t, sleeper(t), state.Running)
 	old := gateState(t, g).Merges[0]
-	if why, err := g.Step(); why != "" || Code(err) != ExitGateDuplicate {
+	if why, err := g.Step(); why != "" || Code(err) != gate.ExitGateDuplicate {
 		t.Fatalf("step: %q, %v", why, err)
 	}
 	if st := gateState(t, g); len(st.Merges) != 1 || st.Merges[0].PID != old.PID {
@@ -191,7 +192,7 @@ func TestGateDoesNotTakeOverLiveOpenPR(t *testing.T) {
 func TestGateDoesNotRetryDeadOwnerWhenGitHubIsUnread(t *testing.T) {
 	stubGitHub(t, "", "")
 	g := takeoverGate(t, 1<<30, state.Running)
-	if _, err := g.Step(); Code(err) != ExitGateUnread {
+	if _, err := g.Step(); Code(err) != gate.ExitGateUnread {
 		t.Fatalf("step: %v", err)
 	}
 	if st := gateState(t, g); len(st.Merges) != 1 || st.Merges[0].PID != 1<<30 {

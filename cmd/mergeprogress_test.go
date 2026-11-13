@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -93,7 +94,7 @@ func TestMergeChildCapturesProgress(t *testing.T) {
 	var current atomic.Pointer[os.Process]
 	var stop atomic.Value
 	var gone atomic.Bool
-	rc := runSpec(base, ChildSpec{Argv: []string{"sh", "-c", "printf 'release: waiting for the release of abc\\npipeline 123: workflow build running\\n' >&2"}}, out, log, &current, &stop, &gone)
+	rc := runSpec(base, gate.ChildSpec{Argv: []string{"sh", "-c", "printf 'release: waiting for the release of abc\\npipeline 123: workflow build running\\n' >&2"}}, out, log, &current, &stop, &gone)
 	if rc != 0 {
 		t.Fatalf("exit %d", rc)
 	}

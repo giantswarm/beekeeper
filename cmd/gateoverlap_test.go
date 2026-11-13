@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -36,9 +37,9 @@ func TestAMergeInALaneWithoutAnInstallationFreesItsLaneForTheNextCIWhileItsRelea
 	var during state.State
 	var starts, merges string
 	asked := new([]string)
-	was := ReleaseWait
-	t.Cleanup(func() { ReleaseWait = was })
-	ReleaseWait = func(_ context.Context, repo string, target ...string) []byte {
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(_ context.Context, repo string, target ...string) []byte {
 		*asked = append(*asked, repo+" "+strings.Join(target, " "))
 		during = *gateState(t, g)
 		q := merge.Queue(&during, localLane.Name)
@@ -87,23 +88,23 @@ func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerd
 		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 		g := runningMerge(t, scratchRepo, localLane)
 		var merges string
-		was := ReleaseWait
-		t.Cleanup(func() { ReleaseWait = was })
-		ReleaseWait = func(context.Context, string, ...string) []byte {
+		was := gate.ReleaseWait
+		t.Cleanup(func() { gate.ReleaseWait = was })
+		gate.ReleaseWait = func(context.Context, string, ...string) []byte {
 			merges = g.LanePending()
 			return []byte(`{"verdict":"ci_failed","reason":"push-to-registries failed","tag":"v1.2.4"}`)
 		}
 		var err error
 		out := gateStderr(t, func() { err = startMerge(t, g) })
-		if Code(err) != DevctlReleaseFailed {
-			t.Fatalf("exit %d, want %d\n%s", Code(err), DevctlReleaseFailed, out)
+		if Code(err) != gate.DevctlReleaseFailed {
+			t.Fatalf("exit %d, want %d\n%s", Code(err), gate.DevctlReleaseFailed, out)
 		}
 		st := gateState(t, g)
 		if len(st.Merges) != 1 {
 			t.Fatalf("failed release barrier was deleted: %+v", st.Merges)
 		}
 		m := st.Merges[0]
-		if m.Phase != state.Settling || m.Releasing || !m.ReleaseFailed || m.Release != failedReleaseTag || m.Exit != DevctlReleaseFailed || m.Finished.IsZero() {
+		if m.Phase != state.Settling || m.Releasing || !m.ReleaseFailed || m.Release != failedReleaseTag || m.Exit != gate.DevctlReleaseFailed || m.Finished.IsZero() {
 			t.Fatalf("failed release verdict not persisted: %+v", m)
 		}
 		if merges == "" {
@@ -126,8 +127,8 @@ func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerd
 		gateApp(g.Host).cfg.Merge.Settle.Duration = time.Hour
 		var err error
 		_ = gateStderr(t, func() { err = startMerge(t, g) })
-		if Code(err) != DevctlUnconfirmed {
-			t.Fatalf("exit %d, want %d", Code(err), DevctlUnconfirmed)
+		if Code(err) != gate.DevctlUnconfirmed {
+			t.Fatalf("exit %d, want %d", Code(err), gate.DevctlUnconfirmed)
 		}
 		st := gateState(t, g)
 		if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Releasing {
@@ -156,7 +157,7 @@ func TestALaneWithAnInstallationDoesNotOverlap(t *testing.T) {
 // while o/r#7's release is being confirmed in a live gate (this process),
 // with its warm-up stubbed: warmed is called when the warm-up's CI wait
 // runs, the state polled every few milliseconds.
-func nextBesideARelease(t *testing.T, warmed func(g *GateRun)) *GateRun {
+func nextBesideARelease(t *testing.T, warmed func(g *gate.GateRun)) *gate.GateRun {
 	t.Helper()
 	stubGitHub(t, github.Open, "")
 	g := runningMerge(t, scratchRepo, localLane)
@@ -169,17 +170,17 @@ func nextBesideARelease(t *testing.T, warmed func(g *GateRun)) *GateRun {
 		}
 		return nil, nil
 	})
-	wasPoll, wasUpdate, wasWait := ReleasesPoll, updateBranch, PrWarmWait
-	t.Cleanup(func() { ReleasesPoll, updateBranch, PrWarmWait = wasPoll, wasUpdate, wasWait })
-	ReleasesPoll = 10 * time.Millisecond
+	wasPoll, wasUpdate, wasWait := gate.ReleasesPoll, updateBranch, gate.PrWarmWait
+	t.Cleanup(func() { gate.ReleasesPoll, updateBranch, gate.PrWarmWait = wasPoll, wasUpdate, wasWait })
+	gate.ReleasesPoll = 10 * time.Millisecond
 	updateBranch = func(context.Context, string, int) error { return nil }
-	PrWarmWait = func(context.Context, string, int) { warmed(g) }
+	gate.PrWarmWait = func(context.Context, string, int) { warmed(g) }
 	return g
 }
 
 // releaseKnown takes o/r#7's releasing place out of the lane, as its gate
 // does once the release is confirmed.
-func releaseKnown(g *GateRun) {
+func releaseKnown(g *gate.GateRun) {
 	_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 })
 		return nil, nil
@@ -191,7 +192,7 @@ func releaseKnown(g *GateRun) {
 // that release is known.
 func TestTheNextMergeWarmsUpBesideTheReleaseAndMergesAfterIt(t *testing.T) {
 	var known, warmed atomic.Bool
-	g := nextBesideARelease(t, func(g *GateRun) {
+	g := nextBesideARelease(t, func(g *gate.GateRun) {
 		warmed.Store(!known.Load())
 		go func() {
 			time.Sleep(50 * time.Millisecond)
@@ -218,11 +219,11 @@ func TestTheNextMergeWarmsUpBesideTheReleaseAndMergesAfterIt(t *testing.T) {
 // caller's timeout cuts only the call, and the wait goes on.
 func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 	sig := make(chan os.Signal, 2)
-	g := nextBesideARelease(t, func(*GateRun) {})
+	g := nextBesideARelease(t, func(*gate.GateRun) {})
 	g.Sig = sig
-	was := TimedCaller
-	t.Cleanup(func() { TimedCaller = was })
-	TimedCaller = func() bool { return false }
+	was := gate.TimedCaller
+	t.Cleanup(func() { gate.TimedCaller = was })
+	gate.TimedCaller = func() bool { return false }
 	sig <- syscall.SIGHUP
 	sig <- syscall.SIGINT
 	var err error
@@ -241,7 +242,7 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 		t.Errorf("stopped event: %q", d)
 	}
 	t.Run("context", func(t *testing.T) {
-		g := nextBesideARelease(t, func(*GateRun) {})
+		g := nextBesideARelease(t, func(*gate.GateRun) {})
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		g.Ctx = ctx
@@ -252,7 +253,7 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 		}
 	})
 	t.Run("taken out of the lane", func(t *testing.T) {
-		g := nextBesideARelease(t, func(g *GateRun) {
+		g := nextBesideARelease(t, func(g *gate.GateRun) {
 			_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == 8 })
 				return nil, nil
@@ -260,7 +261,7 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 		})
 		var err error
 		out := gateStderr(t, func() { err = g.AwaitReleases() })
-		if Code(err) != ExitGateRefused || !strings.Contains(out, "taken out of lane o/r") {
+		if Code(err) != gate.ExitGateRefused || !strings.Contains(out, "taken out of lane o/r") {
 			t.Fatalf("exit %d, want a refusal:\n%s", Code(err), out)
 		}
 	})
@@ -270,7 +271,7 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 // pull request through first puts the merge back to waiting in its place,
 // before its devctl starts.
 func TestAHoldDuringTheReleaseWaitPutsTheMergeBackToWaiting(t *testing.T) {
-	g := nextBesideARelease(t, func(g *GateRun) {
+	g := nextBesideARelease(t, func(g *gate.GateRun) {
 		_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 			st.Holds = append(st.Holds, state.Hold{Target: merge.LanePrefix + localLane.Name, Except: scratchRepo + "#9", By: state.Party{Name: supervisorName},
 				At: time.Now().UTC(), Reason: "the fix first"})
@@ -279,7 +280,7 @@ func TestAHoldDuringTheReleaseWaitPutsTheMergeBackToWaiting(t *testing.T) {
 	})
 	var err error
 	_ = gateStderr(t, func() { err = g.AwaitReleases() })
-	if p := (*PreemptedError)(nil); !errors.As(err, &p) {
+	if p := (*gate.PreemptedError)(nil); !errors.As(err, &p) {
 		t.Fatalf("%v, want the merge preempted", err)
 	}
 	st := gateState(t, g)
@@ -291,13 +292,13 @@ func TestAHoldDuringTheReleaseWaitPutsTheMergeBackToWaiting(t *testing.T) {
 // A release whose verdict stays unknown past the wait's bound refuses the
 // merge, its place out of the lane: it never merges ahead of a verdict.
 func TestAReleaseUnknownPastTheWaitRefusesTheMerge(t *testing.T) {
-	g := nextBesideARelease(t, func(*GateRun) {})
-	was := ReleasesWait
-	t.Cleanup(func() { ReleasesWait = was })
-	ReleasesWait = func(time.Duration) time.Duration { return 30 * time.Millisecond }
+	g := nextBesideARelease(t, func(*gate.GateRun) {})
+	was := gate.ReleasesWait
+	t.Cleanup(func() { gate.ReleasesWait = was })
+	gate.ReleasesWait = func(time.Duration) time.Duration { return 30 * time.Millisecond }
 	var err error
 	out := gateStderr(t, func() { err = g.AwaitReleases() })
-	if Code(err) != ExitGateRefused || !strings.Contains(out, "still waits for a release's verdict") {
+	if Code(err) != gate.ExitGateRefused || !strings.Contains(out, "still waits for a release's verdict") {
 		t.Fatalf("exit %d, want a refusal:\n%s", Code(err), out)
 	}
 	if st := gateState(t, g); slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.PR == 8 }) {
@@ -343,10 +344,10 @@ func TestGateStopInterruptsAMergeWaitingForItsLanesRelease(t *testing.T) {
 // A merge whose lane confirms no release goes on at once, no warm-up.
 func TestTheNextMergeOfAFreeLaneDoesNotWarmUp(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
-	was := PrWarmWait
-	t.Cleanup(func() { PrWarmWait = was })
+	was := gate.PrWarmWait
+	t.Cleanup(func() { gate.PrWarmWait = was })
 	called := false
-	PrWarmWait = func(context.Context, string, int) { called = true }
+	gate.PrWarmWait = func(context.Context, string, int) { called = true }
 	if err := g.AwaitReleases(); err != nil {
 		t.Fatalf("exit %d, want the merge to go on", Code(err))
 	}
@@ -363,14 +364,14 @@ func TestLanePaceIsTheMedianOfItsLatestPlaces(t *testing.T) {
 		return state.Event{At: at.Add(time.Duration(min) * time.Minute), Verb: verb, Detail: detail}
 	}
 	events := []state.Event{
-		ev(0, VerbMerging, "o/r#1 in lane o/r"),
+		ev(0, gate.VerbMerging, "o/r#1 in lane o/r"),
 		ev(10, verbMerged, "o/r#1 exit 0, release v1"),
-		ev(10, VerbMerging, "o/r#2 in lane o/r"),
+		ev(10, gate.VerbMerging, "o/r#2 in lane o/r"),
 		ev(22, verbMerged, "o/r#2 exit 0, release v2"),
 		ev(30, verbLaneSettled, "o/r: o/r#2 rolled"),
-		ev(30, VerbMerging, "o/x#3 in lane other"),
+		ev(30, gate.VerbMerging, "o/x#3 in lane other"),
 		ev(31, verbMerged, "o/x#3 exit 0, release v1"),
-		ev(31, VerbMerging, "o/r#4 in lane o/r"),
+		ev(31, gate.VerbMerging, "o/r#4 in lane o/r"),
 		ev(46, verbMerged, "o/r#4 exit 0, release v4"),
 	}
 	pace, ok := lanePace(events, "o/r")
@@ -387,10 +388,10 @@ func TestWarmUpUsesRepositoryCITimeout(t *testing.T) {
 	g.Argv = mergeArgv(scratchRepo)
 	gateApp(g.Host).cfg.Merge.CITimeout.Duration = time.Hour
 	gateApp(g.Host).cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: 3 * time.Hour}}
-	wasWait := PrWarmWait
-	t.Cleanup(func() { PrWarmWait = wasWait })
+	wasWait := gate.PrWarmWait
+	t.Cleanup(func() { gate.PrWarmWait = wasWait })
 	called := false
-	PrWarmWait = func(ctx context.Context, repo string, pr int) {
+	gate.PrWarmWait = func(ctx context.Context, repo string, pr int) {
 		called = true
 		deadline, ok := ctx.Deadline()
 		if left := time.Until(deadline); !ok || left < 3*time.Hour-time.Minute || left > 3*time.Hour {

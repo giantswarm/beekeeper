@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 )
 
@@ -12,10 +13,10 @@ import (
 func TestLoopVocabulary(t *testing.T) {
 	own := map[string]any{
 		"ExitError":                        ExitError,
-		"ExitGateDuplicate":                ExitGateDuplicate,
-		"ExitGateQueued":                   ExitGateQueued,
-		"ExitGateRefused":                  ExitGateRefused,
-		"ExitGateUnread":                   ExitGateUnread,
+		"ExitGateDuplicate":                gate.ExitGateDuplicate,
+		"ExitGateQueued":                   gate.ExitGateQueued,
+		"ExitGateRefused":                  gate.ExitGateRefused,
+		"ExitGateUnread":                   gate.ExitGateUnread,
 		"ExitOutdated":                     ExitOutdated,
 		"ExitRefused":                      ExitRefused,
 		"agentStartName":                   agentStartName,
@@ -37,7 +38,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
-		"gateCmdName":                      GateCmdName,
+		"gateCmdName":                      gate.GateCmdName,
 		"harnessAuto":                      capacity.HarnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
 		"hostUpdateDeferred":               hostUpdateDeferred,
@@ -61,7 +62,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,
 		"verbStart":                        verbStart,
-		"verdictAvailable":                 VerdictAvailable,
+		"verdictAvailable":                 gate.VerdictAvailable,
 		"workerGitHubAPIGroup":             workerGitHubAPIGroup,
 		"workerRole":                       workerRole,
 	}

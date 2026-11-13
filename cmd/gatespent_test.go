@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -25,8 +26,8 @@ var errGraphQLSpent = errors.New("gh pr view 7: GraphQL: API rate limit already 
 func stubSpentRead(t *testing.T, now func() time.Time, reset time.Time, spent bool) *int {
 	t.Helper()
 	asked := stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
-	read := PullBase
-	PullBase = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
+	read := gate.PullBase
+	gate.PullBase = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
 		if now().Before(reset) {
 			*asked++
 			return github.PullBase{}, errGraphQLSpent
@@ -83,7 +84,7 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	a := spentLane(t)
 	reset := a.now.Add(time.Second)
 	asked := stubSpentRead(t, func() time.Time { return a.now }, reset, true)
-	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
 		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
 	why, err := g.Step()
 	if err != nil || !strings.Contains(why, "until the GitHub budget's reset") || !strings.Contains(why, "keeps its place in lane o/r") {
@@ -121,9 +122,9 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	a := spentLane(t)
 	reset := a.now.Add(time.Second)
 	stubSpentRead(t, func() time.Time { return a.now }, reset, false)
-	g := &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
 		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
-	if _, err := g.Step(); Code(err) != ExitGateRefused {
+	if _, err := g.Step(); Code(err) != gate.ExitGateRefused {
 		t.Fatalf("step: exit %d (%v), want refused", Code(err), err)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "its place in lane o/r is kept for 1h0m0s") {
@@ -135,7 +136,7 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	}
 
 	a.now = reset.Add(time.Millisecond)
-	g = &GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+	g = &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
 		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid()}
 	if why, err := g.Step(); why != "" || err != nil {
 		t.Fatalf("the same command again: %q, %v; want it to rejoin at its old position and merge", why, err)
@@ -149,7 +150,7 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	reads := 0
-	ReleaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
+	gate.ReleaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
 		reads++
 		return github.BaseRelease{Base: mainBranch, Auto: true}, nil
 	}

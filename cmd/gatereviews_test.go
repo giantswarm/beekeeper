@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -25,13 +26,13 @@ const (
 	reviewsFailedInTransit = "reading the reviews of o/r#7 failed in transit"
 )
 
-// stubReviews answers reviewGuard with why and err and counts the reads.
+// stubReviews answers gate.ReviewGuard with why and err and counts the reads.
 func stubReviews(t *testing.T, why string, err error) *int {
 	t.Helper()
 	asked := new(int)
-	was := ReviewGuard
-	t.Cleanup(func() { ReviewGuard = was })
-	ReviewGuard = func(context.Context, string, int) (string, error) {
+	was := gate.ReviewGuard
+	t.Cleanup(func() { gate.ReviewGuard = was })
+	gate.ReviewGuard = func(context.Context, string, int) (string, error) {
 		*asked++
 		return why, err
 	}
@@ -48,10 +49,10 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 		code int
 		says string
 	}{
-		"changes requested": {why: changesRequested, code: ExitGateRefused, says: "o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
-		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: reviewsFailedInTransit},
-		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: reviewsFailedInTransit},
-		"unreadable":        {err: errFake("HTTP 404"), code: ExitGateRefused, says: "the reviews of o/r#7 cannot be read"},
+		"changes requested": {why: changesRequested, code: gate.ExitGateRefused, says: "o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
+		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: gate.ExitGateUnread, says: reviewsFailedInTransit},
+		"in transit":        {err: syscall.ECONNRESET, code: gate.ExitGateUnread, says: reviewsFailedInTransit},
+		"unreadable":        {err: errFake("HTTP 404"), code: gate.ExitGateRefused, says: "the reviews of o/r#7 cannot be read"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			stubGitHub(t, github.Open, "")
@@ -74,7 +75,7 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 			var picture bytes.Buffer
 			a.out = &picture
 			a.printLanes(a.laneViews(st))
-			if c.code == ExitGateRefused {
+			if c.code == gate.ExitGateRefused {
 				if !strings.Contains(picture.String(), "exit 77: "+c.says) {
 					t.Errorf("lane picture omits refusal: %s", picture.String())
 				}
@@ -102,7 +103,7 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 	stubReviews(t, changesRequested, nil)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
 	err := g.CheckReviews(g.RefuseRunningWith)
-	if Code(err) != ExitGateRefused {
+	if Code(err) != gate.ExitGateRefused {
 		t.Fatalf("exit %d (%v)", Code(err), err)
 	}
 	st, err := gateApp(g.Host).store.Read()
@@ -128,9 +129,9 @@ func TestGateCheckIsTheDryPath(t *testing.T) {
 		code int
 		says string
 	}{
-		"changes requested": {why: changesRequested, code: ExitGateRefused, says: "refused, o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
-		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: ExitGateUnread, says: reviewsFailedInTransit},
-		"in transit":        {err: syscall.ECONNRESET, code: ExitGateUnread, says: "unread, reading the reviews of o/r#7 failed in transit"},
+		"changes requested": {why: changesRequested, code: gate.ExitGateRefused, says: "refused, o/r#7 waits on its reviewers, nothing merged: changes requested: review CHANGES_REQUESTED by marians"},
+		"quota exhausted":   {err: errFake("API rate limit exceeded"), code: gate.ExitGateUnread, says: reviewsFailedInTransit},
+		"in transit":        {err: syscall.ECONNRESET, code: gate.ExitGateUnread, says: "unread, reading the reviews of o/r#7 failed in transit"},
 		"nothing holds":     {says: "dry path: o/r#7 would merge as far as its reviews go"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -167,7 +168,7 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 	t.Cleanup(func() { mergeAuthority = oldAuth })
 	mergeAuthority = gateMergeHeadAuthority
 
-	g := &GateRun{
+	g := &gate.GateRun{
 		Host: r.a,
 		Ctx:  t.Context(),
 		Repo: loopMergeRepo,
@@ -186,8 +187,8 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 	}
 
 	// Recording an explicit supervisor.go for that exact head clears the hold,
-	// including when reviewGuard sees the earlier changes-requested review.
-	ReviewGuard = func(context.Context, string, int) (string, error) {
+	// including when gate.ReviewGuard sees the earlier changes-requested review.
+	gate.ReviewGuard = func(context.Context, string, int) (string, error) {
 		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
 	}
 	if err := r.a.store.Record(about(event(loop.LoopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loop.LoopWorkerMergeGo), loopPR)); err != nil {
@@ -207,7 +208,7 @@ func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
 	r.pull.Head = loopFixed
 	mergeAuthority = gateMergeHeadAuthority
-	g := &GateRun{Host: r.a, Ctx: t.Context(), Repo: loopMergeRepo, Pr: 7, Lane: r.a.cfg.LaneOf(loopMergeRepo),
+	g := &gate.GateRun{Host: r.a, Ctx: t.Context(), Repo: loopMergeRepo, Pr: 7, Lane: r.a.cfg.LaneOf(loopMergeRepo),
 		Me: loop.LoopParty, Pid: os.Getpid(), ReviewedHead: loopFixed,
 		Argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
 	if why, err := g.ReviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
@@ -216,7 +217,7 @@ func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	if err := r.a.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	ReviewGuard = func(context.Context, string, int) (string, error) {
+	gate.ReviewGuard = func(context.Context, string, int) (string, error) {
 		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
 	}
 	if why, err := g.ReviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {

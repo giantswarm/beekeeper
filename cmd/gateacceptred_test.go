@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 )
@@ -34,11 +35,11 @@ case "$*" in *--accept-red*) echo '`+mergedDoc+`';; *) echo '`+baseRedDoc+`'; ex
 // and whether the installed devctl has --accept-red.
 func stubBase(t *testing.T, e2e string, accepts bool) {
 	t.Helper()
-	BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
+	gate.BaseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
 		return github.BaseChecks{Base: mainBranch, Head: "0123456789", Required: []string{"go-build"},
 			Outcomes: map[string]string{"e2e-test": e2e, "go-build": github.CheckPass}}, nil
 	}
-	DevctlAcceptsRed = func(context.Context) bool { return accepts }
+	gate.DevctlAcceptsRed = func(context.Context) bool { return accepts }
 }
 
 func devctlCalls(t *testing.T, path string) []string {
@@ -119,7 +120,7 @@ func TestARedCheckOnAnInfraFlakeIsNotThePullRequestsBreak(t *testing.T) {
 	calls := acceptingDevctl(t)
 	stubGitHub(t, github.Open, "")
 	stubBase(t, github.CheckPass, true)
-	InfraReds = func(context.Context, []byte) []merge.Infra {
+	gate.InfraReds = func(context.Context, []byte) []merge.Infra {
 		return []merge.Infra{{Check: "e2e-test", Repo: scratchRepo, Run: 11, Job: 12, Signature: "Go module proxy",
 			Line: `read "https://proxy.golang.org/golang.org/x/text/@v/v0.41.0.zip": stream error: stream ID 143; INTERNAL_ERROR; received from peer`}}
 	}

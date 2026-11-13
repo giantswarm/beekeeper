@@ -19,6 +19,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -98,7 +99,7 @@ func TestBudgetNamesIdentitiesAndNeverReusesAnotherWindow(t *testing.T) {
 	if queries["gh"] != 1 || queries[github.IdentityApp] != 1 {
 		t.Fatalf("cache not per identity: %v", queries)
 	}
-	g := &GateRun{Host: a, Ctx: context.Background()}
+	g := &gate.GateRun{Host: a, Ctx: context.Background()}
 	minimum, err := g.GateBudget()
 	if err != nil || minimum.Identity != "gh" || minimum.Remaining != 1941 || !minimum.Reset.Equal(resetGH.Truncate(time.Second)) {
 		t.Fatalf("merge gate ignored low GraphQL: %+v, %v", minimum, err)

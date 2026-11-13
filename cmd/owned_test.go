@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -82,9 +83,9 @@ func tellOwnerRun(t *testing.T, owner state.Party) (*app, childResult, *[]string
 	}); err != nil {
 		t.Fatal(err)
 	}
-	infra := InfraReds
-	InfraReds = func(context.Context, []byte) []merge.Infra { return nil }
-	t.Cleanup(func() { InfraReds = infra })
+	infra := gate.InfraReds
+	gate.InfraReds = func(context.Context, []byte) []merge.Infra { return nil }
+	t.Cleanup(func() { gate.InfraReds = infra })
 	var woke []string
 	was := wakeOwner
 	wakeOwner = func(_ *app, _ context.Context, by state.Party, q, msg, _ string) error {
@@ -93,7 +94,7 @@ func tellOwnerRun(t *testing.T, owner state.Party) (*app, childResult, *[]string
 	}
 	t.Cleanup(func() { wakeOwner = was })
 	r := childResult{
-		spec: ChildSpec{Argv: strings.Fields("/usr/bin/devctl pr wait o/r 7"), Owner: owner, Gate: 0},
+		spec: gate.ChildSpec{Argv: strings.Fields("/usr/bin/devctl pr wait o/r 7"), Owner: owner, Gate: 0},
 		base: filepath.Join(store.Dir(), ownedRuns, "pr-wait-o_r-7-1"),
 		rc:   0, doc: []byte(greenDoc), last: "checks pending", kept: "/k/pr-wait.log",
 	}
@@ -215,8 +216,8 @@ func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 	second.Pid, second.Me = g.Pid+1, state.Party{Name: "second"}
 	_, err = second.Step()
 	var e *exitError
-	if !errors.As(err, &e) || e.code != ExitGateDuplicate {
-		t.Fatalf("got %v, want exit %d", err, ExitGateDuplicate)
+	if !errors.As(err, &e) || e.code != gate.ExitGateDuplicate {
+		t.Fatalf("got %v, want exit %d", err, gate.ExitGateDuplicate)
 	}
 	d := lastEvent(t, g, "merge.refused")
 	for _, want := range []string{"o/r#7 is already merging: started", `by "worker"`, "last line: waiting for the release v1.2.4", "do not merge again"} {
@@ -294,13 +295,13 @@ func TestMergeChildRecordsItsStop(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(ChildSpec{Argv: mergeArgv("o/r"), Env: os.Environ()})
+	raw, _ := json.Marshal(gate.ChildSpec{Argv: mergeArgv("o/r"), Env: os.Environ()})
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	go func() {
-		for deadline := time.Now().Add(ChildStart); readPID(base) == 0 && time.Now().Before(deadline); {
-			time.Sleep(FollowPoll)
+		for deadline := time.Now().Add(gate.ChildStart); readPID(base) == 0 && time.Now().Before(deadline); {
+			time.Sleep(gate.FollowPoll)
 		}
 		time.Sleep(300 * time.Millisecond)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
@@ -343,7 +344,7 @@ func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 				t.Fatal(err)
 			}
 			return s
-		}, said: GatePrefix},
+		}, said: gate.GatePrefix},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			noSystemd(t)
@@ -373,9 +374,9 @@ func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 // request's break alone.
 func TestARedRunOnAnInfraFlakeWakesItsOwnerWithTheRerun(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
-	was := InfraReds
-	t.Cleanup(func() { InfraReds = was })
-	InfraReds = func(_ context.Context, doc []byte) []merge.Infra {
+	was := gate.InfraReds
+	t.Cleanup(func() { gate.InfraReds = was })
+	gate.InfraReds = func(_ context.Context, doc []byte) []merge.Infra {
 		if !merge.Red(doc) {
 			t.Errorf("infra read for a document that is not red")
 		}

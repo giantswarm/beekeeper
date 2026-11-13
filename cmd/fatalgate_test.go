@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/gate"
 )
 
 func TestFatalMainGateRefusesOrdinaryMergeAndPromotion(t *testing.T) {
@@ -23,7 +24,7 @@ func TestFatalMainGateRefusesOrdinaryMergeAndPromotion(t *testing.T) {
 			g := placedGate(a, pr, os.Getpid())
 			var err error
 			out := gateStderr(t, func() { _, err = g.Step() })
-			if Code(err) != ExitGateRefused || !strings.Contains(out, "scope: default-branch merges and releases in "+scratchRepo) {
+			if Code(err) != gate.ExitGateRefused || !strings.Contains(out, "scope: default-branch merges and releases in "+scratchRepo) {
 				t.Fatalf("gate did not refuse: %v %s", err, out)
 			}
 		})

@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -203,7 +204,7 @@ func TestSupervisorNitAttestationKeepsApprovalWithoutSecondRound(t *testing.T) {
 	if start := r.called(agentsName, agentStartName); start != nil {
 		t.Fatalf("second review started: %v", start)
 	}
-	if merge := r.called(GateCmdName); merge == nil {
+	if merge := r.called(gate.GateCmdName); merge == nil {
 		t.Fatalf("no merge go after nits: %s", r.out)
 	}
 	r.pull.Head = "3333333333333333333333333333333333333333"

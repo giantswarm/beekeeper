@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -75,7 +76,7 @@ func TestMain(m *testing.M) {
 	}
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
-	ReviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	gate.ReviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
 	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
@@ -93,7 +94,7 @@ func TestMain(m *testing.M) {
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
 	// Nor does a gate read that fails in transit pause between its tries.
-	ReadBackoff = make([]time.Duration, len(ReadBackoff))
+	gate.ReadBackoff = make([]time.Duration, len(gate.ReadBackoff))
 	// Nor its Go build cache: the trim sees only a cache a test points
 	// GOCACHE at; the cache the tests started with is no cache to it.
 	machineCache := gocache.Dir()
@@ -132,7 +133,7 @@ func TestMain(m *testing.M) {
 	// outcome handed over (tellOwner) into the file instead of a wake.
 	if wakes := os.Getenv(testWakesEnv); wakes != "" {
 		wakeOwner = recordWakes(wakes)
-	} else if len(os.Args) > 2 && os.Args[1] == MergeChildCmd {
+	} else if len(os.Args) > 2 && os.Args[1] == gate.MergeChildCmd {
 		os.Exit(mergeChild(os.Args[2]).rc)
 	}
 	if len(os.Args) > 2 && os.Args[1] == followRunCmd {
