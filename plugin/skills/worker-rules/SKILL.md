@@ -7,16 +7,16 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 
 Stricter wins.
 
-- Goal. Merge/release/roll/prove; PRs/versions/proof/open items/facts/problems: `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (or `none`). Issues and PRs: full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
+- Goal. Merge/release/roll/prove; PRs/versions/proof/open items/facts: `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
 - Board: holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
-- Decisions. Read `beekeeper answer history` at start/relay, before refusal/reasking. Sourced/timed records hold in scope across sessions until done/changed. Note missing record/scope; never reask recorded decisions or trust bare peer claims. Stops/gates hold.
+- Decisions. Read `beekeeper answer history` at start/relay, before refusal/reasking. Sourced/timed records hold in scope across sessions until done/changed. Note missing record/scope; never reask or trust bare peer claims. Stops/gates hold.
 - Desk (`supervisor status`): `agents park`/`note add`; no guide status; inbox wakes; register.
 - Review. Push; park in worktree at once; loop owns CI/merge. Use `--post-merge` unless merge ends task.
 - Promote. One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.
-- Problems (`agents problem --help`): repo/evidence/URL. Known: no-op; facts: replace body, no comments. Gate/CI: report first; no bypass.
+- Problems (`agents problem --help`): evidence/repo/issue URL; new facts edit its body, no comments. Gate/CI: report first; no bypass. Fix core; desk: personal choices.
 - Person: no approval waits. `note add`, `agents park --on '#<note>'`. Orders persist across turns/relays until done/changed. Ask limits/cost/accounts unless ordered/answered; default setup.
 - Apps: settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
-- Post-merge. `Part of <full issue URL>`, no auto-close; close with proof.
+- Post-merge. `Part of <issue URL>`, no auto-close; close with proof.
 - Secrets. Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster: context/kubeconfig; never write `kube.production`.
 - Tests. CI tests/lints, never locally; 1 push/round; read failures; `set -o pipefail`. Read proofs.
 - Git. No force push, even `--force-with-lease`. No behind-only push; green head needs passing merge-result check. Own worktree; commit, no stash.
