@@ -5,7 +5,6 @@ package cmd
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/codex"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -31,6 +31,8 @@ type stoppingWorkerLauncher struct {
 func (l stoppingWorkerLauncher) State(context.Context, string) string { return holdActive }
 func (l stoppingWorkerLauncher) Stop(context.Context, string) error   { l.stop(); return nil }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.T) {
 	const workerID = "test-worker"
 	for _, harness := range []string{codex.Harness, agy.Harness, omp.Harness} {
@@ -49,8 +51,8 @@ func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.
 				a, _ := stubApp(t)
 				a.now = time.Now()
 				asked := stubGitHub(t, tc.pull, "")
-				start := func() (*exec.Cmd, func()) {
-					c := exec.Command("sleep", "30")
+				start := func() (*proc.Cmd, func()) {
+					c := proc.CommandContext(context.Background(), "sleep", "30")
 					if err := c.Start(); err != nil {
 						t.Skip("no sleep:", err)
 					}
@@ -65,16 +67,16 @@ func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.
 					t.Cleanup(stop)
 					return c, stop
 				}
-				gate, stopGate := start()
+				gateProc, stopGate := start()
 				runner, stopRunner := start()
-				m := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: four, PID: gate.Process.Pid, Child: runner.Process.Pid, Phase: state.Running, Started: a.now, Joined: a.now, Seen: a.now}
+				m := state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: four, PID: gateProc.Process.Pid, Child: runner.Process.Pid, Phase: state.Running, Started: a.now, Joined: a.now, Seen: a.now}
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 					st.Merges = []state.Merge{m, {Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting, PID: os.Getpid(), Joined: a.now, Seen: a.now}}
 					return nil, nil
 				}); err != nil {
 					t.Fatal(err)
 				}
-				base := mergeBase(a.store.Dir(), m.Repo, m.PR)
+				base := gate.MergeBase(a.store.Dir(), m.Repo, m.PR)
 				if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 					t.Fatal(err)
 				}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -28,6 +29,8 @@ const (
 	reviewedRedCase     = "red"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -50,7 +53,7 @@ func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 			}
 			for range 4 {
 				r.pass(t)
-				if r.called(gateCmdName) != nil {
+				if r.called(gate.GateCmdName) != nil {
 					t.Fatalf("held merge reached gate: %v", r.calls)
 				}
 				r.a.now = r.a.now.Add(time.Hour)
@@ -74,7 +77,7 @@ func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			if r.called(gateCmdName) == nil || len(r.logged(t, "merge.authorized")) != 1 {
+			if r.called(gate.GateCmdName) == nil || len(r.logged(t, "merge.authorized")) != 1 {
 				t.Fatalf("lift did not resume the reviewed merge: %v\n%s", r.calls, r.out)
 			}
 			if len(r.logged(t, "supervisor.merge")) != 1 {
@@ -143,6 +146,8 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -165,7 +170,7 @@ func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
 	if reads < 2 {
 		t.Fatal("did not exercise the executor's live review read")
 	}
-	if r.called(gateCmdName) != nil || len(r.logged(t, "merge.authorized")) != 0 {
+	if r.called(gate.GateCmdName) != nil || len(r.logged(t, "merge.authorized")) != 0 {
 		t.Fatalf("new findings were overwritten by a fresh authorization: %v", r.calls)
 	}
 	if !strings.Contains(r.out.String(), "requested changes") {
@@ -186,13 +191,31 @@ func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 		return "branch conflicts with base", 1
 	}
 	r.pass(t)
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "Repair the branch") {
-		t.Fatalf("repair not requested: %v", r.calls)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+		t.Fatalf("conflict returned to the author: %v", c)
 	}
+	r.reviewerRepair(t, loopReviewer, "Repair the branch")
 	r.pass(t)
+	if c := r.called(agentsName, agentStartName, loopReviewer); c != nil {
+		t.Fatalf("repeated repair start %v", c)
+	}
 	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
 		t.Fatalf("repeated repair wake %v", c)
+	}
+}
+
+// reviewerRepair fails t unless this pass started reviewer's repair turn
+// with a brief that carries want: a real conflict after approval returns to
+// the reviewer, never to the author and never as a second review.
+func (r *loopRig) reviewerRepair(t *testing.T, reviewer, want string) {
+	t.Helper()
+	start := r.called(agentsName, agentStartName, reviewer)
+	if start == nil {
+		t.Fatalf("no repair turn for %s: %v\n%s", reviewer, r.calls, r.out)
+	}
+	brief, err := os.ReadFile(start[3])
+	if err != nil || !strings.Contains(string(brief), want) {
+		t.Fatalf("repair brief of %s lacks %q: %v: %s", reviewer, want, err, brief)
 	}
 }
 
@@ -276,6 +299,8 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
@@ -294,8 +319,8 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 			t.Fatalf("missing %s in %v", flag, argv)
 		}
 	}
-	g := gateRun{app: r.a, repo: loopMergeRepo, pr: 7, reviewedHead: loopHead, argv: []string{"devctl", "pr", superloop.KindMerge, loopMergeRepo, "7"}}
-	pinned, err := g.mergeArgv()
+	g := gate.GateRun{Host: r.a, Repo: loopMergeRepo, Pr: 7, ReviewedHead: loopHead, Argv: []string{"devctl", "pr", superloop.KindMerge, loopMergeRepo, "7"}}
+	pinned, err := g.MergeArgv()
 	if err != nil || !slices.Contains(pinned, "--head") || !slices.Contains(pinned, loopHead) {
 		t.Fatalf("gate lost its pin: %v %v", pinned, err)
 	}
@@ -324,6 +349,8 @@ func TestReviewedRebaseMergeKeepsABehindHead(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -331,11 +358,14 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 		repark    bool
 		wantGates int
 		failure   int
+		// repairer gets the repair turn: the approving reviewer for a real
+		// conflict, the worker for a failed merge validation.
+		repairer string
 	}{
-		{name: "without_repark", mergeable: loop.MergeableConflicting, repark: false, wantGates: 1},
-		{name: "with_repark", mergeable: loop.MergeableConflicting, repark: true, wantGates: 1},
-		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashNotApplicable},
-		{name: "gate_red_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashRed},
+		{name: "without_repark", mergeable: loop.MergeableConflicting, repark: false, wantGates: 1, repairer: loopReviewer},
+		{name: "with_repark", mergeable: loop.MergeableConflicting, repark: true, wantGates: 1, repairer: loopReviewer},
+		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashNotApplicable, repairer: loopWorker},
+		{name: "gate_red_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashRed, repairer: loopWorker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
@@ -370,7 +400,7 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 			room := 0
 			gateRuns := 0
 			r.answer = func(args []string) (string, int) {
-				if len(args) > 0 && args[0] == gateCmdName {
+				if len(args) > 0 && args[0] == gate.GateCmdName {
 					gateRuns++
 					if gateRuns == 1 && tc.failure != 0 {
 						// Model the real synchronous gate: it persists its failed
@@ -378,7 +408,7 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 						if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 							st.Merges = append(st.Merges, state.Merge{Repo: loopMergeRepo, PR: 7, Head: loopHead, By: loop.LoopParty})
 							evs := recordRun(st, len(st.Merges)-1, config.Lane{Name: loopMergeRepo}, loop.LoopParty,
-								runOutcome{rc: tc.failure, reason: "merge validation failed"}, r.a.now, "")
+								gate.RunOutcome{Rc: tc.failure, Reason: "merge validation failed"}, r.a.now, "")
 							if len(st.Failed) != 1 || st.Failed[0].Head != loopHead {
 								t.Fatalf("gate lost the tested head: %+v", st.Failed)
 							}
@@ -405,15 +435,15 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 				t.Fatalf("completed repair handoff without capacity: %v", r.logged(t, "supervisor.merge"))
 			}
 
-			// Pass 4: capacity frees up; fixer starts once, without invoking gate again.
+			// Pass 4: capacity frees up; the repairer starts once, without invoking gate again.
 			room = 1
 			r.pass(t)
 			if gateRuns != tc.wantGates-1 {
 				t.Fatalf("conflicting PR invoked merge gate %d times, want %d", gateRuns, tc.wantGates-1)
 			}
-			fixerStart := r.called(agentsName, agentStartName, loopWorker)
-			if fixerStart == nil || len(r.logged(t, "supervisor.merge")) != 1 {
-				t.Fatalf("expected fixer start for conflict repair, got %v\n%s", r.calls, r.out)
+			repairStart := r.called(agentsName, agentStartName, tc.repairer)
+			if repairStart == nil || len(r.logged(t, "supervisor.merge")) != 1 {
+				t.Fatalf("expected %s to start for the repair, got %v\n%s", tc.repairer, r.calls, r.out)
 			}
 
 			st, err := r.a.store.Read()
@@ -498,7 +528,9 @@ func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T
 	})
 }
 
-func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
+func TestLoopConflictingPRHandsOffItsRepairOnce(t *testing.T) {
 	t.Run("conflicting pull state skips gate and hands off once", func(t *testing.T) {
 		r := newLoopRig(t)
 		r.park(t, loopPR, time.Now())
@@ -507,22 +539,25 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 		r.pull.Mergeable = "CONFLICTING"
 		r.pull.MergeState = github.DirtyState
 		r.pass(t)
-		if c := r.called(gateCmdName); c != nil {
+		if c := r.called(gate.GateCmdName); c != nil {
 			t.Fatalf("conflicting PR invoked gate: %v", c)
 		}
-		wake := r.called(agentsName, agentWakeName, loopWorker)
-		if wake == nil || !strings.Contains(wake[3], "conflicts with its base") {
-			t.Fatalf("conflicting PR did not wake worker for repair: %v", r.calls)
+		if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+			t.Fatalf("conflict returned to the author: %v", c)
 		}
+		r.reviewerRepair(t, loopReviewer, "conflicts with its base")
 		if len(r.logged(t, "supervisor.merge")) != 1 {
 			t.Fatalf("expected 1 supervisor.merge record, got %d", len(r.logged(t, "supervisor.merge")))
 		}
-		// Subsequent passes do not retry or wake again for the same head.
+		// Subsequent passes do not retry or start the repair again for the same head.
 		r.pass(t)
+		if c := r.called(agentsName, agentStartName, loopReviewer); c != nil {
+			t.Fatalf("conflicting PR retried its repair start on next pass: %v", c)
+		}
 		if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
 			t.Fatalf("conflicting PR retried repair wake on next pass: %v", c)
 		}
-		if c := r.called(gateCmdName); c != nil {
+		if c := r.called(gate.GateCmdName); c != nil {
 			t.Fatalf("conflicting PR retried gate on next pass: %v", c)
 		}
 	})
@@ -534,8 +569,8 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 		r.verdict("R1", loopHead, superloop.Approved, "")
 		// First pass queues behind a busy lane.
 		r.answer = func(args []string) (string, int) {
-			if len(args) > 0 && args[0] == gateCmdName {
-				return "queued in lane", ExitGateQueued
+			if len(args) > 0 && args[0] == gate.GateCmdName {
+				return "queued in lane", gate.ExitGateQueued
 			}
 			return "", 0
 		}
@@ -560,7 +595,7 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.pass(t)
-		if c := r.called(gateCmdName); c != nil {
+		if c := r.called(gate.GateCmdName); c != nil {
 			t.Fatalf("failed detached merge called gate again instead of handing off: %v", c)
 		}
 		wake := r.called(agentsName, agentWakeName, loopWorker)
@@ -577,6 +612,8 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 	})
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 	r := newLoopRig(t)
 	brief := filepath.Join(t.TempDir(), "worker.md")
@@ -620,7 +657,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 
 	r.answer = func(args []string) (string, int) {
 		switch {
-		case len(args) > 0 && args[0] == gateCmdName:
+		case len(args) > 0 && args[0] == gate.GateCmdName:
 			close(gateEntered)
 			<-releaseGate
 			return "", 0
@@ -696,6 +733,8 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 	for _, slow := range []string{capacity.TaskKindReview, workerRole} {
 		t.Run(slow, func(t *testing.T) {
@@ -725,7 +764,7 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 			var starts, busy atomic.Int32
 			r.answer = func(args []string) (string, int) {
 				switch {
-				case len(args) > 0 && args[0] == gateCmdName:
+				case len(args) > 0 && args[0] == gate.GateCmdName:
 					merged <- struct{}{}
 				case len(args) > 0 && args[0] == fillCapacityCommand:
 					if slices.Contains(args, "--review") {
@@ -912,6 +951,26 @@ func TestMergeHeadAuthorityTrustsOnlyDeskAndMemberVerdicts(t *testing.T) {
 	}
 }
 
+// A superseded reviewer's late request for changes on the head it was
+// given, posted after its author replaced that head, is no verdict at the
+// gate either: the next round's approval of the current head still
+// authorizes the merge. Posted before the push, it holds the merge.
+// https://github.com/giantswarm/beekeeper/issues/3843
+func TestMergeHeadAuthorityIgnoresAReviewOfAReplacedHead(t *testing.T) {
+	r := newLoopRig(t)
+	p := superloop.Pull{Ref: loopPR, Head: loopFixed, Reviews: []superloop.Review{
+		{ID: "R2", Author: loopDesk, Head: loopFixed, Commit: loopFixed, Verdict: superloop.Approved, Body: loopApproved, At: time.Now().Add(-time.Minute)},
+		{ID: "R1", Author: loopDesk, Head: loopHead, Commit: loopFixed, Verdict: superloop.ChangesRequested, Body: "Review: changes requested", At: time.Now()},
+	}}
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why != "" {
+		t.Fatalf("approval past a replaced head's review: %q, %v; want authorized", why, err)
+	}
+	p.Reviews[1].Commit = loopHead
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why == "" {
+		t.Fatalf("changes requested before the push: %q, %v; want a refusal", why, err)
+	}
+}
+
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
 // an issued execution merge grant names its head after " at ", behind a
 // grant id whose first group is hex too; the grant is logged without a
@@ -1064,6 +1123,8 @@ func TestReopenedPullMergeAuthority(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 	for _, head := range []string{"", loopFixed} {
 		t.Run("failed_head_"+head, func(t *testing.T) {
@@ -1078,7 +1139,7 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.pass(t)
-			if r.called(gateCmdName) == nil {
+			if r.called(gate.GateCmdName) == nil {
 				t.Fatalf("stale failure prevented gate validation: %v", r.calls)
 			}
 			if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
@@ -1091,6 +1152,8 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 	const (
 		confirmed     = "confirmed merge"
@@ -1107,7 +1170,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			read := loop.ReadLoopPull
 			r.answer = func(args []string) (string, int) {
-				if len(args) == 0 || args[0] != gateCmdName {
+				if len(args) == 0 || args[0] != gate.GateCmdName {
 					return "", 0
 				}
 				switch outcome {
@@ -1115,7 +1178,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 					r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
 					return "", 0
 				case laneWait:
-					return "lane occupied by running merge", ExitGateQueued
+					return "lane occupied by running merge", gate.ExitGateQueued
 				case policyRefusal:
 					return adminPolicyTestReason, 1
 				case branchRepair:
@@ -1126,7 +1189,7 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 					}
 					return "", 0
 				default:
-					return "held by release window", ExitGateRefused
+					return "held by release window", gate.ExitGateRefused
 				}
 			}
 			r.pass(t)
@@ -1158,8 +1221,11 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 
 // Quota-only refusals wait on fresh GitHub reads, not exponential backoff.
 // The same exact-head review is used once quota recovers.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
-	for _, code := range []int{ExitGateUnread, ExitGateRefused} {
+	for _, code := range []int{gate.ExitGateUnread, gate.ExitGateRefused} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
@@ -1167,7 +1233,7 @@ func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
 			r.verdict("R1", loopHead, superloop.Approved, "")
 			attempts := 0
 			r.answer = func(args []string) (string, int) {
-				if len(args) > 0 && args[0] == gateCmdName {
+				if len(args) > 0 && args[0] == gate.GateCmdName {
 					attempts++
 					if attempts <= 3 {
 						return "the reviews cannot be read: API rate limit exceeded", code
@@ -1189,6 +1255,8 @@ func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopRetriesLegacyQuotaBackoff(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -1204,7 +1272,7 @@ func TestLoopRetriesLegacyQuotaBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.pass(t)
-	if r.called(gateCmdName) == nil {
+	if r.called(gate.GateCmdName) == nil {
 		t.Fatalf("legacy quota backoff still holds the gate: %s", r.out)
 	}
 }

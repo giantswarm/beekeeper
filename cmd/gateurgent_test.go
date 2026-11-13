@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -147,6 +148,9 @@ func TestASecondUrgentMergeInTheWindowIsRefused(t *testing.T) {
 
 // At the cap, counted from the machine's process table, the merge first in
 // its lane waits for a devctl process to end.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeWaitsForTheMachinesDevctlCap(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
@@ -154,24 +158,27 @@ func TestAMergeWaitsForTheMachinesDevctlCap(t *testing.T) {
 	a.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
 	setBudget(t, a, 4000)
 	hostDevctls(t, a.cfg.Merge.Cap)
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	if why, err := g.step(); err != nil || !strings.Contains(why, "4 merges and promotes run machine-wide (cap 4)") {
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	if why, err := g.Step(); err != nil || !strings.Contains(why, "4 merges and promotes run machine-wide (cap 4)") {
 		t.Errorf("step: %q, %v; want a wait for the cap", why, err)
 	}
 }
 
 // An urgent merge keeps its own bound: under it, the merge waits for the
 // reset and says why.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnUrgentMergeWaitsUnderItsOwnBound(t *testing.T) {
 	a := urgentApp(t)
 	setBudget(t, a, 10)
 	if _, err := markUrgent(t, a, "7"); err != nil {
 		t.Fatal(err)
 	}
-	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
-		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
-	if why, err := g.step(); err != nil || !strings.Contains(why, `o/r#7 is urgent (asked by "supervisor"), and the GitHub budget 10 is under its own bound 20`) {
+	g := &gate.GateRun{Host: a, Ctx: context.Background(), Argv: mergeArgv(scratchRepo), Repo: scratchRepo, Pr: 7, Lane: a.cfg.LaneOf(scratchRepo),
+		Me: state.Party{Session: "s1", Name: ownerName}, Pid: os.Getpid(), Queued: true}
+	if why, err := g.Step(); err != nil || !strings.Contains(why, `o/r#7 is urgent (asked by "supervisor"), and the GitHub budget 10 is under its own bound 20`) {
 		t.Errorf("step: %q, %v; want a wait under the urgent bound", why, err)
 	}
 }

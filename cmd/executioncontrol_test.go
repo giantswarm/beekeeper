@@ -325,8 +325,62 @@ func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
 	}
 }
 
-func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
-	for _, waits := range []string{"merge hold lifting", "gate run completion"} {
+// TestExecutionMoveHandsOnItsPublication: a host worker that published its
+// work and then asks for the coordinator (agents move) hands the fresh
+// worker there the branch, head and pull request it published, and that
+// pull request stays on the coordinator beside the issue it serves, also
+// when no park or desk review named it
+// (https://github.com/giantswarm/beekeeper/issues/3900).
+//
+// control: none: agents move and its execution control are new, so the
+// merge base cannot build this test; the scenario
+// regression/host-worker-moves-its-task-to-the-coordinator fails on the base
+func TestExecutionMoveHandsOnItsPublication(t *testing.T) {
+	a, r := executionTestApp(t)
+	pull := "https://github.com/" + sshTestRepository + "/pull/7"
+	branch := executionBranch(r.Ref)
+	var line string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Published = &state.ExecutionPublication{At: a.now, Branch: branch, Head: loopHead, URL: pull}
+		var evs []state.Event
+		var err error
+		line, evs, err = a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{Operation: execution.ControlMove, Data: mustExecutionJSON(t, executionMove{Why: "the proof needs the coordinator's data"})})
+		return evs, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, "on the coordinator") {
+		t.Fatalf("move reply %q", line)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := st.Agents[0].Park
+	if p == nil || len(p.Continuation) != 1 {
+		t.Fatalf("park %+v, want one queued continuation", p)
+	}
+	for _, want := range []string{branch, loopHead, pull} {
+		if !strings.Contains(p.Continuation[0], want) {
+			t.Fatalf("continuation %q does not name %s", p.Continuation[0], want)
+		}
+	}
+	for _, ref := range []string{sshTestRepository + "#1711", sshTestRepository + "#7"} {
+		if _, ok := st.LocalTaskFor(ref); !ok {
+			t.Fatalf("%s carries no mark to stay on the coordinator: %+v", ref, st.LocalTasks)
+		}
+	}
+	if rec, _ := executionRecord(st, r.Ref); rec == nil || !rec.Completed {
+		t.Fatalf("execution record %+v, want it completed", rec)
+	}
+}
+
+// TestExecutionParkReasonMaySayAnything: an SSH execution's park on a pull
+// request is recorded on it whatever its reason says; --on alone says what
+// a park waits on.
+func TestExecutionParkReasonMaySayAnything(t *testing.T) {
+	for _, waits := range []string{"the editor's held-still source", "merge hold lifting", "gate run completion"} {
 		t.Run(waits, func(t *testing.T) {
 			a, _ := executionTestApp(t)
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -336,8 +390,15 @@ func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
 				})
 				return evs, err
 			})
-			if err == nil || !strings.Contains(err.Error(), "does not settle") {
-				t.Fatalf("mismatched park: %v", err)
+			if err != nil {
+				t.Fatalf("park refused: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := st.Agents[0].Park; p == nil || p.On != refOne || p.Waits != waits {
+				t.Fatalf("park %+v, want on %s waiting for %q", p, refOne, waits)
 			}
 		})
 	}

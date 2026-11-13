@@ -30,6 +30,9 @@ const (
 	fatalAsFlag            = "--as"
 	fatalBudgetCommand     = "budget"
 	fatalStatusError       = "error"
+	fatalStatusFailure     = "failure"
+	fatalStatusPending     = "pending"
+	fatalStatusSuccess     = "success"
 	fatalInstallationGuard = "guard:installation"
 	fatalDisabledState     = "disabled"
 	fatalEnabledState      = "enabled"
@@ -373,8 +376,10 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			if ag.Park != nil || ag.Import.Pending(now) || ag.Execution != nil {
 				return true
 			}
+			// A start still launching gets two minutes to show its session;
+			// a start that failed has none coming, so its process decides.
 			for _, incident := range q.Incidents {
-				if incident.Owner == name && now.Sub(incident.LastAttempt) < 2*time.Minute {
+				if incident.Owner == name && incident.StartError == "" && now.Sub(incident.LastAttempt) < 2*time.Minute {
 					return true
 				}
 			}
@@ -514,27 +519,72 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	args = append(args, briefPath)
 	launchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	_, code, runErr := loop.BeekeeperRun(launchCtx, args...)
-	x.Outcome = fmt.Sprintf("repair start exited %d; awaiting probe verification", code)
-	if runErr == nil && (code == ExitRefused || code == 75) {
+	out, code, runErr := loop.BeekeeperRun(launchCtx, args...)
+	exhausted := false
+	switch {
+	case runErr != nil:
+		x.Outcome = "repair launch uncertain; reserved owner retained"
+	case code == 0:
+		x.Outcome = "repair start exited 0; awaiting probe verification"
+	case code == ExitRefused || code == 75:
 		// Admission refusals created no worker and consume no repair attempt.
 		x.Attempts--
 		x.Owner = ""
 		x.Outcome = "waiting for normal start admission; retry after cooldown"
+	default:
+		// A start that failed runs no repair: no probe can verify one, so
+		// the next pass retries, and the last failure goes to the guide.
+		exhausted = x.StartFailed(fmt.Sprintf("exit %d: %s", code, fatalStartError(out)))
 	}
-	if runErr != nil {
-		x.Outcome = "repair launch uncertain; reserved owner retained"
+	_, _ = fmt.Fprintf(a.out, "%s: owner %q; attempt %d/%d; %s\n", x.ID, x.Owner, x.Attempts, fatal.MaxAttempts, x.Outcome)
+	events := []state.Event{{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}}
+	if exhausted {
+		events = append(events, fatalStartProblem(now, *x, repo))
 	}
-	_, _ = fmt.Fprintf(a.out, "%s: owner %q; attempt %d/3; %s\n", x.ID, x.Owner, x.Attempts, x.Outcome)
-	if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}); err != nil {
-		return err
+	for _, e := range events {
+		if err := store.Record(e); err != nil {
+			return err
+		}
 	}
 	_, _ = fatalProbe(observationCtx, "notify-send", "beekeeper system repair", x.ID+": "+x.Outcome)
 	return q.Save(dir)
 }
 
+// fatalStartErrorMax bounds the start's error kept on the incident.
+const fatalStartErrorMax = 600
+
+// fatalStartError is a failed repair start's own error: the last lines it
+// printed, on one line, bounded. Its error lines come last.
+func fatalStartError(out string) string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 {
+		return "no output"
+	}
+	text := strings.Join(lines[max(0, len(lines)-3):], " | ")
+	if r := []rune(text); len(r) > fatalStartErrorMax {
+		text = "…" + string(r[len(r)-fatalStartErrorMax:])
+	}
+	return text
+}
+
+// fatalStartProblem is the guide's report of an outage whose every repair
+// start failed: no repair runs and the sentinel starts none again.
+func fatalStartProblem(now time.Time, x fatal.Incident, repo string) state.Event {
+	finding := fmt.Sprintf("Fatal outage %s (scope: %s) has no repair: all %d repair starts failed, the last with %s. Evidence: %s. The sentinel starts no further repair of this outage: fix why beekeeper agents start fails for it, then repair %s by hand; beekeeper fatal status shows the incident.",
+		x.ID, x.Scope(), x.Attempts, x.StartError, x.Evidence, repo)
+	return state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: loop.LoopFileVerb,
+		Detail: fmt.Sprintf("[fatal-repair-start %s %d] fatal repair of %s could not start%s%s", x.ID, x.Opened.UnixNano(), x.ID, loop.FileReportSeparator, finding)}
+}
+
 // fatalMain checks only completed failing checks on the current default-branch
-// HEAD. Pending CI and unavailable GitHub are never called red or healthy.
+// HEAD. Pending CI and unavailable GitHub are never called red or healthy. A
+// red status context counts as red only when no run of it on HEAD passed or is
+// still running (fatalStatusRuns).
 func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	o := fatal.Observation{ID: "main:" + repo}
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
@@ -561,9 +611,10 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		return o
 	}
 	var status struct {
-		SHA   string `json:"sha"`
-		State string `json:"state"`
-		Total int    `json:"total_count"`
+		SHA      string        `json:"sha"`
+		State    string        `json:"state"`
+		Total    int           `json:"total_count"`
+		Statuses []fatalStatus `json:"statuses"`
 	}
 	if json.Unmarshal([]byte(out), &status) != nil || status.SHA == "" {
 		o.Unknown = true
@@ -571,10 +622,17 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	}
 	if status.Total > 0 {
 		switch status.State {
-		case "failure", fatalStatusError:
+		case fatalStatusFailure, fatalStatusError:
 			o.Failed = true
-			o.Evidence = "https://github.com/" + repo + "/commit/" + status.SHA
-		case "success":
+			// Every context is in the combined status: judge each red one by
+			// all of its runs. A truncated list keeps the combined verdict.
+			if len(status.Statuses) == status.Total {
+				o.Failed, o.Unknown = fatalStatusRuns(ctx, repo, status.SHA, status.Statuses)
+			}
+			if o.Failed {
+				o.Evidence = "https://github.com/" + repo + "/commit/" + status.SHA
+			}
+		case fatalStatusSuccess:
 		default:
 			o.Unknown = true
 		}
@@ -609,10 +667,10 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	}
 	for _, r := range wire.Runs {
 		switch r.Conclusion {
-		case "failure", "cancelled", "timed_out", "startup_failure", "action_required":
+		case fatalStatusFailure, "cancelled", "timed_out", "startup_failure", "action_required":
 			o.Failed = true
 			o.Evidence = r.URL
-		case "success", "neutral", "skipped":
+		case fatalStatusSuccess, "neutral", "skipped":
 		default:
 			o.Unknown = true
 		}
@@ -621,6 +679,67 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		o.Unknown = false
 	}
 	return o
+}
+
+// fatalStatus is one commit status as GitHub lists it.
+type fatalStatus struct {
+	Context   string `json:"context"`
+	State     string `json:"state"`
+	TargetURL string `json:"target_url"`
+}
+
+// fatalStatusRuns judges the red contexts of a combined status by all of
+// their runs on the commit. CircleCI reports a job of every pipeline that
+// builds the commit, the branch's and a tag's, under one context, and the
+// combined status keeps only the newest report, so one slow run of a tag
+// pipeline turns a commit red whose branch pipeline is green. A run is a
+// context's reports with one target (the job's URL), and its newest report is
+// its state. A red context with a passed run is not red, one with a run still
+// pending is unknown, and one whose every run failed is red. Unreadable
+// history keeps the combined status red.
+func fatalStatusRuns(ctx context.Context, repo, sha string, latest []fatalStatus) (failed, unknown bool) {
+	out, _, code, err := fatalRun(ctx, "", []string{"gh", workerGitHubAPIGroup, "repos/" + repo + "/commits/" + sha + "/statuses?per_page=100"})
+	var history []fatalStatus
+	if err != nil || code != 0 || json.Unmarshal([]byte(out), &history) != nil {
+		return true, false
+	}
+	// GitHub lists a commit's statuses newest first: the first report of a
+	// run is its state. A run older than the page is not seen, which leaves
+	// its context red.
+	type run struct{ context, target string }
+	state := map[run]string{}
+	for _, s := range history {
+		k := run{s.Context, s.TargetURL}
+		if _, seen := state[k]; !seen {
+			state[k] = s.State
+		}
+	}
+	for _, s := range latest {
+		switch s.State {
+		case fatalStatusPending:
+			unknown = true
+			continue
+		case fatalStatusFailure, fatalStatusError:
+		default:
+			continue
+		}
+		passed, running := false, false
+		for r, st := range state {
+			if r.context != s.Context {
+				continue
+			}
+			passed = passed || st == fatalStatusSuccess
+			running = running || st == fatalStatusPending
+		}
+		switch {
+		case passed:
+		case running:
+			unknown = true
+		default:
+			failed = true
+		}
+	}
+	return failed, unknown && !failed
 }
 
 // Installation ownership, rather than executable presence, determines whether

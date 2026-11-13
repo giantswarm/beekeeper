@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -37,9 +38,9 @@ echo '`+mergedDoc+`'`)
 // quickRetries sends a merge again at once.
 func quickRetries(t *testing.T) {
 	t.Helper()
-	was := serverRetries
-	serverRetries = []time.Duration{0, 0, 0}
-	t.Cleanup(func() { serverRetries = was })
+	was := gate.ServerRetries
+	gate.ServerRetries = []time.Duration{0, 0, 0}
+	t.Cleanup(func() { gate.ServerRetries = was })
 }
 
 // gateStdout catches the gate's stdout in a file and returns its reader.
@@ -69,6 +70,9 @@ func runs(t *testing.T, count string) int {
 // A merge call GitHub answers with a 5xx is sent again while the pull
 // request is open, and merges on the next success; the caller reads one
 // document, the merge's.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeCallsServerErrorIsRetried(t *testing.T) {
 	noSystemd(t)
 	quickRetries(t)
@@ -76,7 +80,7 @@ func TestAMergeCallsServerErrorIsRetried(t *testing.T) {
 	asked := stubGitHub(t, github.Open, "")
 	stdout := gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); err != nil {
+	if err := g.RunMerge(); err != nil {
 		t.Fatalf("the merge after two 502s: %v", err)
 	}
 	if n := runs(t, count); n != 3 {
@@ -101,6 +105,9 @@ func TestAMergeCallsServerErrorIsRetried(t *testing.T) {
 
 // The retries spent, the last 502 is the run's outcome: nothing merged, and
 // the merge leaves its lane with its run.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeCallsServerErrorEndsAfterTheRetries(t *testing.T) {
 	noSystemd(t)
 	quickRetries(t)
@@ -108,11 +115,11 @@ func TestAMergeCallsServerErrorEndsAfterTheRetries(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stdout := gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); Code(err) != 7 {
+	if err := g.RunMerge(); Code(err) != 7 {
 		t.Fatalf("exit %d, want 7", Code(err))
 	}
-	if n := runs(t, count); n != 1+len(serverRetries) {
-		t.Errorf("devctl ran %d times, want %d", n, 1+len(serverRetries))
+	if n := runs(t, count); n != 1+len(gate.ServerRetries) {
+		t.Errorf("devctl ran %d times, want %d", n, 1+len(gate.ServerRetries))
 	}
 	if got := stdout(); got != badGateway {
 		t.Errorf("the caller read %q, want the last document alone", got)
@@ -126,6 +133,9 @@ func TestAMergeCallsServerErrorEndsAfterTheRetries(t *testing.T) {
 }
 
 // A 502 whose merge landed after all is not sent again: GitHub judges it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 	noSystemd(t)
 	quickRetries(t)
@@ -133,11 +143,11 @@ func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	gateStdout(t)
 	// The release recovery reads, it is no merge retry: keep it off the count.
-	was := releaseWait
-	t.Cleanup(func() { releaseWait = was })
-	releaseWait = func(context.Context, string, ...string) []byte { return nil }
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(context.Context, string, ...string) []byte { return nil }
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); Code(err) != 7 {
+	if err := g.RunMerge(); Code(err) != 7 {
 		t.Fatalf("exit %d, want devctl's 7", Code(err))
 	}
 	if n := runs(t, count); n != 1 {
@@ -151,7 +161,7 @@ func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 // writeRC leaves the exit code a merge's devctl wrote for repo#pr.
 func writeRC(t *testing.T, dir, repo string, pr, rc int) {
 	t.Helper()
-	base := mergeBase(dir, repo, pr)
+	base := gate.MergeBase(dir, repo, pr)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -366,18 +376,18 @@ func stopGate(t *testing.T, output string) string {
 	fakeDevctl(t, `echo $$ >`+devpid+`; exec sleep 60`)
 	stubGitHub(t, github.Open, "")
 	// The hook and the gate ask at once: a stub without stubGitHub's count.
-	pullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
+	gate.PullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
 	gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	g.cfg.StateDir = g.store.Dir()
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	gateApp(g.Host).cfg.StateDir = gateApp(g.Host).store.Dir()
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Output = output
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- g.runMerge() }()
+	go func() { done <- g.RunMerge() }()
 	var dev int
 	if !eventually(10*time.Second, func() bool {
 		raw, err := os.ReadFile(devpid) //nolint:gosec // the test's file
@@ -388,7 +398,7 @@ func stopGate(t *testing.T, output string) string {
 	}
 	child := gateState(t, g).Merges[0].Child
 	task := strings.TrimSuffix(filepath.Base(output), taskOutputExt)
-	said := g.stopTask("", task)
+	said := gateApp(g.Host).stopTask("", task)
 	select {
 	case err := <-done:
 		if Code(err) != 143 {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // rosterFresh is how long a read roster answers before it is read again.
@@ -191,7 +191,7 @@ func personToken(ctx context.Context, agentPath []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c := exec.CommandContext(ctx, gh, "auth", "token") //nolint:gosec // gh from PATH
+	c := proc.CommandContext(ctx, gh, "auth", "token") //nolint:gosec // gh from PATH
 	c.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		name, _, _ := strings.Cut(kv, "=")
 		return slices.Contains(ghTokenEnv, name)

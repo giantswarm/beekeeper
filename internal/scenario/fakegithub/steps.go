@@ -13,15 +13,16 @@ import (
 )
 
 // The scenario's steps and expectations of its GitHub: the github step
-// (what happens on GitHub: a push, a check's result, a review, a merge, a
-// close, a comment, a budget), the fault step (arm or clear a fault), and
-// the github expectation (the calls it saw, what callers spent, and the
-// facts of a pull request or an issue).
+// (what happens on GitHub: a push, a check's result, a commit status, a
+// review, a merge, a close, a comment, a budget), the fault step (arm or
+// clear a fault), and the github expectation (the calls it saw, what callers
+// spent, and the facts of a pull request or an issue).
 
 // Step is a github step: exactly one of its actions.
 type Step struct {
 	Push    *PushStep              `yaml:"push"`
 	Check   *CheckStep             `yaml:"check"`
+	Status  *StatusStep            `yaml:"status"`
 	Review  *ReviewStep            `yaml:"review"`
 	Merge   *MergeStep             `yaml:"merge"`
 	Close   *CloseStep             `yaml:"close"`
@@ -49,6 +50,20 @@ type CheckStep struct {
 	Name     string `yaml:"name"`
 	Workflow string `yaml:"workflow"`
 	State    string `yaml:"state"`
+}
+
+// StatusStep reports a commit status on Head, a branch or a commit: Context
+// (default "default") at State (pending, success, failure or error), with
+// TargetURL naming the run. CI that builds a commit more than once, as
+// CircleCI's branch and tag pipelines do, reports each run under one context
+// with a target of its own.
+type StatusStep struct {
+	Repo        string `yaml:"repo"`
+	Head        string `yaml:"head"`
+	Context     string `yaml:"context"`
+	State       string `yaml:"state"`
+	TargetURL   string `yaml:"target_url"`
+	Description string `yaml:"description"`
 }
 
 // ReviewStep submits a review of a pull request's head: approved,
@@ -89,8 +104,8 @@ type CommentStep struct {
 func (s *Step) Kind() string {
 	var kinds []string
 	for name, set := range map[string]bool{
-		"push": s.Push != nil, "check": s.Check != nil, "review": s.Review != nil, "merge": s.Merge != nil,
-		"close": s.Close != nil, "comment": s.Comment != nil, "budget": len(s.Budget) > 0,
+		"push": s.Push != nil, "check": s.Check != nil, "status": s.Status != nil, "review": s.Review != nil,
+		"merge": s.Merge != nil, "close": s.Close != nil, "comment": s.Comment != nil, "budget": len(s.Budget) > 0,
 	} {
 		if set {
 			kinds = append(kinds, name)
@@ -123,7 +138,7 @@ func (s *Step) Validate() error {
 	var errs []error
 	switch s.Kind() {
 	case "":
-		return errors.New("exactly one of push, check, review, merge, close, comment and budget")
+		return errors.New("exactly one of push, check, status, review, merge, close, comment and budget")
 	case "push":
 		errs = append(errs, needRepo(s.Push.Repo))
 		if s.Push.Branch == "" {
@@ -137,6 +152,15 @@ func (s *Step) Validate() error {
 		}
 		if _, ok := checkStates[strings.ToLower(c.State)]; !ok || c.Name == "" {
 			errs = append(errs, fmt.Errorf("check: a name and a state of queued, pending, green or red (has %q, %q)", c.Name, c.State))
+		}
+	case "status":
+		c := s.Status
+		errs = append(errs, needRepo(c.Repo))
+		if c.Head == "" {
+			errs = append(errs, errors.New("status without a head"))
+		}
+		if !slices.Contains(statusStates, strings.ToUpper(c.State)) {
+			errs = append(errs, fmt.Errorf("status: a state of pending, success, failure or error (has %q)", c.State))
 		}
 	case "review":
 		r := s.Review
@@ -255,6 +279,18 @@ func (s *Server) Run(st *Step) error {
 			}
 			state := checkStates[strings.ToLower(c.State)]
 			m.SetCheck(r, sha, CheckSpec{Name: c.Name, Workflow: c.Workflow, Status: state[0], Conclusion: state[1], Branch: branch})
+			return nil
+		case "status":
+			c := st.Status
+			r, err := m.repoOf(c.Repo)
+			if err != nil {
+				return err
+			}
+			sha, ok := m.Commit(r, c.Head)
+			if !ok {
+				return fmt.Errorf("status: %s is no branch or commit of %s", c.Head, c.Repo)
+			}
+			m.SetStatus(r, sha, cmpOr(c.Context, "default"), c.State, c.Description, c.TargetURL)
 			return nil
 		case "review":
 			rv := st.Review

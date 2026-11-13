@@ -136,6 +136,32 @@ func (s *State) ContinueDelivery(ref, agent, pull string, at time.Time) {
 	}
 }
 
+// PullDelivery records that ref, whose delivery a start just started or
+// continued, is a pull request: that delivery holds ref among its pulls, as
+// the loop's observation of an issue-less pull request has it. The pull
+// request's merge then proves the delivery's outcome although no sweep of
+// the desk's open pull requests ever read it (one another author opened, or
+// one that merged first). A pull request an active delivery of its issue
+// holds has no delivery of its own: StartDelivery started none.
+func (s *State) PullDelivery(ref string) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	holds := func(d Delivery) bool {
+		return slices.ContainsFunc(d.Pulls, func(p string) bool { return strings.EqualFold(p, ref) })
+	}
+	if ref == "" || slices.ContainsFunc(s.Deliveries, func(d Delivery) bool {
+		return d.Active() && !strings.EqualFold(d.Ref, ref) && holds(d)
+	}) {
+		return
+	}
+	i := slices.IndexFunc(s.Deliveries, func(d Delivery) bool { return strings.EqualFold(d.Ref, ref) })
+	if i < 0 || holds(s.Deliveries[i]) {
+		return
+	}
+	d := &s.Deliveries[i]
+	d.Pulls = append(slices.Clone(d.Pulls), ref)
+	slices.Sort(d.Pulls)
+}
+
 // DeliveryStallReport retains the identity needed to recover one batched alert.
 type DeliveryStallReport struct {
 	Episodes []string `json:"episodes"`

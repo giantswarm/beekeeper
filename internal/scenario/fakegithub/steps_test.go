@@ -104,12 +104,16 @@ func TestStepsAndExpectations(t *testing.T) {
 // Steps, expectations and given.github refuse what they cannot mean:
 // exactly one action or kind, known states, known buckets, and no unknown
 // key, in a range too.
+//
+// control: none: the status step is new, so the base's fake GitHub cannot build its cases
 func TestValidation(t *testing.T) {
 	for name, st := range map[string]*Step{
 		"no action":            {},
 		"two actions":          {Merge: &MergeStep{Repo: "o/r", Pull: 1}, Close: &CloseStep{Repo: "o/r", Pull: 1}},
 		"a check of no head":   {Check: &CheckStep{Repo: "o/r", Name: "x", State: "green"}},
 		"an unknown state":     {Check: &CheckStep{Repo: "o/r", Pull: 1, Name: "x", State: "blue"}},
+		"a status of no head":  {Status: &StatusStep{Repo: "o/r", Context: "ci", State: "success"}},
+		"a check's state":      {Status: &StatusStep{Repo: "o/r", Head: "main", Context: "ci", State: "green"}},
 		"a bad repository":     {Merge: &MergeStep{Repo: "nope", Pull: 1}},
 		"a close of both":      {Close: &CloseStep{Repo: "o/r", Pull: 1, Issue: 2}},
 		"an unknown bucket":    {Budget: map[string]GivenBudget{"gql": {}}},

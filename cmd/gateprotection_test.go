@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 )
 
 // classicDeclineDoc is devctl pr merge's document of a merge GitHub declined
@@ -24,6 +25,9 @@ const classicDeclineDoc = `{"exitCode":3,"verdict":"not_applicable","repository"
 // A merge declined on classic protection ends with one gate line naming the
 // cause and the alignment, whole past the reason's truncation; devctl runs
 // once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAClassicProtectionDeclineNamesTheAlignment(t *testing.T) {
 	noSystemd(t)
 	calls := filepath.Join(t.TempDir(), "calls")
@@ -31,7 +35,7 @@ func TestAClassicProtectionDeclineNamesTheAlignment(t *testing.T) {
 	stubGitHub(t, "", "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	var err error
-	out := gateStderr(t, func() { err = g.runMerge() })
+	out := gateStderr(t, func() { err = g.RunMerge() })
 	var code *exitError
 	if !errors.As(err, &code) || code.code != 3 {
 		t.Errorf("exit %v, want 3", err)
@@ -40,7 +44,7 @@ func TestAClassicProtectionDeclineNamesTheAlignment(t *testing.T) {
 		"(no token of ours may change it: HTTP 403): align the repository, align: true on the entry r in repositories/team-o.yaml of giantswarm/github (devctl repo status o/r)"
 	lines := 0
 	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, GatePrefix+"nothing merged") {
+		if strings.HasPrefix(l, gate.GatePrefix+"nothing merged") {
 			lines++
 			if !strings.Contains(l, want) {
 				t.Errorf("the gate line %q does not name the cause and the fix %q", l, want)

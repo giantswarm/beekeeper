@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/capacity"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
@@ -441,6 +442,99 @@ func TestContinuationStartKeepsTheMergedPullOfItsDelivery(t *testing.T) {
 	}
 }
 
+// A fixer's review park, its worker off the roster, has post-merge work. Once
+// its pull request merged, the loop starts a fresh session for that work
+// (StartFixer's end start). That session continues the served issue's
+// delivery: the delivery keeps the merged pull request, or gains it, so the
+// session's idle --done is accepted without --no-change.
+func TestReviewParkContinuationKeepsTheMergedPullOfItsDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		delivery state.Delivery
+	}{
+		{name: "released merge", delivery: state.Delivery{Pulls: []string{loopPR}, Step: state.DeliveryDone, Outcome: state.OutcomeMerged, Evidence: loopURL}},
+		{name: "delivery the park alone links to the pull", delivery: state.Delivery{Pulls: []string{}, Step: state.DeliveryImplementing}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			now := r.a.now
+			work := "prove the change on main"
+			started := now.Add(-2 * time.Hour)
+			d := tc.delivery
+			d.Ref, d.Started, d.Since = continuationTaskRef, started, now.Add(-time.Minute)
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.ReviewParks = []state.ReviewPark{{On: loopPR, At: now.Add(-time.Minute), ReviewHead: loopHead, Agent: loopWorker,
+					Party: state.Party{Name: loopWorker, Session: continuationOldSession}, Serves: continuationTaskRef, PostMerge: &work}}
+				st.Deliveries = []state.Delivery{d}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			next := state.Party{Name: loopWorker, Session: continuationNewSession}
+			var startErr error
+			r.answer = func(args []string) (string, int) {
+				switch {
+				case args[0] == loop.LoopCapacity:
+					return loopRoomJSON, 0
+				case len(args) > 3 && args[0] == agentsName && args[1] == agentStartName:
+					// The start reads its brief file and registers its
+					// session as agents start does.
+					brief, err := readBrief(args[3])
+					if err != nil {
+						startErr = err
+						break
+					}
+					startErr = r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						_, err := recordStart(st, state.Start{Party: next, At: now}, briefTask(brief), strings.Join(briefIssues(brief), ","), func(p state.Party) bool { return p.Is(next) })
+						return nil, err
+					})
+				}
+				return "", 0
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := &loop.Loop{Host: r.a, Said: map[string]bool{}, Merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+			if _, err := l.EndMerged(t.Context(), st, superloop.Action{Key: "end " + loopPR, Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)}); err != nil {
+				t.Fatal(err)
+			}
+			if startErr != nil {
+				t.Fatal(startErr)
+			}
+			if r.called(agentsName, agentStartName, loopWorker) == nil {
+				t.Fatalf("no fresh session for the post-merge work: %v\n%s", r.calls, r.out)
+			}
+			if st, err = r.a.store.Read(); err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(next) })
+			if i < 0 {
+				t.Fatalf("fresh session not on the roster: %+v", st.Agents)
+			}
+			merged := func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+				out := map[github.PR]github.RefState{}
+				for _, ref := range refs {
+					out[ref] = github.RefState{Kind: github.RefPullRequest, State: github.Merged}
+				}
+				return out, nil
+			}
+			_, err = r.a.completionOutcomeWith(t.Context(), st, st.Agents[i], true, "", false, "", merged)
+			k := slices.IndexFunc(st.Deliveries, func(x state.Delivery) bool { return x.Ref == continuationTaskRef })
+			if k < 0 {
+				t.Fatalf("the task's delivery is gone: %+v", st.Deliveries)
+			}
+			got := st.Deliveries[k]
+			if err != nil {
+				t.Fatalf("fresh session's idle --done refused: %v (delivery %+v)", err, got)
+			}
+			if !slices.Equal(got.Pulls, []string{loopPR}) || got.Agent != loopWorker || !got.Started.Equal(started) {
+				t.Fatalf("fresh session lost the task's delivery: %+v", got)
+			}
+		})
+	}
+}
+
 func TestParkedPullNamesOnlyAPullRequest(t *testing.T) {
 	for _, tc := range []struct {
 		park *state.Park
@@ -454,6 +548,60 @@ func TestParkedPullNamesOnlyAPullRequest(t *testing.T) {
 	} {
 		if got := parkedPull(tc.park); got != tc.want {
 			t.Errorf("parkedPull(%+v) = %q, want %q", tc.park, got, tc.want)
+		}
+	}
+}
+
+// The fresh worker the loop starts for a pull request whose worker left the
+// roster for the desk review takes that worker's place: the note it filed,
+// the timer it set, its serve record and its desk-review park name the
+// fresh worker, and a late answer or wake for the old session reaches the
+// fresh worker instead of resuming the old transcript beside it.
+//
+// control: none: takeOverReviewPark is new, so the merge base cannot build this test
+func TestFixerTakesOverTheWorkerItsReviewParkLeft(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	old := state.Party{Name: holderParked, HostSession: codex.HostPrefix + continuationOldSession}
+	fixer := state.Agent{Party: state.Party{Name: holderParked, HostSession: codex.HostPrefix + continuationNewSession}, Task: "Fix the findings on https://github.com/o/r/pull/13"}
+	rp := state.ReviewPark{On: "o/r#13", ReviewHead: "abc123", Agent: holderParked, Party: old, Serves: continuationTaskRef}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{fixer}
+		st.EndedWorkers = []state.Start{{Party: old, Task: recoveryTask}}
+		st.ReviewParks = []state.ReviewPark{rp}
+		st.Records = []state.Record{{Session: old, Issue: continuationTaskRef}}
+		st.Notes = []state.Note{{ID: 7, By: old, Text: "May the desk buy the larger build cache?"}}
+		st.Timers = []state.Timer{{ID: 3, Wake: old.HostSession, By: old, What: "look at the cache again"}}
+		st.Grants = []state.Grant{{Resource: labOne, To: old}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		return takeOverReviewPark(a, st, rp, holderParked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch {
+	case !st.Notes[0].By.Is(fixer.Party):
+		t.Errorf("the old session's note stays its own: %+v", st.Notes[0].By)
+	case st.Timers[0].Wake != fixer.Name || !st.Timers[0].By.Is(fixer.Party):
+		t.Errorf("the old session's timer wakes %q, set by %+v", st.Timers[0].Wake, st.Timers[0].By)
+	case len(st.Records) != 1 || !st.Records[0].Session.Is(fixer.Party) || !strings.EqualFold(st.Records[0].Issue, continuationTaskRef):
+		t.Errorf("serve records %+v", st.Records)
+	case !st.ReviewParks[0].Party.Is(fixer.Party):
+		t.Errorf("the desk-review park stays the old session's: %+v", st.ReviewParks[0].Party)
+	case !st.Grants[0].To.Is(fixer.Party):
+		t.Errorf("the old session's grant stays its own: %+v", st.Grants[0].To)
+	}
+	for _, q := range []string{old.HostSession, old.Name} {
+		ag, rostered, err := a.wakeParty(st, q)
+		if err != nil || !rostered || !ag.Is(fixer.Party) {
+			t.Errorf("a wake of %q reaches %+v (rostered %v, %v), not the fresh worker", q, ag.Party, rostered, err)
 		}
 	}
 }

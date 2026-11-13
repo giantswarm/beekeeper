@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -395,6 +396,9 @@ func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
 // decision or records a failure, so each must be named by the alarm instead
 // of "no successful completion recorded"
 // (https://github.com/giantswarm/beekeeper/issues/3820).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 	r, l, _ := emptyBoardFill(t)
 	fill := r.answer
@@ -409,7 +413,7 @@ func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 	// stage stands, and the worker left the roster with its review park.
 	l.Mu.Lock()
 	l.Stages = map[string]bool{act.Key + " repair": true}
-	l.StageDetail = map[string]string{act.Key + " repair": "(exit 1): merge result (main + " + shortSHA(loopHead) + ") failed go test: --- FAIL: TestOfTheHost"}
+	l.StageDetail = map[string]string{act.Key + " repair": "(exit 1): merge result (main + " + gate.ShortSHA(loopHead) + ") failed go test: --- FAIL: TestOfTheHost"}
 	l.Mu.Unlock()
 	st, err := r.a.store.Read()
 	if err != nil {
@@ -533,6 +537,9 @@ func TestLoopKeepsMergeDecisionWaitsAcrossARestart(t *testing.T) {
 // A claimed merge whose pull request cannot be read yet waits for the next
 // pass with that cause: it neither fails the pass (which ends the loop) nor
 // waits unnamed.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopClaimedMergeWithAnUnreadPullWaitsNamed(t *testing.T) {
 	r, _ := fillRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -557,7 +564,7 @@ func TestLoopClaimedMergeWithAnUnreadPullWaitsNamed(t *testing.T) {
 	if note.Class != loop.WaitUnread || !strings.Contains(note.Cause, "observation is 19m43s old") {
 		t.Fatalf("the wait is not named: %+v", note)
 	}
-	if r.called(gateCmdName) != nil || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
+	if r.called(gate.GateCmdName) != nil || len(r.logged(t, loop.LoopFailureVerb)) != 0 {
 		t.Fatalf("an unread claim ran the gate or recorded a failure: %v\n%s", r.calls, r.out)
 	}
 }

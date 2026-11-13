@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 )
 
 // State seeds the desk's state before the scenario's first step.
@@ -13,7 +14,18 @@ type State struct {
 	// Generate fills the state and the event log like a coordinator's
 	// that has worked for weeks.
 	Generate *Generate `yaml:"generate"`
+	// Rewrite rewrites the state this often from the first step to the
+	// last, as a busy desk's sessions, runners and commands do: each
+	// rewrite changes one generated worker's activity and appends one event.
+	Rewrite Duration `yaml:"rewrite"`
 }
+
+// VerbRewrite is the event of a rewrite of given.state.rewrite.
+const VerbRewrite = "scenario.rewrite"
+
+// minRewrite is the shortest given.state.rewrite: a busy desk rewrites its
+// state about once a second.
+const minRewrite = 100 * time.Millisecond
 
 // Generate is the size of a generated desk. What it fills is at rest: the
 // workers are idle, the serve records are of sessions that ended, and the
@@ -64,6 +76,14 @@ func (s *State) validate(repositories []string) error {
 	}
 	if g.Agents+g.Records+g.Deliveries+g.Reports+g.Events == 0 {
 		errs = append(errs, errors.New("state.generate: nothing to generate"))
+	}
+	if r := s.Rewrite.Duration; r != 0 {
+		if r < minRewrite {
+			errs = append(errs, fmt.Errorf("state.rewrite: %s is more often than every %s", r, minRewrite))
+		}
+		if g.Agents == 0 {
+			errs = append(errs, errors.New("state.rewrite: no generate.agents, whose activity a rewrite changes"))
+		}
 	}
 	switch {
 	case len(repositories) == 0:

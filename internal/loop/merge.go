@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -101,7 +102,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	if err := EnsureCombinedPullCloses(ctx, st, &p); err != nil {
 		return "", err
 	}
-	if LatestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
+	if m := MarkReplaced(ctx, p); LatestReviewRequestsChanges(m) || reviewOvertookDecision(m, act) {
 		return "", Cmd.Refused("a review requested changes; new supervisor approval required")
 	}
 	repair := func(code int, reason string) (string, error) {
@@ -118,8 +119,11 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		}
 		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, Cmd.OneLine(reason)))
 	}
-	if p.Draft || strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
-		return repair(github.SquashNotApplicable, "branch is draft or conflicts with its base")
+	if p.Draft {
+		return repair(github.SquashNotApplicable, "branch is draft")
+	}
+	if strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
+		return repair(github.SquashNotApplicable, "branch conflicts with its base")
 	}
 	// A detached gate owns the queued/running mutation. Observe its result
 	// on later passes; do not submit another command for the same PR.
@@ -203,7 +207,10 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 			resultErr = errors.Join(resultErr, err)
 		}
 	}()
-	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
+	// The claim ends when GitHub reports the merge: the gate leaves the
+	// release wait to its merge-child (--until-merged), which records the
+	// release with the run, and the delivery observation tracks it apart.
+	gateArgs := []string{gate.GateCmdName, "--wait", "0s", "--limit", "0", "--until-merged", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := BeekeeperRun(ctx, l.As(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
 		if saveErr := a.OperationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
@@ -260,18 +267,18 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		}
 		return "", MergeHeld(waitPolicy, "%s", pending)
 	}
-	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
+	if err == nil && (code == gate.ExitGateQueued || code == gate.ExitGateDuplicate && !mutationResult) {
 		pending = fmt.Sprintf("merge gate waiting (exit %d): %s", code, Cmd.OneLine(out))
 		return "", MergeHeld(waitGate, "%s", pending)
 	}
 	// An unavailable read never authorizes a merge and is not a durable
 	// policy refusal. Reconsider it on a budget-admitted pass, so quota
 	// recovery does not wait for the generic exponential failure backoff.
-	if err == nil && (code == ExitGateUnread || code == ExitGateRefused && github.RateLimited(errors.New(out))) {
+	if err == nil && (code == gate.ExitGateUnread || code == gate.ExitGateRefused && github.RateLimited(errors.New(out))) {
 		pending = "GitHub read unavailable; retrying when GitHub answers: " + Cmd.OneLine(out)
 		return "", MergeHeld(WaitUnread, "%s", pending)
 	}
-	if err == nil && code == ExitGateRefused || mutationResult && code == github.SquashRefused {
+	if err == nil && code == gate.ExitGateRefused || mutationResult && code == github.SquashRefused {
 		if mutationResult && reply.Reason != "" {
 			out = reply.Reason
 		}
@@ -290,7 +297,7 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", Cmd.Refused("merge head moved or current CI is not green")
 	}
-	if LatestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
+	if m := MarkReplaced(ctx, p); LatestReviewRequestsChanges(m) || reviewOvertookDecision(m, act) {
 		return "", Cmd.Refused("a review requested changes; new supervisor approval required")
 	}
 	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
@@ -330,7 +337,7 @@ func StaleMergeResultFailure(reason, head string) bool {
 		}
 		identity, tail, closed := strings.Cut(rest, ")")
 		_, tested, paired := strings.Cut(identity, " + ")
-		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != Cmd.ShortSHA(head)) {
+		if !closed || !paired || tested == "" || head == "" || (tested != head && tested != gate.ShortSHA(head)) {
 			return true
 		}
 		reason = tail
@@ -402,7 +409,7 @@ func (l *Loop) DropInvalidMergeRepairs(taken []superloop.Taken, stages map[strin
 }
 
 // repairPull hands an open pull request whose merge was not applicable or red
-// to its worker once, recording the repair stage before waking or starting a
+// to its repair owner once, recording the repair stage before waking or starting a
 // fixer so capacity waits never retry the merge command each pass.
 func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Action, reason string) (string, error) {
 	if StaleMergeResultFailure(reason, act.Head) {
@@ -430,7 +437,10 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 		l.StageDetail[repairStage] = reason
 		l.Mu.Unlock()
 	}
-	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
+	if act.RepairAgent != "" && strings.Contains(strings.ToLower(reason), "conflicts with") {
+		act.Agent = act.RepairAgent
+	}
+	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI: the pull request had its one desk review, and the supervisor merges the repaired head once CI is green without a new review.", act.URL, act.Head, reason)
 	if err := l.WakeOrStartFixer(ctx, st, act); err != nil {
 		// The merge is over; the decision stays pending until a worker has
 		// the repair. Say both, or the wait reads as a merge that never ran.
@@ -975,13 +985,41 @@ func (l *Loop) moveServedDone(ctx context.Context, serves, ref string) error {
 
 const MergeableConflicting = "CONFLICTING"
 
+// MarkReplaced is p with its reviews of a head their author had replaced
+// when they came (superloop.Replaced) marked, as the planner reads them: no
+// verdict, neither for a merge nor against one. A superseded reviewer's late
+// request for changes on the head it was given holds no go the next round's
+// verdict earned. A base merge that cannot be read keeps the review standing.
+// The reviews of the p passed in stay as they are.
+func MarkReplaced(ctx context.Context, p superloop.Pull) superloop.Pull {
+	covers := func(q superloop.Pull, judged string) bool {
+		ok, err := ReadBaseMerge(ctx, q, judged)
+		return err != nil || ok
+	}
+	var reviews []superloop.Review
+	for i, r := range p.Reviews {
+		if r.Replaced || !superloop.Replaced(p, r, covers) {
+			continue
+		}
+		if reviews == nil {
+			reviews = slices.Clone(p.Reviews)
+		}
+		reviews[i].Replaced = true
+	}
+	if reviews != nil {
+		p.Reviews = reviews
+	}
+	return p
+}
+
 // reviewOvertookDecision prevents a fresh exact-head authorization from
 // concealing a change request that arrived after the planner's review snapshot.
+// A review of a replaced head (MarkReplaced) overtakes nothing.
 func reviewOvertookDecision(p superloop.Pull, act superloop.Action) bool {
 	var latest *superloop.Review
 	for i := range p.Reviews {
 		r := &p.Reviews[i]
-		if r.Verdict != "" && (latest == nil || !r.At.Before(latest.At)) {
+		if r.Verdict != "" && !r.Replaced && (latest == nil || !r.At.Before(latest.At)) {
 			latest = r
 		}
 	}
@@ -992,12 +1030,13 @@ func reviewOvertookDecision(p superloop.Pull, act superloop.Action) bool {
 // LatestReviewRequestsChanges reports whether the latest review verdict on p
 // requests changes on its current head, overriding any earlier approval.
 // A different head still needs the loop's exact-head decision; the executor's
-// authority check rejects any go overtaken by a later change request.
+// authority check rejects any go overtaken by a later change request. A
+// review of a replaced head (MarkReplaced) is no verdict.
 func LatestReviewRequestsChanges(p superloop.Pull) bool {
 	var latest superloop.Review
 	var found bool
 	for _, r := range p.Reviews {
-		if r.Verdict == "" {
+		if r.Verdict == "" || r.Replaced {
 			continue
 		}
 		if !found || r.At.IsZero() || latest.At.IsZero() || !r.At.Before(latest.At) {

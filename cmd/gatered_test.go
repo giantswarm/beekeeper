@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -25,6 +26,9 @@ const redReason = "red: status ci/circleci: go-build is failure; failed: lint / 
 // A gated merge that ends red leaves no heard marker, so its merge-child
 // wakes the owner with devctl's verdict and the failed checks, as for a
 // queued merge's outcome; the lane shows the failed attempt with its reason.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo "waiting for CI" >&2; echo '`+redDoc+`'; exit 1`)
@@ -32,18 +36,18 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
 	owner := state.Party{Session: "s1", Name: ownerName}
-	g.me = owner
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	g.Me = owner
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].By = owner
 		st.Agents = []state.Agent{{Party: owner}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.runMerge(); Code(err) != 1 {
+	if err := g.RunMerge(); Code(err) != 1 {
 		t.Fatalf("exit %d, want devctl's 1", Code(err))
 	}
-	base := mergeBase(g.store.Dir(), g.repo, g.pr)
+	base := gate.MergeBase(gateApp(g.Host).store.Dir(), g.Repo, g.Pr)
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err == nil {
 		t.Fatal("a red merge left the heard marker: its merge-child wakes nobody")
 	}
@@ -68,15 +72,15 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { wakeOwner = was })
-	g.tellOwner(context.Background(), childResult{spec: childSpec{Argv: g.argv, Owner: owner}, base: base, rc: 1, doc: []byte(redDoc)})
+	gateApp(g.Host).tellOwner(context.Background(), childResult{spec: gate.ChildSpec{Argv: g.Argv, Owner: owner}, base: base, rc: 1, doc: []byte(redDoc)})
 	want := "beekeeper gate → s1: devctl pr merge o/r 7 exit 1: " + redReason
 	if len(woke) != 1 || woke[0] != want {
 		t.Errorf("woke %q, want %q", woke, want)
 	}
 
 	var out bytes.Buffer
-	g.out = &out
-	g.printLanes(g.laneViews(st))
+	gateApp(g.Host).out = &out
+	gateApp(g.Host).printLanes(gateApp(g.Host).laneViews(st))
 	if want := `failed o/r#7 by "worker" at`; !strings.Contains(out.String(), want) ||
 		!strings.Contains(out.String(), "nothing merged, exit 1: "+redReason+"; shown until its next attempt") {
 		t.Errorf("lanes:\n%s", out.String())
@@ -86,13 +90,16 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 // A merge with --update-branch whose updated head got no workflow runs
 // (devctl exit 4, required_missing, no Actions run among its checks) ends
 // with a reason that says what retriggers them; another wait would not.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeWhoseHeadGotNoRunsSaysHowToRetrigger(t *testing.T) {
 	noSystemd(t)
 	doc := `{"exitCode":4,"verdict":"required_missing","reason":"required status context build never reported","mergeCommitSha":"","checks":[],"release":null}`
 	fakeDevctl(t, `echo '`+doc+`'; exit 4`)
 	stubGitHub(t, "", "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.runMerge(); Code(err) != 4 {
+	if err := g.RunMerge(); Code(err) != 4 {
 		t.Fatalf("exit %d, want devctl's 4", Code(err))
 	}
 	want := "required_missing: required status context build never reported; " + merge.NoRunsHint
@@ -107,21 +114,24 @@ func TestAMergeWhoseHeadGotNoRunsSaysHowToRetrigger(t *testing.T) {
 
 // A merge that ends green leaves the heard marker for a caller still
 // listening, and drops the pull request's earlier failed attempt.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGreenMergeIsHeardAndLeavesNoFailedAttempt(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubGitHub(t, "", "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Failed = []state.Failed{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Exit: 1, Reason: "red"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.runMerge(); err != nil {
+	if err := g.RunMerge(); err != nil {
 		t.Fatalf("exit %d: %v", Code(err), err)
 	}
-	base := mergeBase(g.store.Dir(), g.repo, g.pr)
+	base := gate.MergeBase(gateApp(g.Host).store.Dir(), g.Repo, g.Pr)
 	if _, err := os.Stat(heardFile(base, os.Getpid())); err != nil {
 		t.Errorf("no heard marker: %v", err)
 	}

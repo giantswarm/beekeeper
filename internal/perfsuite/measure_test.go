@@ -150,7 +150,8 @@ type procStat struct {
 	ppid  int
 	start uint64
 	comm  string
-	cpu   time.Duration
+	// cpu is the process's and its reaped children's, own its alone.
+	cpu, own time.Duration
 }
 
 func readStat(pid int) (procStat, bool) {
@@ -171,12 +172,16 @@ func readStat(pid int) (procStat, bool) {
 	}
 	ps := procStat{comm: s[open+1 : end]}
 	ps.ppid, _ = strconv.Atoi(f[1])
-	var ticks uint64
+	var ticks, own uint64
 	for _, i := range []int{11, 12, 13, 14} {
 		n, _ := strconv.ParseUint(f[i], 10, 64)
 		ticks += n
+		if i < 13 {
+			own += n
+		}
 	}
 	ps.cpu = time.Duration(ticks) * time.Second / clockTicks
+	ps.own = time.Duration(own) * time.Second / clockTicks
 	ps.start, _ = strconv.ParseUint(f[19], 10, 64)
 	return ps, true
 }

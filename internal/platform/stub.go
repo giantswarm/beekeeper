@@ -2,7 +2,6 @@ package platform
 
 import (
 	"context"
-	"os/exec"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -93,7 +92,7 @@ type stubCapper struct{}
 func (stubCapper) Available() bool   { return false }
 func (stubCapper) Capped() bool      { return false }
 func (stubCapper) CapSlot(Cap) error { return missing("Capper.CapSlot") }
-func (stubCapper) Command(string, Cap, []string) (*exec.Cmd, error) {
+func (stubCapper) Command(string, Cap, []string) (*proc.Cmd, error) {
 	return nil, missing("Capper.Command")
 }
 func (stubCapper) Adopt(int, string, Cap) error { return missing("Capper.Adopt") }

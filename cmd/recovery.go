@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/gofrs/flock"
 
 	clk "github.com/giantswarm/beekeeper/internal/clock"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/loopworkflow"
@@ -140,7 +140,7 @@ func (a *app) startRecovery(artifact, target string) error {
 			return nil
 		}
 	}
-	c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the verified recovery binary
+	c := proc.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // the verified recovery binary
 	platform.Detach(c)
 	if err := c.Start(); err != nil {
 		return err
@@ -412,7 +412,7 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 	// Streaks only: a loop that died must not read as unknown here.
 	status, _ := evaluateThroughput(now, time.Hour, throughputObservation{At: now, Candidate: version}, outcomes, false)
 	switch {
-	case status == unknownState:
+	case status == gate.UnknownState:
 		s.Unproven = "an operation's outcome is unknown"
 	case strings.HasPrefix(status, "failed-"):
 		if recoveryGitHubUp(ctx) {

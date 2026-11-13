@@ -17,7 +17,10 @@ import (
 
 var taskRepositoryReference = regexp.MustCompile(`(?:^|[\s(])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+`)
 
-var taskRepository = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/(issues|pull)/(\d+))?`)
+// taskRepository is a GitHub URL in a brief. A name never ends in a period:
+// a URL that ends a sentence (the fatal sentinel's repair brief) names the
+// repository the URLs after it name.
+var taskRepository = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]*[A-Za-z0-9_-])(?:/(issues|pull)/(\d+))?`)
 
 // checkoutDir deliberately rejects linked worktrees and subdirectories: the
 // harness must load the repository's own instructions from its main checkout.

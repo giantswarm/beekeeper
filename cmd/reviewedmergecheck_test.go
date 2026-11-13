@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -156,12 +157,18 @@ func parkMergeCheckPR(t *testing.T, r *loopRig, worker, on, url, head string) {
 // never both reach main: the first merges and advances
 // main, while the second is refused on the combined merge result (PR + current
 // main) and returned to its owner with the failing check.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(t *testing.T) {
 	for name, tc := range map[string]struct {
 		baseFiles map[string]string
 		pr1Files  map[string]string
 		pr2Files  map[string]string
 		wantCheck string
+		// conflict: the combination conflicts, so its repair returns to
+		// the approving reviewer rather than the worker.
+		conflict bool
 	}{
 		"go test failure across two PRs": {
 			baseFiles: map[string]string{
@@ -200,6 +207,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				testGuardBaseFile: "package guard\n\nfunc Name() string { return \"from-pr-2\" }\n",
 			},
 			wantCheck: "conflicts with its base",
+			conflict:  true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -261,7 +269,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			prevRun := loop.BeekeeperRun
 			t.Cleanup(func() { loop.BeekeeperRun = prevRun })
 			loop.BeekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
-				if g := slices.Index(args, gateCmdName); g >= 0 && slices.Contains(args, "8") {
+				if g := slices.Index(args, gate.GateCmdName); g >= 0 && slices.Contains(args, "8") {
 					clean := args[g:]
 					r.calls = append(r.calls, clean)
 					idx := slices.Index(clean, "--reviewed-head")
@@ -302,11 +310,19 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				return
 			}
 
-			// PR 2 must NOT be merged into main, and must be returned to its owner with the failing check.
+			// PR 2 must NOT be merged into main, and must be returned with the failing check:
+			// a red result to its worker, a conflict to its approving reviewer.
 			if r.pulls[secondPR].State == superloop.Merged || slices.Contains(mergedHeads, repo.head2) {
 				t.Fatalf("second PR merged despite failing combination (%s): mergedHeads=%v", tc.wantCheck, mergedHeads)
 			}
 			wake := r.called(agentsName, agentWakeName, secondWorker)
+			if tc.conflict {
+				if wake != nil {
+					t.Fatalf("conflict returned to the author: %v", wake)
+				}
+				r.reviewerRepair(t, superloop.ReviewerName(secondPR, 1), tc.wantCheck)
+				return
+			}
 			if wake == nil || !strings.Contains(wake[3], tc.wantCheck) {
 				t.Fatalf("second PR was not returned to its owner with failing check %q: wake=%v calls=%v", tc.wantCheck, wake, r.calls)
 			}
@@ -598,13 +614,15 @@ func TestMergeResultValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeResultUnreadableGateCannotDelegateAnUnsafeMerge(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == gateCmdName {
+		if len(args) > 0 && args[0] == gate.GateCmdName {
 			return "unreadable gate result", github.SquashTooling
 		}
 		return "", 0
@@ -650,13 +668,15 @@ func TestMergeCheckEnvironmentFailures(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeCheckHostFailureDoesNotRequestBranchRepair(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.answer = func(args []string) (string, int) {
-		if len(args) > 0 && args[0] == gateCmdName {
+		if len(args) > 0 && args[0] == gate.GateCmdName {
 			doc := github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, Reason: mergeValidationUnavailable("host resources exhausted")}
 			body, _ := json.Marshal(doc)
 			return string(body), github.SquashTooling

@@ -1,11 +1,11 @@
 package guard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func TestCommandHead(t *testing.T) {
@@ -93,9 +94,9 @@ func (f *fakeCapper) CapSlot(c platform.Cap) error {
 	f.capped = append(f.capped, c.Slice)
 	return nil
 }
-func (f *fakeCapper) Command(_ string, c platform.Cap, argv []string) (*exec.Cmd, error) {
+func (f *fakeCapper) Command(_ string, c platform.Cap, argv []string) (*proc.Cmd, error) {
 	f.ran = append(f.ran, c.Slice)
-	return exec.Command(argv[0], argv[1:]...), nil //nolint:gosec // the test's own command
+	return proc.CommandContext(context.Background(), argv[0], argv[1:]...), nil //nolint:gosec // the test's own command
 }
 
 // holdSlot holds slot n of dir for session as a running beekeeper run does.
@@ -252,7 +253,7 @@ func TestRunLeavesASlotWhoseSliceStillRuns(t *testing.T) {
 // ids read from the file the command writes them to.
 type scopeCapper struct {
 	fakeCapper
-	cmd *exec.Cmd
+	cmd *proc.Cmd
 	// pids is the file the command writes the ids it leaves behind to.
 	pids string
 	// lock is the run's slot lock, held: Reap finds it still held.
@@ -261,7 +262,7 @@ type scopeCapper struct {
 	held   bool
 }
 
-func (s *scopeCapper) Command(name string, c platform.Cap, argv []string) (*exec.Cmd, error) {
+func (s *scopeCapper) Command(name string, c platform.Cap, argv []string) (*proc.Cmd, error) {
 	cmd, _ := s.fakeCapper.Command(name, c, argv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	s.cmd = cmd
@@ -502,7 +503,7 @@ type buildCacheCheckingCapper struct {
 	held bool
 }
 
-func (f *buildCacheCheckingCapper) Command(unit string, cap platform.Cap, argv []string) (*exec.Cmd, error) {
+func (f *buildCacheCheckingCapper) Command(unit string, cap platform.Cap, argv []string) (*proc.Cmd, error) {
 	release, ok, err := gocache.TryTrim(f.dir)
 	f.held = err == nil && !ok
 	if ok {

@@ -237,3 +237,30 @@ func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 		t.Fatal("legacy escalation was read back")
 	}
 }
+
+// Commits past the pull request's one desk review that nobody parked on get
+// a worker to take them over and park for the loop's go, never a second
+// review (https://github.com/giantswarm/beekeeper/issues/3861).
+func TestTheSweepStartsNoSecondReviewPastTheOneReview(t *testing.T) {
+	rv := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: PullWorkerName(pr), Round: 1}
+	for _, verdict := range []string{Approved, ChangesRequested} {
+		t.Run(verdict, func(t *testing.T) {
+			review := Review{ID: "R1", URL: prURL + "#pullrequestreview-1", Head: head1, Verdict: verdict, At: t1}
+			in := sweepInput(pull(head2, true, review), OrphanWait)
+			in.Taken = taken(t, t0, rv)
+			if verdict == ChangesRequested {
+				in.Taken = append(in.Taken, taken(t, t1, Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: PullWorkerName(pr)})...)
+			}
+			got := Plan(in)
+			a := only(t, got, KindRework)
+			if !IsSweep(a.Key) || a.Head != head2 || a.Agent != PullWorkerName(pr) || !strings.Contains(a.Message, "no second review runs") || !strings.Contains(a.Message, "agents park --on "+pr) {
+				t.Errorf("fix = %+v", a)
+			}
+			for _, a := range got {
+				if a.Kind == KindReview {
+					t.Errorf("a second review: %+v", a)
+				}
+			}
+		})
+	}
+}

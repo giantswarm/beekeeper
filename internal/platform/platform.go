@@ -13,7 +13,6 @@ package platform
 import (
 	"context"
 	"errors"
-	"os/exec"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -181,7 +180,7 @@ type Capper interface {
 	CapSlot(c Cap) error
 	// Command is argv to run capped in the scope name, in c.Slice; the
 	// caller starts and waits for it.
-	Command(name string, c Cap, argv []string) (*exec.Cmd, error)
+	Command(name string, c Cap, argv []string) (*proc.Cmd, error)
 	// Adopt moves the running process pid into a new capped scope name, in
 	// c.Slice, and returns once it is there: a command the sandbox keeps
 	// from the service manager asks the host for its scope this way.

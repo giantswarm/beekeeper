@@ -1,0 +1,132 @@
+name: merge-check-gives-the-tests-the-jq-a-builder-lacks
+description: >
+  The desk validates merge results on its Kubernetes builder (run.remote),
+  whose Go image carries go and golangci-lint but no jq, and the
+  repository's tests run jq. An approved, green head whose base moved on
+  gets the merge go; the gate lints and tests base plus head on the
+  builder. The checker's environment has every tool of its one list before
+  a check runs: it installs jq into the builder's workspace, the tests find
+  it and pass, and the head merges. Live, the tests failed with exit 127,
+  jq: command not found, a checker environment finding on every attempt and
+  no merge.
+issue: https://github.com/giantswarm/beekeeper/issues/3811
+flow: regression
+tags: [regression, merge-result, gate, builder, delivery]
+timeout: 300s
+
+given:
+  clock:
+    start: "2026-11-12T09:00:00Z"
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      watch: {interval: 1h}
+      supervisor: {loopInterval: 1m}
+  # The builder's Go image: go and golangci-lint, and no jq, which the
+  # repository's tests call.
+  builder:
+    tools: [go, golangci-lint]
+    testsCall: [jq]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: The item, board: Ready}
+  harness:
+    workers:
+      - name: app 1
+        turns:
+          # A Go module: its merge result is linted and tested once its
+          # base has moved on.
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/go.mod, content: "module example.invalid/app\n\ngo 1.26\n"}
+              - write: {path: app/b.go, content: "package app\n\nvar B = 1\n"}
+              - git: [add, go.mod, b.go]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      - name: 'Review app 2 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    # The repository publishes no release: nothing to wait for after a
+    # merge.
+    - program: devctl
+      args: [release, wait]
+      respond: {stdout: '{"verdict":"no_release","reason":"the repository has no release workflow"}'}
+    - program: gh
+      args: [search, prs, --author, desk]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - name: admitted
+    wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  - name: tick
+    advance: 1m
+  # 09:01: the item's worker opens its pull request and parks on it.
+  - name: parked
+    wait_for:
+      timeout: 60s
+      expect:
+        - worker: {name: app 1, turns: 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  # The base moves on while the pull request waits: its head no longer
+  # contains the base, and the two together have to be checked before the
+  # merge.
+  - name: base-moves
+    github: {push: {repo: example/app, branch: main, file: a.go, content: "package app\n\nvar A = 2\n"}}
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  # The head is green: the loop starts its reviewer, who approves it.
+  - name: review
+    advance: {by: 4m, step: 1m, quiet: 1s}
+  - name: reviewed
+    wait_for:
+      timeout: 60s
+      expect:
+        - worker: {name: 'Review app 2 r1', turns: 1, outcome: finish}
+  # Approved and green, the head goes through the gate: the merge result is
+  # checked in the builder, whose environment gets jq first.
+  - name: go
+    advance: {by: 4m, step: 1m, quiet: 1s}
+  - name: merged
+    wait_for:
+      timeout: 90s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+        # The gate has finished its merge: the loop is not stopped in it.
+        - events: {contains: [merge.finished]}
+  - stop: loop
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - github: {issue: {repo: example/app, number: 1, state: closed}}
+  # The builder got jq installed from the checker's list, ran the image's
+  # linter and the tests, which found jq.
+  - calls: {program: go, args: [install, 'github\.com/itchyny/gojq/.*'], min: 1}
+  - calls: {program: golangci-lint, args: [run], min: 1}
+  - calls: {program: go, args: [test, -short], min: 1}
+  - events: {contains: [merge.authorized, merge.finished], not_contains: [merge.failed]}

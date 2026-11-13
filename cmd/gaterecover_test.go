@@ -10,20 +10,23 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `kill -TERM $$`)
 	stubGitHub(t, github.Merged, "")
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
-	was := releaseWait
-	t.Cleanup(func() { releaseWait = was })
-	releaseWait = func(ctx context.Context, repo string, target ...string) []byte {
+	was := gate.ReleaseWait
+	t.Cleanup(func() { gate.ReleaseWait = was })
+	gate.ReleaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 		if repo != scratchRepo || strings.Join(target, " ") != "--pr 7" {
 			t.Fatalf("lookup: %s %v", repo, target)
 		}
@@ -34,7 +37,7 @@ func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 		// devctl resolves the merged PR's commit to its release tag.
 		return []byte(`{"verdict":"available","tag":"v1.2.4-rc.1"}`)
 	}
-	if err := g.runMerge(); Code(err) != 143 {
+	if err := g.RunMerge(); Code(err) != 143 {
 		t.Fatalf("exit: %v", err)
 	}
 	st := gateState(t, g)
@@ -43,14 +46,16 @@ func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 	for _, version := range []string{"v1.2.5", "v1.2.5-rc.1"} {
 		t.Run(version, func(t *testing.T) {
 			lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 			g := runningMerge(t, scratchRepo, lane)
-			g.out = io.Discard
+			gateApp(g.Host).out = io.Discard
 			now := time.Now()
-			err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			err := gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Merges[0].Phase, st.Merges[0].Finished = state.Settling, now
 				st.Merges[0].Outside = true
 				st.Merges[0].Roll = []string{"ns/chart"}
@@ -59,8 +64,8 @@ func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			g.as = litOperator
-			c := g.lanesCmd()
+			gateApp(g.Host).as = litOperator
+			c := gateApp(g.Host).lanesCmd()
 			c.SetArgs([]string{"settle", scratchRepo, "7", "--release", version})
 			if err := c.Execute(); err != nil {
 				t.Fatal(err)
@@ -78,18 +83,20 @@ func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 			if ready, why := merge.Ready(lane, hrs, &m, now, time.Hour); !ready {
 				t.Fatalf("rolled/unadmitted release did not settle: %s", why)
 			}
-			if err := g.nameSettlingRelease(g.me, scratchRepo, 7, "v9.0.0"); Code(err) != ExitRefused {
+			if err := gateApp(g.Host).nameSettlingRelease(g.Me, scratchRepo, 7, "v9.0.0"); Code(err) != ExitRefused {
 				t.Fatalf("known release replaced: %v", err)
 			}
 		})
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestNameReleaseRefusesRunningAndMissingMerges(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
-	g.out = io.Discard
+	gateApp(g.Host).out = io.Discard
 	for _, pr := range []int{7, 8} {
-		if err := g.nameSettlingRelease(g.me, scratchRepo, pr, "v1.2.6"); Code(err) != ExitRefused {
+		if err := gateApp(g.Host).nameSettlingRelease(g.Me, scratchRepo, pr, "v1.2.6"); Code(err) != ExitRefused {
 			t.Fatalf("named a non-settling merge: %v", err)
 		}
 	}

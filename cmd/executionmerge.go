@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -16,9 +15,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -32,7 +33,7 @@ func (a *app) mergeAuthorityRoot() string {
 // Mutations have no transport retry: a lost response is reconciled by reading
 // GitHub, never by issuing the merge a second time.
 var runExecutionMerge = func(ctx context.Context, use execution.MergeUse) error {
-	c := exec.CommandContext(ctx, "gh", "api", "--method", "PUT", fmt.Sprintf("repos/%s/pulls/%d/merge", use.Repository, use.PR), "-f", "sha="+use.Head, "-f", "merge_method=squash") //nolint:gosec // repository and head validated by the grant, no shell
+	c := proc.CommandContext(ctx, "gh", "api", "--method", "PUT", fmt.Sprintf("repos/%s/pulls/%d/merge", use.Repository, use.PR), "-f", "sha="+use.Head, "-f", "merge_method=squash") //nolint:gosec // repository and head validated by the grant, no shell
 	out, err := c.Output()
 	if err != nil {
 		return errors.New("merge outcome uncertain; reconcile authorization before further action")
@@ -91,7 +92,7 @@ func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, u
 		var releases []merge.HelmRelease
 		if lane.Installation != "" {
 			var err error
-			releases, err = readHelmReleases(ctx, lane)
+			releases, err = gate.ReadHelmReleases(ctx, lane)
 			if err != nil {
 				return refused("merge lane readiness unavailable")
 			}
@@ -205,7 +206,7 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 					if !grant.Consumed {
 						return nil, refused("authorization has no merge attempt to reconcile")
 					}
-					grant.Outcome = verdictUnconfirmed
+					grant.Outcome = gate.VerdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {
 						grant.Outcome = execution.MergeSucceeded
 					}

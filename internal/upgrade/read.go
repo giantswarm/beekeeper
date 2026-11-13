@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -244,7 +243,7 @@ func (r Reader) kubectl(ctx context.Context, kubeContext string, args ...string)
 		return out, nil
 	}
 	msg := lastLine(stderr.String())
-	var exitErr *exec.ExitError
+	var exitErr *proc.ExitError
 	if ctx.Err() == nil && errors.As(err, &exitErr) {
 		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 			return nil, err
