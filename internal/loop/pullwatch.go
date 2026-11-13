@@ -25,11 +25,11 @@ const (
 	loopPullBackoff   = 10 * time.Minute
 	LoopPullMaxAge    = 5 * time.Minute
 	loopPullBatchSize = 60
-	// LoopPullDetailBatchSize bounds a batch of pull requests read on first
+	// loopPullDetailBatchSize bounds a batch of pull requests read on first
 	// sight, with their files, reviews and closing issues: the heaviest
 	// query the watch asks. GitHub answered a restarted loop's first batch,
 	// sixty of them, with 504 (#3809).
-	LoopPullDetailBatchSize = 20
+	loopPullDetailBatchSize = 20
 	// LoopPullMinBatch is the smallest batch a fault of GitHub's halves the
 	// watch's batches to: below it, the failure is GitHub's, not the
 	// batch's size.
@@ -620,7 +620,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 }
 
 // readBatches reads refs in batches of the watch's size, those read on
-// first sight in batches of at most LoopPullDetailBatchSize, the others
+// first sight in batches of at most loopPullDetailBatchSize, the others
 // first. A batch GitHub fails (PullBatchFault: a 5xx, no answer in time, a
 // body that is not JSON) is asked again in halves, down to
 // LoopPullMinBatch; one that still fails is skipped, and the rest are
@@ -642,7 +642,7 @@ func (w *loopPullWatcher) readBatches(ctx context.Context, l *Loop, refs []strin
 	for _, group := range []struct {
 		refs  []string
 		limit int
-	}{{light, loopPullBatchSize}, {detail, LoopPullDetailBatchSize}} {
+	}{{light, loopPullBatchSize}, {detail, loopPullDetailBatchSize}} {
 		for rest := group.refs; len(rest) > 0; {
 			n := min(len(rest), group.limit, w.batchSize(clk.Now()))
 			got, err := ReadLoopPullBatch(ctx, rest[:n], previous, floor)
@@ -656,7 +656,7 @@ func (w *loopPullWatcher) readBatches(ctx context.Context, l *Loop, refs []strin
 					_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH GitHub failed a batch of %d pull requests (%v); asking again in batches of %d\n", n, Cmd.OneLine(err.Error()), size)
 					continue
 				}
-				_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH GitHub failed a batch of %d pull requests (%s …) in batches of %d: %v; reading the rest\n", n, rest[0], LoopPullMinBatch, Cmd.OneLine(err.Error()))
+				_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR PULL WATCH GitHub failed a batch of %d pull requests from %s at the smallest size (%v); reading the rest\n", n, rest[0], Cmd.OneLine(err.Error()))
 				skipped = cmp.Or(skipped, err)
 			default:
 				return found, faults, err
