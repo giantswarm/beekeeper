@@ -41,8 +41,8 @@ func CommandContext(ctx context.Context, name string, arg ...string) *Cmd {
 // command's own runs with Process set: os/exec may call it from its own
 // goroutine before Start has returned.
 func (c *Cmd) Start() error {
-	if cancel := c.Cmd.Cancel; cancel != nil {
-		c.Cmd.Cancel = func() error {
+	if cancel := c.Cancel; cancel != nil {
+		c.Cancel = func() error {
 			c.started()
 			return cancel()
 		}
