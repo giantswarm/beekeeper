@@ -762,7 +762,7 @@ func TestMergeResultMissingHostBuildDependencyIsNotABranchRepair(t *testing.T) {
 			if len(findings) != 1 || !strings.Contains(findings[0].Detail, "not a branch repair") || !strings.Contains(findings[0].Detail, tc.missing) {
 				t.Fatalf("want one environment finding naming %s, got %v", tc.missing, findings)
 			}
-			if ran, err := os.ReadFile(calls); err != nil || strings.Count(string(ran), "test -short ./...") != 1 {
+			if ran, err := os.ReadFile(calls); err != nil || strings.Count(string(ran), "test -short ./...") != 1 { //nolint:gosec // test-owned calls file
 				t.Fatalf("a missing dependency is retried: %q, %v", ran, err)
 			}
 		})
