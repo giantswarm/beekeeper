@@ -22,7 +22,17 @@ func (a *app) agentProblemCmd() *cobra.Command {
 supervisor's watch. Name what broke, the evidence and the owning repository;
 use full issue and pull request URLs. The worker keeps its task and park.
 Repeating the same finding, including with idle --problem, records and
-delivers it once per worker assignment.`,
+delivers it once per worker assignment.
+
+For automatic filing, pass one multiline argument:
+  <owner/repo or full existing issue URL>: <stable title>
+
+  <complete current issue description>
+
+The loop matches the open issue by URL or unique title. A known finding adds
+nothing; new facts replace its description, never a comment. A new finding
+creates one issue in Backlog. Keep relevant facts and acceptance criteria in
+the replacement description. Ambiguous reports go to the guide.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if a.managedExecutionID() != "" {
