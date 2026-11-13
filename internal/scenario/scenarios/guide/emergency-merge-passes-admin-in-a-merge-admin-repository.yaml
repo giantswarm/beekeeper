@@ -13,7 +13,7 @@ description: >
 issue: https://github.com/giantswarm/beekeeper/issues/3691
 flow: guide
 tags: [guide, emergency, merge, admin]
-timeout: 120s
+timeout: 90s
 
 given:
   desk:
@@ -55,13 +55,14 @@ given:
             outcome: finish
 
 when:
+  # The person starts the guide's next run from a terminal.
   - name: start
-    run: {args: [guide, start, --new]}
+    run: {args: [--as, scenario, guide, start, --new]}
     expect:
       - exit: 0
       - output: {contains: ['started "Guide run 1"']}
   - wait_for:
-      timeout: 60s
+      timeout: 30s
       expect:
         - worker: {name: Guide run 1, turns: 1, outcome: finish}
   - name: actions
