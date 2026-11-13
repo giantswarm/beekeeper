@@ -580,6 +580,13 @@ timer from the running watches.
   forwarder that says so. A seam entry goes when its target moves to a package the loop can import.
   The loop uses `internal/gate` directly for its command name, exit codes, release verdict and
   short commit IDs, without command callbacks or copied gate constants.
+- `internal/superloop`: The supervisor's pure planner: the pass's input, actions, `Tracked` and
+  `Plan` in `superloop.go`, the action ledger and tracking episodes in `ledger.go`, the pull
+  request stage in `pull.go`, the overlap stage in `overlap.go`, the orphan sweep in `sweep.go`,
+  another desk's claims in `elsewhere.go`, ownership policy in `ownership.go`, event and report
+  helpers in `events.go`, owned delivery problems in `problems.go`, closing-issue and absorbed-pull
+  parsers in `closes.go`, delivery state derivation in `delivery.go` and standstills recording in
+  `record.go`.
 - `internal/lease`: Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim.
 - `internal/peer`: The command-line send to a running Claude session: one headless `claude -p` turn
   whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's
