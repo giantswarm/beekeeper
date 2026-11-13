@@ -499,12 +499,6 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if p, ok := pulls[github.Head{Repo: t.Repo, Branch: t.HeadBranch()}]; ok {
 			pull = &p
 		}
-		harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
-		if m.automatic && (t.Locked || pull == nil && !harness && (t.Pushed == "" || t.Pushed != t.HeadBranch())) {
-			v := worktrees.AutomaticPressure(t, pull, false, harness, false, false, m.now, m.pressure)
-			r.kept[v.Kept]++
-			continue
-		}
 		if m.automatic && pull != nil && (pull.State == github.Open || !m.pressure && m.now.Sub(pull.ClosedAt) < worktrees.Grace) {
 			v := worktrees.Automatic(t, pull, false, false, false, false, m.now)
 			r.kept[v.Kept]++
@@ -512,6 +506,14 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		}
 		if pull != nil && pull.State == github.Merged {
 			finished = append(finished, t.Dir)
+		}
+		// A tree that cannot be removed needs no publication query. Its merged
+		// task above still retires its builders, a locked tree's included.
+		harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
+		if m.automatic && (t.Locked || pull == nil && !harness && (t.Pushed == "" || t.Pushed != t.HeadBranch())) {
+			v := worktrees.AutomaticPressure(t, pull, false, harness, false, false, m.now, m.pressure)
+			r.kept[v.Kept]++
+			continue
 		}
 		knownPushed := !m.automatic && pull != nil && pushed(ctx, m.git, t, pull.HeadOid)
 		v := worktrees.Decide(t, pull, false, knownPushed, m.now)

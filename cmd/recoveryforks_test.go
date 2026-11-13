@@ -95,6 +95,34 @@ func TestRecoveryRolledBackCandidateHasNoFurtherProbes(t *testing.T) {
 	}
 }
 
+// TestRecoveryFinishesARollbackDuringItsProbe: a rollback that lands while the
+// first evaluation probes leaves no observation behind, which Settled calls
+// done. The controller finishes it on its next tick instead of ending there.
+//
+// control: none: main has no post-probe journal check and finishes it already
+func TestRecoveryFinishesARollbackDuringItsProbe(t *testing.T) {
+	c, _ := recoveryRig(t)
+	probes := 0
+	recoveryProbe = func(ctx context.Context, _, _, _ string) error {
+		probes++
+		if probes == 1 {
+			if err := update.Rollback(ctx, c.target, "manual", func(_, _ string, restore func() error) error { return restore() }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	if c.mustTick(t) {
+		t.Fatal("a rollback during the probe ended the controller before its finish")
+	}
+	if !c.mustTick(t) {
+		t.Fatal("the finished rollback did not settle")
+	}
+	if lines := c.filedReports(t); len(lines) != 1 || !strings.Contains(lines[0], "RELEASE ROLLED BACK") || probes != 1 {
+		t.Fatalf("the person's line: %q, %d probes", lines, probes)
+	}
+}
+
 // A rollback no controller observed (Settled already calls it done) is still
 // finished: the person's line is filed and the writer fence released, with
 // no probe of the restored candidate.

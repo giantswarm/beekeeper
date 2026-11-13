@@ -341,6 +341,33 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 	}
 }
 
+// TestAutomaticTrimRetiresLockedMergedBuilders: the disk step keeps a locked
+// worktree without its publication query, but its merged task still retires
+// its builders.
+//
+// control: none: main retires them already; only this change's skip lost it
+func TestAutomaticTrimRetiresLockedMergedBuilders(t *testing.T) {
+	a, read, root := worktreeApp(t)
+	dir := filepath.Join(root, mergedPR)
+	gitT(t, dir, "worktree", "lock", dir)
+	var finished []string
+	r := a.trimWorktrees(true, func() (worktreeMachine, error) {
+		m, err := read()
+		m.dirs, m.automatic = []string{dir}, true
+		m.retire = func(_ context.Context, paths []string, _ bool) error {
+			finished = append(finished, paths...)
+			return nil
+		}
+		return m, err
+	})
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !slices.Contains(finished, dir) || r.kept[worktrees.KeptLocked] != 1 || !exists(dir) {
+		t.Fatalf("locked merged worktree: retired %v, kept %v", finished, r.kept)
+	}
+}
+
 // Exercise the API reader through the automatic cleanup boundary. These
 // old, clean harness checkouts are published and removable if no PR exists.
 func TestTrimHarnessRequiresCompleteHeadPulls(t *testing.T) {

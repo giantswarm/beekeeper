@@ -277,8 +277,10 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	if current == nil || current.Candidate.Digest != c.candidate || !current.InstalledAt.Equal(c.installedAt) {
 		return true, nil
 	}
+	// A rollback still owes its finish, which the next tick runs: Settled
+	// calls an unobserved one done, so it must not end the controller here.
 	if !current.Pending() || current.RollingBack() {
-		return current.Settled(), nil
+		return current.Settled() && !current.RolledBack(), nil
 	}
 	s := c.signals(ctx, j)
 	o.NoteLoop(s)
