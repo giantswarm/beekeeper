@@ -282,9 +282,15 @@ func TestPrepareStartWorktree(t *testing.T) {
 }
 
 func TestSingleTaskRepository(t *testing.T) {
-	for _, brief := range []string{paramTask, "https://github.com/example/repo/issues/1 https://github.com/example/repo/pull/2"} {
+	for _, brief := range []string{
+		paramTask,
+		"https://github.com/example/repo/issues/1 https://github.com/example/repo/pull/2",
+		// The fatal sentinel's repair brief of a red main: the repository's
+		// URL ends a sentence, the failed check's URL follows.
+		"Repair fatal system outage main:example/repo in https://github.com/example/repo. Evidence: https://github.com/example/repo/actions/runs/1/job/2.",
+	} {
 		if err := singleTaskRepository(brief); err != nil {
-			t.Fatal(err)
+			t.Fatal(brief, err)
 		}
 	}
 	for _, brief := range []string{"https://github.com/example/one/issues/1 https://github.com/example/two/issues/2", "example/one#1 and example/two#2"} {

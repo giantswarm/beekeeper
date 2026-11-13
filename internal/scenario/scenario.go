@@ -80,6 +80,10 @@ type Given struct {
 	Desk Desk `yaml:"desk"`
 	// Repositories each get a bare Git origin with one commit on main.
 	Repositories []Repository `yaml:"repositories"`
+	// Checkouts are repositories of the scenario cloned on the desk, at
+	// /work/src/<owner>/<name>, as an operator keeps the checkout a
+	// session's --dir names (agents.roots holds /work/src).
+	Checkouts []string `yaml:"checkouts"`
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
@@ -458,6 +462,11 @@ func (s *Scenario) Validate() error {
 	if g := s.Given.GitHub; g != nil {
 		if err := g.Validate(); err != nil {
 			bad("given.github: %v", err)
+		}
+	}
+	for _, name := range s.Given.Checkouts {
+		if !slices.Contains(s.repositoryNames(), name) {
+			bad("given.checkouts: %q is no repository of the scenario", name)
 		}
 	}
 	for i, tool := range s.Given.Tools {

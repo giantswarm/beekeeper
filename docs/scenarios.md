@@ -129,12 +129,15 @@ parent (`go-control-history/`), in shard 0 too. To run the step on a branch:
    overlaid by `given.desk.config`), a state store, `HOME` and the XDG
    directories, and a bare Git origin with one commit on `main` for each of
    `given.repositories` and of `given.github`'s repositories under
-   `/work/origins/<owner>/<name>.git`, and a root for each of
+   `/work/origins/<owner>/<name>.git`, a clone of each of
+   `given.checkouts` at `/work/src/<owner>/<name>` (its origin the
+   repository's GitHub URL, `/work/src` in `agents.roots`, so a start's
+   `--dir` may name it), and a root for each of
    `given.hosts` (see [Execution hosts](#execution-hosts)). A repository
    with `checkout` also gets a person's main checkout, cloned under its
    GitHub URL to `/work/checkouts/<owner>/<name>` with the Git
    configuration `checkout.config` names; `agents.roots` then holds
-   `/work/checkouts`, so a hand start's `--dir` may name it.
+   `/work/checkouts` too, so a hand start's `--dir` may name it.
 4. It starts the scenario's **world** on a Unix socket. `PATH` holds only
    the candidate, `git`, `sh` and the fakes: `gh`, `claude`, `codex`,
    `agy`, `omp`, `ssh`, `devctl`, `systemctl`, `systemd-run` and
@@ -175,6 +178,7 @@ given:
     - name: example/app
       checkout:                      # optional: /work/checkouts/example/app
         config: {push.default: upstream}   # git config in the checkout
+  checkouts: [example/app]           # cloned on the desk at /work/src/example/app
   calls:
     - program: gh
       # Every pattern must match one argument whole (a regular expression;

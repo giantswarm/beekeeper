@@ -36,6 +36,7 @@ const (
 	repoDir      = workDir + "/repo"
 	stateDir     = workDir + "/state"
 	originsDir   = workDir + "/origins"
+	srcDir       = workDir + "/src"
 	checkoutsDir = workDir + "/checkouts"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
@@ -302,6 +303,14 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 		overlay(cfg, map[string]any{"run": map[string]any{"remote": remote}})
 	}
+	if len(d.s.Given.Checkouts) > 0 {
+		// A session's --dir must be a checkout under agents.dir or agents.roots.
+		roots := []any{srcDir}
+		if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+			roots = append(roots, checkoutsDir)
+		}
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": roots}})
+	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -331,6 +340,11 @@ func (d *driver) setup(ctx context.Context) error {
 	for _, name := range repos {
 		if err := origin(ctx, name); err != nil {
 			return fmt.Errorf("origin %s: %w", name, err)
+		}
+	}
+	for _, name := range d.s.Given.Checkouts {
+		if err := sourceCheckout(ctx, name); err != nil {
+			return fmt.Errorf("checkout %s: %w", name, err)
 		}
 	}
 	for _, r := range d.s.Given.Repositories {
@@ -529,6 +543,21 @@ func overlay(dst, src map[string]any) {
 		}
 		dst[k] = v
 	}
+}
+
+// sourceCheckout clones owner/name onto the desk under srcDir. It names its
+// origin as GitHub does; the scenario's git leads that URL to the origin.
+func sourceCheckout(ctx context.Context, name string) error {
+	dst := filepath.Join(srcDir, name)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	c := exec.CommandContext(ctx, binDir+"/git", "clone", "--quiet", "https://github.com/"+name+".git", dst) //nolint:gosec // real git on the scenario's own paths
+	c.Env = env(nil)
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone: %w: %s", err, out)
+	}
+	return nil
 }
 
 // origin creates the bare origin of owner/name with one commit on main.
