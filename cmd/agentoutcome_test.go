@@ -140,7 +140,7 @@ func TestPullRequestTaskFinishesWithItsMerge(t *testing.T) {
 	}{
 		{name: "pull request task", brief: "Prove https://github.com/example/app/pull/7 on main.", served: []string{pull}, pulls: []string{pull}},
 		{name: "issue task", brief: "Fix https://github.com/example/app/issues/3.\nSee https://github.com/example/app/pull/7 for context.", served: []string{"example/app#3"}},
-		{name: "review", brief: "Review https://github.com/example/app/pull/7.", kind: capacity.TaskKindReview, served: []string{pull}},
+		{name: "reviewer", brief: "Review https://github.com/example/app/pull/7.", kind: capacity.TaskKindReview, served: []string{pull}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := stubApp(t)
