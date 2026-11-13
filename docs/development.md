@@ -567,6 +567,8 @@ timer from the running watches.
   command's names, flags and exit codes, kept equal by `cmd`'s `TestLoopVocabulary`). Steps whose
   bodies need the command's own types stay in `cmd` as functions over `*loop.Loop`, behind a
   forwarder that says so. A seam entry goes when its target moves to a package the loop can import.
+  The loop uses `internal/gate` directly for its command name, exit codes, release verdict and
+  short commit IDs, without command callbacks or copied gate constants.
 - `internal/lease`: Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim.
 - `internal/peer`: The command-line send to a running Claude session: one headless `claude -p` turn
   whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's
