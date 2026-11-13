@@ -56,33 +56,39 @@ func (l *Loop) RepoRecentUnmerged(ctx context.Context, repo string) ([]UnmergedP
 	l.Mu.Unlock()
 	if !ok || now.Sub(obs.At) >= UnmergedCacheTTL {
 		next := obs
-		err := l.Host.LoopGitHub(ctx, "inventory", func() error {
-			// A conditional read of the most recently updated pull (all states)
-			// also notices closures and edits to old pulls. A periodic full refresh
-			// bounds reuse even if GitHub omits a validator or a change races us.
-			etag, unchanged, err := ReadRepoPullRevision(ctx, repo, obs.Etag)
-			if err != nil {
-				return err
-			}
-			if !ok || !unchanged || now.Sub(obs.FullAt) >= time.Hour {
+		// A conditional read of the most recently updated pull (all states)
+		// also notices closures and edits to old pulls. A periodic full refresh
+		// bounds reuse even if GitHub omits a validator or a change races us.
+		// Only the full read is a GraphQL query and counted as one: the
+		// revision spends REST, nothing when unchanged (#3769).
+		var etag string
+		var unchanged bool
+		err := l.Host.LoopGitHub(ctx, LoopRevisionStep, func() error {
+			var err error
+			etag, unchanged, err = ReadRepoPullRevision(ctx, repo, obs.Etag)
+			return err
+		})
+		if err == nil && (!ok || !unchanged || now.Sub(obs.FullAt) >= time.Hour) {
+			err = l.Host.LoopGitHub(ctx, "inventory", func() error {
 				pulls, err := Cmd.ReadRepoOpenPulls(ctx, repo)
 				if err != nil {
 					return err
 				}
 				next.Pulls, next.FullAt = pulls, now
-			}
+				return nil
+			})
+		}
+		if err == nil {
 			next.Etag, next.At = etag, now
-			return nil
-		})
-		if err != nil {
+		} else {
 			// Admission and cancellation are not repository observations. Retry
 			// them when their gates clear, without retaining a transient hold.
 			if errors.Is(err, ErrLoopLater) || ctx.Err() != nil {
 				return nil, "", err
 			}
 			// Keep the last successful payload and validator for recovery, but
-			// cache the failure too: otherwise every idle pass repeats the read
-			// and its before/after GraphQL budget probes indefinitely.
+			// cache the failure too: otherwise every idle pass repeats the read,
+			// and a failed full read its GraphQL budget readings, indefinitely.
 			next = obs
 			next.At = now
 		}

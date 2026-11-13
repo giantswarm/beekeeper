@@ -12,11 +12,23 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-// Count the budget queries as well as inventory queries: even an unchanged
-// REST response or a failed read has two fresh GraphQL budget samples.
+// Count the budget readings as well as the inventory queries. The
+// conditional REST read of the revision takes no GraphQL reading, unchanged
+// or failed: only the GraphQL read of the open pull requests is counted
+// between two, on a repository's first read, after a change or after its
+// own failure (#3769).
 func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
-	for _, failure := range []string{"", "revision", "full inventory"} {
-		t.Run("failure="+failure, func(t *testing.T) {
+	for _, tc := range []struct {
+		failure string
+		// first is the GraphQL calls of the first pass, later those of each
+		// pass that reads the three repositories again.
+		first, later int
+	}{
+		{failure: "", first: 9},
+		{failure: "revision"},
+		{failure: "full inventory", first: 9, later: 9},
+	} {
+		t.Run("failure="+tc.failure, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.GitHub.Floor = 1000
 			healthyLoopBudget(t, r)
@@ -34,14 +46,14 @@ func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
 			}
 			loop.ReadRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
 				revisions++
-				if failure == "revision" {
+				if tc.failure == "revision" {
 					return "", false, errors.New("repository unavailable")
 				}
 				return "inventory-validator", etag != "", nil
 			}
 			readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) {
 				calls++
-				if failure == "full inventory" {
+				if tc.failure == "full inventory" {
 					return nil, errors.New("GraphQL inventory unavailable")
 				}
 				return nil, nil
@@ -50,23 +62,29 @@ func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
 			for n := range 3 {
 				in.Pulls[fmt.Sprintf("o/repo%d#1", n)] = superloop.Pull{State: superloop.Open}
 			}
+			want := 0
 			for pass := range 120 {
 				r.a.now = start.Add(time.Duration(pass) * 30 * time.Second)
 				before := calls
 				if err := l.CheckUnmergedBacklogs(t.Context(), in); err != nil {
 					t.Fatal(err)
 				}
-				// Three repositories, at most two probes and one query each.
-				bound := 9
-				if pass%10 != 0 {
-					bound = 0
+				// Three repositories, read again every ten passes: two
+				// readings and one query each where a full read is due.
+				expected := 0
+				switch {
+				case pass == 0:
+					expected = tc.first
+				case pass%10 == 0:
+					expected = tc.later
 				}
-				if calls-before > bound {
-					t.Fatalf("idle pass %d: %d GraphQL calls, maximum %d", pass, calls-before, bound)
+				want += expected
+				if calls-before != expected {
+					t.Fatalf("idle pass %d: %d GraphQL calls, want %d", pass, calls-before, expected)
 				}
 			}
-			if revisions != 36 || calls > 108 {
-				t.Fatalf("hour: %d revisions, %d GraphQL calls; want 36 revisions and at most 108 calls", revisions, calls)
+			if revisions != 36 || calls != want {
+				t.Fatalf("hour: %d revisions, %d GraphQL calls; want 36 revisions and %d calls", revisions, calls, want)
 			}
 		})
 	}

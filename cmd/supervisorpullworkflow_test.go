@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 )
@@ -106,6 +107,35 @@ func TestPullWatcherNewestWorkflowGatesGreen(t *testing.T) {
 			got := seen[loopPR]
 			if *calls != 1 || got.Pull.Green != tc.green || len(got.Pull.Red) != tc.red || got.Pending != tc.pending || (got.Error != "") != tc.unread {
 				t.Fatalf("calls=%d observation=%+v", *calls, got)
+			}
+		})
+	}
+}
+
+// A pull request no check reported on since its last update ten minutes
+// ago has no CI coming: it no longer keeps the watch at the 30-second
+// interval, while one updated a minute ago still waits for its first
+// check there (#3769).
+func TestPullWatcherStopsWaitingForChecksThatNeverCome(t *testing.T) {
+	for _, tc := range []struct {
+		name, updated string
+		pending       bool
+	}{
+		{name: "updated a minute ago", updated: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), pending: true},
+		{name: "updated long ago", updated: watchFixtureUpdated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakePullGraphQL(t, func(query string, _ int) map[string]any {
+				p := pullGraphQLFixture(t, query, loop.CheckSuccess, loopHead, tc.updated)
+				loop.PullConnection(p, loop.PullContexts)[loop.PullNodes] = []any{}
+				return p
+			})
+			seen, err := loop.FetchLoopPullBatch(t.Context(), []string{loopPR}, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := seen[loopPR]; got.Error != "" || got.Pending != tc.pending {
+				t.Fatalf("observation=%+v, want pending=%t", got, tc.pending)
 			}
 		})
 	}

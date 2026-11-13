@@ -20,11 +20,16 @@ import (
 )
 
 const (
-	LoopPullShort     = 30 * time.Second
-	LoopPullLong      = 2 * time.Minute
-	loopPullBackoff   = 10 * time.Minute
-	LoopPullMaxAge    = 5 * time.Minute
-	loopPullBatchSize = 60
+	LoopPullShort   = 30 * time.Second
+	LoopPullLong    = 2 * time.Minute
+	loopPullBackoff = 10 * time.Minute
+	LoopPullMaxAge  = 5 * time.Minute
+	// LoopPullChecksWait is how long after a pull request's last update the
+	// watch waits for its first check at the short interval: a pull request
+	// without any check since longer has no CI coming until a push updates
+	// it, and the long interval reads it.
+	LoopPullChecksWait = 10 * time.Minute
+	loopPullBatchSize  = 60
 	// loopPullDetailBatchSize bounds a batch of pull requests read on first
 	// sight, with their files, reviews and closing issues: the heaviest
 	// query the watch asks. GitHub answered a restarted loop's first batch,
@@ -911,6 +916,11 @@ func parseWatchedLoopPull(ref string, raw []byte, details bool) (superloop.Pull,
 	if err == nil && p.State == superloop.Open && suites != nil {
 		err = suites.apply(&p, checks)
 		pending = pending || !p.Green && len(p.Red) == 0
+	}
+	// Every old pull request of a repository without CI kept the whole watch
+	// at the short interval for checks that never come (#3769).
+	if pending && len(checks) == 0 && !p.Updated.IsZero() && clk.Since(p.Updated) > LoopPullChecksWait {
+		pending = false
 	}
 	return p, pending, err
 }

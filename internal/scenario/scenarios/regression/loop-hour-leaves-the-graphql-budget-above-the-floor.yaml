@@ -4,26 +4,21 @@ description: >
   repositories. For three of them GitHub answers the pull request listing
   with 404 for the whole hour: the desk's login lost them. The loop keeps
   a failed inventory for five minutes like a successful one, so it asks
-  for each of the three again twelve times in the hour, not at every pass,
-  and its own GraphQL spend (the budget readings around each inventory)
-  leaves the budget above github.floor. At the end of the hour a board
-  item that became free still gets its worker. Live, every idle pass
-  repeated the failed reads and their budget readings, the budget fell
-  under the floor in most hours, and starts were held until the hourly
-  reset.
+  for each of the three again twelve times in the hour, not at every pass.
+  Neither those reads nor the unchanged ones of the other five take a
+  GraphQL budget reading, since a conditional REST read spends no GraphQL,
+  and the pass admits itself on the saved reading. No check ever reports
+  on the eight pull requests, so ten minutes after their last update the
+  pull watch reads them at its long interval. The loop's own GraphQL
+  spend leaves the budget above github.floor, and at the end of the hour a
+  board item that became free still gets its worker. Live, the budget
+  readings around every inventory read and every pass, and the watch of
+  old pull requests without CI every 30 seconds, took the budget under the
+  floor in most hours, and starts were held until the hourly reset.
 issue: https://github.com/giantswarm/beekeeper/issues/3769
 flow: regression
 tags: [regression, loop, github, budget, clock]
 timeout: 300s
-
-# The bug's fix is on main already, so the scenario passes on this change's
-# base. Its control is a run on the code before the fix, linked on the pull
-# request that added the scenario.
-control:
-  none: >-
-    the fix https://github.com/giantswarm/beekeeper/pull/3782 is on main
-    already; the run that fails on the code before it is linked on the pull
-    request that adds this scenario
 
 given:
   clock:
@@ -122,9 +117,16 @@ when:
       # Twelve refreshes of the three repositories, not a read at every one
       # of some hundred passes.
       - github: {calls: {path: 'repos/example/svc-0[1-3]/pulls', caller: loop, fault: unlisted, min: 3, max: 60}}
-      # Some 600 points with the budget readings of every pass; the failed
-      # reads of every pass cost that again and half as much on top.
-      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 900}}}
+      # Budget readings around the GraphQL reads and about one a minute to
+      # keep the saved reading fresh, some 150; with a reading before and
+      # after every inventory read and every pass, some 400.
+      - github: {calls: {path: graphql, operation: viewer, caller: loop, max: 250}}
+      # The pull watch's polls: every 30 seconds for the first ten minutes,
+      # then every two minutes, some 40; at the short interval all hour, some
+      # 100.
+      - github: {calls: {path: graphql, operation: rateLimit, caller: loop, max: 70}}
+      # Some 250 points; with those readings and polls, some 550.
+      - github: {budget: {bucket: graphql, caller: loop, spent: {max: 350}}}
       - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
   # 10:00: an item becomes free. Starts are not held: the refill's next
   # read of the board finds it and the item gets its worker.

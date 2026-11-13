@@ -192,14 +192,21 @@ holds, cancellation and capacity admission still stop the refill.
 
 Pull inventory observations are shared by repository for five minutes. A failed
 repository observation is cached for the same interval: idle passes return that
-failure without repeating the inventory request or its two fresh GraphQL budget
-probes. Starts still require a successful observation; old pulls are retained
-only so a later successful conditional read can recover without a full fetch.
-Admission holds and canceled passes are not cached as repository failures.
+failure without repeating the inventory request. Starts still require a
+successful observation; old pulls are retained only so a later successful
+conditional read can recover without a full fetch. Admission holds and canceled
+passes are not cached as repository failures.
+
+The conditional REST read of a repository's newest pull request takes no GraphQL
+budget reading, unchanged or failed. Only the GraphQL read of the open pull
+requests, on a repository's first read, after a change, after its own failure or
+hourly, is counted between two fresh readings, each a GraphQL query per identity.
 
 The inventory cost regression simulates an hour of 30-second idle passes with
-three repositories. It bounds the inventory path to zero GraphQL calls between
-refreshes and at most nine calls on a refresh pass, including budget probes,
-even when every repository read fails. This bounds inventory retries, not all
-worker activity or all loop queries. A release still needs a 24-hour live
+three repositories. The first pass makes nine GraphQL calls, two readings and one
+query for each repository; the passes that read the repositories again make
+none when they are unchanged or their reads fail, and nine when each full read
+fails. The scenario `loop-hour-leaves-the-graphql-budget-above-the-floor` bounds
+the loop's budget readings, pull watch polls and GraphQL points over an hour of
+passes. Neither bounds worker activity. A release still needs a 24-hour live
 observation of budget holds and refill stalls to establish the end-to-end result.

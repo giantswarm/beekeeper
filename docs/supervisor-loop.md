@@ -32,12 +32,15 @@ The loop also holds ownership and PR observations under the GraphQL floor or whi
 unknown or stale. Board queries and tracked PR reads check a fresh budget against a durable
 allowance of 1,500 points per hour, keeping 300 points for two identities' budget probes and
 reserving 500 points before each work request. Budget probes run at most every 30 seconds.
-Concurrent timer commands share its lock. An interrupted request keeps its reservation.
+Concurrent timer commands share its lock. An interrupted request keeps its reservation. A step's
+cost is counted between two fresh readings, each a GraphQL query per identity, so only steps that
+query GraphQL take them: the pass admits itself on the saved reading, which it refreshes once it is
+a minute old, and the conditional read of a repository's newest pull request takes none.
 
 Traffic between observations counts conservatively toward the allowance as `shared`; a busy desk can
 therefore pause the loop early. `budget --json` exposes the window, spent points and `board`,
-`pull`, `watch`, `timers`, `pass` and `shared` totals under `loop`. The embedded watch's note and
-parked-PR reads and GitHub timer conditions share the allowance; local timer jobs remain
+`pull`, `watch`, `timers`, `inventory` and `shared` totals under `loop`. The embedded watch's note
+and parked-PR reads and GitHub timer conditions share the allowance; local timer jobs remain
 independent. `budget` names the stored `gh` login and the configured devctl `app` login, with each
 account's login, counters and reset under JSON `identities`.
 
@@ -53,7 +56,8 @@ identity also hold it without hiding the lowest counter. Loop spend tracks each 
 separately; selecting another minimum or a GitHub window resetting never replenishes its own hourly
 allowance. One independent watcher reads the pull requests of active deliveries, parks and sweep
 discoveries in GraphQL batches of up to 60. It polls every 30 seconds while checks or mergeability
-are pending and every two minutes when settled.
+are pending and every two minutes when settled. A pull request no check has reported on ten minutes
+after its last update counts as settled: no CI is coming until a push updates it.
 
 Files, body and reviews refresh only when the head or `updatedAt` changes. Errors and rate limits
 are logged once per episode and back off exponentially to ten minutes, respecting `github.floor`.
@@ -68,7 +72,8 @@ unchanged response costs no REST core points and skips the GraphQL inventory. A 
 least hourly; missing validators and failed or incomplete reads never certify an empty backlog.
 Background inventory and orphan scans always share a separate durable allowance of 1,000 REST points
 per window, reserving 50 points before a batch and preserving an enabled `github.floor` for other
-work.
+work. The conditional check is admitted while the allowance and the saved reading have room, and
+takes no budget reading: it spends no GraphQL, and unchanged no REST either.
 
 Disabling the shared floor for emergency access does not disable this scan allowance or make scans
 depend on GraphQL admission. Fresh conditional budget samples settle the reservation; an interrupted

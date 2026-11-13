@@ -142,11 +142,66 @@ var readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, er
 	return copyApp.probeBudget(ctx)
 }
 
+// loopStepReading is the reading a loop step is admitted on. A step's
+// cost is counted between two fresh readings, each a GraphQL query per
+// identity; the pass's own admission reads nothing and counts nothing, so
+// it holds on the saved reading while that is fresh, the watch's or the
+// pass's own. A forced reading before and after a no-op on every pass was a
+// large share of the loop's GraphQL spend (#3769).
+func (a *app) loopStepReading(ctx context.Context, st *state.State, pass bool) (github.Budget, error) {
+	if pass && !loop.LoopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		return savedLoopBudget(st.Budget), nil
+	}
+	return readLoopGraphQLBudget(a, ctx)
+}
+
+// savedLoopBudget is a saved reading in the form of a fresh one: the
+// lowest identity's buckets, and each identity's GraphQL bucket for its
+// account in the allowance.
+func savedLoopBudget(s *state.Budget) github.Budget {
+	b := github.Budget{Identity: s.Identity, Login: s.Login, Remaining: s.Remaining, Limit: s.Limit,
+		Used: s.Limit - s.Remaining, Reset: s.Reset, GraphQL: graphqlOf(s.GraphQL)}
+	for id, profile := range s.Identities {
+		if b.Identities == nil {
+			b.Identities = map[string]github.Budget{}
+		}
+		b.Identities[id] = github.Budget{Identity: id, Login: profile.Login, Remaining: profile.Remaining,
+			Limit: profile.Limit, Used: profile.Limit - profile.Remaining, Reset: profile.Reset, GraphQL: graphqlOf(profile.GraphQL)}
+	}
+	return b
+}
+
+// loopRevision admits the conditional REST read of a repository's newest
+// pull request (loop.LoopRevisionStep): on the saved reading above
+// github.floor and the background scans' REST allowance, without the
+// readings before and after that count a step's cost. It spends no GraphQL
+// and, unchanged, no REST either; two forced GraphQL readings per identity
+// around every such read were most of the loop's GraphQL spend (#3769).
+func (a *app) loopRevision(run func() error) error {
+	now := a.timeNow()
+	if a.cfg.GitHub.Floor > 0 {
+		st, err := a.store.Read()
+		if err != nil {
+			return err
+		}
+		if st.Budget == nil || st.Budget.GraphQL == nil || loop.BoardBudgetLow(st.Budget, a.cfg.GitHub.Floor, now) {
+			return fmt.Errorf("loop GitHub budget unknown or low: %w", loop.ErrLoopLater)
+		}
+	}
+	if err := a.loopRESTHeld(now); err != nil {
+		return err
+	}
+	return run()
+}
+
 // loopGitHub admits one observation against the shared floor and a durable
 // allowance for the active GraphQL window. A healthy live REST and GraphQL
 // budget reading above the floor releases a held allowance rather than
 // renewing a blind hourly hold.
 func (a *app) loopGitHub(ctx context.Context, step string, run func() error) error {
+	if step == loop.LoopRevisionStep {
+		return a.loopRevision(run)
+	}
 	if a.cfg.GitHub.Floor <= 0 {
 		if step == "inventory" || step == loop.LoopSweepStep {
 			return a.loopScanREST(ctx, step, run)
@@ -185,7 +240,8 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		ctx = context.WithValue(ctx, freshLoopRESTKey{}, true)
 	}
 	// A reading lost only to a busy state or lease commit stands (#3841).
-	b, err := readLoopGraphQLBudget(a, ctx)
+	pass := step == loop.LoopPassStep
+	b, err := a.loopStepReading(ctx, st, pass)
 	if err = unsavedBudget(err); err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
 		return fmt.Errorf("loop GitHub budget unavailable (%s): %w", loopBudgetUnavailable(a, b, err), loop.ErrLoopLater)
 	}
@@ -200,7 +256,8 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		(!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) ||
 		g.Remaining > spend.Remaining ||
 		(g.Limit > 0 && g.Limit-g.Remaining < spend.Spent))
-	if !a.timeNow().Before(spend.Reset) || spend.Steps == nil || (!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) || releaseHold {
+	renewed := !a.timeNow().Before(spend.Reset) || spend.Steps == nil || (!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) || releaseHold
+	if renewed {
 		spend = loopGraphQLSpend{Reset: reset, Remaining: g.Remaining, Steps: map[string]int{}}
 	}
 	accounts := graphQLAccounts(b)
@@ -212,6 +269,17 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 			return err
 		}
 		return fmt.Errorf("loop GitHub held: %d points spent, %d remaining (floor %d): %w", spend.Spent, g.Remaining, a.cfg.GitHub.Floor, loop.ErrLoopLater)
+	}
+	if pass {
+		// The pass's admission reads nothing and has no cost to count: it
+		// writes the allowance only to release a hold or start a window.
+		if renewed || !spend.HeldAt.IsZero() {
+			spend.HeldAt = time.Time{}
+			if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
+				return err
+			}
+		}
+		return run()
 	}
 	var restSpend loopRESTSpend
 	if scan {

@@ -341,6 +341,49 @@ func TestLoopRetainsReservationWhenSpendCannotBeRead(t *testing.T) {
 	}
 }
 
+// The pass's own admission takes no budget reading, each a GraphQL query
+// per identity: it holds on the saved reading, releases a held allowance
+// on a healthy one and holds the pass on one under the reserve (#3769).
+func TestLoopPassAdmitsOnTheSavedReading(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = 1000
+	healthyLoopBudget(t, r)
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		t.Fatal("the pass took a budget reading of its own")
+		return github.Budget{}, nil
+	}
+	if err := r.a.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{
+		Reset:     r.a.now.Add(time.Hour),
+		HeldAt:    r.a.now.Add(-5 * time.Minute),
+		Remaining: 1200,
+		Spent:     loopGraphQLLimit,
+		Steps:     map[string]int{loop.LoopBoard: loopGraphQLLimit},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	if err := r.a.loopGitHub(t.Context(), "pass", func() error { ran = true; return nil }); err != nil || !ran {
+		t.Fatalf("healthy saved reading held the pass: ran=%t err=%v", ran, err)
+	}
+	var spend loopGraphQLSpend
+	if _, err := r.a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
+		t.Fatal(err)
+	}
+	if !spend.HeldAt.IsZero() || spend.Spent != 0 || spend.Remaining != 4900 {
+		t.Fatalf("healthy saved reading did not release the held allowance: %+v", spend)
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget.GraphQL.Remaining = 1400
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ran = false
+	if err := r.a.loopGitHub(t.Context(), "pass", func() error { ran = true; return nil }); !errors.Is(err, loop.ErrLoopLater) || ran {
+		t.Fatalf("saved reading under the reserve above github.floor admitted the pass: ran=%t err=%v", ran, err)
+	}
+}
+
 func healthyLoopBudget(t *testing.T, r *loopRig) {
 	t.Helper()
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {

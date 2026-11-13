@@ -1485,7 +1485,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	}
 	l.ClearSaid("graphql budget")
 	if !l.DryRun {
-		if err := a.LoopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+		if err := a.LoopGitHub(ctx, LoopPassStep, func() error { return nil }); err != nil {
 			if saveErr := l.ObserveThroughput(superloop.Input{}, nil, false); saveErr != nil {
 				return saveErr
 			}

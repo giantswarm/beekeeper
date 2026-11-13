@@ -14,6 +14,16 @@ const LoopPullStep = "pull"
 
 const LoopSweepStep = "sweep"
 
+// LoopPassStep is the pass's own admission: it holds or admits the pass on
+// the saved budget reading and takes no reading of its own (#3769).
+const LoopPassStep = "pass"
+
+// LoopRevisionStep is the conditional REST read of a repository's newest
+// pull request: it spends no GraphQL, and unchanged no REST either, so it
+// is admitted without the GraphQL readings that count a step's cost
+// (#3769).
+const LoopRevisionStep = "revision"
+
 // Keep room for an admitted query and for concurrent callers. The large
 // board regression checks a whole walk below this per-request reserve.
 const LoopGraphQLReserve = 500
