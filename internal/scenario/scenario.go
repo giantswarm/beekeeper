@@ -110,6 +110,16 @@ type Given struct {
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
+	// Files are written under /work before the desk starts: a brief a
+	// start by hand reads.
+	Files []File `yaml:"files"`
+}
+
+// File is a file of the scenario's /work: Path relative to it, and its
+// Content.
+type File struct {
+	Path    string `yaml:"path"`
+	Content string `yaml:"content"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -487,6 +497,14 @@ func (s *Scenario) Validate() error {
 	}
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
+	}
+	for i, f := range s.Given.Files {
+		switch {
+		case !filepath.IsLocal(f.Path):
+			bad("given.files[%d]: path %q is not relative to /work", i, f.Path)
+		case slices.ContainsFunc(s.Given.Files[:i], func(o File) bool { return filepath.Clean(o.Path) == filepath.Clean(f.Path) }):
+			bad("given.files[%d]: %q is named twice", i, f.Path)
+		}
 	}
 	for i, c := range s.Given.Calls {
 		if !slices.Contains(s.programs(), c.Program) {

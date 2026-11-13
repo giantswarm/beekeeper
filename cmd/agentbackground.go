@@ -331,7 +331,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		if reg, err = a.recordStart(st, s, sp.task, sp.serves, live); err != nil {
+		if reg, err = a.recordStart(st, s, sp.task, sp.serves, live, sp.pulls...); err != nil {
 			return nil, err
 		}
 		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, model %s, effort %s, bypassPermissions, busy with %q", sp.name, id, dir, cmp.Or(sp.model, harnessDefaultModel), cmp.Or(sp.effort, harnessDefaultModel), reg.task)}

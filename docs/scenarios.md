@@ -195,6 +195,9 @@ given:
   clock:
     start: "2026-11-12T09:00:00Z"   # the world's time at the start; default now
   tools: [go, golangci-lint]         # further programs on PATH, answered by given.calls only
+  files:                             # written under /work before the desk starts
+    - path: briefs/fix.md            # relative to /work: a brief a start by hand reads
+      content: "Fix https://github.com/example/app/pull/2\n"
 
 when:
   - name: next

@@ -252,7 +252,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if o.Review {
 			s.Kind = capacity.TaskKindReview
 		}
-		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
+		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }, briefServedPulls(brief, issues)...); err != nil {
 			return nil, err
 		}
 		ref := r.Ref
