@@ -1,0 +1,134 @@
+name: done-task-retires-the-other-workers-park
+description: >
+  Two workers hold one task. The loop's worker parks on its task issue until
+  the fix is rolled out. A second worker on the same issue, started by hand
+  as a guide's emergency start is, proves the rollout, closes the issue and
+  reports the task done. The other worker's park is retired with that
+  report: the close wakes nobody, the loop starts no fresh session that
+  would only find the work done, and the doctor takes both off the roster.
+issue: https://github.com/giantswarm/beekeeper/issues/3855
+flow: regression
+tags: [regression, park, continuation, relay, loop]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {loopInterval: 1m, releaseEvery: 24h}
+      watch: {interval: 30s}
+      # The watch resumes a parked worker once its wait settled.
+      agents: {autoResume: true}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Roll out the fix, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      # The second worker on the task: it proves the rollout and ends the
+      # task, closing its issue.
+      - name: app 1 relay
+        harness: claude
+        turns:
+          - steps:
+              - gh: [issue, close, '1', --repo, example/app, --comment, "Proven: the fix runs on the desk."]
+              - beekeeper:
+                  - agents
+                  - idle
+                  - --done
+                  - --no-change
+                  - "https://github.com/example/app/issues/1: the fix was on main already; its rollout is proven on the desk"
+                  - --report
+                  - "https://github.com/example/app/issues/1 closed with proof; open items: none"
+                  - --problem
+                  - none
+      # The loop's worker waits on its task issue for the rollout.
+      - name: app 1
+        harness: claude
+        turns:
+          - steps:
+              - beekeeper: [agents, park, --on, 'example/app#1', the rollout of the fix on the desk]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [watch.budget-state]}
+  # The refill starts the item's worker, which parks on its issue.
+  - name: start
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+  - name: apply
+    advance:
+      by: 2m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - events: {contains: [agents.park]}
+  - name: parked
+    run: {args: [agents, --json]}
+    expect:
+      - json_path: {path: '[0].name', equals: app 1}
+      - json_path: {path: '[0].park.on', equals: 'example/app#1'}
+  # A second worker on the same task, started by hand with the item's brief.
+  - name: relay
+    run:
+      args: [--as, supervisor loop, agents, start, app 1 relay, /work/state/supervisor-loop/next-example-app-1.md, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1 relay, outcome: finish}
+        - github: {issue: {repo: example/app, number: 1, state: closed}}
+  # Long enough for the watch to read the closed issue again (every five
+  # minutes), for a resumable park to be resumed and for the loop to start
+  # the continuation it would queue.
+  - name: done
+    advance:
+      by: 12m
+      step: 1m
+      quiet: 200ms
+  - name: roster
+    run: {args: [agents, --json]}
+  - stop: loop
+
+then:
+  - github: {issue: {repo: example/app, number: 1, state: closed}}
+  - events:
+      contains: [agents.start, agents.park, agents.done, agents.park-retired]
+      not_contains: [agents.resumable, agents.continuation-queued, agents.continuation, session.report-rejected]
+  - worker: {name: app 1 relay, turns: 1, outcome: finish}
+  # The parked session ran its one turn: it was neither resumed nor
+  # continued by a fresh session.
+  - worker: {name: app 1, turns: 1}
+  - worker: {name: 'app 1 next-[0-9a-f]+', turns: 0}
+  - calls: {program: claude, args: [--resume], max: 0}
+  - {step: roster, exit: 0}
+  - {step: roster, json_path: {path: ., len: 0}}
