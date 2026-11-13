@@ -428,23 +428,9 @@ nothing; it makes no GitHub call.`,
 			liveCap := a.liveCapacity()
 			var v *capacity.View
 			if host != "" && host != executionLocal {
-				h, err := a.executionHost(host)
-				if err != nil {
+				if v, err = a.hostStartView(cmd.Context(), host, st, sessions, builds, exclude, capacity.StartKind(review, ofSelfHosted), capacity.HarnessAuto, model); err != nil {
 					return err
 				}
-				if err := a.admitExecution(host, h); err != nil {
-					return err
-				}
-				caps, err := a.probeExecution(cmd.Context(), h)
-				if err != nil {
-					return err
-				}
-				k := liveCap
-				var legacy *capacity.UsageView
-				if len(k.Providers) == 0 {
-					k, legacy = a.resolveUsageForStart(cmd.Context(), k, capacity.StartKind(review, ofSelfHosted))
-				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), capacity.StartKind(review, ofSelfHosted), capacity.HarnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = capacityStopped(a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, capacity.StartKind(review, ofSelfHosted), model).WithLocal(st, liveCap), a, st)
 			} else {

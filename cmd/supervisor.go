@@ -187,8 +187,10 @@ func (a *app) loopWaitLines() (held, pulls string) {
 	}
 	var snapshot loop.LoopPullSnapshot
 	if found, err := a.store.ReadFile(loop.LoopPullWatchFile, &snapshot); found && err == nil {
-		if line := snapshot.AgeLine(a.timeNow()); line != "" {
-			pulls = strings.TrimSpace(pulls + "\n" + line)
+		for _, line := range []string{snapshot.AgeLine(a.timeNow()), snapshot.FailingLine(a.timeNow())} {
+			if line != "" {
+				pulls = strings.TrimSpace(pulls + "\n" + line)
+			}
 		}
 	}
 	return held, pulls

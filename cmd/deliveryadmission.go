@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -121,21 +120,4 @@ func deliveryExempt(st *state.State, now time.Time, ref string, exempt bool) boo
 
 func (a *app) deliveryExemptIntake(st *state.State) bool {
 	return len(deliveryRepairs(st, a.timeNow())) > 0 || slices.ContainsFunc(a.cfg.Board.Order, func(s config.BoardStep) bool { return s.WIPExempt })
-}
-
-// Only new issue starts use this check. The frozen references travel with
-// their worker stream, never in a field another pass could overwrite.
-func loopDeliveryPriority(l *loop.Loop, ctx context.Context, reserved ...[]string) error {
-	st, err := asApp(l.Host).store.Read()
-	if err != nil {
-		return err
-	}
-	refs, _ := l.DeliveryReservedRefs(st, reserved...)
-	if len(refs) == 0 {
-		return nil
-	}
-	if l.DeliveryRoom(loopFillRoom(l, loopFillCapacity(l, ctx)), st, refs) <= 0 {
-		return loop.ErrLoopLater
-	}
-	return nil
 }

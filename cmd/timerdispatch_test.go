@@ -381,10 +381,16 @@ func TestFatalTimersDetectMissedTicksNotUnsatisfiedConditions(t *testing.T) {
 
 // A temporary lock refusal must not terminate the long-running scheduler.
 // --once still reports it to its caller instead of claiming a successful pass.
+// The pass reads the snapshot without the lock, so the refusal reaches it at
+// its settlement.
 type timerBusyStore struct{ state.Store }
 
 func (s timerBusyStore) Read() (*state.State, error) {
 	return nil, fmt.Errorf("timer read: %w", &state.LockBusyError{})
+}
+
+func (s timerBusyStore) Update(func(*state.State) ([]state.Event, error)) error {
+	return fmt.Errorf("timer settle: %w", &state.LockBusyError{})
 }
 
 type timerCancelWriter struct {
@@ -402,6 +408,12 @@ func TestTimerDispatcherBusyLockKeepsServiceAlive(t *testing.T) {
 		t.Run(fmt.Sprint(once), func(t *testing.T) {
 			a, _ := stubApp(t)
 			a.loadedCfg = filepath.Join(a.store.Dir(), "config.yaml")
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Run: probeHolds}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 			a.store = timerBusyStore{a.store}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -417,6 +429,62 @@ func TestTimerDispatcherBusyLockKeepsServiceAlive(t *testing.T) {
 				t.Fatalf("service exited instead of retrying: err=%v logged=%v", err, out.wrote)
 			}
 		})
+	}
+}
+
+// Writers queued on the state lock once held a pass's locked reads for most
+// of a minute each, so a check ran on its tick but settled past the fatal
+// deadline. A writer holding the lock must not hold back the checks: the
+// pass checks from the snapshot, and only its settlement waits for the lock.
+func TestTimerDispatcherChecksWhileWriterHoldsStateLock(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Probe: probeFails, Wake: timerDispatchRepairWorker}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	probed := make(chan struct{})
+	var once sync.Once
+	old := readProbe
+	readProbe = func(context.Context, string) ([]byte, error) {
+		once.Do(func() { close(probed) })
+		return nil, errors.New("exit status 1")
+	}
+	t.Cleanup(func() { readProbe = old })
+	locked := make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		held <- a.store.Exclusive(func() error {
+			close(locked)
+			select {
+			case <-probed:
+				return nil
+			case <-time.After(10 * time.Second):
+				return errors.New("condition not checked while a writer held the state lock")
+			}
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-held:
+		t.Fatal("writer did not take the state lock:", err)
+	}
+	w, err := a.dispatchTimerPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.timerActs.Wait()
+	if err := <-held; err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Timers) != 1 || !st.Timers[0].Checked.Equal(a.now) {
+		t.Fatalf("check not settled once the writer released the lock: %+v", st.Timers)
 	}
 }
 

@@ -81,7 +81,10 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					return err
 				}
 				if args[0] == "pr" && len(args) > 1 && args[1] == workerGitHubCreate {
-					branch := execution.GitHubBranch(j.Handle.Ref)
+					if j.Request.PublicationPR != "" {
+						return refused("continuation must update %s instead of creating another PR", j.Request.PublicationPR)
+					}
+					branch := targetBranch
 					for i, arg := range args {
 						if arg == workerGitHubHeadFlag || arg == "-H" {
 							if i+1 >= len(args) || args[i+1] != branch {
@@ -224,6 +227,9 @@ type workerGitHubPushTarget struct {
 }
 
 func executionGitHubTargetBranch(j execution.Journal) string {
+	if j.Request.PublicationBranch != "" {
+		return j.Request.PublicationBranch
+	}
 	return execution.GitHubBranch(j.Handle.Ref)
 }
 

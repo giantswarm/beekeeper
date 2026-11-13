@@ -196,6 +196,34 @@ guide, which decides whether a worker starts on it; the rest are one
 `SUPERVISOR ALERTS unowned` summary line per pass. A worker parked on an
 alert (`agents park --on alert:<name>`) is woken by it whoever's it is.
 
+## The pull watch
+
+One watcher reads the desk's pull requests for every pass: the parked ones, the tracked deliveries
+and the open ones its listing finds. It reads them in GraphQL batches of up to 60, and those on
+first sight, with their files, reviews and closing issues, in batches of up to 20. What it read is
+saved in `supervisor-pull-observations.json`; a pass trusts an observation for 5 minutes.
+
+GitHub can fail a batch it cannot answer in time: a 5xx, no answer, or its HTML error page in
+place of JSON. The watcher then asks for the same pull requests again in halves, down to batches
+of 5, and the halved size holds for the polls after it. It doubles again after each 30 minutes
+without a fault. A batch that still fails at 5 is skipped, and the rest are read. What a failed
+poll did read stands.
+
+| Line | Says |
+| --- | --- |
+| `SUPERVISOR PULL WATCH GitHub failed a batch of …` | GitHub's answer (its HTTP status, the page's start), the halved size |
+| `SUPERVISOR PULL WATCH read the … pull requests it asked for; …` | a poll that read everything after a fault, the size from now on |
+| `SUPERVISOR PULL WATCH held: try <n> failed (failing since …)` | every failed poll, its error and the next try (1, 2, 4, 8, 10 minutes) |
+| `SUPERVISOR PULL WATCH recovered: …` | the poll that ends the episode, with its failed tries |
+| `SUPERVISOR PULL WATCH held: <budget cause>` | a budget hold, said once; it ends on its own |
+
+`supervisor status` shows the episode: `pull watch failing since …, <n> tries (last complete poll
+…): <error>`. When the watch has not read all its pull requests for 30 minutes, measured from its
+start after a restart, the loop files one alarm for the guide. The alarm names the failed tries and
+the last error, since no parked pull request gets a desk review, a merge decision or its CI's wake
+until the watch reads again. `SUPERVISOR STALL ENDED: the pull watch reads the desk's pull requests
+again` says when a poll completes.
+
 ## The supervisor loop down
 
 The supervisor is the supervisor loop; no session holds its role. While the loop does not run,

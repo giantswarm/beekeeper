@@ -393,6 +393,9 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "updateProjectV2ItemPosition"):
 		f.mutations = append(f.mutations, fmt.Sprintf("%s after %q", vars["i"], vars["a"]))
 		return []byte(cmp.Or(f.moved, `{"data":{"updateProjectV2ItemPosition":{"clientMutationId":null}}}`)), nil
+	case strings.Contains(q, "unarchiveProjectV2Item"):
+		f.mutations = append(f.mutations, "unarchive "+vars["i"])
+		return []byte(`{"data":{"unarchiveProjectV2Item":{"item":{"id":"` + vars["i"] + `"}}}}`), nil
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
@@ -509,7 +512,7 @@ func TestMoveTakesOnlyTheBoardsStatuses(t *testing.T) {
 	f := &fakeGH{t: t, item: onBoard}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(context.Background(), "https://github.com/o/r/issues/5", "in progress")
-	if err != nil || *mv != (Moved{Ref: issue5, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I1=s3"}) {
+	if err != nil || *mv != (Moved{Ref: issue5, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{moveI1}) {
 		t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
 	// An item on the board is moved by the issue's projectItems: no add,

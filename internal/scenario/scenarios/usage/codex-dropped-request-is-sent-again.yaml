@@ -1,0 +1,49 @@
+name: codex-dropped-request-is-sent-again
+description: >
+  Six minutes after the last good Codex reading, a refresh's account usage request goes unanswered
+  once, as when the network is still coming up after a resume. The reader sends it again a moment
+  later and gets the account's answer: capacity has a fresh reading, with no fallback and nothing
+  unreadable.
+issue: https://github.com/giantswarm/beekeeper/issues/3639
+flow: usage
+tags: [usage, capacity, codex]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      capacity:
+        ceiling: 2
+        providers:
+          codex: {ceiling: 2}
+  harness:
+    usage:
+      codex:
+        session: 10
+        week: 23
+        # The second request goes unanswered, as codex app-server reports a
+        # request it could not send.
+        fail:
+          after: 1
+          times: 1
+          message: >-
+            failed to fetch codex rate limits: error sending request for url
+            (https://chatgpt.com/backend-api/wham/usage)
+
+when:
+  - name: read
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.fallback, exists: false}
+  - advance: 6m
+  - name: refresh
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.sevenDay.usedPercent, equals: 23}
+      - json_path: {path: providers.codex.fallback, exists: false}
+      - output: {not_contains: [unreadable]}
+
+then:
+  - calls: {program: codex, args: [app-server], min: 3, max: 3}

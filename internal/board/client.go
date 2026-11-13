@@ -858,6 +858,13 @@ type Moved struct {
 	// Kept says a release left the item as it is: its Status was changed
 	// since the hold set it (Release).
 	Kept bool `json:"kept,omitempty"`
+	// Closed says the issue is closed and the move left it: an intake puts
+	// a closed issue nowhere, a move leaves a closed issue's archived item.
+	// Archived says its item is archived; Unarchived that the move
+	// restored it first, the issue being open.
+	Closed     bool `json:"closed,omitempty"`
+	Archived   bool `json:"archived,omitempty"`
+	Unarchived bool `json:"unarchived,omitempty"`
 }
 
 // Move sets the Status of the board item of the issue ref to the status in
@@ -873,7 +880,10 @@ type Moved struct {
 // resolve is refused as no issue, with GitHub's reason. A move of an epic
 // to the epic gate's go status is the go: Moved.Go names its plan and the
 // private thread to record it on (RecordGo), and an epic with a plan but
-// no private thread is refused before anything is written.
+// no private thread is refused before anything is written. An archived
+// item, which GitHub refuses to update, is left as it is when the issue is
+// closed (Moved.Closed and Archived, nothing written) and restored to the
+// board before the move when it is open (Moved.Unarchived).
 func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	owner, repo, n, err := Ref(ref)
 	if err != nil {
@@ -885,10 +895,11 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 		return nil, err
 	}
 	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
-	id, found, _, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	is, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return nil, err
 	}
+	id, found := is.ID, is.Found
 	sf := m.Fields[StatusField]
 	to, err := Resolve(StatusField, sf.names(), in)
 	if err != nil {
@@ -909,6 +920,17 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	}
 	if item.Status != nil {
 		mv.From = item.Status.Name
+	}
+	if item.Archived {
+		mv.Archived = true
+		if is.Closed {
+			mv.Closed = true
+			return mv, nil
+		}
+		if err := c.unarchive(ctx, m.ID, item.ID); err != nil {
+			return nil, err
+		}
+		mv.Unarchived = true
 	}
 	var it Item
 	item.onto(&it)
@@ -952,6 +974,8 @@ func workedStatus(status string) bool {
 // none, unless the issue already sits on another board where it is being
 // worked (Moved.Board and Moved.Kept set) or already has a Status on the
 // configured board (left as it is, Moved.Kept set when it differs from in).
+// A closed issue is put nowhere (Moved.Closed) and an archived item is left
+// archived (Moved.Archived and Kept): nothing is written for either.
 func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
 	owner, repo, n, err := Ref(ref)
 	if err != nil {
@@ -963,10 +987,11 @@ func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
 		return nil, err
 	}
 	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
-	id, found, items, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	is, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return nil, err
 	}
+	id, found := is.ID, is.Found
 	sf := m.Fields[StatusField]
 	to, err := Resolve(StatusField, sf.names(), in)
 	if err != nil {
@@ -976,8 +1001,20 @@ func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
 	if err != nil {
 		return nil, &Refusal{err.Error()}
 	}
+	if found != nil && found.Status != nil {
+		mv.From = found.Status.Name
+	}
+	switch {
+	case is.Closed:
+		mv.To, mv.Closed = cmp.Or(mv.From, to), true
+		mv.Archived = found != nil && found.Archived
+		return mv, nil
+	case found != nil && found.Archived:
+		mv.To, mv.Archived, mv.Kept = cmp.Or(mv.From, to), true, true
+		return mv, nil
+	}
 	if found == nil {
-		for _, other := range items {
+		for _, other := range is.Items {
 			if other.Project.ID != m.ID && other.Status != nil && workedStatus(other.Status.Name) {
 				mv.From = other.Status.Name
 				mv.To = other.Status.Name
@@ -1019,11 +1056,11 @@ func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
 // projectItems do not list (GitHub lists an item of another owner's project
 // under none) is the one the add answers.
 func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo string, n int) (projectItem, error) {
-	id, found, _, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	is, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return projectItem{}, err
 	}
-	return c.ensure(ctx, m, mv, id, found)
+	return c.ensure(ctx, m, mv, is.ID, is.Found)
 }
 
 // ensure is the item found, else the issue id's item addProjectV2ItemById
@@ -1065,11 +1102,11 @@ func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem
 	}
 	oref := fmt.Sprintf("%s/%s#%d", oo, or, on)
 	octx := github.ActingOn(ctx, oo+"/"+or)
-	oid, found, _, err := c.lookup(octx, m, oref, oo, or, on)
-	if err != nil || found != nil || strings.EqualFold(oo, c.Board.Owner) {
-		return found, err
+	is, err := c.lookup(octx, m, oref, oo, or, on)
+	if err != nil || is.Found != nil || strings.EqualFold(oo, c.Board.Owner) {
+		return is.Found, err
 	}
-	return c.findItem(octx, m.ID, oid)
+	return c.findItem(octx, m.ID, is.ID)
 }
 
 // findItem resolves only membership, the item id and its archived state.
@@ -1121,47 +1158,68 @@ func (c *Client) findItem(ctx context.Context, project, content string) (*projec
 	}
 }
 
-// lookup reads the issue's node id and its item on the board from the
-// issue's projectItems, nil when they name none, and every item they name. An issue
-// GitHub does not resolve is refused as no issue, ref naming it.
-func (c *Client) lookup(ctx context.Context, m *meta, ref, owner, repo string, n int) (string, *projectItem, []projectItem, error) {
+// looked is what lookup reads of an issue: its node id, whether it is
+// closed, its item on the board (nil when its projectItems name none) and
+// every item they name.
+type looked struct {
+	ID     string
+	Closed bool
+	Found  *projectItem
+	Items  []projectItem
+}
+
+// lookup reads the issue's node id, its state and its items from the
+// issue's projectItems. An issue GitHub does not resolve is refused as no
+// issue, ref naming it.
+func (c *Client) lookup(ctx context.Context, m *meta, ref, owner, repo string, n int) (looked, error) {
 	var r struct {
 		Repository struct {
 			Issue *struct {
 				ID           string `json:"id"`
+				State        string `json:"state"`
 				ProjectItems struct {
 					Nodes []projectItem `json:"nodes"`
 				} `json:"projectItems"`
 			} `json:"issue"`
 		} `json:"repository"`
 	}
-	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
+	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id state projectItems(first:50){nodes{
 `+itemFields+`}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
 	p, ok := partialOf(err)
 	if !ok {
-		return "", nil, nil, err
+		return looked{}, err
 	}
 	is := r.Repository.Issue
 	if is == nil {
-		return "", nil, nil, &Refusal{ref + " is no issue" + p.reason()}
+		return looked{}, &Refusal{ref + " is no issue" + p.reason()}
 	}
 	if p != nil {
 		// Its items unknown, the issue is never taken for one off the board.
-		return "", nil, nil, fmt.Errorf("the board items of %s: %w", ref, err)
+		return looked{}, fmt.Errorf("the board items of %s: %w", ref, err)
 	}
-	items := is.ProjectItems.Nodes
-	if i := slices.IndexFunc(items, func(x projectItem) bool { return x.Project.ID == m.ID }); i >= 0 {
-		return is.ID, &items[i], items, nil
+	l := looked{ID: is.ID, Closed: strings.EqualFold(is.State, stateClosed), Items: is.ProjectItems.Nodes}
+	if i := slices.IndexFunc(l.Items, func(x projectItem) bool { return x.Project.ID == m.ID }); i >= 0 {
+		l.Found = &l.Items[i]
 	}
-	return is.ID, nil, items, nil
+	return l, nil
+}
+
+// unarchive restores the archived item of the project to the board
+// (unarchiveProjectV2Item), where a move or a rank can update it again.
+func (c *Client) unarchive(ctx context.Context, project, item string) error {
+	var done json.RawMessage
+	return c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!){unarchiveProjectV2Item(input:{projectId:$p,itemId:$i}){item{id}}}`,
+		vars{"p": project, "i": item})
 }
 
 // Place is where Rank puts an item: at the top of the board, or right
 // before or right after the item of another issue, one of the three.
+// Unarchive restores an open issue's archived item to the board first.
 type Place struct {
 	Top           bool
 	Before, After string
+	Unarchive     bool
 }
 
 // Ranked is a move of an item to a place on the board.
@@ -1177,6 +1235,12 @@ type Ranked struct {
 	// Added and Team are as in Moved: the issue had no item on the board.
 	Added bool   `json:"added,omitempty"`
 	Team  string `json:"team,omitempty"`
+	// Archived says the item is archived and was left where it is:
+	// Closed says the issue is closed, which leaves it whatever Place
+	// says. Unarchived says the rank restored it first (Place.Unarchive).
+	Archived   bool `json:"archived,omitempty"`
+	Closed     bool `json:"closed,omitempty"`
+	Unarchived bool `json:"unarchived,omitempty"`
 }
 
 // Rank moves the board item of the issue ref to the place at with
@@ -1188,6 +1252,9 @@ type Ranked struct {
 // other one after the item, so nothing reads the board's items to find the
 // other one's predecessor. An archived After anchor is replaced by its
 // nearest unarchived predecessor, or the board's end when none precedes it.
+// An archived item, which has no place in board order and which GitHub
+// refuses to move, is left as it is (Ranked.Archived, nothing written),
+// unless the issue is open and at.Unarchive restores it first.
 // Each call acts on the repository of the issue it
 // asks about. No issue, a reference without an item on the board and an
 // item placed against itself are refused before anything is written.
@@ -1209,18 +1276,36 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 	if err != nil {
 		return nil, &Refusal{err.Error()}
 	}
-	rk := &Ranked{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n), Top: at.Top}
-	var otherID string
-	var archivedAnchor bool
+	rk := &Ranked{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
+	oref := ""
 	if other != "" {
 		oo, or, on, err := Ref(other)
 		if err != nil {
 			return nil, err
 		}
-		oref := fmt.Sprintf("%s/%s#%d", oo, or, on)
+		oref = fmt.Sprintf("%s/%s#%d", oo, or, on)
 		if strings.EqualFold(oref, rk.Ref) {
 			return nil, &Refusal{rk.Ref + " cannot be placed against itself"}
 		}
+	}
+	is, err := c.lookup(ctx, m, rk.Ref, owner, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	// left says it is archived and stays so: nothing is written.
+	left := func(it *projectItem) bool {
+		if it == nil || !it.Archived || (at.Unarchive && !is.Closed) {
+			return false
+		}
+		rk.Archived, rk.Closed = true, is.Closed
+		return true
+	}
+	if left(is.Found) {
+		return rk, nil
+	}
+	var otherID string
+	var archivedAnchor bool
+	if oref != "" {
 		found, err := c.onBoard(ctx, m, oref)
 		if err != nil {
 			return nil, err
@@ -1230,16 +1315,21 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 		}
 		otherID = found.ID
 		archivedAnchor = found.Archived && at.After != ""
-		if at.Before != "" {
-			rk.Below = oref
-		} else {
-			rk.Above = oref
-		}
 	}
 	mv := &Moved{Ref: rk.Ref}
-	item, err := c.item(ctx, m, mv, owner, repo, n)
+	item, err := c.ensure(ctx, m, mv, is.ID, is.Found)
 	if err != nil {
 		return nil, err
+	}
+	rk.Added = mv.Added
+	if left(&item) {
+		return rk, nil
+	}
+	if item.Archived {
+		if err := c.unarchive(ctx, m.ID, item.ID); err != nil {
+			return nil, err
+		}
+		rk.Unarchived = true
 	}
 	if archivedAnchor {
 		otherID, err = c.unarchivedPredecessor(ctx, m.ID, otherID, item.ID)
@@ -1247,7 +1337,6 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 			return nil, err
 		}
 	}
-	rk.Added = mv.Added
 	if item.Team == nil && team != nil {
 		if err := c.set(ctx, m.ID, item.ID, team.field, team.id); err != nil {
 			return nil, err
@@ -1260,11 +1349,14 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 	}
 	switch {
 	case at.Top:
-		rk.Below = below
+		rk.Top, rk.Below = true, below
 	case at.Before != "":
 		if _, err := c.position(ctx, m.ID, otherID, item.ID); err != nil {
 			return nil, err
 		}
+		rk.Below = oref
+	default:
+		rk.Above = oref
 	}
 	return rk, nil
 }

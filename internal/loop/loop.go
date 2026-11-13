@@ -28,6 +28,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -1375,6 +1376,18 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			l.SayOnce("flow waits", "SUPERVISOR STALL alarm for the pending merge decisions failed: %v", err)
 		} else {
 			l.ClearSaid("flow waits")
+		}
+	}()
+	// Every pass measures the pull watch, wherever it ends: a watch that
+	// stopped reading is what holds the passes' reviews and merges.
+	defer func() {
+		if l.DryRun || ctx.Err() != nil {
+			return
+		}
+		if err := l.CheckPullStall(); err != nil {
+			l.SayOnce("pull stall", "SUPERVISOR STALL alarm for the pull watch failed: %v", err)
+		} else {
+			l.ClearSaid("pull stall")
 		}
 	}()
 	l.LifecyclePhase("reload configuration")
@@ -3782,7 +3795,7 @@ func SelfHostedModel(k config.Capacity, model string) bool {
 		return false
 	}
 	for _, c := range k.Choices {
-		if c.Model == model || c.Harness+"/"+c.Model == model || Cmd.OmpChoiceModel(c, model) {
+		if c.Model == model || c.Harness+"/"+c.Model == model || capacity.OmpChoiceModel(c, model) {
 			if p, ok := k.Providers[c.EffectiveProvider()]; ok && p.SelfHosted() {
 				return true
 			}

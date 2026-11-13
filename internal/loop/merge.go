@@ -439,6 +439,23 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 	return "merge failed; branch repair requested", nil
 }
 
+// closeSupersededPulls closes, beside a merge, the pull requests other
+// executions published for the merged pull request's task (Command's
+// CloseSupersededPulls). It is a safety net, never a hold on the merge: a
+// duplicate it cannot close is said, and the merge's own wake goes on.
+func (l *Loop) closeSupersededPulls(ctx context.Context, st *state.State, merged superloop.Pull) {
+	if Cmd.CloseSupersededPulls == nil {
+		return
+	}
+	superseded, err := Cmd.CloseSupersededPulls(ctx, st, merged)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR SUPERSEDED PULLS of %s stay open: %v\n", merged.URL, err)
+	case len(superseded) > 0:
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR SUPERSEDED by %s: closed %s\n", merged.URL, strings.Join(superseded, ", "))
+	}
+}
+
 // EndMerged closes tasks that explicitly declared no post-merge work and
 // wakes only tasks with a remaining release, rollout or proof. Older parks
 // retain the existing release-containment and retirement behavior.
@@ -467,6 +484,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 		if closeErr != nil {
 			return "", closeErr
 		}
+		l.closeSupersededPulls(ctx, st, mp)
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil

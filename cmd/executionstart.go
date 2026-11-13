@@ -29,6 +29,14 @@ type executionStartOptions struct {
 	Exclude                                                           []string
 }
 
+// workerGitHubAccessPrompt and workerGitHubLimitsPrompt tell an execution
+// with the worker GitHub App what gh reaches and what it never does; a
+// continuation of an existing PR gets them as well as a new task.
+const (
+	workerGitHubAccessPrompt = "Worker GitHub access: use gh for issues, PRs and checks across repositories you can reach. Cross-repository calls name --repo owner/repo; gh api uses repos/owner/repo/.... "
+	workerGitHubLimitsPrompt = "Merges stay on the coordinator. Never expose credential environment values.\n"
+)
+
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
 	if err := a.checkRepositoryVisibility(ctx, o.Repository); err != nil {
 		return err
@@ -49,7 +57,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err := a.admitExecution(o.Host, host); err != nil {
 		return err
 	}
-	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
+	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != executionHeadless {
 		return usageErr("remote starts require --repo and --ref, use headless mode and do not accept --dir or --desktop")
 	}
 	if o.Harness != capacity.HarnessAuto && (!execution.SupportedHarness(o.Harness) || !host.Supports(o.Harness)) {
@@ -165,6 +173,17 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 			return err
 		}
 	}
+	var publication *state.ExecutionPublication
+	if !o.Review && !o.ReviewOfSelfHosted {
+		_, repairPulls, _ := a.startGateExemptions(name, brief, issues, a.timeNow())
+		publication, err = continuationPublication(ctx, o.Repository, repairPulls)
+		if err != nil {
+			return err
+		}
+		if publication != nil {
+			o.GitRef = publication.Head
+		}
+	}
 	id := execution.ExecutionID(uuid.NewString())
 	control, err := execution.NewControlKey()
 	if err != nil {
@@ -174,13 +193,21 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
 	if o.Review {
 		prompt += "\n\nExecution review access: use `beekeeper agents review` to read the assigned pull request and linked issues, and `beekeeper agents review --diff` to read its diff through the coordinator. If you fix your own review findings on the pull request branch, commit in this workspace, push the fast-forward fix with `beekeeper agents publish` (without `--title` or `--body-file`), and post your review of that published head immediately. Do not run local tests or lints or wait for CI; the loop owns CI and merges only on green. Post the required review with `beekeeper agents review --body-file <file>`; it returns the exact review URL for your completion report. If the assignment is not available yet, retry after the supervisor finishes recording the start. Do not create a new pull request or park as an author.\n"
+	} else if publication != nil {
+		prompt += "\n\nContinue the existing pull request " + publication.URL + ". The workspace starts at its head. Commit fixes and run `beekeeper agents publish` without title/body flags; it advances the assigned branch " + publication.Branch + " and returns the same PR. Do not create a new PR. Park on that PR for desk review.\n"
+		if a.cfg.GitHub.WorkerApp != nil {
+			prompt += workerGitHubAccessPrompt + workerGitHubLimitsPrompt
+		}
 	} else if a.cfg.GitHub.WorkerApp != nil {
-		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks across repositories you can reach. Cross-repository calls name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
+		prompt += "\n\n" + workerGitHubAccessPrompt + "Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. " + workerGitHubLimitsPrompt
 	} else {
 		prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
 	}
 
 	r := execution.StartRequest{BundleDigest: bundleDigest, GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Effort: o.Effort, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	if publication != nil {
+		r.PublicationBranch, r.PublicationPR = publication.Branch, publication.URL
+	}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -219,6 +246,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		endpoint := host.Endpoint
 		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		rec.Published = publication
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
 		s.Kind = a.selectionKind
 		if o.Review {

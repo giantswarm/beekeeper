@@ -49,6 +49,7 @@ given:
             blocked_by: [2]
             board: Ready               # its Status on the scenario's board
             fields: {Kind: Bug}        # the board's other single-select fields
+            archived: false            # true: that board item is archived
             comments: [{author: alice, body: hello}]
         pulls:
           - number: 4
@@ -115,9 +116,10 @@ made it (`step-<i>`, its index in `when`, for an unnamed `run`). The driver sets
 (`http://127.0.0.1:<port>/caller/<name>`). What a step's process starts in its own environment
 inherits both: a worker session the `loop` step starts spends as `loop`. A transient unit of the
 fake `systemd-run` (without `--scope`) and a command on an execution host start from the desk's
-environment and carry neither: their `gh` calls have no caller, and code there that calls HTTP
-itself is not pointed at the server. A caller of a worker's own, and the server for units and
-hosts, are the follow-up https://github.com/giantswarm/beekeeper/issues/3844.
+environment, which names the server and the caller `desk`: their `gh` calls and their HTTP calls
+reach it as `desk`. A session on an execution host runs in the environment beekeeper gives it,
+without the caller: its own `gh` calls have none. A caller of each worker's own is the follow-up
+https://github.com/giantswarm/beekeeper/issues/3844.
 
 The server keeps GitHub's buckets: `core` and `graphql` (5000 points an hour), `search` (30 a
 minute) and `code_search` (10 a minute). Every answer carries the `X-RateLimit-*` headers of its
@@ -142,10 +144,12 @@ only that long after it was armed. They are checked in order; the first that hol
 | `operation` | a GraphQL operation's name or one of its top-level fields (`repositoryOwner`) |
 | `conditional` | requests with (`true`) or without (`false`) `If-None-Match` |
 | `via` | `gh` for the CLI, `http` for direct callers |
+| `min_fields` | GraphQL requests with at least that many top-level fields, each alias counted |
 
 | `respond` | Answers |
 | --- | --- |
 | `status` (and `body`) | that status with GitHub's usual body for it |
+| `content_type` | the `body`'s type, JSON by default; `text/html` is GitHub's error page, which `gh` prints |
 | `secondary_rate_limit: true` | GitHub's 403 for a secondary rate limit |
 | `outage: true` | no answer: the connection fails (`gh`: `error connecting to api.github.com`) |
 | `retry_after` | the `Retry-After` header |
@@ -190,8 +194,8 @@ then:
 | --- | --- |
 | `calls` | the calls matching `method`, `path`, `operation`, `caller`, `via`, `status`, `conditional` and `fault` number `min` to `max` |
 | `budget` | what `caller` (everyone when empty) `spent` of `bucket`, and what `remaining` of it |
-| `pull` | a pull request (`number`, or the newest of `head`): `state`, `draft`, `labels`, `checks`, `review_decision`, `merged_into`, `comments` |
-| `issue` | an issue: `state`, `labels`, `board`, `comments`, and the `pulls` and `open_pulls` that close it |
+| `pull` | a pull request (`number`, or the newest of `head`): `state`, `draft`, `labels`, `checks`, `review_decision`, `merged_into`, `comments`, `ahead` (an open one's commits beyond its base) |
+| `issue` | an issue: `state`, `labels`, `board` (an archived item is `none`), `archived`, `comments`, and the `pulls` and `open_pulls` that close it |
 
 A number is exact (`spent: 1`) or a range (`spent: {min: 1, max: 5}`). A `github` expectation is
 observed for every step kind, in `then`, inline and in `wait_for`. The call log is in the

@@ -23,6 +23,8 @@ const (
 	executionStatus   = "status"
 	executionHandover = "handover"
 	executionLocal    = "local"
+	// executionHeadless is the one --mode a remote start takes.
+	executionHeadless = "headless"
 	executionPending  = "pending"
 	executionDone     = "agents.done"
 )

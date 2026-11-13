@@ -160,6 +160,13 @@ entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board nex
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
 returns the entry to `agents.staleAfter`.
 
+An entry whose session queued a report for its current assignment (`agents idle`, `agents park`,
+`agents problem`, `note add`, `sessions serve`; see [session reports](session-reports.md)) stays on
+the roster while that report waits in the inbox: taken off first, the loop would reject the report
+as one of an ended assignment. `doctor --dry-run` names the waiting report; once the loop applied
+it, a done report retires the entry as finished. The doctor and the loop read the inbox again under
+the state lock before they take an entry off.
+
 ## Reviews
 
 A Claude worker's security reviews follow its model. The security-guidance plugin reviews a

@@ -83,7 +83,6 @@ type Host interface {
 // moved to a package the loop can import.
 type Command struct {
 	About                      func(e state.Event, ref string) state.Event
-	AgentHarnessModel          func(st *state.State, sessions []*claude.Session, ag state.Agent) (string, string)
 	AgyAgentStartID            func(ag state.Agent) string
 	AgyQuotaError              func(cfg *config.Config, ag state.Agent) *agy.QuotaError
 	AlertOwnerKey              func(o state.AlertOwner) string
@@ -92,6 +91,7 @@ type Command struct {
 	ClassifyDelivery           func(st *state.State, d state.Delivery, now time.Time, p any) DeliveryFlow
 	ClearRecords               func(st *state.State, p state.Party) []state.Record
 	Clock                      func(now time.Time, t time.Time) string
+	CloseSupersededPulls       func(ctx context.Context, st *state.State, merged superloop.Pull) ([]string, error)
 	Code                       func(err error) int
 	ContinuationName           func(ag state.Agent) string
 	CoordinatorHostUpdateReady func(version string) error
@@ -118,14 +118,11 @@ type Command struct {
 	IsDeskReviewWait           func(waits string) bool
 	IssueURL                   func(ref string) string
 	LoopBroker                 func(ctx context.Context) (string, error)
-	LoopDeliveryPriority       func(l *Loop, ctx context.Context, reserved ...[]string) error
 	LoopEpicStart              func(l *Loop, next LoopBoardItem) error
 	LoopFiledIssues            func(l *Loop, st *state.State) []superloop.FiledIssue
-	LoopFill                   func(l *Loop, ctx context.Context, st *state.State, claims map[string]LoopClaim, taken []superloop.Taken, reserved ...[]string) error
 	LoopFinishContinuation     func(l *Loop, old state.Agent, name string) error
 	LoopFireTimers             func(l *Loop, ctx context.Context, st *state.State) error
 	LoopInTurn                 func(a Host, p state.Party) bool
-	LoopPreviewFill            func(l *Loop, ctx context.Context) error
 	LoopRecoverUnfinishedTurns func(l *Loop, ctx context.Context, st *state.State) error
 	LoopResumable              func(a Host, st *state.State, ag state.Agent) bool
 	LoopResumePark             func(a Host, ctx context.Context, by state.Party, q string) error
@@ -135,7 +132,6 @@ type Command struct {
 	LowBudget                  func(b *state.Budget, floor int, now time.Time) bool
 	NamedRefs                  func(text string, owner string) []string
 	NewExitError               func(code int, msg string, err error) error
-	OmpChoiceModel             func(ch config.Choice, model string) bool
 	OneLine                    func(s string) string
 	ParkMessage                func(p *state.Park, by string) string
 	ParkedBetweenTurns         func(st *state.State, x *state.ExecutionRecord) bool

@@ -102,7 +102,8 @@ type GivenComment struct {
 }
 
 // GivenIssue is an issue. Board puts it on the scenario's board with
-// that Status; Fields sets the board's other single-select fields.
+// that Status; Fields sets the board's other single-select fields;
+// Archived archives that item, as board tidy or a person does.
 type GivenIssue struct {
 	Number    int               `yaml:"number"`
 	Title     string            `yaml:"title"`
@@ -115,6 +116,7 @@ type GivenIssue struct {
 	BlockedBy []IssueRef        `yaml:"blocked_by"`
 	Board     string            `yaml:"board"`
 	Fields    map[string]string `yaml:"fields"`
+	Archived  bool              `yaml:"archived"`
 	Comments  []GivenComment    `yaml:"comments"`
 }
 
@@ -445,14 +447,15 @@ func (b *builder) board() (*Project, bool) {
 	return p, true
 }
 
-// place puts an issue or a pull request on the scenario's board.
-func (b *builder) place(where string, i *Issue, pr *Pull, status string, fields map[string]string) {
+// place puts an issue or a pull request on the scenario's board: its
+// item, nil when it has no Status or field to hold there.
+func (b *builder) place(where string, i *Issue, pr *Pull, status string, fields map[string]string) *ProjectItem {
 	if status == "" && len(fields) == 0 {
-		return
+		return nil
 	}
 	p, open := b.board()
 	if p == nil {
-		return
+		return nil
 	}
 	it := b.m.AddItem(p, i, pr)
 	values := map[string]string{}
@@ -470,6 +473,7 @@ func (b *builder) place(where string, i *Issue, pr *Pull, status string, fields 
 			b.bad("%s: %v", where, err)
 		}
 	}
+	return it
 }
 
 func (b *builder) repo(r *Repo, gr GivenRepo) {
@@ -504,7 +508,13 @@ func (b *builder) repo(r *Repo, gr GivenRepo) {
 		default:
 			b.bad("%s: state %q is neither open nor closed", where, gi.State)
 		}
-		b.place(where, i, nil, gi.Board, gi.Fields)
+		it := b.place(where, i, nil, gi.Board, gi.Fields)
+		switch {
+		case gi.Archived && it == nil:
+			b.bad("%s: archived, but not on the board (board or fields)", where)
+		case gi.Archived:
+			it.Archived = true
+		}
 	}
 	for _, gl := range gr.Releases {
 		if gl.Tag == "" {

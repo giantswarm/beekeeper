@@ -90,6 +90,13 @@ repositories:
 	if out := mustGH(t, s, "api", "repos/example/app/compare/main...feature", "--jq", "[.status, .ahead_by, .behind_by]"); out != `["ahead",2,0]`+"\n" {
 		t.Fatalf("compare: %q", out)
 	}
+	// What the pull request's branch adds is read from its origin.
+	if err := s.Check(&Expect{Pull: &PullExpect{Repo: "example/app", Number: 2, Ahead: ptr(2)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Check(&Expect{Pull: &PullExpect{Repo: "example/app", Number: 2, Ahead: ptr(1)}}); err == nil || !strings.Contains(err.Error(), "head 2 commit(s) ahead of main, want 1") {
+		t.Fatalf("a head two commits beyond its base, expected one: %v", err)
+	}
 	if out := mustGH(t, s, "api", "-H", "Accept: application/vnd.github.raw", "repos/example/app/contents/b.txt?ref=feature"); out != "b\n" {
 		t.Fatalf("the file's raw content: %q", out)
 	}
