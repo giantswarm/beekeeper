@@ -324,8 +324,11 @@ func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
 	}
 }
 
-func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
-	for _, waits := range []string{"merge hold lifting", "gate run completion"} {
+// TestExecutionParkReasonMaySayAnything: an SSH execution's park on a pull
+// request is recorded on it whatever its reason says; --on alone says what
+// a park waits on.
+func TestExecutionParkReasonMaySayAnything(t *testing.T) {
+	for _, waits := range []string{"the editor's held-still source", "merge hold lifting", "gate run completion"} {
 		t.Run(waits, func(t *testing.T) {
 			a, _ := executionTestApp(t)
 			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -335,8 +338,15 @@ func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
 				})
 				return evs, err
 			})
-			if err == nil || !strings.Contains(err.Error(), "does not settle") {
-				t.Fatalf("mismatched park: %v", err)
+			if err != nil {
+				t.Fatalf("park refused: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := st.Agents[0].Park; p == nil || p.On != refOne || p.Waits != waits {
+				t.Fatalf("park %+v, want on %s waiting for %q", p, refOne, waits)
 			}
 		})
 	}

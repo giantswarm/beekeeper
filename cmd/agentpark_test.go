@@ -786,7 +786,7 @@ func TestParkReasonMaySayAnything(t *testing.T) {
 	} {
 		t.Run(waits, func(t *testing.T) {
 			for _, direct := range []bool{false, true} {
-				w := parkingWatch(t, nil)
+				w := parkingWatch(t, map[string]string{refOne: github.Open})
 				var err error
 				if direct {
 					_, err = w.park(state.Party{Name: agentOne}, refOne, waits)
