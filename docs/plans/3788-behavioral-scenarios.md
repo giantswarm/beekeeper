@@ -11,9 +11,10 @@ that take the existing scenarios over, one step each.
 
 ## Outcome
 
-Every pull request runs every behavioral scenario in a few seconds: the whole suite in under 5
-seconds of wall time, excluding the `go test` build, in one process on one CI executor and on a
-laptop, without sharding. A scenario states a behavior as given/when/then in YAML and runs the
+Every pull request runs every behavioral scenario in a few seconds, on one CI executor and on a
+laptop, without sharding: the in-process suite in under 5 seconds of wall time, and the full run,
+the [smoke scenarios](#real-binary-smoke-scenarios) on the real binary included, in under 10,
+excluding the builds. A scenario states a behavior as given/when/then in YAML and runs the
 real command code of `beekeeper`: the loop with its streams and refill, and the commands that
 workers, the guide and the person call. It runs against fakes of everything outside: GitHub, the
 harness CLIs, the service manager, the SSH execution hosts and the clock. A bug found live becomes
@@ -125,7 +126,10 @@ request.
 - One scenario at a time: the process environment and the seam's world belong to the test
   process, and the bubble keeps one scenario's goroutines and timers apart from the next one's.
   Caches that live for a process's lifetime (a `sync.Once`, a package variable holding a path or
-  a reading) move onto the invocation, so no scenario sees another's.
+  a reading, such as the state lock's command name `state.SetCommand` keeps) move onto the
+  invocation. The processes of one scenario run at once in one address space (a background loop,
+  a worker's `agents park`, a `run` step), so such a variable would be one process's for all of
+  them, and the next scenario's too.
 
 ### The process seam: internal/proc
 
@@ -137,25 +141,41 @@ becomes beekeeper's one view of its own process and of the processes it starts a
   `Process`). The 123 `exec.Command` calls in 86 core files move to it.
 - **The invocation.** `cmd.Run(ctx, proc.Invocation)` runs the command tree; `cmd.Main` builds the
   invocation from the operating system. The arguments, the environment (`Getenv`, `LookupEnv`,
-  `Environ`), the working directory, standard input, output and error, the process id and parent
-  process id, the executable's path, the home directory and the version come from the invocation:
-  from the context, or from the object built for the invocation (the app, the state store). That
-  is 184 environment reads, 57 `os.Environ`, 62 `os.Getpid`, 83 uses of the standard streams,
-  44 `os.Executable`, 44 `os.UserHomeDir`, 26 `os.Getwd` and 35 reads of the version.
+  `Environ`, and `Setenv` and `Unsetenv`, which change the invocation's environment and what its
+  children inherit), the working directory (`Getwd`, and `filepath.Abs`, which reads it for a
+  relative path), the temporary directory, standard input, output and error, the process id and
+  parent process id, the executable's path, the home directory and the version come from the
+  invocation: from the context, or from the object built for the invocation (the app, the state
+  store). That is 184 environment reads, 19 environment writes in 9 files (the gate's variables
+  for devctl, `HOME` in `guard`, `CODEX_HOME`, `BEEKEEPER_CONFIG`), 57 `os.Environ`, 62
+  `os.Getpid`, 83 uses of the standard streams, 44 `os.Executable`, 44 `os.UserHomeDir`, 26
+  `os.Getwd`, 35 `filepath.Abs`, 6 `os.TempDir` and 35 reads of the version. In-process, a write
+  to the test process's environment would reach every process of the world at once and none of
+  the invocations that read their own, and a relative path would resolve against the test
+  process's directory instead of the invocation's.
 - **Signals and the process table.** `proc.NotifyContext` in place of `signal.Notify` (21 calls);
-  sending a signal, `Alive`, `Started`, `Read` (the table the core finds its sessions, units and
-  loops in), and a process's environment and directory.
+  sending a signal (`syscall.Kill` and `os.FindProcess` outside the started commands, 13 calls),
+  `Alive`, `Started`, `Read` (the table the core finds its sessions, units and loops in), a
+  process's environment and directory, and the core's own reads of `/proc` (33 in 17 files: a
+  process's executable in `stalewatch`, `supervisor` and `gatetakeover`, its standard output in
+  `gatemerge`, a peer's credentials in `sandbox` and `secret`). `internal/machine`'s readings of
+  the machine's memory and load stay the machine's, as in the sandbox.
+- **Replacing the process.** `proc.Exec` in place of `syscall.Exec` (5 calls: the loop's
+  re-execution after an update on Linux and macOS, `sandbox`'s run of the caller's command and
+  its gpg signing, and `guard run`). Under a world the process keeps its id and runs the new
+  program; a direct call would replace the test process and end the suite.
 - **What a bubble cannot wait on.** A goroutine blocked in a system call or in the network poller
   is not waiting on the fake clock, so while one is blocked the clock cannot move: a goroutine
   blocked in `accept` would stop the scenario's time for good. Under a world, Unix sockets
   (`proc.Listen` and `proc.Dial`, 24 calls) are in-memory pipes, a state change notification is
   the store's own instead of fsnotify's, a file lock is taken with a retry
-  (`TryLockContext`), never a blocking `Lock`, HTTP goes through `proc.HTTPClient`, whose transport
-  hands the request to the world, and the loop's re-execution after an update is the world's.
+  (`TryLockContext`), never a blocking `Lock`, and HTTP goes through `proc.HTTPClient`, whose
+  transport hands the request to the world.
 - **The guard.** `TestCoreUsesProc`, like the clock's guard, fails when a core package (`cmd`,
   `internal/...` and `pkg`, apart from `internal/proc` itself and the test harnesses) calls one of
-  these operating system functions directly. Each step of the move adds what it moved to the
-  list.
+  these operating system functions directly (the environment's reads and writes and
+  `filepath.Abs` among them) or reads `/proc` itself. Each step of the move adds what it
+  moved to the list.
 
 A release build's implementation of every seam function is the call it replaces, so release
 behavior does not change at any step. The seam is a context value and a few constructors, not a
@@ -174,7 +194,8 @@ condition), and then straight to the next time something is due. For the scenari
   scenario starts, as today: one sleep before anything else runs.
 - `advance: 30m` is a sleep of the runner. Every timer, ticker and sleep due in the 30 minutes
   fires at its own time and in order, each after the work the previous one woke is done. There is
-  no acknowledgement, no 10-second wait and no `quiet` window, and a ticker never misses a tick.
+  no acknowledgement, no 10-second wait and no `quiet` window, and a ticker misses a tick only
+  as it does live: when its receiver waits on something else past the next one.
 - `wait_for` and `settle` check their expectations after `synctest.Wait`, when the desk is idle,
   and else let the clock move by their `interval`. Their `timeout` is world time.
 - CPU work takes no world time. A slow GitHub response, a slow host or a slow command is a delay
@@ -244,18 +265,26 @@ append their call to the call log.
 
 No namespaces are needed, because nothing but `git` (and the builder's `sh`) runs on the host, and
 only in the scenario's directories. The world looks both up once and starts them by their absolute
-paths. Before the first scenario, the test process points its own `HOME`, XDG directories and
-`PATH` at an empty directory, so a call that bypasses the seam fails instead of reading the
-person's home or starting a program of the machine; the guard test keeps such calls out of the
-core. No network is used: the world answers HTTP in memory.
+paths. Before the first scenario, the test process points its own `HOME`, XDG directories,
+`TMPDIR` and `PATH` at an empty directory, so a call that bypasses the seam fails instead of
+reading the person's home or temporary files or starting a program of the machine. The sandbox's
+PID namespace kept a scenario's process ids apart from the machine's; in-process, the world's
+process ids start above the kernel's highest (`pid_max`, at most 2^22), so a signal or a `/proc`
+read that bypasses the seam finds no process instead of a person's real session or loop. The
+guard test keeps such calls out of the core. No network is used: the world answers HTTP in
+memory.
 
 ### Speed
 
-- **Budget.** The suite's wall time, excluding the build, stays under 5 s on CI's executor. The
-  job warns from 5 s and fails above 10 s.
+- **Budget.** The in-process suite's wall time, excluding the build, stays under 5 s on CI's
+  executor, and the job warns from 5 s. The full run, the in-process suite and the smoke
+  scenarios on the real binary together, fails above 10 s, so no second budget lets a run of
+  every scenario grow past a few seconds.
 - **Per scenario.** A scenario's `timeout` is its real time, 1 s by default. A watchdog outside
-  the bubble fails a scenario that exceeds it and prints every goroutine's stack, so a scenario
-  that holds the clock still or loops is found in a second, not at the job's timeout.
+  the bubble ends the run when a scenario exceeds it: it prints every goroutine's stack, writes
+  the report with that scenario failed and exits, since a bubble whose goroutines do not return
+  cannot be abandoned. A scenario that holds the clock still or loops is found in a second, not
+  at the job's timeout.
 - **Reporting.** The reporter keeps the real time and the world time of every scenario and step
   (JSON, JUnit and text) and the suite's wall time.
 - **The known risk is `git`.** It stays a real process, a few milliseconds per call on CI, and a
@@ -285,7 +314,7 @@ refuses one there), so the socket clock is not needed:
   state lock to the next command.
 
 Each also runs in-process, so the smoke set proves the seams against the operating system. Its
-budget is 10 s of wall time, in the same job.
+run on the real binary, in the same job, counts toward the full run's 10 s (see [Speed](#speed)).
 
 ## Scenario format
 
@@ -445,13 +474,14 @@ existing suite stays green on them, and the guard test is their control.
 1. **This plan.**
 2. **Starts through `internal/proc`.** `proc.Cmd` and `proc.Command`, the 123 `exec.Command`
    calls of the core, and `TestCoreUsesProc` with `os/exec` on its list.
-3. **The invocation through `internal/proc`.** `cmd.Run(ctx, proc.Invocation)`; the environment,
-   directory, standard streams, process ids, executable, home directory and version read from
-   it; process-lifetime caches onto it; the guard's list grows. Split by package group (`cmd`
-   first, then `internal`) where one pull request would be too large to review.
-4. **What a bubble cannot wait on, through `internal/proc`.** Signals and the process table, Unix
-   sockets, state change notifications, blocking file locks, the HTTP transport and the loop's
-   re-execution.
+3. **The invocation through `internal/proc`.** `cmd.Run(ctx, proc.Invocation)`; the environment
+   (read and written), directory (relative paths included), temporary directory, standard
+   streams, process ids, executable, home directory and version taken from it; process-lifetime
+   caches onto it; the guard's list grows. Split by package group (`cmd` first, then `internal`)
+   where one pull request would be too large to review.
+4. **What a bubble cannot wait on, through `internal/proc`.** Signals, the process table and the
+   core's own reads of `/proc`, Unix sockets, state change notifications, blocking file locks, the
+   HTTP transport and every `syscall.Exec`, the loop's re-execution among them.
 5. **The in-process driver.** The bubble, the world's in-process transport and process table,
    GitHub in memory, the watchdog, the reporter's world time and the per-scenario `driver`. The
    28 scenarios without worker sessions, hosts, a builder or releases move: smoke, github, clock
