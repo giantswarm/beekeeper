@@ -1117,9 +1117,11 @@ or instead of its model; the first matching rule (same `match` and `kind`
 semantics as the model) with a nonempty effort selects it. Rules without an
 effort are skipped for effort, so model-only and effort-only rules compose.
 `agents start --effort <level>` overrides the rules, independently of
-`--model`. Without either, no effort option is sent and the harness keeps
-its own default. The `agents.start` event names the effort, or
-`harness default`.
+`--model`. After the rules come the capacity choice's effort, the effort of
+the session a start continues and the loop's `supervisor.effort`; the order
+is in [guide.md](guide.md), beside the choices' `effort`. Without any, no
+effort option is sent and the harness keeps its own default. The
+`agents.start` events name the effort, or `harness default`.
 
 ```yaml
 agents:
@@ -1143,8 +1145,11 @@ Background starts keep Remote Control. Start records persist effort for
 wakes and handovers; no user settings file is changed.
 
 `guide.effort` selects the guide's session effort, ahead of the rules. The
-supervisor is a loop, so `supervisor.effort` is the default it passes to the
-sessions it starts; a matching rule's effort wins over it. Both are optional.
+supervisor is a loop, so `supervisor.effort` is the last default of the
+sessions it starts: a matching rule, the choice's effort and the continued
+session's effort win over it, and agy gets none. The loop passes it to each
+start as `--default-effort`, the last step of the start's order, never as
+`--effort`. Both are optional.
 
 ### Owned issue monitor
 

@@ -100,7 +100,6 @@ type Command struct {
 	DeliveryExempt             func(st *state.State, now time.Time, ref string, exempt bool) bool
 	DeliveryURL                func(ref string, pull bool) string
 	DevctlCommandEnv           func(configPath string) []string
-	EffortFlags                func(level string) []string
 	EndNotes                   func(st *state.State, worker state.Party, now time.Time)
 	EndedParkCandidate         func(ag state.Agent) bool
 	EpicChildStatus            func(st *state.State, child board.Item, now time.Time, policy any) string
