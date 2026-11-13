@@ -656,7 +656,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	if err != nil {
 		return st
 	}
-	return updated
+	return w.retireEndedExecutions(ctx, updated)
 }
 
 // rebindExecutionPolicy moves a running execution onto its host's prepared

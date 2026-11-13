@@ -684,6 +684,11 @@ advances it, each execution on its own backoff, and records it under the
 execution's `retirement`. A parked worker, an open desk review or a finished
 round of an unfinished task does not enter it: the worktree and thread stay.
 
+Only the newest publication transfer can hold retirement; earlier pushes are
+superseded. A successful publication marks its transfer recovered. When host
+reconciliation confirms that the worker ended and collects its transcript,
+the watch advances retirement again in that same pass.
+
 The execution's inventory is in its host journal under `resources`, recorded
 before the resources exist: the worktree, its repository and branch, scratch,
 temporary files, caches, Go module and toolchain downloads, source bundle and

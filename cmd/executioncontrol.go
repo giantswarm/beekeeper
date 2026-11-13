@@ -270,6 +270,9 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
 					r.PendingPublication = nil
+					r.RecoveredTransfer = publication.BundleDigest
+				} else if result.BundleDigest != "" {
+					r.RecoveredTransfer = result.BundleDigest
 				}
 				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
 			}
