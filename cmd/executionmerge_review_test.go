@@ -21,6 +21,9 @@ const (
 	testReviewHost = "review-host"
 )
 
+// sharedReviewLogin is the GitHub login a reviewer and a worker share.
+const sharedReviewLogin = "shared-github-account"
+
 func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 	t.Helper()
 	a, r := executionTestApp(t)
@@ -160,7 +163,7 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 	if review.ID == "" {
 		review.ID = "independent-result"
 	}
-	review.Author = "shared-github-account"
+	review.Author = sharedReviewLogin
 	review.Head, review.Commit = use.Head, use.Head
 	review.URL = fmt.Sprintf("https://github.com/%s/pull/%d#pullrequestreview-100", use.Repository, use.PR)
 	review.Body = fmt.Sprintf("Review: %s\nHead reviewed: `%s`", review.Verdict, use.Head)
@@ -596,7 +599,7 @@ func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T
 	use.Head = fixedHead
 	review := superloop.Review{
 		ID:      "reviewer-fixed-approval",
-		Author:  "shared-github-account",
+		Author:  sharedReviewLogin,
 		Head:    fixedHead,
 		Commit:  fixedHead,
 		Verdict: superloop.Approved,
@@ -645,7 +648,7 @@ func TestExecutionMergeRefusesReviewOfANonDescendantHead(t *testing.T) {
 	pull.Head = rewritten
 	review := superloop.Review{
 		ID:      "reviewer-rewritten-approval",
-		Author:  "shared-github-account",
+		Author:  sharedReviewLogin,
 		Head:    rewritten,
 		Commit:  rewritten,
 		Verdict: superloop.Approved,
