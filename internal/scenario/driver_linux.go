@@ -14,8 +14,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -133,6 +135,13 @@ type driver struct {
 	// github.allowedOrgs: the hosts are provisioned against them.
 	cfg  map[string]any
 	orgs []string
+	// rewrites counts given.state.rewrite's rewrites of the state so far;
+	// its writer stops when rewriteStop closes, then closes rewriteDone,
+	// rewriteErr why it stopped early.
+	rewrites    atomic.Int64
+	rewriteStop chan struct{}
+	rewriteDone chan struct{}
+	rewriteErr  error
 }
 
 // deskCaller names the desk itself to the scenario's GitHub: what a unit
@@ -210,6 +219,9 @@ func (d *driver) run() {
 		for _, name := range slices.Sorted(maps.Keys(d.procs)) {
 			d.procs[name].stop()
 		}
+		for _, f := range d.stopRewrites() {
+			d.res.Fail("%s", f)
+		}
 		_ = d.fakes.Close()
 		for _, f := range d.fakes.Failures() {
 			d.res.Fail("%s", f)
@@ -236,6 +248,7 @@ func (d *driver) run() {
 			_ = d.githubLog.Close()
 		}
 	}()
+	d.startRewrites()
 	for i, st := range d.s.When {
 		if err := ctx.Err(); err != nil {
 			d.res.Fail("scenario timed out after %s before when[%d]", d.s.Timeout, i)
@@ -624,6 +637,18 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
+	case KindMeasure:
+		var shares map[string]float64
+		var failures []string
+		shares, sr.Args, failures = d.measure(ctx, st.Measure)
+		sr.Failures = append(sr.Failures, failures...)
+		v.CPU = func(name string) (float64, error) {
+			share, ok := shares[name]
+			if !ok {
+				return 0, errors.New("it did not run through the measure step")
+			}
+			return share, nil
+		}
 	}
 	dur := time.Since(started)
 	sr.Duration = dur
@@ -703,6 +728,71 @@ func (d *driver) start(st Step) error {
 		close(p.done)
 	}()
 	return nil
+}
+
+// measure waits m.For and gives the share of one core each background step's
+// process used itself in that time, of those that ran through it, with a
+// summary for the report: each share and the state's rewrites in it.
+func (d *driver) measure(ctx context.Context, m *Measure) (shares map[string]float64, summary, failures []string) {
+	names := slices.Sorted(maps.Keys(d.procs))
+	before := map[string]time.Duration{}
+	for _, name := range names {
+		if running, _ := d.procs[name].state(); running {
+			if cpu, err := ownCPU(d.procs[name].cmd.Process.Pid); err == nil {
+				before[name] = cpu
+			}
+		}
+	}
+	rewrites, started := d.rewrites.Load(), time.Now()
+	select {
+	case <-ctx.Done():
+		return nil, nil, []string{fmt.Sprintf("scenario timed out after %s while measuring", d.s.Timeout)}
+	case <-time.After(m.For.Duration):
+	}
+	took := time.Since(started)
+	shares = map[string]float64{}
+	for _, name := range names {
+		cpu0, ok := before[name]
+		if !ok {
+			continue
+		}
+		cpu, err := ownCPU(d.procs[name].cmd.Process.Pid)
+		if running, _ := d.procs[name].state(); err != nil || !running {
+			continue
+		}
+		shares[name] = (cpu - cpu0).Seconds() / took.Seconds()
+		summary = append(summary, fmt.Sprintf("%s: %.3f of a core", name, shares[name]))
+	}
+	summary = append(summary, fmt.Sprintf("%d state rewrites in %s", d.rewrites.Load()-rewrites, took.Round(time.Millisecond)))
+	return shares, summary, nil
+}
+
+// ownCPU is the user and system time process pid used itself, without its
+// children's.
+func ownCPU(pid int) (time.Duration, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, err
+	}
+	end := bytes.LastIndexByte(raw, ')')
+	if end < 0 {
+		return 0, errors.New("malformed stat")
+	}
+	// f[0] is field 3 (state): utime and stime are fields 14 and 15.
+	f := strings.Fields(string(raw[end+1:]))
+	if len(f) < 13 {
+		return 0, errors.New("short stat")
+	}
+	var ticks int64
+	for _, s := range f[11:13] {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		ticks += n
+	}
+	// USER_HZ is 100 on every Linux architecture Go supports.
+	return time.Duration(ticks) * (time.Second / 100), nil
 }
 
 // waitFor polls the expectations until all hold, the wait's timeout or the

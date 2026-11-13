@@ -110,12 +110,7 @@ func valueEnd(raw []byte, i int) (int, error) {
 	for j := i; j < len(raw); j++ {
 		switch raw[j] {
 		case '"':
-			for j++; j < len(raw) && raw[j] != '"'; j++ {
-				if raw[j] == '\\' {
-					j++
-				}
-			}
-			if j >= len(raw) {
+			if j = stringEnd(raw, j+1); j < 0 {
 				return 0, errMemberSyntax
 			}
 			if depth == 0 {
@@ -140,6 +135,29 @@ func valueEnd(raw []byte, i int) (int, error) {
 		return 0, errMemberSyntax
 	}
 	return len(raw), nil
+}
+
+// stringEnd is the index of the quote that ends the JSON string whose content
+// starts at raw[i]: the first quote after i that an odd run of backslashes
+// does not escape; -1 when none does. It finds the quotes with IndexByte, not
+// byte by byte: most of a state document's bytes are in strings.
+func stringEnd(raw []byte, i int) int {
+	for k := i; k <= len(raw); {
+		q := bytes.IndexByte(raw[k:], '"')
+		if q < 0 {
+			return -1
+		}
+		q += k
+		escaped := false
+		for b := q - 1; b >= i && raw[b] == '\\'; b-- {
+			escaped = !escaped
+		}
+		if !escaped {
+			return q
+		}
+		k = q + 1
+	}
+	return -1
 }
 
 // encodeKeeping encodes v, a type without JSON methods, with the members r
