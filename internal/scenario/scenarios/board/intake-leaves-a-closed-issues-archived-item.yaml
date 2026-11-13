@@ -1,0 +1,108 @@
+name: intake-leaves-a-closed-issues-archived-item
+description: >
+  A worker reports a problem that names a closed issue whose board item board tidy archived. The
+  loop takes the issue in once and leaves it: it writes nothing on the board, ranks nothing,
+  records no failure and does not take the issue in again at the next passes. Before the fix the
+  intake ranked the archived item after the worker's item, GitHub refused the move ("The item is
+  archived and cannot be updated") and the loop retried the step with backoff without end.
+issue: https://github.com/giantswarm/beekeeper/issues/3731
+flow: board
+tags: [board, intake, loop]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Speed up the builds, board: Ready}
+          # Its body names the worker's item, the place an intake ranks it after.
+          - number: 2
+            title: The build cache fills by noon
+            body: Seen while working on https://github.com/example/app/issues/1.
+            state: closed
+            board: Done
+            archived: true
+          - {number: 3, title: A larger build cache}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - beekeeper:
+                  - agents
+                  - problem
+                  - >-
+                    The build cache is full by noon again (today's cache log), as in
+                    https://github.com/example/app/issues/2; owning repository example/app
+              - beekeeper: [agents, park, --on, 'example/app#3', the larger build cache]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The refill starts a worker on the Ready item; it reports the problem and parks.
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.start]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+  # The passes apply the worker's reports and take the closed issue in.
+  - advance: 2s
+  - name: apply
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - advance: 2s
+  - name: intake
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  # A later pass takes nothing in again and retries nothing.
+  - advance: 2s
+  - name: again
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - output: {not_contains: [example/app#2]}
+  - name: intakes
+    run: {args: [log, --verb, supervisor.intake, --json]}
+  - name: said
+    run: {args: [log, --verb, supervisor.intake]}
+
+then:
+  - events: {contains: [agents.problem, supervisor.intake], not_contains: [supervisor.failure, board.rank]}
+  # One intake, which left the issue as it is.
+  - {step: intakes, exit: 0}
+  - {step: intakes, json_path: {path: ., len: 1}}
+  - {step: said, output: {contains: ["left example/app#2 archived in Done: the issue is closed"]}}
+  # The issue was read once and its item neither moved, nor changed, nor restored.
+  - calls: {program: gh, args: [api, graphql, 'query=.*issue\(number:\$n\)\{id state projectItems.*', n=2], min: 1, max: 1}
+  - calls: {program: gh, args: [api, graphql, 'query=.*(updateProjectV2ItemPosition|unarchiveProjectV2Item|addProjectV2ItemById).*'], max: 0}
+  - github: {issue: {repo: example/app, number: 2, state: closed, archived: true}}

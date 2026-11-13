@@ -393,6 +393,9 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "updateProjectV2ItemPosition"):
 		f.mutations = append(f.mutations, fmt.Sprintf("%s after %q", vars["i"], vars["a"]))
 		return []byte(cmp.Or(f.moved, `{"data":{"updateProjectV2ItemPosition":{"clientMutationId":null}}}`)), nil
+	case strings.Contains(q, "unarchiveProjectV2Item"):
+		f.mutations = append(f.mutations, "unarchive "+vars["i"])
+		return []byte(`{"data":{"unarchiveProjectV2Item":{"item":{"id":"` + vars["i"] + `"}}}}`), nil
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil

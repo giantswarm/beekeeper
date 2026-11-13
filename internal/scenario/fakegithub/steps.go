@@ -450,8 +450,9 @@ type IssueExpect struct {
 	State  string   `yaml:"state"`
 	Labels []string `yaml:"labels"`
 	// Board is its Status on the scenario's board; "none" for an issue
-	// that is not on it.
+	// that is not on it. Archived says whether its item there is archived.
 	Board    string `yaml:"board"`
+	Archived *bool  `yaml:"archived"`
 	Comments *Range `yaml:"comments"`
 	// OpenPulls and Pulls count the pull requests that close it: the open
 	// ones, and all of them.
@@ -530,7 +531,7 @@ func (e *Expect) Validate() error {
 		if i.State != "" && i.State != "open" && i.State != "closed" {
 			errs = append(errs, fmt.Errorf("issue: state %q is neither open nor closed", i.State))
 		}
-		if i.State == "" && i.Labels == nil && i.Board == "" && i.Comments == nil && i.OpenPulls == nil && i.Pulls == nil {
+		if i.State == "" && i.Labels == nil && i.Board == "" && i.Archived == nil && i.Comments == nil && i.OpenPulls == nil && i.Pulls == nil {
 			errs = append(errs, errors.New("issue without a fact to check"))
 		}
 	}
@@ -740,6 +741,15 @@ func (m *Model) checkIssue(want *IssueExpect) error {
 		}
 		if !strings.EqualFold(got, want.Board) {
 			bad("board status %q, want %q", got, want.Board)
+		}
+	}
+	if want.Archived != nil {
+		items := m.Items(i, nil)
+		switch {
+		case len(items) == 0:
+			bad("not on the board, want an item archived %t", *want.Archived)
+		case items[0].Archived != *want.Archived:
+			bad("board item archived %t, want %t", items[0].Archived, *want.Archived)
 		}
 	}
 	if want.Comments != nil {
