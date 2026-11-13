@@ -28,7 +28,7 @@ func TestLoopVocabulary(t *testing.T) {
 		"boardEscalateName":                boardEscalateName,
 		"configFlag":                       configFlag,
 		"continuationQueuedEvent":          continuationQueuedEvent,
-		"defaultEffortFlag":                defaultEffortFlag,
+		"defaultEffortFlag":                "--default-effort", // by value: the test builds on the merge base
 		"deliveryBlocked":                  deliveryBlocked,
 		"deliveryExemptOnlyFlag":           deliveryExemptOnlyFlag,
 		"deliveryFlowing":                  deliveryFlowing,
