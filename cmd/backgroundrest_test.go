@@ -89,24 +89,26 @@ func TestBackgroundRESTStaleReadingAndRecovery(t *testing.T) {
 }
 
 func TestBackgroundRESTNewWindowAndIdentityRecover(t *testing.T) {
-	for _, change := range []string{"reset", "identity", "login", "legacy"} {
-		t.Run(change, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		legacy bool
+		mutate func(*state.Budget)
+	}{
+		{name: "window-reset", mutate: func(b *state.Budget) { b.Reset = b.Reset.Add(-time.Minute) }},
+		{name: "credential-identity", mutate: func(b *state.Budget) { b.Identity = "rest-app" }},
+		{name: "credential-login", mutate: func(b *state.Budget) { b.Login = "rest-other" }},
+		{name: "legacy-ledger", legacy: true, mutate: func(*state.Budget) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
-			b := &state.Budget{Identity: "gh", Login: "desk", Limit: 5000, Remaining: 4000, Reset: now.Add(time.Hour), At: now}
+			b := &state.Budget{Identity: "rest-gh", Login: "rest-desk", Limit: 5000, Remaining: 4000, Reset: now.Add(time.Hour), At: now}
 			spend := backgroundRESTSpend{Reset: b.Reset, Calls: 4000, Limit: 2000}
-			if change != "legacy" {
+			if !tc.legacy {
 				spend.Reading, spend.Identity, spend.Login, spend.Reserved = now, b.Identity, b.Login, 3000
 			}
-			switch change {
-			case "reset":
-				b.Reset = b.Reset.Add(-time.Minute)
-			case "identity":
-				b.Identity = "app"
-			case "login":
-				b.Login = "another"
-			}
+			tc.mutate(b)
 			if err := spend.admit(now, b, 1000, backgroundTestCaller); err != nil {
-				t.Fatalf("%s retained exhausted ledger: %v", change, err)
+				t.Fatalf("%s retained exhausted ledger: %v", tc.name, err)
 			}
 		})
 	}
