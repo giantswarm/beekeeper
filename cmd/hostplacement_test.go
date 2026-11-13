@@ -15,7 +15,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
+// A host's capacity --json answer is stdout and then stderr: the
+// diagnostic capacity writes after its document while the desk's state
+// snapshot is older than a pass must not cost the host its starts.
 func TestHostCapacityReasons(t *testing.T) {
+	const stale = "state snapshot is 2m0s old (supervisor pass 30s)\n"
 	for _, tc := range []struct {
 		out  string
 		code int
@@ -23,7 +27,10 @@ func TestHostCapacityReasons(t *testing.T) {
 		want string
 	}{
 		{loopRoomJSON, 0, nil, ""},
+		{loopRoomJSON + "\n" + stale, 0, nil, ""},
 		{`{"room":0,"blocks":["host maxBusy reached"]}`, 0, nil, "host maxBusy reached"},
+		{`{"room":0,"blocks":["host maxBusy reached"]}` + "\n" + stale, 0, nil, "host maxBusy reached"},
+		{stale, 0, nil, "answer is unreadable"},
 		{`{"room":0,"verdict":"no start: provider quota"}`, 0, nil, "provider quota"},
 		{"malformed capacity output", 0, nil, "answer is unreadable"},
 		{"{}", 0, nil, "capacity answer is"},
