@@ -303,9 +303,11 @@ func TestReviewReservationIsSharedWithAutomaticLoop(t *testing.T) {
 	if err := r.a.reserveReview(act); Code(err) != ExitRefused {
 		t.Fatalf("round collision not refused: %v", err)
 	}
+	// The requested review holds the pull request even after its head moved:
+	// a new round on the moved head would be a second review.
 	act.Round = 2
-	if err := r.a.reserveReview(act); err != nil {
-		t.Fatalf("new head and round refused: %v", err)
+	if err := r.a.reserveReview(act); Code(err) != ExitRefused {
+		t.Fatalf("moved head started a second review: %v", err)
 	}
 }
 

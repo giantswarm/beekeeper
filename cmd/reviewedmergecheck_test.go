@@ -162,6 +162,9 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 		pr1Files  map[string]string
 		pr2Files  map[string]string
 		wantCheck string
+		// conflict: the combination conflicts, so its repair returns to
+		// the approving reviewer rather than the worker.
+		conflict bool
 	}{
 		"go test failure across two PRs": {
 			baseFiles: map[string]string{
@@ -200,6 +203,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				testGuardBaseFile: "package guard\n\nfunc Name() string { return \"from-pr-2\" }\n",
 			},
 			wantCheck: "conflicts with its base",
+			conflict:  true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -302,11 +306,19 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				return
 			}
 
-			// PR 2 must NOT be merged into main, and must be returned to its owner with the failing check.
+			// PR 2 must NOT be merged into main, and must be returned with the failing check:
+			// a red result to its worker, a conflict to its approving reviewer.
 			if r.pulls[secondPR].State == superloop.Merged || slices.Contains(mergedHeads, repo.head2) {
 				t.Fatalf("second PR merged despite failing combination (%s): mergedHeads=%v", tc.wantCheck, mergedHeads)
 			}
 			wake := r.called(agentsName, agentWakeName, secondWorker)
+			if tc.conflict {
+				if wake != nil {
+					t.Fatalf("conflict returned to the author: %v", wake)
+				}
+				r.reviewerRepair(t, superloop.ReviewerName(secondPR, 1), tc.wantCheck)
+				return
+			}
 			if wake == nil || !strings.Contains(wake[3], tc.wantCheck) {
 				t.Fatalf("second PR was not returned to its owner with failing check %q: wake=%v calls=%v", tc.wantCheck, wake, r.calls)
 			}
