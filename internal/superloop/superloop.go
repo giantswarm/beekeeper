@@ -8,6 +8,7 @@ package superloop
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -166,6 +167,8 @@ type Review struct {
 	ID     string
 	Author string
 	URL    string
+	// Commit is the head GitHub attached the review to: the pull request's
+	// head when it was posted, unless its poster named another.
 	Commit string
 	// Member is a review by a member or collaborator of the repository's
 	// owner: only such a review is the owning team's.
@@ -174,6 +177,9 @@ type Review struct {
 	Verdict string
 	Body    string
 	At      time.Time
+	// Replaced is a review of a head its author replaced before the review
+	// came (Input.replaced): no round's verdict.
+	Replaced bool
 }
 
 // MaxReviews is how many reviews the loop starts for one pull request,
@@ -194,19 +200,19 @@ const verdictSlack = 30 * time.Second
 // own head, when pushed says that head was pushed during the round. A
 // verdict on any other head (one from before the round, a teammate's late
 // review of an older head), of an earlier round, or of nobody's round never
-// counts.
+// counts, nor does one of a head its author had replaced when it came.
 func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
 	var onHead *Review
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
-		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) && (rd.until.IsZero() || r.At.Before(rd.until)) {
+		if r := p.Reviews[i]; r.Verdict != "" && !r.Replaced && sameHead(r.Head, rd.head) && !r.At.Before(since) && (rd.until.IsZero() || r.At.Before(rd.until)) {
 			onHead = &p.Reviews[i]
 			break
 		}
 	}
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
 		r := p.Reviews[i]
-		if r.Verdict == "" || r.Head == "" || r.At.Before(since) || !rd.until.IsZero() && !r.At.Before(rd.until) {
+		if r.Verdict == "" || r.Replaced || r.Head == "" || r.At.Before(since) || !rd.until.IsZero() && !r.At.Before(rd.until) {
 			continue
 		}
 		if onHead != nil && (r.At.Before(onHead.At) || r.Verdict != ChangesRequested) {
@@ -395,6 +401,45 @@ func (in Input) serving(w Worker, ref string, last time.Time) string {
 // the base alone.
 func (in Input) baseMerged(p Pull, approved string) bool {
 	return in.BaseMerged != nil && approved != "" && !sameHead(approved, p.Head) && in.BaseMerged(p, approved)
+}
+
+// replaced reports whether r, a review of p, judged a head its author had
+// replaced when r came: GitHub attached r to another head than the one its
+// "Head reviewed:" line names, and p's head carries a change past the judged
+// one. Its round ended when the head moved, without a verdict. A head that
+// only brings the base into the judged one is still that head.
+func (in Input) replaced(p Pull, r Review) bool {
+	return r.Verdict != "" && r.Commit != "" && r.Head != "" && !sameHead(r.Commit, r.Head) && !sameHead(r.Head, p.Head) && !in.baseMerged(p, r.Head)
+}
+
+// markReplaced marks the reviews of in.Pulls that judged a replaced head
+// (replaced), on copies: the caller's pulls stay as they are.
+func (in Input) markReplaced() Input {
+	var pulls map[string]Pull
+	for ref, p := range in.Pulls {
+		var reviews []Review
+		for i, r := range p.Reviews {
+			if r.Replaced || !in.replaced(p, r) {
+				continue
+			}
+			if reviews == nil {
+				reviews = slices.Clone(p.Reviews)
+			}
+			reviews[i].Replaced = true
+		}
+		if reviews == nil {
+			continue
+		}
+		if pulls == nil {
+			pulls = maps.Clone(in.Pulls)
+		}
+		p.Reviews = reviews
+		pulls[ref] = p
+	}
+	if pulls != nil {
+		in.Pulls = pulls
+	}
+	return in
 }
 
 // gated reports whether the gate's devctl pr merge serves repo. A
@@ -866,6 +911,7 @@ func parks(workers []Worker, l ledger, desk Desk) (fresh, stale map[string]bool)
 // Plan is the pass: the actions in, in a stable order, none whose key was
 // taken.
 func Plan(in Input) []Action {
+	in = in.markReplaced()
 	l := newLedger(in.Taken, in.Answers)
 	// Report pairing is local to an agent. Index once instead of walking
 	// the entire retained event history for every completed worker.
@@ -1348,6 +1394,17 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
 		add(a)
 	}
+	// handed reports whether the park hands p's head over for its review:
+	// the head the park verified, one that only brings the base into it, or
+	// any head of an older park that verified none. A head its author pushed
+	// past the park is still being worked on: neither a review round nor a
+	// merge go starts on it before the author parks on it.
+	handed := func() bool {
+		return isParked && (w.ParkedHead == "" || sameHead(w.ParkedHead, p.Head) || in.baseMerged(p, w.ParkedHead))
+	}
+	unhanded := func() {
+		leave(ref, p.URL, agent, leftUnhanded(p.Head), fmt.Sprintf("head %s moved past head %s, which the park of %s handed over for the desk review: its author still works on it, and no review round or merge go starts before it parks on the head it pushed", short(p.Head), short(w.ParkedHead), w.Name))
+	}
 	// cycles is how many of the rounds asked for changes: the rounds
 	// supervisor.reviewRounds caps. An approved head is no cycle; a new
 	// head after it gets a review only for a change the approval does
@@ -1359,22 +1416,27 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		}
 	}
 	if len(rs) == 0 {
-		if p.Green && isParked {
-			review()
+		if !p.Green || !isParked {
+			return
 		}
+		if !handed() {
+			unhanded()
+			return
+		}
+		review()
 		return
 	}
 	last := rs[len(rs)-1]
 	// A head past the last round's asks for a park since that round
-	// opened, or for a verified park of that very head: a worker stopped
-	// on such a park cannot repeat it. A park of any other head from
-	// before the round is stale.
-	requested := w.ParkedAt.After(last.at) || sameHead(w.ParkedHead, p.Head)
+	// opened that handed it over, or for a verified park of that very
+	// head: a worker stopped on such a park cannot repeat it. A park of
+	// any other head from before the round is stale.
+	requested := sameHead(w.ParkedHead, p.Head) || w.ParkedAt.After(last.at) && handed()
 	v := p.verdict(last, l.pushed(p))
 	if v != nil && v.Verdict == Approved {
 		for i := len(p.Reviews) - 1; i >= 0; i-- {
 			r := p.Reviews[i]
-			if !r.At.After(v.At) || r.Verdict == "" || r.Head == "" {
+			if !r.At.After(v.At) || r.Verdict == "" || r.Head == "" || r.Replaced {
 				continue
 			}
 			if r.Verdict == ChangesRequested && !slices.ContainsFunc(last.earlier, func(h string) bool { return sameHead(h, r.Head) }) && (sameHead(r.Head, v.Head) || l.pushed(p)(r)) {
@@ -1400,7 +1462,19 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return strings.EqualFold(o.Name, reviewer)
 		})
 		same := sameHead(p.Head, last.head)
-		if !gone && (!done || same) || !p.Green || !isParked || !requested {
+		if !p.Green || !isParked || !requested {
+			return
+		}
+		// A head its author moved past the round's with a change of its
+		// own ends the round early, without a verdict: the reviewer
+		// judges a head that is no longer the one to merge, and what it
+		// posts after the move is no verdict (Input.replaced). While one
+		// of MaxReviews is left, the next round starts on the new head
+		// once its author handed it over, without waiting for the old
+		// reviewer's done; the loop retires that reviewer once its turn
+		// ends. A head that only brings the base in is the round's still.
+		moved := !same && len(rs) < MaxReviews && !in.baseMerged(p, last.head)
+		if !gone && !moved && (!done || same) {
 			return
 		}
 		if len(rs) < MaxReviews {
@@ -1479,6 +1553,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !isParked {
 			return
 		}
+		if !requested && w.ParkedAt.After(last.at) {
+			unhanded()
+			return
+		}
 		if !requested {
 			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 			return
@@ -1520,6 +1598,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			return
 		}
 		if !p.Green {
+			return
+		}
+		if !handed() {
+			unhanded()
 			return
 		}
 		if left {

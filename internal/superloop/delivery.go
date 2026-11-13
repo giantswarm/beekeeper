@@ -17,6 +17,7 @@ type Delivery = state.Delivery
 // Deliveries derives observations from the same ledger, pulls and workers as
 // Plan. Missing reads retain the previous observation, including terminal state.
 func Deliveries(in Input, prev []Delivery) []Delivery {
+	in = in.markReplaced()
 	l := newLedger(in.Taken, in.Answers)
 	refs := make([]string, 0, len(in.Pulls))
 	for ref := range in.Pulls {
@@ -349,8 +350,14 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head) && !p.Green {
 			return state.DeliveryCI
 		}
-		if (!reviewerDone || sameHead(rd.head, p.Head)) && p.verdict(rd, l.pushed(p)) == nil {
+		// A head its author moved past the round's ends the round
+		// (planPull): its author works on it until it parks on it.
+		moved := !sameHead(rd.head, p.Head) && len(rs) < MaxReviews && !in.baseMerged(p, rd.head)
+		if (!reviewerDone && !moved || sameHead(rd.head, p.Head)) && p.verdict(rd, l.pushed(p)) == nil {
 			return state.DeliveryReviewing
+		}
+		if moved && !requested && p.verdict(rd, l.pushed(p)) == nil {
+			return state.DeliveryImplementing
 		}
 	}
 	if !requested && len(rs) == 0 {

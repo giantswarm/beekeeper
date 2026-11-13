@@ -376,7 +376,9 @@ func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix " + loopURL})
 			i = len(st.Agents) - 1
 		}
-		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: deskReviewWait, ReviewHead: loopHead}
+		// A park verifies the head the worker published: the pull
+		// request's head now.
+		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: deskReviewWait, ReviewHead: cmp.Or(r.pull.Head, loopHead)}
 		return nil, nil
 	})
 	if err != nil {
