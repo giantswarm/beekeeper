@@ -134,15 +134,15 @@ func TestDeliveryPersonWaitNamesThePerson(t *testing.T) {
 		name, on, waits, class string
 		missing                bool
 	}{
-		{name: "blocker issue", on: "example/blocker#235", waits: "after the trace fix, finish the release-note gap", class: deliveryFlowing},
-		{name: "agents note", waits: "GitHub budget reset; continuation recorded in agents note", class: deliveryFlowing},
-		{name: "answered note", on: "#2382", waits: "the person's decision on the scope", class: deliveryFlowing},
-		{name: "central note", on: "team#7", waits: "the person's decision on the scope", class: deliveryPerson},
-		{name: "hold", on: "hold merges", waits: "the release window the person decides", class: deliveryFlowing},
-		{name: "alert", on: "alert:WorkloadDown", waits: "the person's reply on the alert", class: deliveryFlowing},
-		{name: "loop review", waits: "the loop's review of the change", class: deliveryFlowing},
-		{name: "named person", waits: "waiting on Timo", class: deliveryPerson, missing: true},
-		{name: "person's answer", waits: "the person's answer on the cache", class: deliveryPerson, missing: true},
+		{name: "park on a blocker issue", on: "example/blocker#235", waits: "after the trace fix, finish the release-note gap", class: deliveryFlowing},
+		{name: "budget reset in an agents note", waits: "GitHub budget reset; continuation recorded in agents note", class: deliveryFlowing},
+		{name: "park on an answered note", on: "#2382", waits: "the person's decision on the scope", class: deliveryFlowing},
+		{name: "park on an open central note", on: "team#7", waits: "the person's decision on the scope", class: deliveryPerson},
+		{name: "park on a merge hold", on: litHoldMerges, waits: "the release window the person decides", class: deliveryFlowing},
+		{name: "park on a firing alert", on: "alert:DeliveryStalled", waits: "the person's reply on the alert", class: deliveryFlowing},
+		{name: "the loop's review", waits: "the loop's review of the change", class: deliveryFlowing},
+		{name: "wait names the person", waits: "waiting on Timo", class: deliveryPerson, missing: true},
+		{name: "wait on the person's answer", waits: "the person's answer on the cache", class: deliveryPerson, missing: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := state.Delivery{Ref: deliveryTestIssue, Agent: workerRole, Step: state.DeliveryImplementing, Since: now}
