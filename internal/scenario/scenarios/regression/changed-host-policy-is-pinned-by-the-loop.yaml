@@ -64,11 +64,13 @@ when:
       name: builder
       config:
         agents: {execution: {retention: 72h}}
-  # The pin names the former digest: the check refuses the host.
+  # The pin names the former digest: the check refuses the host, as every
+  # start on it was refused.
   - name: stale
     run: {args: [agents, hosts, check, builder]}
     expect:
-      - stderr: {contains: ["identity, protocol, harness or policy does not match"]}
+      - exit: 1
+      - stderr: {contains: ["execution host identity, protocol or policy mismatch"]}
   - name: watch
     run: {args: [watch, --once]}
     expect:
