@@ -2122,12 +2122,8 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 // serving an issue (owner/repo#n, briefIssue) is the session's serve record
 // from the start, so board next never offers that item again. The loop's
 // fresh continuation of a parked worker continues that task's delivery
-// (state.ContinueDelivery) rather than starting a new one. pulls are the
-// served refs that are pull requests (briefServedPulls): a worker's task of
-// a pull request has that pull request in its delivery's pulls
-// (state.PullDelivery), so its merge proves the task's outcome. A review
-// start works no pull request; it reviews one.
-func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool, pulls ...string) (registration, error) {
+// (state.ContinueDelivery) rather than starting a new one.
+func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
 		return registration{}, err
@@ -2149,9 +2145,6 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 						st.ContinueDelivery(iss, ag.Name, parkedPull(continued), s.At)
 					} else {
 						st.StartDelivery(iss, ag.Name, "", s.At)
-					}
-					if s.Kind != capacity.TaskKindReview && slices.ContainsFunc(pulls, func(p string) bool { return strings.EqualFold(p, iss) }) {
-						st.PullDelivery(iss)
 					}
 				}
 			}
@@ -2317,6 +2310,24 @@ func briefServedPulls(brief string, serves []string) []string {
 	return slices.DeleteFunc(slices.Clone(serves), func(ref string) bool {
 		return !slices.ContainsFunc(named, func(p string) bool { return strings.EqualFold(p, ref) })
 	})
+}
+
+// startPullDeliveries makes the delivery of each of pulls, the served refs of
+// start s that are pull requests (briefServedPulls), hold its pull request
+// (state.PullDelivery) once s serves it: a worker's task of a pull request is
+// proven by that pull request's merge. A review start works no pull request;
+// it reviews one and opens no delivery.
+func startPullDeliveries(st *state.State, s state.Start, pulls []string) {
+	if s.Kind == capacity.TaskKindReview {
+		return
+	}
+	for _, p := range pulls {
+		if slices.ContainsFunc(st.Records, func(r state.Record) bool {
+			return r.Session.Is(s.Party) && r.Ended.IsZero() && strings.EqualFold(r.Issue, p)
+		}) {
+			st.PullDelivery(p)
+		}
+	}
 }
 
 // briefContextIntro matches a line prefix that cites a related or follow-up
@@ -2629,10 +2640,11 @@ func unitEnded(ctx context.Context, unit string) bool {
 
 func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool, pulls ...string) (registration, error) {
 	s.Kind = cmp.Or(s.Kind, a.selectionKind)
-	reg, err := recordStart(st, s, task, serves, live, pulls...)
+	reg, err := recordStart(st, s, task, serves, live)
 	if err != nil {
 		return reg, err
 	}
+	startPullDeliveries(st, s, pulls)
 	if limit := a.cfg.Delivery.WIPLimit; limit > 0 {
 		v := readDeliveryWIP(st, limit, a.cfg.Supervisor.LoopInterval.Duration, s.At, a.deliveryPolicy())
 		if v.Count > limit {
