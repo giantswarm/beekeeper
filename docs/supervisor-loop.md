@@ -79,6 +79,14 @@ retain their own admission. Supervisor status names the scan hold.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+## Action briefs
+
+The loop stores briefs under `<state dir>/supervisor-loop/`. New filenames keep up to 160 bytes
+before `.md`; longer action keys use a readable prefix and 16 hex digits of the key's SHA-256.
+A red-check brief still lists every failed check and its available URL, regardless of the filename
+length. Quota recovery reopens the review round's brief, including a longer filename written before
+an upgrade when the new path does not exist.
+
 ## Outages and emergencies
 
 `beekeeper fatal status` reports each outage's scope. A red repository default

@@ -473,39 +473,73 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 }
 
 // A reviewer the loop started that hits a quota 429 restarts as the
-// reviewer of its round, with its round's brief and the review flags.
+// reviewer of its round, with its round's brief and the review flags,
+// including bounded filenames and briefs written before an upgrade.
 func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
-	const ref = "giantswarm/beekeeper#2153"
-	name := superloop.ReviewerName(ref, 2)
-	f := newQuotaFixture(t, name, "Review https://github.com/giantswarm/beekeeper/pull/2153 at head abc", ref)
-	key := "review " + ref + "@abc"
-	if err := f.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	var runCalls [][]string
-	l := f.loop(t, &out, func(args []string) (string, int, error) {
-		runCalls = append(runCalls, args)
-		return `{"room":1}` + "\n", 0, nil
-	})
-	brief, err := l.Brief("", "Review {{.URL}} at {{.Head}}\n", key, loop.BriefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := f.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := l.RecoverQuota(context.Background(), st); err != nil {
-		t.Fatal(err)
-	}
-	i := slices.IndexFunc(runCalls, func(args []string) bool { return slices.Contains(args, "start") })
-	if i < 0 {
-		t.Fatalf("runCalls = %v, want a start", runCalls)
-	}
-	start := runCalls[i]
-	if !slices.Contains(start, name) || !slices.Contains(start, brief) || !slices.Contains(start, "--review") || !slices.Contains(start, "--"+reviewOfSelfHostedFlag) {
-		t.Fatalf("reviewer restart = %v, want %q with brief %s, --review and --%s", start, name, brief, reviewOfSelfHostedFlag)
+	longRepo := strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100)
+	for _, tc := range []struct {
+		name, repo string
+		legacy     bool
+		both       bool
+	}{
+		{name: "short", repo: "example/app"},
+		{name: "bounded", repo: longRepo},
+		{name: "before upgrade", repo: longRepo, legacy: true},
+		{name: "new brief takes precedence", repo: longRepo, both: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := tc.repo + "#2153"
+			url := "https://github.com/" + tc.repo + "/pull/2153"
+			head := strings.Repeat("a", 40)
+			name := superloop.ReviewerName(ref, 2)
+			f := newQuotaFixture(t, name, "Review "+url+" at head "+head, ref)
+			owner, _, _ := strings.Cut(tc.repo, "/")
+			f.cfg.GitHub.AllowedOrgs = []string{owner}
+			key := "review " + ref + "@" + head
+			if err := f.store.Record(about(event(loop.LoopParty, loop.LoopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			var runCalls [][]string
+			l := f.loop(t, &out, func(args []string) (string, int, error) {
+				runCalls = append(runCalls, args)
+				return `{"room":1}` + "\n", 0, nil
+			})
+			brief, err := l.Brief("", "Review {{.URL}} at {{.Head}}\n", key, loop.BriefData{URL: url, Head: head})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(filepath.Base(brief)) > 163 {
+				t.Fatalf("new brief filename is not bounded: %s", brief)
+			}
+			legacyName := strings.NewReplacer(" ", "-", "/", "-", "#", "-", "@", "-").Replace(key) + ".md"
+			legacy := filepath.Join(filepath.Dir(brief), legacyName)
+			if tc.legacy {
+				if err := os.Rename(brief, legacy); err != nil {
+					t.Fatal(err)
+				}
+				brief = legacy
+			} else if tc.both {
+				if err := os.WriteFile(legacy, []byte("stale brief\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, err := f.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.RecoverQuota(context.Background(), st); err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(runCalls, func(args []string) bool { return slices.Contains(args, "start") })
+			if i < 0 {
+				t.Fatalf("runCalls = %v, want a start; output: %s", runCalls, out.String())
+			}
+			start := runCalls[i]
+			if !slices.Contains(start, name) || !slices.Contains(start, brief) || !slices.Contains(start, "--review") || !slices.Contains(start, "--"+reviewOfSelfHostedFlag) {
+				t.Fatalf("reviewer restart = %v, want %q with brief %s, --review and --%s", start, name, brief, reviewOfSelfHostedFlag)
+			}
+		})
 	}
 }
 

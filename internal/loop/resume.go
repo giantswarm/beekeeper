@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -202,7 +203,17 @@ func (l *Loop) restartQuota(ctx context.Context, st *state.State, ag state.Agent
 	var brief string
 	if review != nil {
 		brief = l.briefPath(review.key)
-		if _, err := os.Stat(brief); err != nil {
+		_, err := os.Stat(brief)
+		if errors.Is(err, os.ErrNotExist) {
+			// An upgrade can leave a review round's brief under the old,
+			// unbounded name. Only try names the old writer could create.
+			legacy := briefName.ReplaceAllString(review.key, "-") + ".md"
+			if len(legacy) <= 255 && legacy != filepath.Base(brief) {
+				brief = filepath.Join(filepath.Dir(brief), legacy)
+				_, err = os.Stat(brief)
+			}
+		}
+		if err != nil {
 			return fmt.Errorf("the brief of review round %d: %w", review.round, err)
 		}
 	} else {
