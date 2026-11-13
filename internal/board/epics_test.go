@@ -349,7 +349,7 @@ func TestMovingAnEpicToInProgressIsTheGo(t *testing.T) {
 	f := &goGH{t: t, found: true, planPrivate: true}
 	c := &Client{GH: f.run, Board: b, Plans: []string{plansRepo}}
 	mv, err := c.Move(context.Background(), epicRef, "in progress")
-	if err != nil || mv.Go == nil || mv.Go.Thread != "o/plans#1" || mv.Go.Plan.Head != planHead || mv.Go.Plan.State != "draft" || !slices.Equal(f.mutations, []string{"I1=s3"}) {
+	if err != nil || mv.Go == nil || mv.Go.Thread != "o/plans#1" || mv.Go.Plan.Head != planHead || mv.Go.Plan.State != "draft" || !slices.Equal(f.mutations, []string{moveI1}) {
 		t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
 	url, err := c.RecordGo(context.Background(), mv.Go, mv.Go.Text("guide", mv.To))

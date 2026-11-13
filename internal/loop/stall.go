@@ -32,6 +32,64 @@ type startStall struct {
 	// reviewFiled the alarms raised for it.
 	reviewSince time.Time
 	reviewFiled int
+	// pullSince is the last complete poll of the pull watch the alarm was
+	// raised for.
+	pullSince time.Time
+	pullFiled bool
+}
+
+// LoopPullStallAfter is how long the pull watch may go without a poll that
+// read every pull request it asked for before the loop raises the alarm.
+const LoopPullStallAfter = 30 * time.Minute
+
+const LoopPullStallKey = "stall pulls "
+
+// CheckPullStall raises one alarm, through the loop's file channel that
+// guide watch says as GUIDE PROBLEM, when the continuous pull watch has
+// not completed a poll for LoopPullStallAfter, measured from its start
+// after a restart: no parked pull request gets its desk review, merge
+// decision or CI wake until it does. A watch that kept failing went
+// unnoticed for a day (#3809). The alarm names the failed tries and the
+// last error, once per episode; SUPERVISOR STALL ENDED says when a poll
+// completes again.
+func (l *Loop) CheckPullStall() error {
+	w := l.PullWatcher()
+	w.Mu.Lock()
+	started := w.Started
+	w.Mu.Unlock()
+	if started.IsZero() {
+		return nil
+	}
+	s, now := w.View(), l.Host.TimeNow()
+	since := s.PolledAt
+	if started.After(since) {
+		since = started
+	}
+	stalled := now.Sub(since) >= LoopPullStallAfter
+	l.Mu.Lock()
+	filed, alarmed := l.Stall.pullFiled, l.Stall.pullSince
+	// A poll completed since the alarm: its episode ended.
+	if filed && (!stalled || !alarmed.Equal(since)) {
+		l.Stall.pullSince, l.Stall.pullFiled, filed = time.Time{}, false, false
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR STALL ENDED: the pull watch reads the desk's pull requests again (stalled since %s)\n", alarmed.UTC().Format(time.RFC3339))
+	}
+	l.Mu.Unlock()
+	if !stalled || filed {
+		return nil
+	}
+	cause := "no poll has finished since: one may hang"
+	if f := s.Failing; f != nil {
+		cause = fmt.Sprintf("%d tries failed since %s, the last: %s", f.Tries, f.Since.UTC().Format(time.RFC3339), f.Error)
+	}
+	text := fmt.Sprintf("The pull watch has not read all the desk's pull requests since %s (%s): %s. Parked pull requests get no desk review, merge decision or CI wake until it reads them again; the alarm is delivered once per episode.", since.UTC().Format(time.RFC3339), now.Sub(since).Round(time.Minute), cause)
+	line := fmt.Sprintf("%s reported at %s%s%s", LoopParty.Name, now.UTC().Format(time.RFC3339), FileReportSeparator, text)
+	if err := l.Record(superloop.Action{Kind: superloop.KindFile, Key: LoopPullStallKey + since.UTC().Format("20060102T150405Z")}, line); err != nil {
+		return err
+	}
+	l.Mu.Lock()
+	l.Stall.pullSince, l.Stall.pullFiled = since, true
+	l.Mu.Unlock()
+	return nil
 }
 
 const LoopReviewStallKey = "stall reviews "

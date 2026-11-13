@@ -111,6 +111,9 @@ request's closing keyword closed at its merge, or any close while the
 worker that filed the note still runs its task, keeps the note open
 (NOTE KEPT, note.kept, once per reason); once the worker reports its task
 over (agents idle), its settled issues overtake its notes.
+A --kind todo is the person's own action and is never overtaken: its
+answer or note done ends it, whatever happens to its --ref; so does a note
+put back with note reopen.
 A note without --ref stays open: once the session that filed it is
 archived, guide watch names it to the guide as orphaned (GUIDE ORPHANED),
 to ask or close by hand; a role's run never orphans its notes.
@@ -669,9 +672,11 @@ func (a *app) noteReopenCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "reopen <id>",
 		Short: "Reopen a closed, answered or defaulted note back into the open queue",
-		Long: `Reopen a closed, answered or defaulted note from retained history back into
-the open notes queue while preserving all prior answer.recorded and closure
-events in the audit log. Logs note.reopened.`,
+		Long: `Reopen a closed, answered, defaulted, withdrawn or overtaken note from retained
+history back into the open notes queue while preserving all prior answer.recorded
+and closure events in the audit log. A reopened note's --ref no longer
+overtakes it: its answer, its default or note done ends it. A board item it
+held was released when it closed and is not held again. Logs note.reopened.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
@@ -700,6 +705,10 @@ events in the audit log. Logs note.reopened.`,
 			if shown.Status == noteStatusOpen {
 				return refused("note #%d is already open; use `beekeeper note defer %d --due <time>` to defer it", id, id)
 			}
+			if shown.For == "" && shown.Closure != nil && shown.Closure.Verb == noteOvertaken {
+				return refused("note #%d was overtaken before overtaken notes were retained whole, so whom it is for is unknown; "+
+					"file it again with note add --for <person>: %s", id, oneLine(shown.Text))
+			}
 			var reopened state.Note
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				if slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
@@ -711,9 +720,11 @@ events in the audit log. Logs note.reopened.`,
 					n.Kind = noteDecision
 				}
 				clearNoteDeferral(&n)
-				n.Fired = d.UTC()
-				n.Fired = n.Fired.Truncate(0)
 				n.Fired = state.Note{}.Fired
+				// Reopened by hand, its settled refs no longer settle it;
+				// its close released what it held and what the watch kept.
+				n.Reopened = a.now.UTC()
+				n.Held, n.AlsoHeld, n.Kept = nil, nil, ""
 				switch {
 				case !d.IsZero():
 					n.Due = d.UTC()

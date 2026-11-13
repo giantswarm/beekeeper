@@ -20,9 +20,21 @@ type DeliveryWIP struct {
 	Reason     string           `json:"reason,omitempty"`
 }
 
-// deliveryPriority runs in the command, which holds what it needs (loopDeliveryPriority).
+// Only new issue starts use this check. The frozen references travel with
+// their worker stream, never in a field another pass could overwrite.
 func (l *Loop) deliveryPriority(ctx context.Context, reserved ...[]string) error {
-	return Cmd.LoopDeliveryPriority(l, ctx, reserved...)
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return err
+	}
+	refs, _ := l.DeliveryReservedRefs(st, reserved...)
+	if len(refs) == 0 {
+		return nil
+	}
+	if l.DeliveryRoom(l.FillRoom(l.FillCapacity(ctx)), st, refs) <= 0 {
+		return ErrLoopLater
+	}
+	return nil
 }
 
 func (l *Loop) deliveryStart(ref string, exempt bool) error {

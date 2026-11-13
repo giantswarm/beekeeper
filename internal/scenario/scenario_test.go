@@ -49,6 +49,10 @@ func TestParseRejects(t *testing.T) {
 		{"bad duration", validScenario + "timeout: soon\n", "invalid duration"},
 		{"two documents", validScenario + "---\n" + validScenario, "one scenario per file"},
 		{"json_path without a check", strings.Replace(validScenario, "exit: 0", "json_path: {path: a.b}", 1), "exactly one of equals, exists and len"},
+		{"builder with an unknown tool", strings.Replace(validScenario, "when:", "given:\n  builder: {tools: [cargo]}\nwhen:", 1), `"cargo" is none of go, golangci-lint`},
+		{"generated desk without a repository", strings.Replace(validScenario, "when:", "given:\n  state: {generate: {agents: 3}}\nwhen:", 1), "which has none"},
+		{"state that seeds nothing", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {}\nwhen:", 1), "given.state without generate"},
+		{"generated desk with an unknown key", strings.Replace(validScenario, "when:", "given:\n  repositories: [{name: example/app}]\n  state: {generate: {workers: 3}}\nwhen:", 1), "field workers not found"},
 		{"github step without given.github", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}}", 1), "a github step needs given.github"},
 		{"github step with two actions", strings.Replace(validScenario, "run: {args: [version]}", "github: {merge: {repo: example/app, pull: 1}, close: {repo: example/app, pull: 1}}", 1), "exactly one of push, check, review, merge, close, comment and budget"},
 		{"fault step that neither arms nor clears", strings.Replace(validScenario, "run: {args: [version]}", "fault: {}", 1), "exactly one of arm and clear"},
@@ -64,6 +68,7 @@ func TestParseRejects(t *testing.T) {
 		{"host step of no host", strings.Replace(validScenario, "run: {args: [version]}", "host: {name: builder, clear: true}", 1), `host "builder" is none of given.hosts`},
 		{"worker expectation without a check", strings.Replace(validScenario, "exit: 0", "worker: {name: w}", 1), "one of turns, outcome and running"},
 		{"tool that is a fake already", strings.Replace(validScenario, "when:", "given:\n  tools: [gh]\nwhen:", 1), `"gh" is on the desk's PATH already`},
+		{"tool that is the builder's kubectl", strings.Replace(validScenario, "when:", "given:\n  tools: [kubectl]\nwhen:", 1), `"kubectl" is on the desk's PATH already`},
 		{"given call of a program that is no tool", strings.Replace(validScenario, "when:", "given:\n  calls: [{program: go, respond: {exit: 0}}]\nwhen:", 1), `program "go" is none of`},
 		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
 	} {
@@ -90,6 +95,7 @@ func TestScenariosLoad(t *testing.T) {
 		"smoke/version", "smoke/capacity-json-empty-desk", "smoke/board-next-fake-board",
 		"harness/claude-worker-parks-on-its-pull", "harness/codex-worker-parks-on-its-pull", "harness/agy-worker-parks-on-its-pull",
 		"harness/omp-worker-parks-on-its-pull", "harness/execution-host-worker-publishes-its-branch", "harness/execution-host-faults",
+		"harness/execution-host-reviewer-publishes-its-fix",
 		"harness/crashed-worker-is-retired-hung-worker-holds-its-slot", "harness/claude-turn-reports-usage-and-hits-the-limit",
 	} {
 		if !names[want] {
@@ -99,7 +105,7 @@ func TestScenariosLoad(t *testing.T) {
 	if got := Filter(all, []string{"smoke"}, []string{"board"}); len(got) != 1 || got[0].Name != "board-next-fake-board" {
 		t.Errorf("filter smoke+board: %v", got)
 	}
-	if got := Filter(all, []string{"harness"}, []string{"hosts"}); len(got) != 2 {
+	if got := Filter(all, []string{"harness"}, []string{"hosts"}); len(got) != 3 {
 		t.Errorf("filter harness+hosts: %v", got)
 	}
 	if got := Filter(all, []string{"no-such-flow"}, nil); len(got) != 0 {

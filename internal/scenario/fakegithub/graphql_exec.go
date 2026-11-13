@@ -232,6 +232,8 @@ type gqlOperation struct {
 	Vars map[string]any
 	// Roots are the operation's top-level field names.
 	Roots []string
+	// Fields counts its top-level fields, each alias on its own.
+	Fields int
 }
 
 // Name is the operation's name, or its first root field for an anonymous
@@ -286,7 +288,27 @@ func prepareGraphQL(query, operationName string, vars map[string]any) (*gqlOpera
 		}
 	}
 	out.Roots = rootFields(doc, op.Sels, nil)
+	out.Fields = rootFieldCount(doc, op.Sels, nil)
 	return out, nil
+}
+
+// rootFieldCount counts the top-level fields of sels, each alias on its
+// own, through inline fragments and fragment spreads.
+func rootFieldCount(doc *gqlDoc, sels []gqlSel, seen []string) int {
+	n := 0
+	for _, s := range sels {
+		switch {
+		case s.Field != nil:
+			n++
+		case s.Inline != nil:
+			n += rootFieldCount(doc, s.Inline.Sels, seen)
+		case s.Spread != "" && !slices.Contains(seen, s.Spread):
+			if f, ok := doc.Fragments[s.Spread]; ok {
+				n += rootFieldCount(doc, f.Sels, append(seen, s.Spread))
+			}
+		}
+	}
+	return n
 }
 
 func rootFields(doc *gqlDoc, sels []gqlSel, seen []string) []string {

@@ -1,0 +1,68 @@
+name: codex-refusal-names-its-cause-and-marks-the-kept-reading-stale
+description: >
+  Twenty minutes after the last good Codex reading, the account refuses the usage refresh with
+  401 (token_expired). capacity keeps that reading and says why: the endpoint, the status and the
+  error code, never the response's body. The kept reading is older than its maximum of 15 minutes,
+  so capacity marks it stale, in its JSON and in its line. Once the account answers again, the next
+  refresh is fresh and nothing is stale or kept.
+issue: https://github.com/giantswarm/beekeeper/issues/3639
+flow: usage
+tags: [usage, capacity, codex]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      capacity:
+        ceiling: 2
+        providers:
+          codex: {ceiling: 2}
+  harness:
+    usage:
+      codex:
+        session: 10
+        week: 23
+        # The first request is answered, the next two are refused as codex
+        # app-server reports a 401 of the usage endpoint, then it answers.
+        fail:
+          after: 1
+          times: 2
+          message: >-
+            failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage?x=1
+            failed: 401 Unauthorized; content-type=application/json;
+            body={"error":{"message":"Provided authentication token is expired.","code":"token_expired"}}
+
+when:
+  - name: read
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.sevenDay.usedPercent, equals: 23}
+      - json_path: {path: providers.codex.fallback, exists: false}
+      - json_path: {path: providers.codex.stale, exists: false}
+  - advance: 20m
+  - name: refused
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.sevenDay.usedPercent, equals: 23}
+      - json_path: {path: providers.codex.stale, equals: true}
+      - output:
+          contains: ['GET https://chatgpt.com/backend-api/wham/usage answered 401 Unauthorized (token_expired)']
+          not_contains: [authentication token is expired]
+  - name: refused-line
+    run: {args: [capacity]}
+    expect:
+      - exit: 0
+      - output:
+          matches: 'provider codex: .*7d 23%.*STALE: read 20m\d*s? ago, max 15m \(account refresh failed: GET https://chatgpt.com/backend-api/wham/usage answered 401 Unauthorized \(token_expired\)'
+  - name: recovered
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.sevenDay.usedPercent, equals: 23}
+      - json_path: {path: providers.codex.fallback, exists: false}
+      - json_path: {path: providers.codex.stale, exists: false}
+
+then:
+  - calls: {program: codex, args: [app-server], min: 4, max: 4}

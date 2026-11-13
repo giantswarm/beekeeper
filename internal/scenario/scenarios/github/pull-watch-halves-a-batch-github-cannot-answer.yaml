@@ -1,0 +1,92 @@
+name: pull-watch-halves-a-batch-github-cannot-answer
+description: >
+  GitHub cannot answer a batch of more than six pull requests in time: it
+  answers 504 with its HTML error page, at every try. The desk has twelve
+  open pull requests the loop has never seen. Its pull watcher asks for
+  the twelve in one batch, says GitHub's answer (HTTP 504 and the page),
+  asks again in batches of six, which GitHub answers, and reads every one:
+  supervisor status shows twelve fresh observations. It never says the
+  JSON decoder's "invalid character '<'": a loop that did asked for the
+  same batch at every try and read none of the desk's pull requests for a
+  day.
+issue: https://github.com/giantswarm/beekeeper/issues/3809
+flow: github
+tags: [github, loop, pullwatch, fault]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # No board read and no release lookup beside the watcher.
+      supervisor: {loopInterval: 30m, releaseEvery: 24h, workerBrief: ""}
+      watch: {interval: 30m}
+  github:
+    repositories:
+      - name: example/app
+        pulls:
+          - {number: 1, title: One, head: one, author: desk}
+          - {number: 2, title: Two, head: two, author: desk}
+          - {number: 3, title: Three, head: three, author: desk}
+          - {number: 4, title: Four, head: four, author: desk}
+          - {number: 5, title: Five, head: five, author: desk}
+          - {number: 6, title: Six, head: six, author: desk}
+          - {number: 7, title: Seven, head: seven, author: desk}
+          - {number: 8, title: Eight, head: eight, author: desk}
+          - {number: 9, title: Nine, head: nine, author: desk}
+          - {number: 10, title: Ten, head: ten, author: desk}
+          - {number: 11, title: Eleven, head: eleven, author: desk}
+          - {number: 12, title: Twelve, head: twelve, author: desk}
+    faults:
+      # The pull batch's rate limit and seven or more pull requests.
+      - name: too-large
+        match: {path: graphql, operation: rateLimit, min_fields: 8}
+        respond:
+          status: 504
+          content_type: text/html; charset=utf-8
+          body: |
+            <!DOCTYPE html>
+            <html>
+              <head><title>Unicorn! &middot; GitHub</title></head>
+              <body>We couldn't respond to your request in time.</body>
+            </html>
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The watch's machine reads: empty journals.
+    - program: journalctl
+      respond: {stdout: ""}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - github: {calls: {path: graphql, fault: too-large, min: 1}}
+  # gh's tries of the failed batch wait for the clock.
+  - name: retries
+    advance:
+      by: 1m
+      step: 5s
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["SUPERVISOR PULL WATCH GitHub failed a batch of 12 pull requests", "HTTP 504", "Unicorn!", "asking again in batches of 6"]}
+        # Said once the poll's observations are saved.
+        - log: {name: loop, contains: ["SUPERVISOR PULL WATCH read the 12 pull requests it asked for; GitHub failed 1 of its batches, which hold 6 from now on"]}
+  - name: status
+    run: {args: [supervisor, status]}
+    expect:
+      - exit: 0
+      - output: {contains: ["pull observations: 12,", "0 stale"], not_contains: ["pull watch failing"]}
+  - stop: loop
+
+then:
+  - log: {name: loop, not_contains: ["invalid character", "SUPERVISOR PULL WATCH held"]}
+  # The twelve, read in two batches of six that GitHub answered.
+  - github: {calls: {path: graphql, operation: rateLimit, fault: too-large, max: 3}}

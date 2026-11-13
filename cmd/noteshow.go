@@ -185,6 +185,8 @@ func (a *app) retainedNote(id int) (*shownNote, error) {
 					}
 				case noteDefaulted:
 					shown.Status = "defaulted"
+				case noteOvertaken:
+					shown.Reason = overtakenReason(*closure)
 				case answerRecorded:
 					shown.Status = closedAnswered
 					if an, ok := parseAnswered(*closure); ok {
@@ -195,19 +197,26 @@ func (a *app) retainedNote(id int) (*shownNote, error) {
 			return shown, nil
 		}
 	}
+	// The latest close of the note: answered, withdrawn or overtaken.
+	closedBy := func(e state.Event) *shownNote {
+		if n := withdrawnNote(e); n != nil {
+			return n
+		}
+		return overtakenNote(e)
+	}
 	evs, err := a.store.Events(1, func(e state.Event) bool {
 		an, ok := parseAnswered(e)
-		withdrawn := withdrawnNote(e)
-		return ok && an.ID == id || withdrawn != nil && withdrawn.ID == id
+		closed := closedBy(e)
+		return ok && an.ID == id || closed != nil && closed.ID == id
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(evs) > 0 {
 		e := evs[len(evs)-1]
-		if withdrawn := withdrawnNote(e); withdrawn != nil {
-			parseNoteTextParts(&withdrawn.Note)
-			return withdrawn, nil
+		if closed := closedBy(e); closed != nil {
+			parseNoteTextParts(&closed.Note)
+			return closed, nil
 		}
 		an, _ := parseAnswered(e)
 		n := state.Note{ID: id, Text: an.Question, For: an.Audience, By: state.Party{Name: an.Asker}}

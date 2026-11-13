@@ -455,3 +455,122 @@ func TestNoteOvertakenOnlyByMergeAfterItWasAdded(t *testing.T) {
 		})
 	}
 }
+
+// A person's to-do is theirs whatever happens to the issue it names: its
+// ref closing never closes it, and the watch reads no GitHub for it
+// (https://github.com/giantswarm/beekeeper/issues/3848).
+func TestTodoIsNeverOvertakenByItsRef(t *testing.T) {
+	w, out := overtakingWatch(t, map[string]string{refOne: github.Closed})
+	setNotes(t, w, state.Note{ID: 1, Kind: noteTodo, For: personTimo, Text: "rotate the robot password", Refs: []string{refOne}})
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{1}) || len(overtakenEvents(t, w)) != 0 {
+		t.Fatalf("the to-do was overtaken: open %v", ids)
+	}
+	if said := out.String(); strings.Contains(said, "NOTE OVERTAKEN") || strings.Contains(said, "NOTE KEPT") {
+		t.Fatalf("watch said %q", said)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs := overtakeRefs(st); len(refs) != 0 {
+		t.Fatalf("the watch reads a to-do's refs: %v", refs)
+	}
+}
+
+// reopenNote runs note reopen with args on a.
+func reopenNote(a *app, args ...string) error {
+	c := a.noteCmd()
+	c.SetArgs(append([]string{reopenName}, args...))
+	c.SetOut(a.out)
+	c.SetErr(a.out)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	return c.Execute()
+}
+
+// A note the overtaken rule closed stays in the file store's history:
+// note show reads it back with its reason, and note reopen puts it back
+// whole, without the hold its close released, where its settled ref no
+// longer overtakes it.
+func TestReopenRestoresAnOvertakenNote(t *testing.T) {
+	w, _ := overtakingWatch(t, map[string]string{refOne: github.Closed})
+	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Default: dfltOK, Refs: []string{refOne}})
+	w.pending(context.Background(), nil)
+	if ids := openIDs(t, w); len(ids) != 0 || len(overtakenEvents(t, w)) != 1 {
+		t.Fatalf("not overtaken: open %v", ids)
+	}
+	var out bytes.Buffer
+	w.out = &out
+	c := w.noteCmd()
+	c.SetArgs([]string{noteShowName, "1"})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{askedQ, "[status: " + noteStatusClosed + "]", "reason: o/r#1 closed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("note show lacks %q: %q", want, out.String())
+		}
+	}
+	if err := reopenNote(w.app, "1"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 1 || st.Notes[0].For != personTimo || !slices.Equal(st.Notes[0].Refs, []string{refOne}) || st.Notes[0].Reopened.IsZero() {
+		t.Fatalf("reopened %+v", st.Notes)
+	}
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{1}) || len(overtakenEvents(t, w)) != 1 {
+		t.Fatalf("the reopened note was overtaken again: open %v", ids)
+	}
+}
+
+// note reopen drops what the close released: the board items the note
+// held and the watch's reason for keeping it.
+func TestReopenHoldsNothing(t *testing.T) {
+	a, out := noteApp(t)
+	n := state.Note{ID: 3, Kind: noteDecision, For: notePerson, Text: askedQ, Default: dfltOK, Refs: []string{refOne},
+		Held: &state.ItemHold{Ref: refOne}, Kept: "o/r#1 closed, its worker still runs"}
+	if err := a.store.Record(overtakenEvent(watchParty, n, "o/r#1 closed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopenNote(a, "3"); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 1 || st.Notes[0].Held != nil || st.Notes[0].Kept != "" || st.Notes[0].Text != askedQ {
+		t.Fatalf("reopened %+v", st.Notes)
+	}
+}
+
+// An overtaken event written before the note was retained whole names the
+// note's text but not its person: note show says it, and note reopen
+// refuses, saying to file it again, instead of "not found".
+func TestReopenOfAnOldOvertakenNoteSaysToFileItAgain(t *testing.T) {
+	a, out := noteApp(t)
+	old := event(watchParty, noteOvertaken, "#5 overtaken: o/r#1 closed%srotate the robot password", overtakenSep)
+	if err := a.store.Record(old); err != nil {
+		t.Fatal(err)
+	}
+	c := a.noteCmd()
+	c.SetArgs([]string{noteShowName, "5"})
+	if err := c.Execute(); err != nil || !strings.Contains(out.String(), "rotate the robot password") {
+		t.Fatalf("note show: %v: %q", err, out)
+	}
+	err := reopenNote(a, "5")
+	if err == nil || !strings.Contains(err.Error(), "file it again") || !strings.Contains(err.Error(), "rotate the robot password") {
+		t.Fatalf("reopen: %v", err)
+	}
+	if st, _ := a.store.Read(); len(st.Notes) != 0 {
+		t.Fatalf("reopened %+v", st.Notes)
+	}
+}

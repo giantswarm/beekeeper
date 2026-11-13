@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -1352,7 +1353,11 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p)
-			if scenario == review3325Unassigned || scenario == review3325WrongSession {
+			if scenario == review3325Authorized {
+				if err != nil || result.Branch != authorBranch || result.URL != publicationFixturePRURL {
+					t.Fatalf("authorized publication failed: %+v %v", result, err)
+				}
+			} else if scenario == review3325Unassigned || scenario == review3325WrongSession {
 				if err == nil && result.Branch == authorBranch {
 					t.Fatal("unassigned execution wrote author branch")
 				}
@@ -1364,6 +1369,9 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 				t.Fatal(readErr)
 			}
 			want := rig.base
+			if scenario == review3325Authorized {
+				want = head
+			}
 			if !strings.HasPrefix(got, want+"\t") {
 				t.Fatalf("author branch changed without authorization: %q", got)
 			}
@@ -1374,19 +1382,50 @@ func TestReview3325AssignedReviewerPublication(t *testing.T) {
 	}
 }
 
-func TestReviewerWriteGrantRefusedBeforeAnyBranchRead(t *testing.T) {
+func TestReview3325GrantExpiresDuringBranchRead(t *testing.T) {
 	rig := newPublicationRig(t)
 	st, err := rig.a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
+	start := &st.Starts[0]
+	record := start.Execution
+	const branch = "fixture/lease-bound-review"
+	const ref = "giantswarm/beekeeper#42"
+	record.Request.GitRef = branch
+	st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: "lease-bound-round", Ref: ref, Head: rig.base, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()})
 	originalRead := loop.ReadLoopPull
 	t.Cleanup(func() { loop.ReadLoopPull = originalRead })
 	loop.ReadLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		t.Fatal("review branch lookup must not grant writes")
-		return superloop.Pull{}, nil
+		record.Lease.ExpiresAt = time.Now().Add(-time.Second)
+		return superloop.Pull{Ref: ref, State: superloop.Open, Branch: branch}, nil
 	}
-	if _, err := executionReviewWriteBranch(context.Background(), st, rig.request.Ref); err == nil || !strings.Contains(err.Error(), "implementing worker") {
-		t.Fatalf("missing finding-forwarding refusal: %v", err)
+	if _, err := executionReviewWriteBranch(context.Background(), st, rig.request.Ref); err == nil {
+		t.Fatal("branch read outlived the lease but still returned a write grant")
+	}
+}
+
+// A review session the loop has not assigned yet pushes nowhere: not to the
+// pull request, not to a branch of its own.
+func TestReviewerPublicationWaitsForItsAssignment(t *testing.T) {
+	rig := newPublicationRig(t)
+	head := rig.commit(t, "fix.txt", "fix\n")
+	p := rig.publication(t, head)
+	p.Title, p.Body = "", ""
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Kind = capacity.TaskKindReview
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p); err == nil || !strings.Contains(err.Error(), "no recorded review assignment") {
+		t.Fatalf("unassigned reviewer publication = %v, want the assignment refusal", err)
+	}
+	if rig.creates != 0 || len(rig.edits) != 0 {
+		t.Fatal("unassigned reviewer created or edited a pull request")
 	}
 }

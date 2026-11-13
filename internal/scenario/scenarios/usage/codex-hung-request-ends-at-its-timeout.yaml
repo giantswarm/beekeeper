@@ -1,0 +1,49 @@
+name: codex-hung-request-ends-at-its-timeout
+description: >
+  A refresh's account usage request never answers, and a helper of codex app-server keeps the
+  app-server's output open after its end. The reader's timeout (2s here) still ends the refresh:
+  capacity answers within seconds with the last reading and the cause, no answer within 2s. A
+  refresh that outlived its timeout would hold the watch's next refreshes behind it for good.
+issue: https://github.com/giantswarm/beekeeper/issues/3639
+flow: usage
+tags: [usage, capacity, codex]
+timeout: 40s
+
+given:
+  desk:
+    config:
+      capacity:
+        ceiling: 2
+        providers:
+          codex: {ceiling: 2, timeout: 2s}
+  harness:
+    usage:
+      codex:
+        session: 10
+        week: 23
+        # The second request never answers.
+        fail: {after: 1, times: 1, hang: true}
+
+when:
+  - name: read
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.fallback, exists: false}
+  - advance: 6m
+  - name: hung
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - duration: {max: 15s}
+      - json_path: {path: providers.codex.sevenDay.usedPercent, equals: 23}
+      - output:
+          contains: ['account refresh failed: no answer within 2s; using last Codex reading']
+  - name: answered
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: providers.codex.fallback, exists: false}
+
+then:
+  - calls: {program: codex, args: [app-server], min: 3, max: 3}
