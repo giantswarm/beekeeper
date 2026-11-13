@@ -71,6 +71,14 @@ func TestParseRejects(t *testing.T) {
 		{"tool that is the builder's kubectl", strings.Replace(validScenario, "when:", "given:\n  tools: [kubectl]\nwhen:", 1), `"kubectl" is on the desk's PATH already`},
 		{"given call of a program that is no tool", strings.Replace(validScenario, "when:", "given:\n  calls: [{program: go, respond: {exit: 0}}]\nwhen:", 1), `program "go" is none of`},
 		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
+		{"file without a path", strings.Replace(validScenario, "exit: 0", "file: {min_bytes: 1}", 1), "file without a path"},
+		{"file outside the work directory", strings.Replace(validScenario, "exit: 0", "file: {path: ../etc/passwd}", 1), "a file under the scenario's work directory"},
+		{"file by an absolute path", strings.Replace(validScenario, "exit: 0", "file: {path: /work/cpu.pprof}", 1), "relative to it (cpu.pprof is /work/cpu.pprof)"},
+		{"file that is the work directory", strings.Replace(validScenario, "exit: 0", "file: {path: repo/..}", 1), "a file under the scenario's work directory"},
+		{"file of no bytes", strings.Replace(validScenario, "exit: 0", "file: {path: cpu.pprof, min_bytes: 0}", 1), "min_bytes 0: at least 1"},
+		{"contents of a file that is not there", strings.Replace(validScenario, "exit: 0", "file: {path: cpu.pprof, exists: false, contains: [x]}", 1), "exists false with checks of the contents"},
+		{"file with a bad pattern", strings.Replace(validScenario, "exit: 0", "file: {path: out.txt, matches: '('}", 1), "file: matches:"},
+		{"unknown key in a file expectation", strings.Replace(validScenario, "exit: 0", "file: {path: out.txt, size: 3}", 1), "field size not found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))

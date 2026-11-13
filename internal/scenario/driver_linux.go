@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -565,6 +566,7 @@ func (d *driver) globals(v View) View {
 	}
 	v.Worker = d.fakes.CheckWorker
 	v.Log = d.backgroundLog
+	v.File = workFile
 	v.Origin = func(repository, branch string) (bool, int, error) { return originBranch(repository, branch) }
 	v.Process = func(name string) (bool, int, bool) {
 		p, ok := d.procs[name]
@@ -732,6 +734,19 @@ func (d *driver) waitFor(ctx context.Context, w *WaitFor) []string {
 		case <-time.After(interval):
 		}
 	}
+}
+
+// workFile reads the file at path, relative to the work directory: its
+// contents, or false when it is not there.
+func workFile(path string) ([]byte, bool, error) {
+	data, err := os.ReadFile(filepath.Join(workDir, path)) //nolint:gosec // a local path under the scenario's own work directory
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, false, nil
+	case err != nil:
+		return nil, true, err
+	}
+	return data, true, nil
 }
 
 // originBranch reads the branches of a repository's bare origin that match

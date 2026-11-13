@@ -240,8 +240,10 @@ type Expect struct {
 	// repository's origin.
 	Worker *harness.WorkerExpect `yaml:"worker"`
 	Origin *OriginExpect         `yaml:"origin"`
-	// Log checks what a background step has written so far.
-	Log *LogExpect `yaml:"log"`
+	// Log checks what a background step has written so far, File a file
+	// under the scenario's work directory.
+	Log  *LogExpect  `yaml:"log"`
+	File *FileExpect `yaml:"file"`
 }
 
 // TextExpect checks a text: every Contains is in it, no NotContains is,
@@ -309,7 +311,7 @@ func (e Expect) kinds() []string {
 		"exit": e.Exit != nil, "output": e.Output != nil, "stderr": e.Stderr != nil,
 		"json_path": e.JSONPath != nil, "events": e.Events != nil, "duration": e.Duration != nil,
 		"process": e.Process != nil, "calls": e.Calls != nil, "github": e.GitHub != nil,
-		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil,
+		"worker": e.Worker != nil, "origin": e.Origin != nil, "log": e.Log != nil, "file": e.File != nil,
 	} {
 		if set {
 			k = append(k, name)
@@ -571,7 +573,8 @@ func (s *Scenario) Validate() error {
 }
 
 // stepObserves are the expectation kinds a step kind's response holds;
-// events, calls and process are the desk's and the world's, held by all.
+// events, calls, process, github, worker, origin, log and file are the
+// desk's and the world's, held by all.
 var stepObserves = map[string][]string{
 	KindRun:        {"exit", "output", "stderr", "json_path", "duration"},
 	KindBackground: {"duration"},
@@ -591,11 +594,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	kind := e.Kind()
 	if kind == "" {
-		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin and log (has %v)", e.kinds())
+		bad("exactly one of exit, output, stderr, json_path, events, duration, process, calls, github, worker, origin, log and file (has %v)", e.kinds())
 		return errs
 	}
 	switch kind {
-	case "events", "calls", "process", "github", "worker", "origin", "log":
+	case "events", "calls", "process", "github", "worker", "origin", "log", "file":
 	default:
 		if stepKind != "" && !slices.Contains(stepObserves[stepKind], kind) {
 			bad("%s is not observed for a %s step", kind, stepKind)
@@ -674,6 +677,11 @@ func (s *Scenario) validateExpect(where string, e Expect, stepKind string, backg
 	}
 	if l := e.Log; l != nil {
 		for _, line := range l.validate(background) {
+			bad("%s", line)
+		}
+	}
+	if f := e.File; f != nil {
+		for _, line := range f.validate() {
 			bad("%s", line)
 		}
 	}

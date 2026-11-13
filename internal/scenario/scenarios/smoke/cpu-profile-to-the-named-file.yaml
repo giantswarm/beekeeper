@@ -1,0 +1,24 @@
+name: cpu-profile-to-the-named-file
+description: >
+  BEEKEEPER_CPUPROFILE names the file a command writes its CPU profile to,
+  for go tool pprof: the profile is there and not empty once the command
+  exits, which only the file shows.
+flow: smoke
+tags: [smoke, profile]
+issue: https://github.com/giantswarm/beekeeper/issues/3836
+timeout: 20s
+control:
+  none: >
+    states the CPU profile main already writes; this pull request changes no
+    beekeeper code, it adds the harness's file expectation, whose Go tests
+    TestParseRejects and TestFileExpectation fail on the merge base
+
+when:
+  - name: profiled
+    run: {args: [version], env: {BEEKEEPER_CPUPROFILE: /work/cpu.pprof}}
+
+then:
+  - exit: 0
+  - output: {matches: '^beekeeper \S+'}
+  - file: {path: cpu.pprof, min_bytes: 1}
+  - calls: {max: 0}

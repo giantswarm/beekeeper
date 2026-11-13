@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/giantswarm/beekeeper/internal/scenario/fakegithub"
 	"github.com/giantswarm/beekeeper/internal/scenario/harness"
@@ -41,6 +42,9 @@ type View struct {
 	Origin func(repository, branch string) (exists bool, ahead int, err error)
 	// Log reads what a background step has written so far.
 	Log func(name string) (string, error)
+	// File reads a file under the scenario's work directory: its contents,
+	// or false when it is not there.
+	File func(path string) (data []byte, exists bool, err error)
 }
 
 // Check checks one expectation against a view.
@@ -162,6 +166,11 @@ func Check(e Expect, v View) error {
 			return missing("log")
 		}
 		return e.Log.check(v.Log)
+	case "file":
+		if v.File == nil {
+			return missing("file")
+		}
+		return e.File.check(v.File)
 	default:
 		return fmt.Errorf("expectation without exactly one kind: %v", e.kinds())
 	}
@@ -207,7 +216,12 @@ func checkText(what string, t TextExpect, got string) error {
 		}
 	}
 	if len(errs) > 0 {
-		errs = append(errs, fmt.Errorf("%s was: %s", what, clip(got, 2000)))
+		shown := clip(got, 2000)
+		if !utf8.ValidString(got) {
+			// A binary file, such as a profile, is quoted, not printed.
+			shown = strconv.Quote(clip(got, 500))
+		}
+		errs = append(errs, fmt.Errorf("%s was: %s", what, shown))
 	}
 	return errors.Join(errs...)
 }

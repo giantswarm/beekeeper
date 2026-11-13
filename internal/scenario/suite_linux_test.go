@@ -183,6 +183,74 @@ then:
 	}
 }
 
+// TestFileExpectation runs scenarios with file expectations on files under
+// the work directory: the CPU profile the candidate writes where a step's
+// BEEKEEPER_CPUPROFILE names it, and the desk's config.yaml. They are read
+// inline, in a wait_for and in then. A file that is not there, is smaller
+// than min_bytes, lacks what it should contain or is there when it should
+// not be fails the scenario on an assertion, not in the harness.
+func TestFileExpectation(t *testing.T) {
+	holds := mustParse(t, `
+name: file-holds
+flow: harness
+when:
+  - name: profiled
+    run: {args: [version], env: {BEEKEEPER_CPUPROFILE: /work/cpu.pprof}}
+    expect:
+      - file: {path: cpu.pprof, min_bytes: 1}
+  - wait_for:
+      timeout: 5s
+      expect:
+        - file: {path: config.yaml, contains: ['stateDir: /work/state'], matches: '^stateDir: /work/state$'}
+then:
+  - {step: profiled, exit: 0}
+  - file: {path: cpu.pprof, min_bytes: 1}
+  - file: {path: config.yaml, not_contains: [BEEKEEPER_CPUPROFILE]}
+  - file: {path: repo/cpu.pprof, exists: false}
+`)
+	fails := mustParse(t, `
+name: file-fails
+flow: harness
+when:
+  - run: {args: [version]}
+then:
+  - file: {path: cpu.pprof}
+  - file: {path: config.yaml, min_bytes: 100000000}
+  - file: {path: config.yaml, contains: [no such line]}
+  - file: {path: config.yaml, exists: false}
+`)
+	r := runner(t)
+	t.Run("holds", func(t *testing.T) {
+		t.Parallel()
+		res := r.Run(t.Context(), holds, t.TempDir())
+		if !res.Passed() {
+			t.Fatalf("file expectations that hold failed: harness %q, failures %q", res.Harness, res.Failures)
+		}
+	})
+	t.Run("fails on assertions", func(t *testing.T) {
+		t.Parallel()
+		res := r.Run(t.Context(), fails, t.TempDir())
+		if res.Harness != "" {
+			t.Fatalf("the harness failed instead of the expectations: %s", res.Harness)
+		}
+		failures := strings.Join(res.Failures, "\n")
+		for _, want := range []string{
+			"then[0] file: file cpu.pprof is not there",
+			"then[1] file: file config.yaml has ",
+			"bytes, at least 100000000",
+			`then[2] file: file config.yaml lacks "no such line"`,
+			"then[3] file: file config.yaml is there (",
+		} {
+			if !strings.Contains(failures, want) {
+				t.Errorf("failures lack %q:\n%s", want, failures)
+			}
+		}
+		if len(res.Failures) != 4 {
+			t.Errorf("%d failures, want one per expectation:\n%s", len(res.Failures), failures)
+		}
+	})
+}
+
 func mustParse(t *testing.T, doc string) *Scenario {
 	t.Helper()
 	dir := t.TempDir()

@@ -224,6 +224,7 @@ such as the `exit` of a `wait_for`, fails instead of passing.
 | `worker` | what the sessions named `name` did: the `turns` they began, the last `outcome` (none while a begun turn has not reported), whether a CLI is `running` | every step |
 | `origin` | a `branch` of `repository`'s origin: whether it `exists`, how many commits it is `ahead` of `main` | every step |
 | `log` | what the background step `name` wrote so far: `contains`, `not_contains`, `matches` | every step |
+| `file` | the file at `path` under `/work`: whether it `exists`, its size of at least `min_bytes`, `contains`, `not_contains`, `matches` | every step |
 
 In `then`, an expectation reads the step named by `step`, or the last step.
 A `worker` expectation may also name the `harness` and the `host` of the
@@ -231,6 +232,19 @@ sessions; `name` and an `origin`'s `branch` are regular expressions that
 match the whole name. A `log` reads a background step's standard output and
 error as one text: the lines a running loop and its watch say
 (`SUPERVISOR STARTS HELD`, `HIGH LOAD`), which no event records.
+
+A `file` reads a file the candidate writes where a step names it, such as the CPU profile
+`BEEKEEPER_CPUPROFILE` names. Its `path` is relative to the work directory: `cpu.pprof` is
+`/work/cpu.pprof`, the desk's checkout is `repo/` and its home `home/`. An absolute path, or one
+that leaves `/work`, does not load. The file is expected there unless `exists: false`, which
+checks no contents.
+
+```yaml
+when:
+  - run: {args: [version], env: {BEEKEEPER_CPUPROFILE: /work/cpu.pprof}}
+then:
+  - file: {path: cpu.pprof, min_bytes: 1}
+```
 
 ### The clock
 
