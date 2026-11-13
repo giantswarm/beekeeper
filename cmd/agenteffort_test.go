@@ -23,6 +23,8 @@ const (
 	testEffortX    = "xhigh"
 	testScanRule   = "^scan"
 	testScanName   = "scan deps"
+	// testPlainModel is a configured choice's model without an effort.
+	testPlainModel = "plain-model"
 )
 
 func TestEffortBackgroundLaunchAndRecord(t *testing.T) {
@@ -111,6 +113,35 @@ func TestEffortLoopLeavesEffortToTheStart(t *testing.T) {
 	}
 }
 
+func TestEffortRulePrecedence(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.Agents.Models = []config.AgentModelRule{
+		{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortX},
+		{Match: testScanRule, Effort: testEffortHigh},
+	}
+	for _, tc := range []struct{ name, kind, flag, want string }{
+		{testScanName, workerRole, "", testEffortHigh},
+		{testScanName, capacity.TaskKindReview, "", testEffortX},
+		{testScanName, workerRole, testEffortLow, testEffortLow},
+		{testFixWord, workerRole, "", ""},
+	} {
+		got, err := a.startEffort(tc.name, tc.kind, tc.flag)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %q, %v", tc, got, err)
+		}
+	}
+	if _, err := a.startEffort(testFixWord, workerRole, "extreme"); err == nil {
+		t.Fatal("invalid flag accepted")
+	}
+	a.cfg.Guide.Effort = testEffortMax
+	if got := a.sessionEffort(agentStart{name: "scan guide", role: guideName}); got != testEffortMax {
+		t.Fatalf("guide effort: %q", got)
+	}
+	if got := a.sessionEffort(agentStart{name: testScanName, role: workerRole}); got != testEffortHigh {
+		t.Fatalf("rule effort: %q", got)
+	}
+}
+
 // TestEffortLoopDefaultYieldsToRuleAndChoice checks the order of a loop
 // start's effort: a matching rule, then the choice's effort, then
 // supervisor.effort; agy gets none, and a start not of the loop gets no
@@ -120,10 +151,10 @@ func TestEffortLoopDefaultYieldsToRuleAndChoice(t *testing.T) {
 	a.as = loop.LoopParty.Name
 	a.cfg.Supervisor.Effort = testEffortHigh
 	a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortLow}}
-	a.cfg.Capacity.Choices = []config.Choice{{Harness: claudeComm, Model: bgModel, Effort: testEffortX}, {Harness: claudeComm, Model: "sonnet"}}
+	a.cfg.Capacity.Choices = []config.Choice{{Harness: claudeComm, Model: bgModel, Effort: testEffortX}, {Harness: claudeComm, Model: testPlainModel}}
 	for _, tc := range []struct{ name, kind, harness, model, choice, want string }{
-		{"scan-review", capacity.TaskKindReview, claudeComm, "sonnet", "", testEffortLow},
-		{"scan-worker", workerRole, claudeComm, "sonnet", "", testEffortHigh},
+		{"scan-review", capacity.TaskKindReview, claudeComm, testPlainModel, "", testEffortLow},
+		{"scan-worker", workerRole, claudeComm, testPlainModel, "", testEffortHigh},
 		{"auto pick", workerRole, claudeComm, bgModel, testEffortX, testEffortX},
 		{"named choice", workerRole, claudeComm, bgModel, "", testEffortX},
 		{"agy pick", workerRole, capacity.HarnessAgy, "gemini", "", ""},
@@ -134,7 +165,7 @@ func TestEffortLoopDefaultYieldsToRuleAndChoice(t *testing.T) {
 		}
 	}
 	a.as = agentOne
-	if got, err := a.selectedEffort("scan-worker", workerRole, claudeComm, "sonnet", "", ""); err != nil || got != "" {
+	if got, err := a.selectedEffort("scan-worker", workerRole, claudeComm, testPlainModel, "", ""); err != nil || got != "" {
 		t.Fatalf("a start not of the loop took the loop's default: %q, %v", got, err)
 	}
 }
@@ -149,7 +180,7 @@ func TestEffortContinuationKeepsTheContinuedSession(t *testing.T) {
 	parked := state.Agent{Party: state.Party{Name: "app 1", Session: "parked-session"}, Task: "Continue example/app#1", Park: &state.Park{At: a.now.Add(-time.Hour), Continuing: true}}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, parked)
-		st.Starts = append(st.Starts, state.Start{Party: parked.Party, Model: "sonnet", Effort: testEffortMax, At: a.now.Add(-2 * time.Hour)})
+		st.Starts = append(st.Starts, state.Start{Party: parked.Party, Model: testPlainModel, Effort: testEffortMax, At: a.now.Add(-2 * time.Hour)})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -162,7 +193,7 @@ func TestEffortContinuationKeepsTheContinuedSession(t *testing.T) {
 		{next, claudeComm, testEffortHigh, testEffortHigh},
 		{"app 2", claudeComm, "", ""},
 	} {
-		got, err := a.selectedEffort(tc.name, workerRole, tc.harness, "sonnet", "", tc.choice)
+		got, err := a.selectedEffort(tc.name, workerRole, tc.harness, testPlainModel, "", tc.choice)
 		if err != nil || got != tc.want {
 			t.Errorf("%+v: got %q, %v", tc, got, err)
 		}
