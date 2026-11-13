@@ -8,6 +8,9 @@ import (
 
 // TestGateVocabulary keeps the copy the gate has of the command's names equal to
 // the command's own: it cannot import them.
+//
+// control: none: this guards the new internal/gate vocabulary after a code-only extraction.
+// The merge base has no internal/gate package or vocabulary to compare.
 func TestGateVocabulary(t *testing.T) {
 	own := map[string]any{
 		"ExitCentral":    ExitCentral,

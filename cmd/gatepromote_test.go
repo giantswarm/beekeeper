@@ -26,6 +26,8 @@ const (
 	candidateB = "v1.2.4-rc.2"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteCandidateKeepsKilledChildStderr(t *testing.T) {
 	const cause = "dial tcp: connect: network is unreachable"
 	fakeDevctl(t, `case " $* " in *" --progress "*) echo '`+cause+`' >&2;; esac
@@ -50,6 +52,8 @@ exec sleep 30`)
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteCandidateRejectsFailedDryRunDocument(t *testing.T) {
 	const cause = "reading the repository: GET https://api.github.com/repos/o/r: dial tcp: lookup api.github.com: no such host"
 	fakeDevctl(t, `echo '{"exitCode":1,"verdict":"red","reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","candidate":"`+candidateA+`","state":"failed","message":"`+cause+`"}]}'
@@ -69,6 +73,8 @@ exit 1`)
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateReportsKilledCandidateRead(t *testing.T) {
 	a := queueApp(t)
 	const cause = "dial tcp: connect: connection refused"
@@ -128,6 +134,9 @@ func promotePlace(t *testing.T) (*app, *gate.GateRun) {
 // A pinned promotion behind a busy lane waits on in a run of its own (exit
 // 76), its place recording the candidate it pins, not the newest; the run
 // carries the pin.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAQueuedPromotionRecordsItsPinnedCandidate(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -158,6 +167,9 @@ func TestAQueuedPromotionRecordsItsPinnedCandidate(t *testing.T) {
 // An unpinned promotion is never queued: where it would wait on outside the
 // call it is refused (77), its place dropped, and the refusal names the
 // newest candidate to pin.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubSelf(t)
@@ -183,6 +195,9 @@ func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
 // A newer candidate cut while a pinned promotion is queued refuses it at its
 // turn, so a stable release is never cut at an older release candidate; with
 // its pinned candidate still newest, devctl runs with the pin.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -229,6 +244,9 @@ func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 // promote run, the step that cuts the release it waits on, and still
 // refuses a merge into the repository. A hold whose probe waits on
 // something else keeps the promote waiting.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -261,6 +279,9 @@ func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
 // A promotion whose turn comes when another candidate is newest promotes
 // nothing: it is refused, its place leaves the lane, and the refusal names
 // both candidates. With its own candidate still newest, it runs.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -296,6 +317,9 @@ func TestAPromotionQueuedForOneCandidateNeverPromotesAnother(t *testing.T) {
 
 // lanes drop takes a waiting promotion out of its lane, and the gate that
 // waited for the place refuses instead of joining again.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLanesDropTakesAPromotionOut(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	newest := candidateA
@@ -356,6 +380,9 @@ func TestDropArg(t *testing.T) {
 // The gate names the command whose turn came: a promotion is "promoting
 // o/r" and a refused one says "nothing promoted" with devctl's state, never
 // "merging"; a merge stays "merging o/r#7".
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -420,6 +447,9 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 // A lane hold that admits the line's promoter lets that promoter's own
 // promote through; every other session's promote and merge on the line is
 // refused (exit 77) with a gate line naming the session the hold admits.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -556,6 +586,8 @@ bash "$gate" "$TAG"
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteUsageExitIsARefusal(t *testing.T) {
 	noSystemd(t)
 	newest := candidateA
@@ -598,6 +630,8 @@ func TestPromoteRefusesBareVersionBeforeDevctl(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPromoteUsageOutcomeNeedsNoJudging(t *testing.T) {
 	for _, rc := range []int{7, 1, 143} {
 		out, ok, got := gate.ParseRunOutcome(0, nil, rc)
@@ -613,6 +647,9 @@ func TestPromoteUsageOutcomeNeedsNoJudging(t *testing.T) {
 
 // The public gate entry point refuses an unnamed promoter without dispatching
 // devctl or taking the named promoter's existing place.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGatePromoteRequiresNamedPromoter(t *testing.T) {
 	noSystemd(t)
 	a, _ := promotePlace(t)

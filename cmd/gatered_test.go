@@ -26,6 +26,9 @@ const redReason = "red: status ci/circleci: go-build is failure; failed: lint / 
 // A gated merge that ends red leaves no heard marker, so its merge-child
 // wakes the owner with devctl's verdict and the failed checks, as for a
 // queued merge's outcome; the lane shows the failed attempt with its reason.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo "waiting for CI" >&2; echo '`+redDoc+`'; exit 1`)
@@ -87,6 +90,9 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 // A merge with --update-branch whose updated head got no workflow runs
 // (devctl exit 4, required_missing, no Actions run among its checks) ends
 // with a reason that says what retriggers them; another wait would not.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeWhoseHeadGotNoRunsSaysHowToRetrigger(t *testing.T) {
 	noSystemd(t)
 	doc := `{"exitCode":4,"verdict":"required_missing","reason":"required status context build never reported","mergeCommitSha":"","checks":[],"release":null}`
@@ -108,6 +114,9 @@ func TestAMergeWhoseHeadGotNoRunsSaysHowToRetrigger(t *testing.T) {
 
 // A merge that ends green leaves the heard marker for a caller still
 // listening, and drops the pull request's earlier failed attempt.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGreenMergeIsHeardAndLeavesNoFailedAttempt(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)

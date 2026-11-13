@@ -53,6 +53,9 @@ func sibling(t *testing.T) state.Merge {
 
 // A paired merge at its turn waits for its sibling to be next in its own
 // lane, then takes two cap slots; the sibling, the first started, takes none.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPairedMergeStartsOnlyWithItsSiblingNext(t *testing.T) {
 	g, st := pairedGate(t)
 	if why, _ := g.PairTurn(st); !strings.Contains(why, "it lands with o/s#7, which has no place in a lane yet") {
@@ -79,6 +82,9 @@ func TestAPairedMergeStartsOnlyWithItsSiblingNext(t *testing.T) {
 
 // Both merges of a pair start in one turn: the first once its sibling is
 // next, the sibling right after it outside a full merge.cap.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPairStartsBackToBack(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -113,6 +119,9 @@ func TestAPairStartsBackToBack(t *testing.T) {
 
 // The pair's first start needs room under merge.cap and merge.sessionCap
 // for both, its sibling's start none.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPairTakesTwoSlots(t *testing.T) {
 	g, st := pairedGate(t)
 	me := st.Merges[0]
@@ -143,6 +152,9 @@ func TestAPairTakesTwoSlots(t *testing.T) {
 // A refusal of either merge refuses the other with the same reason: the
 // queued run past its wait records it, the sibling's gate refuses with it
 // and ends the pair.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARefusalOfEitherRefusesBoth(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	busy, queued := sleeper(t), sleeper(t)
@@ -182,6 +194,9 @@ func TestARefusalOfEitherRefusesBoth(t *testing.T) {
 
 // --pair is the gate's: the queued run's devctl never sees it, and the pair
 // is recorded before the merge waits on.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPairedMergeQueuesWithoutTheFlag(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -207,6 +222,9 @@ func TestAPairedMergeQueuesWithoutTheFlag(t *testing.T) {
 
 // A merge pairs with one other at most, never with itself, and a merge
 // refused before declares its pair anew.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPairDeclaration(t *testing.T) {
 	g, _ := pairedGate(t)
 	if err := g.DeclarePair(siblingKey); err != nil {

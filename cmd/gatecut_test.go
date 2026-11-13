@@ -132,6 +132,9 @@ func TestADevctlEndedBySignalSaysWhatGitHubSays(t *testing.T) {
 }
 
 // A requested cancellation recovered by the watch must not invite a retry.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheWatchDoesNotRetryARequestedCancellation(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubPull(t, github.Pull{State: github.Open}, nil)

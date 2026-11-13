@@ -60,6 +60,9 @@ func indexOf(lines []string, prefix string) int {
 // and its devctl on, and starts only once the merge merged, its release
 // candidate cut and the lane settled (a candidate the installation does
 // not follow settles it without a roll); the second waits behind the first.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -144,6 +147,9 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 // after its gate left, without a document, is judged before the promotion
 // behind it starts: merged, its release unknown, the lane settles by the
 // settle rule first; not merged, the promotion starts at once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, held string
@@ -211,6 +217,9 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 // recorded late) settles its installation-less lane from GitHub's mergedAt:
 // a promotion behind it starts at mergedAt plus merge.settle, not at the
 // record time plus merge.settle.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Merged, "")

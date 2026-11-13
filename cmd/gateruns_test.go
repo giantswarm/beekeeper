@@ -101,6 +101,9 @@ func TestGateStopEndsADetachedReleaseWait(t *testing.T) {
 // queued merge's own run waiting for its turn leaves its lane, a seeded
 // place too. The queued run's files under runs/ are the merge's, not a
 // wait of their own.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	a := w.app
@@ -162,6 +165,9 @@ func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 
 // A wait gate stop ended tells its owner who stopped it, and nothing is
 // owed to an owner who stopped it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStoppedWaitsOutcomeNamesTheStopper(t *testing.T) {
 	r := childResult{spec: gate.ChildSpec{Argv: strings.Fields(releaseWaitCmd), Owner: four}, rc: 128 + int(syscall.SIGTERM),
 		stop: syscall.SIGTERM, stoppedBy: state.Party{Session: "s9", Name: supervisorName}}
@@ -184,6 +190,9 @@ func TestAStoppedWaitsOutcomeNamesTheStopper(t *testing.T) {
 
 // gate runs and gate stop are the gate's subcommands; a gated devctl
 // command still reaches the gate itself.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateRoutesItsSubcommands(t *testing.T) {
 	a := &app{}
 	c := a.gateCmd()
@@ -206,6 +215,8 @@ func TestGateRoutesItsSubcommands(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	dir := w.store.Dir()
@@ -278,6 +289,8 @@ func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestRunProcessAliveLegacy(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "run")
 	now := time.Now().UTC()
@@ -302,6 +315,8 @@ func TestRunProcessAliveLegacy(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestWatchCleanupRetiresOnlyOldDeadRuns(t *testing.T) {
 	a, machine, _ := tmpfsApp(t)
 	old, pid := detachedWait(t, a.store.Dir(), four)

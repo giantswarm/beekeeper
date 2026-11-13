@@ -31,6 +31,8 @@ type stoppingWorkerLauncher struct {
 func (l stoppingWorkerLauncher) State(context.Context, string) string { return holdActive }
 func (l stoppingWorkerLauncher) Stop(context.Context, string) error   { l.stop(); return nil }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestStoppingAWorkerPreservesItsGateOrSettlesItsPlaceImmediately(t *testing.T) {
 	const workerID = "test-worker"
 	for _, harness := range []string{codex.Harness, agy.Harness, omp.Harness} {

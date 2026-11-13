@@ -212,6 +212,8 @@ func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *te
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestSupervisorNitAttestationKeepsApprovalWithoutSecondRound(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.as = loop.LoopParty.Name

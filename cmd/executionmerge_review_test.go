@@ -77,6 +77,8 @@ func TestExecutionMergeWorkerApprovalCannotAuthorize(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 	cases := []struct {
 		name string
@@ -189,6 +191,8 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 	return *executionReviewRound(st, use)
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	completeMergeReview(t, a, use, &pull.Reviews[0])

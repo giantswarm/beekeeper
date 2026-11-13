@@ -428,6 +428,8 @@ func (r *loopRig) logged(t *testing.T, verb string) []state.Event {
 	return evs
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopTakesAParkedPullRequestFromReviewToTheMergeGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -492,6 +494,9 @@ func TestLoopWaitsForRoomForAReviewer(t *testing.T) {
 // https://github.com/giantswarm/beekeeper/issues/1795: findings that stand
 // with no review round left go back to the worker; the person gets no merge
 // question.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -548,6 +553,9 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 // head its worker parked on itself, and no note asks the person whether to
 // merge (https://github.com/giantswarm/beekeeper/issues/2207,
 // https://github.com/giantswarm/beekeeper/issues/3861).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergesANewHeadAfterAnApprovalWithoutASecondReview(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -583,6 +591,9 @@ func TestLoopMergesANewHeadAfterAnApprovalWithoutASecondReview(t *testing.T) {
 // pushed (https://github.com/giantswarm/beekeeper/issues/3861): the loop
 // merges that head once its CI is green, without a second review, a new
 // park of the worker or a question to the person.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergesTheHeadTheReviewerFixedAndApproved(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -614,6 +625,9 @@ func TestLoopMergesTheHeadTheReviewerFixedAndApproved(t *testing.T) {
 // worker parked on it gets the go without a second review, naming the
 // gate's command. A head with more than the base merge gets the go too, once
 // its worker parked on it: no second review.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.DevctlOwners = []string{"o"}
@@ -696,6 +710,9 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 // A comparison GitHub does not answer is no base merge, and the failure is
 // said; the head its worker parked on gets the go all the same, never a
 // second review.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergesAHeadItCannotCompareWithoutASecondReview(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -721,6 +738,9 @@ func TestLoopMergesAHeadItCannotCompareWithoutASecondReview(t *testing.T) {
 // those of a second round an older loop started) are forwarded, and their
 // green fixes receive the loop's merge go without another round or a
 // question to the person.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergesFixesOfFindingsAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -749,6 +769,8 @@ func TestLoopMergesFixesOfFindingsAfterAnApproval(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopGivesTheFixedHeadTheGoWithoutASecondReview(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -1148,6 +1170,8 @@ func (r *loopRig) started(t *testing.T, name, session string) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopRetiresTheReviewerAndRetainsTheMergedWorker(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -1732,6 +1756,8 @@ func TestParseLoopPull(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopGivesNoGoToAnApprovedHeadWithoutGreenChecks(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -1753,6 +1779,9 @@ func TestLoopGivesNoGoToAnApprovedHeadWithoutGreenChecks(t *testing.T) {
 // parked on before the go gets the go itself, never a second round,
 // whatever supervisor.reviewRounds says
 // (https://github.com/giantswarm/beekeeper/issues/3861).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopAnApprovalIsTheOneReviewOfANewHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.ReviewRounds = 2
@@ -1772,6 +1801,9 @@ func TestLoopAnApprovalIsTheOneReviewOfANewHead(t *testing.T) {
 
 // A request for changes reaches the worker even when the head moved before
 // the loop saw it; its fixes get the go only after a park past the forward.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -1796,6 +1828,9 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 
 // A side effect whose completion line was lost is not repeated: its claim
 // and the line its command logged settle it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopDoesNotRepeatAnActionWhoseRecordWasLost(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -1880,6 +1915,9 @@ func TestLoopWakesForAnUnclassifiedParkWhoseClaimedWakeNeverRan(t *testing.T) {
 }
 
 // A claim whose command left no line is taken after the restart.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopTakesAClaimedActionItNeverRan(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -3191,6 +3229,9 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 // managed SSH execution, whose first pull request merged stays on the
 // roster while it serves an open issue and parks on its next open pull
 // request; once both closed it is stopped and removed.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 	const issue, next = "o/r#5", "o/r#8"
 	r := newLoopRig(t)
@@ -3259,6 +3300,9 @@ func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 // execution) worker has no local session or process, so post-merge
 // retirement and KindDone must consult its execution record and host
 // observation rather than retiring it mid-turn once postMergeWindow passes.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, r.a.now)

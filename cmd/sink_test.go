@@ -202,6 +202,9 @@ func TestTheWatchDispatchesNothingWithoutASink(t *testing.T) {
 
 // A merge the gate recorded as merged carries its pull request as the
 // subject the sink dispatches; a promotion, which has none, carries none.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergedEventCarriesItsPullRequestAsItsSubject(t *testing.T) {
 	for _, tc := range []struct {
 		pr   int

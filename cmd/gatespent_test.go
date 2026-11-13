@@ -77,6 +77,9 @@ func placesOf(t *testing.T, a *app) []string {
 // auto-release is a wait for the reset, not a refusal: the merge keeps its
 // place at the head of its lane, the place behind it stays behind, and at
 // the reset it reads again and merges in its original order.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -115,6 +118,9 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 // A read refused under a rate limit whose reset is unknown refuses the
 // merge (77), but keeps its place for merge.seedTTL: the same command, run
 // again, rejoins its lane ahead of the place queued behind it, and merges.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -147,6 +153,9 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 }
 
 // Each pull request reads its own release tree, even in the same lane pass.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	reads := 0

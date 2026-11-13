@@ -44,6 +44,9 @@ func busyGate(t *testing.T, budget, pause time.Duration) *gate.GateRun {
 }
 
 // Without --update-branch devctl's exit 3 is the caller's: devctl runs once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestABehindMergeWithoutUpdateBranchRunsOnce(t *testing.T) {
 	count := busyDevctl(t, 99)
 	g := busyGate(t, time.Hour, 0)

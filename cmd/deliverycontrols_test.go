@@ -533,6 +533,8 @@ func TestDeliveryMissingObservationAndZeroOff(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestUnconfirmedReleaseStallGraceAndRecovery(t *testing.T) {
 	for _, completes := range []bool{false, true} {
 		t.Run(fmt.Sprintf("completes=%t", completes), func(t *testing.T) {

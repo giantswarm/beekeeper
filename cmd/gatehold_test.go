@@ -80,6 +80,9 @@ func mergeOf(st *state.State, pr int) (state.Merge, bool) {
 // exception settled and the hold is gone, the queued merge runs from the
 // place it joined with, never queued anew. A new merge during the hold is
 // still refused.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 	joined := time.Now().Add(-10 * time.Minute).UTC()
 	other := sleeper(t)
@@ -135,6 +138,9 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 // waits for CI, ends that devctl before it merges, and the merge goes back
 // to its place in the lane. One GitHub reports merged all the same is
 // recorded as any other run.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	joined := time.Now().Add(-10 * time.Minute).UTC()
 	child := sleeper(t)
@@ -186,6 +192,9 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 
 // Opening a release window preserves both queued places, and closing it
 // admits them in their original order without refusing either queued gate.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTwoQueuedMergesKeepTheirOrderThroughToolWindow(t *testing.T) {
 	joined := time.Now().Add(-time.Minute).UTC()
 	pids := []int{os.Getpid(), sleeper(t)}

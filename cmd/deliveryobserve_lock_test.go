@@ -16,6 +16,9 @@ import (
 
 // A paused derivation models slow ownership classification. Writers must finish
 // before it resumes, and a conflicting delivery write must force recomputation.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryObservationDoesNotLockDerivation(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow().UTC()

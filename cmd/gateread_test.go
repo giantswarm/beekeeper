@@ -19,6 +19,9 @@ import (
 
 // A GitHub budget read that fails once in transit and then answers does not
 // refuse the merge; one that is refused (no login) is not sent again.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheBudgetReadRetriesATransientFailure(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -52,6 +55,9 @@ func TestTheBudgetReadRetriesATransientFailure(t *testing.T) {
 // A GitHub budget read that fails in transit on every try is no refusal: the
 // merge exits 74 (unread), its line saying the read failed and the merge was
 // not judged. A budget GitHub refuses to tell (no login) still refuses (77).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestABudgetUnreadInTransitExitsRetryableNotRefused(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -100,6 +106,9 @@ func TestABudgetUnreadInTransitExitsRetryableNotRefused(t *testing.T) {
 // An installation's HelmReleases that stay unreadable in transit refuse the
 // merge (77) after the last try, the refusal naming the read's last error
 // and the tries; one try that answers lets the lane go on.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheHelmReleaseReadRefusesOnlyAfterItsRetries(t *testing.T) {
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	for _, answerAt := range []int{0, 3} {

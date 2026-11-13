@@ -63,6 +63,9 @@ func placeOf(t *testing.T, a *app) int {
 // A rebase merge GitHub reports not rebaseable, or conflicting with its base
 // though a base merge made the branch itself clean, is refused before it
 // takes a lane place, naming the replacement PR as the way out.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestANonRebaseableMergeIsRefusedBeforeItQueues(t *testing.T) {
 	for name, r := range map[string]github.Rebase{
 		"not rebaseable": {Known: true, State: rebaseClean},
@@ -95,6 +98,9 @@ func TestANonRebaseableMergeIsRefusedBeforeItQueues(t *testing.T) {
 // A rebase merge whose head carries a merge commit, a base merged into the
 // branch, is refused before it takes a lane place: a rebase merge would put
 // it on the line. Its commits not read refuse too.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARebaseMergeCarryingAMergeCommitIsRefusedBeforeItQueues(t *testing.T) {
 	for name, c := range map[string]struct {
 		merges []string
@@ -125,6 +131,9 @@ func TestARebaseMergeCarryingAMergeCommitIsRefusedBeforeItQueues(t *testing.T) {
 
 // A rebaseable merge queues as before; so does one whose rebase GitHub has
 // not computed after its reads, devctl judging it at its turn.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 	for name, c := range map[string]struct {
 		r     github.Rebase
@@ -168,6 +177,9 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 // GitHub not answering whether the pull request rebases, its last try too,
 // refuses it before it queues; a squash merge and a queued run, which has its place already,
 // are not asked.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubSelf(t)
@@ -255,6 +267,9 @@ func TestARebaseMergeBehindItsBaseAtItsTurnMergesWithoutUpdating(t *testing.T) {
 // A rebase merge that conflicts with its base at its turn, or that GitHub
 // does not rebase, is refused with nothing merged: devctl does not run, the
 // place leaves the lane and the refusal names the replacement PR.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARebaseMergeThatCannotCatchUpAtItsTurnIsRefused(t *testing.T) {
 	for name, c := range map[string]struct {
 		r         github.Rebase
@@ -288,6 +303,9 @@ func TestARebaseMergeThatCannotCatchUpAtItsTurnIsRefused(t *testing.T) {
 
 // A rebase merge whose head carries a merge commit by its turn is refused
 // with nothing merged: devctl does not run and the place leaves the lane.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARebaseMergeCarryingAMergeCommitAtItsTurnIsRefused(t *testing.T) {
 	g, _, updates, args := rebaseTurn(t, nil, github.Rebase{Known: true, Rebaseable: true, State: github.BehindState})
 	stubMergeCommits(t, []string{"cccccccccccc"}, nil)
@@ -311,6 +329,9 @@ func TestARebaseMergeCarryingAMergeCommitAtItsTurnIsRefused(t *testing.T) {
 
 // A rebase merge up to date with its base, or one GitHub does not answer
 // for at its turn, runs devctl as it stands; a squash merge is not read.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARebaseMergeUpToDateAtItsTurnRunsAsItStands(t *testing.T) {
 	for name, squash := range map[string]bool{"rebase, up to date": false, "squash": true} {
 		t.Run(name, func(t *testing.T) {
@@ -339,6 +360,9 @@ func TestARebaseMergeUpToDateAtItsTurnRunsAsItStands(t *testing.T) {
 }
 
 // Repository policy applies before admission and survives the queued child.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateRepositoryMergeMethod(t *testing.T) {
 	for _, method := range []string{"", "squash", mergeMethodRebase} {
 		t.Run("method="+method, func(t *testing.T) {
@@ -374,6 +398,8 @@ func TestGateRepositoryMergeMethod(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateConfiguredRebaseRefusesConflictsWithoutWorkerFlag(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubPullRebase(t, github.Rebase{Known: true, State: github.DirtyState}, nil)

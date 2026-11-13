@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
 	for _, tc := range []struct {
 		phase   string
@@ -69,6 +71,8 @@ func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	a := busyLaneApp(t)
@@ -131,6 +135,8 @@ func TestQueuedFollowerCancellationDoesNotWaitForItsSleep(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 	t.Setenv(gate.GateFromEnv, "")
 	for _, seeded := range []bool{false, true} {
@@ -184,6 +190,8 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 	a := busyLaneApp(t)
 	a.cfg.Lanes[0].Name = litShared

@@ -396,6 +396,9 @@ func TestLoopMergeDecisionAlarmNamesEachHoldOnce(t *testing.T) {
 // decision or records a failure, so each must be named by the alarm instead
 // of "no successful completion recorded"
 // (https://github.com/giantswarm/beekeeper/issues/3820).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopNamesAMergeRepairWaitingForAWorkerAndHeldPasses(t *testing.T) {
 	r, l, _ := emptyBoardFill(t)
 	fill := r.answer
@@ -534,6 +537,9 @@ func TestLoopKeepsMergeDecisionWaitsAcrossARestart(t *testing.T) {
 // A claimed merge whose pull request cannot be read yet waits for the next
 // pass with that cause: it neither fails the pass (which ends the loop) nor
 // waits unnamed.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopClaimedMergeWithAnUnreadPullWaitsNamed(t *testing.T) {
 	r, _ := fillRig(t)
 	l, err := r.a.newSupervisorLoop(false)

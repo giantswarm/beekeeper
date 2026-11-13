@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGatedChildSignalExit(t *testing.T) {
 	for _, route := range []string{litDirect, "owned", litWatchStop} {
 		for _, signal := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {

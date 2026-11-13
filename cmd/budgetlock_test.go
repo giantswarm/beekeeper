@@ -30,6 +30,9 @@ func holdStateLock(t *testing.T, a *app) {
 // Another process holding the state lock past the budget's save does not
 // make the budget unknown to the merge gate or to budget --gate: GitHub
 // answered, and only keeping the reading lost to the lock (#3411).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 	a, out := budgetApp(t)
 	refuse := false
@@ -63,6 +66,9 @@ func TestBudgetGatesPassWhileTheStateLockIsBusy(t *testing.T) {
 
 // A saved reading younger than merge.budgetFresh is the merge gate's budget
 // without the state lock and without GitHub.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 	a, _ := budgetApp(t)
 	refuse := false
@@ -85,6 +91,9 @@ func TestMergeGateReadsTheSavedBudgetWithoutTheStateLock(t *testing.T) {
 
 // A budget GitHub does not give stays unknown while the lock is busy: the
 // busy lock never hides another failure.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing.T) {
 	a, out := budgetApp(t)
 	refuse := true
@@ -109,6 +118,8 @@ func TestBudgetGatesStillRefuseAnUnknownBudgetWhileTheStateLockIsBusy(t *testing
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestOnlyLockBusy(t *testing.T) {
 	busy := &state.LockBusyError{Waited: 100 * time.Millisecond}
 	commitBusy := errors.Join(execution.ErrCoordinatorBusy, context.DeadlineExceeded)

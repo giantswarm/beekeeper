@@ -94,6 +94,9 @@ func TestAMergeWhoseTurnCameWaitsAtTheMachinesDevctlCap(t *testing.T) {
 // branch, its tags cut by hand) ends at the merge and frees its lane at
 // once, though the lane has an installation to roll; a merge into a branch
 // with auto-release still settles its lane until the release rolled.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	t.Run("no auto-release", func(t *testing.T) {
@@ -138,6 +141,9 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 // GitHub not answering for the base branch, its last try too, refuses the
 // merge before devctl runs; a repository on the plain squash merge, which awaits no release, is
 // not asked.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 	asked := stubBaseRelease(t, github.BaseRelease{}, errors.New("connection reset"))
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
@@ -157,6 +163,9 @@ func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 // one sent while devctl starts as well: the run ends as one ended by a
 // signal and GitHub judges it. devctl sends it once it runs, as early as
 // the gate may still be starting it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASIGTERMToTheGateStopsItsDevctl(t *testing.T) {
 	noSystemd(t)
 	t.Setenv("BEEKEEPER_TEST_GATE", strconv.Itoa(os.Getpid()))
@@ -200,6 +209,9 @@ func stubPluginTags(t *testing.T, tags []string) {
 // of the plugin whose version it changed, which is its release; one that
 // changed no version warrants none. A repository-wide Auto-release is
 // devctl's to await, as before.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeIntoAPerPluginRepositoryAwaitsThePluginsTag(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	plugins := github.BaseRelease{Base: mainBranch, Plugins: true}
@@ -351,6 +363,8 @@ func TestAMergeIntoAReleasePRBranchTracksTheReleasePullRequestsTag(t *testing.T)
 	})
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

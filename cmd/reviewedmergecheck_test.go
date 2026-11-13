@@ -157,6 +157,9 @@ func parkMergeCheckPR(t *testing.T, r *loopRig, worker, on, url, head string) {
 // never both reach main: the first merges and advances
 // main, while the second is refused on the combined merge result (PR + current
 // main) and returned to its owner with the failing check.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(t *testing.T) {
 	for name, tc := range map[string]struct {
 		baseFiles map[string]string
@@ -611,6 +614,8 @@ func TestMergeResultValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeResultUnreadableGateCannotDelegateAnUnsafeMerge(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -663,6 +668,8 @@ func TestMergeCheckEnvironmentFailures(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeCheckHostFailureDoesNotRequestBranchRepair(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())

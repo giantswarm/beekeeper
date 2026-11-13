@@ -70,6 +70,9 @@ func runs(t *testing.T, count string) int {
 // A merge call GitHub answers with a 5xx is sent again while the pull
 // request is open, and merges on the next success; the caller reads one
 // document, the merge's.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeCallsServerErrorIsRetried(t *testing.T) {
 	noSystemd(t)
 	quickRetries(t)
@@ -102,6 +105,9 @@ func TestAMergeCallsServerErrorIsRetried(t *testing.T) {
 
 // The retries spent, the last 502 is the run's outcome: nothing merged, and
 // the merge leaves its lane with its run.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeCallsServerErrorEndsAfterTheRetries(t *testing.T) {
 	noSystemd(t)
 	quickRetries(t)
@@ -127,6 +133,9 @@ func TestAMergeCallsServerErrorEndsAfterTheRetries(t *testing.T) {
 }
 
 // A 502 whose merge landed after all is not sent again: GitHub judges it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 	noSystemd(t)
 	quickRetries(t)

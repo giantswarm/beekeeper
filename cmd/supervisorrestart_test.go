@@ -18,6 +18,9 @@ import (
 // replaced binary that waits for a claim in flight still runs the merge
 // decision of an approved head, through a gate that ends at the merge, and
 // nothing else of the pass (https://github.com/giantswarm/beekeeper/issues/3907).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopGivesTheMergeGoWhileItsRestartWaits(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())

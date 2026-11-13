@@ -74,6 +74,9 @@ func pidIn(t *testing.T, file string) int {
 // devctl's own timeout, and the run wakes nobody. A gate that sees its
 // caller go away (SIGHUP) returns at once, the run's files left to its
 // merge-child.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAWaitEndsWithItsCaller(t *testing.T) {
 	gatePID, stopGate := fakeGate(t)
 	argv := strings.Fields("devctl release wait o/r v1.2.3")
@@ -122,6 +125,9 @@ func TestAWaitEndsWithItsCaller(t *testing.T) {
 // its gate left to run on (the caller's timeout, the tool limit) both run
 // devctl to its end with their gate gone, and their owner is woken with the
 // outcome.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARunLeftToRunOnOutlivesItsGate(t *testing.T) {
 	owner := state.Party{Session: "s1", Name: ownerName}
 	for _, c := range []struct {

@@ -51,6 +51,9 @@ func devctlCalls(t *testing.T, path string) []string {
 // A pull request red only on a non-required check that is red on the base
 // head too merges: devctl runs again accepting that check, the caller reads
 // the merge's document alone, and the event names the check and why.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 	noSystemd(t)
 	calls := acceptingDevctl(t)
@@ -79,6 +82,9 @@ func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 // A red check green on the base head, or any red check while the installed
 // devctl has no --accept-red, ends the merge red as before: devctl runs
 // once, and the caller reads its red document.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 	for name, tc := range map[string]struct {
 		e2e     string
@@ -115,6 +121,9 @@ func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 // the pull request's break: the gate refuses it as infra, and the failed
 // attempt's reason, which wakes its owner, names the matched line and the
 // rerun of that job.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedCheckOnAnInfraFlakeIsNotThePullRequestsBreak(t *testing.T) {
 	noSystemd(t)
 	calls := acceptingDevctl(t)

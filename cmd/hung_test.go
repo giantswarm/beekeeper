@@ -219,6 +219,9 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 
 // A long post-merge CircleCI wait stays alive while devctl reports progress,
 // even after the watch's historical hung threshold has elapsed.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	now := relayNow

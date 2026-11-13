@@ -61,6 +61,9 @@ func yields(t *testing.T, a *app, d time.Duration) bool {
 // gated on, the waits' devctl processes do not count against merge.cap
 // for it, and a wait started at the reset starts after it. The waits run
 // with what the merge leaves.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeQueuedUnderTheFloorRunsFirstAtTheReset(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
@@ -107,6 +110,9 @@ func TestAMergeQueuedUnderTheFloorRunsFirstAtTheReset(t *testing.T) {
 
 // At the reset the older merge queued for it takes a devctl slot first;
 // the waits' processes count for neither.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheOldestMergeQueuedForTheResetGoesFirst(t *testing.T) {
 	reset := time.Now().Add(-time.Minute)
 	older := state.Merge{Repo: "o/s", PR: 3, Lane: "o/s", By: state.Party{Name: aheadName}, PID: sleeper(t), Phase: state.Waiting,
@@ -177,6 +183,9 @@ func TestBudgetGateLetsTheMergesQueuedForTheResetGoFirst(t *testing.T) {
 }
 
 // Ordinary one-PR merges need their own reserve, rather than the reader floor.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestBoundedMergeUnderTheBudgetFloor(t *testing.T) {
 	for _, remaining := range []int{2438, gate.MergeBudgetReserve} {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
@@ -198,6 +207,8 @@ func TestBoundedMergeUnderTheBudgetFloor(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeBelowItsReserveStillWaitsForReset(t *testing.T) {
 	a, _ := resetApp(t)
 	a.cfg.GitHub.Floor = 2500

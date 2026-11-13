@@ -19,6 +19,9 @@ import (
 // A gated release wait whose caller's timeout kills the call runs on: the
 // call ends at once with exit 76 and the line that the timeout cut the
 // connection, not the wait; devctl's verdict wakes the owner once it ends.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestACallersTimeoutCutsTheCallNotTheWait(t *testing.T) {
 	// coreutils' timeout runs the command as its child; busybox's execs it
 	// and times it from a child of its own, no ancestor the gate can see.
@@ -125,6 +128,9 @@ echo '` + doc + `'
 
 // A timeout counts as the caller's below the Claude Code CLI only: one the
 // CLI itself runs under is no caller of the gate.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestUnderTimeout(t *testing.T) {
 	// table is the gate, pid 1, below its ancestors' comms, nearest first.
 	table := func(comms ...string) *proc.Table {

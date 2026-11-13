@@ -148,6 +148,9 @@ func TestASecondUrgentMergeInTheWindowIsRefused(t *testing.T) {
 
 // At the cap, counted from the machine's process table, the merge first in
 // its lane waits for a devctl process to end.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeWaitsForTheMachinesDevctlCap(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
@@ -164,6 +167,9 @@ func TestAMergeWaitsForTheMachinesDevctlCap(t *testing.T) {
 
 // An urgent merge keeps its own bound: under it, the merge waits for the
 // reset and says why.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnUrgentMergeWaitsUnderItsOwnBound(t *testing.T) {
 	a := urgentApp(t)
 	setBudget(t, a, 10)

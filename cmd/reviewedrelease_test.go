@@ -18,6 +18,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixReviewedGateKeepsAutoReleaseWait(t *testing.T) {
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
 	g.ReviewedHead = loopHead
@@ -30,6 +32,8 @@ func TestReviewFixReviewedGateKeepsAutoReleaseWait(t *testing.T) {
 
 const reviewFixCandidate = "v1.2.4-rc.1"
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
@@ -71,6 +75,8 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Installation: gazelle, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)

@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `kill -TERM $$`)
@@ -44,6 +46,8 @@ func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 	for _, version := range []string{"v1.2.5", "v1.2.5-rc.1"} {
 		t.Run(version, func(t *testing.T) {
@@ -86,6 +90,8 @@ func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestNameReleaseRefusesRunningAndMissingMerges(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
 	gateApp(g.Host).out = io.Discard

@@ -25,6 +25,9 @@ const classicDeclineDoc = `{"exitCode":3,"verdict":"not_applicable","repository"
 // A merge declined on classic protection ends with one gate line naming the
 // cause and the alignment, whole past the reason's truncation; devctl runs
 // once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAClassicProtectionDeclineNamesTheAlignment(t *testing.T) {
 	noSystemd(t)
 	calls := filepath.Join(t.TempDir(), "calls")

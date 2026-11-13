@@ -17,6 +17,8 @@ func mergeFailureForTest(head string) string {
 	return fmt.Sprintf("merge result (main + %s) failed go test: regression", head)
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestStaleMergeResultFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -41,6 +43,9 @@ func TestStaleMergeResultFailure(t *testing.T) {
 
 // A surrounding record naming the current head cannot relabel a diagnostic
 // from the previous merge result, whether persisted or returned synchronously.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 	for _, source := range []string{"stored", "synchronous"} {
 		t.Run(source, func(t *testing.T) {
@@ -75,6 +80,8 @@ func TestLoopDropsContradictoryMergeFailures(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopRetiresStalePersistedRepair(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		for _, tested := range []string{loopHead, loopFixed} {

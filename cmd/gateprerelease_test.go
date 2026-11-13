@@ -34,6 +34,9 @@ func platMgrOn(version string) merge.HelmRelease {
 // the installation's stable range admits no pre-release of, and a release
 // that failed, tagged or not. The merge records why, and a candidate the
 // range admits still waits for its roll.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 	const (
 		lane    = "portal-tools"
@@ -106,6 +109,9 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 // beekeeper lanes names what a settling merge waits for: its release, a
 // pre-release, a release unknown, or a release that failed and rolls
 // nothing; the watch settles a failed release at once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 	const (
 		lane    = "portal-tools"

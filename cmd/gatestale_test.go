@@ -28,6 +28,9 @@ const (
 // install while it waited, its binary not replaced at its path) is refused
 // before it touches the lane: the lane and the writer stay as the newer
 // release left them, and the refusal names both versions.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	waiting := state.Merge{Repo: scratchRepo, PR: 3, Lane: scratchRepo, Phase: state.Waiting, By: state.Party{Session: "s2", Name: agentTwo},
@@ -66,6 +69,9 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 // not decode (a field the newer release changed) re-executes its replaced
 // binary, and refuses (77) naming both releases only when the new binary
 // does not start, the state untouched.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	a := queueApp(t)
@@ -103,6 +109,9 @@ func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 // A merge whose turn came while a newer release wrote the state hands the
 // refused save to the wait loop, which re-executes or names the skew,
 // instead of refusing it as a state that does not load.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
 	store, err := state.OpenVersion(t.TempDir(), "dev")
 	if err != nil {

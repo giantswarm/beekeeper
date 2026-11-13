@@ -223,6 +223,9 @@ func (p *person) gate(pr int) *gate.GateRun {
 // second's turn comes only once the first merged and its release rolled; a
 // central hold refuses the gate; a place nobody asks for any longer holds
 // up nobody; an unreachable central instance refuses with ExitCentral.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestCentralLanesEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")

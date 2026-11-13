@@ -29,6 +29,8 @@ const (
 	reviewedRedCase     = "red"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopReviewedMergeWaitsForHoldWithoutFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -144,6 +146,8 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -295,6 +299,8 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
@@ -343,6 +349,8 @@ func TestReviewedRebaseMergeKeepsABehindHead(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -520,6 +528,8 @@ func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T
 	})
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopConflictingPRHandsOffItsRepairOnce(t *testing.T) {
 	t.Run("conflicting pull state skips gate and hands off once", func(t *testing.T) {
 		r := newLoopRig(t)
@@ -602,6 +612,8 @@ func TestLoopConflictingPRHandsOffItsRepairOnce(t *testing.T) {
 	})
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 	r := newLoopRig(t)
 	brief := filepath.Join(t.TempDir(), "worker.md")
@@ -721,6 +733,8 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 	for _, slow := range []string{capacity.TaskKindReview, workerRole} {
 		t.Run(slow, func(t *testing.T) {
@@ -1089,6 +1103,8 @@ func TestReopenedPullMergeAuthority(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 	for _, head := range []string{"", loopFixed} {
 		t.Run("failed_head_"+head, func(t *testing.T) {
@@ -1116,6 +1132,8 @@ func TestLoopMergeIgnoresFailuresOfOtherHeads(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 	const (
 		confirmed     = "confirmed merge"
@@ -1183,6 +1201,9 @@ func TestLoopMergeStartAlwaysRecordsOutcome(t *testing.T) {
 
 // Quota-only refusals wait on fresh GitHub reads, not exponential backoff.
 // The same exact-head review is used once quota recovers.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
 	for _, code := range []int{gate.ExitGateUnread, gate.ExitGateRefused} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
@@ -1214,6 +1235,8 @@ func TestLoopMergeRetriesUnreadGitHubWithoutBackoff(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLoopRetriesLegacyQuotaBackoff(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())

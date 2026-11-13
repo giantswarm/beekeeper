@@ -26,6 +26,8 @@ const deliveryCompareBehind = "behind"
 const deliveryFailedTag = "v8.1.1"
 const deliveryAvailableTag = "v2.0.0-rc.1"
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
@@ -79,6 +81,8 @@ func TestDeliveryReleaseVerdictsSurviveLane(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryExternalMergeRestartAndReadBound(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -321,6 +325,8 @@ func TestDeliveryLimitLeavesCapacityJSONUnchanged(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryRESTTagMustContainActualMerge(t *testing.T) {
 	old := github.RunGH
 	t.Cleanup(func() { github.RunGH = old })
@@ -416,6 +422,8 @@ func TestDeliveryClaimRecordsSameAtomicUpdate(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -440,6 +448,8 @@ func TestDeliveryOverlappedReleasePersistsWhenLaneForgets(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryFailedTagDoesNotBecomeReleaseProof(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()
@@ -577,6 +587,9 @@ func TestDeliveryMeanCycleTimeUsesFullCompletedAges(t *testing.T) {
 // A pass can take longer than the per-release retry interval. Ledger-order
 // probing then retries the same failures forever, leaving published releases
 // at the tail counted in WIP even though they could finish immediately.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestDeliveryReleaseBacklogDoesNotStarveBehindFailures(t *testing.T) {
 	a, _ := supervisorApp(t)
 	now := a.timeNow()

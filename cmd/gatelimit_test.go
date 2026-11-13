@@ -48,6 +48,9 @@ func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 // with exit 76: devctl runs on, the merge keeps running in its lane, no heard
 // marker is left (so its merge-child wakes the owner), and the watch records
 // the run from its files once devctl ended.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	g, base, pid, stderr := launchedMerge(t, `echo merging >&2; sleep 2; echo '`+mergedDoc+`'`)
 	asked := stubGitHub(t, github.Open, "")
@@ -106,6 +109,9 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 // ended, before it wakes the owner: the lane no longer lists the merge as
 // running when the owner hears the outcome. One killed before its record
 // leaves the run to the watch's recordGone, the backstop.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 	asked := stubGitHub(t, github.Open, "")
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
@@ -175,6 +181,9 @@ func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
 
 // A merge waiting for its turn leaves at the tool limit too, before its
 // --wait ends: it is queued in a run of its own (exit 76).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAWaitingMergeLeavesAtItsToolLimit(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -194,6 +203,9 @@ func TestAWaitingMergeLeavesAtItsToolLimit(t *testing.T) {
 
 // leaveAt: now plus the limit; none for a queued merge's own run or without
 // a limit; a re-executed call keeps its own, which devctl never inherits.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLeaveAt(t *testing.T) {
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	if got := leaveAt(now, 9*time.Minute, false); !got.Equal(now.Add(9 * time.Minute)) {

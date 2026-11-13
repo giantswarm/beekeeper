@@ -317,6 +317,8 @@ func TestReviewFixEndDoesNotFinishAPlainWaiter(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 	for _, phase := range []string{state.Waiting, state.Running} {
 		t.Run(phase, func(t *testing.T) {
@@ -357,6 +359,8 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 	for _, tc := range []struct {
 		code    int
@@ -392,6 +396,8 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 	for _, reason := range []string{"branch conflicts with base", "branch behind its base"} {
 		t.Run(reason, func(t *testing.T) {
@@ -432,6 +438,8 @@ func TestReviewFixBranchFailureKeepsStructuredResultWithGateLogs(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 	for _, limit := range []int{0, 1} {
 		t.Run(fmt.Sprintf("wip=%d", limit), func(t *testing.T) {

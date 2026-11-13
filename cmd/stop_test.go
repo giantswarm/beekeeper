@@ -421,6 +421,9 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 // merge-child, and says what GitHub reports: one whose release wait it
 // ended merged before the stop, one waiting for CI merged nothing. A
 // waiting merge keeps its place behind the hold.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestStopEndsARunningMergesDevctl(t *testing.T) {
 	a, _, _ := stopDesk(t)
 	children := map[int]int{}

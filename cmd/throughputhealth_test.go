@@ -58,6 +58,8 @@ func TestThroughputInitialPhaseCheckpoint(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestThroughputStreaksAndSuccesses(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	obs := throughputObservation{At: now}
@@ -81,6 +83,8 @@ func TestThroughputStreaksAndSuccesses(t *testing.T) {
 	check(gate.UnknownState)
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestThroughputEligibleWaitAndStale(t *testing.T) {
 	now := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
 	obs := throughputObservation{At: now, Eligible: map[string]eligibleWait{loopPR: {Head: loopHead, URL: loopURL, Since: now.Add(-2 * time.Hour)}}}
@@ -218,6 +222,8 @@ func TestThroughputPublicDiagnostics(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestThroughputDetachedMergeDurableReasons(t *testing.T) {
 	r := newLoopRig(t)
 	now := r.a.timeNow()
@@ -262,6 +268,8 @@ func TestThroughputStartChangingTextAndIntentionalRefusals(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestThroughputStallEscalatesAndRecoversAfterUnknown(t *testing.T) {
 	r := newLoopRig(t)
 	now := r.a.timeNow()

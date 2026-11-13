@@ -44,6 +44,9 @@ func stubRecoveredPull(t *testing.T) {
 // A stopped gate that cannot confirm its merge records merge.unknown.
 // Confirmation while handing over the owed outcome must still produce a
 // merged event with its subject, so the configured sink sees the merge.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheSinkDispatchesARecoveredMerge(t *testing.T) {
 	fail := false
 	calls := fakeSinkGH(t, &fail)
@@ -92,6 +95,9 @@ func TestTheSinkDispatchesARecoveredMerge(t *testing.T) {
 
 // The gate and its replacement may confirm a merge before or after owed
 // recovery. Both paths retain their log details, but dispatch only once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
 	for _, producer := range []string{gate.GateCmdName, sinkReplacement} {
 		for _, recoveryFirst := range []bool{false, true} {
@@ -233,6 +239,9 @@ func TestARecoveredMergeWaitsUntilItsEventCanBeRecorded(t *testing.T) {
 }
 
 // A history read failure must leave the runner's evidence for a later poll.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeRecordersKeepResultsWhenHistoryFails(t *testing.T) {
 	for _, producer := range []string{gate.GateCmdName, sinkReplacement} {
 		t.Run(producer, func(t *testing.T) {

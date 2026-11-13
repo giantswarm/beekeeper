@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 )
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestFatalMainGateRefusesOrdinaryMergeAndPromotion(t *testing.T) {
 	for _, pr := range []int{0, 7} {
 		t.Run(strconv.Itoa(pr), func(t *testing.T) {
@@ -31,6 +33,8 @@ func TestFatalMainGateRefusesOrdinaryMergeAndPromotion(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestFatalMainRepairStillPassesNormalGateAdmission(t *testing.T) {
 	a := heldApp(t)
 	q := fatal.Queue{Incidents: []fatal.Incident{{ID: "main:" + scratchRepo, Repair: scratchRepo + "#7"}}}

@@ -42,6 +42,9 @@ func stubReviews(t *testing.T, why string, err error) *int {
 // A fresh merge a reviewer holds is refused (77) before it takes a lane
 // place, naming the reviewer; one whose reviews cannot be read in transit
 // is unread (74): nothing merges unread.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 	for name, c := range map[string]struct {
 		why  string
@@ -87,6 +90,9 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 }
 
 // A promotion has no reviews to read.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAPromotionReadsNoReviews(t *testing.T) {
 	asked := stubReviews(t, changesRequested, nil)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
@@ -98,6 +104,9 @@ func TestAPromotionReadsNoReviews(t *testing.T) {
 
 // Feedback that landed while the merge waited refuses it at its turn: its
 // running place leaves the lane, devctl never runs.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubReviews(t, changesRequested, nil)
@@ -122,6 +131,9 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 
 // The gate's dry path judges the reviews alone: 77 naming the reviewer, 74
 // in transit, 0 when they let the merge through; nothing reaches the state.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateCheckIsTheDryPath(t *testing.T) {
 	for name, c := range map[string]struct {
 		why  string
@@ -159,6 +171,9 @@ func (e errFake) Error() string { return string(e) }
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
 // the gate refuses any merge whose head has no approved desk review and no
 // exact-head supervisor go, whichever process asks.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *testing.T) {
 	stubGitHub(t, github.Open, devctlFrom)
 	r := newLoopRig(t)
@@ -202,6 +217,9 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
 // an ownership claim alone must never stand in for an explicit merge go.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	stubGitHub(t, github.Open, devctlFrom)
 	r := newLoopRig(t)

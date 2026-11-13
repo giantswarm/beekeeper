@@ -43,6 +43,9 @@ func capGate(t *testing.T) (*gate.GateRun, *state.State, state.Merge) {
 
 // merge.cap counts the merges and promotes only: nine waits running leave a
 // queued merge free to start under a cap of 5.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeCapDoesNotCountWaits(t *testing.T) {
 	g, st, me := capGate(t)
 	hostDevctl(t, slices.Concat(devctlArgv(3, prWait), devctlArgv(3, relWait), devctlArgv(3, rollWait))...)
@@ -53,6 +56,9 @@ func TestMergeCapDoesNotCountWaits(t *testing.T) {
 
 // Five merges and promotes still fill a cap of 5, the waits beside them
 // counted for nothing.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeCapCountsMergesAndPromotes(t *testing.T) {
 	g, st, me := capGate(t)
 	hostDevctl(t, slices.Concat(devctlArgv(3, prMerge), devctlArgv(2, promote), devctlArgv(4, prWait))...)
@@ -68,6 +74,9 @@ func TestMergeCapCountsMergesAndPromotes(t *testing.T) {
 }
 
 // A queued run sees an edited cap on its next poll, without a new binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedGateReloadsCap(t *testing.T) {
 	g, st, me := capGate(t)
 	g.Queued = true
@@ -96,6 +105,8 @@ func TestQueuedGateReloadsCap(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedGateStartsAfterCapRaise(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, "echo '"+mergedDoc+"'")
@@ -127,6 +138,8 @@ func TestQueuedGateStartsAfterCapRaise(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedGateMovesToReloadedLane(t *testing.T) {
 	g, _, _ := capGate(t)
 	gateApp(g.Host).loadedCfg = filepath.Join(t.TempDir(), "config.yaml")

@@ -120,6 +120,8 @@ func ancestors(pid int) []int {
 	return up
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 	for _, systemd := range []bool{false, true} {
 		t.Run(fmt.Sprintf("user systemd %v", systemd), func(t *testing.T) {
@@ -182,6 +184,8 @@ func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	noSystemd(t)
 	pidFile := filepath.Join(t.TempDir(), "runner")
@@ -205,6 +209,8 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
 	for _, tc := range []struct{ name, script, want string }{
 		{"external", litKillKill, "no cap kill confirmed"},
@@ -247,6 +253,8 @@ func noSystemd(t *testing.T) {
 	t.Cleanup(func() { userSystemd = was })
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 	gazelleLane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	toolLane := config.Lane{Name: merge.ToolRepo, Repositories: []string{merge.ToolRepo}}
@@ -316,6 +324,8 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestADeadMergesToolWindowCloses(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, version string
@@ -372,6 +382,9 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 // (no verifying binary) keeps the window and says so, the first that
 // installs the release lifts it, and the merges held behind it pass. The
 // merge's own record then finds no window left.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	pull, version, updates, fail := github.Open, devctlFrom, 0, error(nil)
@@ -466,6 +479,9 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 
 // A running promotion's window updates devctl as its release comes and
 // lifts once devctl reports a release newer than the window's opening one.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	version := devctlFrom
@@ -488,6 +504,9 @@ func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T)
 // read the window's pull request once per interval, not n times per step.
 // After the interval the next step reads again and the window closes; the
 // gate whose merge of the window ended checks at once.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 	stubGitHub(t, "", devctlFrom) // restores the stubs, devctl's update a no-op
 	asked, answer, version := 0, "", devctlFrom
@@ -564,6 +583,9 @@ func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 // A merge-child unit fails only where a person must act; devctl's verdicts,
 // the gate's and a stop as asked are its caller's and end the unit
 // successfully.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
 	for rc, want := range map[int]int{
 		0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 9: 0, gate.ExitGateQueued: 0, gate.ExitGateRefused: 0, gate.ExitGateUnread: 0, 143: 0,
@@ -577,6 +599,9 @@ func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
 
 // The plain squash merge route carries the caller's --timeout, in either
 // spelling, and nothing else of devctl's flags.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestSquashArgv(t *testing.T) {
 	for want, argv := range map[string][]string{
 		"bk squash-merge fixture-person/lab 7":                mergeArgv(labRepo, "--progress"),
@@ -589,6 +614,8 @@ func TestSquashArgv(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestUpdateBranchRefused(t *testing.T) {
 	for _, flag := range []string{"--update-branch", "--update-branch=true"} {
 		t.Run(flag, func(t *testing.T) {
@@ -625,6 +652,9 @@ func TestUpdateBranchRefused(t *testing.T) {
 
 // A finished run's stderr and document are kept for its owner outside the
 // run's own files; kept outputs past gate.KeptFor are pruned.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestKeepOutput(t *testing.T) {
 	dir := t.TempDir()
 	base := gate.MergeBase(dir, labRepo, 7)
@@ -661,6 +691,9 @@ func TestKeepOutput(t *testing.T) {
 
 // A repository devctl does not serve takes the plain squash merge in the
 // merge's child, not devctl, and the event names the route and the output.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 	userSystemd = func() bool { return false }
 	t.Cleanup(func() { userSystemd = plat.Launcher.Available })
@@ -694,6 +727,9 @@ func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 
 // The example configuration routes the additional owner through devctl,
 // retaining its release wait and recording the confirmed release.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestExampleOwnerMergeUsesDevctlAndConfirmsRelease(t *testing.T) {
 	was := userSystemd
 	userSystemd = func() bool { return false }
@@ -732,6 +768,9 @@ const unansweredDoc = `{"exitCode":5,"verdict":"refused","reason":"unanswered re
 // On either route, devctl pr merge's and the plain squash merge's, a merge a
 // reviewer's unanswered review refuses merges nothing, ends with exit 5 and
 // says why in a gate line.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAnUnansweredReviewRefusesEveryRoute(t *testing.T) {
 	userSystemd = func() bool { return false }
 	t.Cleanup(func() { userSystemd = plat.Launcher.Available })
@@ -781,6 +820,9 @@ func TestHelperMergeChild(t *testing.T) {
 
 // A fix window lets its pull request through a lane whose installation
 // cannot be read (or is not Ready) and logs it; without it the lane refuses.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 	lane := config.Lane{Name: "portal-tools", Installation: "nowhere", Context: "no-such-context"}
 	g := runningMerge(t, "o/r", lane)
@@ -803,6 +845,9 @@ func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 // A merged window installs the release itself: the update runs once per
 // toolUpdateEvery, a failed one is logged, and the window lifts once devctl
 // reports the release.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version, updates, fail := devctlFrom, 0, error(nil)
@@ -848,6 +893,9 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 
 // A devctl merge that warrants no release lifts its window: no update is
 // coming.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
@@ -862,6 +910,8 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlTo)
 	// Stop after the startup transaction so no external merge runs.
@@ -915,6 +965,8 @@ func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAToolMergeStartOpensAWindowUnlessAlreadyMerged(t *testing.T) {
 	for _, tc := range []struct {
 		name, pull string
@@ -950,6 +1002,9 @@ func TestAToolMergeStartOpensAWindowUnlessAlreadyMerged(t *testing.T) {
 // gate runs devctl's update before it starts, and the merge waits while the
 // window of the previous release is open, as devctl would otherwise run on
 // the version that release replaced and refuse (exit 7).
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	updates := 0
@@ -977,6 +1032,9 @@ func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
 // A devctl merge that releases only a candidate lifts its window once
 // recorded: devctl version update never installs a candidate, so the window
 // would hold every other merge until lifted by hand.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
@@ -995,6 +1053,9 @@ func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 // candidate's tag is published with this platform's binary, while the
 // merge's devctl still waits for the rest of the release: no update installs
 // a candidate, so devctl never reports it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	toolRelease = func(context.Context, string) (string, error) { return devctlTo + "-rc.1", nil }
@@ -1047,6 +1108,9 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 // A promotion of devctl opens the window and holds the other merges until
 // devctl reports the stable release; one that ends without its document,
 // with no pull request to ask, lifts it.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version := devctlFrom + "-rc.1"
@@ -1097,6 +1161,9 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 
 // A merged window stays until devctl reports its release: another version
 // than the window's opening one is not enough.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, "v8.0.5")
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
@@ -1114,6 +1181,9 @@ func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 // The gate gives devctl pr merge merge.ciTimeout as its --timeout, which a
 // CI wait fits into; a --timeout the command names
 // is the caller's and stays the only one.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -1159,6 +1229,9 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
 // the merge-output record names the session or agent that asked for the merge,
 // not only a PID.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 	stateDir := t.TempDir()
 	base := gate.MergeBase(stateDir, scratchRepo, 42)
@@ -1191,6 +1264,9 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 
 // The command remains the first line even without owner metadata and after
 // the transient run files are removed.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestKeepOutputStartsWithTheMergeCommandAndFlags(t *testing.T) {
 	base := gate.MergeBase(t.TempDir(), scratchRepo, 7)
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
@@ -1212,6 +1288,8 @@ func TestKeepOutputStartsWithTheMergeCommandAndFlags(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "merge")
 	if err := os.WriteFile(base+".pid", []byte("2147483647"), 0o600); err != nil {
@@ -1229,6 +1307,8 @@ func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(fmt.Sprint(live), func(t *testing.T) {

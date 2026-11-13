@@ -202,6 +202,9 @@ func TestRunReason(t *testing.T) {
 
 // A second merge of a pull request whose merge runs is refused with exit 3
 // and the running one's start, owner and last line.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 	g := runningMerge(t, scratchRepo, lane)
@@ -289,6 +292,9 @@ func TestAWaiterWhoseOwnerLeftTheRosterIsWokenBySession(t *testing.T) {
 
 // merge-child records the SIGTERM that stops it as the run's stop, passes it
 // on to its command and keeps it across the re-exec of a replaced binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergeChildRecordsItsStop(t *testing.T) {
 	fakeDevctl(t, `echo "queued" >&2; exec sleep 30`)
 	base := filepath.Join(t.TempDir(), ownedRuns, "pr-merge-o_r-7-1")
@@ -319,6 +325,9 @@ func TestMergeChildRecordsItsStop(t *testing.T) {
 // route a wait takes: owned, unowned (no state), and owned without its run
 // files (the gate's own line). The gate's lines and devctl's progress go to
 // stderr, so `<gated wait> | jq .` parses.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 	const doc = `{"verdict":"available","reason":""}`
 	for _, c := range []struct {
@@ -372,6 +381,9 @@ func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 // A red merge whose check died on a transient infrastructure failure wakes
 // its owner naming the matched line and the job's rerun, not as the pull
 // request's break alone.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestARedRunOnAnInfraFlakeWakesItsOwnerWithTheRerun(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
 	was := gate.InfraReds

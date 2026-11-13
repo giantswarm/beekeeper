@@ -177,6 +177,8 @@ func TestLoopAllowanceHoldReleasesWhenLiveBudgetAboveFloor(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500

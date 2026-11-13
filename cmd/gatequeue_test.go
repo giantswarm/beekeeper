@@ -124,6 +124,9 @@ func stubSelf(t *testing.T) (self string, launched func() gate.ChildSpec) {
 
 // Returning from gate.LaunchChild must mean that the fake child's last fixture
 // write is complete, including when a caller immediately ends its subtest.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestQueuedChildAcknowledgesFixtureWrites(t *testing.T) {
 	// Delay cp past awaitPID's poll so publishing the PID before the copy
 	// reliably exposes an unfinished write, without depending on machine load.
@@ -180,6 +183,9 @@ func queuedGate(self string) []string {
 // A merge behind a busy lane does not end in a rerun: at its deadline the
 // gate hands its wait to a run of its own, the same gate under --queued with
 // the caller as owner, and exits 76.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	self, launched := stubSelf(t)
@@ -212,6 +218,9 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 
 // A detached merge is the blocking one under the gate: --detach and its
 // --on-done never reach the run that merges, which the lane accounts for.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	self, launched := stubSelf(t)
@@ -231,6 +240,9 @@ func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
 // The queued run takes over the place of the gate it came from; any other
 // live gate of the same pull request is refused as a second merge (exit 3)
 // and leaves the place alone.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASecondMergeOfAQueuedOneReusesItsPlace(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	busy, queued := sleeper(t), sleeper(t)
@@ -271,6 +283,9 @@ func lastEventOf(t *testing.T, a *app, verb string) string {
 // A place whose merge is not in the gate leaves its lane once its pull
 // request closes and settles it once merged, including a live waiting gate;
 // one asked less than a check ago is not asked.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	now := time.Now()
 	alive := sleeper(t)
@@ -313,6 +328,9 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 // A merge under the budget floor is not refused: it is queued for the reset
 // in a run of its own (exit 76, a "queued" line), which waits while the
 // budget is under the floor.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -350,6 +368,9 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 // A held repository is refused (exit 77) with its reason and the park that
 // waits for its lift, and nothing is queued: 77 never comes with a "queued"
 // line.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHeldMergeIsRefusedNotQueued(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	a := queueApp(t)

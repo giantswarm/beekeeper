@@ -28,6 +28,9 @@ var localLane = config.Lane{Name: scratchRepo, Repositories: []string{scratchRep
 // confirms its release in its gate, its place releasing meanwhile: the
 // lane's next merge may start beside the release, never merge before it is
 // known; a confirmed release frees the lane.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAMergeInALaneWithoutAnInstallationFreesItsLaneForTheNextCIWhileItsReleaseIsConfirmed(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, handCutDevctl)
@@ -79,6 +82,9 @@ func TestAMergeInALaneWithoutAnInstallationFreesItsLaneForTheNextCIWhileItsRelea
 // 6, as devctl pr merge's own release wait ends, and the lane's next merge
 // waits for that verdict; an unconfirmed one settles the lane by the
 // settle rule.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerdict(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
 		const failedReleaseTag = "v1.2.4"
@@ -142,6 +148,9 @@ func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerd
 
 // A lane with an installation keeps devctl's own release wait: its merge
 // settles until the release rolled, nothing overlaps.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestALaneWithAnInstallationDoesNotOverlap(t *testing.T) {
 	g := runningMerge(t, scratchRepo, config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}})
 	if g.OverlapLane() || g.Overlaps() {
@@ -190,6 +199,9 @@ func releaseKnown(g *gate.GateRun) {
 // The next merge, its turn come beside a release being confirmed, updates
 // its branch and waits for its CI meanwhile, and goes on to merge only once
 // that release is known.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheNextMergeWarmsUpBesideTheReleaseAndMergesAfterIt(t *testing.T) {
 	var known, warmed atomic.Bool
 	g := nextBesideARelease(t, func(g *gate.GateRun) {
@@ -217,6 +229,9 @@ func TestTheNextMergeWarmsUpBesideTheReleaseAndMergesAfterIt(t *testing.T) {
 // A stop that reaches the merge while it waits for its lane's release ends
 // the wait, nothing merged, its place out of the lane; a hangup or the
 // caller's timeout cuts only the call, and the wait goes on.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 	sig := make(chan os.Signal, 2)
 	g := nextBesideARelease(t, func(*gate.GateRun) {})
@@ -270,6 +285,9 @@ func TestAStopDuringTheReleaseWaitEndsTheMergeUnmerged(t *testing.T) {
 // A hold set while the merge waits for its lane's release that lets another
 // pull request through first puts the merge back to waiting in its place,
 // before its devctl starts.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAHoldDuringTheReleaseWaitPutsTheMergeBackToWaiting(t *testing.T) {
 	g := nextBesideARelease(t, func(g *gate.GateRun) {
 		_ = gateApp(g.Host).store.Update(func(st *state.State) ([]state.Event, error) {
@@ -291,6 +309,9 @@ func TestAHoldDuringTheReleaseWaitPutsTheMergeBackToWaiting(t *testing.T) {
 
 // A release whose verdict stays unknown past the wait's bound refuses the
 // merge, its place out of the lane: it never merges ahead of a verdict.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReleaseUnknownPastTheWaitRefusesTheMerge(t *testing.T) {
 	g := nextBesideARelease(t, func(*gate.GateRun) {})
 	was := gate.ReleasesWait
@@ -342,6 +363,9 @@ func TestGateStopInterruptsAMergeWaitingForItsLanesRelease(t *testing.T) {
 }
 
 // A merge whose lane confirms no release goes on at once, no warm-up.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestTheNextMergeOfAFreeLaneDoesNotWarmUp(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
 	was := gate.PrWarmWait
@@ -358,6 +382,9 @@ func TestTheNextMergeOfAFreeLaneDoesNotWarmUp(t *testing.T) {
 
 // The lane's pace is the median of its latest places, start to merge, on
 // to the settle where its lane rolled; drain is that times its places.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLanePaceIsTheMedianOfItsLatestPlaces(t *testing.T) {
 	at := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	ev := func(min int, verb, detail string) state.Event {
@@ -383,6 +410,8 @@ func TestLanePaceIsTheMedianOfItsLatestPlaces(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestWarmUpUsesRepositoryCITimeout(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
 	g.Argv = mergeArgv(scratchRepo)

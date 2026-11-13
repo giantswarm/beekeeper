@@ -26,6 +26,8 @@ func takeoverGate(t *testing.T, pid int, phase string) *gate.GateRun {
 		Me: state.Party{Session: "taking over", Name: "current worker"}, Pid: os.Getpid(), Argv: mergeArgv(scratchRepo)}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateTakesOverDeadOwnerAndRunsMerge(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
@@ -45,6 +47,8 @@ func TestGateTakesOverDeadOwnerAndRunsMerge(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateTakesOverMergedPRAndConfirmsRelease(t *testing.T) {
 	for _, phase := range []string{state.Running, state.Waiting} {
 		t.Run(phase, func(t *testing.T) {
@@ -84,6 +88,8 @@ func TestGateTakesOverMergedPRAndConfirmsRelease(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	g := takeoverGate(t, sleeper(t), state.Running)
@@ -121,6 +127,8 @@ func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 	g := takeoverGate(t, 1<<30, state.Running)
 	var out bytes.Buffer
@@ -138,6 +146,8 @@ func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestSameSessionReusesWaitingPlace(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)
@@ -154,6 +164,8 @@ func TestSameSessionReusesWaitingPlace(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)
@@ -177,6 +189,8 @@ func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateDoesNotTakeOverLiveOpenPR(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	g := takeoverGate(t, sleeper(t), state.Running)
@@ -189,6 +203,8 @@ func TestGateDoesNotTakeOverLiveOpenPR(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestGateDoesNotRetryDeadOwnerWhenGitHubIsUnread(t *testing.T) {
 	stubGitHub(t, "", "")
 	g := takeoverGate(t, 1<<30, state.Running)

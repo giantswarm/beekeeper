@@ -17,6 +17,9 @@ import (
 // lane free, wait in the lane without reading GitHub: no pull request read,
 // no budget probe, exit 76 with the reason; beekeeper budget shows the
 // session's two polling merges and the queued one.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestASessionsThirdMergeWaitsWithoutReadingGitHub(t *testing.T) {
 	asked := stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)

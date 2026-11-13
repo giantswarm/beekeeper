@@ -108,6 +108,9 @@ const devctlFirstLine = "merging\n"
 // where the stderr was copied and records the outcome: the merge's lane
 // entry leaves with the real outcome, nothing is copied twice, and the
 // re-exec that does not start is followed on under the old binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 	script := `echo merging >&2; sleep 1; echo "waiting for the release" >&2; echo '` + mergedDoc + `'`
 	t.Run("the installed binary follows on", func(t *testing.T) {
@@ -187,6 +190,9 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 // with devctl's own code: 0 for a merge, and a refusal's code unchanged, never
 // the re-executed process's own. The gate is this test binary run as
 // beekeeper from a copy that the test renames another copy over.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 	if runningBinary().Path() == "" {
 		t.Skip("the running binary cannot be read here")
@@ -338,6 +344,9 @@ func (l *lines) await(t *testing.T, s string, n int) {
 // the outcome: it leaves the run's document and exit code, and the watch
 // records the real outcome from them at its next poll, without asking
 // GitHub, so no running entry stays for a finished merge.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo merged >&2; echo '`+mergedDoc+`'`)
@@ -415,6 +424,9 @@ func TestAStaleGatesOutcomeIsRecordedByTheWatchFromItsFiles(t *testing.T) {
 // the installed one with the outcome, which hands it to the owner running
 // nothing again; a re-exec that does not start hands it over under the old
 // binary.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAReplacedMergeChildHandsItsOutcomeOverUnderTheInstalledOne(t *testing.T) {
 	owner := state.Party{Session: "s1", Name: ownerName}
 	a, _, woke := tellOwnerRun(t, owner)
@@ -478,6 +490,9 @@ func TestAReplacedMergeChildHandsItsOutcomeOverUnderTheInstalledOne(t *testing.T
 // A waiting gate whose step's save the newer release refuses re-executes
 // its replaced binary, keeping its place and deadline, and refuses (77)
 // only when the new binary does not start.
+//
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestAStaleStepReExecutesAReplacedGate(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	waiting := state.Merge{Repo: scratchRepo, PR: 3, Lane: scratchRepo, Phase: state.Waiting, By: state.Party{Session: "s2", Name: agentTwo},

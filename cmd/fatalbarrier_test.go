@@ -126,6 +126,8 @@ func TestFatalRepairParkPersistsAndStatusShowsScope(t *testing.T) {
 	}
 }
 
+// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
+// The merge base has no internal/gate package, so these tests cannot build there.
 func TestFatalMainLoopWaitsBeforeMergeGo(t *testing.T) {
 	r := newLoopRig(t)
 	q := saveMainOutage(t, r.a)
