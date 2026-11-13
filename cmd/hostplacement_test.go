@@ -78,6 +78,40 @@ func TestProbationKeepsCompatibleHostAdmission(t *testing.T) {
 	}
 }
 
+// A host pinned to an older release than the coordinator's takes no new
+// start once the coordinator's probation passed: it drains, so the
+// executions on it reach the turn boundary its update waits for, and new
+// starts placed on it cannot keep it busy. It takes starts while its update
+// waits on the coordinator's failed lookup of the release, and again on the
+// coordinator's release.
+func TestAHostBehindTheCoordinatorsReleaseDrains(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	withSettledCoordinator(t, hostNewRelease)
+	h := a.cfg.Agents.Hosts[sshTestSelector]
+	pin := func(p state.HostPin) {
+		t.Helper()
+		p.Selector, p.Identity, p.PolicyDigest = sshTestSelector, h.Identity, h.PolicyDigest
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.HostPins = []state.HostPin{p}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pin(state.HostPin{Version: hostOldRelease})
+	if err := a.admitExecution(sshTestSelector, h); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) || !strings.Contains(err.Error(), hostNewRelease) {
+		t.Fatalf("a host behind the coordinator's release took a start: %v", err)
+	}
+	pin(state.HostPin{Version: hostOldRelease, UpdateError: "looking up release " + hostNewRelease + ": lookup unavailable", UpdateVersion: hostNewRelease, Tried: a.timeNow()})
+	if err := a.admitExecution(sshTestSelector, h); err != nil {
+		t.Fatalf("a host whose update waits on the coordinator's lookup: %v", err)
+	}
+	pin(state.HostPin{Version: hostNewRelease})
+	if err := a.admitExecution(sshTestSelector, h); err != nil {
+		t.Fatalf("a host on the coordinator's release: %v", err)
+	}
+}
+
 func TestLookupFailurePreservesExistingInstallationHold(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, hostNewRelease)

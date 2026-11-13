@@ -524,7 +524,13 @@ given:
       fault: unreachable             # optional, see below
       slow: 300ms                    # delay of every ssh call to it
       config: {}                     # laid over the host's own config.yaml
+      pinned: v1.0.0-rc.1            # the release the desk pinned it to
 ```
+
+`pinned` records the host in the desk's state (`hostPins`) as pinned to that release, with the
+policy digest it prepared, as an earlier coordinator's `agents hosts update` left it. A desk on
+another release (`given.releases.installed`) finds the host behind its own; the host still runs
+the candidate.
 
 | Fault | What happens |
 | --- | --- |

@@ -410,7 +410,10 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, raw, 0o600)
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		return err
+	}
+	return d.seedHostPins(hosts)
 }
 
 // repositories are the scenario's repositories: given.repositories and
