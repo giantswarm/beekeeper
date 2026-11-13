@@ -38,12 +38,13 @@ data that lives there.
 
 A worker on an SSH execution host that finds itself on the wrong machine runs
 it from its workspace instead of parking: the coordinator marks its task (the
-issue it serves and the pull requests it waits on or asked a desk review of)
-and queues the task for a fresh worker, which the loop's next pass starts on
-the coordinator. That worker sees what is published, never the host's
-workspace: publish your work first (agents publish), then move and end your
-turn. A worker on the coordinator marks its task the same way; it keeps
-working, and its later starts stay here.
+issue it serves and the pull requests it waits on, asked a desk review of or
+published) and queues the task for a fresh worker, which the loop's next pass
+starts on the coordinator. That worker sees what is published, never the
+host's workspace: publish your work first (agents publish), then move and end
+your turn; its brief names the branch and pull request you published. A
+worker on the coordinator marks its task the same way; it keeps working, and
+its later starts stay here.
 
 --ref marks the task owner/repo#n, the desk's own word before any start;
 --clear with --ref lifts the mark.`,
@@ -162,8 +163,16 @@ func (a *app) moveToCoordinator(st *state.State, ag *state.Agent, me state.Party
 		return "", nil, refused("%q has no execution record", ag.Name)
 	}
 	// A host's worker moves its own task only: refs of another repository,
-	// such as one an earlier park of it named, stay as they are.
-	refs := slices.DeleteFunc(movedTaskRefs(st, *ag), func(ref string) bool {
+	// such as one an earlier park of it named, stay as they are. The pull
+	// request it published (agents publish) is its task too, also before
+	// any park or desk review names it.
+	refs := movedTaskRefs(st, *ag)
+	if p := r.Published; p != nil {
+		if pr, ok := parseRef(p.URL); ok && !slices.ContainsFunc(refs, func(x string) bool { return strings.EqualFold(x, refName(pr)) }) {
+			refs = append(refs, refName(pr))
+		}
+	}
+	refs = slices.DeleteFunc(refs, func(ref string) bool {
 		p, _ := parseRef(ref)
 		return !strings.EqualFold(p.Repo, r.Request.Repository)
 	})
@@ -171,6 +180,19 @@ func (a *app) moveToCoordinator(st *state.State, ag *state.Agent, me state.Party
 		return "", nil, refused("%q names no issue or pull request of %s in its task to move", ag.Name, r.Request.Repository)
 	}
 	message := fmt.Sprintf("%s asked for the coordinator: %s", ag.Name, why)
+	// The fresh worker never sees the host's workspace: it is told what the
+	// worker published, so it continues that branch and pull request rather
+	// than opening a competing one.
+	if p := r.Published; p != nil && p.Branch != "" {
+		message += ". It published branch " + p.Branch
+		if p.Head != "" {
+			message += " at " + p.Head
+		}
+		if p.URL != "" {
+			message += ", pull request " + p.URL
+		}
+		message += ": continue it, never a competing pull request"
+	}
 	if ag.Park == nil {
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: refs[0], Waits: "a fresh worker on the coordinator: " + why}
 	}
