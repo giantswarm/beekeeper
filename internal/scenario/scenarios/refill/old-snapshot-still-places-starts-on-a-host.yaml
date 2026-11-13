@@ -1,0 +1,89 @@
+name: old-snapshot-still-places-starts-on-a-host
+description: >
+  When the desk's state and the loop's cache are older than a pass, as on
+  a desk whose state does not change while a pass runs late, capacity
+  writes `state snapshot is … old` to its standard error after its JSON
+  answer. The loop reads each answer's document and ignores the line after
+  it: the refill starts the Ready item's worker, and under
+  supervisor.hostsFirst the start goes to the execution host that has
+  room, as it does with a fresh snapshot. Read whole, with the line, the
+  refill's answer failed and it started nobody, and the placement took
+  every host's room for unreadable and the coordinator's for open, so the
+  start stayed on the coordinator.
+issue: https://github.com/giantswarm/beekeeper/issues/3829
+flow: refill
+tags: [refill, loop, capacity, hosts, placement]
+timeout: 90s
+
+given:
+  # No clock.start: the world's clock is the system's, so the state files'
+  # times and the clock agree until the advance below.
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {hosts: [builder]}
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        host: builder
+        turns:
+          - reply: working on the host
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+    # The host's gh has a login of its own: without one a host gives its
+    # workers no GitHub reads and gets no start.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # More than a pass (supervisor.loopInterval, 30s) goes by and nothing is
+  # saved: the snapshot is old, and every capacity read says so on stderr.
+  - advance: 1m
+  - name: capacity
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - stderr: {contains: ["state snapshot is", "old (supervisor pass 30s)"]}
+  - name: fill
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: app 1, host: builder, outcome: finish}
+  - name: roster
+    run: {args: [agents, --json]}
+
+then:
+  - worker: {name: app 1, host: builder, harness: claude, turns: 1, outcome: finish}
+  - {step: roster, json_path: {path: '[0].name', equals: app 1}}
+  - {step: roster, json_path: {path: '[0].execution.host', equals: builder}}
+  - {step: fill, output: {not_contains: ["capacity --json:", "capacity answer is unreadable"]}}
