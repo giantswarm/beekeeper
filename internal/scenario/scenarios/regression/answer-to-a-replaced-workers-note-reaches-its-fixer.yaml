@@ -4,10 +4,11 @@ description: >
   desk review and leaves the roster. Red CI makes the loop start a fresh
   worker under the same name for the pull request, and that worker parks on
   the open note. The person's answer reaches the fresh worker, whose
-  continuation the loop starts and which registers and parks as itself; the
-  first worker's transcript is never resumed beside it. Without the fix the
-  fresh worker takes the task but not the note, so the answer resumes the
-  first worker's codex thread and two sessions work the same item.
+  continuation the loop starts; the continuation finds itself registered
+  and hands the pull request back for the desk review. The first worker's
+  transcript is never resumed beside it. Without the fix the fresh worker
+  takes the task but not the note, so the answer resumes the first
+  worker's codex thread and two sessions work the same item.
 issue: https://github.com/giantswarm/beekeeper/issues/3714
 flow: regression
 tags: [regression, loop, continuation, notes, answer, codex]
@@ -78,8 +79,8 @@ given:
           # to the note.
           - steps:
               - beekeeper: [agents, park, --on, '#1', the person's answer on the build cache]
-      # The answer's continuation is registered under its own name and parks
-      # as itself.
+      # The answer's continuation is registered under its own name and hands
+      # the pull request back for the desk review.
       - name: 'app 1 next-[0-9a-f]+'
         turns:
           - steps:
@@ -159,21 +160,13 @@ when:
       timeout: 15s
       expect:
         - worker: {name: 'app 1 next-[0-9a-f]+', outcome: finish}
+  # The continuation took the fresh worker's entry: it is the only one.
+  # What the next pass does with its desk review is other scenarios' to say.
   - name: roster
     run: {args: [agents, --json]}
     expect:
       - json_path: {path: ., len: 1}
       - output: {matches: '"name": *"app 1 next-[0-9a-f]+"'}
-  - advance: 2s
-  - name: settle
-    run: {args: [supervisor, loop, --once]}
-    expect:
-      - exit: 0
-  - name: parks
-    run: {args: [log, --verb, agents.park]}
-    expect:
-      - exit: 0
-      - output: {matches: 'app 1 next-[0-9a-f]+: parked on example/app#2'}
   - name: takeover
     run: {args: [log, --verb, agents.continuation]}
 
