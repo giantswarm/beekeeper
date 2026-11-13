@@ -36,7 +36,8 @@ const (
 	repoDir      = workDir + "/repo"
 	stateDir     = workDir + "/state"
 	originsDir   = workDir + "/origins"
-	checkoutsDir = workDir + "/src"
+	srcDir       = workDir + "/src"
+	checkoutsDir = workDir + "/checkouts"
 	artifactsDir = workDir + "/artifacts"
 	configFile   = workDir + "/config.yaml"
 	worldSocket  = DefaultWorldSocket
@@ -286,6 +287,10 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	cfg := baseConfig(orgs)
+	if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+		// A hand start's --dir is agents.dir or a checkout under agents.roots.
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": []any{checkoutsDir}}})
+	}
 	if b := d.s.Given.Builder; b != nil {
 		// The desk's remote builds go to the scenario's builder, through
 		// the fake kubectl on its PATH.
@@ -300,7 +305,11 @@ func (d *driver) setup(ctx context.Context) error {
 	}
 	if len(d.s.Given.Checkouts) > 0 {
 		// A session's --dir must be a checkout under agents.dir or agents.roots.
-		overlay(cfg, map[string]any{"agents": map[string]any{"roots": []any{checkoutsDir}}})
+		roots := []any{srcDir}
+		if slices.ContainsFunc(d.s.Given.Repositories, func(r Repository) bool { return r.Checkout != nil }) {
+			roots = append(roots, checkoutsDir)
+		}
+		overlay(cfg, map[string]any{"agents": map[string]any{"roots": roots}})
 	}
 	overlay(cfg, d.s.Given.Desk.Config)
 	raw, err := yaml.Marshal(cfg)
@@ -334,8 +343,16 @@ func (d *driver) setup(ctx context.Context) error {
 		}
 	}
 	for _, name := range d.s.Given.Checkouts {
-		if err := checkout(ctx, name); err != nil {
+		if err := sourceCheckout(ctx, name); err != nil {
 			return fmt.Errorf("checkout %s: %w", name, err)
+		}
+	}
+	for _, r := range d.s.Given.Repositories {
+		if r.Checkout == nil {
+			continue
+		}
+		if err := checkout(ctx, r.Name, r.Checkout.Config); err != nil {
+			return fmt.Errorf("checkout %s: %w", r.Name, err)
 		}
 	}
 	if board, ok := cfg["board"].(map[string]any); ok {
@@ -420,7 +437,10 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, raw, 0o600)
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		return err
+	}
+	return d.seedHostPins(hosts)
 }
 
 // repositories are the scenario's repositories: given.repositories and
@@ -525,10 +545,10 @@ func overlay(dst, src map[string]any) {
 	}
 }
 
-// checkout clones owner/name onto the desk under checkoutsDir. It names its
+// sourceCheckout clones owner/name onto the desk under srcDir. It names its
 // origin as GitHub does; the scenario's git leads that URL to the origin.
-func checkout(ctx context.Context, name string) error {
-	dst := filepath.Join(checkoutsDir, name)
+func sourceCheckout(ctx context.Context, name string) error {
+	dst := filepath.Join(srcDir, name)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
@@ -555,6 +575,25 @@ func origin(ctx context.Context, name string) error {
 		{"-C", seed, "push", bare, "main"},
 	} {
 		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // real git on the scenario's own paths
+		c.Env = env(nil)
+		if out, err := c.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return nil
+}
+
+// checkout clones the origin of owner/name under its GitHub URL to
+// /work/checkouts/<owner>/<name>, as a person's main checkout is, and sets
+// the checkout's own Git configuration.
+func checkout(ctx context.Context, name string, config map[string]string) error {
+	dir := filepath.Join(checkoutsDir, name)
+	cmds := [][]string{{"clone", "--quiet", harness.GitHub + name + ".git", dir}}
+	for _, key := range slices.Sorted(maps.Keys(config)) {
+		cmds = append(cmds, []string{"-C", dir, "config", key, config[key]})
+	}
+	for _, args := range cmds {
+		c := exec.CommandContext(ctx, binDir+"/git", args...) //nolint:gosec // the scenario's git on its own paths
 		c.Env = env(nil)
 		if out, err := c.CombinedOutput(); err != nil {
 			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)

@@ -192,12 +192,31 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 			}
 		}
 	}
-	args := []string{"worktree", loop.LoopAdd, branchFlag, branch, target, ref}
 	if review {
-		args = []string{"worktree", loop.LoopAdd, "--detach", target, ref}
+		if _, err := runGit(ctx, checkout, "worktree", loop.LoopAdd, "--detach", target, ref); err != nil {
+			return "", err
+		}
+		return rules, nil
 	}
-	if _, err := runGit(ctx, checkout, args...); err != nil {
+	// The worker branch never tracks the default branch it starts from:
+	// under push.default=upstream, git push and git push -u origin <branch>
+	// would update main. Its upstream is its own name on origin, which also
+	// repairs a reused local branch that still tracks main.
+	if _, err := runGit(ctx, checkout, "worktree", loop.LoopAdd, "--no-track", branchFlag, branch, target, ref); err != nil {
+		return "", err
+	}
+	if err := setWorkerUpstream(ctx, checkout, branch); err != nil {
 		return "", err
 	}
 	return rules, nil
+}
+
+// setWorkerUpstream makes origin/<branch> the upstream of a worker branch,
+// whether or not origin has the branch yet.
+func setWorkerUpstream(ctx context.Context, checkout, branch string) error {
+	if _, err := runGit(ctx, checkout, "config", "branch."+branch+".remote", workerGitHubOrigin); err != nil {
+		return err
+	}
+	_, err := runGit(ctx, checkout, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	return err
 }

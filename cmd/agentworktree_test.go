@@ -175,6 +175,11 @@ func TestPrepareStartWorktree(t *testing.T) {
 	if got := git(target, "branch", "--show-current"); got != "fix/task" {
 		t.Fatal(got)
 	}
+	// Its upstream is its own name on origin, never the default branch it
+	// starts from, where push.default=upstream would send its pushes.
+	if got := git(checkout, "config", "branch.fix/task.remote") + " " + git(checkout, "config", "branch.fix/task.merge"); got != "origin refs/heads/fix/task" {
+		t.Fatalf("upstream = %s, want origin refs/heads/fix/task", got)
+	}
 	if got := git(checkout, "branch", "--show-current"); got != "trunk" {
 		t.Fatal(got)
 	}
@@ -233,11 +238,16 @@ func TestPrepareStartWorktree(t *testing.T) {
 	if out := git(checkout, "branch", "--list", "fix/task"); out == "" {
 		t.Fatal("expected local branch fix/task to remain after worktree remove")
 	}
+	// An older start left the branch tracking the default branch.
+	git(checkout, "config", "branch.fix/task.merge", "refs/heads/trunk")
 	if _, err := a.prepareStartWorktree(ctx, checkout, "fix/task", "task", false, false); err != nil {
 		t.Fatalf("reuse local branch equal to origin/main: %v", err)
 	}
 	if got := git(target, "rev-parse", "HEAD"); got != tip {
 		t.Fatalf("reused worktree HEAD = %s, want %s", got, tip)
+	}
+	if got := git(checkout, "config", "branch.fix/task.merge"); got != "refs/heads/fix/task" {
+		t.Fatalf("reused branch upstream = %s, want refs/heads/fix/task", got)
 	}
 
 	// If the branch was pushed to origin and the worktree was later removed,

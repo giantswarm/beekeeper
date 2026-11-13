@@ -39,6 +39,7 @@ const (
 	hostFixtureSource        = "/srv/source"
 	hostFixtureDraining      = "host-c"
 	hostDrainsWord           = "drains"
+	hostInTurnWord           = "in a turn"
 	hostFixtureCommand       = "hosts"
 	hostFixtureCoordinator   = "coordinator.example"
 	hostFixtureWorker        = "remote-worker"
@@ -50,6 +51,18 @@ func withCoordinatorVersion(t *testing.T, version string) {
 	prev := coordinatorVersion
 	coordinatorVersion = func() string { return version }
 	t.Cleanup(func() { coordinatorVersion = prev })
+}
+
+// withSettledCoordinator makes the coordinator run version, its probation
+// passed: its execution hosts follow it.
+func withSettledCoordinator(t *testing.T, version string) {
+	t.Helper()
+	withCoordinatorVersion(t, version)
+	previous := coordinatorJournal
+	coordinatorJournal = func() (*update.Journal, error) {
+		return &update.Journal{Probation: coordinatorProbationPassed, Candidate: update.Binary{Version: version}}, nil
+	}
+	t.Cleanup(func() { coordinatorJournal = previous })
 }
 
 // hostUpdateServer is a prepared execution host runtime on release version.
@@ -309,10 +322,15 @@ func TestHostsUpdatePinsTheDigestInStateWithoutAConfiguredOne(t *testing.T) {
 	if err := a.admitExecution(sshTestSelector, got); err != nil {
 		t.Errorf("the pinned host takes no start: %v", err)
 	}
-	// A newer coordinator does not revoke the already pinned host policy.
-	withCoordinatorVersion(t, "v0.7.0")
-	if err := a.admitExecution(sshTestSelector, got); err != nil {
+	// A newer coordinator does not revoke the already pinned host policy,
+	// but the host drains for its release: it takes no new start until it
+	// is updated.
+	withSettledCoordinator(t, "v0.7.0")
+	if err := a.admitExecution(sshTestSelector, got); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) {
 		t.Errorf("a host behind the coordinator: %v", err)
+	}
+	if st, err := a.store.Read(); err != nil || st.HostPin(sshTestSelector).PolicyDigest != digest {
+		t.Errorf("the drained host's pin %+v, %v", st.HostPin(sshTestSelector), err)
 	}
 }
 
@@ -435,7 +453,7 @@ func TestHostsUpdateGoesAheadUnderAParkedWorkerBetweenTurns(t *testing.T) {
 		o    execution.Observation
 		park *state.Park
 	}{
-		"in a turn":              {inTurn, &state.Park{}},
+		hostInTurnWord:           {inTurn, &state.Park{}},
 		"a wake waits":           {queued, &state.Park{}},
 		"between turns, no park": {between, nil},
 	} {
@@ -523,7 +541,7 @@ func TestSupervisorLoopReportsAHostBehindForMoreThanOneRelease(t *testing.T) {
 	pass()
 	pass()
 	findings := behind()
-	if len(findings) != 1 || !strings.Contains(findings[0].Detail, hostFixtureWorker) || !strings.Contains(findings[0].Detail, hostNewRelease) || !strings.Contains(findings[0].Detail, "v0.7.0") || !strings.Contains(findings[0].Detail, "in a turn") {
+	if len(findings) != 1 || !strings.Contains(findings[0].Detail, hostFixtureWorker) || !strings.Contains(findings[0].Detail, hostNewRelease) || !strings.Contains(findings[0].Detail, "v0.7.0") || !strings.Contains(findings[0].Detail, hostInTurnWord) {
 		t.Fatalf("behind findings %+v", findings)
 	}
 	if strings.Count(r.out.String(), "SUPERVISOR HOST BEHIND") != 1 {
@@ -535,6 +553,63 @@ func TestSupervisorLoopReportsAHostBehindForMoreThanOneRelease(t *testing.T) {
 	}
 	if pin := st.HostPin(hostFixtureDraining); pin.Behind != hostNewRelease || !pin.BehindReported {
 		t.Fatalf("pin %+v", pin)
+	}
+}
+
+// A host that stays behind the coordinator's release for longer than an
+// hour is handed on once, with how long and why, although no second
+// release came: live, a busy host waited for its turn boundary for hours.
+func TestSupervisorLoopReportsAHostBehindPastTheBound(t *testing.T) {
+	r := newLoopRig(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{hostFixtureDraining: {Endpoint: execution.Endpoint{SSH: hostFixtureDraining + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(hostFixtureDraining), WorkspaceRoot: hostFixtureWorkspaces, Repositories: map[string]string{sshTestRepository: hostFixtureSource}, Harnesses: []string{claudeComm}, MaxBusy: 1}}
+	ref := execution.Ref{Host: hostFixtureDraining, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: hostFixtureWorker}, Execution: &state.ExecutionRecord{Selector: hostFixtureDraining, Handle: execution.Handle{Ref: ref}, Phase: execution.Running, Observation: execution.Observation{ProcessState: execution.Running, Ready: true, InTurn: true}}})
+		st.HostPins = append(st.HostPins, state.HostPin{Selector: hostFixtureDraining, Identity: execution.HostID(hostFixtureDraining), Version: hostOldRelease})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
+	start := time.Date(2026, 11, 13, 5, 0, 0, 0, time.UTC)
+	pass := func(at time.Duration) {
+		t.Helper()
+		r.a.now = start.Add(at)
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.UpdateHosts(context.Background(), st)
+	}
+	behind := func() []state.Event {
+		t.Helper()
+		findings, err := r.a.store.Events(0, func(e state.Event) bool {
+			return e.Verb == "supervisor."+superloop.KindFile && strings.Contains(e.Detail, "host-behind")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return findings
+	}
+	pass(0)
+	pass(59 * time.Minute)
+	if n := len(behind()); n != 0 {
+		t.Fatalf("%d findings for a host behind for 59 minutes", n)
+	}
+	pass(61 * time.Minute)
+	pass(2 * time.Hour)
+	findings := behind()
+	if len(findings) != 1 {
+		t.Fatalf("behind findings %+v, want one", findings)
+	}
+	for _, want := range []string{hostFixtureWorker, hostOldRelease, hostNewRelease, "for 1h1m", hostInTurnWord, "takes no new start"} {
+		if !strings.Contains(findings[0].Detail, want) {
+			t.Errorf("the finding does not say %q: %s", want, findings[0].Detail)
+		}
+	}
+	if strings.Count(r.out.String(), "SUPERVISOR HOST BEHIND") != 1 {
+		t.Fatalf("loop said:\n%s", r.out.String())
 	}
 }
 

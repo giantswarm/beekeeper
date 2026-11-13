@@ -120,6 +120,16 @@ type Desk struct {
 // Repository is a repository on the fake origin, owner/name.
 type Repository struct {
 	Name string `yaml:"name"`
+	// Checkout is a person's main checkout of the repository, the --dir of
+	// a hand start.
+	Checkout *Checkout `yaml:"checkout"`
+}
+
+// Checkout is a main checkout of a repository's origin, cloned under its
+// GitHub URL to /work/checkouts/<owner>/<name>. Config is the checkout's
+// own Git configuration (git config <key> <value>), such as push.default.
+type Checkout struct {
+	Config map[string]string `yaml:"config"`
 }
 
 // Call is one answer of the world: the first call of Program whose
@@ -356,6 +366,8 @@ var (
 	nameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	issueRE = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
 	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	// gitConfigKeyRE is section.key or section.subsection.key.
+	gitConfigKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*\.(.+\.)?[A-Za-z][A-Za-z0-9-]*$`)
 )
 
 // Load reads and validates one scenario file.
@@ -437,6 +449,13 @@ func (s *Scenario) Validate() error {
 	for _, r := range s.Given.Repositories {
 		if !repoRE.MatchString(r.Name) {
 			bad("given.repositories: %q is not owner/name", r.Name)
+		}
+		if r.Checkout != nil {
+			for key := range r.Checkout.Config {
+				if !gitConfigKeyRE.MatchString(key) {
+					bad("given.repositories: %s: checkout.config: %q is no Git configuration key", r.Name, key)
+				}
+			}
 		}
 	}
 	if g := s.Given.GitHub; g != nil {
