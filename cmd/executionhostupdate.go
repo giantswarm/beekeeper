@@ -98,9 +98,10 @@ recover does). An update that
 fails holds the host: it takes no start until an update succeeds (exit 3),
 and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
-whenever its release differs from the coordinator's, and retries a held host
-hourly. During the coordinator's probation, updates wait without holding
-hosts or recording a failed attempt. Compatible older hosts keep taking starts;
+whenever its release differs from the coordinator's or the entry names
+another policy digest than the pin and than when it was pinned (the host's
+policy changed), and retries a held host hourly. During the coordinator's
+probation, updates wait without holding hosts or recording a failed attempt. Compatible older hosts keep taking starts;
 their live protocol, identity, capabilities and pinned policy are still checked.
 The next pass targets the coordinator's
 release after its verdict, including its recovery release after rollback.
@@ -324,6 +325,9 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	if err != nil {
 		return "", err
 	}
+	// The entry's own digest: the pin records it, so that a changed one makes
+	// the host due for an update again (loop.UpdateHosts).
+	configured := h.PolicyDigest
 	h = pinnedHost(st, selector, h)
 	if hostExecutions(st, selector) > 0 && h.Validate() == nil && (a.executionTransport != nil || a.executionUpdate == nil) {
 		for _, s := range st.Starts {
@@ -383,7 +387,7 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 			pin.Held, pin.HeldVersion = oneLine(err.Error()), version
 			return []state.Event{event(by, "agents.host-held", "%s on %s: %s", selector, version, pin.Held)}, nil
 		}
-		pin.Version, pin.PolicyDigest, pin.Tools, pin.PinnedAt = version, x.PolicyDigest, maps.Clone(caps.Tools), now
+		pin.Version, pin.PolicyDigest, pin.Configured, pin.Tools, pin.PinnedAt = version, x.PolicyDigest, configured, maps.Clone(caps.Tools), now
 		pin.Held, pin.HeldAt, pin.HeldVersion, pin.Reported = "", time.Time{}, "", false
 		pin.Behind, pin.BehindReported = "", false
 		return []state.Event{event(by, "agents.host-pinned", "%s on %s, policy %s", selector, version, x.PolicyDigest)}, nil
@@ -414,6 +418,9 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 		}
 	}
 	line := fmt.Sprintf("%s runs %s, policy %s pinned", selector, version, x.PolicyDigest)
+	if configured != "" && configured != x.PolicyDigest {
+		line += fmt.Sprintf("; its agents.hosts entry names policy %s, which the host did not prepare (the entry's policyDigest is deprecated)", configured)
+	}
 	rebound, failed := a.rebindHostExecutions(ctx, selector, h)
 	if rebound > 0 {
 		line += fmt.Sprintf("; %d executions between turns rebound to it", rebound)

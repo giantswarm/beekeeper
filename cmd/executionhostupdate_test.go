@@ -643,6 +643,87 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	}
 }
 
+// TestSupervisorLoopUpdatesAHostWhoseConfiguredPolicyChanged is the issue's
+// case: the host's pin has the coordinator's release and a digest its
+// agents.hosts entry no longer names, after the host's policy changed
+// without a release. The loop updates the host, which prepares its policy
+// again, and pins that digest; it does so once, also for an entry still
+// naming a digest the host does not prepare.
+func TestSupervisorLoopUpdatesAHostWhoseConfiguredPolicyChanged(t *testing.T) {
+	r := newLoopRig(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	pinned, prepared := execution.Digest([]byte("the host's former policy")), execution.Digest([]byte("the host's changed policy"))
+	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{sshTestSelector: {Endpoint: execution.Endpoint{SSH: sshTestSelector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: sshTestSelector, WorkspaceRoot: hostFixtureWorkspaces, Repositories: map[string]string{sshTestRepository: hostFixtureSource}, Harnesses: []string{claudeComm}, PolicyDigest: prepared, MaxBusy: 1}}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.HostPins = append(st.HostPins, state.HostPin{Selector: sshTestSelector, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: pinned, PinnedAt: r.a.now.Add(-loop.HostUpdateRetry), Tried: r.a.now.Add(-loop.HostUpdateRetry)})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updates := stubHostUpdates(t, r.a, map[execution.HostID]func(string) (execution.HostUpdate, error){sshTestSelector: pinnedAnswer(sshTestSelector, prepared)})
+	r.a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
+		return execution.Capabilities{CIWait: true, SourcePreparation: true, Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: hostNewRelease, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{claudeComm: hostFixtureClaudeVersion}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
+	}
+	// The loop's agents hosts update is the command's own.
+	r.answer = func(args []string) (string, int) {
+		if len(args) != 4 || args[2] != hostUpdateCmdName {
+			return "", 0
+		}
+		line, err := r.a.updateExecutionHost(context.Background(), args[3])
+		if err != nil {
+			return err.Error(), Code(err)
+		}
+		return line, 0
+	}
+	l := &loop.Loop{Host: r.a, Said: map[string]bool{}}
+	pass := func() {
+		t.Helper()
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.UpdateHosts(context.Background(), st)
+		r.a.now = r.a.now.Add(loop.HostUpdateRetry)
+	}
+	pinnedDigest := func() string {
+		t.Helper()
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pin := st.HostPin(sshTestSelector); pin != nil {
+			return pin.PolicyDigest
+		}
+		return ""
+	}
+	pass()
+	if len(*updates) != 1 || pinnedDigest() != prepared {
+		t.Fatalf("updates %v, pinned %s: want one update pinning the changed policy %s", *updates, pinnedDigest(), prepared)
+	}
+	if out := r.out.String(); !strings.Contains(out, "SUPERVISOR HOST UPDATED "+sshTestSelector+" runs "+hostNewRelease+", policy "+prepared+" pinned") {
+		t.Fatalf("loop said:\n%s", out)
+	}
+	// The pin answers the entry: no further update.
+	pass()
+	if len(*updates) != 1 {
+		t.Fatalf("updates %v, want none once the pin answers the entry", *updates)
+	}
+	// An entry naming a digest the host does not prepare is updated once.
+	stale := execution.Digest([]byte("a digest the host never prepared"))
+	h := r.a.cfg.Agents.Hosts[sshTestSelector]
+	h.PolicyDigest = stale
+	r.a.cfg.Agents.Hosts[sshTestSelector] = h
+	r.out.Reset()
+	pass()
+	pass()
+	if len(*updates) != 2 || pinnedDigest() != prepared {
+		t.Fatalf("updates %v, pinned %s: want one more update, pinning what the host prepared", *updates, pinnedDigest())
+	}
+	if out := r.out.String(); !strings.Contains(out, "names policy "+stale+", which the host did not prepare") {
+		t.Fatalf("loop said:\n%s", out)
+	}
+}
+
 func TestReleaseVersionIsATagNotABuild(t *testing.T) {
 	for v, want := range map[string]bool{
 		"v0.174.0":       true,

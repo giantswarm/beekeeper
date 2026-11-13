@@ -1,0 +1,99 @@
+name: changed-host-policy-is-pinned-by-the-loop
+description: >
+  An execution host runs the coordinator's release and is pinned to the
+  policy it prepared. Its operator then changes the host's configuration
+  without a release, prepares its policy again and names the digest prepare
+  printed in the host's agents.hosts entry. The pin still names the former
+  digest, so the host's check refuses it. The loop's next pass updates the
+  host as for a new release: the host prepares its policy, the pin follows
+  the entry and the check passes again. Live, the loop skipped a host whose
+  pin had the coordinator's release, and every start on it was refused for
+  a policy mismatch until someone updated each host by hand.
+issue: https://github.com/giantswarm/beekeeper/issues/3695
+flow: regression
+tags: [regression, hosts, update, policy]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      supervisor: {releaseEvery: 24h}
+  # Host updates follow a release: a development build updates none. The
+  # host runs the same release, so an update prepares its policy again.
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.1]
+  hosts:
+    - name: builder
+  github:
+    repositories:
+      - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+    # The desk's release lookup and the host's gh login.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # The host is pinned to the policy it prepared.
+  - name: pin
+    run: {args: [agents, hosts, update, builder]}
+    expect:
+      - exit: 0
+      - output: {matches: 'builder runs v1\.0\.0-rc\.1, policy sha256:[0-9a-f]{64} pinned'}
+  - name: pinned
+    run: {args: [agents, hosts, check, builder]}
+    expect:
+      - exit: 0
+  # The operator changes the host's configuration, prepares its policy
+  # again and names the new digest in the host's agents.hosts entry.
+  - host:
+      name: builder
+      config:
+        agents: {execution: {retention: 72h}}
+  # The pin names the former digest: the check refuses the host.
+  - name: stale
+    run: {args: [agents, hosts, check, builder]}
+    expect:
+      - stderr: {contains: ["identity, protocol, harness or policy does not match"]}
+  # Past the pace of host updates, with a fresh reading of the budget.
+  - advance: 11m
+  - name: rewatch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: pass
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: followed
+    run: {args: [agents, hosts, check, builder]}
+
+then:
+  # The loop updated the host for its changed policy and pinned what the
+  # host prepared, so the check passes again.
+  - {step: pass, output: {matches: 'SUPERVISOR HOST UPDATED builder runs v1\.0\.0-rc\.1, policy sha256:[0-9a-f]{64} pinned'}}
+  - {step: pass, output: {not_contains: ["which the host did not prepare"]}}
+  - {step: followed, exit: 0}
+  - {step: followed, json_path: {path: identity, equals: builder}}
+  # The host's self-update ran twice: by hand, and by the loop.
+  - calls: {program: ssh, args: [builder, '.*agents hosts self-update.*'], min: 2, max: 2}

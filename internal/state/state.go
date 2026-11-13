@@ -1491,6 +1491,11 @@ type HostPin struct {
 	PolicyDigest string            `json:"policyDigest,omitempty"`
 	Tools        map[string]string `json:"tools,omitempty"`
 	PinnedAt     time.Time         `json:"pinnedAt,omitzero"`
+	// Configured is the digest the agents.hosts entry named when the host
+	// was last pinned, empty for none. An entry that names another digest
+	// than this and PolicyDigest is a changed host policy: the host is due
+	// for an update, as for a new release.
+	Configured string `json:"configured,omitempty"`
 	// Tried is the last update attempt, which paces the retries.
 	Tried time.Time `json:"tried,omitzero"`
 	// UpdateError is a release lookup failure before contacting the host.

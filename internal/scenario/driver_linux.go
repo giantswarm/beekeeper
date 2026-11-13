@@ -413,6 +413,29 @@ func (d *driver) provisionHosts(ctx context.Context) error {
 	return os.WriteFile(configFile, raw, 0o600)
 }
 
+// reconfigureHost changes a host's policy as an operator does: the host's
+// configuration changes and it prepares its policy again, and the desk's
+// agents.hosts entry names the digest prepare printed.
+func (d *driver) reconfigureHost(ctx context.Context, h harness.HostStep) error {
+	digest, err := harness.Reconfigure(ctx, harness.Desk{Env: d.stepEnv(deskCaller, nil)}, h.Name, h.Config)
+	if err != nil {
+		return fmt.Errorf("host %s: %w", h.Name, err)
+	}
+	raw, err := os.ReadFile(configFile)
+	if err != nil {
+		return err
+	}
+	cfg := map[string]any{}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return err
+	}
+	overlay(cfg, map[string]any{"agents": map[string]any{"hosts": map[string]any{h.Name: map[string]any{"policyDigest": digest}}}})
+	if raw, err = yaml.Marshal(cfg); err != nil {
+		return err
+	}
+	return os.WriteFile(configFile, raw, 0o600)
+}
+
 // repositories are the scenario's repositories: given.repositories and
 // given.github's, each once.
 func (d *driver) repositories() []string { return d.s.repositoryNames() }
@@ -621,7 +644,11 @@ func (d *driver) step(ctx context.Context, i int, st Step) StepResult {
 		sr.Args, failures = d.advance(ctx, st.Advance)
 		sr.Failures = append(sr.Failures, failures...)
 	case KindHost:
-		if err := d.fakes.ApplyHostStep(*st.Host); err != nil {
+		err := d.fakes.ApplyHostStep(*st.Host)
+		if err == nil && len(st.Host.Config) > 0 {
+			err = d.reconfigureHost(ctx, *st.Host)
+		}
+		if err != nil {
 			sr.Failures = append(sr.Failures, err.Error())
 		}
 	}
