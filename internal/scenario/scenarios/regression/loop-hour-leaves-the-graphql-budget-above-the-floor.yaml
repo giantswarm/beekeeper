@@ -123,8 +123,9 @@ when:
       - github: {calls: {path: graphql, operation: viewer, caller: loop, max: 250}}
       # The pull watch's polls: every 30 seconds for the first ten minutes,
       # then every two minutes, some 40; at the short interval all hour, some
-      # 100.
-      - github: {calls: {path: graphql, operation: rateLimit, caller: loop, max: 70}}
+      # 100. The operation matcher also matches root fields: HTTP budget
+      # probes include rateLimit too, so count only the watch's gh calls.
+      - github: {calls: {path: graphql, operation: rateLimit, caller: loop, via: gh, max: 70}}
       # Some 250 points; with those readings and polls, some 550.
       - github: {budget: {bucket: graphql, caller: loop, spent: {max: 350}}}
       - github: {budget: {bucket: graphql, remaining: {min: 1000}}}
