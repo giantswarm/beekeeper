@@ -973,7 +973,11 @@ func (l *Loop) moveServedDone(ctx context.Context, serves, ref string) error {
 	return err
 }
 
-const MergeableConflicting = "CONFLICTING"
+const (
+	MergeableConflicting = "CONFLICTING"
+	// MergeableUnknown is GitHub's mergeability while it is still computing it.
+	MergeableUnknown = "UNKNOWN"
+)
 
 // reviewOvertookDecision prevents a fresh exact-head authorization from
 // concealing a change request that arrived after the planner's review snapshot.

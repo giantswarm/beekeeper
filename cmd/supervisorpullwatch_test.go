@@ -211,7 +211,7 @@ func TestPullWatcherStopsWaitingForMergeabilityThatNeverComes(t *testing.T) {
 			w.Set([]string{loopPR}, nil, nil, 0, nil)
 			w.Snapshot.ListedAt = time.Now()
 			p := r.pull
-			p.Mergeable, p.Updated = "UNKNOWN", time.Now().Add(-tc.updated)
+			p.Mergeable, p.Updated = loop.MergeableUnknown, time.Now().Add(-tc.updated)
 			old := loop.ReadLoopPullBatch
 			t.Cleanup(func() { loop.ReadLoopPullBatch = old })
 			loop.ReadLoopPullBatch = func(context.Context, []string, map[string]loop.WatchedLoopPull, int) (map[string]loop.WatchedLoopPull, error) {

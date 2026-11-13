@@ -604,7 +604,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 		// Live, 22 old pull requests of unknown mergeability kept the whole
 		// watch at the short interval too: like a check that never comes, an
 		// old pull request's unknown mergeability no longer does (#3769).
-		if p.Pending || (p.Pull.Mergeable == "UNKNOWN" && !loopPullQuiet(p.Pull)) {
+		if p.Pending || (p.Pull.Mergeable == MergeableUnknown && !loopPullQuiet(p.Pull)) {
 			next = LoopPullShort
 		}
 	}
