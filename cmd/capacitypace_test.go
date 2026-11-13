@@ -7,8 +7,14 @@ import (
 	"time"
 )
 
-// paceReason is the person's words a pace override records.
-const paceReason = "usage reset in hand"
+// paceReason is the person's words a pace override records; paceOffArg
+// and paceOnArg are capacity pace's subcommands, paceUntil its end.
+const (
+	paceReason = "usage reset in hand"
+	paceOffArg = "off"
+	paceOnArg  = "on"
+	paceUntil  = "2h"
+)
 
 // pace runs capacity pace with args and returns its output.
 func (r *pickRig) pace(args ...string) (string, error) {
@@ -30,7 +36,7 @@ func TestCapacityPaceOffLetsAProviderRunAheadOfItsPace(t *testing.T) {
 	r.claude[1], r.codex[1] = 77, 70
 	r.want(noPick)
 
-	if _, err := r.pace("off", "claude", "--until", "2h", "--reason", paceReason); err != nil {
+	if _, err := r.pace(paceOffArg, claudeComm, untilFlag, paceUntil, flagNoteReason, paceReason); err != nil {
 		t.Fatalf("pace off: %v", err)
 	}
 	r.want("claude " + pickOpus)
@@ -44,7 +50,7 @@ func TestCapacityPaceOffLetsAProviderRunAheadOfItsPace(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
 		t.Fatal(err)
 	}
-	if po := p.Capacity.Providers["claude"].PaceOff; po == nil || po.Reason != paceReason || po.By != agentOne {
+	if po := p.Capacity.Providers[claudeComm].PaceOff; po == nil || po.Reason != paceReason || po.By != agentOne {
 		t.Errorf("claude's paceOff = %+v, want %q by %q", po, paceReason, agentOne)
 	}
 	if po := p.Capacity.Providers["codex"].PaceOff; po != nil {
@@ -68,16 +74,16 @@ func TestCapacityPaceOffLetsAProviderRunAheadOfItsPace(t *testing.T) {
 	r.reset7d = reset
 	r.want("claude " + pickOpus)
 
-	if _, err := r.pace("on", "claude"); err != nil {
+	if _, err := r.pace(paceOnArg, claudeComm); err != nil {
 		t.Fatalf("pace on: %v", err)
 	}
 	r.want(noPick)
-	if _, err := r.pace("on", "claude"); err == nil {
+	if _, err := r.pace(paceOnArg, claudeComm); err == nil {
 		t.Error("a second pace on claude: no refusal")
 	}
 
 	// Its time ends it.
-	if _, err := r.pace("off", "claude", "--until", "2h", "--reason", paceReason); err != nil {
+	if _, err := r.pace(paceOffArg, claudeComm, untilFlag, paceUntil, flagNoteReason, paceReason); err != nil {
 		t.Fatalf("pace off again: %v", err)
 	}
 	r.want("claude " + pickOpus)
@@ -88,11 +94,11 @@ func TestCapacityPaceOffLetsAProviderRunAheadOfItsPace(t *testing.T) {
 	}
 
 	for _, args := range [][]string{
-		{"off", "nobody", "--until", "2h", "--reason", paceReason},
-		{"off", "local", "--until", "2h", "--reason", paceReason},
-		{"off", "claude", "--until", "2h"},
-		{"off", "claude", "--reason", paceReason},
-		{"off", "claude", "--until", "-1h", "--reason", paceReason},
+		{paceOffArg, "nobody", untilFlag, paceUntil, flagNoteReason, paceReason},
+		{paceOffArg, executionLocal, untilFlag, paceUntil, flagNoteReason, paceReason},
+		{paceOffArg, claudeComm, untilFlag, paceUntil},
+		{paceOffArg, claudeComm, flagNoteReason, paceReason},
+		{paceOffArg, claudeComm, untilFlag, "-1h", flagNoteReason, paceReason},
 	} {
 		if _, err := r.pace(args...); err == nil {
 			t.Errorf("capacity pace %v: no refusal", args)
