@@ -359,10 +359,15 @@ const (
 	// OlderGo pins a Go on the host that is older than the go.mod of the
 	// repository it serves names.
 	OlderGo = "older-go"
+	// DropsSource answers every call but a start's source upload, whose
+	// connection the host drops: ssh exits 255. The host passes its checks
+	// and never acknowledges a start, as when a start's source bundle
+	// exceeds the transfer limit.
+	DropsSource = "drops-source"
 )
 
 // Faults are an execution host's faults.
-var Faults = []string{Unreachable, HostKeyChanged, MissingTool, OlderGo}
+var Faults = []string{Unreachable, HostKeyChanged, MissingTool, OlderGo, DropsSource}
 
 // Host is an SSH execution host of the scenario: an alias the fake ssh maps
 // to a root of its own under /work/hosts/<name>, with a home, a tool

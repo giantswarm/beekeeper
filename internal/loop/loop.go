@@ -2547,7 +2547,10 @@ func (l *Loop) claim(act superloop.Action, target string) error {
 
 // Reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
-// remove, note add, all logged as the loop), else not, and it runs.
+// remove, note add, all logged as the loop), else not, and it runs. A start
+// on an execution host logs its line at the reservation; one whose
+// reservation was released after it, unacknowledged by the host, started
+// nothing.
 func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Action, c LoopClaim) (string, bool, error) {
 	// Reconciliation runs in background action streams. Its history reads must
 	// not mutate the main pass's lifecycle or keep a stalled pass healthy.
@@ -2567,10 +2570,21 @@ func (l *Loop) Reconcile(ctx context.Context, st *state.State, act superloop.Act
 		return slices.ContainsFunc(evs, func(e state.Event) bool { return e.Verb == verb && match(e.Detail) })
 	}
 	opens := func(d string) bool { return strings.HasPrefix(d, c.Target+":") }
+	started := func() bool {
+		last := -1
+		for i, e := range evs {
+			if e.Verb == verbStart && opens(e.Detail) {
+				last = i
+			}
+		}
+		return last >= 0 && !slices.ContainsFunc(evs[last+1:], func(e state.Event) bool {
+			return e.Verb == executionReleasedEvent && opens(e.Detail)
+		})
+	}
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged(verbStart, opens)
+		done = started()
 	case superloop.KindGo:
 		l.Mu.Lock()
 		repairing := l.Stages[act.Key+" repair"]
@@ -3919,11 +3933,20 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		}
 		return startHost{}, nil
 	}
+	var unacknowledged map[execution.HostID]bool
+	if review {
+		unacknowledged = l.unacknowledgedHosts(name, repo)
+	}
 	for i, selector := range k.Hosts {
 		h, err := l.Host.ExecutionHost(selector)
 		if err != nil {
 			l.RecordHostPlacement(selector, repo, err.Error())
 			l.SayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
+			continue
+		}
+		if unacknowledged[h.Identity] {
+			l.RecordHostPlacement(selector, repo, "never acknowledged the start of "+name)
+			l.SayOnce("host unacknowledged "+selector+" "+name, "SUPERVISOR HOST SKIPPED %s: it never acknowledged the start of %q, which starts elsewhere", selector, name)
 			continue
 		}
 		if !h.AdmitsRepository(repo) {
@@ -3953,6 +3976,24 @@ func (l *Loop) startPlacement(ctx context.Context, name, repo string, review, se
 		return startHost{}, ErrLoopLater
 	}
 	return startHost{}, nil
+}
+
+// unacknowledgedHosts are the execution hosts that never acknowledged a
+// start of name for repo: its reservation there was released. A reviewer's
+// name is its pull request's round, so the round's next start goes to
+// another host or the coordinator, never back to the host that failed it.
+func (l *Loop) unacknowledgedHosts(name, repo string) map[execution.HostID]bool {
+	st, err := l.Host.Store().Read()
+	if err != nil {
+		return nil
+	}
+	hosts := map[execution.HostID]bool{}
+	for _, s := range st.Starts {
+		if r := s.Execution; r != nil && r.Released() && strings.EqualFold(s.Name, name) && strings.EqualFold(r.Request.Repository, repo) {
+			hosts[r.Handle.Ref.Host] = true
+		}
+	}
+	return hosts
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:

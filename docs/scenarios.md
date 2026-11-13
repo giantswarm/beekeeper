@@ -523,6 +523,7 @@ given:
 | `host-key-changed` | `ssh` fails the host key check: exit 255 with OpenSSH's warning |
 | `missing-tool` | the remote shell does not find beekeeper: exit 127 |
 | `older-go` | the host pins Go 1.21.0 while its repository's `go.mod` names 1.26.0 |
+| `drops-source` | the host passes its checks but drops a start's source upload: exit 255 |
 | `slow` | every call is delayed; one slower than `ConnectTimeout` times out with 255 |
 
 The `host` step changes a host's faults while the scenario runs:
