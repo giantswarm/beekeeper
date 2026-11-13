@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -210,7 +210,7 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 	} else {
 		argv = ResumeArgv(bin, model, *threadID, effort...)
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is built from the configured codex binary and model
+	cmd := proc.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is built from the configured codex binary and model
 	configureTurnCmd(cmd)
 	if !strings.HasSuffix(prompt, "\n") {
 		prompt += "\n"

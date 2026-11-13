@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The helper contains no credential; it expands the client-only environment.
@@ -81,7 +81,10 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					return err
 				}
 				if args[0] == "pr" && len(args) > 1 && args[1] == workerGitHubCreate {
-					branch := execution.GitHubBranch(j.Handle.Ref)
+					if j.Request.PublicationPR != "" {
+						return refused("continuation must update %s instead of creating another PR", j.Request.PublicationPR)
+					}
+					branch := targetBranch
 					for i, arg := range args {
 						if arg == workerGitHubHeadFlag || arg == "-H" {
 							if i+1 >= len(args) || args[i+1] != branch {
@@ -161,7 +164,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if cwdErr != nil {
 					return cwdErr
 				}
-				local := exec.CommandContext(ctx, binary, args...) //nolint:gosec // system git, no credential or configuration injection
+				local := proc.CommandContext(ctx, binary, args...) //nolint:gosec // system git, no credential or configuration injection
 				var localEnv []string
 				for _, kv := range env {
 					if !strings.HasPrefix(kv, "GH_TOKEN=") && !strings.HasPrefix(kv, "GITHUB_TOKEN=") {
@@ -210,7 +213,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					return refused("push assignment changed during preparation")
 				}
 			}
-			child := exec.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
+			child := proc.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
 			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = workDir, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
 			return workerGitHubCommandError(child.Run())
 		}})
@@ -224,6 +227,9 @@ type workerGitHubPushTarget struct {
 }
 
 func executionGitHubTargetBranch(j execution.Journal) string {
+	if j.Request.PublicationBranch != "" {
+		return j.Request.PublicationBranch
+	}
 	return execution.GitHubBranch(j.Handle.Ref)
 }
 
@@ -280,7 +286,7 @@ func workerGitHubCommandError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var status *exec.ExitError
+	var status *proc.ExitError
 	if errors.As(err, &status) {
 		code := status.ExitCode()
 		if code < 1 {
@@ -298,7 +304,7 @@ func workerGitHubCommandError(err error) error {
 func workerGitHubIsolatedPush(ctx context.Context, binary, workspace, repository, branch string, env []string) ([]string, []string, func(), error) {
 	env = append(env, "GIT_NO_REPLACE_OBJECTS=1")
 	inspect := func(args ...string) (string, error) {
-		command := exec.CommandContext(ctx, binary, args...) //nolint:gosec // system git; fixed read-only revision queries without credentials
+		command := proc.CommandContext(ctx, binary, args...) //nolint:gosec // system git; fixed read-only revision queries without credentials
 		command.Dir = workspace
 		for _, kv := range env {
 			if !strings.HasPrefix(kv, "GH_TOKEN=") {

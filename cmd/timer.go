@@ -31,7 +31,8 @@ disable timers. Existing watches and loops share the same transactional
 claims with the dispatcher, so they can coexist without double firing.
 
 Without a subcommand, lists the open timers; -v adds what the last check
-of each condition found.`,
+of each condition found. A probe that could not run is said without -v,
+with its error and since when.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.timerList(verbose) },
 	}
@@ -93,7 +94,14 @@ floor:
                                          release of status.history)
   controlplane-ready context/namespace/name   (every replica ready and updated)
 --probe is a quick check that exits 0 once the condition holds, with a
-10 s budget per check. It must answer within seconds: for example, compare
+10 s budget per check. Only a probe that ran and exits non-zero is "not
+yet". One that could not run says nothing of its condition: it exits 126
+or 127 (a command not executable or not found) or 255 (ssh could not reach
+or log in to its host), says on stderr that a host name did not resolve,
+or spends its budget. Such a check is a TIMER UNREADABLE line, the guide
+hears of it once as a GUIDE PROBLEM for the checks in a row that fail so,
+and timer list shows its error until a check runs it again.
+A probe must answer within seconds: for example, compare
 a HelmRelease version using kubectl get helmrelease … -o jsonpath, or use
 beekeeper lease status <resource>. Never use devctl … wait or
 beekeeper gate -- devctl … wait: those wait rather than check. Use
@@ -222,7 +230,10 @@ func (a *app) printTimers(timers []state.Timer, verbose bool) {
 			when += " (due)"
 		}
 		_, _ = fmt.Fprintf(a.out, "#%d [%s, set by %s] %s\n", t.ID, when, t.By.Name, t.What)
-		if verbose && t.Conditional() {
+		// A probe that could not run is said without -v: its timer waits
+		// on a condition nobody can see. Failing, not Unreadable: a
+		// probe that held keeps the reason of its last failed check.
+		if (verbose && t.Conditional()) || !t.Failing.IsZero() {
 			_, _ = fmt.Fprintf(a.out, "    %s\n", lastCheck(a.now, t))
 		}
 	}
@@ -230,6 +241,9 @@ func (a *app) printTimers(timers []state.Timer, verbose bool) {
 
 // lastCheck says what t's last check found.
 func lastCheck(now time.Time, t state.Timer) string {
+	if t.Stuck && !t.Failing.IsZero() {
+		return fmt.Sprintf("not seen to hold since %s; %s", clock(now, t.Since), lastCheckOnly(now, t))
+	}
 	if t.Stuck {
 		return fmt.Sprintf("not held since %s; %s", clock(now, t.Since), lastCheckOnly(now, t))
 	}
@@ -241,8 +255,10 @@ func lastCheckOnly(now time.Time, t state.Timer) string {
 	switch {
 	case t.Checked.IsZero():
 		return "not checked yet"
+	case t.Unreadable && !t.Failing.IsZero():
+		return fmt.Sprintf("checked %s: %s since %s: %s", clock(now, t.Checked), unchecked(t), clock(now, t.Failing), t.Reason)
 	case t.Unreadable:
-		return fmt.Sprintf("checked %s: cannot be read: %s", clock(now, t.Checked), t.Reason)
+		return fmt.Sprintf("checked %s: %s: %s", clock(now, t.Checked), unchecked(t), t.Reason)
 	case t.Reason != "":
 		return fmt.Sprintf("checked %s: not yet: %s", clock(now, t.Checked), t.Reason)
 	}
@@ -275,7 +291,7 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 	case r.holds:
 		found = "it holds"
 	case r.unreadable:
-		found = "cannot be read"
+		found = unchecked(t)
 	}
 	if r.reason != "" {
 		found += ": " + r.reason

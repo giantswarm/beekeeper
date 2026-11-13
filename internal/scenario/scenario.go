@@ -4,14 +4,17 @@ package scenario
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,6 +80,10 @@ type Given struct {
 	Desk Desk `yaml:"desk"`
 	// Repositories each get a bare Git origin with one commit on main.
 	Repositories []Repository `yaml:"repositories"`
+	// Checkouts are repositories of the scenario cloned on the desk, at
+	// /work/src/<owner>/<name>, as an operator keeps the checkout a
+	// session's --dir names (agents.roots holds /work/src).
+	Checkouts []string `yaml:"checkouts"`
 	// Calls answer external programs; a call none answers fails the
 	// scenario.
 	Calls []Call `yaml:"calls"`
@@ -103,6 +110,16 @@ type Given struct {
 	// Releases are beekeeper's own releases, for self-update: the one the
 	// desk runs and those the scenario's GitHub publishes.
 	Releases Releases `yaml:"releases"`
+	// Files are written under /work before the desk starts: a brief a
+	// start by hand reads.
+	Files []File `yaml:"files"`
+}
+
+// File is a file of the scenario's /work: Path relative to it, and its
+// Content.
+type File struct {
+	Path    string `yaml:"path"`
+	Content string `yaml:"content"`
 }
 
 // Desk is the desk's configuration: Config is laid over the generated
@@ -114,6 +131,16 @@ type Desk struct {
 // Repository is a repository on the fake origin, owner/name.
 type Repository struct {
 	Name string `yaml:"name"`
+	// Checkout is a person's main checkout of the repository, the --dir of
+	// a hand start.
+	Checkout *Checkout `yaml:"checkout"`
+}
+
+// Checkout is a main checkout of a repository's origin, cloned under its
+// GitHub URL to /work/checkouts/<owner>/<name>. Config is the checkout's
+// own Git configuration (git config <key> <value>), such as push.default.
+type Checkout struct {
+	Config map[string]string `yaml:"config"`
 }
 
 // Call is one answer of the world: the first call of Program whose
@@ -127,12 +154,18 @@ type Call struct {
 	Times   int      `yaml:"times"`
 }
 
-// Response is what a fake prints and exits with.
+// Response is what a fake prints and exits with, Delay later in real time
+// (a slow command: devctl waiting for a release), at most MaxCallDelay.
 type Response struct {
-	Stdout string `yaml:"stdout"`
-	Stderr string `yaml:"stderr"`
-	Exit   int    `yaml:"exit"`
+	Stdout string   `yaml:"stdout"`
+	Stderr string   `yaml:"stderr"`
+	Exit   int      `yaml:"exit"`
+	Delay  Duration `yaml:"delay"`
 }
+
+// MaxCallDelay bounds a given call's delay below the minute a fake waits
+// for the world's answer.
+const MaxCallDelay = 50 * time.Second
 
 // Step is one when step: exactly one of run, background, stop, wait_for,
 // advance, github, fault and host, with optional expectations of its own
@@ -350,6 +383,8 @@ var (
 	nameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	issueRE = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$`)
 	repoRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	// gitConfigKeyRE is section.key or section.subsection.key.
+	gitConfigKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*\.(.+\.)?[A-Za-z][A-Za-z0-9-]*$`)
 )
 
 // Load reads and validates one scenario file.
@@ -432,10 +467,22 @@ func (s *Scenario) Validate() error {
 		if !repoRE.MatchString(r.Name) {
 			bad("given.repositories: %q is not owner/name", r.Name)
 		}
+		if r.Checkout != nil {
+			for key := range r.Checkout.Config {
+				if !gitConfigKeyRE.MatchString(key) {
+					bad("given.repositories: %s: checkout.config: %q is no Git configuration key", r.Name, key)
+				}
+			}
+		}
 	}
 	if g := s.Given.GitHub; g != nil {
 		if err := g.Validate(); err != nil {
 			bad("given.github: %v", err)
+		}
+	}
+	for _, name := range s.Given.Checkouts {
+		if !slices.Contains(s.repositoryNames(), name) {
+			bad("given.checkouts: %q is no repository of the scenario", name)
 		}
 	}
 	for i, tool := range s.Given.Tools {
@@ -451,12 +498,23 @@ func (s *Scenario) Validate() error {
 	for _, line := range s.Given.Releases.validate() {
 		bad("given.releases: %s", line)
 	}
+	for i, f := range s.Given.Files {
+		switch {
+		case !filepath.IsLocal(f.Path):
+			bad("given.files[%d]: path %q is not relative to /work", i, f.Path)
+		case slices.ContainsFunc(s.Given.Files[:i], func(o File) bool { return filepath.Clean(o.Path) == filepath.Clean(f.Path) }):
+			bad("given.files[%d]: %q is named twice", i, f.Path)
+		}
+	}
 	for i, c := range s.Given.Calls {
 		if !slices.Contains(s.programs(), c.Program) {
 			bad("given.calls[%d]: program %q is none of %s", i, c.Program, strings.Join(s.programs(), ", "))
 		}
 		if c.Times < 0 {
 			bad("given.calls[%d]: times %d", i, c.Times)
+		}
+		if c.Respond.Delay.Duration > MaxCallDelay {
+			bad("given.calls[%d]: delay %s is over %s, the fake's wait for an answer", i, c.Respond.Delay, MaxCallDelay)
 		}
 		if _, err := compileArgs(c.Args); err != nil {
 			bad("given.calls[%d]: %v", i, err)
@@ -756,7 +814,14 @@ func LoadDir(root string) ([]*Scenario, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	slices.SortFunc(out, func(a, b *Scenario) int { return strings.Compare(a.Flow+"/"+a.Name, b.Flow+"/"+b.Name) })
+	// Start the longest-timeout scenarios first so a long regression run does
+	// not trail alone at the end of a parallel suite.
+	slices.SortFunc(out, func(a, b *Scenario) int {
+		if c := cmp.Compare(b.Timeout.Duration, a.Timeout.Duration); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Flow+"/"+a.Name, b.Flow+"/"+b.Name)
+	})
 	return out, nil
 }
 
@@ -774,6 +839,60 @@ func Filter(all []*Scenario, flows, tags []string) []*Scenario {
 		out = append(out, s)
 	}
 	return out
+}
+
+// Shard is one of Total disjoint parts of the suite: CI runs each in its
+// own container, so the suite grows without crossing its wall-time budget.
+// The zero Shard is the whole suite.
+type Shard struct {
+	Index, Total int
+}
+
+// ParseShard reads "<index>/<total>" (index from 0); empty is the whole
+// suite.
+func ParseShard(s string) (Shard, error) {
+	if strings.TrimSpace(s) == "" {
+		return Shard{}, nil
+	}
+	i, n, ok := strings.Cut(strings.TrimSpace(s), "/")
+	index, err1 := strconv.Atoi(i)
+	total, err2 := strconv.Atoi(n)
+	if !ok || err1 != nil || err2 != nil || total < 1 || index < 0 || index >= total {
+		return Shard{}, fmt.Errorf("shard %q is not <index>/<total> with 0 <= index < total", s)
+	}
+	return Shard{Index: index, Total: total}, nil
+}
+
+// Holds reports whether s runs in this shard. A scenario's shard is the
+// FNV-1a hash of its flow/name modulo Total: every scenario runs in exactly
+// one shard, the suite and the control agree on it, and adding or removing
+// a scenario moves no other.
+func (sh Shard) Holds(s *Scenario) bool {
+	if sh.Total <= 1 {
+		return true
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s.Flow + "/" + s.Name))
+	return int(h.Sum32()%uint32(sh.Total)) == sh.Index //nolint:gosec // Total is a small positive count
+}
+
+// Of keeps the scenarios of this shard.
+func (sh Shard) Of(all []*Scenario) []*Scenario {
+	var out []*Scenario
+	for _, s := range all {
+		if sh.Holds(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// String is the shard as ParseShard reads it, "all" for the whole suite.
+func (sh Shard) String() string {
+	if sh.Total <= 1 {
+		return "all"
+	}
+	return fmt.Sprintf("%d/%d", sh.Index, sh.Total)
 }
 
 // SplitList splits a comma-separated list, dropping empty entries.

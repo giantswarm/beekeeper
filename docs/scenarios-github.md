@@ -82,7 +82,8 @@ given:
 **Origins.** Every repository has a bare Git origin, and GitHub's branches, heads, commits, files,
 diffs and merges are the origin's, read and written with real `git`. A pull request's head is its
 branch's head, so a worker's push moves it, and a merge commits to the base branch and closes the
-issues the pull request closes.
+issues the pull request closes. As on GitHub, `refs/pull/<n>/head` follows that head and keeps its
+last commit once the branch is deleted, so a fetch of it reads a commit pushed from another clone.
 
 **The board.** Without `projects`, the scenario's board is the desk's (`board.owner`,
 `board.project`), with the Status options Todo, Ready, In Progress, Blocked and Done plus any an
@@ -94,10 +95,19 @@ scenario's board and holds exactly the fields and options it declares.
 file in the sandbox, read at each download: a binary. [`given.releases`](scenarios.md#releases-and-self-update)
 publishes beekeeper's own releases this way.
 
-**Mergeability.** `mergeStateStatus` and `reviewDecision` follow from the reviews, the checks on
-the head and the base's `protection`, as on GitHub: BLOCKED without the required approval or check,
-UNSTABLE with a pending or red check, else CLEAN. `mergeable`, `merge_state` and `review_decision`
-on a pull request declare them instead.
+**Mergeability.** `mergeable` follows from the origin: CONFLICTING when the head does not merge
+into its base without conflicts (`git merge-tree`), else MERGEABLE, so a push to the base that
+conflicts with a pull request makes it conflicting, and a merge refuses it. `mergeStateStatus`
+and `reviewDecision` follow from that, the reviews, the checks on the head and the base's
+`protection`, as on GitHub: DIRTY when conflicting, BLOCKED without the required approval or
+check, UNSTABLE with a pending or red check, else CLEAN. `mergeable`, `merge_state` and
+`review_decision` on a pull request declare them instead.
+
+**Comparisons.** `compare/<base>...<head>` lists each file as GitHub does: its status (added,
+removed, modified, renamed, copied, changed), a rename's `previous_filename`, its blob `sha` and
+its `patch`, the hunks of `git diff` against the merge base. The desk's approval coverage
+(`github.ApprovalCovers`) reads them, so a scenario's merge of the base, conflict resolution or
+rebase after an approval is judged as on GitHub.
 
 ## Callers and budgets
 
@@ -186,7 +196,7 @@ then:
 | `calls` | the calls matching `method`, `path`, `operation`, `caller`, `via`, `status`, `conditional` and `fault` number `min` to `max` |
 | `budget` | what `caller` (everyone when empty) `spent` of `bucket`, and what `remaining` of it |
 | `pull` | a pull request (`number`, or the newest of `head`): `state`, `draft`, `labels`, `checks`, `review_decision`, `merged_into`, `comments`, `ahead` (an open one's commits beyond its base) |
-| `issue` | an issue: `state`, `labels`, `board` (an archived item is `none`), `archived`, `comments`, and the `pulls` and `open_pulls` that close it |
+| `issue` | an issue: `state`, `body` (exact current description), `labels`, `board` (an archived item is `none`), `archived`, `comments`, and the `pulls` and `open_pulls` that close it |
 
 A number is exact (`spent: 1`) or a range (`spent: {min: 1, max: 5}`). A `github` expectation is
 observed for every step kind, in `then`, inline and in `wait_for`. The call log is in the

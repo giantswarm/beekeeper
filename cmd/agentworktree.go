@@ -17,7 +17,10 @@ import (
 
 var taskRepositoryReference = regexp.MustCompile(`(?:^|[\s(])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+`)
 
-var taskRepository = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/(issues|pull)/(\d+))?`)
+// taskRepository is a GitHub URL in a brief. A name never ends in a period:
+// a URL that ends a sentence (the fatal sentinel's repair brief) names the
+// repository the URLs after it name.
+var taskRepository = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]*[A-Za-z0-9_-])(?:/(issues|pull)/(\d+))?`)
 
 // checkoutDir deliberately rejects linked worktrees and subdirectories: the
 // harness must load the repository's own instructions from its main checkout.
@@ -67,15 +70,22 @@ func (a *app) startCheckout(dir string) (string, error) {
 	return "", usageErr("--dir must be exactly one repository checkout (not a parent folder or worktree); accepted checkouts: %s", strings.Join(accepted, ", "))
 }
 
-func singleTaskRepository(brief string) error {
-	repos := map[string]bool{}
+// briefRepositories are the repositories a brief names, by URL or by
+// owner/repo#n, lower-cased and sorted, each once.
+func briefRepositories(brief string) []string {
+	var repos []string
 	for _, m := range taskRepository.FindAllStringSubmatch(brief, -1) {
-		repos[strings.ToLower(m[1])] = true
+		repos = append(repos, strings.ToLower(m[1]))
 	}
 	for _, m := range taskRepositoryReference.FindAllStringSubmatch(brief, -1) {
-		repos[strings.ToLower(m[1])] = true
+		repos = append(repos, strings.ToLower(m[1]))
 	}
-	if len(repos) > 1 {
+	slices.Sort(repos)
+	return slices.Compact(repos)
+}
+
+func singleTaskRepository(brief string) error {
+	if len(briefRepositories(brief)) > 1 {
 		return usageErr("task names multiple repositories; split it into one task per repository")
 	}
 	return nil
@@ -182,12 +192,31 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 			}
 		}
 	}
-	args := []string{"worktree", loop.LoopAdd, branchFlag, branch, target, ref}
 	if review {
-		args = []string{"worktree", loop.LoopAdd, "--detach", target, ref}
+		if _, err := runGit(ctx, checkout, "worktree", loop.LoopAdd, "--detach", target, ref); err != nil {
+			return "", err
+		}
+		return rules, nil
 	}
-	if _, err := runGit(ctx, checkout, args...); err != nil {
+	// The worker branch never tracks the default branch it starts from:
+	// under push.default=upstream, git push and git push -u origin <branch>
+	// would update main. Its upstream is its own name on origin, which also
+	// repairs a reused local branch that still tracks main.
+	if _, err := runGit(ctx, checkout, "worktree", loop.LoopAdd, "--no-track", branchFlag, branch, target, ref); err != nil {
+		return "", err
+	}
+	if err := setWorkerUpstream(ctx, checkout, branch); err != nil {
 		return "", err
 	}
 	return rules, nil
+}
+
+// setWorkerUpstream makes origin/<branch> the upstream of a worker branch,
+// whether or not origin has the branch yet.
+func setWorkerUpstream(ctx context.Context, checkout, branch string) error {
+	if _, err := runGit(ctx, checkout, "config", "branch."+branch+".remote", workerGitHubOrigin); err != nil {
+		return err
+	}
+	_, err := runGit(ctx, checkout, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	return err
 }

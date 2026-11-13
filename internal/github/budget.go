@@ -19,10 +19,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // APIURL is GitHub's API; BEEKEEPER_GITHUB_API points the probes at
@@ -130,7 +131,7 @@ func (b Budget) SpentUntil(now time.Time) time.Time {
 
 // Token returns the token of the gh CLI's login.
 func Token(ctx context.Context) (string, error) {
-	c := exec.CommandContext(ctx, "gh", "auth", "token")
+	c := proc.CommandContext(ctx, "gh", "auth", "token")
 	c.Env = DevctlEnv(ghEnv(os.Environ(), Repo(ctx)), DevctlSkipVersionCheck())
 	out, err := c.Output()
 	if err != nil {

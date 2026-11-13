@@ -34,7 +34,7 @@ const (
 
 // runCacheCleaner runs a cleaner in its cache root; tests replace it.
 var runCacheCleaner = func(ctx context.Context, dir string, argv []string) error {
-	exe, err := proc.LookPath(argv[0])
+	exe, err := proc.LookTool(argv[0])
 	if err != nil {
 		return err
 	}

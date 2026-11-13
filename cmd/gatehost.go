@@ -19,6 +19,7 @@ func gateApp(h gate.Host) *app {
 // The gate calls the command through Cmd.
 func init() {
 	gate.Cmd = gate.Command{
+		AwaitsRelease:    awaitsRelease,
 		BinaryVersion:    binaryVersion,
 		Clock:            clock,
 		DevctlCommandEnv: devctlCommandEnv,

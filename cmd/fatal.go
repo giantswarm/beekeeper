@@ -37,6 +37,7 @@ const (
 	fatalStateDirOption    = "--state-dir"
 	fatalDirOption         = "--dir"
 	fatalBranchOption      = "--branch"
+	fatalHostOption        = "--host"
 	fatalHarnessOption     = "--harness"
 	fatalExcludeOption     = "--exclude"
 	fatalGateOption        = "--gate"
@@ -372,8 +373,10 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			if ag.Park != nil || ag.Import.Pending(now) || ag.Execution != nil {
 				return true
 			}
+			// A start still launching gets two minutes to show its session;
+			// a start that failed has none coming, so its process decides.
 			for _, incident := range q.Incidents {
-				if incident.Owner == name && now.Sub(incident.LastAttempt) < 2*time.Minute {
+				if incident.Owner == name && incident.StartError == "" && now.Sub(incident.LastAttempt) < 2*time.Minute {
 					return true
 				}
 			}
@@ -500,7 +503,10 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if checkout == "" {
 		checkout = filepath.Join(cfg.Projects.Dir, loop.RepoName(repo))
 	}
-	args = append(args, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
+	// The repair works in this machine's checkout, may restore its
+	// configuration from the snapshot and proves the probe here, so it is
+	// never placed on an execution host (supervisor.hostsFirst).
+	args = append(args, fatalHostOption, executionLocal, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
 	if len(cfg.Capacity.Choices) > 0 {
 		args = append(args, fatalHarnessOption, "auto")
 		for _, harness := range slices.Compact(broken) {
@@ -510,23 +516,66 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	args = append(args, briefPath)
 	launchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	_, code, runErr := loop.BeekeeperRun(launchCtx, args...)
-	x.Outcome = fmt.Sprintf("repair start exited %d; awaiting probe verification", code)
-	if runErr == nil && (code == ExitRefused || code == 75) {
+	out, code, runErr := loop.BeekeeperRun(launchCtx, args...)
+	exhausted := false
+	switch {
+	case runErr != nil:
+		x.Outcome = "repair launch uncertain; reserved owner retained"
+	case code == 0:
+		x.Outcome = "repair start exited 0; awaiting probe verification"
+	case code == ExitRefused || code == 75:
 		// Admission refusals created no worker and consume no repair attempt.
 		x.Attempts--
 		x.Owner = ""
 		x.Outcome = "waiting for normal start admission; retry after cooldown"
+	default:
+		// A start that failed runs no repair: no probe can verify one, so
+		// the next pass retries, and the last failure goes to the guide.
+		exhausted = x.StartFailed(fmt.Sprintf("exit %d: %s", code, fatalStartError(out)))
 	}
-	if runErr != nil {
-		x.Outcome = "repair launch uncertain; reserved owner retained"
+	_, _ = fmt.Fprintf(a.out, "%s: owner %q; attempt %d/%d; %s\n", x.ID, x.Owner, x.Attempts, fatal.MaxAttempts, x.Outcome)
+	events := []state.Event{{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}}
+	if exhausted {
+		events = append(events, fatalStartProblem(now, *x, repo))
 	}
-	_, _ = fmt.Fprintf(a.out, "%s: owner %q; attempt %d/3; %s\n", x.ID, x.Owner, x.Attempts, x.Outcome)
-	if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}); err != nil {
-		return err
+	for _, e := range events {
+		if err := store.Record(e); err != nil {
+			return err
+		}
 	}
 	_, _ = fatalProbe(observationCtx, "notify-send", "beekeeper system repair", x.ID+": "+x.Outcome)
 	return q.Save(dir)
+}
+
+// fatalStartErrorMax bounds the start's error kept on the incident.
+const fatalStartErrorMax = 600
+
+// fatalStartError is a failed repair start's own error: the last lines it
+// printed, on one line, bounded. Its error lines come last.
+func fatalStartError(out string) string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 {
+		return "no output"
+	}
+	text := strings.Join(lines[max(0, len(lines)-3):], " | ")
+	if r := []rune(text); len(r) > fatalStartErrorMax {
+		text = "…" + string(r[len(r)-fatalStartErrorMax:])
+	}
+	return text
+}
+
+// fatalStartProblem is the guide's report of an outage whose every repair
+// start failed: no repair runs and the sentinel starts none again.
+func fatalStartProblem(now time.Time, x fatal.Incident, repo string) state.Event {
+	finding := fmt.Sprintf("Fatal outage %s (scope: %s) has no repair: all %d repair starts failed, the last with %s. Evidence: %s. The sentinel starts no further repair of this outage: fix why beekeeper agents start fails for it, then repair %s by hand; beekeeper fatal status shows the incident.",
+		x.ID, x.Scope(), x.Attempts, x.StartError, x.Evidence, repo)
+	return state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: loop.LoopFileVerb,
+		Detail: fmt.Sprintf("[fatal-repair-start %s %d] fatal repair of %s could not start%s%s", x.ID, x.Opened.UnixNano(), x.ID, loop.FileReportSeparator, finding)}
 }
 
 // fatalMain checks only completed failing checks on the current default-branch

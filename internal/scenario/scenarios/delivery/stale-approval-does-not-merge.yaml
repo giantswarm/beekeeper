@@ -1,16 +1,15 @@
 name: stale-approval-does-not-merge
 description: >
-  An approval of an older head merges nothing. Review round one approves
-  the head the worker parked on. Then the branch moves: a commit lands on
-  it that nobody parked for. The new head is green, but its only approval
-  names the old head, so the loop gives no go, says that the head moved
-  past its approval, and the pull request stays open.
-issue: https://github.com/giantswarm/beekeeper/issues/3793
+  An approval of an older head merges nothing nobody parked on. Review
+  round one approves the head the worker parked on. Then the branch moves:
+  a commit lands on it that nobody parked for. The new head is green, but
+  its only approval names the old head, so the loop gives no go and says
+  that the head moved past its approval: its worker parks on it for the
+  merge go, and no second review runs for it. The pull request stays open.
+issue: https://github.com/giantswarm/beekeeper/issues/3862
 flow: delivery
 tags: [delivery, loop, review, merge]
 timeout: 150s
-control:
-  none: states the delivery behavior main already has; this change only adds the scenario
 
 given:
   desk:
@@ -109,7 +108,7 @@ when:
     run: {args: [supervisor, loop, --once]}
     expect:
       - exit: 0
-      - output: {contains: ["moved past head", "park on the pull request again for its review"]}
+      - output: {contains: ["moved past head", "park on the pull request again for its merge go (no second review runs)"]}
   - advance: 2s
   # However often the loop looks: no go for the head nobody reviewed.
   - name: still
@@ -121,5 +120,6 @@ then:
   - github: {pull: {repo: example/app, number: 2, state: open}}
   - github: {issue: {repo: example/app, number: 1, state: open, open_pulls: 1}}
   - calls: {program: gh, args: [pr, merge], max: 0}
+  # One review session, never a second one for the moved head.
   - worker: {name: 'Review app 2 r\d+', turns: 1}
   - events: {contains: [supervisor.review, supervisor.leave], not_contains: [merge.authorized, merge.start, supervisor.merge]}

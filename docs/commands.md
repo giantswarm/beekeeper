@@ -21,7 +21,8 @@ configured cost, and `capacity.choices` order breaking ties, from the model's bu
 multi-bucket providers) and self-hosted choices as fallbacks. Each eligible provider has room, its
 5-hour window below threshold and its 7-day use within its worker weekly cap (`sevenDayMax`) and,
 for a worker start, not ahead of the even pace of its window (a negative `paceMargin` tightens it; a
-positive one, a choice's `skipPace` and `capacity.reviewSkipPace` are read and ignored); a stale or
+positive one, a choice's `skipPace` and `capacity.reviewSkipPace` are read and ignored; only the
+person's pace override, [`capacity pace off`](#beekeeper-capacity-pace), lifts it); a stale or
 failed usage read counts as no room (`ceiling 0`, `room 0`) for that provider, except built-in
 Codex: an ordinary read or validation failure keeps its last good windows (including active limits),
 or its configured ceiling when no valid saved reading exists; the watch retains an unreadable
@@ -62,6 +63,25 @@ still apply; `--review-of-self-hosted` decides the reviewer of a pull request a 
 worker wrote, which takes no self-hosted provider. `--json` gives the pick with every choice's
 reason, each eligible subscription choice's `rate` (remaining percent per hour) and `behindPace` in
 percentage points, each provider's windows and verdict, and the headroom. Read-only.
+
+### `beekeeper capacity pace`
+
+`beekeeper capacity pace [off <provider> --until <time> --reason <why> | on <provider>]`
+
+No worker start runs ahead of the even pace of its provider's 7-day window. `pace off` records the
+person's word that a subscription provider's worker starts may, for a while: a usage reset in hand,
+say, with the week's budget to spend before it. Until `--until` (`23:00`, `2026-11-15 23:00`, RFC
+3339 or a duration such as `48h`), and only within the 7-day window current when it was set, the
+provider's worker starts are neither refused for running ahead of the pace nor capped by its
+`paceCaps`; its weekly caps (`sevenDayMax`, a choice's worker `sevenDayMax`, 100%), its 5-hour
+window, its ceiling and the machine guards still bound them, so the supervisor loop schedules it up
+to the weekly cap. The override ends at its time, once the provider's 7-day window starts anew (the
+reset used, or the week over), or with `pace on <provider>`; the pace then holds again. A second
+`pace off` of the provider replaces the first. `--reason` is required, in the person's words.
+
+`beekeeper capacity` shows the override on the provider's line (`pace off until 18:00: <reason>`,
+or `pace off ended: the 7-day window started anew`) and under `providers.<name>.paceOff` in
+`--json`; `capacity pace` lists those in effect, and `beekeeper handover` in its `pace` section.
 
 ### `beekeeper status`
 
@@ -355,9 +375,10 @@ it; `watch` prints one line when the session ends, naming the issue to re-query.
 
 Everything on the desk, as Markdown, from the live state: whether the supervisor loop runs, leases
 and grants, holds and their exceptions, agents, session records, notes with their defaults, the
-decisions answered within the last day, timers, the merge lanes with their queues and settling
-merges, what the alert watch reads (the installations and why, the ignored alert names, the
-baseline), and the board holds (`--section board-holds`): read from GitHub with the read `board
+decisions answered within the last day, timers, the configuration and pace overrides in effect
+(`--section pace`: [`capacity pace off`](#beekeeper-capacity-pace)), the merge lanes with their
+queues and settling merges, what the alert watch reads (the installations and why, the ignored
+alert names, the baseline), and the board holds (`--section board-holds`): read from GitHub with the read `board
 next` makes, every held board item with what holds it, its open blockers (`board block`), its Status
 set after they closed, or the open decision that holds it (`note add --holds`) with its person; a
 failed read is shown as not read, never filled from the state.
@@ -1014,6 +1035,12 @@ beside a finding, it is refused (exit 3). beekeeper delivers them itself: both a
 supervisor to file and hand to a worker; a finding that names its issue's URL
 (`https://github.com/<owner>/<repo>/issues/<n>`) is filed already, and its line says so.
 
+`idle --done` (not `--blocked`) also retires the park of every other worker on the same task
+issue, the one its serve record or else its task names: that worker's task ends as done, its serve
+records and the timers that wake it go (`timer.done`), and an `agents.park-retired` event says so.
+Its wake would only start a session that finds the work done
+([Parking](worker-sessions.md#parking)).
+
 The supervisor loop logs unfiled findings intact in `supervisor.file`; `guide watch` delivers them
 once as `GUIDE PROBLEM` to file in their owning repositories, before the agent leaves the roster.
 These status reports create no decision notes and need no thread reference. Printed reports escape
@@ -1199,7 +1226,9 @@ worker assignment. Reports explicitly naming only the worker’s claimed issues 
 in the delivery timeline as `supervisor.progress`, including after the worker leaves; they create no
 guide filing task. Unknown ownership and reports naming another repository remain findings. Repeated
 fingerprints already mapped to filed issues increment their observation tally without creating new
-guide work.
+guide work. A multiline report in the filing format of `agents problem --help` (an owner or issue
+URL, a stable title and the complete current description) is placed by the loop instead, its own
+issue's included: see [Filing findings](supervisor-loop.md#filing-findings).
 
 ### `beekeeper agents note`
 
@@ -1378,7 +1407,18 @@ keeps waiting; `timer list -v` says since when. A reference the watch cannot rea
 context, no access, no such kind or object) is one `TIMER UNREADABLE` line, again when the reason
 changes, and the timer keeps waiting; `timer list -v` shows what each timer's last check found,
 `timer check <id>` runs it now. `--until` ends the wait: the timer then fires as timed out, or with
-`--expire` closes unfired (`TIMER EXPIRED`).
+`--expire` closes unfired (`TIMER EXPIRED`), each saying whether the last check found the condition
+false or could not make it.
+
+Only a probe that ran and exits non-zero is "not yet". A probe that could not run says nothing of
+its condition: it exits 126 or 127 (a command not executable or not found) or 255 (ssh could not
+reach or log in to its host), its stderr says a host name did not resolve (`Could not resolve
+hostname`, `Name or service not known`, `no such host`, …), or it spends its 10 s budget. Such a
+check is a `TIMER UNREADABLE` line (`… could not run (<error>)`), and the guide hears of it once
+for the checks in a row that fail so: a `TIMER PROBE FAILED` report with the error, which its feed
+says as `GUIDE PROBLEM` and which the next clean check closes (`RECOVERED`). `timer list` shows such
+a probe's error and since when without `-v`, and so does a handover. Its `TIMER STUCK` line says its
+condition has not been seen to hold, not that it has not held.
 
 `--wake <agent>` wakes the agent with the timer's text (as `agents wake`; `TIMER WAKE FAILED` when
 it cannot), `--run "<command>"` runs a command, its output in `timers/<id>.log` of the state

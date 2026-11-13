@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/codex"
@@ -22,6 +23,8 @@ const (
 	testEffortX    = "xhigh"
 	testScanRule   = "^scan"
 	testScanName   = "scan deps"
+	// testPlainModel is a configured choice's model without an effort.
+	testPlainModel = "plain-model"
 )
 
 func TestEffortBackgroundLaunchAndRecord(t *testing.T) {
@@ -86,24 +89,27 @@ func TestEffortDryRunAndWake(t *testing.T) {
 	}
 }
 
-func TestEffortLoopStartDefault(t *testing.T) {
+// TestEffortLoopPassesItsDefaultLast checks that the loop passes
+// supervisor.effort to its starts as --default-effort, never as --effort: an
+// explicit flag would mask the start's rule, choice and continued session.
+// A start the loop gives an --effort of its own gets no default beside it.
+func TestEffortLoopPassesItsDefaultLast(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.Effort = testEffortHigh
 	l := &loop.Loop{Host: r.a}
-	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief"); err != nil {
+	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", "--harness", capacity.HarnessAuto); err != nil {
 		t.Fatal(err)
 	}
 	call := r.called(agentsName, agentStartName)
-	i := slices.Index(call, effortFlag)
-	if i < 0 || call[i+1] != testEffortHigh {
-		t.Fatalf("start omitted supervisor effort: %q", call)
+	if i := slices.Index(call, "--default-effort"); slices.Contains(call, effortFlag) || i < 0 || call[i+1] != testEffortHigh {
+		t.Fatalf("the loop's default is not the start's last: %q", call)
 	}
 	r.calls = nil
 	if _, err := l.Run(t.Context(), agentsName, agentStartName, "effort-worker", "brief", effortFlag, testEffortLow); err != nil {
 		t.Fatal(err)
 	}
 	call = r.called(agentsName, agentStartName)
-	if strings.Count(strings.Join(call, " "), effortFlag) != 1 || call[len(call)-1] != testEffortLow {
+	if slices.Contains(call, "--default-effort") || strings.Count(strings.Join(call, " "), effortFlag) != 1 || call[len(call)-1] != testEffortLow {
 		t.Fatalf("explicit effort overridden: %q", call)
 	}
 }
@@ -137,24 +143,65 @@ func TestEffortRulePrecedence(t *testing.T) {
 	}
 }
 
-func TestEffortLoopYieldsToRule(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Supervisor.Effort = testEffortHigh
-	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortLow}}
-	l := &loop.Loop{Host: r.a}
-	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
+// TestEffortLoopDefaultYieldsToRuleAndChoice checks the order of a
+// start's effort under the loop's --default-effort: a matching rule, then
+// the choice's effort, then the default; agy gets none, and a start without
+// the default keeps the harness default.
+func TestEffortLoopDefaultYieldsToRuleAndChoice(t *testing.T) {
+	a, _ := stubApp(t)
+	start := a.agentStartCmd()
+	if err := start.Flags().Set("default-effort", testEffortHigh); err != nil {
 		t.Fatal(err)
 	}
-	if call := r.called(agentsName, agentStartName); slices.Contains(call, effortFlag) {
-		t.Fatalf("loop default masked the matching rule: %q", call)
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: capacity.TaskKindReview, Effort: testEffortLow}}
+	a.cfg.Capacity.Choices = []config.Choice{{Harness: claudeComm, Model: bgModel, Effort: testEffortX}, {Harness: claudeComm, Model: testPlainModel}}
+	for _, tc := range []struct{ name, kind, harness, model, choice, want string }{
+		{"scan-review", capacity.TaskKindReview, claudeComm, testPlainModel, "", testEffortLow},
+		{"scan-worker", workerRole, claudeComm, testPlainModel, "", testEffortHigh},
+		{"auto pick", workerRole, claudeComm, bgModel, testEffortX, testEffortX},
+		{"named choice", workerRole, claudeComm, bgModel, "", testEffortX},
+		{"agy pick", workerRole, capacity.HarnessAgy, "gemini", "", ""},
+	} {
+		got, err := a.selectedEffort(tc.name, tc.kind, tc.harness, tc.model, "", tc.choice)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %q, %v", tc, got, err)
+		}
 	}
-	r.calls = nil
-	if _, err := l.Run(t.Context(), agentsName, agentStartName, "scan-worker", "brief"); err != nil {
+	if err := start.Flags().Set("default-effort", ""); err != nil {
 		t.Fatal(err)
 	}
-	call := r.called(agentsName, agentStartName)
-	if i := slices.Index(call, effortFlag); i < 0 || call[i+1] != testEffortHigh {
-		t.Fatalf("worker without a rule lost the loop default: %q", call)
+	if got, err := a.selectedEffort("scan-worker", workerRole, claudeComm, testPlainModel, "", ""); err != nil || got != "" {
+		t.Fatalf("a start without the loop's default took one: %q, %v", got, err)
+	}
+}
+
+// TestEffortContinuationKeepsTheContinuedSession checks that a fresh
+// continuation of a parked worker, and a start that resumes a roster agent
+// under its name, keep the effort that worker was started with on its
+// harness when no rule or choice names one, and that a choice's effort
+// still wins.
+func TestEffortContinuationKeepsTheContinuedSession(t *testing.T) {
+	a, _ := stubApp(t)
+	parked := state.Agent{Party: state.Party{Name: "app 1", Session: "parked-session"}, Task: "Continue example/app#1", Park: &state.Park{At: a.now.Add(-time.Hour), Continuing: true}}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, parked)
+		st.Starts = append(st.Starts, state.Start{Party: parked.Party, Model: testPlainModel, Effort: testEffortMax, At: a.now.Add(-2 * time.Hour)})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next := continuationName(parked)
+	for _, tc := range []struct{ name, harness, choice, want string }{
+		{next, claudeComm, "", testEffortMax},
+		{parked.Name, claudeComm, "", testEffortMax},
+		{next, codex.Harness, "", ""},
+		{next, claudeComm, testEffortHigh, testEffortHigh},
+		{"app 2", claudeComm, "", ""},
+	} {
+		got, err := a.selectedEffort(tc.name, workerRole, tc.harness, testPlainModel, "", tc.choice)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %q, %v", tc, got, err)
+		}
 	}
 }
 

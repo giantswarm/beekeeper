@@ -21,6 +21,7 @@ const (
 	boardEscalateName                = "escalate"
 	configFlag                       = "config"
 	continuationQueuedEvent          = "agents.continuation-queued"
+	defaultEffortFlag                = "--default-effort"
 	deliveryBlocked                  = "blocked"
 	deliveryExemptOnlyFlag           = "--wip-exempt-only"
 	deliveryFlowing                  = "flowing"
@@ -30,6 +31,7 @@ const (
 	epicOwnerTask                    = "Epic owner: "
 	epicSnapshotFile                 = "epic-delivery.json"
 	excludeFlag                      = "exclude"
+	executionReleasedEvent           = "execution.released"
 	harnessAuto                      = "auto"
 	hostUpdateCmdName                = "update"
 	hostUpdateDeferred               = "host update deferred"
@@ -48,7 +50,6 @@ const (
 	reviewedMergeRoute               = "reviewed merge"
 	runMerge                         = "merge"
 	selfUpdateCmdName                = "self-update"
-	taskKindArg                      = "--kind"
 	taskKindReview                   = "review"
 	throughputCadence                = time.Minute
 	throughputObservationFile        = "throughput-observation.json"
@@ -73,6 +74,7 @@ func Vocabulary() map[string]any {
 		"boardEscalateName":                boardEscalateName,
 		"configFlag":                       configFlag,
 		"continuationQueuedEvent":          continuationQueuedEvent,
+		"defaultEffortFlag":                defaultEffortFlag,
 		"deliveryBlocked":                  deliveryBlocked,
 		"deliveryExemptOnlyFlag":           deliveryExemptOnlyFlag,
 		"deliveryFlowing":                  deliveryFlowing,
@@ -82,6 +84,7 @@ func Vocabulary() map[string]any {
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
+		"executionReleasedEvent":           executionReleasedEvent,
 		"harnessAuto":                      harnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
 		"hostUpdateDeferred":               hostUpdateDeferred,
@@ -100,7 +103,6 @@ func Vocabulary() map[string]any {
 		"reviewedMergeRoute":               reviewedMergeRoute,
 		"runMerge":                         runMerge,
 		"selfUpdateCmdName":                selfUpdateCmdName,
-		"taskKindArg":                      taskKindArg,
 		"taskKindReview":                   taskKindReview,
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,

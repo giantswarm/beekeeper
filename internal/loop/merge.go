@@ -119,8 +119,11 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 		}
 		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, Cmd.OneLine(reason)))
 	}
-	if p.Draft || strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
-		return repair(github.SquashNotApplicable, "branch is draft or conflicts with its base")
+	if p.Draft {
+		return repair(github.SquashNotApplicable, "branch is draft")
+	}
+	if strings.EqualFold(p.Mergeable, MergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
+		return repair(github.SquashNotApplicable, "branch conflicts with its base")
 	}
 	// A detached gate owns the queued/running mutation. Observe its result
 	// on later passes; do not submit another command for the same PR.
@@ -204,7 +207,10 @@ func (l *Loop) MergePull(ctx context.Context, _ *state.State, act superloop.Acti
 			resultErr = errors.Join(resultErr, err)
 		}
 	}()
-	gateArgs := []string{gate.GateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
+	// The claim ends when GitHub reports the merge: the gate leaves the
+	// release wait to its merge-child (--until-merged), which records the
+	// release with the run, and the delivery observation tracks it apart.
+	gateArgs := []string{gate.GateCmdName, "--wait", "0s", "--limit", "0", "--until-merged", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := BeekeeperRun(ctx, l.As(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
 		if saveErr := a.OperationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
@@ -403,7 +409,7 @@ func (l *Loop) DropInvalidMergeRepairs(taken []superloop.Taken, stages map[strin
 }
 
 // repairPull hands an open pull request whose merge was not applicable or red
-// to its worker once, recording the repair stage before waking or starting a
+// to its repair owner once, recording the repair stage before waking or starting a
 // fixer so capacity waits never retry the merge command each pass.
 func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Action, reason string) (string, error) {
 	if StaleMergeResultFailure(reason, act.Head) {
@@ -431,13 +437,33 @@ func (l *Loop) repairPull(ctx context.Context, st *state.State, act superloop.Ac
 		l.StageDetail[repairStage] = reason
 		l.Mu.Unlock()
 	}
-	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
+	if act.RepairAgent != "" && strings.Contains(strings.ToLower(reason), "conflicts with") {
+		act.Agent = act.RepairAgent
+	}
+	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together without local tests or lints and immediately park for the loop to run CI: the pull request had its one desk review, and the supervisor merges the repaired head once CI is green without a new review.", act.URL, act.Head, reason)
 	if err := l.WakeOrStartFixer(ctx, st, act); err != nil {
 		// The merge is over; the decision stays pending until a worker has
 		// the repair. Say both, or the wait reads as a merge that never ran.
 		return "", namedWait(err, waitRepair, fmt.Sprintf("its merge failed %s; the branch repair it requested waits for a worker", Cmd.Truncate(Cmd.OneLine(reason), 300)))
 	}
 	return "merge failed; branch repair requested", nil
+}
+
+// closeSupersededPulls closes, beside a merge, the pull requests other
+// executions published for the merged pull request's task (Command's
+// CloseSupersededPulls). It is a safety net, never a hold on the merge: a
+// duplicate it cannot close is said, and the merge's own wake goes on.
+func (l *Loop) closeSupersededPulls(ctx context.Context, st *state.State, merged superloop.Pull) {
+	if Cmd.CloseSupersededPulls == nil {
+		return
+	}
+	superseded, err := Cmd.CloseSupersededPulls(ctx, st, merged)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR SUPERSEDED PULLS of %s stay open: %v\n", merged.URL, err)
+	case len(superseded) > 0:
+		_, _ = fmt.Fprintf(l.Host.Out(), "SUPERVISOR SUPERSEDED by %s: closed %s\n", merged.URL, strings.Join(superseded, ", "))
+	}
 }
 
 // EndMerged closes tasks that explicitly declared no post-merge work and
@@ -468,6 +494,7 @@ func (l *Loop) EndMerged(ctx context.Context, st *state.State, act superloop.Act
 		if closeErr != nil {
 			return "", closeErr
 		}
+		l.closeSupersededPulls(ctx, st, mp)
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil

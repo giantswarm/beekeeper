@@ -53,4 +53,12 @@ below. Where they differ from this block, they take precedence.
   links the follow-up issue that gives the harness the missing step. CI's `scenario-control` step
   runs each added or changed scenario against the merge base, where it must fail on an assertion;
   a scenario that cannot fail there, such as one of behavior main already has, says why with
-  `control: {none: <reason>}`. Reviews reject a core fix without a scenario.
+  `control: {none: <reason>}`. The same step runs the `Test…` functions a pull request adds or
+  changes in any `_test.go` against the merge base's code with its test files applied: at least
+  one must fail there and pass on the change, and a package that does not build on the base shows
+  nothing. A test that cannot fail there says why in its doc comment with a
+  `control: none: <reason>` paragraph. Reviews reject a core fix without a scenario.
+- The core starts processes through `internal/proc` (`proc.CommandContext`, `proc.Cmd`,
+  `proc.ExitError`, `proc.LookPath`), never `os/exec`, so that the behavioral scenarios can answer
+  every start in their test process ([docs/scenarios.md](docs/scenarios.md#the-process-seam)).
+  `internal/proc/coreguard` fails on an `os/exec` import in a core package.

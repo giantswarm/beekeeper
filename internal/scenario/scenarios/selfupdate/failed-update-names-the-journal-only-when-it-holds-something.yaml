@@ -1,0 +1,101 @@
+name: failed-update-names-the-journal-only-when-it-holds-something
+description: >
+  A failed self-update says what to do next. A download that does not match
+  its bundle is refused before anything is replaced: the error says so and
+  that a retry is safe. It does not send the person to the recovery journal,
+  which the refusal never touched, and the retry installs the release. A
+  later update, asked for while a recovery controller watches the installed
+  candidate's probation, fails on the journal's transaction: the error names
+  the journal's full path, beside the executable.
+issue: https://github.com/giantswarm/beekeeper/issues/3854
+flow: selfupdate
+tags: [selfupdate, release, journal]
+timeout: 240s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      supervisor: {releaseEvery: 24h}
+      watch: {interval: 30s}
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.2, v1.0.0-rc.3]
+  github:
+    repositories:
+      - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
+    # The tampered step downloads other bytes than the release's: the
+    # binary does not match the bundle served beside it.
+    faults:
+      - name: tampered
+        match: {path: 'repos/giantswarm/beekeeper/releases/assets/\d+', caller: tampered}
+        respond:
+          status: 200
+          content_type: application/octet-stream
+          body: "beekeeper-scenario-bundle sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+  calls:
+    # The service manager takes the controller's unit and starts nothing:
+    # its verdict is not this scenario's.
+    - program: systemd-run
+      args: ['--unit=beekeeper-recovery\.service']
+      respond: {exit: 0}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+# Every install skips the dry-run comparison (--allow-loop-regression): the
+# signature, the canary checks and the journal still apply, and the
+# comparison is not what this scenario states.
+when:
+  - name: tampered
+    run: {args: [self-update, --version, v1.0.0-rc.2, --allow-loop-regression]}
+    expect:
+      - exit: 1
+      - stderr:
+          contains:
+            - "updating /work/bin/beekeeper failed, nothing was replaced (a retry is safe): "
+            - "the download does not match its scenario bundle"
+          not_contains: ["recovery journal"]
+      - github: {calls: {path: 'repos/giantswarm/beekeeper/releases/assets/\d+', caller: tampered, fault: tampered, min: 1}}
+  - name: kept
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.1\b'}
+  # The retry is safe: it installs the release.
+  - name: first
+    run: {args: [self-update, --version, v1.0.0-rc.2, --allow-loop-regression]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.1 to v1.0.0-rc.2."]}
+  - name: promote-first
+    run: {args: [self-update, --complete-probation]}
+    expect:
+      - exit: 0
+  # The second install is watched by a recovery controller.
+  - name: second
+    run: {args: [self-update, --version, v1.0.0-rc.3, --allow-loop-regression]}
+    expect:
+      - exit: 0
+      - calls: {program: systemd-run, args: ['--unit=beekeeper-recovery\.service', --recovery-controller], min: 1, max: 1}
+  - name: watched
+    run: {args: [self-update, --version, v1.0.0-rc.2, --allow-loop-regression]}
+    expect:
+      - exit: 1
+      - stderr:
+          contains:
+            - "updating /work/bin/beekeeper failed (inspect the recovery journal /work/bin/beekeeper.update/journal.json before retrying): "
+            - "a recovery controller supervises the installed candidate's probation"
+          not_contains: ["nothing was replaced"]
+
+then:
+  - {step: tampered, output: {not_contains: ["Verified the signature"]}}
+  - {step: kept, exit: 0}
+  - {step: watched, output: {not_contains: ["Verified the signature"]}}

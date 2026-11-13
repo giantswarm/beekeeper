@@ -186,6 +186,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		// follow the serving mode of the model it serves.
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
+	withPaceOffs(readings, st, now)
 	h := a.readHeadroom(ctx, k, a.watchSwap())
 	choicesCap := capacity.FilterChoiceModel(k, wantModel)
 	v := capacity.BuildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
@@ -311,7 +312,8 @@ behind pace (with remaining
 breaking ties), with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and, for a worker start, at or under the even pace of its
-7-day window.
+7-day window, unless the person's pace override of the provider (capacity pace
+off, shown on its line) lets it run ahead until a time.
 If built-in Codex usage is unreadable, its last good windows still bound starts;
 without valid saved windows, its configured ceiling applies. The watch reports
 the failure to the guide. Explicit account, spend and rate-limit stops remain
@@ -428,23 +430,9 @@ nothing; it makes no GitHub call.`,
 			liveCap := a.liveCapacity()
 			var v *capacity.View
 			if host != "" && host != executionLocal {
-				h, err := a.executionHost(host)
-				if err != nil {
+				if v, err = a.hostStartView(cmd.Context(), host, st, sessions, builds, exclude, capacity.StartKind(review, ofSelfHosted), capacity.HarnessAuto, model); err != nil {
 					return err
 				}
-				if err := a.admitExecution(host, h); err != nil {
-					return err
-				}
-				caps, err := a.probeExecution(cmd.Context(), h)
-				if err != nil {
-					return err
-				}
-				k := liveCap
-				var legacy *capacity.UsageView
-				if len(k.Providers) == 0 {
-					k, legacy = a.resolveUsageForStart(cmd.Context(), k, capacity.StartKind(review, ofSelfHosted))
-				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), capacity.StartKind(review, ofSelfHosted), capacity.HarnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = capacityStopped(a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, capacity.StartKind(review, ofSelfHosted), model).WithLocal(st, liveCap), a, st)
 			} else {
@@ -524,7 +512,7 @@ nothing; it makes no GitHub call.`,
 	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the verdict for the review of a self-hosted model's work: no self-hosted provider")
 	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
-	c.AddCommand(a.capacityPickCmd())
+	c.AddCommand(a.capacityPickCmd(), a.capacityPaceCmd())
 	return c
 }
 

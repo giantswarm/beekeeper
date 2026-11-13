@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"slices"
 	"strconv"
@@ -50,6 +49,7 @@ func (a *app) gateCmd() *cobra.Command {
 	var wait, limit time.Duration
 	var queued bool
 	var reviewedHead string
+	var untilMerged bool
 	c := &cobra.Command{
 		Use:   gate.GateCmdName + " [--wait DURATION] [--limit DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
 		Short: "The PreToolUse hook's gate on devctl's blocking commands",
@@ -243,7 +243,7 @@ gate runs lists the runs the gate runs outside their callers, gate stop
 			if !cmd.Flags().Changed("limit") {
 				limit = a.cfg.Merge.ToolLimit.Duration
 			}
-			return a.gate(cmd.Context(), args, wait, limit, queued, reviewedHead)
+			return a.runGate(cmd.Context(), args, wait, limit, queued, reviewedHead, untilMerged)
 		},
 	}
 	c.Flags().SetInterspersed(false)
@@ -252,12 +252,21 @@ gate runs lists the runs the gate runs outside their callers, gate stop
 	c.Flags().StringVar(&reviewedHead, "reviewed-head", "", "pin the supervisor merge to its reviewed head; refuse a moved head")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
+	c.Flags().BoolVar(&untilMerged, "until-merged", false, "end the call once the merge landed: its merge-child awaits the release outside it")
+	_ = c.Flags().MarkHidden("until-merged")
 	c.AddCommand(a.gateRunsCmd(), a.gateStopCmd(), a.gateCheckCmd())
 	return c
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool, reviewedHead ...string) error {
-	if inSandbox() && len(reviewedHead) > 0 && reviewedHead[0] != "" {
+	return a.runGate(ctx, argv, wait, limit, queued, strings.Join(reviewedHead, ""), false)
+}
+
+// runGate is the gate's call; untilMerged (the supervisor loop's reviewed
+// merges) ends it once the merge landed and its merge-child only awaits the
+// release, which it records with the run outside the call (leave).
+func (a *app) runGate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool, reviewedHead string, untilMerged bool) error {
+	if inSandbox() && reviewedHead != "" {
 		return refused("reviewed merges run on the coordinator, outside an execution sandbox")
 	}
 	if inSandbox() {
@@ -284,10 +293,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	}
 	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gate.GateRun{Host: a, Ctx: ctx, Argv: argv, Repo: repo, Pr: pr, Lane: a.cfg.LaneOf(repo), Me: me, Pid: os.Getpid(), Cli: callerCLI(), Queued: queued,
-		Bin: runningBinary(), Output: gateOutput()}
-	if len(reviewedHead) > 0 {
-		g.ReviewedHead = reviewedHead[0]
-	}
+		Bin: runningBinary(), Output: gateOutput(), ReviewedHead: reviewedHead, UntilMerged: untilMerged && pr != 0 && !queued}
 	if err := g.CheckMergeRoute(); err != nil {
 		return err
 	}
@@ -863,7 +869,7 @@ func (a *app) installTool(ctx context.Context, by state.Party, verb, what string
 func toolUpdate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
+	c := proc.CommandContext(ctx, merge.Tool, "version", "update") //nolint:gosec // the merge tool, a constant
 	c.Env = devctlCommandEnv("")
 	out, err := c.CombinedOutput()
 	if err != nil {
@@ -876,12 +882,12 @@ func toolUpdate(ctx context.Context) error {
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
 	started := clk.Now()
-	path, err := exec.LookPath(argv[0])
+	path, err := proc.LookPath(argv[0])
 	if err != nil {
 		gate.GateLine("%v", err)
 		return guard.ExitNotFound
 	}
-	c := exec.Command(path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
+	c := proc.CommandContext(context.Background(), path, argv[1:]...) //nolint:gosec // running the caller's command is the purpose
 	c.Env = devctlCommandEnv("")
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, out, os.Stderr
 	sig := make(chan os.Signal, 1)
@@ -902,7 +908,7 @@ func runChild(argv []string, out io.Writer) int {
 
 // childExit preserves signal deaths as shell exit codes and reports how long
 // the command ran, including when a caller or the watch stopped it.
-func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
+func childExit(ps *proc.ProcessState, errs io.Writer, started time.Time) int {
 	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", gate.GatePrefix, signalName(ws.Signal()), clk.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())

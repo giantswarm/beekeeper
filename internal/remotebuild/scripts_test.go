@@ -183,7 +183,7 @@ func TestRemoteRunThroughShellTransport(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	handled, rc := r.Try(ctx, []string{"go", "test", "./..."})
+	handled, rc := r.Try(ctx, []string{"go", "test", testPackages})
 	if !handled || rc != 37 || output.String() != "remote output\n" {
 		t.Fatalf("handled=%v rc=%d output=%q diagnostics=%s", handled, rc, output.String(), diagnostics.String())
 	}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -372,7 +371,7 @@ func mergeChild(base string) childResult {
 	}
 	var stop atomic.Value
 	var gone atomic.Bool
-	var current atomic.Pointer[os.Process]
+	var current atomic.Pointer[proc.Child]
 	stopCh := make(chan struct{})
 	go func() {
 		for s := range sig {
@@ -454,14 +453,14 @@ const busySpent = "busy-base budget spent"
 // with its caller: once its gate is gone without the left mark (gate.LeftExt)
 // and no other run follows it (followerGlob), the command is sent SIGTERM
 // and gone set.
-func runSpec(base string, spec gate.ChildSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
+func runSpec(base string, spec gate.ChildSpec, out, errs *os.File, current *atomic.Pointer[proc.Child], stop *atomic.Value, gone *atomic.Bool) int {
 	started := clk.Now()
 	skip := slices.Contains(spec.Env, github.DevctlSkipVersionCheckEnv+"=true")
 	if spec.Config != "" || os.Getenv(beekeeperConfigEnv) != "" {
 		skip = !guardsEnabledForConfig(spec.Config)
 	}
 	github.SetDevctlSkipVersionCheck(skip)
-	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
+	c := proc.CommandContext(context.Background(), spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
 	progress := newMergeProgress(base, spec.Argv, clk.Now().UTC())
 	c.Stdout, c.Stderr, c.Env, c.Dir = out, io.MultiWriter(errs, progress), github.DevctlEnv(spec.Env, skip), spec.Dir
 	if err := c.Start(); err != nil {

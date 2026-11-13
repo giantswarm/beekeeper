@@ -59,13 +59,13 @@ its key first in the detail):
             stopped desk are left alone
   review    an agent parked from its pull request's worktree at its
             published HEAD (agents park --on owner/repo#n), with every
-            check on the head green, for the
-            first round and for each new head the last approval does not
-            cover, including fixes after changes requested, while a round
-            is left: supervisor.reviewRounds caps the rounds that ask for
-            changes, superloop.MaxReviews all rounds. With the cap used, a
-            green head with fixes gets the merge go and no new review.
-            A reviewer starts
+            check on the head green: a pull request gets one desk
+            review. Once any round gave a verdict no review starts again,
+            whatever head comes next (supervisor.reviewRounds adds none); a
+            second round starts only when the first ended without a verdict.
+            The reviewer fixes its findings on the branch, pushes one commit
+            and approves the head it pushed; findings it cannot fix go to
+            the worker. A reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), using reserved review headroom; a worker on a
@@ -110,28 +110,29 @@ its key first in the detail):
             commit of the base branch); or it rebases the approved head
             onto the base under the same rule. A file without a patch counts
             only with the approved blob and no change of the base's to it
-            since. Anything else, or a comparison GitHub cuts short, is a
-            new head with a new review. Only the verdict of the loop's own
-            last round counts, on the head it reviewed and posted after it
-            started: an older verdict or a round still running authorizes
-            nothing
+            since. Such a head needs no new park; any other head after the
+            review gets the go once its worker parked on it, never a second
+            review. Nobody updates an approved branch with the base: the
+            gate merges it as it is, its merge-result check the gate; only
+            a real conflict or a red merge result goes back for repair. Only
+            the verdict of the loop's own rounds counts, posted after the
+            round started on its head or on one pushed during it (the
+            reviewer's fixes): an older verdict or a round still running
+            authorizes nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
   rework    the worker parked again after the forward on the head the
-            findings were about with no change-request round left
-            (supervisor.reviewRounds counts the rounds that asked for
-            changes; an approved head is none), or, rounds left or not, on
-            a head that only brings the base into it, which carries no
-            fixes: the worker is told to fix them and push (agents wake),
-            once for each such park; its new green head gets the next
-            round, or the merge go once none is left. Review and rework
+            findings were about, or on a head that only brings the base
+            into it, which carries no fixes: the worker is told to fix them
+            and push (agents wake), once for each such park; its new green
+            head gets the merge go, no second review. Review and rework
             stay in the loop: no merge question goes to guide.person
-  go        (past the reviews) a green head the worker parked on after
-            superloop.MaxReviews reviews, the last approving or, when the
-            last reviewer finished without a verdict, an earlier round's
-            verdict standing: the desk's rule is the review, then the fixes
-            and the merge, so the merge go. No third reviewer starts, and
-            no note asks guide.person whether to merge; reviews that gave
+  go        (after the review) a green head the worker parked on after the
+            one review's verdict, its fixes or any later change, or, when a
+            later reviewer finished without a verdict, an earlier round's
+            verdict standing: the desk's rule is one review, then the fixes
+            and the merge, so the merge go. No second reviewer starts, and
+            no note asks guide.person whether to merge; rounds that gave
             no verdict at all get no go, said once as a leave line
   relay     another team's pull request: each review its owning team
             posted after the worker parked, told to it word for word
@@ -153,7 +154,9 @@ its key first in the detail):
             (agents start under its worker's name) for a head that
             conflicts, is red, or carries an unfixed changes request; the merge go again for a green
             head whose go was given and never carried out; a reviewer for
-            a green head awaiting its review. Running checks wait; an open
+            a green head awaiting its one review; a worker to take over and
+            park on a head with commits past that review that nobody parked
+            on, for the go without a second review. Running checks wait; an open
             escalation or ownership question is the person's. One action per stretch,
             at most superloop.MaxSweeps (2) per head, then a leave for the
             guide
@@ -169,8 +172,8 @@ its key first in the detail):
   done      agents.done: once its turn ends, the agent leaves the roster
             (agents remove); the loop retires a session beekeeper started
             the same way, once its turn ends: a reviewer once the loop
-            acted on its round's verdict (a go, forward, next
-            round or end), and a worker given the merge go after its post-merge
+            acted on its round's verdict (a go, forward, rework
+            or end), and a worker given the merge go after its post-merge
             report or supervisor.postMergeWindow without activity
             (default 2h). A worker that still serves other open work, the
             open issue its sessions serve record names or another open pull
@@ -246,9 +249,11 @@ its key first in the detail):
             to park again on a wait the loop watches (a pull request, a
             timer that wakes it, a note for a person) or to report done.
             An unclassified report goes to the guide unclassified
-  file      a problem found (agents.problem) that cites no issue URL:
-            the full report is logged in supervisor.file and delivered once
-            by guide watch as GUIDE PROBLEM, to file in its owning repository.
+  file      a finding with an owner, stable title and complete description:
+            match its issue URL or unique title against the open issues;
+            known findings add nothing, new facts replace the description,
+            and new findings create one issue and enter the board's Backlog.
+            Unplaceable reports reach GUIDE PROBLEM; no comment trails.
             A step failing the same way for 30 minutes or on more than one
             item is filed the same way, once per episode, naming the step,
             the items it blocks and the error.

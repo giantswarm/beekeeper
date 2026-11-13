@@ -1,15 +1,17 @@
 package guard
 
 import (
+	"context"
 	"maps"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The folders guard keeps sessions' files out of the person's folders
@@ -171,7 +173,7 @@ var gitSafe = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/
 // gitSays reports whether the git command in dir exits 0; one that fails to
 // run says no. It writes no lock or index.
 func gitSays(dir string, args ...string) bool {
-	c := exec.Command("git", append(append(slices.Clone(gitSafe), "-C", dir), args...)...) //nolint:gosec // fixed git subcommands
+	c := proc.CommandContext(context.Background(), "git", append(append(slices.Clone(gitSafe), "-C", dir), args...)...) //nolint:gosec // fixed git subcommands
 	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 	return c.Run() == nil
 }

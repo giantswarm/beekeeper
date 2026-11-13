@@ -163,6 +163,9 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 		pr1Files  map[string]string
 		pr2Files  map[string]string
 		wantCheck string
+		// conflict: the combination conflicts, so its repair returns to
+		// the approving reviewer rather than the worker.
+		conflict bool
 	}{
 		"go test failure across two PRs": {
 			baseFiles: map[string]string{
@@ -201,6 +204,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				testGuardBaseFile: "package guard\n\nfunc Name() string { return \"from-pr-2\" }\n",
 			},
 			wantCheck: "conflicts with its base",
+			conflict:  true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -303,11 +307,19 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				return
 			}
 
-			// PR 2 must NOT be merged into main, and must be returned to its owner with the failing check.
+			// PR 2 must NOT be merged into main, and must be returned with the failing check:
+			// a red result to its worker, a conflict to its approving reviewer.
 			if r.pulls[secondPR].State == superloop.Merged || slices.Contains(mergedHeads, repo.head2) {
 				t.Fatalf("second PR merged despite failing combination (%s): mergedHeads=%v", tc.wantCheck, mergedHeads)
 			}
 			wake := r.called(agentsName, agentWakeName, secondWorker)
+			if tc.conflict {
+				if wake != nil {
+					t.Fatalf("conflict returned to the author: %v", wake)
+				}
+				r.reviewerRepair(t, superloop.ReviewerName(secondPR, 1), tc.wantCheck)
+				return
+			}
 			if wake == nil || !strings.Contains(wake[3], tc.wantCheck) {
 				t.Fatalf("second PR was not returned to its owner with failing check %q: wake=%v calls=%v", tc.wantCheck, wake, r.calls)
 			}
@@ -698,6 +710,75 @@ func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
 	_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
 	if code != github.SquashTooling || !strings.HasPrefix(reason, reasonMergeValidationUnavailable) {
 		t.Fatalf("checker hook failure blamed on branch: %d: %s", code, reason)
+	}
+}
+
+// A merge result whose go test fails only because this host lacks a native
+// build dependency of the repository (a C header, a pkg-config package, a
+// library or the C compiler), which the repository's CI has, is not validated
+// on this host: the checker files an environment finding once, does not retry,
+// and the pull request's own checks stand instead of a branch repair. A
+// missing header the repository tracks, source text quoting such a message,
+// a failing test or another build failure beside it is the merge result's own
+// and stays red.
+func TestMergeResultMissingHostBuildDependencyIsNotABranchRepair(t *testing.T) {
+	const alsa = "# example.com/r/midi\nIn file included from midi.go:4:\n" +
+		"./rtmidi.h:12:10: fatal error: alsa/asoundlib.h: No such file or directory\n" +
+		"   12 | #include <alsa/asoundlib.h>\n      |          ^~~~~~~~~~~~~~~~~~\ncompilation terminated.\n" +
+		"FAIL\texample.com/r/midi [build failed]\n?   \texample.com/r/cmd\t[no test files]\n"
+	for name, tc := range map[string]struct{ output, missing string }{
+		"gcc header":   {alsa + "ok  \texample.com/r/guard\t0.002s\nFAIL\n", "alsa/asoundlib.h"},
+		"clang header": {"# example.com/r/midi\nmidi.go:4:10: fatal error: 'alsa/asoundlib.h' file not found\n1 error generated.\nFAIL\texample.com/r/midi [build failed]\nFAIL\n", "alsa/asoundlib.h"},
+		"pkg-config": {"# example.com/r/midi\n# [pkg-config --cflags  -- alsa]\nPackage alsa was not found in the pkg-config search path.\n" +
+			"Perhaps you should add the directory containing `alsa.pc'\nto the PKG_CONFIG_PATH environment variable\nNo package 'alsa' found\n" +
+			"pkg-config: exit status 1\nFAIL\texample.com/r/midi [build failed]\nFAIL\n", "pkg-config package alsa"},
+		"library": {"# example.com/r/midi\n/usr/bin/ld: cannot find -lasound: No such file or directory\ncollect2: error: ld returned 1 exit status\n" +
+			"FAIL\texample.com/r/midi [build failed]\nFAIL\n", "libasound"},
+		"C compiler": {"# runtime/cgo\ncgo: C compiler \"gcc\" not found: exec: \"gcc\": executable file not found in $PATH\n" +
+			"FAIL\texample.com/r/midi [build failed]\nFAIL\n", "gcc"},
+		"#error posing as one": {"# example.com/r/midi\nmidi.go:3:2: error: #error fatal error: alsa/asoundlib.h: No such file or directory\n" +
+			"FAIL\texample.com/r/midi [build failed]\nFAIL\n", ""},
+		"tracked header":     {"# example.com/r/guard\nguard/native.go:3:10: fatal error: native.h: No such file or directory\ncompilation terminated.\nFAIL\texample.com/r/guard [build failed]\nFAIL\n", ""},
+		"and a failing test": {alsa + "--- FAIL: TestCombined (0.00s)\n    cost_test.go:7: combined result is red\nFAIL\texample.com/r/guard\t0.002s\nFAIL\n", ""},
+		"and a build error":  {alsa + "# example.com/r/guard\nguard/pr2.go:2:5: undefined: A\nFAIL\texample.com/r/guard [build failed]\nFAIL\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA},
+				map[string]string{testGuardPR2File: testGuardSourceB, "guard/native.h": "int native(void);\n"}, nil)
+			repo.advanceMain(t, repo.head1)
+			tools := t.TempDir()
+			output, calls := filepath.Join(tools, "output"), filepath.Join(tools, "calls")
+			if err := os.WriteFile(output, []byte(tc.output), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := "#!/bin/sh\necho \"$*\" >>" + calls + "\ncat " + output + "\nexit 1\n"
+			if err := os.WriteFile(filepath.Join(tools, "go"), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+			r := newLoopRig(t)
+			r.a.cfg.Disk.Checkouts = []string{repo.dir}
+			_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+			findings, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loop.LoopFileVerb })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.missing == "" {
+				if code != github.SquashRed || !strings.Contains(reason, "failed go test") || len(findings) != 0 {
+					t.Fatalf("the merge result's own failure was not returned to its branch: %d: %s; findings %v", code, reason, findings)
+				}
+				return
+			}
+			if code != 0 || !strings.HasPrefix(reason, "merge-result validation skipped: ") || !strings.Contains(reason, tc.missing) || !strings.Contains(reason, "own checks stand") {
+				t.Fatalf("a host without %s refused or repaired the branch: %d: %s", tc.missing, code, reason)
+			}
+			if len(findings) != 1 || !strings.Contains(findings[0].Detail, "not a branch repair") || !strings.Contains(findings[0].Detail, tc.missing) {
+				t.Fatalf("want one environment finding naming %s, got %v", tc.missing, findings)
+			}
+			if ran, err := os.ReadFile(calls); err != nil || strings.Count(string(ran), "test -short ./...") != 1 { //nolint:gosec // test-owned calls file
+				t.Fatalf("a missing dependency is retried: %q, %v", ran, err)
+			}
+		})
 	}
 }
 

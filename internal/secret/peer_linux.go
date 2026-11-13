@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Peer checks that the other end of c is this user's broker: the main
@@ -63,7 +64,7 @@ func Peer(c net.Conn) error {
 // brokerProcess answers the broker unit's main process and the binary its
 // unit starts.
 var brokerProcess = func() (int, string, error) {
-	out, err := exec.Command("systemctl", "--user", "show", BrokerUnit, "--property=MainPID", "--property=ExecStart").Output()
+	out, err := proc.CommandContext(context.Background(), "systemctl", "--user", "show", BrokerUnit, "--property=MainPID", "--property=ExecStart").Output()
 	if err != nil {
 		return 0, "", fmt.Errorf("systemctl show: %w", err)
 	}
@@ -77,7 +78,7 @@ func BrokerProcess() (int, string, error) { return brokerProcess() }
 // RestartBroker restarts the broker unit, onto the binary its unit starts:
 // the vault session it keeps goes with the old process.
 func RestartBroker(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, "systemctl", "--user", "restart", BrokerUnit).CombinedOutput()
+	out, err := proc.CommandContext(ctx, "systemctl", "--user", "restart", BrokerUnit).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl --user restart %s: %w: %s", BrokerUnit, err, strings.TrimSpace(string(out)))
 	}

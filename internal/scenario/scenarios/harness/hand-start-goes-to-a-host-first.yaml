@@ -1,0 +1,83 @@
+name: hand-start-goes-to-a-host-first
+description: >
+  A start the guide makes by hand, without --host, is placed as the loop
+  places its own under supervisor.hostsFirst: the execution host that maps
+  the start's repository and has room runs it, pinned to the repository's
+  default branch, and the coordinator runs nothing of it. A start whose
+  repository no host maps is not placed and says why.
+issue: https://github.com/giantswarm/beekeeper/issues/3866
+flow: harness
+tags: [harness, placement]
+timeout: 90s
+
+given:
+  repositories:
+    - name: example/app
+    - name: example/other
+  hosts:
+    - name: builder
+      repositories: [example/app]
+  harness:
+    workers:
+      - name: hand-worker
+        host: builder
+        turns:
+          - reply: working on the host
+  calls:
+    # The host's gh has a login of its own, and so has the desk's.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+    # The repository's default branch: the placement pins the start to it,
+    # and the host's check compares its source with it.
+    - program: gh
+      args: [api, repos/example/app, --jq, .default_branch]
+      respond: {stdout: "main\n"}
+    - program: gh
+      args: [api, 'repos/example/app/compare/.*\.\.\.main', --jq, .ahead_by]
+      respond: {stdout: "0\n"}
+    - program: gh
+      args: [repo, view, example/app, --json, defaultBranchRef]
+      respond: {stdout: '{"defaultBranchRef":{"name":"main"}}'}
+    - program: gh
+      args: [api, graphql, 'query=.*pullRequests\(states:OPEN.*', 'owner=example', 'name=app']
+      respond:
+        stdout: |
+          {"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+
+when:
+  # The desk places its starts on builder (supervisor.hostsFirst is the
+  # default). The host is in agents.hosts once it is provisioned, so the
+  # placement is set then.
+  - name: hosts
+    run: {args: [config, set, supervisor.hosts, '[builder]']}
+    expect:
+      - exit: 0
+  - name: check
+    run: {args: [agents, hosts, check, builder]}
+    expect:
+      - exit: 0
+  # The guide's hand start names the repository and no host.
+  - name: start
+    run:
+      args: [--as, guide, agents, start, hand-worker, /work/worker.txt, --repo, example/app, --harness, claude, --model, sonnet]
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: hand-worker, host: builder, outcome: finish}
+  - name: roster
+    run: {args: [agents, --json]}
+  # No host maps this one's repository.
+  - name: unmapped
+    run:
+      args: [--as, guide, agents, start, other-worker, /work/worker.txt, --repo, example/other, --harness, claude, --model, sonnet]
+
+then:
+  - {step: start, exit: 0}
+  - {step: start, output: {contains: ["placed on builder by supervisor.hostsFirst: example/app at main", "started hand-worker: execution", "on builder"]}}
+  - {step: roster, json_path: {path: '[0].name', equals: hand-worker}}
+  - {step: roster, json_path: {path: '[0].execution.host', equals: builder}}
+  - worker: {name: hand-worker, host: builder, harness: claude, turns: 1, outcome: finish}
+  - calls: {program: ssh, args: [builder], min: 1}
+  - {step: unmapped, exit: 2}
+  - {step: unmapped, stderr: {contains: ["no host takes it: builder: example/other is not mapped"]}}

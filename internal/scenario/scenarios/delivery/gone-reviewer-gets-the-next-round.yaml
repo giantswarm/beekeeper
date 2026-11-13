@@ -1,0 +1,147 @@
+name: gone-reviewer-gets-the-next-round
+description: >
+  The reviewer of round one crashes without a verdict or a done, so the
+  pull request its worker parked for desk review has no reviewer. Once that
+  reviewer is off the roster and the round has been open for the sweep's
+  wait, the loop starts round two on the same head, and round two's
+  approval gets the go and the merge. (A reviewer or worker on an execution
+  host also has an assignment of the head, which that start releases:
+  review.released, covered by cmd's tests.)
+issue: https://github.com/giantswarm/beekeeper/issues/3757
+flow: delivery
+tags: [delivery, loop, review, crash]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # A reviewer with no CLI is stale after 30s once staleAfter is set.
+      agents: {staleAfter: 1h}
+      # Headless workers: a continuation is a fresh session's next turn.
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+  harness:
+    # Usage on pace: neither ahead of it nor far behind.
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      # Round one's reviewer crashes: no verdict, no done.
+      - name: Review app 2 r1
+        turns:
+          - outcome: crash
+      - name: Review app 2 r2
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    # What the watch reads beside GitHub: no GitHub App login beside the gh
+    # login, and empty journals of the kernel and of systemd-oomd.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      args: ['-k']
+      respond: {stdout: ""}
+    - program: journalctl
+      args: ['-u', systemd-oomd]
+      respond: {stdout: ""}
+
+when:
+  # The watch's reading admits starts: the budget and the machine are fine.
+  - name: watch
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  - name: start
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - name: ci-green
+    github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - name: review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review], not_contains: [session.report-rejected]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: Review app 2 r1, outcome: crash, running: false}
+  # Past the reviewer's stale window and the round's wait. The watch reads
+  # again, as a running watch would have: a stale reading holds every start.
+  - advance: 16m
+  - name: watch-again
+    run: {args: [watch, --once]}
+    expect:
+      - exit: 0
+  # One pass takes the gone reviewer off the roster, the next plans the
+  # round after it, whichever pass sees it gone first.
+  - name: retire
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - name: second-review
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - calls: {program: gh, args: [pr, merge], max: 0}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: Review app 2 r2, outcome: finish}
+  - advance: 2s
+  - name: go
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged}}
+  - advance: 2s
+  - name: end
+    run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - worker: {name: Review app 2 r1, turns: 1, outcome: crash, running: false}
+  - worker: {name: Review app 2 r2, turns: 1, outcome: finish}
+  - calls: {program: gh, args: [pr, merge], min: 1, max: 1}
+  - events: {contains: [supervisor.review, merge.authorized, supervisor.merge], not_contains: [merge.failed, session.report-rejected]}

@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
@@ -58,23 +59,53 @@ func TestReviewRoundPinsHeadAcrossRestarts(t *testing.T) {
 		{ReviewRequests: []state.ReviewRequest{{Ref: p.Ref, Head: p.Head, Round: 1, PID: os.Getpid()}}},
 		{DeskReviews: []state.DeskReview{{Ref: p.Ref, Head: p.Head, Round: 1}}},
 	} {
-		if _, _, err := reviewRound(st, p); Code(err) != ExitRefused {
+		if _, err := reviewRound(st, p); Code(err) != ExitRefused {
 			t.Fatalf("duplicate not refused: %v", err)
 		}
 	}
-	p.Reviews = []superloop.Review{{Head: loopFixed, Verdict: superloop.ChangesRequested, Body: "main.go:7: broken → fix"}}
-	round, previous, err := reviewRound(&state.State{}, p)
-	if err != nil || round != 2 || previous != p.Reviews[0].Body {
-		t.Fatalf("round=%d previous=%q err=%v", round, previous, err)
+	// A reviewer may have pushed its fix without posting a verdict yet.
+	// The changed head still belongs to that active review, including when
+	// the reservation and assignment refer to the original head.
+	for _, st := range []*state.State{
+		{ReviewRequests: []state.ReviewRequest{{Ref: p.Ref, Head: loopFixed, Round: 1, PID: os.Getpid()}}},
+		{DeskReviews: []state.DeskReview{{Ref: p.Ref, Head: loopFixed, Round: 1}}},
+	} {
+		if _, err := reviewRound(st, p); Code(err) != ExitRefused {
+			t.Fatalf("moved head started a concurrent review: %v", err)
+		}
 	}
-	p.Head = loopFixed
-	if _, _, err := reviewRound(&state.State{}, p); Code(err) != ExitRefused {
-		t.Fatalf("reviewed head not refused: %v", err)
+	if round, err := reviewRound(&state.State{}, p); err != nil || round != 1 {
+		t.Fatalf("round=%d err=%v", round, err)
+	}
+}
+
+// A pull request gets one desk review
+// (https://github.com/giantswarm/beekeeper/issues/3861): once a desk verdict
+// is on it, on any head, or an assigned round reported one, agents review
+// starts no second review.
+func TestReviewRoundRefusesASecondReview(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reviews []superloop.Review
+		st      *state.State
+	}{
+		"changes requested on an older head": {reviews: []superloop.Review{{Head: loopHead, Verdict: superloop.ChangesRequested, Body: "main.go:7: broken → fix"}}},
+		"approved on an older head":          {reviews: []superloop.Review{{Head: loopHead, Verdict: superloop.Approved}}},
+		"approved on this head":              {reviews: []superloop.Review{{Head: loopFixed, Verdict: superloop.Approved}}},
+		"a round's reported result": {st: &state.State{DeskReviews: []state.DeskReview{{Ref: loopPR, Head: loopHead, Round: 1, Released: time.Unix(1, 0),
+			Result: &state.DeskReviewResult{Verdict: superloop.ChangesRequested, Head: loopHead}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := cmp.Or(tc.st, &state.State{})
+			_, err := reviewRound(st, superloop.Pull{Ref: loopPR, Head: loopFixed, Reviews: tc.reviews})
+			if Code(err) != ExitRefused || !strings.Contains(err.Error(), "one desk review") {
+				t.Fatalf("second review not refused: %v", err)
+			}
+		})
 	}
 }
 
 func TestAgentsReviewRefusesBeforeStarting(t *testing.T) {
-	for _, name := range []string{reviewCaseRedCI, "draft PR", "closed", "reviewed", "requested"} {
+	for _, name := range []string{reviewCaseRedCI, "draft PR", "closed", "reviewed", "reviewed an older head", "requested"} {
 		t.Run(name, func(t *testing.T) {
 			r := newLoopRig(t)
 			switch name {
@@ -86,6 +117,9 @@ func TestAgentsReviewRefusesBeforeStarting(t *testing.T) {
 				r.pull.State = superloop.Merged
 			case "reviewed":
 				r.pull.Reviews = []superloop.Review{{Head: r.pull.Head, Verdict: superloop.Approved, Member: true}}
+			case "reviewed an older head":
+				// The one desk review was given: no second one, whatever the head.
+				r.pull.Reviews = []superloop.Review{{Head: loopFixed, Verdict: superloop.ChangesRequested, Member: true}}
 			case "requested":
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 					st.ReviewRequests = []state.ReviewRequest{{Ref: r.pull.Ref, Head: r.pull.Head, Round: 1, PID: os.Getpid()}}
@@ -141,7 +175,7 @@ func TestAgentsReviewStartsInCheckoutWithFilledBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{loopURL, loopHead, "CI green at " + loopHead, "Light review:", epicTen, issueOneURL, "review round 1", "none (first round)", deskReviewApproved} {
+	for _, want := range []string{loopURL, loopHead, "CI green at " + loopHead, "Light review:", epicTen, issueOneURL, "review round 1", deskReviewApproved} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("brief lacks %q", want)
 		}
@@ -270,9 +304,11 @@ func TestReviewReservationIsSharedWithAutomaticLoop(t *testing.T) {
 	if err := r.a.reserveReview(act); Code(err) != ExitRefused {
 		t.Fatalf("round collision not refused: %v", err)
 	}
+	// The requested review holds the pull request even after its head moved:
+	// a new round on the moved head would be a second review.
 	act.Round = 2
-	if err := r.a.reserveReview(act); err != nil {
-		t.Fatalf("new head and round refused: %v", err)
+	if err := r.a.reserveReview(act); Code(err) != ExitRefused {
+		t.Fatalf("moved head started a second review: %v", err)
 	}
 }
 
@@ -292,7 +328,7 @@ func TestReviewReservationRecoversOrphan(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, _, err := reviewRound(st, r.pull); err != nil || got != 1 {
+			if got, err := reviewRound(st, r.pull); err != nil || got != 1 {
 				t.Fatalf("orphan influenced round: %d %v", got, err)
 			}
 			if err := r.a.reserveReview(act); err != nil {
@@ -391,7 +427,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			retry := superloop.Action{Ref: loopPR, Head: loopHead, Round: 2}
+			retry := superloop.Action{Ref: loopPR, Head: loopFixed, Round: 2}
 			err := r.a.reserveReview(retry)
 			st, rerr := r.a.store.Read()
 			if rerr != nil {
@@ -412,7 +448,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 			if st.DeskReviews[0].Released.IsZero() {
 				t.Fatalf("gone assignment not released: %+v", st.DeskReviews[0])
 			}
-			if !slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 2 && q.Head == loopHead }) || slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 1 }) {
+			if !slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 2 && q.Head == loopFixed }) || slices.ContainsFunc(st.ReviewRequests, func(q state.ReviewRequest) bool { return q.Round == 1 }) {
 				t.Fatalf("restart not reserved in place of the gone one: %+v", st.ReviewRequests)
 			}
 			events, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == reviewReleasedVerb })
@@ -440,7 +476,7 @@ func TestReviewReservationReleasesGoneReviewer(t *testing.T) {
 // A released round keeps its number: the head's next reviewer gets the next.
 func TestReleasedReviewKeepsItsRoundButNotItsHead(t *testing.T) {
 	st := &state.State{DeskReviews: []state.DeskReview{{Ref: loopPR, Head: loopHead, Round: 1, Released: time.Unix(1, 0)}}}
-	if round, _, err := reviewRound(st, superloop.Pull{Ref: loopPR, Head: loopHead}); err != nil || round != 2 {
+	if round, err := reviewRound(st, superloop.Pull{Ref: loopPR, Head: loopHead}); err != nil || round != 2 {
 		t.Fatalf("released round: round %d, %v", round, err)
 	}
 }

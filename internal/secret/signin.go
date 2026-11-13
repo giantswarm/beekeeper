@@ -3,9 +3,10 @@ package secret
 import (
 	"context"
 	"errors"
-	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The broker's sign-in through secret.signinCommand fails for reasons that
@@ -114,7 +115,7 @@ func ClassifySignin(err error, store StoreState) SigninCause {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "signal: killed"):
 		return SigninTimeout
-	case errors.Is(err, exec.ErrNotFound) || strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory"):
+	case errors.Is(err, proc.ErrNotFound) || strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory"):
 		return SigninCommand
 	case store == StoreLocked:
 		return SigninStoreLocked

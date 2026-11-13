@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -48,7 +47,7 @@ var TagExists = func(ctx context.Context, repo, tag string) (bool, error) {
 // stderr, and returns its document.
 var ReleaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 	var out bytes.Buffer
-	c := exec.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
+	c := proc.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
 	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdout, c.Stderr = &out, os.Stderr
 	_ = c.Run() // its exit code is the document's verdict
@@ -82,7 +81,7 @@ var ReviewGuard = func(ctx context.Context, repo string, n int) (string, error) 
 // PrWarmWait runs devctl pr wait for repo#n, its progress on the gate's
 // stderr: a warm-up whose verdict the merge's own devctl run judges.
 var PrWarmWait = func(ctx context.Context, repo string, n int) {
-	c := exec.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
+	c := proc.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
 	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stdout, c.Stderr = io.Discard, os.Stderr
 	_ = c.Run()
@@ -339,8 +338,9 @@ type ChildRun struct {
 	held bool
 	// left says the follow reached its leave time while the run went on;
 	// cut that it left as its caller's timeout cut the connection
-	// (TimedCaller).
-	Left, cut bool
+	// (TimedCaller), merged that it left at the merge, the run awaiting
+	// its release (leaveMerged).
+	Left, cut, merged bool
 	// ended says the follow returned as its caller went away, for a run that
 	// ends with it (withCaller): its merge-child stops the command.
 	Ended bool
@@ -386,7 +386,15 @@ func (r ChildRun) emit() ChildRun {
 // (the gate's tool limit), its files in place for its merge-child and the
 // watch. sig, when given, hears the signals from before devctl started
 // (GateRun.followSignals); else the follow hears them from its start on.
-func FollowChild(base string, pid int, offset int64, bin Binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) (r ChildRun) {
+func FollowChild(base string, pid int, offset int64, bin Binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) ChildRun {
+	return FollowChildUntil(base, pid, offset, bin, hold, leave, false, withCaller, sig)
+}
+
+// FollowChildUntil is FollowChild that, with leaveMerged, also returns with
+// Left and merged set once the run merged and awaits its release
+// (Cmd.AwaitsRelease): its merge-child confirms the release and records the run
+// without the caller (the gate's --until-merged).
+func FollowChildUntil(base string, pid int, offset int64, bin Binary, hold func(doc []byte) bool, leave time.Time, leaveMerged, withCaller bool, sig <-chan os.Signal) (r ChildRun) {
 	r.Rc = guard.ExitNotFound
 	if sig == nil {
 		own := make(chan os.Signal, 1)
@@ -452,6 +460,10 @@ func FollowChild(base string, pid int, offset int64, bin Binary, hold func(doc [
 		}
 		if !leave.IsZero() && !clk.Now().Before(leave) {
 			r.Left = true
+			return r
+		}
+		if leaveMerged && Cmd.AwaitsRelease(base) {
+			r.Left, r.merged = true, true
 			return r
 		}
 		select {
@@ -545,7 +557,7 @@ func LaunchChild(spec ChildSpec, base string) (int, error) {
 		GateLine("previous merge termination: %s", strings.TrimSpace(string(raw)))
 	}
 	RemoveMergeFiles(base)
-	path, err := exec.LookPath(spec.Argv[0])
+	path, err := proc.LookPath(spec.Argv[0])
 	if err != nil {
 		return 0, err
 	}
@@ -573,7 +585,7 @@ func startChild(base string) error {
 		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), clk.Now().UnixNano())
 		return Cmd.Plat().Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, MergeChildCmd, base}, TermIsSuccess: true})
 	}
-	c := exec.Command(self, MergeChildCmd, base) //nolint:gosec // as above
+	c := proc.CommandContext(context.Background(), self, MergeChildCmd, base) //nolint:gosec // as above
 	platform.Detach(c)
 	if err := c.Start(); err != nil {
 		return err

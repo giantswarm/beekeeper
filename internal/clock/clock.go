@@ -1,5 +1,6 @@
 // Package clock is beekeeper's time: Now, Since, Until, After, Sleep,
-// NewTimer, NewTicker and AfterFunc, in place of the time package's.
+// NewTimer, NewTicker and AfterFunc, in place of the time package's, and
+// WithTimeout in place of context.WithTimeout.
 //
 // A release build uses the system clock and nothing else: every function is
 // the time package's own, and nothing reads the environment.

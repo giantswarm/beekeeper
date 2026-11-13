@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -132,6 +131,9 @@ type GateRun struct {
 	// leaveAt is when the call leaves its merge to run on outside it, exit
 	// 76 (merge.toolLimit); zero: never.
 	LeaveAt time.Time
+	// untilMerged ends the call once the merge landed and its merge-child
+	// only awaits the release (--until-merged, the supervisor loop's).
+	UntilMerged bool
 	// acceptRed are the red checks the gate let through (merge.JudgeRed),
 	// which devctl's run again accepts.
 	acceptRed []string
@@ -304,6 +306,18 @@ func (g *GateRun) leave(pid int, cut bool) error {
 		g.Key(), why, pid, g.OutcomeTo())
 	_ = g.Host.Store().Log(Cmd.Event(g.Me, "merge.left", "%s: devctl runs on outside the call past %s (pid %d)", g.Key(), past, pid))
 	return Cmd.NewExitError(ExitGateQueued, "", nil)
+}
+
+// leaveMerged ends the call once the merge landed and its merge-child only
+// awaits the release (UntilMerged): exit 0 without a document. The
+// merge-child confirms the release and records the run, which settles the
+// lane as ever (recordLeft); the caller no longer waits on a release it does
+// not act on.
+func (g *GateRun) leaveMerged(pid int) error {
+	GateLine("%s merged; its merge-child (pid %d) awaits the release outside the call and records it with the run, which settles lane %s; %s",
+		g.Key(), pid, g.Lane.Name, g.OutcomeTo())
+	_ = g.Host.Store().Log(Cmd.Event(g.Me, "merge.left", "%s: merged, its release wait runs on outside the call (pid %d)", g.Key(), pid))
+	return nil
 }
 
 // MergeBudgetReserve leaves room for the reads and writes of one gated PR.
@@ -602,7 +616,7 @@ var PromoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
+	c := proc.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
 	c.Env = Cmd.DevctlCommandEnv("")
 	c.Stderr = &stderr
 	out, err := c.Output()
@@ -613,7 +627,7 @@ var PromoteCandidate = func(ctx context.Context, repo string) (string, error) {
 		err = errors.New("no document")
 	}
 	// CommandContext reports a killed process rather than its deadline. Keep
-	// both causes, and use our buffer even when exec.ExitError has no Stderr.
+	// both causes, and use our buffer even when proc.ExitError has no Stderr.
 	if cause := ctx.Err(); cause != nil {
 		err = fmt.Errorf("%w (%w)", err, cause)
 	}
@@ -1503,7 +1517,7 @@ func (g *GateRun) retryServerError(base string, pid int, run ChildRun) (ChildRun
 		if pid, rc = g.launch(base); rc != 0 {
 			return ChildRun{Rc: rc}, pid
 		}
-		run = FollowChild(base, pid, 0, g.Bin, g.retried(try+1), g.LeaveAt, false, g.Sig)
+		run = FollowChildUntil(base, pid, 0, g.Bin, g.retried(try+1), g.LeaveAt, g.UntilMerged, false, g.Sig)
 	}
 	return run, pid
 }
@@ -1549,7 +1563,7 @@ func (g *GateRun) acceptRedRun(base string, pid int, run ChildRun) (ChildRun, in
 	if pid, rc = g.launch(base); rc != 0 {
 		return ChildRun{Rc: rc}, pid
 	}
-	return g.retryServerError(base, pid, FollowChild(base, pid, 0, g.Bin, g.retried(0), g.LeaveAt, false, g.Sig))
+	return g.retryServerError(base, pid, FollowChildUntil(base, pid, 0, g.Bin, g.retried(0), g.LeaveAt, g.UntilMerged, false, g.Sig))
 }
 
 // judgeRed judges a red document against the base branch it names; a base
@@ -1571,7 +1585,7 @@ func (g *GateRun) judgeRed(ctx context.Context, doc []byte) merge.RedJudgement {
 // run: sent again on a 5xx of its merge call (retryServerError), and with
 // the red checks the gate lets through accepted (acceptRedRun).
 func (g *GateRun) followRun(base string, pid int, offset int64, bin Binary) (ChildRun, int) {
-	run, pid := g.retryServerError(base, pid, FollowChild(base, pid, offset, bin, g.retried(0), g.LeaveAt, false, g.Sig))
+	run, pid := g.retryServerError(base, pid, FollowChildUntil(base, pid, offset, bin, g.retried(0), g.LeaveAt, g.UntilMerged, false, g.Sig))
 	return g.acceptRedRun(base, pid, run)
 }
 
@@ -1605,6 +1619,9 @@ func (g *GateRun) Follow(base string, pid int, offset int64) error {
 		}
 	}
 	run = run.emit()
+	if run.merged {
+		return g.leaveMerged(pid)
+	}
 	if run.Left {
 		return g.leave(pid, run.cut)
 	}
@@ -2039,7 +2056,7 @@ func runningMerges(st *state.State) map[int]bool {
 func toolVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
+	c := proc.CommandContext(ctx, merge.Tool, "version") //nolint:gosec // the merge tool, a constant
 	c.Env = Cmd.DevctlCommandEnv("")
 	out, err := c.Output()
 	if err != nil {
@@ -2058,7 +2075,7 @@ func toolVersion(ctx context.Context) string {
 func toolAcceptsRed(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
+	c := proc.CommandContext(ctx, merge.Tool, "pr", "merge", "--help") //nolint:gosec // the merge tool, a constant
 	c.Env = Cmd.DevctlCommandEnv("")
 	out, _ := c.Output()
 	return strings.Contains(string(out), merge.AcceptRedFlag)

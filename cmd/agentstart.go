@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -153,6 +152,17 @@ execution host still enforces memory, swap, load, disk, build slots (with
 --builds) and maxBusy during admission, so remote preparation can still be
 refused. Authentication, identity, version and policy checks remain required.
 
+A start without --host is placed as the supervisor loop places its own
+(supervisor.hostsFirst, the default, with supervisor.hosts): on the first host
+that maps the start's repository, offers its harness and has room for it
+(capacity --host), pinned to --ref, else to the repository's default branch.
+The repository is --repo, else the origin of the checkout --dir names, else
+the one the brief names, else the origin of agents.dir or the current
+directory. The host's own workspace takes the place of --dir and --branch.
+A start no host takes runs here and says why on its first line; with --repo
+or --ref it is refused instead. Reviews, timers' starts, --desktop and a
+--mode other than headless stay here; so does every start with --host local.
+
 A seed turn creates the session: "claude -p" under a session id beekeeper
 chooses, without tools, with the brief as its first prompt, in a transient
 user unit (beekeeper-agent-<id>, its output in journalctl --user -u <unit>);
@@ -206,8 +216,9 @@ A worker start requires --dir to name exactly one main repository checkout
 and --branch to name a new branch. Parent folders and linked worktrees are
 refused with the available checkout paths. The session starts in the checkout
 so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
-created from the freshly fetched origin default branch. A --review start
-instead requires a pull request URL in its brief and creates a detached
+created from the freshly fetched origin default branch, with origin/<branch>
+as the branch's upstream, so a push never goes to the default branch. A
+--review start instead requires a pull request URL in its brief and creates a detached
 <state>/worktrees/<repo>/review-<number>-<unique-id>. Old review worktrees
 are preserved; each review start gets its own detached checkout.
 A brief spanning repositories must be split into one task per repository.
@@ -360,6 +371,34 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			kind := capacity.StartKind(review, ofSelfHosted)
+			if host == "" {
+				// supervisor.hostsFirst places a start without --host as the
+				// loop places its own; --host local keeps one here.
+				byTimer := os.Getenv(envTimerID) != "" || cmd.Flags().Changed(flagTimerID)
+				p := a.placeHandStart(cmd.Context(), handStart{brief: a.placementBrief(briefFile), repository: repository, ref: gitRef, dir: dir, harness: harness, model: model, mode: mode, review: review || ofSelfHosted, desktop: desktop, builds: builds, byTimer: byTimer, kind: kind, exclude: exclude})
+				// With --json the start's answer is the JSON on stdout alone.
+				say := a.out
+				if a.json {
+					say = cmd.ErrOrStderr()
+				}
+				switch {
+				case p.Host != "":
+					line := fmt.Sprintf("placed on %s by supervisor.hostsFirst: %s at %s; --host local starts it on this machine", p.Host, p.Repository, p.Ref)
+					if branch != "" || dir != "" {
+						line += "; the host's own workspace takes the place of --dir and --branch"
+					}
+					if _, err := fmt.Fprintln(say, line); err != nil {
+						return err
+					}
+					host, repository, gitRef, dir = p.Host, p.Repository, p.Ref, ""
+				case p.Local != "" && (repository != "" || gitRef != ""):
+					return usageErr("--repo and --ref require an SSH --host: %s", p.Local)
+				case p.Local != "":
+					if _, err := fmt.Fprintf(say, "on this machine: %s\n", p.Local); err != nil {
+						return err
+					}
+				}
+			}
 			if host != "" && host != executionLocal {
 				base, ok := harnessByName(harness)
 				if harness == capacity.HarnessAuto {
@@ -648,7 +687,7 @@ work, which takes no choice on a self-hosted provider.`,
 							return err
 						}
 					}
-					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
+					sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: strings.Join(issues, ","), pulls: briefServedPulls(brief, issues), dir: dir, model: model, effort: level, desktop: desktop, mode: mode}
 					if byTimer {
 						if timerLine == "" {
 							var err error
@@ -675,7 +714,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
+				return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s, effort %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(level, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
 			}
 		},
 	}
@@ -684,9 +723,9 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
 	c.Flags().StringVar(&effortLevel, "effort", "", "session effort: low, medium, high, xhigh, max (default: task kind, else harness default)")
-	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
+	c.Flags().StringVar(&host, "host", "", "execution host selector; local keeps the start here; empty: placed by supervisor.hostsFirst")
 	c.Flags().StringVar(&branch, "branch", "", "new worker branch, created from the freshly fetched origin default branch")
-	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
+	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host; without --host: placed on one that maps it")
 	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
@@ -701,6 +740,8 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
+	c.Flags().StringVar(&a.startDefaultEffort, defaultEffortFlag[2:], "", "the effort when no --effort, rule, choice or continued session gives one: the loop's supervisor.effort")
+	_ = c.Flags().MarkHidden(defaultEffortFlag[2:])
 	addTimerFlags(c)
 	return c
 }
@@ -759,7 +800,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		bin, err := exec.LookPath(agy.Comm)
+		bin, err := proc.LookPath(agy.Comm)
 		if err != nil {
 			return err
 		}
@@ -795,7 +836,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if _, err := a.codexModel(model); err != nil {
 			return err
 		}
-		_, err = exec.LookPath(codex.Comm)
+		_, err = proc.LookPath(codex.Comm)
 		return err
 	default:
 		resolvedDir, err := a.agentDir(dir, "")
@@ -805,7 +846,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		_, err = exec.LookPath(claudeComm)
+		_, err = proc.LookPath(claudeComm)
 		return err
 	}
 }
@@ -855,6 +896,9 @@ type agentStart struct {
 	// serves is the issue the task works (briefIssue), recorded as the
 	// session's serve record with the task; empty: none.
 	serves string
+	// pulls are those of serves the brief names as pull requests
+	// (briefServedPulls): their deliveries hold them as pulls.
+	pulls []string
 	// replaces is the running session a hand-over ends: its roster entry,
 	// task and session record go to the new session.
 	replaces *state.Party
@@ -992,7 +1036,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -1007,7 +1051,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		prevDeliveries := slices.Clone(st.Deliveries)
 		var err error
-		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live, sp.pulls...)
 		if err != nil {
 			return nil, err
 		}
@@ -2080,7 +2124,9 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 // serving an issue (owner/repo#n, briefIssue) is the session's serve record
 // from the start, so board next never offers that item again. The loop's
 // fresh continuation of a parked worker continues that task's delivery
-// (state.ContinueDelivery) rather than starting a new one.
+// (state.ContinueDelivery) rather than starting a new one. A review start
+// serves the pull request it reviews and starts no delivery: a reviewer
+// never owns the delivery of what it reviews.
 func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
@@ -2099,6 +2145,9 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 					return o.Session.Is(s.Party) && strings.EqualFold(o.Issue, iss)
 				}) {
 					st.Records = append(st.Records, state.Record{Session: s.Party, Issue: iss, By: s.By, At: s.At})
+					if s.Kind == capacity.TaskKindReview {
+						continue
+					}
 					if continued != nil {
 						st.ContinueDelivery(iss, ag.Name, parkedPull(continued), s.At)
 					} else {
@@ -2258,6 +2307,34 @@ func briefPulls(brief string) []string {
 		}
 	}
 	return out
+}
+
+// briefServedPulls is those of serves, the refs a start serves (briefIssues),
+// that brief names by a pull request URL: an issue and a pull request of a
+// repository never share a number, so such a ref is a pull request.
+func briefServedPulls(brief string, serves []string) []string {
+	named := briefPulls(brief)
+	return slices.DeleteFunc(slices.Clone(serves), func(ref string) bool {
+		return !slices.ContainsFunc(named, func(p string) bool { return strings.EqualFold(p, ref) })
+	})
+}
+
+// startPullDeliveries makes the delivery of each of pulls, the served refs of
+// start s that are pull requests (briefServedPulls), hold its pull request
+// (state.PullDelivery) once s serves it: a worker's task of a pull request is
+// proven by that pull request's merge. A review start works no pull request;
+// it reviews one and opens no delivery.
+func startPullDeliveries(st *state.State, s state.Start, pulls []string) {
+	if s.Kind == capacity.TaskKindReview {
+		return
+	}
+	for _, p := range pulls {
+		if slices.ContainsFunc(st.Records, func(r state.Record) bool {
+			return r.Session.Is(s.Party) && r.Ended.IsZero() && strings.EqualFold(r.Issue, p)
+		}) {
+			st.PullDelivery(p)
+		}
+	}
 }
 
 // briefContextIntro matches a line prefix that cites a related or follow-up
@@ -2473,7 +2550,7 @@ func devBuild() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	onPath, err := exec.LookPath("beekeeper")
+	onPath, err := proc.LookPath("beekeeper")
 	if err == nil {
 		if a, err1 := os.Stat(self); err1 == nil {
 			if b, err2 := os.Stat(onPath); err2 == nil && os.SameFile(a, b) {
@@ -2568,12 +2645,13 @@ func unitEnded(ctx context.Context, unit string) bool {
 	return s == "inactive" || s == "failed"
 }
 
-func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool, pulls ...string) (registration, error) {
 	s.Kind = cmp.Or(s.Kind, a.selectionKind)
 	reg, err := recordStart(st, s, task, serves, live)
 	if err != nil {
 		return reg, err
 	}
+	startPullDeliveries(st, s, pulls)
 	if limit := a.cfg.Delivery.WIPLimit; limit > 0 {
 		v := readDeliveryWIP(st, limit, a.cfg.Supervisor.LoopInterval.Duration, s.At, a.deliveryPolicy())
 		if v.Count > limit {

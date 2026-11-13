@@ -1,0 +1,76 @@
+name: sync-base-of-a-pin-holding-the-default-branch-transfers-nothing
+description: >
+  An execution on an SSH execution host is pinned at a pull request's head
+  that already holds the default branch, as a continuation of an open pull
+  request is. Its agents publish --sync-base finds the workspace up to date:
+  the coordinator answers with the default branch's head and no bundle, and
+  denies nothing. Live, the coordinator refused the empty bundle of the
+  default branch beyond that head, the host retried with the whole history,
+  and in a large repository that history exceeded the 64 MiB transfer limit:
+  the sync failed and the pull request could not be brought up to date.
+issue: https://github.com/giantswarm/beekeeper/issues/3902
+flow: regression
+tags: [regression, hosts, publication]
+timeout: 90s
+
+given:
+  github:
+    repositories:
+      - name: example/app
+        # The pull request's branch is one commit ahead of main.
+        pulls:
+          - {number: 2, title: "feat: the worker's change", head: app-1}
+  hosts:
+    - name: builder
+  harness:
+    workers:
+      - name: sync-worker
+        host: builder
+        turns:
+          - steps:
+              # The workspace's main is the default branch's head: the host's
+              # source checkout holds it.
+              - git: [rev-parse, main]
+                save: main
+              - beekeeper: [agents, publish, --sync-base]
+                save: synced
+              # Nothing travels: the answer names the default branch's head
+              # and carries no bundle.
+              - run:
+                  - sh
+                  - -c
+                  - |
+                    case "$1" in
+                      *bundleSize*) echo "the sync transferred a bundle: $1" >&2; exit 1;;
+                      *"\"head\":\"$2\""*) exit 0;;
+                    esac
+                    echo "the sync does not answer with the default branch's head $2: $1" >&2
+                    exit 1
+                  - sh
+                  - '${synced}'
+                  - '${main}'
+  calls:
+    # The host's gh has a login of its own, and so has the desk's.
+    - program: gh
+      args: [auth, token]
+      respond: {stdout: "scenario-token\n"}
+
+when:
+  # The execution is pinned at the pull request's head.
+  - name: start
+    run:
+      args: [--as, supervisor loop, agents, start, sync-worker, /work/worker.txt, --host, builder, --repo, example/app, --ref, app-1, --harness, claude, --model, sonnet]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 30s
+      expect:
+        - worker: {name: sync-worker, host: builder, outcome: finish}
+
+then:
+  - worker: {name: sync-worker, host: builder, harness: claude, turns: 1, outcome: finish}
+  # The coordinator answered the sync and refused nothing: no empty bundle,
+  # and no whole-history retry after it.
+  - events:
+      contains: [execution.published]
+      not_contains: [execution.publish-denied]

@@ -187,13 +187,31 @@ func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 		return "branch conflicts with base", 1
 	}
 	r.pass(t)
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "Repair the branch") {
-		t.Fatalf("repair not requested: %v", r.calls)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+		t.Fatalf("conflict returned to the author: %v", c)
 	}
+	r.reviewerRepair(t, loopReviewer, "Repair the branch")
 	r.pass(t)
+	if c := r.called(agentsName, agentStartName, loopReviewer); c != nil {
+		t.Fatalf("repeated repair start %v", c)
+	}
 	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
 		t.Fatalf("repeated repair wake %v", c)
+	}
+}
+
+// reviewerRepair fails t unless this pass started reviewer's repair turn
+// with a brief that carries want: a real conflict after approval returns to
+// the reviewer, never to the author and never as a second review.
+func (r *loopRig) reviewerRepair(t *testing.T, reviewer, want string) {
+	t.Helper()
+	start := r.called(agentsName, agentStartName, reviewer)
+	if start == nil {
+		t.Fatalf("no repair turn for %s: %v\n%s", reviewer, r.calls, r.out)
+	}
+	brief, err := os.ReadFile(start[3])
+	if err != nil || !strings.Contains(string(brief), want) {
+		t.Fatalf("repair brief of %s lacks %q: %v: %s", reviewer, want, err, brief)
 	}
 }
 
@@ -332,11 +350,14 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 		repark    bool
 		wantGates int
 		failure   int
+		// repairer gets the repair turn: the approving reviewer for a real
+		// conflict, the worker for a failed merge validation.
+		repairer string
 	}{
-		{name: "without_repark", mergeable: loop.MergeableConflicting, repark: false, wantGates: 1},
-		{name: "with_repark", mergeable: loop.MergeableConflicting, repark: true, wantGates: 1},
-		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashNotApplicable},
-		{name: "gate_red_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashRed},
+		{name: "without_repark", mergeable: loop.MergeableConflicting, repark: false, wantGates: 1, repairer: loopReviewer},
+		{name: "with_repark", mergeable: loop.MergeableConflicting, repark: true, wantGates: 1, repairer: loopReviewer},
+		{name: "gate_conflict_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashNotApplicable, repairer: loopWorker},
+		{name: "gate_red_while_full", mergeable: "UNKNOWN", repark: true, wantGates: 2, failure: github.SquashRed, repairer: loopWorker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
@@ -406,15 +427,15 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 				t.Fatalf("completed repair handoff without capacity: %v", r.logged(t, "supervisor.merge"))
 			}
 
-			// Pass 4: capacity frees up; fixer starts once, without invoking gate again.
+			// Pass 4: capacity frees up; the repairer starts once, without invoking gate again.
 			room = 1
 			r.pass(t)
 			if gateRuns != tc.wantGates-1 {
 				t.Fatalf("conflicting PR invoked merge gate %d times, want %d", gateRuns, tc.wantGates-1)
 			}
-			fixerStart := r.called(agentsName, agentStartName, loopWorker)
-			if fixerStart == nil || len(r.logged(t, "supervisor.merge")) != 1 {
-				t.Fatalf("expected fixer start for conflict repair, got %v\n%s", r.calls, r.out)
+			repairStart := r.called(agentsName, agentStartName, tc.repairer)
+			if repairStart == nil || len(r.logged(t, "supervisor.merge")) != 1 {
+				t.Fatalf("expected %s to start for the repair, got %v\n%s", tc.repairer, r.calls, r.out)
 			}
 
 			st, err := r.a.store.Read()
@@ -499,7 +520,7 @@ func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T
 	})
 }
 
-func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
+func TestLoopConflictingPRHandsOffItsRepairOnce(t *testing.T) {
 	t.Run("conflicting pull state skips gate and hands off once", func(t *testing.T) {
 		r := newLoopRig(t)
 		r.park(t, loopPR, time.Now())
@@ -511,15 +532,18 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 		if c := r.called(gate.GateCmdName); c != nil {
 			t.Fatalf("conflicting PR invoked gate: %v", c)
 		}
-		wake := r.called(agentsName, agentWakeName, loopWorker)
-		if wake == nil || !strings.Contains(wake[3], "conflicts with its base") {
-			t.Fatalf("conflicting PR did not wake worker for repair: %v", r.calls)
+		if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+			t.Fatalf("conflict returned to the author: %v", c)
 		}
+		r.reviewerRepair(t, loopReviewer, "conflicts with its base")
 		if len(r.logged(t, "supervisor.merge")) != 1 {
 			t.Fatalf("expected 1 supervisor.merge record, got %d", len(r.logged(t, "supervisor.merge")))
 		}
-		// Subsequent passes do not retry or wake again for the same head.
+		// Subsequent passes do not retry or start the repair again for the same head.
 		r.pass(t)
+		if c := r.called(agentsName, agentStartName, loopReviewer); c != nil {
+			t.Fatalf("conflicting PR retried its repair start on next pass: %v", c)
+		}
 		if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
 			t.Fatalf("conflicting PR retried repair wake on next pass: %v", c)
 		}

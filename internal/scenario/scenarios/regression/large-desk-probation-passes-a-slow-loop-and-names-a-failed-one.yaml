@@ -1,0 +1,194 @@
+name: large-desk-probation-passes-a-slow-loop-and-names-a-failed-one
+description: >
+  Self-update on a desk the size of the lab's coordinator when its updates
+  failed: 120 workers on the roster, 1500 serve records, 1200 deliveries in
+  flight, 3000 reports and 20000 events. The canary of each release runs
+  its commands against that state and installs it. Candidate 3's loop
+  applies the desk's 3000 finished reports in its first pass while GitHub
+  answers it late, so that pass outlasts the heartbeat's grace of ten
+  minutes; it reports each phase as it goes, its probation passes and it
+  becomes the last known good, while
+  supervisor status and capacity --json answer within their budget beside
+  it. Candidate 4 is installed while the loop of candidate 3 runs another
+  copy of that release, which is never replaced, so it never hands over:
+  no loop of candidate 4 starts. At the end of the probation window the
+  controller rolls candidate 4 back and the line for the person names the
+  loop's failure. Live, every candidate after rc.215 was rolled back on
+  such a desk with no more than "no health heartbeat from the candidate's
+  loop", a slow first pass and a missing loop alike.
+issue: https://github.com/giantswarm/beekeeper/issues/3345
+flow: regression
+tags: [regression, selfupdate, probation, rollback, performance]
+timeout: 300s
+
+# The bug's fixes are on main already, so the scenario passes on this
+# change's base. Its control is a run on the code before the fixes, linked
+# on the pull request that adds the scenario.
+control:
+  none: >-
+    the fixes of https://github.com/giantswarm/beekeeper/issues/3345 are on
+    main already; the runs that fail on the code before them are linked on
+    the pull request that adds this scenario
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      # A loop passes, and sends its heartbeat, every second.
+      supervisor: {loopInterval: 1s, releaseEvery: 24h}
+      watch: {interval: 30s}
+  releases:
+    installed: v1.0.0-rc.1
+    published: [v1.0.0-rc.2, v1.0.0-rc.3, v1.0.0-rc.4]
+  github:
+    repositories:
+      - name: example/app
+        # The desk's board, with nothing to start.
+        issues:
+          - {number: 1, title: Not ready yet, board: Todo}
+    # The scenario installs each release by hand: a loop's own release
+    # lookup finds nothing, or it would install the newest itself. The
+    # slow loop's lookup is answered by its own fault below.
+    faults:
+      - name: no-lookup
+        match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: stuck-loop}
+        respond: {status: 404}
+  state:
+    generate:
+      agents: 120
+      records: 1500
+      deliveries: 1200
+      reports: 3000
+      events: 20000
+  calls:
+    # The service manager takes a controller's unit and starts nothing:
+    # the scenario runs the unit's command itself (the controller steps).
+    - program: systemd-run
+      args: ['--unit=beekeeper-recovery\.service']
+      respond: {exit: 0}
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ""}
+    - program: gh
+      args: [search, prs]
+      respond: {stdout: "[]\n"}
+
+when:
+  # The first install has no recovery target: its canary runs on the large
+  # desk, and its completion makes candidate 2 the last known good.
+  - name: first
+    run: {args: [self-update, --version, v1.0.0-rc.2]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.1 to v1.0.0-rc.2."]}
+  - name: promote-first
+    run: {args: [self-update, --complete-probation]}
+    expect:
+      - exit: 0
+  - name: second
+    run: {args: [self-update, --version, v1.0.0-rc.3]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.2 to v1.0.0-rc.3."]}
+      - calls: {program: systemd-run, args: ['--unit=beekeeper-recovery\.service', --recovery-controller], min: 1, max: 1}
+  # GitHub answers candidate 3's loop late: its release lookup (in its
+  # first pass) after 12 seconds and finding nothing, and for the next 40
+  # seconds everything else four seconds late. The first fault that holds
+  # answers, so the lookup's comes first.
+  - name: slow-lookup
+    fault:
+      arm:
+        name: slow-lookup
+        match: {path: 'repos/giantswarm/beekeeper/git/matching-refs/.*', caller: slow-loop}
+        respond: {status: 404, delay: 12s}
+  - name: slow-github
+    fault:
+      arm:
+        name: slow
+        match: {caller: slow-loop}
+        respond: {delay: 4s}
+        for: 40s
+  - name: slow-loop
+    background: {args: [supervisor, loop]}
+  # The controller of candidate 2: an evaluation every 500 ms that counts
+  # for thirty minutes of probation, the whole window and more than the
+  # heartbeat's grace of ten minutes. It runs the isolated workflow probe
+  # first, several seconds on a CI runner, and judges the loop while that
+  # loop's first pass still applies the desk's 3000 finished reports or
+  # waits on its release lookup.
+  - name: controller
+    background:
+      release: v1.0.0-rc.2
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 30m]
+  # While the slow loop works the large desk, the commands the canary and
+  # the person run answer within their budget.
+  - name: status
+    run: {args: [supervisor, status]}
+    expect:
+      - exit: 0
+      - duration: {max: 3s}
+  - name: capacity-json
+    run: {args: [capacity, --json]}
+    expect:
+      - exit: 0
+      - duration: {max: 3s}
+  - wait_for:
+      timeout: 120s
+      interval: 200ms
+      expect:
+        - process: {name: controller, exit: 0}
+        - events: {contains: [self-update.recovery]}
+  - name: verdict
+    run: {args: [log, --verb, self-update.recovery]}
+    expect:
+      - output: {contains: ["v1.0.0-rc.3 passed its probation: last known good"]}
+  # GitHub held the judged loop's answers.
+  - name: slow-answers
+    wait_for:
+      timeout: 30s
+      expect:
+        - github: {calls: {caller: slow-loop, fault: slow, min: 1}}
+  - stop: slow-loop
+  # The loop of candidate 3 now runs another copy of that release, one no
+  # update replaces: it never re-executes into a newer one.
+  - name: stuck-loop
+    background: {release: v1.0.0-rc.3, args: [supervisor, loop]}
+  - wait_for:
+      timeout: 60s
+      expect:
+        - log: {name: stuck-loop, contains: ["SUPERVISOR REFILL started 0"]}
+  - name: third
+    run: {args: [self-update, --version, v1.0.0-rc.4]}
+    expect:
+      - exit: 0
+      - output: {contains: ["Verified the signature and updated /work/bin/beekeeper from v1.0.0-rc.3 to v1.0.0-rc.4."]}
+      - calls: {program: systemd-run, args: ['--unit=beekeeper-recovery\.service', --recovery-controller], min: 2, max: 2}
+  # The controller of candidate 3, with the same cadence: no loop of
+  # candidate 4 starts while the old one runs, so it is judged at the
+  # window's end, its one evaluation.
+  - name: failure-controller
+    background:
+      release: v1.0.0-rc.3
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 30m]
+  - wait_for:
+      timeout: 120s
+      interval: 200ms
+      expect:
+        - process: {name: failure-controller, exit: 0}
+        - events: {contains: [supervisor.file]}
+  - name: restored
+    run: {args: [version]}
+    expect:
+      - output: {matches: '^beekeeper v1\.0\.0-rc\.3\b'}
+  - name: reason
+    run: {args: [log, --verb, supervisor.file]}
+    expect:
+      - output: {contains: ["RELEASE ROLLED BACK: v1.0.0-rc.4 failed (no health heartbeat from the candidate's loop: no matching candidate loop startup recorded after install; another-version loop is still alive); restored v1.0.0-rc.3"]}
+  - stop: stuck-loop
+
+then:
+  - {step: status, duration: {max: 3s}}
+  - log: {name: controller, not_contains: ["RELEASE ROLLED BACK", "RELEASE RECOVERY FAILED"]}
+  - log: {name: failure-controller, contains: ["RELEASE ROLLED BACK: v1.0.0-rc.4 failed (no health heartbeat from the candidate's loop: no matching candidate loop startup recorded after install"]}

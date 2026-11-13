@@ -42,6 +42,7 @@ type Host interface {
 // there until their own packages exist; a field goes when its function has
 // moved to a package the gate can import.
 type Command struct {
+	AwaitsRelease         func(base string) bool
 	BinaryVersion         func(ctx context.Context, file string) string
 	Clock                 func(now time.Time, t time.Time) string
 	DevctlCommandEnv      func(configPath string) []string
