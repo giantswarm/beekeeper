@@ -27,7 +27,8 @@ given:
             state: closed
             board: Done
             archived: true
-          - {number: 3, title: A larger build cache}
+          # In Backlog, the Status an intake puts an issue in, which the board then has.
+          - {number: 3, title: A larger build cache, board: Backlog}
   harness:
     # Usage on pace: neither ahead of it nor far behind.
     usage:
