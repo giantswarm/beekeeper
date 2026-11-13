@@ -140,8 +140,11 @@ its release step. A worker finishes with one of these commands:
   session the loop starts for a parked worker's task (its post-merge work, for
   one) continues that task's delivery: a delivery still active or ended merged
   keeps its pull requests and outcome, and the pull request the worker parked
-  on joins them, also when it only says "Part of" the issue. Its own
-  `--done` then rests on that merge without a park of its own.
+  on joins them, also when it only says "Part of" the issue. The same holds
+  for the session the loop starts for a review park once its pull request
+  ended, its worker off the roster: the review park's pull request joins the
+  delivery. Its own `--done` then rests on that merge without a park of its
+  own.
 - `agents idle --done --no-change "<reason and proof>" --report "..." --problem none`:
   explicitly explain an already fixed issue, an operation with its proof, or
   an answer recorded on the issue. This counts as no change, not a release.

@@ -966,7 +966,10 @@ or a merged pull request whose served issue remains open or unreadable, wakes it
 continue or verify the task rather than leaving it parked.
 
 An ended worker's saved review park still lets the loop request a fixer when that
-parked head conflicts with its base or fails CI. The saved park alone does not
+parked head conflicts with its base or fails CI. Its post-merge work, once the pull
+request merged, goes to a fresh session that continues the served issue's delivery
+with that pull request (the review park's `continuing` names it while it starts),
+so its `agents idle --done` rests on the merge. The saved park alone does not
 keep the worker's board item served after the worker ends. This recovery requires
 a tracked pull and saved review ownership; it does not discover every open pull
 or recover every ownerless In Progress item. The broader 15-minute orphan sweep

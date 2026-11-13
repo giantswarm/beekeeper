@@ -116,6 +116,26 @@ func continuedPark(st *state.State, name string) *state.Park {
 	return nil
 }
 
+// continuesPull says whether the start named name continues a task whose
+// delivery it keeps, and the pull request that joins that delivery: a parked
+// worker's fresh continuation (continuedPark, with the pull it parked on) or
+// the session the loop starts for a review park whose pull request ended
+// (state.ReviewPark.Continuing, with that pull request).
+func continuesPull(st *state.State, name string) (string, bool) {
+	if p := continuedPark(st, name); p != nil {
+		return parkedPull(p), true
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.Continuing != "" && strings.EqualFold(rp.Continuing, name) {
+			if r, ok := parseRef(rp.On); ok {
+				return refName(r), true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}
+
 // parkedPull is the pull request p waits on, owner/repo#n: "" when p waits
 // on an issue, a note or nothing GitHub names.
 func parkedPull(p *state.Park) string {
