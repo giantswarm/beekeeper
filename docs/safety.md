@@ -122,9 +122,11 @@ short-flag clusters, including an attached or separate value after `-R`.
 
 Set `hooks.guards: false` to let `hook pretooluse` pass tools unchanged in
 Claude, agy and Codex, including calls normally refused or rewritten for the
-merge gate, build slots, secret reads, allowed organizations or guide roles.
-Unset or `true` keeps enforcement enabled. Configuration errors retain recovery
-mode; they do not silently disable guards.
+merge gate, secret reads, allowed organizations or guide roles. Where a build
+runs is placement, not a guard: in the hooks' scope a Claude session's Bash
+builds still run under `beekeeper run`, and so on `run.remote` when it is
+enabled; nothing is refused. Unset or `true` keeps enforcement enabled.
+Configuration errors retain recovery mode; they do not silently disable guards.
 
 Instruction relay, result secret redaction, sessionstart and worktree placement
 continue independently. While `hooks.guards: false`, managed worker environments

@@ -82,8 +82,14 @@ func (a Advance) String() string {
 	return s
 }
 
-// maxQuietWait bounds a wait for a quiet desk.
-const maxQuietWait = 10 * time.Second
+// maxQuiet bounds an advance's quiet: how long the desk has to rest.
+const maxQuiet = 5 * time.Second
+
+// maxQuietWait bounds a wait for a quiet desk. The wait ends as soon as the
+// desk rests, so the bound only names a desk that never does: work a step
+// woke may keep it busy for longer than a few seconds, such as a merge gate
+// that lints and tests in the builder, then merges, on a loaded CI machine.
+const maxQuietWait = 30 * time.Second
 
 func (s *Scenario) validateAdvance(where string, a *Advance, background []string) []error {
 	var errs []error
@@ -92,8 +98,8 @@ func (s *Scenario) validateAdvance(where string, a *Advance, background []string
 		bad("advance without by")
 		return errs
 	}
-	if a.Quiet.Duration > maxQuietWait/2 {
-		bad("advance quiet %s exceeds %s", a.Quiet, maxQuietWait/2)
+	if a.Quiet.Duration > maxQuiet {
+		bad("advance quiet %s exceeds %s", a.Quiet, maxQuiet)
 	}
 	if a.Step.Duration > a.By.Duration {
 		bad("advance step %s exceeds its by %s", a.Step, a.By)

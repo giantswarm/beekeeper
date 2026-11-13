@@ -1217,7 +1217,11 @@ Status. Issues from any accessible repository are added to the configured
 board, regardless of the repository's owner, subject to GitHub permissions.
 With --intake, the issue is put in the given status only when it has no
 Status on the configured board yet and does not sit on another board where
-it is already being worked.
+it is already being worked; a closed issue is put nowhere and an archived
+item stays archived ("left …", nothing written).
+An archived item, which GitHub refuses to update, is restored to the board
+(unarchiveProjectV2Item) before the move when the issue is open, and left
+as it is when the issue is closed ("left …", exit 0, nothing written).
 Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
@@ -1289,19 +1293,27 @@ leaves the item in its Status; a person's decision that holds it is note add
 			if mv.Board != "" {
 				team = " on the board " + mv.Board
 			}
+			if mv.Unarchived {
+				team += ", restored from the archive"
+			}
+			// Nothing was written for an issue left: on another board, closed,
+			// or with an archived item an intake leaves.
+			left := (mv.Board != "" && mv.Kept) || mv.Closed || (mv.Archived && !mv.Unarchived)
 			switch {
-			case mv.Board != "" && mv.Kept:
+			case left:
 			case mv.Added:
 				_ = a.store.Log(event(me, "board.move", "%s: added to the board%s, → %s", mv.Ref, team, mv.To))
 			case mv.From != mv.To:
 				_ = a.store.Log(event(me, "board.move", "%s: %s → %s%s", mv.Ref, from, mv.To, team))
+			case mv.Unarchived:
+				_ = a.store.Log(event(me, "board.move", "%s: in %s%s", mv.Ref, mv.To, team))
 			}
 			if a.json {
 				return a.printJSON(mv)
 			}
 			switch {
-			case mv.Board != "" && mv.Kept:
-				_, err = fmt.Fprintf(a.out, "left %s in %s%s\n", mv.Ref, mv.From, team)
+			case left:
+				_, err = fmt.Fprintln(a.out, leftLine(mv))
 			case mv.Added:
 				_, err = fmt.Fprintf(a.out, "added %s to the board %s/%d%s: → %s\n", mv.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, team, mv.To)
 			case mv.From == mv.To:
@@ -1330,7 +1342,7 @@ leaves the item in its Status; a person's decision that holds it is note add
 func (a *app) boardRankCmd() *cobra.Command {
 	var at board.Place
 	c := &cobra.Command{
-		Use:     "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
+		Use:     "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue> [--unarchive]",
 		Aliases: []string{"order"},
 		Short:   "Change a board item's position: move it to the top, or before or after another item",
 		Long: `An item's position on the board orders work within each board.order step:
@@ -1345,7 +1357,11 @@ board.team as its Team and no Status, whatever the owner of its repository
 (GitHub decides whether it may be added).
 The other issue must be on the board already. Only the items named are read,
 except an archived after anchor: board order is read to find its nearest
-unarchived predecessor, or the board's end if none precedes it. Every GitHub
+unarchived predecessor, or the board's end if none precedes it. An archived
+item has no place in board order and GitHub refuses to move it: rank leaves
+it, says so in one line and exits 0, writing nothing; with --unarchive an
+open issue's item is restored to the board (unarchiveProjectV2Item) and
+ranked, while a closed issue's stays archived. Every GitHub
 call acts on the repository of the issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
 exist, another issue that has no item on the board, an item placed against itself.
 Any session (including the guide on the person's word) may change positions;
@@ -1374,6 +1390,13 @@ identifies the caller; an anonymous call is refused.`,
 			if err != nil {
 				return err
 			}
+			if rk.Archived {
+				if a.json {
+					return a.printJSON(rk)
+				}
+				_, err = fmt.Fprintln(a.out, rankLeft(a.cfg.Board, rk))
+				return err
+			}
 			place := rankPlace(rk)
 			added := ""
 			if rk.Added {
@@ -1381,6 +1404,9 @@ identifies the caller; an anonymous call is refused.`,
 				if rk.Team != "" {
 					added += " with Team " + rk.Team
 				}
+			}
+			if rk.Unarchived {
+				added += ", restored from the archive"
 			}
 			_ = a.store.Log(event(me, "board.rank", "%s: %s%s", rk.Ref, place, added))
 			if a.json {
@@ -1393,6 +1419,7 @@ identifies the caller; an anonymous call is refused.`,
 	c.Flags().BoolVar(&at.Top, "top", false, "move the item to the top of the board")
 	c.Flags().StringVar(&at.Before, "before", "", "move the item right before this issue's item")
 	c.Flags().StringVar(&at.After, "after", "", "move the item right after this issue's item")
+	c.Flags().BoolVar(&at.Unarchive, "unarchive", false, "restore an open issue's archived item to the board first; a closed issue's stays archived")
 	c.MarkFlagsMutuallyExclusive("top", "before", "after")
 	c.MarkFlagsOneRequired("top", "before", "after")
 	return c
@@ -1501,6 +1528,37 @@ func (a *app) printEpics(epics []board.Epic, indent string) {
 	for _, e := range epics {
 		_, _ = fmt.Fprintf(a.out, "%s%s %s (%s): %s\n", indent, e.Ref, truncate(e.Title, 50), e.Status, e.PlanText())
 	}
+}
+
+// leftLine says why a move or an intake left the issue as it is. It opens
+// with "left", which the supervisor loop's intake reads as nothing to rank.
+func leftLine(mv *board.Moved) string {
+	where := "as it is"
+	switch {
+	case mv.Archived && mv.From != "":
+		where = "archived in " + mv.From
+	case mv.Archived:
+		where = "archived"
+	case mv.From != "":
+		where = "in " + mv.From
+	}
+	switch {
+	case mv.Board != "":
+		return fmt.Sprintf("left %s in %s on the board %s", mv.Ref, mv.From, mv.Board)
+	case mv.Closed:
+		return fmt.Sprintf("left %s %s: the issue is closed", mv.Ref, where)
+	default:
+		return fmt.Sprintf("left %s %s: an intake leaves an archived item, board move restores it", mv.Ref, where)
+	}
+}
+
+// rankLeft says why a rank left an archived item where it is.
+func rankLeft(b config.Board, rk *board.Ranked) string {
+	why := "the issue is closed, nothing to rank"
+	if !rk.Closed {
+		why = "rank --unarchive restores and ranks it"
+	}
+	return fmt.Sprintf("left %s archived on the board %s/%d: %s", rk.Ref, b.Owner, b.Project, why)
 }
 
 // rankPlace is where rk put the item, with the neighbours it names.

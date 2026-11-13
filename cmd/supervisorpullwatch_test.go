@@ -289,7 +289,7 @@ func TestPullWatcherFloorAndTerminalRemoval(t *testing.T) {
 	}
 }
 
-func TestPullWatcherRateLimitLogsOnceAndRecovers(t *testing.T) {
+func TestPullWatcherRateLimitBacksOffAndRecovers(t *testing.T) {
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -314,8 +314,8 @@ func TestPullWatcherRateLimitLogsOnceAndRecovers(t *testing.T) {
 			t.Fatalf("retry %d: %s", i, got)
 		}
 	}
-	if n := strings.Count(r.out.String(), "SUPERVISOR PULL WATCH held"); n != 1 {
-		t.Fatalf("failure logged %d times", n)
+	if n := strings.Count(r.out.String(), "SUPERVISOR PULL WATCH held: try "); n != 8 {
+		t.Fatalf("failed tries said %d times, want each of 8", n)
 	}
 	fail = false
 	next, err := w.Poll(t.Context(), l)
@@ -330,8 +330,8 @@ func TestPullWatcherRateLimitLogsOnceAndRecovers(t *testing.T) {
 	if schedule.After(l, next, err) != time.Minute {
 		t.Fatal("backoff did not reset")
 	}
-	if n := strings.Count(r.out.String(), "SUPERVISOR PULL WATCH held"); n != 2 {
-		t.Fatalf("new failure episode logged %d times", n)
+	if !strings.Contains(r.out.String(), "SUPERVISOR PULL WATCH recovered") || !strings.HasSuffix(strings.TrimSpace(r.out.String()), "rate limit; next try in 1m0s") || !strings.Contains(r.out.String(), "held: try 1 failed") {
+		t.Fatalf("new failure episode:\n%s", r.out.String())
 	}
 }
 
@@ -382,6 +382,11 @@ func TestPullWatcherHasOneFetchAndCancelsOnStop(t *testing.T) {
 	}
 	old := loop.ReadLoopPullBatch
 	t.Cleanup(func() { loop.ReadLoopPullBatch = old })
+	listed := loop.ReadOpenPulls
+	t.Cleanup(func() { loop.ReadOpenPulls = listed })
+	loop.ReadOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
+		return []string{loopPR}, nil
+	}
 	entered := make(chan struct{})
 	loop.ReadLoopPullBatch = func(ctx context.Context, _ []string, _ map[string]loop.WatchedLoopPull, _ int) (map[string]loop.WatchedLoopPull, error) {
 		close(entered) // a concurrent second fetch would panic

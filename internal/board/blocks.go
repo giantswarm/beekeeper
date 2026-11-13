@@ -263,7 +263,7 @@ func (c *Client) MoveHeld(ctx context.Context, ref, in, by string) (*Moved, *Hel
 	}
 	if by != "" {
 		ref = fmt.Sprintf("%s/%s#%d", owner, repo, n)
-		if _, _, _, err := c.lookup(github.ActingOn(ctx, owner+"/"+repo), m, ref, owner, repo, n); err != nil {
+		if _, err := c.lookup(github.ActingOn(ctx, owner+"/"+repo), m, ref, owner, repo, n); err != nil {
 			return nil, nil, err
 		}
 	}

@@ -101,16 +101,28 @@ func (d *driver) advance(ctx context.Context, a *Advance) (args, failures []stri
 
 // quiet waits until no process has armed a timer on the world's clock and
 // no fake was called for q (none for zero), at most maxQuietWait; it
-// returns how long it waited. A call is seen when the world's log grows.
+// returns how long it waited. A call is seen when the world's log grows,
+// and while the world or the scenario's GitHub still answers one: a
+// process that waits for an answer is at work, not at rest.
 func (d *driver) quiet(ctx context.Context, q time.Duration) (time.Duration, error) {
 	if q <= 0 {
 		return 0, nil
 	}
+	// answered counts what the world and the scenario's GitHub answered;
+	// asked says one of them still answers a call.
+	answered := func() (n int, asked bool) {
+		n, asked = len(d.world.Calls()), d.world.InFlight() > 0
+		if d.github != nil {
+			n, asked = n+len(d.github.Calls()), asked || d.github.InFlight() > 0
+		}
+		return n, asked
+	}
 	started := time.Now()
-	calls, called := len(d.world.Calls()), started
+	calls, _ := answered()
+	called := started
 	for {
 		now := time.Now()
-		if n := len(d.world.Calls()); n != calls {
+		if n, asked := answered(); n != calls || asked {
 			calls, called = n, now
 		}
 		last := called

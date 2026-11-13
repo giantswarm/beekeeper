@@ -473,6 +473,9 @@ type PullExpect struct {
 	// MergedInto says its merge commit is the head of that branch.
 	MergedInto string `yaml:"merged_into"`
 	Comments   *Range `yaml:"comments"`
+	// Ahead is how many commits the head of an open pull request has
+	// beyond its base: what its branch adds, read from the origin.
+	Ahead *int `yaml:"ahead"`
 }
 
 // IssueExpect checks an issue.
@@ -483,8 +486,9 @@ type IssueExpect struct {
 	State  string   `yaml:"state"`
 	Labels []string `yaml:"labels"`
 	// Board is its Status on the scenario's board; "none" for an issue
-	// that is not on it.
+	// that is not on it. Archived says whether its item there is archived.
 	Board    string `yaml:"board"`
+	Archived *bool  `yaml:"archived"`
 	Comments *Range `yaml:"comments"`
 	// OpenPulls and Pulls count the pull requests that close it: the open
 	// ones, and all of them.
@@ -551,7 +555,10 @@ func (e *Expect) Validate() error {
 		if p.ReviewDecision != "" && !slices.Contains([]string{"none", "approved", "changes_requested", "review_required"}, p.ReviewDecision) {
 			errs = append(errs, fmt.Errorf("pull: review_decision %q is none of none, approved, changes_requested, review_required", p.ReviewDecision))
 		}
-		if p.State == "" && p.Draft == nil && p.Labels == nil && p.Checks == "" && p.ReviewDecision == "" && p.MergedInto == "" && p.Comments == nil {
+		if p.Ahead != nil && (*p.Ahead < 0 || (p.State != "" && p.State != "open")) {
+			errs = append(errs, errors.New("pull: ahead counts the commits of an open pull request, at least 0"))
+		}
+		if p.State == "" && p.Draft == nil && p.Labels == nil && p.Checks == "" && p.ReviewDecision == "" && p.MergedInto == "" && p.Comments == nil && p.Ahead == nil {
 			errs = append(errs, errors.New("pull without a fact to check"))
 		}
 	case "issue":
@@ -563,7 +570,7 @@ func (e *Expect) Validate() error {
 		if i.State != "" && i.State != "open" && i.State != "closed" {
 			errs = append(errs, fmt.Errorf("issue: state %q is neither open nor closed", i.State))
 		}
-		if i.State == "" && i.Labels == nil && i.Board == "" && i.Comments == nil && i.OpenPulls == nil && i.Pulls == nil {
+		if i.State == "" && i.Labels == nil && i.Board == "" && i.Archived == nil && i.Comments == nil && i.OpenPulls == nil && i.Pulls == nil {
 			errs = append(errs, errors.New("issue without a fact to check"))
 		}
 	}
@@ -743,6 +750,21 @@ func (m *Model) checkPull(want *PullExpect) error {
 			errs = append(errs, err)
 		}
 	}
+	if want.Ahead != nil {
+		switch {
+		case p.State != stateOpen:
+			bad("state %s, ahead is an open pull request's", strings.ToLower(p.State))
+		case !m.Origins.Has(p.Repo):
+			bad("ahead: %s has no origin", want.Repo)
+		default:
+			ahead, _, err := m.Origins.AheadBehind(p.Repo, m.BaseSHA(p), m.HeadSHA(p))
+			if err != nil {
+				bad("ahead: %v", err)
+			} else if ahead != *want.Ahead {
+				bad("head %d commit(s) ahead of %s, want %d", ahead, p.Base, *want.Ahead)
+			}
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -773,6 +795,15 @@ func (m *Model) checkIssue(want *IssueExpect) error {
 		}
 		if !strings.EqualFold(got, want.Board) {
 			bad("board status %q, want %q", got, want.Board)
+		}
+	}
+	if want.Archived != nil {
+		items := m.Items(i, nil)
+		switch {
+		case len(items) == 0:
+			bad("not on the board, want an item archived %t", *want.Archived)
+		case items[0].Archived != *want.Archived:
+			bad("board item archived %t, want %t", items[0].Archived, *want.Archived)
 		}
 	}
 	if want.Comments != nil {

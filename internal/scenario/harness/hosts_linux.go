@@ -287,7 +287,7 @@ func provision(ctx context.Context, desk Desk, h Host, repositories []string, ke
 		"identity": map[string]any{"person": "scenario", "team": "scenario", "host": h.Name},
 		"github":   map[string]any{"floor": -1, "allowedOrgs": toAny(desk.Orgs)},
 		"capacity": map[string]any{"ceiling": maxBusy, "reviewHeadroom": 0, "availMinMiB": 1},
-		"watch":    map[string]any{"availMinMiB": 1, "loadMax": 1000000},
+		"watch":    map[string]any{"availMinMiB": 1, "loadMax": 1000000, "cpuPSIMax": 100, "psiMax": 100},
 		"agents": map[string]any{
 			"staleAfter": "-1s",
 			"execution": map[string]any{

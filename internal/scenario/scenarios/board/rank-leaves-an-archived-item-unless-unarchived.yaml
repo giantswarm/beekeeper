@@ -1,0 +1,54 @@
+name: rank-leaves-an-archived-item-unless-unarchived
+description: >
+  board rank of an issue whose board item is archived says so in one line and exits 0, writing
+  nothing: an archived item has no place in board order and GitHub refuses to move it. With
+  --unarchive an open issue's item is restored to the board and then ranked; a closed issue's item
+  stays archived, --unarchive or not.
+issue: https://github.com/giantswarm/beekeeper/issues/3731
+flow: board
+tags: [board, rank]
+timeout: 30s
+
+given:
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: First item, board: Ready}
+          - {number: 2, title: Reopened after board tidy archived it, board: Done, archived: true}
+          - {number: 3, title: Finished, state: closed, board: Done, archived: true}
+
+when:
+  - name: open
+    run: {args: [--as, scenario, board, rank, example/app#2, --after, example/app#1]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ["left example/app#2 archived on the board example/1: rank --unarchive restores and ranks it"]
+      - github: {issue: {repo: example/app, number: 2, archived: true}}
+      - events: {not_contains: [board.rank]}
+  - name: closed
+    run: {args: [--as, scenario, board, rank, example/app#3, --after, example/app#1, --unarchive]}
+    expect:
+      - exit: 0
+      - output:
+          contains: ["left example/app#3 archived on the board example/1: the issue is closed, nothing to rank"]
+      - github: {issue: {repo: example/app, number: 3, archived: true}}
+      - events: {not_contains: [board.rank]}
+  - name: restored
+    run: {args: [--as, scenario, board, rank, example/app#2, --after, example/app#1, --unarchive, --json]}
+    expect:
+      - exit: 0
+      - json_path: {path: above, equals: example/app#1}
+      - json_path: {path: unarchived, equals: true}
+      - github: {issue: {repo: example/app, number: 2, board: Done, archived: false}}
+      - events: {contains: [board.rank]}
+
+then:
+  # Nothing was written for the items left; the restored one was restored once and moved once.
+  - github: {calls: {path: graphql, operation: updateProjectV2ItemPosition, caller: open, max: 0}}
+  - github: {calls: {path: graphql, operation: updateProjectV2ItemPosition, caller: closed, max: 0}}
+  - github: {calls: {path: graphql, operation: unarchiveProjectV2Item, caller: closed, max: 0}}
+  - github: {calls: {path: graphql, operation: unarchiveProjectV2Item, caller: restored, min: 1, max: 1}}
+  - github: {calls: {path: graphql, operation: updateProjectV2ItemPosition, caller: restored, min: 1, max: 1}}
+  - github: {issue: {repo: example/app, number: 3, state: closed, archived: true}}

@@ -94,6 +94,9 @@ type reply struct {
 	Full    bool      `json:"full,omitempty"`
 	Models  []string  `json:"models,omitempty"`
 	SSH     *sshRoute `json:"ssh,omitempty"`
+
+	// Fail is the account's refusal of this usage request.
+	Fail *UsageFail `json:"fail,omitempty"`
 }
 
 // canned is a given call's answer.

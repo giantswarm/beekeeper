@@ -60,6 +60,9 @@ type Fault struct {
 // name or one of its top-level fields ("repositoryOwner"); Caller who
 // sent it. Conditional picks the requests with (true) or without (false)
 // If-None-Match; Via those through the gh CLI ("gh") or direct ("http").
+// MinFields picks GraphQL requests with at least that many top-level
+// fields, each alias counted: a batch too large for GitHub to answer in
+// time.
 type FaultMatch struct {
 	Method      string `yaml:"method"`
 	Path        string `yaml:"path"`
@@ -67,17 +70,19 @@ type FaultMatch struct {
 	Caller      string `yaml:"caller"`
 	Conditional *bool  `yaml:"conditional"`
 	Via         string `yaml:"via"`
+	MinFields   int    `yaml:"min_fields"`
 }
 
 // FaultRespond is a fault's answer. Status answers with that status
-// (Body, or GitHub's usual body for it); SecondaryRateLimit with GitHub's
-// 403 for a secondary rate limit; Outage drops the connection without an
-// answer. RetryAfter adds the Retry-After header. Delay holds the answer
-// that long in real time; a fault of Delay alone is a slow answer of the
-// real one.
+// (Body, of ContentType or JSON, or GitHub's usual body for it);
+// SecondaryRateLimit with GitHub's 403 for a secondary rate limit; Outage
+// drops the connection without an answer. RetryAfter adds the Retry-After
+// header. Delay holds the answer that long in real time; a fault of Delay
+// alone is a slow answer of the real one.
 type FaultRespond struct {
 	Status             int      `yaml:"status"`
 	Body               string   `yaml:"body"`
+	ContentType        string   `yaml:"content_type"`
 	RetryAfter         Duration `yaml:"retry_after"`
 	Delay              Duration `yaml:"delay"`
 	SecondaryRateLimit bool     `yaml:"secondary_rate_limit"`
@@ -145,6 +150,12 @@ func (f *Fault) Validate() error {
 	if r.Body != "" && r.Status == 0 {
 		errs = append(errs, errors.New("respond.body needs respond.status"))
 	}
+	if r.ContentType != "" && r.Body == "" {
+		errs = append(errs, errors.New("respond.content_type needs respond.body"))
+	}
+	if f.Match.MinFields < 0 {
+		errs = append(errs, fmt.Errorf("match.min_fields %d", f.Match.MinFields))
+	}
 	if f.Times < 0 {
 		errs = append(errs, fmt.Errorf("times %d", f.Times))
 	}
@@ -175,6 +186,9 @@ func (f *Fault) holds(req *Request, op *gqlOperation) bool {
 		return false
 	}
 	if c := f.Match.Conditional; c != nil && *c != (req.Header.Get("If-None-Match") != "") {
+		return false
+	}
+	if n := f.Match.MinFields; n > 0 && (op == nil || op.Fields < n) {
 		return false
 	}
 	if m.operation != nil {
@@ -229,7 +243,7 @@ func (f *Fault) response() *Response {
 	switch {
 	case r.Body != "":
 		resp = &Response{Status: r.Status, Header: http.Header{}, Body: []byte(r.Body)}
-		resp.Header.Set("Content-Type", "application/json; charset=utf-8")
+		resp.Header.Set("Content-Type", cmpOr(r.ContentType, "application/json; charset=utf-8"))
 	case r.Status == http.StatusNotModified || r.Status == http.StatusNoContent:
 		resp = &Response{Status: r.Status, Header: http.Header{}}
 	case r.Status >= 400:

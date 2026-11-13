@@ -1,0 +1,49 @@
+name: guards-off-still-routes-builds
+description: >
+  The desk runs with hooks.guards off. The PreToolUse hook refuses nothing,
+  but where a build runs is placement, not a guard: a desk session's go test
+  still runs under beekeeper run, which sends it to run.remote's builders when
+  that is enabled, never on the coordinator. A command that builds nothing,
+  here a devctl merge the guards would gate, passes unchanged, and a session
+  on the person's own projects, outside hooks.scope, gets no rewrite, as with
+  the guards on.
+issue: https://github.com/giantswarm/beekeeper/issues/3873
+flow: guards
+tags: [guards, hooks, builds]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      shell: sh
+      hooks:
+        guards: false
+        scope: {dirs: [/work/repo]}
+
+when:
+  - name: build
+    run:
+      args: [hook, pretooluse]
+      stdin: '{"hook_event_name":"PreToolUse","session_id":"desk","cwd":"/work/repo","tool_name":"Bash","tool_input":{"command":"go test ./..."}}'
+    expect:
+      - exit: 0
+      - output: {contains: [" run -- sh -c 'go test ./...'"], not_contains: ['"deny"']}
+      - json_path: {path: hookSpecificOutput.permissionDecision, equals: allow}
+  - name: no-build
+    run:
+      args: [hook, pretooluse]
+      stdin: '{"hook_event_name":"PreToolUse","session_id":"desk","cwd":"/work/repo","tool_name":"Bash","tool_input":{"command":"devctl pr merge example/app 1"}}'
+    expect:
+      - exit: 0
+      - output: {not_contains: [updatedInput, '"deny"']}
+  - name: own-project
+    run:
+      args: [hook, pretooluse]
+      stdin: '{"hook_event_name":"PreToolUse","session_id":"own","cwd":"/work/home/own-project","tool_name":"Bash","tool_input":{"command":"go test ./..."}}'
+    expect:
+      - exit: 0
+      - output: {not_contains: [updatedInput, " run -- "]}
+
+then:
+  # The hook's own binary runs the build in a beekeeper run slot.
+  - {step: build, output: {matches: "\"command\":\"[^\"]*beekeeper run -- sh -c 'go test \\./\\.\\.\\.'\""}}
