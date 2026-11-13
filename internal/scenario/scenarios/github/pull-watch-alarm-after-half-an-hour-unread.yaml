@@ -1,0 +1,100 @@
+name: pull-watch-alarm-after-half-an-hour-unread
+description: >
+  GitHub fails every batch of the desk's pull requests: 504 with its HTML
+  error page. The loop's pull watcher says each failed try, with its count,
+  GitHub's answer and the next try. After half an hour in which it read
+  none of them, the loop raises one alarm for the guide that names the
+  failed tries and GitHub's answer. Once GitHub answers again, the watcher
+  reads the pull requests and says it recovered, and the loop says the
+  stall ended. A watch that said its first failure only and kept failing
+  left every parked pull request without a desk review for a day, and
+  nobody heard of it.
+issue: https://github.com/giantswarm/beekeeper/issues/3809
+flow: github
+tags: [github, loop, pullwatch, fault, alarm]
+timeout: 150s
+
+given:
+  desk:
+    config:
+      # The budget probe reads a repository the scenario's GitHub has.
+      github: {probeRepo: example/app}
+      # Passes every five minutes measure the watch; no board read and no
+      # release lookup beside it.
+      supervisor: {loopInterval: 5m, releaseEvery: 24h, workerBrief: ""}
+      watch: {interval: 30m}
+  github:
+    repositories:
+      - name: example/app
+        pulls:
+          - {number: 1, title: One, head: one, author: desk}
+          - {number: 2, title: Two, head: two, author: desk}
+    faults:
+      # Every pull batch: its rate limit and the two pull requests (the
+      # budget probe asks for the rate limit and the viewer).
+      - name: gateway
+        match: {path: graphql, operation: rateLimit, min_fields: 3}
+        respond:
+          status: 504
+          content_type: text/html; charset=utf-8
+          body: |
+            <!DOCTYPE html>
+            <html>
+              <head><title>Unicorn! &middot; GitHub</title></head>
+              <body>We couldn't respond to your request in time.</body>
+            </html>
+  calls:
+    # No GitHub App login beside the gh login.
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    # The watch's machine reads: empty journals.
+    - program: journalctl
+      respond: {stdout: ""}
+
+when:
+  - name: loop
+    background: {args: [supervisor, loop]}
+  - wait_for:
+      timeout: 30s
+      expect:
+        - github: {calls: {path: graphql, fault: gateway, min: 1}}
+  # Half an hour and more of failed tries, backing off to ten minutes.
+  - name: failing
+    advance:
+      by: 40m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["SUPERVISOR PULL WATCH held: try 1 failed", "SUPERVISOR PULL WATCH held: try 4 failed", "HTTP 504", "Unicorn!"]}
+        - log: {name: loop, contains: ["The pull watch has not read all the desk's pull requests since", "tries failed since"]}
+        - events: {contains: [supervisor.file]}
+  - name: failing-status
+    run: {args: [supervisor, status]}
+    expect:
+      - exit: 0
+      - output: {contains: ["pull watch failing since", "last complete poll never", "HTTP 504"]}
+  - name: answers
+    fault: {clear: gateway}
+  - name: recovering
+    advance:
+      by: 20m
+      step: 1m
+      quiet: 200ms
+  - wait_for:
+      timeout: 30s
+      expect:
+        - log: {name: loop, contains: ["SUPERVISOR PULL WATCH recovered", "SUPERVISOR STALL ENDED: the pull watch reads the desk's pull requests again"]}
+  - name: status
+    run: {args: [supervisor, status]}
+    expect:
+      - exit: 0
+      - output: {contains: ["pull observations: 2,"], not_contains: ["pull watch failing"]}
+  - stop: loop
+
+then:
+  # One alarm for the one episode.
+  - log: {name: loop, not_contains: ["invalid character"]}
+  - events: {contains: [supervisor.file]}
