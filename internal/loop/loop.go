@@ -2008,6 +2008,7 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
 	}
+	in.Elsewhere = l.markElsewhere(ctx, in)
 	if !l.DryRun {
 		if err := l.reportSweep(in.Ownerless, unread); err != nil {
 			return err

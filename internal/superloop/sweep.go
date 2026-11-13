@@ -154,24 +154,30 @@ func reviews(ref, name string, rounds int) bool {
 // once that review gave its verdict, for the loop's go without a second
 // review. A head with checks still running waits. Each
 // stretch without an owner gets one action, a head at most MaxSweeps; an
-// ownership question still open is the person's.
+// ownership question still open is the person's. Another desk's worker's
+// pull request (in.Elsewhere) gets the first review of its green head
+// without the wait.
 func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave func(string, string, string, string, string), add func(Action)) {
 	since, ok := in.Ownerless[ref]
 	if !ok || since.IsZero() {
 		return
 	}
-	// The loop's own last act on it (a start, a wake, the sweep's last
-	// action) gives its owner the wait again: one action for each stretch.
-	if last := sw.lastAct[ref]; last.After(since) {
-		since = last
-	}
-	// Activity on GitHub, a push or a review, is somebody's: the wait runs
-	// from it.
-	if p.Updated.After(since) {
-		since = p.Updated
-	}
-	if in.Now.Before(since.Add(OrphanWait)) {
-		return
+	// Another desk's worker waits on its own desk for this desk's review:
+	// its green head gets the review now, whatever it last did on GitHub.
+	if in.Elsewhere[ref] == "" || !awaitsFirstReview(l, ref, p) {
+		// The loop's own last act on it (a start, a wake, the sweep's last
+		// action) gives its owner the wait again: one action for each stretch.
+		if last := sw.lastAct[ref]; last.After(since) {
+			since = last
+		}
+		// Activity on GitHub, a push or a review, is somebody's: the wait runs
+		// from it.
+		if p.Updated.After(since) {
+			since = p.Updated
+		}
+		if in.Now.Before(since.Add(OrphanWait)) {
+			return
+		}
 	}
 	if !orphanable(in, l, ref, p) || liveOwner(in, l, ref, p) != "" {
 		return
