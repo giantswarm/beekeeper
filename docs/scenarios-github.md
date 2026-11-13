@@ -133,10 +133,12 @@ only that long after it was armed. They are checked in order; the first that hol
 | `operation` | a GraphQL operation's name or one of its top-level fields (`repositoryOwner`) |
 | `conditional` | requests with (`true`) or without (`false`) `If-None-Match` |
 | `via` | `gh` for the CLI, `http` for direct callers |
+| `min_fields` | GraphQL requests with at least that many top-level fields, each alias counted |
 
 | `respond` | Answers |
 | --- | --- |
 | `status` (and `body`) | that status with GitHub's usual body for it |
+| `content_type` | the `body`'s type, JSON by default; `text/html` is GitHub's error page, which `gh` prints |
 | `secondary_rate_limit: true` | GitHub's 403 for a secondary rate limit |
 | `outage: true` | no answer: the connection fails (`gh`: `error connecting to api.github.com`) |
 | `retry_after` | the `Retry-After` header |
