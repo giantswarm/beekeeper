@@ -18,6 +18,9 @@ import (
 // BEEKEEPER_SCENARIO_CONTROL_BASE names, and must fail there on an
 // assertion. Without the variable it skips. Under BEEKEEPER_SCENARIO_SHARD
 // it controls the scenarios of that shard, the ones the shard's suite runs.
+//
+// control: none: it gains only the shard filter, which the merge base
+// lacks; the control itself is unchanged and runs in CI's step
 func TestScenarioControl(t *testing.T) {
 	base := os.Getenv(ControlEnv)
 	if base == "" {

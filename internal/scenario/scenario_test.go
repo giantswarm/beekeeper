@@ -271,6 +271,9 @@ func TestWorldLeavesAModeledCallToItsFake(t *testing.T) {
 
 // Every scenario of the suite runs in exactly one shard, the split is the
 // same on every call, and a malformed shard is refused.
+//
+// control: none: the shard is new in this change, so the merge base lacks
+// the code this test covers and cannot build it
 func TestShardSplitsTheSuite(t *testing.T) {
 	all, err := LoadDir("scenarios")
 	if err != nil {

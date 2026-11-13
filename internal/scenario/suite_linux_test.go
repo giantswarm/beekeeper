@@ -113,6 +113,10 @@ func runner(t *testing.T) *Runner {
 // BEEKEEPER_SCENARIO_FLOW and BEEKEEPER_SCENARIO_TAG, and to the shard
 // BEEKEEPER_SCENARIO_SHARD names) in parallel, each in its own sandbox, and
 // writes the report.
+//
+// control: none: it gains only the shard filter, which the merge base
+// lacks; the shard's split is TestShardSplitsTheSuite's, and every
+// scenario still runs in one of CI's containers
 func TestScenarios(t *testing.T) {
 	all, err := LoadDir("scenarios")
 	if err != nil {
