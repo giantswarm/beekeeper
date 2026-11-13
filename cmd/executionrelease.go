@@ -16,6 +16,10 @@ import (
 // sync releases one that no host journal backs.
 const unstartedReleaseAfter = 15 * time.Minute
 
+// executionReleasedEvent logs the release of a reservation its host never
+// acknowledged: the start it was made for ran nothing.
+const executionReleasedEvent = "execution.released"
+
 // preparePendingExecution takes a reservation its host has not yet
 // acknowledged to a registered handle: it rebinds it to the host's current
 // policy, pins its source and sends the start. sentAt is the start send the
@@ -265,7 +269,7 @@ func (a *app) releaseUnstarted(ref execution.Ref, sentAt time.Time, reason strin
 			removeAgent(st, j)
 			st.Records = slices.DeleteFunc(st.Records, func(r state.Record) bool { return r.Session.Is(party) })
 		}
-		return []state.Event{event(st.Starts[i].By, "execution.released", "%s: host %s never acknowledged its start: %s", st.Starts[i].Name, ref.Host, reason)}, nil
+		return []state.Event{event(st.Starts[i].By, executionReleasedEvent, "%s: host %s never acknowledged its start: %s", st.Starts[i].Name, ref.Host, reason)}, nil
 	})
 	return released, err
 }

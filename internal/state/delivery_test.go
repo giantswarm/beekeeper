@@ -120,3 +120,37 @@ func TestContinueDeliveryKeepsTheTasksDelivery(t *testing.T) {
 		})
 	}
 }
+
+// A pull request a start works itself holds its own delivery's pulls, once;
+// one an active delivery of its issue holds gets no delivery of its own.
+//
+// control: none: PullDelivery is new, so the base cannot build this test;
+// the scenario delivery/pull-request-task-finishes-with-its-merge fails on
+// the base instead.
+func TestPullDeliveryHoldsItsOwnPull(t *testing.T) {
+	at := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	const issue, pull = "o/r#1", "o/r#7"
+	own := func(pulls ...string) Delivery {
+		return Delivery{Ref: pull, Pulls: append([]string{}, pulls...), Step: DeliveryImplementing, Started: at, Since: at}
+	}
+	issues := Delivery{Ref: issue, Pulls: []string{pull}, Step: DeliveryReviewing, Started: at, Since: at}
+	for _, tc := range []struct {
+		name       string
+		prev, want []Delivery
+	}{
+		{name: "fresh", prev: []Delivery{own()}, want: []Delivery{own(pull)}},
+		{name: "held already", prev: []Delivery{own(pull)}, want: []Delivery{own(pull)}},
+		{name: "beside an absorbed pull", prev: []Delivery{own("o/r#9")}, want: []Delivery{own(pull, "o/r#9")}},
+		{name: "its issue's", prev: []Delivery{issues}, want: []Delivery{issues}},
+		{name: "its issue's beside a stale seed", prev: []Delivery{issues, own()}, want: []Delivery{issues, own()}},
+		{name: "none", prev: nil, want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &State{Deliveries: tc.prev}
+			st.PullDelivery("O/R#7")
+			if !reflect.DeepEqual(st.Deliveries, tc.want) {
+				t.Fatalf("got %+v, want %+v", st.Deliveries, tc.want)
+			}
+		})
+	}
+}

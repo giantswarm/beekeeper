@@ -2,7 +2,7 @@
 
 package platform
 
-import "os/exec"
+import "github.com/giantswarm/beekeeper/internal/proc"
 
 // Detach does nothing where there are no sessions.
-func Detach(*exec.Cmd) {}
+func Detach(*proc.Cmd) {}

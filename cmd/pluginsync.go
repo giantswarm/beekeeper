@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/install"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 	"github.com/giantswarm/beekeeper/plugin"
 )
@@ -22,7 +22,7 @@ import (
 // claudePlugin runs one claude plugin command, its output in the error;
 // tests replace it.
 var claudePlugin = func(ctx context.Context, args ...string) error {
-	out, err := exec.CommandContext(ctx, "claude", append([]string{"plugin"}, args...)...).CombinedOutput() //nolint:gosec // Claude Code's own plugin commands
+	out, err := proc.CommandContext(ctx, "claude", append([]string{"plugin"}, args...)...).CombinedOutput() //nolint:gosec // Claude Code's own plugin commands
 	if err != nil {
 		return fmt.Errorf("claude plugin %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -375,7 +375,7 @@ func pinMarketplaceSettings(dir, name, revision string) error {
 
 // verifyMarketplace checks Claude's view rather than trusting its registry file.
 var verifyMarketplace = func(ctx context.Context, name string) error {
-	out, err := exec.CommandContext(ctx, "claude", "plugin", "marketplace", "list", "--json").Output()
+	out, err := proc.CommandContext(ctx, "claude", "plugin", "marketplace", "list", "--json").Output()
 	if err != nil {
 		return fmt.Errorf("listing Claude marketplaces: %w", err)
 	}

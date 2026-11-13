@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
@@ -121,7 +121,7 @@ func devctlToken(ctx context.Context, devctl string) (string, error) {
 
 func devctlTokenEnv(ctx context.Context, devctl string, env []string) (string, error) {
 	var out, errOut bytes.Buffer
-	c := exec.CommandContext(ctx, devctl, "auth", "exec", "--", "printenv", "GH_TOKEN") //nolint:gosec // the configured devctl
+	c := proc.CommandContext(ctx, devctl, "auth", "exec", "--", "printenv", "GH_TOKEN") //nolint:gosec // the configured devctl
 	c.Env = env
 	c.Stdout, c.Stderr = &out, &errOut
 	if err := c.Run(); err != nil {

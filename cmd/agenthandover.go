@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -842,7 +841,7 @@ func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
 	if err := a.requireClaudeLogin(); err != nil {
 		return "", err
 	}
-	bin, err := exec.LookPath("claude")
+	bin, err := proc.LookPath("claude")
 	if err != nil {
 		return "", err
 	}
@@ -917,7 +916,7 @@ type bgJob struct {
 // otherwise resume it once its CLI dies. The daemon names its sessions by a
 // job id of their own, which claude agents maps to the session id.
 var claudeStop = func(ctx context.Context, id string) error {
-	out, err := exec.CommandContext(ctx, "claude", "agents", "--json").Output()
+	out, err := proc.CommandContext(ctx, "claude", "agents", "--json").Output()
 	if err != nil {
 		return fmt.Errorf("claude agents: %w", err)
 	}
@@ -929,7 +928,7 @@ var claudeStop = func(ctx context.Context, id string) error {
 	if i < 0 {
 		return fmt.Errorf("claude agents lists no background job of session %s", id)
 	}
-	if out, err := exec.CommandContext(ctx, "claude", "stop", jobs[i].ID).CombinedOutput(); err != nil { //nolint:gosec // the job claude agents named
+	if out, err := proc.CommandContext(ctx, "claude", "stop", jobs[i].ID).CombinedOutput(); err != nil { //nolint:gosec // the job claude agents named
 		return fmt.Errorf("claude stop %s: %w: %s", jobs[i].ID, err, strings.TrimSpace(string(out)))
 	}
 	return nil

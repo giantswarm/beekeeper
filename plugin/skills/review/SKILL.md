@@ -3,7 +3,7 @@ name: review
 description: Independently review a pull request for fulfilment before the supervisor permits merge. Use in a fresh reviewer session, never to review your own change.
 ---
 
-Start with `beekeeper agents review <owner/repo>#<n>` in the repository checkout (or configure `agents.dir`/`agents.roots`). CI must be green at the current head. `--model` overrides `supervisor.reviewModel` (default `opus`, the strongest Claude alias). The verdict prefix stays fixed across models. The command pins PR/head/issues/parent epic/round/previous findings and refuses a second review of that head.
+Start with `beekeeper agents review <owner/repo>#<n>` in the repository checkout (or configure `agents.dir`/`agents.roots`). CI must be green at the current head. `--model` overrides `supervisor.reviewModel` (default `opus`, the strongest Claude alias). The verdict prefix stays fixed across models. The command pins PR/head/issues/parent epic/round. A pull request gets one desk review: the command refuses once it has a desk verdict, on any head.
 
 Read the filled brief, PR, issue comments and parent epic. Check:
 
@@ -16,7 +16,7 @@ Read the filled brief, PR, issue comments and parent epic. Check:
 
 Use the light brief for fewer than `supervisor.reviewLightLines` changed lines (default 150; `--light-lines` overrides; negative disables this shortcut), or docs/tests-only changes: diff, issue and CI, with no checkout or build. Otherwise create your own worktree at the pinned head and read repository rules for tests and lints. Trust green CI on that exact head. Do not run local tests, lints, builds or probes; inspect code and tests instead. Never merge.
 
-Every finding is blocking or a nit to fix in this round; drop anything else. Review only: never edit, commit or push fixes to the reviewed branch. Post findings and request changes; report the verdict and review URL with `beekeeper agents idle --done --report` so the supervisor forwards them to the implementing worker. Approve only the assigned, unchanged head when it needs no fixes. A new issue is only for a real gap outside the PR or a deferral the issue permits: label it `follow-up`, leave it unranked in backlog, never attach it as an epic sub-issue. `board next` skips `follow-up` by default.
+This is the pull request's one desk review; no second review runs for it. Every finding is blocking or a nit to fix in this round; drop anything else. Fix your own findings yourself in your worktree at the pinned head (a light review creates one only for its fixes) in code, tests or docs, commit them as one commit, push it once to the pull request's branch (`git push origin HEAD:refs/heads/<branch>`, never force-push), and approve the head you pushed at once, without waiting for its CI: the loop waits for green CI on that head and merges it. Never merge the base into the branch or rebase it to bring it up to date: the loop merges the approved head as it is, and its merge-result check against the current base is the gate. Request changes only for a finding that needs a product or design decision or cannot be fixed on the branch, or when your publication is refused: the worker fixes those, and the loop merges its green fix without another review. A new issue is only for a real gap outside the PR or a deferral the issue permits: label it `follow-up`, leave it unranked in backlog, never attach it as an epic sub-issue. `board next` skips `follow-up` by default.
 
 Post exactly one comment review using `gh pr review --comment --body-file <file>`, never `--approve`. Its first line is exactly one of:
 
@@ -25,9 +25,9 @@ Desk review (opus): approved
 Desk review (opus): changes requested
 ```
 
-Its second line is `Head reviewed: <sha>` (put the SHA in backticks: the assigned head only). Each finding is `<file>:<line>: <what is wrong> → <what would be right>`. Report that same verdict and the review URL to the supervisor with `beekeeper agents idle --done --report "<verdict, newline, review URL>" --problem none`, or report each encountered problem with evidence and owning repository.
+Its second line is `Head reviewed: <sha>` (put the SHA in backticks: the pinned head, or the full SHA of the head you pushed when you fixed findings, even while its CI runs). Each finding is `<file>:<line>: <what is wrong> → <what would be right>`, saying which you fixed. Report that same verdict and the review URL to the supervisor with `beekeeper agents idle --done --report "<verdict, newline, review URL>" --problem none`, or report each encountered problem with evidence and owning repository.
 
-Never merge. The supervisor relays findings to the worker; it gives the merge go only after approval. An unchanged approved head gets no second review. For a push fixing only approval nits, the supervisor checks the delta against the approved head, then runs `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>` to attest that check before the loop gives an exact-head go; it must not silently carry an approval across arbitrary code changes.
+Never merge. After your approval the loop gives the merge go for the head you approved once its CI is green; it relays findings you could not fix to the worker and merges the worker's green fix without a second review. A later head that only brings the base into the approved one (a merge, a conflict's resolution, a rebase) keeps the approval. Nobody updates an approved branch with the base: only a real merge conflict is resolved on it. A conflict or red CI after approval returns to the reviewer for a repair turn, without another review verdict; push the repair and park for the loop to wait for CI and merge.
 
 For out-of-scope findings, check the owning repository's open issues first. A known finding adds
 nothing. New facts rewrite the existing issue's description, never comments. Only a new finding

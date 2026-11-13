@@ -25,6 +25,7 @@ const (
 	boardEscalateName                = "escalate"
 	configFlag                       = "config"
 	continuationQueuedEvent          = "agents.continuation-queued"
+	defaultEffortFlag                = "--default-effort"
 	deliveryBlocked                  = "blocked"
 	deliveryExemptOnlyFlag           = "--wip-exempt-only"
 	deliveryFlowing                  = "flowing"
@@ -34,6 +35,7 @@ const (
 	epicOwnerTask                    = "Epic owner: "
 	epicSnapshotFile                 = "epic-delivery.json"
 	excludeFlag                      = "exclude"
+	executionReleasedEvent           = "execution.released"
 	gateCmdName                      = "gate"
 	harnessAuto                      = "auto"
 	hostUpdateCmdName                = "update"
@@ -53,7 +55,6 @@ const (
 	reviewedMergeRoute               = "reviewed merge"
 	runMerge                         = "merge"
 	selfUpdateCmdName                = "self-update"
-	taskKindArg                      = "--kind"
 	taskKindReview                   = "review"
 	throughputCadence                = time.Minute
 	throughputObservationFile        = "throughput-observation.json"
@@ -83,6 +84,7 @@ func Vocabulary() map[string]any {
 		"boardEscalateName":                boardEscalateName,
 		"configFlag":                       configFlag,
 		"continuationQueuedEvent":          continuationQueuedEvent,
+		"defaultEffortFlag":                defaultEffortFlag,
 		"deliveryBlocked":                  deliveryBlocked,
 		"deliveryExemptOnlyFlag":           deliveryExemptOnlyFlag,
 		"deliveryFlowing":                  deliveryFlowing,
@@ -92,6 +94,7 @@ func Vocabulary() map[string]any {
 		"epicOwnerTask":                    epicOwnerTask,
 		"epicSnapshotFile":                 epicSnapshotFile,
 		"excludeFlag":                      excludeFlag,
+		"executionReleasedEvent":           executionReleasedEvent,
 		"gateCmdName":                      gateCmdName,
 		"harnessAuto":                      harnessAuto,
 		"hostUpdateCmdName":                hostUpdateCmdName,
@@ -111,7 +114,6 @@ func Vocabulary() map[string]any {
 		"reviewedMergeRoute":               reviewedMergeRoute,
 		"runMerge":                         runMerge,
 		"selfUpdateCmdName":                selfUpdateCmdName,
-		"taskKindArg":                      taskKindArg,
 		"taskKindReview":                   taskKindReview,
 		"throughputCadence":                throughputCadence,
 		"throughputObservationFile":        throughputObservationFile,

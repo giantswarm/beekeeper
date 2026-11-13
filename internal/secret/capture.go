@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"os/user"
 	"path"
 	"strings"
 
 	"github.com/itchyny/gojq"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // The key and the type of a kubernetes.io/dockerconfigjson Secret.
@@ -251,13 +252,13 @@ func produce(ctx context.Context, opt CaptureOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := exec.CommandContext(ctx, bin, opt.Producer[1:]...) //nolint:gosec // an allowlisted producer is the purpose
+	c := proc.CommandContext(ctx, bin, opt.Producer[1:]...) //nolint:gosec // an allowlisted producer is the purpose
 	c.Env = opt.Env
 	c.Dir = "/"
 	var out bytes.Buffer
 	c.Stdout = &out
 	if err := c.Run(); err != nil {
-		var ee *exec.ExitError
+		var ee *proc.ExitError
 		if errors.As(err, &ee) {
 			return nil, fmt.Errorf("the producer %s exited %d: nothing stored", name, ee.ExitCode())
 		}

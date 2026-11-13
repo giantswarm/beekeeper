@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"syscall"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
@@ -58,7 +58,7 @@ gpg itself.`,
 		DisableFlagParsing: true,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if !inSandbox() {
-				gpg, err := exec.LookPath("gpg")
+				gpg, err := proc.LookPath("gpg")
 				if err != nil {
 					return err
 				}
@@ -92,12 +92,12 @@ func brokeredSign(gpg string) sandbox.Handler {
 		}
 		ctx, cancel := context.WithTimeout(ctx, signTimeout)
 		defer cancel()
-		c := exec.CommandContext(ctx, gpg, append(append([]string{}, gpgSignFlags...), key)...) //nolint:gosec // gpg, the key checked
+		c := proc.CommandContext(ctx, gpg, append(append([]string{}, gpgSignFlags...), key)...) //nolint:gosec // gpg, the key checked
 		c.Stdin = bytes.NewReader(req.Input)
 		var out, errOut bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errOut
 		err := c.Run()
-		var exit *exec.ExitError
+		var exit *proc.ExitError
 		if err != nil && !errors.As(err, &exit) {
 			return sandbox.Reply{}, fmt.Errorf("gpg: %w", err)
 		}
@@ -108,7 +108,7 @@ func brokeredSign(gpg string) sandbox.Handler {
 // hostGPG is the gpg git runs on the host: the person's gpg.program, gpg
 // when none is set, as git does.
 func hostGPG(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "git", "config", "--global", "--get", "gpg.program").Output()
+	out, err := proc.CommandContext(ctx, "git", "config", "--global", "--get", "gpg.program").Output()
 	if p := strings.TrimSpace(string(out)); err == nil && p != "" {
 		return p
 	}

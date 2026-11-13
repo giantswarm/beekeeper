@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // UsageRequestError is the app-server's error reply to the account usage
@@ -126,7 +127,7 @@ func shortCause(s string) string {
 // ProbeUsage fetches account usage without starting a model turn. Codex owns
 // authentication; no credential values pass through beekeeper.
 func ProbeUsage(ctx context.Context, dir, home string, at time.Time) (UsageReading, error) {
-	c := exec.CommandContext(ctx, Comm, "app-server")
+	c := proc.CommandContext(ctx, Comm, "app-server")
 	c.Dir = dir
 	if home != "" {
 		c.Env = append(os.Environ(), "CODEX_HOME="+home)
@@ -135,7 +136,7 @@ func ProbeUsage(ctx context.Context, dir, home string, at time.Time) (UsageReadi
 	return probeUsage(c, at)
 }
 
-func probeUsage(c *exec.Cmd, at time.Time) (UsageReading, error) {
+func probeUsage(c *proc.Cmd, at time.Time) (UsageReading, error) {
 	in, err := c.StdinPipe()
 	if err != nil {
 		return UsageReading{}, err

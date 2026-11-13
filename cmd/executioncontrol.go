@@ -270,6 +270,9 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
 					r.PendingPublication = nil
+					r.RecoveredTransfer = publication.BundleDigest
+				} else if result.BundleDigest != "" {
+					r.RecoveredTransfer = result.BundleDigest
 				}
 				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
 			}
@@ -456,9 +459,6 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
-		if err := validateParkWait(v.On, v.Waits); err != nil {
-			return "", nil, err
-		}
 		if err := validateOverlapPark(v.On, v.Waits); err != nil {
 			return "", nil, err
 		}
@@ -576,7 +576,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if v.Finished && v.Text == "" {
 			return "", nil, refused("final report is required")
 		}
-		if m := post.Unlinked(strings.Join(append([]string{v.Text}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
+		// The no-change proof becomes the comment that closes the task's issue.
+		if m := post.Unlinked(strings.Join(append([]string{v.Text, v.NoChange}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
 			return "", nil, refused("report refused: %s", strings.Join(m, "; "))
 		}
 		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
@@ -586,7 +587,14 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if err != nil {
 			return "", nil, err
 		}
+		if v.Finished && strings.TrimSpace(v.NoChange) != "" {
+			// Before clearRecords: the serve records name the task's issues.
+			closed, failed := a.closeNoChangeIssues(ctx, st, *ag, me, v.NoChange)
+			outcomes = append(outcomes, closed...)
+			problems = append(problems, failed...)
+		}
 		problems = freshWorkerProblems(ag, problems)
+		issue := taskIssue(st, *ag)
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished || v.Blocked
@@ -601,6 +609,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			clearRecords(st, me)
 		}
 		events := append(outcomes, event(me, verb, "%s done: %s", ag.Name, ag.LastTask))
+		if v.Finished && !v.Blocked {
+			events = append(events, retireTaskParks(st, me, *ag, issue, a.now)...)
+		}
 		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems, TellTo: reviewStarter(st, *ag, v.Text)})
 		if v.Text != "" {
 			events = append(events, event(me, "agents.report", "%s: %s", ag.Name, v.Text))

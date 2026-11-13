@@ -1,4 +1,4 @@
-package proc
+package proc_test
 
 import (
 	"bufio"
@@ -14,7 +14,11 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/diskprune"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
+
+// This file is outside package proc because diskprune imports proc through
+// worktrees and github, and an internal test of proc cannot import it.
 
 const zombieLeaderHelper = "BEEKEEPER_TEST_ZOMBIE_LEADER_HOLD"
 
@@ -56,7 +60,7 @@ func zombieLeader(held string) {
 
 func procState(t *testing.T, pid int) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), fixtureStatus))
+	raw, err := os.ReadFile(filepath.Join(proc.ProcRoot, strconv.Itoa(pid), proc.FixtureStatus))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +86,10 @@ func waitZombie(t *testing.T, pid int) {
 // A zombie child of a live process sits next to prune candidates: a plain
 // exited child holds nothing, a zombie leader holds what its live threads
 // hold, and neither fails the scan.
+//
+// control: none: moved from package proc unchanged but for the package
+// prefix, since diskprune now imports proc and an internal test of proc
+// cannot import diskprune
 func TestUserReferencesZombieChildrenNextToPruneCandidates(t *testing.T) {
 	if _, err := os.Stat("/proc/self/task"); err != nil {
 		t.Skip("Linux proc is unavailable")
@@ -125,15 +133,14 @@ func TestUserReferencesZombieChildrenNextToPruneCandidates(t *testing.T) {
 	waitZombie(t, leader.Process.Pid)
 
 	pids := []string{strconv.Itoa(os.Getpid()), strconv.Itoa(exited.Process.Pid), strconv.Itoa(leader.Process.Pid)}
-	files := referenceFiles()
-	files.readDir = func(path string) ([]os.DirEntry, error) {
+	files := proc.ReferenceFilesReading(func(path string) ([]os.DirEntry, error) {
 		entries, err := os.ReadDir(path)
-		if path != procRoot || err != nil {
+		if path != proc.ProcRoot || err != nil {
 			return entries, err
 		}
 		return slices.DeleteFunc(entries, func(e os.DirEntry) bool { return !slices.Contains(pids, e.Name()) }), nil
-	}
-	refs, _, err := userReferencesAt(procRoot, os.Getuid(), files)
+	})
+	refs, _, err := proc.UserReferencesAt(proc.ProcRoot, os.Getuid(), files)
 	if err != nil {
 		t.Fatalf("zombie children failed the scan: %v", err)
 	}

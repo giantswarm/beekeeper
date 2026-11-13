@@ -138,7 +138,7 @@ func (c *client) run() int {
 		modeled = inBuilder() || len(c.args) == 1 && c.args[0] == "version"
 	case "gh":
 		modeled = true
-	case Kubectl, "golangci-lint":
+	case Kubectl, "golangci-lint", "jq", "gojq":
 		modeled = true
 	}
 	stdin := ""
@@ -186,6 +186,8 @@ func (c *client) run() int {
 		return kubectl(c)
 	case "golangci-lint":
 		return builderLint(c)
+	case "jq", "gojq":
+		return builderJQ(c)
 	}
 	return 1
 }

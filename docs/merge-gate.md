@@ -198,6 +198,11 @@ the next merge's CI: devctl ends at the merge (`--no-release-wait`), the merge s
 its CI and merges only once that release is confirmed or failed, so the lane drains one merge per CI
 run and never merges ahead of a release's verdict.
 
+A call with `--until-merged` (the supervisor loop's reviewed merges) ends once the merge landed
+and its merge-child awaits the release: exit 0 and a `merge.left` event, the merge-child
+confirming the release and recording it with the run, which settles the lane as when the gate
+leaves at its limit. The caller no longer waits on a release it does not act on.
+
 The gate's exit is what devctl pr merge's own release wait would have ended with (6 failed, 9
 unconfirmed). That wait is the merge's own: a stop (SIGINT, `beekeeper gate stop`, a TaskStop) ends
 it with nothing merged and the place out of the lane, a hold that lets another pull request through

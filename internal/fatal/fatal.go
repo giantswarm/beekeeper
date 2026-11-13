@@ -14,6 +14,13 @@ import (
 
 const File = "fatal.json"
 
+// MaxAttempts bounds the repair starts of one outage episode.
+const MaxAttempts = 3
+
+// repairCooldown spaces the repair attempts of an outage while a started
+// repair has had no time to work. A start that failed is no such repair.
+const repairCooldown = 10 * time.Minute
+
 // Observation distinguishes a failed probe from one that could not run, and
 // from a component deliberately disabled by its owner.
 type Observation struct {
@@ -33,6 +40,9 @@ type Incident struct {
 	LastAttempt time.Time `json:"lastAttempt,omitzero"`
 	Attempts    int       `json:"attempts"`
 	Outcome     string    `json:"outcome,omitempty"`
+	// StartError is why the last attempt's repair start failed (its exit
+	// and error); empty while that start succeeded or is not known yet.
+	StartError string `json:"startError,omitempty"`
 }
 
 type Queue struct {
@@ -191,6 +201,8 @@ func (q Queue) MainOutage(repo string) (Incident, bool) {
 
 // Reserve chooses at most one repair, with a global owner and a bounded retry
 // budget. A live owner blocks every other repair, even after its cooldown.
+// The cooldown spaces repairs that started; after a failed start the next
+// attempt is due at the next pass.
 func (q *Queue) Reserve(now time.Time, live func(string) bool) *Incident {
 	for _, x := range q.Incidents {
 		if x.Owner != "" && live(x.Owner) {
@@ -199,17 +211,36 @@ func (q *Queue) Reserve(now time.Time, live func(string) bool) *Incident {
 	}
 	for i := range q.Incidents {
 		x := &q.Incidents[i]
-		if x.Resolved.IsZero() && x.Attempts >= 3 {
+		if x.Resolved.IsZero() && x.Attempts >= MaxAttempts {
 			x.Outcome = "repair budget exhausted; outage unresolved"
+			if x.StartError != "" {
+				x.Outcome += "; last repair start failed: " + x.StartError
+			}
 		}
-		if !x.Resolved.IsZero() || x.Attempts >= 3 || (!x.LastAttempt.IsZero() && now.Sub(x.LastAttempt) < 10*time.Minute) {
+		cooling := !x.LastAttempt.IsZero() && now.Sub(x.LastAttempt) < repairCooldown && x.StartError == ""
+		if !x.Resolved.IsZero() || x.Attempts >= MaxAttempts || cooling {
 			continue
 		}
 		x.Attempts++
 		x.LastAttempt = now
 		x.Owner = fmt.Sprintf("fatal repair %d %d", x.Opened.UnixNano(), x.Attempts)
 		x.Outcome = "reserved; launch outcome not yet known"
+		x.StartError = ""
 		return x
 	}
 	return nil
+}
+
+// StartFailed records that the reserved repair's start failed with why: the
+// attempt stays spent and the next pass retries without the cooldown. The
+// owner's name stays, so a session that start did register is still judged
+// live or dead before any retry. It reports whether the budget is spent.
+func (x *Incident) StartFailed(why string) (exhausted bool) {
+	x.StartError = why
+	x.Outcome = fmt.Sprintf("repair start failed: %s; retry at the next pass", why)
+	if x.Attempts >= MaxAttempts {
+		x.Outcome = "repair budget exhausted; outage unresolved; last repair start failed: " + why
+		return true
+	}
+	return false
 }

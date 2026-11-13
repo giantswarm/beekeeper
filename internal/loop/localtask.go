@@ -2,7 +2,6 @@ package loop
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -36,7 +35,7 @@ func (l *Loop) localPlacement(ctx context.Context, name string) (startHost, erro
 	var capacity struct {
 		Room int `json:"room"`
 	}
-	if err != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+	if err != nil || code != 0 || decodeRun(out, &capacity) != nil || capacity.Room <= 0 {
 		return startHost{}, ErrLoopLater
 	}
 	return startHost{}, nil

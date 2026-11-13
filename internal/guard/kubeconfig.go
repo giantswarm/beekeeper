@@ -1,11 +1,13 @@
 package guard
 
 import (
+	"context"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // runKubeconfig isolates default client-go writes. An inherited nonempty
@@ -25,7 +27,7 @@ func runKubeconfig() ([]string, func(), error) {
 // runDirect keeps a parent to clean up the scratch kubeconfig even when
 // systemd is unavailable or this process already runs inside a cap.
 func runDirect(argv, env []string, logf func(string, ...any)) int {
-	c := exec.Command(argv[0], argv[1:]...) //nolint:gosec // runs the caller's command
+	c := proc.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // runs the caller's command
 	c.Env = append(os.Environ(), env...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	sig := make(chan os.Signal, 1)

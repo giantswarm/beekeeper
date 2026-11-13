@@ -4,6 +4,7 @@ package scenario
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,7 @@ func TestParseRejects(t *testing.T) {
 		{"tool that is the builder's kubectl", strings.Replace(validScenario, "when:", "given:\n  tools: [kubectl]\nwhen:", 1), `"kubectl" is on the desk's PATH already`},
 		{"given call of a program that is no tool", strings.Replace(validScenario, "when:", "given:\n  calls: [{program: go, respond: {exit: 0}}]\nwhen:", 1), `program "go" is none of`},
 		{"origin of no repository", strings.Replace(validScenario, "exit: 0", "origin: {repository: example/app, branch: work}", 1), "is none of given.repositories"},
+		{"checkout of no repository", strings.Replace(validScenario, "when:", "given:\n  checkouts: [example/app]\nwhen:", 1), `given.checkouts: "example/app" is no repository of the scenario`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.name+".yaml", []byte(tc.doc))
@@ -265,5 +267,52 @@ func TestWorldLeavesAModeledCallToItsFake(t *testing.T) {
 	}
 	if un := w.Unanswered(); len(un) != 1 || un[0].Seq != 3 {
 		t.Fatalf("unanswered: %+v", un)
+	}
+}
+
+// Every scenario of the suite runs in exactly one shard, the split is the
+// same on every call, and a malformed shard is refused.
+//
+// control: none: the shard is new in this change, so the merge base lacks
+// the code this test covers and cannot build it
+func TestShardSplitsTheSuite(t *testing.T) {
+	all, err := LoadDir("scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, total := range []int{1, 2, 3} {
+		seen := map[string]int{}
+		for i := range total {
+			sh, err := ParseShard(fmt.Sprintf("%d/%d", i, total))
+			if err != nil {
+				t.Fatal(err)
+			}
+			part := sh.Of(all)
+			if total > 1 && len(part) == 0 {
+				t.Errorf("shard %s holds no scenario", sh)
+			}
+			if again := sh.Of(all); len(again) != len(part) {
+				t.Errorf("shard %s holds %d scenarios, then %d", sh, len(part), len(again))
+			}
+			for _, s := range part {
+				seen[s.Flow+"/"+s.Name]++
+			}
+		}
+		if len(seen) != len(all) {
+			t.Errorf("%d shards run %d of %d scenarios", total, len(seen), len(all))
+		}
+		for name, n := range seen {
+			if n != 1 {
+				t.Errorf("%d shards run %s %d times", total, name, n)
+			}
+		}
+	}
+	if whole, err := ParseShard(""); err != nil || len(whole.Of(all)) != len(all) || whole.String() != "all" {
+		t.Errorf("no shard is not the whole suite: %v %v", whole, err)
+	}
+	for _, bad := range []string{"2/2", "-1/2", "0/0", "1", "a/2", "0/b"} {
+		if _, err := ParseShard(bad); err == nil {
+			t.Errorf("shard %q accepted", bad)
+		}
 	}
 }
