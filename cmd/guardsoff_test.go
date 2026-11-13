@@ -61,6 +61,27 @@ func TestPreToolUseGuardsOff(t *testing.T) {
 	}
 }
 
+// With the guards off a build is still routed in the hooks' scope, and a
+// session on the person's own projects gets no rewrite, as with them on.
+func TestPreToolUseGuardsOffRoutesInScope(t *testing.T) {
+	var out bytes.Buffer
+	a, dir := scopeApp(t, &out)
+	desk := filepath.Join(dir, "desk")
+	if err := os.WriteFile(a.cfgPath, []byte("stateDir: "+dir+"\nhooks:\n  guards: false\n  scope:\n    dirs: ["+desk+"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build := func(cwd string) string {
+		return `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"` + cwd +
+			`","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`
+	}
+	if got := runHook(t, a, &out, configPreToolUse, build(filepath.Join(desk, "repo"))); !strings.Contains(got, " run -- ") {
+		t.Errorf("in scope: want the build under beekeeper run, got %q", got)
+	}
+	if got := runHook(t, a, &out, configPreToolUse, build(filepath.Join(dir, "home-project"))); strings.Contains(got, " run -- ") {
+		t.Errorf("out of scope: want the build untouched, got %q", got)
+	}
+}
+
 func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	t.Cleanup(func() { github.SetDevctlSkipVersionCheck(false) })
 	const (

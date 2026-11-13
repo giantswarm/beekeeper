@@ -679,9 +679,14 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 					out = guard.PassAgy()
 				default:
 					// Builds still run under `beekeeper run` (run.remote):
-					// where a build runs is placement, not a guard.
+					// where a build runs is placement, not a guard. Out of
+					// the hooks' scope, as with the guards on, nothing is
+					// rewritten.
 					self, _ := os.Executable()
 					routed := guard.Hook{Self: self, Shell: a.cfg.Shell}.RouteBuilds(raw)
+					if routed != nil && !a.inScope(raw) {
+						routed = nil
+					}
 					out = peer.WithInstructionContext(a.cfg.StateDir, raw, routed)
 				}
 				a.recordGitHubCalls(raw, formatFlag, out)
