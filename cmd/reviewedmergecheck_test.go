@@ -705,8 +705,9 @@ func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
 // library or the C compiler), which the repository's CI has, is not validated
 // on this host: the checker files an environment finding once, does not retry,
 // and the pull request's own checks stand instead of a branch repair. A
-// missing header the repository tracks, a failing test or another build
-// failure beside it is the merge result's own and stays red.
+// missing header the repository tracks, source text quoting such a message,
+// a failing test or another build failure beside it is the merge result's own
+// and stays red.
 func TestMergeResultMissingHostBuildDependencyIsNotABranchRepair(t *testing.T) {
 	const alsa = "# example.com/r/midi\nIn file included from midi.go:4:\n" +
 		"./rtmidi.h:12:10: fatal error: alsa/asoundlib.h: No such file or directory\n" +
@@ -722,6 +723,8 @@ func TestMergeResultMissingHostBuildDependencyIsNotABranchRepair(t *testing.T) {
 			"FAIL\texample.com/r/midi [build failed]\nFAIL\n", "libasound"},
 		"C compiler": {"# runtime/cgo\ncgo: C compiler \"gcc\" not found: exec: \"gcc\": executable file not found in $PATH\n" +
 			"FAIL\texample.com/r/midi [build failed]\nFAIL\n", "gcc"},
+		"#error posing as one": {"# example.com/r/midi\nmidi.go:3:2: error: #error fatal error: alsa/asoundlib.h: No such file or directory\n" +
+			"FAIL\texample.com/r/midi [build failed]\nFAIL\n", ""},
 		"tracked header":     {"# example.com/r/guard\nguard/native.go:3:10: fatal error: native.h: No such file or directory\ncompilation terminated.\nFAIL\texample.com/r/guard [build failed]\nFAIL\n", ""},
 		"and a failing test": {alsa + "--- FAIL: TestCombined (0.00s)\n    cost_test.go:7: combined result is red\nFAIL\texample.com/r/guard\t0.002s\nFAIL\n", ""},
 		"and a build error":  {alsa + "# example.com/r/guard\nguard/pr2.go:2:5: undefined: A\nFAIL\texample.com/r/guard [build failed]\nFAIL\n", ""},

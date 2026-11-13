@@ -124,19 +124,22 @@ func (a *app) runReviewedMergeChecks(ctx context.Context, dir, baseSHA, base, he
 	return runReviewedMergeChecksWith(ctx, dir, baseSHA, base, head, run, true)
 }
 
-// A native build dependency named by the C toolchain, pkg-config or the linker.
+// A native build dependency named by the C toolchain, pkg-config or the
+// linker. Each pattern starts at the line's start with the tool's own prefix
+// (a source location, the tool's name), so source text the compiler quotes,
+// such as an #error directive, cannot pose as one.
 var (
 	mergeCheckMissingHeader = []*regexp.Regexp{
-		regexp.MustCompile(`fatal error: ([^\s:']+): No such file or directory`), // gcc
-		regexp.MustCompile(`fatal error: '([^']+)' file not found`),              // clang
+		regexp.MustCompile(`^[^\s:]+(?::\d+)*: fatal error: ([^\s:']+): No such file or directory`), // gcc
+		regexp.MustCompile(`^[^\s:]+(?::\d+)*: fatal error: '([^']+)' file not found`),              // clang
 	}
 	mergeCheckMissingDependency = []struct {
 		pattern *regexp.Regexp
 		name    string
 	}{
-		{regexp.MustCompile(`Package (\S+) was not found in the pkg-config search path`), "pkg-config package %s"},
-		{regexp.MustCompile(`cannot find -l([\w+.-]+)`), "library lib%s"},
-		{regexp.MustCompile(`exec: "([^"]+)": executable file not found in \$PATH`), "tool %s"},
+		{regexp.MustCompile(`^Package (\S+) was not found in the pkg-config search path`), "pkg-config package %s"},
+		{regexp.MustCompile(`^\S*ld(?:\.\w+)?: cannot find -l([\w+.-]+)`), "library lib%s"},
+		{regexp.MustCompile(`^(?:[\w./-]+: )?(?:C compiler "[^"]+" not found: )?exec: "([^"]+)": executable file not found in \$PATH`), "tool %s"},
 	}
 	// A package whose tests ran and failed, rather than one that did not build.
 	goTestRanAndFailed = regexp.MustCompile(`^(--- FAIL|FAIL\s+\S+\s+[^\s\[])`)
