@@ -65,6 +65,7 @@ func TestGivenValidate(t *testing.T) {
 		{"usage beyond 100", "usage: {claude: {session: 101}}", "percent between 0 and 100"},
 		{"a failing claude probe", "usage: {claude: {fail: {message: x}}}", "only codex's usage probe fails"},
 		{"a failure without a message", "usage: {codex: {fail: {times: 1}}}", "fail: no message"},
+		{"a hung request with a message", "usage: {codex: {fail: {hang: true, message: x}}}", "a hung request has no message"},
 		{"a negative count", "usage: {codex: {fail: {after: -1, message: x}}}", "after and times are counts"},
 		{"a failure in a turn", "workers: [{turns: [{usage: {fail: {message: x}}}]}]", "fail is given in harness.usage"},
 		{"models of a harness that lists none", "models: {claude: [sonnet]}", `"claude" lists no models`},

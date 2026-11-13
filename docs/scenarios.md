@@ -404,6 +404,7 @@ given:
           times: 2                   # this many (0: every one after); then it answers
           message: 'failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; content-type=; body='
           code: -32603               # the JSON-RPC error code (-32603)
+          # hang: true                 # instead: no answer; a helper keeps the output open
     models:                          # what agy models and omp models list
       agy: [gemini-3-pro]
     workers:

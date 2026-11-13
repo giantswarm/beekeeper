@@ -145,6 +145,12 @@ func probeUsage(c *exec.Cmd, at time.Time) (UsageReading, error) {
 	if err != nil {
 		return UsageReading{}, err
 	}
+	// A child of the app-server that keeps its standard output open must not
+	// hold the probe past its deadline, nor the refreshes behind it: the
+	// deadline closes the pipe as well as killing the app-server.
+	if kill := c.Cancel; kill != nil {
+		c.Cancel = func() error { _ = out.Close(); return kill() }
+	}
 	// stderr can contain account metadata: discard it rather than returning it.
 	c.Stderr = io.Discard
 	if err = c.Start(); err != nil {

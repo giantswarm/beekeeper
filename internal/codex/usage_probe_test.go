@@ -55,6 +55,22 @@ func TestProbeUsageDeadline(t *testing.T) {
 	}
 }
 
+// The deadline ends the probe even while a child of the app-server keeps its
+// standard output open.
+func TestProbeUsageDeadlineWithAChildHoldingStdout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	c := exec.CommandContext(ctx, "sh", "-c", "sleep 5; true")
+	c.WaitDelay = time.Second // as ProbeUsage sets it
+	start := time.Now()
+	if _, err := probeUsage(c, time.Now()); err == nil {
+		t.Fatal("expected deadline error")
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("the probe outlived its deadline by %s", took)
+	}
+}
+
 // A refused account usage request names its endpoint, status and error
 // code, never its body; only a request that may pass is sent again.
 func TestUsageRequestErrorNamesTheCause(t *testing.T) {

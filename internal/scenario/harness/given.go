@@ -119,13 +119,16 @@ type Usage struct {
 // UsageFail is a stretch of the account's usage requests that fail: after
 // the first After requests are answered, the next Times (every one when 0)
 // get Message as codex app-server's error reply, with the JSON-RPC error
-// Code (-32603, an internal error, when 0). The requests after them are
+// Code (-32603, an internal error, when 0), or with Hang no answer at all:
+// the app-server starts a helper that keeps its standard output open, as a
+// helper of the real one can, and waits. The requests after them are
 // answered again.
 type UsageFail struct {
 	After   int    `yaml:"after" json:"after"`
 	Times   int    `yaml:"times" json:"times"`
 	Message string `yaml:"message" json:"message"`
 	Code    int    `yaml:"code" json:"code,omitempty"`
+	Hang    bool   `yaml:"hang" json:"hang,omitempty"`
 }
 
 // fails reports whether the request after n answered or refused ones fails.
@@ -219,7 +222,9 @@ func (g *Given) Validate(hosts []Host) error {
 			switch {
 			case name != Codex:
 				bad("harness.usage.%s: fail: only codex's usage probe fails (its app-server's account request)", name)
-			case strings.TrimSpace(f.Message) == "":
+			case f.Hang && f.Message != "":
+				bad("harness.usage.%s: fail: a hung request has no message", name)
+			case !f.Hang && strings.TrimSpace(f.Message) == "":
 				bad("harness.usage.%s: fail: no message", name)
 			case f.After < 0 || f.Times < 0:
 				bad("harness.usage.%s: fail: after and times are counts", name)
