@@ -4,9 +4,10 @@ description: >
   failed: 120 workers on the roster, 1500 serve records, 1200 deliveries in
   flight, 3000 reports and 20000 events. The canary of each release runs
   its commands against that state and installs it. Candidate 3's loop
-  starts while GitHub answers it several seconds late, so its first pass
-  outlasts the heartbeat's grace of ten minutes; it reports each phase as
-  it goes, its probation passes and it becomes the last known good, while
+  applies the desk's 3000 finished reports in its first pass while GitHub
+  answers it late, so that pass outlasts the heartbeat's grace of ten
+  minutes; it reports each phase as it goes, its probation passes and it
+  becomes the last known good, while
   supervisor status and capacity --json answer within their budget beside
   it. Candidate 4 is installed while the loop of candidate 3 runs another
   copy of that release, which is never replaced, so it never hands over:
@@ -112,13 +113,15 @@ when:
   - name: slow-loop
     background: {args: [supervisor, loop]}
   # The controller of candidate 2: an evaluation every 500 ms that counts
-  # for ten minutes of probation, so the window is three evaluations and the
-  # heartbeat's grace one. Each runs the isolated workflow probe, several
-  # seconds on a CI runner: the loop's first pass spans more than one.
+  # for fifteen minutes of probation, so the window is two evaluations and
+  # the heartbeat's grace of ten minutes less than one. Each runs the
+  # isolated workflow probe, several seconds on a CI runner. The loop's
+  # first pass spans both: it applies the desk's 3000 finished reports and
+  # waits on its release lookup.
   - name: controller
     background:
       release: v1.0.0-rc.2
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 10m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 15m]
   # While the slow loop works the large desk, the commands the canary and
   # the person run answer within their budget.
   - name: status
@@ -170,7 +173,7 @@ when:
   - name: failure-controller
     background:
       release: v1.0.0-rc.3
-      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 10m]
+      args: [self-update, --recovery-controller, --recovery-target, /work/bin/beekeeper, --recovery-every, 500ms, --recovery-step, 15m]
   - wait_for:
       timeout: 120s
       interval: 200ms
