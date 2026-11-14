@@ -12,6 +12,8 @@ import (
 
 const postMergeRegressionWork = "verify the rollout"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkPostMergeCanExplicitlyClearWork(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open})
 	was := parkReviewHead
@@ -32,7 +34,7 @@ func TestParkPostMergeCanExplicitlyClearWork(t *testing.T) {
 			if err := park(t, w, append(args, deskReviewWait)...); err != nil {
 				t.Fatal(err)
 			}
-			st, err := w.store.Read()
+			st, err := watchApp(w.Host).store.Read()
 			if err != nil {
 				t.Fatal(err)
 			}

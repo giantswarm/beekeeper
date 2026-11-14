@@ -31,6 +31,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -242,7 +243,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		return github.Budget{Remaining: st.Budget.Remaining, Limit: st.Budget.Limit, Reset: st.Budget.Reset, GraphQL: graphqlOf(st.Budget.GraphQL)}, nil
 	}
-	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
+	if err := store.Record(event(watch.WatchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
 	}
 	// The loop first started a minute ago: the rig's parks are requests
@@ -2250,6 +2251,9 @@ func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
 
 // Line-only timers belong to the supervisor's watch, including its desktop
 // notification. The loop must neither check nor consume them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 	for _, conditional := range []bool{false, true} {
 		t.Run(fmt.Sprintf("conditional=%t", conditional), func(t *testing.T) {
@@ -2282,16 +2286,16 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 				t.Fatalf("loop took watch-only timer: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
 			}
 			if !conditional {
-				lines, evs := firePending(st, nil, r.a.now)
+				lines, evs := watch.FirePending(st, nil, r.a.now)
 				if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "timer.due" {
 					t.Fatalf("firePending lost plain timer after loop: %v, %+v", lines, evs)
 				}
 			}
 			w, desktop, out := notifyingWatch(t, r.a.store.Dir(), false)
-			w.now, w.chores = r.a.now, true // a running watch, not --once
+			watchApp(w.Host).now, w.Chores = r.a.now, true // a running watch, not --once
 			live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
-			w.pending(context.Background(), live)
-			w.timerActs.Wait()
+			w.Pending(context.Background(), live)
+			w.TimerActs.Wait()
 			if !strings.Contains(out.String(), "TIMER:") || len(desktop.sent) != 1 || !strings.Contains(desktop.sent[0].Summary, fmt.Sprintf("timer #%d", timer.ID)) {
 				t.Fatalf("watch lost timer line or notification: %s; %+v", out, desktop.sent)
 			}
@@ -2754,6 +2758,9 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 // without a CLI leave the roster; their background sessions are stopped but
 // a relieved role run's, which stays the person's to close, while active
 // role holders, in-turn sessions and sessions the person started stay.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Agents.Mode = config.ModeBackground
@@ -2762,9 +2769,9 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 
 	doneWorker := state.Party{Session: "11111111-0000-4000-8000-000000000001", Name: loopWorker}
 	reviewer := state.Party{Session: "22222222-0000-4000-8000-000000000002", Name: loopReviewer}
-	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: guideRole.runName(3)}
-	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: guideRole.runName(4)}
-	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: guideRole.runName(5)}
+	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: guideRole.RunName(3)}
+	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: guideRole.RunName(4)}
+	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: guideRole.RunName(5)}
 	staleIdle := state.Party{Session: "66666666-0000-4000-8000-000000000006", Name: "stale worker"}
 	personOwn := state.Party{Session: "77777777-0000-4000-8000-000000000007", Name: "person session"}
 

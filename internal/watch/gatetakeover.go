@@ -1,11 +1,11 @@
-package cmd
+package watch
 
 import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 )
 
-func (w *watcher) staleMerges() {
-	st, err := w.store.Peek()
+func (w *Watcher) StaleMerges() {
+	st, err := w.Host.Store().Peek()
 	if err != nil {
 		return
 	}
@@ -14,10 +14,10 @@ func (w *watcher) staleMerges() {
 		if why := gate.StaleMerge(st, m); why != "" {
 			key := "stale-merge " + m.Key()
 			found[key] = true
-			if !w.isActive(key) {
-				w.emit(key, "MERGE STALE: %s: %s", m.Key(), why)
+			if !w.IsActive(key) {
+				w.Emit(key, "MERGE STALE: %s: %s", m.Key(), why)
 			}
 		}
 	}
-	w.clearMissing("stale-merge ", found)
+	w.ClearMissing("stale-merge ", found)
 }

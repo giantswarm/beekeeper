@@ -14,32 +14,34 @@ import (
 
 const sessionOne = "one"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysARunawayOnce(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
-	w.notifier = nil
-	w.cfg.LeaseDir = filepath.Join(dir, "leases")
-	w.now = time.Now()
-	ts := w.now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	w.Notifier = nil
+	watchApp(w.Host).cfg.LeaseDir = filepath.Join(dir, "leases")
+	watchApp(w.Host).now = time.Now()
+	ts := watchApp(w.Host).now.Add(-time.Minute).UTC().Format(time.RFC3339)
 	tr := filepath.Join(dir, "s1.jsonl")
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":950000},"content":[]}}` + "\n"
 	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	one := state.Party{Session: "s1", Name: sessionOne}
-	if err := w.store.Update(func(*state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(*state.State) ([]state.Event, error) {
 		return []state.Event{event(one, "merge.queued", "o/r#1 in lane l"), event(one, testMergedWord, "o/r#1 exit 0, release v1")}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.now}}
+	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: watchApp(w.Host).now}}
 
-	_, ms := w.sessionMetrics(live, nil, nil)
+	_, ms := watchApp(w.Host).sessionMetrics(live, nil, nil)
 	if m := ms[0]; m.Merges != (merges{Queued: 1, Merged: 1}) || m.Context != 950010 || m.LastHour.CostUSD == nil {
 		t.Errorf("metrics %+v", m)
 	}
-	w.runaways(live, nil)
-	w.runaways(live, nil)
+	w.Runaways(live, nil)
+	w.Runaways(live, nil)
 	got := strings.TrimSpace(out.String())
 	if strings.Count(got, "\n") != 0 || !strings.Contains(got, `RUNAWAY: "one"'s context is at 95% of its 1000000 tokens (threshold 90%)`) {
 		t.Errorf("want one context line, got:\n%s", got)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const finishedSession = "finished-session"
@@ -93,6 +94,8 @@ func TestGitHubWindowCallers(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestBudgetAndWatchNameFinishedGitHubCaller(t *testing.T) {
 	refuse := true
 	refusingGitHub(t, &refuse)
@@ -108,8 +111,8 @@ func TestBudgetAndWatchNameFinishedGitHubCaller(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	w := &watcher{app: a, last: map[string]time.Time{}}
-	w.budget(context.Background(), a.now)
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
+	w.Budget(context.Background(), a.now)
 	if !strings.Contains(out.String(), "window: finished-session: gh project item-list") {
 		t.Fatal(out.String())
 	}

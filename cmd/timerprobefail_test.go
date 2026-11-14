@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // A probe of a host behind the desk's VPN while its login has expired (ssh
@@ -28,6 +29,9 @@ const probeResumeDeploy = "the link is up: resume the deploy"
 // 255, a host name that did not resolve, a command not found or not
 // executable. Only a probe that ran and exits non-zero is "not yet", a
 // refused connection included.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatCannotRunIsNoAnswer(t *testing.T) {
 	for name, tc := range map[string]struct {
 		cmd        string
@@ -48,7 +52,7 @@ func TestProbeThatCannotRunIsNoAnswer(t *testing.T) {
 			false, "exit status 7: curl: (7) Failed to connect to api.example port 6443: Connection refused"},
 	} {
 		r := checkOf(state.Timer{Probe: tc.cmd}).result(probeOutput(context.Background(), tc.cmd))
-		if r.holds || r.unreadable != tc.unreadable || r.reason != tc.says {
+		if r.Holds || r.Unreadable != tc.unreadable || r.Reason != tc.says {
 			t.Errorf("%s: %+v", name, r)
 		}
 	}
@@ -59,6 +63,9 @@ func TestProbeThatCannotRunIsNoAnswer(t *testing.T) {
 // clean check, a false one, is "not yet" and closes the guide's work; the
 // probe failing again is a report of its own, and a timer timing out on it
 // says it could not run, not that its condition did not hold.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	ctx := context.Background()
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(ctx, sshUnresolved))
@@ -68,7 +75,7 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	var reports []state.Event
 	settle := func(n int, r checkResult) []string {
 		t.Helper()
-		lines, evs, fires, _ := settleTimers(st, map[int]checkResult{3284: r}, relayNow.Add(time.Duration(n)*10*time.Minute))
+		lines, evs, fires, _ := watch.SettleTimers(st, map[int]checkResult{3284: r}, relayNow.Add(time.Duration(n)*10*time.Minute))
 		if len(fires) != 0 || len(st.Timers) != 1 {
 			t.Fatalf("check %d: fires %+v, open %+v", n, fires, st.Timers)
 		}
@@ -97,10 +104,10 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	}
 
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	if err := w.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.timerList(false); err != nil {
+	if err := watchApp(w.Host).timerList(false); err != nil {
 		t.Fatal(err)
 	}
 	if want := "\n    checked 02:20: could not run since 02:00: " + sshUnresolvedSays + "\n"; !strings.Contains(out.String(), want) {
@@ -130,8 +137,8 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 		t.Fatalf("a new run of failed checks: %+v", reports)
 	}
 	st.Timers[0].Until = relayNow.Add(45 * time.Minute)
-	_, _, fires, _ := settleTimers(st, map[int]checkResult{3284: cannot}, relayNow.Add(50*time.Minute))
-	if len(fires) != 1 || !strings.Contains(fires[0].reason, "could not run ("+sshUnresolvedSays+")") || strings.Contains(fires[0].reason, "did not hold") {
+	_, _, fires, _ := watch.SettleTimers(st, map[int]checkResult{3284: cannot}, relayNow.Add(50*time.Minute))
+	if len(fires) != 1 || !strings.Contains(fires[0].Reason, "could not run ("+sshUnresolvedSays+")") || strings.Contains(fires[0].Reason, "did not hold") {
 		t.Fatalf("timed out: %+v", fires)
 	}
 }
@@ -140,6 +147,9 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 // guide's report. A wake not delivered re-arms the timer from its firing,
 // which must not bring the failure back: timer list says nothing of a probe
 // that ran.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 	// Read the persisted field so this regression also compiles on the
 	// merge base, where Timer has no Failing field yet.
@@ -160,27 +170,27 @@ func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
 	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, Every: 10 * time.Minute,
 		Wake: "app deploy", What: probeResumeDeploy}}}
-	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
+	watch.SettleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
 	if len(st.Timers) != 1 || failingSince(st.Timers[0]).IsZero() {
 		t.Fatalf("a probe that could not run: %+v", st.Timers)
 	}
 	heldAt := relayNow.Add(10 * time.Minute)
-	_, evs, fires, _ := settleTimers(st, map[int]checkResult{3284: {holds: true}}, heldAt)
+	_, evs, fires, _ := watch.SettleTimers(st, map[int]checkResult{3284: {Holds: true}}, heldAt)
 	recovered := slices.ContainsFunc(evs, func(e state.Event) bool {
 		return e.Verb == loop.LoopFileVerb && strings.Contains(e.Detail, loop.FileReportSeparator+"RECOVERED: ")
 	})
 	if len(fires) != 1 || len(st.Timers) != 0 || !recovered {
 		t.Fatalf("held: fires %+v, open %+v, events %+v", fires, st.Timers, evs)
 	}
-	rearmTimerInState(st, fires[0], "wake not delivered; retrying", heldAt)
+	watch.RearmTimerInState(st, fires[0], "wake not delivered; retrying", heldAt)
 	if len(st.Timers) != 1 || !failingSince(st.Timers[0]).IsZero() {
 		t.Fatalf("re-armed after the probe held: %+v", st.Timers)
 	}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	if err := w.store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
+	if err := watchApp(w.Host).store.Update(func(s *state.State) ([]state.Event, error) { s.Timers = st.Timers; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.timerList(false); err != nil {
+	if err := watchApp(w.Host).timerList(false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "could not run") {
@@ -190,12 +200,15 @@ func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 
 // A probe that could not run for a day is stuck without its condition said
 // false: it has not been seen to hold, and could not run since when.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatCannotRunForADayIsNotSaidFalse(t *testing.T) {
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
 	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, What: probeResumeDeploy}}}
-	settleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
+	watch.SettleTimers(st, map[int]checkResult{3284: cannot}, relayNow)
 	day := relayNow.Add(timerStuckAfter)
-	lines, _, fires, _ := settleTimers(st, map[int]checkResult{3284: cannot}, day)
+	lines, _, fires, _ := watch.SettleTimers(st, map[int]checkResult{3284: cannot}, day)
 	if len(fires) != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "TIMER STUCK: #3284, probe `") ||
 		!strings.Contains(lines[0], "has not been seen to hold since Sep 25 02:00, could not run since Sep 25 02:00 ("+sshUnresolvedSays+")") ||
 		strings.Contains(lines[0], "has not held") {

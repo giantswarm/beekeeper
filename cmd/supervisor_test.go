@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const browser = "browser"
@@ -23,7 +24,7 @@ const browser = "browser"
 // holds none), and two agents.
 var (
 	supA   = state.Party{Session: "sA", HostSession: "local_A", Name: "Guide run 11"}
-	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: guideRole.runName(12)}
+	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: guideRole.RunName(12)}
 	agentC = state.Party{Session: "sC", Name: "Agent three"}
 	agentD = state.Party{Session: "sD", Name: agentFive}
 )
@@ -39,24 +40,26 @@ func handOverState() *state.State {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayMovesTheRole(t *testing.T) {
 	st := handOverState()
 	var log []state.Event
-	if _, _, err := guideRole.relay(st, supB, agentC, relayNow, 15*time.Minute); Code(err) != ExitRefused {
+	if _, _, err := guideRole.Relay(st, supB, agentC, relayNow, 15*time.Minute); Code(err) != ExitRefused {
 		t.Fatalf("a session that does not guide relayed: %v", err)
 	}
-	msg, evs, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute)
+	msg, evs, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute)
 	if err != nil || !strings.Contains(msg, `relayed to "Guide run 12"`) {
 		t.Fatalf("relay: %q, %v", msg, err)
 	}
 	log = append(log, evs...)
-	if _, _, err := guideRole.start(st, agentC, true, false, relayNow); Code(err) != ExitRefused || !strings.Contains(err.Error(), `its relay names "Guide run 12", not you`) {
+	if _, _, err := guideRole.Take(st, agentC, true, false, relayNow); Code(err) != ExitRefused || !strings.Contains(err.Error(), `its relay names "Guide run 12", not you`) {
 		t.Fatalf("an unnamed start was not refused: %v", err)
 	}
 	if relievedIn(st.GuideRole(), supA) != nil {
 		t.Fatal("relieved before the successor started")
 	}
-	msg, evs, err = guideRole.start(st, supB, true, false, relayNow.Add(time.Minute))
+	msg, evs, err = guideRole.Take(st, supB, true, false, relayNow.Add(time.Minute))
 	if err != nil || !strings.Contains(msg, `relieving "Guide run 11"`) || strings.Contains(msg, "grant") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
@@ -75,48 +78,50 @@ func TestRelayMovesTheRole(t *testing.T) {
 	if len(log) != 2 || log[0].Verb != "guide.relay" || log[1].Verb != guideStartVerb {
 		t.Fatalf("the event log lacks the two steps: %+v", log)
 	}
-	lines, _ := guideRole.fireRelay(st, relayNow.Add(time.Minute))
+	lines, _ := guideRole.FireRelay(st, relayNow.Add(time.Minute))
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE RELAY TAKEN:") {
 		t.Fatalf("taken: %q", lines)
 	}
-	if lines, _ := guideRole.fireRelay(st, relayNow.Add(2*time.Minute)); len(lines) != 0 {
+	if lines, _ := guideRole.FireRelay(st, relayNow.Add(2*time.Minute)); len(lines) != 0 {
 		t.Fatalf("taken reported twice: %q", lines)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayExpiresAndCancels(t *testing.T) {
 	st := handOverState()
-	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	later := relayNow.Add(16 * time.Minute)
-	if lines, _ := guideRole.fireRelay(st, relayNow.Add(time.Minute)); len(lines) != 0 {
+	if lines, _ := guideRole.FireRelay(st, relayNow.Add(time.Minute)); len(lines) != 0 {
 		t.Fatalf("open relay reported: %q", lines)
 	}
-	if _, _, err := guideRole.start(st, supB, true, false, later); Code(err) != ExitRefused || !strings.Contains(err.Error(), "its relay to you expired") {
+	if _, _, err := guideRole.Take(st, supB, true, false, later); Code(err) != ExitRefused || !strings.Contains(err.Error(), "its relay to you expired") {
 		t.Fatalf("an expired relay was taken: %v", err)
 	}
 	if !st.Guide.Holder.Is(supA) {
 		t.Fatal("the outgoing guide lost the role to an expired relay")
 	}
-	lines, evs := guideRole.fireRelay(st, later)
+	lines, evs := guideRole.FireRelay(st, later)
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE RELAY EXPIRED:") || len(evs) != 1 {
 		t.Fatalf("expired: %q", lines)
 	}
-	if lines, _ := guideRole.fireRelay(st, later); len(lines) != 0 {
+	if lines, _ := guideRole.FireRelay(st, later); len(lines) != 0 {
 		t.Fatalf("expiry reported twice: %q", lines)
 	}
-	if _, _, err := guideRole.relay(st, supA, supB, later, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.Relay(st, supA, supB, later, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	msg, evs, err := guideRole.cancelRelay(st, supA, later)
+	msg, evs, err := guideRole.CancelRelay(st, supA, later)
 	if err != nil || st.Guide.Relay != nil || len(evs) != 1 || !strings.Contains(msg, "cancelled") {
 		t.Fatalf("cancel: %q, %v", msg, err)
 	}
-	if _, _, err := guideRole.start(st, supB, true, false, later); Code(err) != ExitRefused {
+	if _, _, err := guideRole.Take(st, supB, true, false, later); Code(err) != ExitRefused {
 		t.Fatalf("a cancelled relay was taken: %v", err)
 	}
-	if _, _, err := guideRole.start(st, supB, false, false, later); err != nil || !st.Guide.Holder.Is(supB) {
+	if _, _, err := guideRole.Take(st, supB, false, false, later); err != nil || !st.Guide.Holder.Is(supB) {
 		t.Fatalf("a start over a gone guide: %v", err)
 	}
 }
@@ -125,6 +130,8 @@ func TestRelayExpiresAndCancels(t *testing.T) {
 // stripped to the usage lines: its last request read 163018 tokens.
 var supervisorTranscript = filepath.Join("..", "internal", "claude", "testdata", "transcript", "window.jsonl")
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	st := handOverState()
 	relieved := func(p state.Party) *state.Relief { return relievedIn(st.GuideRole(), p) }
@@ -138,11 +145,11 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 		}
 	}
 	relay := func(from, to state.Party, at time.Duration) error {
-		_, _, err := guideRole.relay(st, from, to, relayNow.Add(at), 15*time.Minute)
+		_, _, err := guideRole.Relay(st, from, to, relayNow.Add(at), 15*time.Minute)
 		return err
 	}
 	start := func(who state.Party, at time.Duration) error {
-		_, _, err := guideRole.start(st, who, true, false, relayNow.Add(at))
+		_, _, err := guideRole.Take(st, who, true, false, relayNow.Add(at))
 		return err
 	}
 	if err := relay(supA, supB, 0); err != nil || relieved(supA) != nil {
@@ -150,7 +157,7 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	}
 	step(time.Minute, "B's start", start(supB, time.Minute))
 	step(2*time.Minute, "B's relay to C", relay(supB, agentC, 2*time.Minute))
-	_, _, err := guideRole.cancelRelay(st, supB, relayNow.Add(3*time.Minute))
+	_, _, err := guideRole.CancelRelay(st, supB, relayNow.Add(3*time.Minute))
 	step(3*time.Minute, "B's cancel", err)
 	step(4*time.Minute, "B's relay to C again", relay(supB, agentC, 4*time.Minute))
 	step(5*time.Minute, "C's start", start(agentC, 5*time.Minute))
@@ -170,11 +177,11 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	if len(st.Guide.Relieved) != 2 {
 		t.Fatalf("one relief per party: %+v", st.Guide.Relieved)
 	}
-	// A relief nobody asked about for reliefTTL goes with the next start.
-	if err := relay(supA, supB, reliefTTL+time.Hour); err != nil {
+	// A relief nobody asked about for watch.ReliefTTL goes with the next start.
+	if err := relay(supA, supB, watch.ReliefTTL+time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := start(supB, reliefTTL+time.Hour+time.Minute); err != nil {
+	if err := start(supB, watch.ReliefTTL+time.Hour+time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if len(st.Guide.Relieved) != 1 || !st.Guide.Relieved[0].Party.Is(supA) {
@@ -185,6 +192,9 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 // A holder's CLI back under the same session within the grace is a
 // restart, logged once; past the grace it is gone, and a new term has a
 // grace of its own.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRestartGraceThroughACLIRestart(t *testing.T) {
 	const grace = time.Minute
 	st := handOverState()
@@ -194,45 +204,47 @@ func TestRestartGraceThroughACLIRestart(t *testing.T) {
 	read := func(at time.Duration, sessions []*claude.Session) supervision {
 		return readHolder(st.GuideRole(), sessions, relayNow.Add(at), grace)
 	}
-	if sv := read(0, nil); !sv.restarting() {
+	if sv := read(0, nil); !sv.Restarting() {
 		t.Fatal("a CLI never seen in this term has no grace")
 	}
-	if changed, evs := guideRole.observeCLI(st, running(100), relayNow); !changed || len(evs) != 0 || st.Guide.CLI.PID != 100 {
+	if changed, evs := guideRole.ObserveCLI(st, running(100), relayNow); !changed || len(evs) != 0 || st.Guide.CLI.PID != 100 {
 		t.Fatalf("first sighting: %v %+v %+v", changed, evs, st.Guide.CLI)
 	}
-	if changed, _ := guideRole.observeCLI(st, running(100), relayNow.Add(time.Second)); changed {
+	if changed, _ := guideRole.ObserveCLI(st, running(100), relayNow.Add(time.Second)); changed {
 		t.Fatal("an unchanged CLI changes the state")
 	}
-	if changed, _ := guideRole.observeCLI(st, nil, relayNow.Add(10*time.Second)); !changed || st.Guide.CLI.Gone.IsZero() {
+	if changed, _ := guideRole.ObserveCLI(st, nil, relayNow.Add(10*time.Second)); !changed || st.Guide.CLI.Gone.IsZero() {
 		t.Fatal("the CLI's absence is not recorded")
 	}
-	if sv := read(69*time.Second, nil); !sv.restarting() {
+	if sv := read(69*time.Second, nil); !sv.Restarting() {
 		t.Fatal("gone within the grace")
 	}
-	changed, evs := guideRole.observeCLI(st, running(200), relayNow.Add(16*time.Second))
+	changed, evs := guideRole.ObserveCLI(st, running(200), relayNow.Add(16*time.Second))
 	if !changed || len(evs) != 1 || evs[0].Verb != "guide.restart" || !strings.Contains(evs[0].Detail, "CLI 100 back as 200 (gone for 6s)") {
 		t.Fatalf("restart: %v %+v", changed, evs)
 	}
-	guideRole.observeCLI(st, nil, relayNow.Add(time.Hour))
-	if sv := read(time.Hour+grace-time.Second, nil); !sv.restarting() {
+	guideRole.ObserveCLI(st, nil, relayNow.Add(time.Hour))
+	if sv := read(time.Hour+grace-time.Second, nil); !sv.Restarting() {
 		t.Fatalf("within the grace after the crash: %+v", sv)
 	}
-	if sv := read(time.Hour+grace, nil); !sv.down() || !sv.gone.Equal(relayNow.Add(time.Hour)) {
+	if sv := read(time.Hour+grace, nil); !sv.Down() || !sv.Gone.Equal(relayNow.Add(time.Hour)) {
 		t.Fatalf("down: %+v", sv)
 	}
-	if _, _, err := guideRole.start(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
+	if _, _, err := guideRole.Take(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if sv := read(2*time.Hour, nil); !sv.restarting() || !sv.gone.Equal(relayNow.Add(2*time.Hour)) {
+	if sv := read(2*time.Hour, nil); !sv.Restarting() || !sv.Gone.Equal(relayNow.Add(2*time.Hour)) {
 		t.Fatalf("the previous term's CLI record counts for the new guide: %+v", sv)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRoleViewShowsTheContext(t *testing.T) {
 	a := &app{cfg: &config.Config{Guide: config.Guide{Role: config.Role{RelayAt: 400_000}}}, now: relayNow}
 	r := state.Role{Holder: &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}}
 	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
-	v := a.viewRole(guideRole, r, sessions, supervision{live: true})
+	v := a.viewRole(guideRole, r, sessions, supervision{Live: true})
 	if got := v.contextText(); got != ", 163k tokens of context (relay at 400k)" {
 		t.Fatalf("context: %q", got)
 	}
@@ -244,19 +256,21 @@ func TestRoleViewShowsTheContext(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARenamedHolderIsKnownByItsCurrentTitle(t *testing.T) {
 	const renamedTitle = "Guide run 18"
 	st := handOverState()
 	renamed := []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: renamedTitle}}
-	guideRole.observeCLI(st, []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}, relayNow)
-	changed, evs := guideRole.observeCLI(st, renamed, relayNow.Add(time.Second))
+	guideRole.ObserveCLI(st, []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}, relayNow)
+	changed, evs := guideRole.ObserveCLI(st, renamed, relayNow.Add(time.Second))
 	if !changed || st.Guide.Holder.Name != renamedTitle || st.Guide.CLI.Supervisor.Name != renamedTitle {
 		t.Fatalf("the rename is not recorded: %v %+v %+v", changed, st.Guide.Holder, st.Guide.CLI)
 	}
 	if len(evs) != 1 || evs[0].Verb != "guide.rename" || !strings.Contains(evs[0].Detail, `is now "`+renamedTitle+`"`) {
 		t.Fatalf("the rename is not logged once: %+v", evs)
 	}
-	if changed, evs := guideRole.observeCLI(st, renamed, relayNow.Add(2*time.Second)); changed || len(evs) != 0 {
+	if changed, evs := guideRole.ObserveCLI(st, renamed, relayNow.Add(2*time.Second)); changed || len(evs) != 0 {
 		t.Fatalf("an unchanged title changes the state: %v %+v", changed, evs)
 	}
 	if renameHolder(st.Guide.Holder, []*claude.Session{{PID: 100, ID: supA.Session}}) || st.Guide.Holder.Name != renamedTitle {
@@ -308,10 +322,10 @@ type fakeLoopService struct {
 	refusal error
 }
 
-func (f *fakeLoopService) service() *loopService {
-	return &loopService{
-		state: func(context.Context) string { return f.state },
-		start: func(context.Context) error {
+func (f *fakeLoopService) service() *watch.LoopService {
+	return &watch.LoopService{
+		State: func(context.Context) string { return f.state },
+		Start: func(context.Context) error {
 			f.starts++
 			return f.refusal
 		},
@@ -322,19 +336,22 @@ func (f *fakeLoopService) service() *loopService {
 // at most once a minute, says SUPERVISOR LOOP DOWN once past the grace and
 // notifies, and never starts or relays a session: the supervisor session is
 // gone. A loop back is one line; a stop restarts nothing.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 	dir := t.TempDir()
 	w, d, out := notifyingWatch(t, dir, true)
 	svc := &fakeLoopService{state: "dead"}
-	w.stand.loopUnit = svc.service()
+	w.Stand.LoopUnit = svc.service()
 	successors := 0
-	w.stand.succeed = func(context.Context, role, state.Party) (state.Party, error) {
+	w.Stand.Succeed = func(context.Context, role, state.Party) (state.Party, error) {
 		successors++
 		return state.Party{}, errors.New("no successor")
 	}
 	poll := func(at time.Duration) {
-		w.now = relayNow.Add(at)
-		w.pending(context.Background(), nil)
+		watchApp(w.Host).now = relayNow.Add(at)
+		w.Pending(context.Background(), nil)
 	}
 	downs := func() (n int) {
 		for _, m := range d.sent {
@@ -370,7 +387,7 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		t.Fatalf("the standby started %d supervisor sessions", successors)
 	}
 	// The loop runs again: one BACK line.
-	if err := w.store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
+	if err := watchApp(w.Host).store.WriteFile(loop.LoopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
 	poll(4 * time.Minute)
@@ -379,10 +396,10 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 		t.Fatalf("back:\n%s", out)
 	}
 	// A stop holds the loop: nothing restarts it.
-	if err := w.store.WriteFile(loop.LoopPIDFile, 0); err != nil {
+	if err := watchApp(w.Host).store.WriteFile(loop.LoopPIDFile, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Stop = &state.Stop{Reason: "maintenance", At: relayNow}
 		return nil, nil
 	}); err != nil {

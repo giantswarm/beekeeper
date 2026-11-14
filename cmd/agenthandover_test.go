@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -33,6 +34,8 @@ const (
 	testSupervisor = "test: supervisor"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
@@ -70,17 +73,17 @@ func TestHandoversDue(t *testing.T) {
 	cfg := config.Agents{RelayAt: 20_000, LastStepGrace: config.Duration{Duration: 30 * time.Minute}, LastStepCeiling: 30_000}
 	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 
-	due := handoversDue(st, sessions, cfg, now, said, contextOf, alive)
-	if len(due) != 2 || due[0].agent.Session != dueID || due[0].context != 25_000 || due[0].parked || due[0].held != "" || due[0].was != "" {
+	due := watch.HandoversDue(st, sessions, cfg, now, said, contextOf, alive)
+	if len(due) != 2 || due[0].Agent.Session != dueID || due[0].Context != 25_000 || due[0].Parked || due[0].Held != "" || due[0].Was != "" {
 		t.Fatalf("due = %+v, want the quiet agent past relayAt first", due)
 	}
 	// The agent whose turn ended with its task open is due too; the one
 	// without a task ("gone") is not.
-	if due[1].agent.Session != "parked" || !due[1].parked {
+	if due[1].Agent.Session != "parked" || !due[1].Parked {
 		t.Errorf("due = %+v, want the parked agent past relayAt second", due)
 	}
 	// The merge ended: the merging agent is quiet now.
-	if due := handoversDue(st, sessions, cfg, now, said, contextOf, func(int) bool { return false }); len(due) != 3 {
+	if due := watch.HandoversDue(st, sessions, cfg, now, said, contextOf, func(int) bool { return false }); len(due) != 3 {
 		t.Errorf("after the merge: due = %+v", due)
 	}
 }
@@ -89,6 +92,9 @@ func TestHandoversDue(t *testing.T) {
 // serve record waits on the report or says the merge landed, or the gate saw
 // its merge land. The hold lasts lastStepGrace from that evidence and ends at
 // lastStepCeiling; an agent that reported done is never handed over.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHandoversHeldInTheLastStep(t *testing.T) {
 	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
@@ -119,15 +125,15 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 	cfg := config.Agents{RelayAt: 20_000, LastStepGrace: config.Duration{Duration: 30 * time.Minute}, LastStepCeiling: 30_000}
 	contextOf := func(state.Agent, *claude.Session) int64 { return 25_000 }
 	none := func(state.Party) bool { return false }
-	find := func(due []dueAgent) map[string]dueAgent {
-		got := map[string]dueAgent{}
+	find := func(due []watch.DueAgent) map[string]watch.DueAgent {
+		got := map[string]watch.DueAgent{}
 		for _, d := range due {
-			got[d.agent.Session] = d
+			got[d.Agent.Session] = d
 		}
 		return got
 	}
 
-	got := find(handoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
+	got := find(watch.HandoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
 	if _, done := got[finished]; len(got) != 6 || done {
 		t.Fatalf("due = %+v, want every agent but the done one", got)
 	}
@@ -137,39 +143,42 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 		"landed":       scratchRepo + "#61 merged",
 	}
 	for id, why := range held {
-		if d := got[id]; d.held != why || d.was != "" {
-			t.Errorf("%s: held %q, was %q; want held %q", id, d.held, d.was, why)
+		if d := got[id]; d.Held != why || d.Was != "" {
+			t.Errorf("%s: held %q, was %q; want held %q", id, d.Held, d.Was, why)
 		}
 	}
-	if d := got["report"]; !d.until.Equal(now.Add(20 * time.Minute)) {
-		t.Errorf("report: held until %s, want 20m from now (30m from its record)", d.until)
+	if d := got["report"]; !d.Until.Equal(now.Add(20 * time.Minute)) {
+		t.Errorf("report: held until %s, want 20m from now (30m from its record)", d.Until)
 	}
 	for _, id := range []string{"ci", closed} {
-		if d := got[id]; d.held != "" || d.was != "" {
-			t.Errorf("%s: held %q, was %q; want due as before", id, d.held, d.was)
+		if d := got[id]; d.Held != "" || d.Was != "" {
+			t.Errorf("%s: held %q, was %q; want due as before", id, d.Held, d.Was)
 		}
 	}
-	if d, want := got[late], `held 30m for its last step (it waits on "the report")`; d.held != "" || d.was != want {
-		t.Errorf("%s: held %q, was %q; want due, %s", late, d.held, d.was, want)
+	if d, want := got[late], `held 30m for its last step (it waits on "the report")`; d.Held != "" || d.Was != want {
+		t.Errorf("%s: held %q, was %q; want due, %s", late, d.Held, d.Was, want)
 	}
 
 	// At the ceiling the last step holds nothing.
 	cfg.LastStepCeiling = 25_000
-	got = find(handoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
+	got = find(watch.HandoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
 	for id := range held {
-		if d := got[id]; d.held != "" || !strings.HasPrefix(d.was, "its last step (") || !strings.HasSuffix(d.was, ") holds no hand-over past 25k") {
-			t.Errorf("%s at the ceiling: held %q, was %q", id, d.held, d.was)
+		if d := got[id]; d.Held != "" || !strings.HasPrefix(d.Was, "its last step (") || !strings.HasSuffix(d.Was, ") holds no hand-over past 25k") {
+			t.Errorf("%s at the ceiling: held %q, was %q", id, d.Held, d.Was)
 		}
 	}
 }
 
 // The watch says HANDOVER HELD once for an agent in its last step and, once
 // the grace is over, HANDOVER DUE once, saying how long it was held.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysHandoverHeldOnce(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
-	w.notifier = nil
-	ts := w.now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	w.Notifier = nil
+	ts := watchApp(w.Host).now.Add(-time.Minute).UTC().Format(time.RFC3339)
 	tr := filepath.Join(dir, "s1.jsonl")
 	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":410000},"content":[]}}` + "\n"
 	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
@@ -178,22 +187,22 @@ func TestWatchSaysHandoverHeldOnce(t *testing.T) {
 	one := state.Party{Session: "s1", Name: sessionOne}
 	st := &state.State{
 		Agents:  []state.Agent{{Party: one, Task: countTask}},
-		Records: []state.Record{{Session: one, Issue: issue61, Waits: "the report", At: w.now.Add(-time.Minute)}},
+		Records: []state.Record{{Session: one, Issue: issue61, Waits: "the report", At: watchApp(w.Host).now.Add(-time.Minute)}},
 	}
-	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.now}}
+	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: watchApp(w.Host).now}}
 
-	w.handoversDue(st, live)
-	w.handoversDue(st, live)
+	w.HandoversDue(st, live)
+	w.HandoversDue(st, live)
 	held := fmt.Sprintf(`HANDOVER HELD %q at 410k: last step, report expected (it waits on "the report"); due at %s or at 500k`,
-		sessionOne, w.now.Add(29*time.Minute).Local().Format("15:04"))
+		sessionOne, watchApp(w.Host).now.Add(29*time.Minute).Local().Format("15:04"))
 	if got := out.String(); strings.Count(got, held) != 1 || strings.Contains(got, "HANDOVER DUE") {
 		t.Errorf("want one held line %q, got:\n%s", held, got)
 	}
 
 	out.Reset()
-	w.now = w.now.Add(time.Hour)
-	w.handoversDue(st, live)
-	w.handoversDue(st, live)
+	watchApp(w.Host).now = watchApp(w.Host).now.Add(time.Hour)
+	w.HandoversDue(st, live)
+	w.HandoversDue(st, live)
 	due := fmt.Sprintf(`HANDOVER DUE %q at 410k, held 30m for its last step (it waits on "the report"): beekeeper agents handover %q`, sessionOne, sessionOne)
 	if got := out.String(); strings.Count(got, due) != 1 || strings.Contains(got, "HANDOVER HELD") {
 		t.Errorf("want one due line %q, got:\n%s", due, got)
@@ -573,6 +582,9 @@ func TestNoteFailsFastNamingAPendingImport(t *testing.T) {
 
 // A revive check in another reader must leave the old CLI running even once
 // a successor is visible. Cancellation of the handover releases that guard.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	a, _ := stubApp(t)
 	a.as = testSupervisor
@@ -588,8 +600,8 @@ func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	next := state.Party{Session: newID, Name: countName}
 	cli := &claude.Session{ID: oldID, Name: countName, PID: 42}
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.store = a.store
-	w.now = time.Now()
+	watchApp(w.Host).store = a.store
+	watchApp(w.Host).now = time.Now()
 	ended := useEndRevived(t)
 	useLauncher(t, &stopLauncher{})
 	ctx, cancel := context.WithCancel(t.Context())
@@ -598,13 +610,13 @@ func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	t.Cleanup(func() { sendNote = orig })
 	sendNote = func(context.Context, string, string, string) (peer.Result, error) {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Starts = []state.Start{{Party: old, At: w.now.Add(-time.Hour)}, {Party: next, At: w.now}}
+			st.Starts = []state.Start{{Party: old, At: watchApp(w.Host).now.Add(-time.Hour)}, {Party: next, At: watchApp(w.Host).now}}
 			st.Agents = []state.Agent{{Party: next, Task: countTask}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if left := w.stopRevived(t.Context(), []*claude.Session{cli}); len(left) != 1 || len(*ended) != 0 || strings.Contains(out.String(), "REVIVED") {
+		if left := w.StopRevived(t.Context(), []*claude.Session{cli}); len(left) != 1 || len(*ended) != 0 || strings.Contains(out.String(), "REVIVED") {
 			t.Fatalf("mid-handover: left %v, stopped %v, output %s", left, *ended, out)
 		}
 		if _, err := a.beginHandover(old); err == nil {
@@ -624,7 +636,7 @@ func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	if len(st.Handovers) != 0 {
 		t.Fatalf("failed handover left marks: %+v", st.Handovers)
 	}
-	w.stopRevived(t.Context(), []*claude.Session{cli})
+	w.StopRevived(t.Context(), []*claude.Session{cli})
 	if len(*ended) != 1 {
 		t.Fatalf("after failure: stopped %v", *ended)
 	}

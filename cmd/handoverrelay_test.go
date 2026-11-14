@@ -120,6 +120,9 @@ func runIn(a *app, c interface {
 // successor's prompt carries the epics with their plans and every held item
 // with what holds it, read from GitHub as the predecessor's was, and its first
 // board next walks the same order past the same holds. Nothing is filed for it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARelayKeepsTheBoardHoldsWithoutANote(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -133,7 +136,7 @@ func TestARelayKeepsTheBoardHoldsWithoutANote(t *testing.T) {
 	t.Cleanup(func() { boardGH = was })
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = nil
-		_, evs, err := guideRole.start(st, supA, true, false, now.Add(-8*time.Hour))
+		_, evs, err := guideRole.Take(st, supA, true, false, now.Add(-8*time.Hour))
 		st.NextNote = 1
 		st.Notes = []state.Note{{ID: 1, Kind: noteDecision, For: notePerson, Text: "ship o/r#7 now?", Refs: []string{decisionRef},
 			Default: relayDefault, By: agentC, At: now.Add(-time.Hour),
@@ -171,11 +174,11 @@ func TestARelayKeepsTheBoardHoldsWithoutANote(t *testing.T) {
 	// The relay at the clock its events are stamped with: the successor's
 	// start is its own, the predecessor's the last relay.
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, evs, err := guideRole.relay(st, supA, supB, time.Now(), 15*time.Minute)
+		_, evs, err := guideRole.Relay(st, supA, supB, time.Now(), 15*time.Minute)
 		if err != nil {
 			return nil, err
 		}
-		_, more, err := guideRole.start(st, supB, true, false, time.Now())
+		_, more, err := guideRole.Take(st, supB, true, false, time.Now())
 		return append(evs, more...), err
 	}); err != nil {
 		t.Fatal(err)

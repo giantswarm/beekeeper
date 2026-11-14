@@ -18,28 +18,11 @@ import (
 // relayed role's name, "" for a worker.
 func startRole(role string) string {
 	for _, rl := range roles {
-		if rl.name == role {
+		if rl.Name == role {
 			return role
 		}
 	}
 	return ""
-}
-
-// startedAs reports whether p's session is a start of beekeeper's as one of
-// rl's runs.
-func (rl role) startedAs(st *state.State, p state.Party) bool {
-	s, ok := st.BypassStartOf(p)
-	return ok && s.Role == rl.name
-}
-
-// mayTake refuses me rl's role unless me holds it already (a restart of its
-// CLI) or beekeeper started me as one of rl's runs: a session started by
-// any other means never takes the role.
-func (rl role) mayTake(st *state.State, me state.Party) error {
-	if h := rl.get(st).Holder; (h != nil && h.Is(me)) || rl.startedAs(st, me) {
-		return nil
-	}
-	return refused("%q is no %s run beekeeper started, and only such a run takes the role: `beekeeper %s start --new` starts the next one", me.Name, rl.name, rl.name)
 }
 
 // roleStartWait bounds how long a background run's `<role> start` waits for
@@ -59,8 +42,8 @@ func (a *app) awaitRoleStart(ctx context.Context, rl role, me state.Party) error
 		if err != nil {
 			return err
 		}
-		r := rl.get(st)
-		if rl.startedAs(st, me) || !r.Relay.Open(a.now) || r.Relay.To.Session != "" || !takesRelay(r.Relay.To, me) {
+		r := rl.Get(st)
+		if rl.StartedAs(st, me) || !r.Relay.Open(a.now) || r.Relay.To.Session != "" || !takesRelay(r.Relay.To, me) {
 			return nil
 		}
 		select {
@@ -96,28 +79,28 @@ func (a *app) newRun(ctx context.Context, rl role, by state.Party, takeOver bool
 	if err != nil {
 		return state.Party{}, "", err
 	}
-	if err := a.refuseStopped(st, "starting the next "+rl.title+" run"); err != nil {
+	if err := a.refuseStopped(st, "starting the next "+rl.Title+" run"); err != nil {
 		return state.Party{}, "", err
 	}
 	var from state.Party
-	if h := rl.get(st).Holder; h != nil {
+	if h := rl.Get(st).Holder; h != nil {
 		from = h.Party
 	}
 	check := func(st *state.State) error {
-		r := rl.get(st)
+		r := rl.Get(st)
 		if r.Holder == nil && from != (state.Party{}) || r.Holder != nil && !r.Holder.Is(from) {
-			return refused("the %s changed meanwhile: `beekeeper %s status`", rl.name, rl.name)
+			return refused("the %s changed meanwhile: `beekeeper %s status`", rl.Name, rl.Name)
 		}
 		if relayPending(st, r, a.now) && r.Relay.Taken.IsZero() {
 			return refused("%q is starting already: its `beekeeper %s start` takes the role (the relay is open until %s)",
-				r.Relay.To.Name, rl.name, clock(a.now, r.Relay.Expires))
+				r.Relay.To.Name, rl.Name, clock(a.now, r.Relay.Expires))
 		}
 		if r.Holder == nil {
 			return nil
 		}
 		if _, live := claude.Live(sessions, r.Holder.Party); live && !takeOver {
 			return refused("%q %s and its CLI runs: its `beekeeper %s relay` starts the next run, or relieve it with --take-over",
-				r.Holder.Name, rl.verb, rl.name)
+				r.Holder.Name, rl.Verb, rl.Name)
 		}
 		return nil
 	}
@@ -144,10 +127,10 @@ func (a *app) runLine(rl role, to state.Party) string {
 	if to.HostSession == "" {
 		short := to.Session[:min(8, len(to.Session))]
 		return fmt.Sprintf("started %q (background session %s, Remote Control: claude attach %s): it runs `beekeeper %s start`, then `%s`",
-			to.Name, to.Session, short, rl.name, rl.handover)
+			to.Name, to.Session, short, rl.Name, rl.Handover)
 	}
 	return fmt.Sprintf("started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`; the standby watch gives it its desktop turn once that ends",
-		to.Name, to.Session, to.HostSession, rl.name)
+		to.Name, to.Session, to.HostSession, rl.Name)
 }
 
 // startRunAfterResume is resume's start of a role's next run (newRun); a
@@ -165,7 +148,7 @@ func (a *app) resumeRole(ctx context.Context, rl role, by state.Party) (string, 
 	if err != nil {
 		return "", err
 	}
-	r := rl.get(st)
+	r := rl.Get(st)
 	if r.Holder == nil {
 		return "", nil
 	}
@@ -177,11 +160,11 @@ func (a *app) resumeRole(ctx context.Context, rl role, by state.Party) (string, 
 		return "", nil
 	}
 	if relayPending(st, r, a.now) && r.Relay.Taken.IsZero() {
-		return fmt.Sprintf("the %s's next run %q is starting", rl.name, r.Relay.To.Name), nil
+		return fmt.Sprintf("the %s's next run %q is starting", rl.Name, r.Relay.To.Name), nil
 	}
 	to, _, err := startRunAfterResume(ctx, a, rl, by)
 	if err != nil {
-		return "", fmt.Errorf("%q %s, its session runs no CLI, and its next run did not start: %w", r.Holder.Name, rl.verb, err)
+		return "", fmt.Errorf("%q %s, its session runs no CLI, and its next run did not start: %w", r.Holder.Name, rl.Verb, err)
 	}
 	return fmt.Sprintf("%q runs no CLI: %s", r.Holder.Name, a.runLine(rl, to)), nil
 }

@@ -19,20 +19,23 @@ const (
 // run name on the roster: a message by the run name addresses the role and
 // reaches the holder's running CLI by its title, where the run name alone
 // would be refused as an agent with no CLI.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 	now := time.Date(2026, 10, 7, 1, 0, 0, 0, time.UTC)
 	run := state.Party{Session: runID, HostSession: "local_sup82", Name: runName}
 	holder := run
 	holder.Name = runTitle
 	st := &state.State{Agents: []state.Agent{{Party: run, Registered: now}, {Party: state.Party{Session: "w1", Name: "w1 worker"}}}}
-	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: now}})
+	guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: now}})
 	sessions := []*claude.Session{{ID: runID, Name: runTitle, PID: 4242}}
 
 	if r := absentAgent(st, sessions, runName, now); !strings.Contains(r, "runs a CLI") {
 		t.Fatalf("the run name alone does not name its running CLI: %q", r)
 	}
 	for _, name := range []string{runName, "supervisor RUN 82", runTitle, runID, "local_sup82"} {
-		if got := holderRole(st, name); got != guideRole.name {
+		if got := holderRole(st, name); got != guideRole.Name {
 			t.Errorf("%q: role %q, want the supervisor", name, got)
 		}
 	}
@@ -41,7 +44,7 @@ func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 			t.Errorf("%q addresses no holder, got %q", name, got)
 		}
 	}
-	to, err := roleAddress(guideRole.get(st).Holder, guideRole, sessions, noSocket)
+	to, err := roleAddress(guideRole.Get(st).Holder, guideRole, sessions, noSocket)
 	if err != nil || to != runTitle {
 		t.Fatalf("address %q, %v; want the running CLI's title", to, err)
 	}

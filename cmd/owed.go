@@ -13,20 +13,18 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gate"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // owedRetry is how long a claimed hand-over of an owed outcome waits before
 // the next try; owedAsk how long a stopped merge's outcome waits for
-// GitHub's answer before its owner hears it without one; owedFor how long
+// GitHub's answer before its owner hears it without one; watch.OwedFor how long
 // an outcome stays owed at all; owedBusy how long the gate and merge-child
 // that owe it may still be handing it over themselves.
 const (
 	owedRetry = time.Minute
 	owedAsk   = 30 * time.Minute
-	owedFor   = 24 * time.Hour
-	owedBusy  = 2 * ownerWait
 )
 
 // owed is r's outcome as this merge-child owes it to its owner.
@@ -104,7 +102,7 @@ func (a *app) payOwed(ctx context.Context, o state.Owed) {
 		a.paid(o, fmt.Sprintf("%q has no session id, nobody is woken", owner.Name))
 		return
 	}
-	if p := wakeTargetPark(st, q); p != nil && parkOnPerson(p, a.cfg.Guide.Person) {
+	if p := wakeTargetPark(st, q); p != nil && watch.ParkOnPerson(p, a.cfg.Guide.Person) {
 		// Keep the result owed until the person's wait settles. An old
 		// command completing is no answer to a later decision.
 		return
@@ -207,43 +205,4 @@ func (a *app) failedPay(o state.Owed, why string) {
 		}
 		return nil, nil
 	})
-}
-
-// owedOutcomes hands over each owed outcome whose gate and merge-child no longer
-// hand it over themselves (both gone, or owedBusy passed), one claim per
-// owedRetry under the state's lock, so one watch tries it: a caller that
-// heard it drops it, and one owed past owedFor is given up.
-func (w *watcher) owedOutcomes(ctx context.Context) {
-	st, err := w.store.Peek()
-	if err != nil || len(st.Owed) == 0 {
-		return
-	}
-	now := w.now.UTC()
-	due := func(o state.Owed) bool {
-		busy := (proc.Alive(o.Gate) || proc.Alive(o.Child)) && now.Sub(o.Since) < owedBusy
-		return !busy && now.Sub(o.Tried) >= owedRetry
-	}
-	if !slices.ContainsFunc(st.Owed, due) {
-		return
-	}
-	var claimed []state.Owed
-	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		for i, o := range st.Owed {
-			if due(o) {
-				st.Owed[i].Tried = now
-				claimed = append(claimed, st.Owed[i])
-			}
-		}
-		return nil, nil
-	})
-	for _, o := range claimed {
-		switch {
-		case heard(o):
-			w.paid(o)
-		case now.Sub(o.Since) > owedFor:
-			w.paid(o, fmt.Sprintf("owed to %q since %s and never handed over (%s): given up", o.Owner.Name, clock(now, o.Since), o.Why))
-		default:
-			w.payOwed(ctx, o)
-		}
-	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // Given an observation pass blocked reading a pull, when the independent
@@ -68,6 +69,8 @@ func TestRefillCadenceWhileObservationIsBlocked(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRefillCadenceHonoursHoldAndRecovers(t *testing.T) {
 	r, busy := fillRig(t)
 	l, err := r.a.newSupervisorLoop(false)
@@ -75,14 +78,14 @@ func TestRefillCadenceHonoursHoldAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := r.a.newWatcher(false, false)
-	w.publishBudget(true)
+	w.PublishBudget(true)
 	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if *busy != 0 {
 		t.Fatal("started through a hold")
 	}
-	w.publishBudget(false)
+	w.PublishBudget(false)
 	if err := l.RefillTick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +202,8 @@ func TestRefillCadenceDoesNotReplayCompletedStarts(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 	for _, condition := range []string{fatalBudgetCommand, secLoad, loop.LoopDiskKind, kindStale} {
 		t.Run(condition, func(t *testing.T) {
@@ -211,11 +216,11 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 			w := r.a.newWatcher(false, false)
 			switch condition {
 			case fatalBudgetCommand:
-				w.publishBudget(true)
+				w.PublishBudget(true)
 			case secLoad:
-				w.check(secLoad, true, "HIGH LOAD")
+				w.Check(secLoad, true, "HIGH LOAD")
 			case loop.LoopDiskKind:
-				w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+				w.PublishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
 			case kindStale:
 				r.a.now = r.a.now.Add(time.Hour)
 			}
@@ -227,13 +232,13 @@ func TestRefillCadenceRefreshesWatchWithoutPass(t *testing.T) {
 			}
 			switch condition {
 			case fatalBudgetCommand:
-				w.publishBudget(false)
+				w.PublishBudget(false)
 			case secLoad:
-				w.clear(secLoad)
+				w.Clear(secLoad)
 			case loop.LoopDiskKind:
-				w.publishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
+				w.PublishDisk(watchDiskReading{FreeMiB: 200, MinMiB: 100})
 			case kindStale:
-				e := event(watchParty, "watch.budget-state", "false")
+				e := event(watch.WatchParty, "watch.budget-state", "false")
 				e.At = r.a.timeNow()
 				if err := r.a.store.Record(e); err != nil {
 					t.Fatal(err)

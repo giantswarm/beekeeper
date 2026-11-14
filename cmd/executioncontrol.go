@@ -351,7 +351,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			for _, ag := range st.Agents {
 				role := ""
 				if guide != nil && guide.Is(ag.Party) {
-					role = guideRole.name
+					role = guideRole.Name
 				}
 				rows = append(rows, row{ag.Name, ag.Task, ag.Host, role, ag.Execution})
 			}

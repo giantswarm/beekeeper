@@ -10,7 +10,7 @@ import (
 // refused rather than silently delivering a request to an unattended session.
 func guideMessageTarget(st *state.State, q string) (string, error) {
 	q = strings.TrimSpace(q)
-	role := guideRole.get(st)
+	role := guideRole.Get(st)
 	if strings.EqualFold(q, "guide") || strings.EqualFold(q, "the guide") {
 		if role.Holder == nil {
 			return "", refused("no current guide; start a guide before sending this message")

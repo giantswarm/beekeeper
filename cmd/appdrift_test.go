@@ -10,6 +10,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAppConsentManifestDrift(t *testing.T) {
 	a, _ := stubApp(t)
 	current := map[string]string{"apps/" + recordedApp + "/manifest.json": recordedManifest}
@@ -37,13 +39,13 @@ func TestAppConsentManifestDrift(t *testing.T) {
 	}
 	var out bytes.Buffer
 	w := a.newWatcher(false, false)
-	w.out = &out
-	w.sayAppDrifts(drift)
+	watchApp(w.Host).out = &out
+	w.SayAppDrifts(drift)
 	if !strings.Contains(out.String(), line) {
 		t.Fatalf("watch output: %s", out.String())
 	}
 	out.Reset()
-	w.sayAppDrifts(nil)
+	w.SayAppDrifts(nil)
 	if !strings.Contains(out.String(), "ENDED") {
 		t.Fatalf("watch did not clear drift: %s", out.String())
 	}

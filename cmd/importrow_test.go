@@ -279,18 +279,21 @@ func (stubDesktopDown) Running(*proc.Table) time.Time { return time.Time{} }
 // what shows it: the standby's import beside a running turn, else the
 // doctor's reopen; a worker with a row, a fresh start, a finished or idle
 // one, a role holder and a session a person started are not in it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysNoDesktopRowOnce(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	orig := plat
 	plat = platform.Stub()
 	t.Cleanup(func() { plat = orig })
 	plat.Opener = &recordingOpener{}
-	w.cfg.Claude.DesktopDir = recordDir(t, "local_rowed001")
-	w.cfg.Claude.DesktopLog = capLog(t, 3)
-	w.table = rowlessTable()
-	st := rowlessState(w.now)
+	watchApp(w.Host).cfg.Claude.DesktopDir = recordDir(t, "local_rowed001")
+	watchApp(w.Host).cfg.Claude.DesktopLog = capLog(t, 3)
+	w.Table = rowlessTable()
+	st := rowlessState(watchApp(w.Host).now)
 	for range 2 {
-		w.rowlessAgents(st)
+		w.RowlessAgents(st)
 	}
 	s := out.String()
 	if n := strings.Count(s, "NO DESKTOP ROW"); n != 1 {
@@ -311,16 +314,16 @@ func TestWatchSaysNoDesktopRowOnce(t *testing.T) {
 		}
 	}
 	// A rowless worker that comes later is said on its own.
-	st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "later001"}, At: w.now.Add(-time.Hour)})
+	st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "later001"}, At: watchApp(w.Host).now.Add(-time.Hour)})
 	st.Agents = append(st.Agents, state.Agent{Party: state.Party{Session: "later001", Name: "worker later001"}, Task: rowlessTask})
-	w.rowlessAgents(st)
+	w.RowlessAgents(st)
 	if s := out.String(); strings.Count(s, "NO DESKTOP ROW") != 2 || !strings.Contains(s, `never imported "worker later001"`) {
 		t.Errorf("a later rowless worker:\n%s", s)
 	}
 	// With the desktop down the line waits.
 	plat.Opener = stubDesktopDown{}
-	w.rowlessSaid = nil
-	w.rowlessAgents(st)
+	w.RowlessSaid = nil
+	w.RowlessAgents(st)
 	if s := out.String(); strings.Count(s, "NO DESKTOP ROW") != 2 {
 		t.Errorf("said with the desktop down:\n%s", s)
 	}
@@ -380,6 +383,9 @@ func TestAgentsMarkAWorkerWithoutADesktopRow(t *testing.T) {
 
 // Managed SSH executions and desks whose agents.mode is not the desktop
 // never offer or launch a local desktop reopen.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Claude.DesktopLog = capLog(t, 4)
@@ -441,9 +447,9 @@ func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 		}
 	}
 	w, _, watchOut := notifyingWatch(t, t.TempDir(), false)
-	w.cfg.Agents.Mode = config.ModeBackground
-	w.table = rowlessTable()
-	w.rowlessAgents(localSt)
+	watchApp(w.Host).cfg.Agents.Mode = config.ModeBackground
+	w.Table = rowlessTable()
+	w.RowlessAgents(localSt)
 	if watchOut.Len() != 0 {
 		t.Fatalf("watch emitted NO DESKTOP ROW in background mode: %s", watchOut.String())
 	}

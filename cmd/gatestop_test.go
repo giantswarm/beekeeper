@@ -173,15 +173,18 @@ func writeRC(t *testing.T, dir, repo string, pr, rc int) {
 // A gate killed while its merge ran leaves no place after one watch tick:
 // its devctl gone, or ended while its merge-child still hands the outcome
 // over, the run is recorded, nothing merged, and leaves the lane.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = relayNow
-	dir := w.store.Dir()
+	watchApp(w.Host).now = relayNow
+	dir := watchApp(w.Host).store.Dir()
 	stubPulls(t, map[int]github.Pull{1: {State: github.Open}, 2: {State: github.Open}})
 	writeRC(t, dir, hungRepo, 1, 143)
 	lingering := hungChild(t, dir, openRepo, 2)
 	writeRC(t, dir, openRepo, 2, 143)
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Phase: state.Running, Started: relayNow},
 			{Repo: openRepo, PR: 2, Lane: openLane, By: four, Child: lingering, Phase: state.Running, Started: relayNow},
@@ -191,14 +194,14 @@ func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.lostMerges(context.Background())
+	w.LostMerges(context.Background())
 	l := out.String()
 	for _, want := range []string{"MERGE RECORDED: o/hung#1 exit 143, nothing merged, it left lane scratch", "MERGE RECORDED: o/open#2 exit 143, nothing merged, it left lane open"} {
 		if !strings.Contains(l, want) {
 			t.Errorf("no %q in the watch lines:\n%s", want, l)
 		}
 	}
-	if st, err := w.store.Read(); err != nil || len(st.Merges) != 0 {
+	if st, err := watchApp(w.Host).store.Read(); err != nil || len(st.Merges) != 0 {
 		t.Errorf("places left after one tick: %+v (%v)", st.Merges, err)
 	}
 }
@@ -207,9 +210,12 @@ func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 // running merge's devctl through its merge-child, a waiting merge's place
 // (a seeded place stays). A task of another session, or one that runs no
 // gate, is left alone.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTaskStopEndsTheGatesMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := watchApp(w.Host)
 	dir := a.store.Dir()
 	stubPulls(t, map[int]github.Pull{1: {State: github.Open}})
 	child := hungChild(t, dir, hungRepo, 1)
@@ -347,9 +353,12 @@ func TestAncestorOutputStopsAtTheCLI(t *testing.T) {
 
 // A TaskStop that reaches a running merge whose pull request merged before
 // it says so, never "nothing merged".
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTaskStopSaysAMergeLandedBeforeIt(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := watchApp(w.Host)
 	at := time.Date(2026, 10, 9, 4, 4, 20, 0, time.UTC)
 	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: at}})
 	child := hungChild(t, a.store.Dir(), hungRepo, 1)

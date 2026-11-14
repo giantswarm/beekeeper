@@ -15,10 +15,10 @@ type fakeWatchResolver struct {
 	resets, stubReads, upstreamReads int
 }
 
-func (f *fakeWatchResolver) servers(context.Context) ([]string, error) {
+func (f *fakeWatchResolver) Servers(context.Context) ([]string, error) {
 	return []string{"192.0.2.1"}, nil
 }
-func (f *fakeWatchResolver) lookup(_ context.Context, server string) error {
+func (f *fakeWatchResolver) Lookup(_ context.Context, server string) error {
 	ok := f.upstreamOK
 	if server == "127.0.0.53" {
 		f.stubReads++
@@ -31,8 +31,10 @@ func (f *fakeWatchResolver) lookup(_ context.Context, server string) error {
 	}
 	return errors.New("DNS timeout")
 }
-func (f *fakeWatchResolver) reset(context.Context) error { f.resets++; return f.resetErr }
+func (f *fakeWatchResolver) Reset(context.Context) error { f.resets++; return f.resetErr }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchResolverDiscrimination(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
@@ -47,11 +49,11 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, out := onceWatch(t, nil)
-			w.resolverState.resolver = &tc.resolver
+			w.ResolverState.Resolver = &tc.resolver
 			// Independent readers arrive concurrently, as in a running watch.
 			var wg sync.WaitGroup
 			for _, line := range []string{"ALERTS fixture unreachable: timed out", "PAGERDUTY unreachable: timed out", "GitHub budget unknown: timed out"} {
-				wg.Go(func() { w.emitNow("fixture", "%s", line) })
+				wg.Go(func() { w.EmitNow("fixture", "%s", line) })
 			}
 			wg.Wait()
 			got := out.String()
@@ -63,8 +65,8 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 			}
 			// A new interval probes again instead of retaining a stale diagnosis.
 			tc.resolver.stubOK = true
-			w.resolverState.checked = time.Now().Add(-time.Minute)
-			w.emitNow("fixture", "ALERTS fixture unreachable: service down")
+			w.ResolverState.Checked = time.Now().Add(-time.Minute)
+			w.EmitNow("fixture", "ALERTS fixture unreachable: service down")
 			if !strings.Contains(out.String(), "ALERTS fixture unreachable: service down") {
 				t.Fatal("healthy DNS still suppressed a target failure")
 			}
@@ -72,21 +74,25 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchResolverHealthyStubKeepsTargetFailure(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	f := &fakeWatchResolver{stubOK: true, upstreamOK: true}
-	w.resolverState.resolver = f
-	w.emitNow("alerts", "ALERTS fixture unreachable: service down")
+	w.ResolverState.Resolver = f
+	w.EmitNow("alerts", "ALERTS fixture unreachable: service down")
 	if !strings.Contains(out.String(), "ALERTS fixture unreachable: service down") || f.resets != 0 || f.upstreamReads != 0 {
 		t.Fatalf("output %q, resolver %+v", out.String(), f)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchResolverLeavesUnrelatedEventsAlone(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	f := &fakeWatchResolver{}
-	w.resolverState.resolver = f
-	w.emitNow("report", "WORKER REPORT: service unreachable, i/o timeout")
+	w.ResolverState.Resolver = f
+	w.EmitNow("report", "WORKER REPORT: service unreachable, i/o timeout")
 	if !strings.Contains(out.String(), "WORKER REPORT:") || f.stubReads != 0 {
 		t.Fatalf("unrelated event probed DNS: %q", out.String())
 	}

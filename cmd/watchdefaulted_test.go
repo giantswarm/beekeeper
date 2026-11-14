@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 	for _, sessions := range []int{1, 2} {
 		for _, failed := range []bool{false, true} {
@@ -19,7 +21,7 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 				var notes []state.Note
 				for session := 0; session < sessions; session++ {
 					for i := 0; i < 3; i++ {
-						notes = append(notes, state.Note{ID: len(notes) + 1, Kind: noteDecision, For: w.cfg.Guide.Person, Text: "Apply the fixture", Default: "Use the fixture", Due: w.now.Add(-time.Minute), By: state.Party{Session: []string{"fixture-session-a", "fixture-session-b"}[session]}})
+						notes = append(notes, state.Note{ID: len(notes) + 1, Kind: noteDecision, For: watchApp(w.Host).cfg.Guide.Person, Text: "Apply the fixture", Default: "Use the fixture", Due: watchApp(w.Host).now.Add(-time.Minute), By: state.Party{Session: []string{"fixture-session-a", "fixture-session-b"}[session]}})
 					}
 				}
 				setNotes(t, w, notes...)
@@ -36,8 +38,8 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 					}
 					return nil
 				}
-				w.pending(t.Context(), nil)
-				w.timerActs.Wait()
+				w.Pending(t.Context(), nil)
+				w.TimerActs.Wait()
 				if len(messages) != sessions {
 					t.Fatalf("woke %d sessions, want %d", len(messages), sessions)
 				}
@@ -46,7 +48,7 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 					if len(got) != 1 || strings.Count(got[0], defaultedLine(&n)) != 1 {
 						t.Fatalf("note %d: wakes = %q, want one containing its default", n.ID, got)
 					}
-					shown, err := w.localNote(n.ID)
+					shown, err := watchApp(w.Host).localNote(n.ID)
 					want := "delivered"
 					if failed {
 						want = noteDeliveryFailed
@@ -60,6 +62,8 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchDefaultedBatchesCurrentRoleHolder(t *testing.T) {
 	w, _ := onceWatch(t, openRefs)
 	holder := state.Party{Session: "fixture-current-session", Name: litGuideRun2}
@@ -67,8 +71,8 @@ func TestWatchDefaultedBatchesCurrentRoleHolder(t *testing.T) {
 		{ID: 1, By: state.Party{Name: firstRun}, Default: "first fixture"},
 		{ID: 2, By: holder, Default: "second fixture"},
 	}
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide = &state.Role{Holder: &state.Supervisor{Party: holder, Since: w.now}}
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: holder, Since: watchApp(w.Host).now}}
 		st.Defaulted = notes
 		return nil, nil
 	}); err != nil {
@@ -84,7 +88,7 @@ func TestWatchDefaultedBatchesCurrentRoleHolder(t *testing.T) {
 		messages = append(messages, msg)
 		return nil
 	}
-	w.tellDefaulted(t.Context(), notes)
+	w.TellDefaulted(t.Context(), notes)
 	if len(messages) != 1 {
 		t.Fatalf("wakes = %q, want one", messages)
 	}

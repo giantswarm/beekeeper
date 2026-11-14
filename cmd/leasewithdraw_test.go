@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // grantees lists to whom res is granted, in order.
@@ -29,6 +30,9 @@ func grantees(t *testing.T, a *app, res string) []string {
 // A grantee queued behind the holder releases its own queued grant: the
 // grant leaves the queue, its park on the lease ends, the next grant moves
 // up, lease list shows it and the log records it. The holder keeps the lease.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseReleaseWithdrawsTheCallersQueuedGrant(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute), claimGrant(labOne, claimFirst, 4*time.Minute))
 	claimAgent(t, a)
@@ -45,7 +49,7 @@ func TestLeaseReleaseWithdrawsTheCallersQueuedGrant(t *testing.T) {
 	if got := grantees(t, a, labOne); !slices.Equal(got, []string{claimFirst.Name}) {
 		t.Errorf("the queue after the withdrawal: %q", got)
 	}
-	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil || ag.Task != parkTask {
+	if ag := agentOf(t, &watch.Watcher{Host: a}); ag.Park != nil || ag.Task != parkTask {
 		t.Errorf("after the withdrawal: task %q park %+v", ag.Task, ag.Park)
 	}
 	if h, _ := lease.Dir(a.cfg.LeaseDir).Get(labOne); h == nil || !h.Party().Is(claimOther) {
@@ -108,6 +112,9 @@ func TestLeaseRevokeOfAnotherSessionsGrantIsRefused(t *testing.T) {
 // The supervisor loop revokes a parked grantee's grant while another session
 // holds the lease: the watch resumes the grantee at once with the words to
 // ask again, instead of leaving it parked until the lease is free.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
 	claimAgent(t, a)
@@ -123,6 +130,6 @@ func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	a.as = ""
 	settleParks(t, a)
 	settleParks(t, a)
-	assertFreshQueue(t, &watcher{app: a}, *woke, "no grant of it to you is left")
+	assertFreshQueue(t, &watch.Watcher{Host: a}, *woke, "no grant of it to you is left")
 
 }

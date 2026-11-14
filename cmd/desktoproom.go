@@ -109,7 +109,7 @@ func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool
 // before a worker idle on its task keeps one.
 func forRole(st *state.State, keep []string, now time.Time) bool {
 	return slices.ContainsFunc(roles, func(rl role) bool {
-		r := rl.get(st)
+		r := rl.Get(st)
 		return r.Holder != nil && slices.Contains(keep, r.Holder.HostSession) ||
 			r.Relay.Open(now) && slices.Contains(keep, r.Relay.To.HostSession)
 	})

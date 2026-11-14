@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // The threads of the answer tests: a private one, a public slice under a
@@ -296,6 +297,9 @@ func TestNoteAnswerTellsTheFilerAndPostsNothing(t *testing.T) {
 // An answer to a decision its default closed within the day replaces the
 // default: logged, its filer told so, the decision no longer kept. One a
 // day after the default is refused.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 	a, out := answerApp(t)
 	stubAnswerGH(t, &answerGH{})
@@ -307,7 +311,7 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 				Text: "Merge now?", Refs: []string{privateThread}, Due: due, Default: "merge it at the due time"})
 		}
 		st.NextNote = 2
-		_, evs, closed := closeDefaulted(st, notePerson, watchParty, relayNow)
+		_, evs, closed := closeDefaulted(st, notePerson, watch.WatchParty, relayNow)
 		if len(closed) != 2 || len(st.Notes) != 0 || len(st.Defaulted) != 2 {
 			t.Fatalf("closed %+v, open %+v, defaulted %+v", closed, st.Notes, st.Defaulted)
 		}
@@ -340,7 +344,7 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 	}
 	for range 2 {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			closeDefaulted(st, notePerson, watchParty, a.now)
+			closeDefaulted(st, notePerson, watch.WatchParty, a.now)
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -353,6 +357,9 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 
 // A decision (note add --for the person) without --ref is refused; a note on a thread the person
 // answered on is filed with a warning quoting the answer.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	a, out := answerApp(t)
 	stubAnswerGH(t, &answerGH{})
@@ -361,7 +368,7 @@ func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	if err := addNote(a, append(noRef, "approve "+prURL+"?")...); Code(err) != ExitUsage || !strings.Contains(err.Error(), "it names no thread: --ref owner/repo#n") {
 		t.Fatalf("a decision without --ref: %v", err)
 	}
-	if err := addNote(a, "--for", guideRole.title, "State of the watch"); Code(err) != ExitUsage {
+	if err := addNote(a, "--for", guideRole.Title, "State of the watch"); Code(err) != ExitUsage {
 		t.Fatalf("a memo --for a role: %v", err)
 	}
 	if err := runAnswer(a, decisionRef, "keep the draft"); err != nil {

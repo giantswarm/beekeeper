@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // errInterrupted ends a reading cut short by SIGINT or SIGTERM: every
@@ -507,7 +508,7 @@ func (a *app) logQuiet(lines ...string) {
 	}
 	evs := make([]state.Event, len(lines))
 	for i, l := range lines {
-		evs[i] = event(watchParty, quietVerb, "%s", l)
+		evs[i] = event(watch.WatchParty, quietVerb, "%s", l)
 	}
 	_ = a.store.Log(evs...)
 }
@@ -818,30 +819,6 @@ func (a *app) printAlerts(v *alertsView) {
 		}
 		p("PagerDuty: the open incidents of %s, read every %s through muster context %s: %s.", strings.Join(pd.Services, ", "), pd.Every, pd.Context, base)
 	}
-}
-
-// watchDiscovery discovers the installations that carry the team's
-// HelmReleases every alerts.discover.every, beginning with a restart only
-// once the kept discovery is that old, and says the ones that joined or
-// left; a failed listing of Teleport's clusters is a lasting condition.
-func (w *watcher) watchDiscovery(ctx context.Context) {
-	every := w.cfg.Alerts.Discover.Every.Duration
-	w.loop(ctx, every, true, func(ctx context.Context) {
-		if d, err := alerts.LoadDiscovery(w.cfg.StateDir); err == nil && time.Since(d.At) < every-time.Minute {
-			return
-		}
-		changed, _, err := w.alertDiscovery(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				w.emit("discover", "ALERTS discovery failed: %v", err)
-			}
-			return
-		}
-		w.clear("discover")
-		for _, l := range changed {
-			w.emitNow("alerts", "%s", l)
-		}
-	})
 }
 
 func makeAlertSnapshot(rules alerts.Rules, targets []alerts.Target, answers []alerts.Answer, now time.Time) alertSnapshotResult {

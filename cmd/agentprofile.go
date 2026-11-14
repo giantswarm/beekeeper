@@ -25,8 +25,8 @@ func profileName(cfg *config.Config, role string) string {
 		return cfg.Agents.Profile
 	}
 	for _, rl := range roles {
-		if rl.name == role {
-			return rl.cfg(cfg).Profile
+		if rl.Name == role {
+			return rl.Cfg(cfg).Profile
 		}
 	}
 	return ""
@@ -36,8 +36,8 @@ func profileName(cfg *config.Config, role string) string {
 // holds, else a worker's.
 func agentRole(st *state.State, p state.Party) string {
 	for _, rl := range roles {
-		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {
-			return rl.name
+		if r := rl.Get(st); r.Holder != nil && r.Holder.Is(p) {
+			return rl.Name
 		}
 	}
 	return workerRole

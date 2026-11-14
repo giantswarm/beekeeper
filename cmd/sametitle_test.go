@@ -111,16 +111,19 @@ func TestTheRoleReachesItsHolderPastASharedTitle(t *testing.T) {
 
 // The watch says a shared title once, naming both sessions, and its end
 // once one session is left with it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchSaysASharedTitle(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.now = time.Now()
+	watchApp(w.Host).now = time.Now()
 	both := []*claude.Session{{PID: 3, ID: "s3", Name: sharedTitle}, {PID: 9, ID: "s9", Name: sharedTitle}}
-	w.sameTitles(both)
-	w.sameTitles(both)
+	w.SameTitles(both)
+	w.SameTitles(both)
 	if s := out.String(); strings.Count(s, "SAME TITLE") != 1 || !strings.Contains(s, "PID 3 session s3, PID 9 session s9") {
 		t.Errorf("output:\n%s", s)
 	}
-	w.sameTitles(both[1:])
+	w.SameTitles(both[1:])
 	if !strings.Contains(out.String(), "ENDED SAME TITLE") {
 		t.Errorf("no end once one session is left:\n%s", out)
 	}
@@ -141,6 +144,9 @@ func TestTheDoctorReportsASharedTitle(t *testing.T) {
 
 // A relay never starts a successor under a run name another live session
 // carries: it is refused with the reason, and no relay opens.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARelayRefusesATakenTitle(t *testing.T) {
 	a, _ := stubApp(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { *st = *handOverState(); return nil, nil }); err != nil {
@@ -156,7 +162,7 @@ func TestARelayRefusesATakenTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := guideRole.get(st); r.Relay != nil || !r.Holder.Is(supA) {
+	if r := guideRole.Get(st); r.Relay != nil || !r.Holder.Is(supA) {
 		t.Errorf("the refused relay changed the role: %+v", r)
 	}
 }

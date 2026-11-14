@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const suspendFixtureTask = "work"
@@ -27,15 +28,17 @@ func (f *suspendFixture) SuspendRecords(context.Context, time.Time) ([]machine.S
 	return f.records, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	w, out := onceWatch(t, nil)
-	w.standby = true
-	entry := w.now
+	w.Standby = true
+	entry := watchApp(w.Host).now
 	exit := entry.Add(2 * time.Hour)
 	worker := state.Party{Name: "fixture-worker", Session: "fixture-session"}
 	supervisor := state.Party{Name: "fixture-supervisor", Session: "fixture-supervisor-session"}
 	supervisedBy(t, w, supervisor, entry.Add(-time.Minute))
-	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: stateIdle}}, {Party: state.Party{Name: paramDone}, Task: "finished suspend fixture", Done: true}}
 		st.Timers = []state.Timer{{ID: 1, Due: entry.Add(time.Hour), What: "fixture timer"}, {ID: 2, Due: exit.Add(time.Hour), What: "later suspend timer"}}
 		return nil, nil
@@ -48,24 +51,24 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
 	calls := map[string]int{}
-	w.suspendDeliver = func(_ context.Context, wake suspendWake) error {
-		calls[wake.party.Name]++
-		if wake.party.Name == worker.Name && calls[worker.Name] == 1 {
+	w.SuspendDeliver = func(_ context.Context, wake watch.SuspendWake) error {
+		calls[wake.Party.Name]++
+		if wake.Party.Name == worker.Name && calls[worker.Name] == 1 {
 			return errors.New("temporary fixture failure")
 		}
 		return nil
 	}
-	w.suspends(t.Context(), entry.Add(-time.Minute), nil)
+	w.Suspends(t.Context(), entry.Add(-time.Minute), nil)
 	if len(calls) != 0 {
 		t.Fatal("recovered before resume")
 	}
 	fixture.records = []machine.SuspendRecord{{At: exit}}
-	w.suspends(t.Context(), entry, nil)
-	w.stand.inflight.Wait()
+	w.Suspends(t.Context(), entry, nil)
+	w.Stand.Inflight.Wait()
 	// Overlapping journal reads must not retry even an ambiguous delivery error.
 	fixture.records = []machine.SuspendRecord{{At: entry, Entry: true}, {At: exit}}
-	w.suspends(t.Context(), exit, nil)
-	w.stand.inflight.Wait()
+	w.Suspends(t.Context(), exit, nil)
+	w.Stand.Inflight.Wait()
 	if calls[worker.Name] != 1 || calls[supervisor.Name] != 1 || len(calls) != 2 {
 		t.Fatalf("deliveries: %v", calls)
 	}
@@ -75,26 +78,30 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRespectsDeskStop(t *testing.T) {
 	w, _ := onceWatch(t, nil)
-	w.standby = true
-	st, err := w.store.Read()
+	w.Standby = true
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A stopped desk must report gaps without scheduling recovery.
 	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: suspendFixtureTask}}
 	st.Stop = &state.Stop{Reason: "suspend fixture stop"}
-	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
-	if len(w.suspendRecovery) != 0 {
+	w.Resumed(st, nil, watchApp(w.Host).now, watchApp(w.Host).now.Add(time.Hour))
+	if len(w.SuspendRecovery) != 0 {
 		t.Fatal("stopped desk queued recovery")
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 	w, _ := onceWatch(t, nil)
-	w.standby = true
-	st, err := w.store.Read()
+	w.Standby = true
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,68 +110,74 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 		{Party: state.Party{Name: "suspend parked worker"}, Task: "wait", Park: &state.Park{}},
 		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: suspendFixtureTask},
 	}
-	w.resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, w.now, w.now.Add(time.Hour))
-	if len(w.suspendRecovery) != 1 || w.suspendRecovery[reviewedStoppedCase].party.Name != reviewedStoppedCase {
-		t.Fatalf("queued: %v", w.suspendRecovery)
+	w.Resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, watchApp(w.Host).now, watchApp(w.Host).now.Add(time.Hour))
+	if len(w.SuspendRecovery) != 1 || w.SuspendRecovery[reviewedStoppedCase].Party.Name != reviewedStoppedCase {
+		t.Fatalf("queued: %v", w.SuspendRecovery)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRestartsSupervisorService(t *testing.T) {
 	w, _ := onceWatch(t, nil)
-	w.standby = true
-	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: w.now, Entry: true}, {At: w.now.Add(time.Hour)}}}
+	w.Standby = true
+	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: watchApp(w.Host).now, Entry: true}, {At: watchApp(w.Host).now.Add(time.Hour)}}}
 	original := plat.Machine
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
 	starts := 0
-	w.stand.loopUnit = &loopService{
-		state: func(context.Context) string { return "suspend fixture inactive" },
-		start: func(context.Context) error { starts++; return nil },
+	w.Stand.LoopUnit = &watch.LoopService{
+		State: func(context.Context) string { return "suspend fixture inactive" },
+		Start: func(context.Context) error { starts++; return nil },
 	}
-	w.suspends(t.Context(), w.now.Add(-time.Minute), nil)
-	w.stand.inflight.Wait()
+	w.Suspends(t.Context(), watchApp(w.Host).now.Add(-time.Minute), nil)
+	w.Stand.Inflight.Wait()
 	if starts != 1 {
 		t.Fatalf("supervisor starts: %d", starts)
 	}
-	w.suspends(t.Context(), w.now, nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now, nil)
 	if starts != 1 {
 		t.Fatalf("duplicate supervisor recovery: %d", starts)
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendReportsEachCompletedGap(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{
-		{At: w.now.Add(-time.Hour)}, // exit without a known entry is ignored
-		{At: w.now, Entry: true},
-		{At: w.now.Add(time.Hour)},
-		{At: w.now.Add(2 * time.Hour), Entry: true},
-		{At: w.now.Add(3 * time.Hour)},
-		{At: w.now.Add(4 * time.Hour), Entry: true}, // no exit yet
+		{At: watchApp(w.Host).now.Add(-time.Hour)}, // exit without a known entry is ignored
+		{At: watchApp(w.Host).now, Entry: true},
+		{At: watchApp(w.Host).now.Add(time.Hour)},
+		{At: watchApp(w.Host).now.Add(2 * time.Hour), Entry: true},
+		{At: watchApp(w.Host).now.Add(3 * time.Hour)},
+		{At: watchApp(w.Host).now.Add(4 * time.Hour), Entry: true}, // no exit yet
 	}}
 	original := plat.Machine
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
-	w.suspends(t.Context(), w.now.Add(-time.Hour), nil)
-	w.suspends(t.Context(), w.now, nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now.Add(-time.Hour), nil)
+	w.Suspends(t.Context(), watchApp(w.Host).now, nil)
 	if got := strings.Count(out.String(), "SUSPENDED / RESUMED"); got != 2 {
 		t.Fatalf("gap lines: %d\n%s", got, out)
 	}
-	if len(w.suspendRecovery) != 0 {
+	if len(w.SuspendRecovery) != 0 {
 		t.Fatal("ordinary watch queued recovery")
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	w, out := onceWatch(t, nil)
-	w.standby = true
-	entry := w.now
+	w.Standby = true
+	entry := watchApp(w.Host).now
 	exit := entry.Add(time.Hour)
 	worker := state.Party{Name: "copy-worker", Session: bgID}
 	oldGuide := state.Party{Name: "Guide run 56", Session: "old-guide-session"}
 	newGuide := state.Party{Name: "Guide run 57", Session: "new-guide-session"}
 	supervisedBy(t, w, oldGuide, entry.Add(-time.Minute))
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: worker, Task: suspendFixtureTask}}
 		return nil, nil
 	}); err != nil {
@@ -175,27 +188,27 @@ func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	plat.Machine = fixture
 	defer func() { plat.Machine = original }()
 	calls := map[string]int{}
-	w.suspendDeliver = func(_ context.Context, wake suspendWake) error {
-		calls[wake.party.Name]++
-		if wake.party.Name == worker.Name {
+	w.SuspendDeliver = func(_ context.Context, wake watch.SuspendWake) error {
+		calls[wake.Party.Name]++
+		if wake.Party.Name == worker.Name {
 			return fmt.Errorf("waking %s: %w 9e3d7b10 of session %s; stopped the copy", worker.Name, errResumeStartedCopy, worker.Session)
 		}
-		if wake.party.Name == oldGuide.Name {
+		if wake.Party.Name == oldGuide.Name {
 			return errors.New("temporary guide failure before handover")
 		}
 		return nil
 	}
-	w.suspends(t.Context(), entry.Add(-time.Minute), nil)
-	w.stand.inflight.Wait()
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	w.Suspends(t.Context(), entry.Add(-time.Minute), nil)
+	w.Stand.Inflight.Wait()
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, At: exit})
 		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: exit}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.suspends(t.Context(), exit, nil)
-	w.stand.inflight.Wait()
+	w.Suspends(t.Context(), exit, nil)
+	w.Stand.Inflight.Wait()
 	if calls[worker.Name] != 1 || calls[oldGuide.Name] != 1 || calls[newGuide.Name] != 0 {
 		t.Fatalf("deliveries: %v", calls)
 	}
@@ -213,6 +226,8 @@ func (m staticProcMachine) Processes() (*proc.Table, error) {
 	return m.table, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 	const (
 		origID            = "a2e980cb-6c26-411f-a3fd-45bc0a0ebde0"
@@ -233,10 +248,10 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		dir := t.TempDir()
 		guide := state.Party{Name: guideName56, Session: origID}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
+			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.Name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 56}
 			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: guide}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.Name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -287,10 +302,10 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		dir := t.TempDir()
 		guide := state.Party{Name: guideName56, Session: origID}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
+			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.Name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 56}
 			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: guide}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.Name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -345,10 +360,10 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		dir := t.TempDir()
 		guide := state.Party{Name: guideName51, Session: origID}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
+			st.Starts = []state.Start{{Party: guide, Mode: state.ModeBypass, Role: guideRole.Name, Dir: dir, Background: true, At: a.now.Add(-time.Hour)}}
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}, Run: 51}
 			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: guide}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.Name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -403,17 +418,17 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 		hostID := "local_" + origID
 		seed := state.Party{Name: guideName56, Session: origID, HostSession: hostID}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Starts = []state.Start{{Party: seed, Mode: state.ModeBypass, Role: guideRole.name, At: a.now.Add(-time.Hour)}}
+			st.Starts = []state.Start{{Party: seed, Mode: state.ModeBypass, Role: guideRole.Name, At: a.now.Add(-time.Hour)}}
 			st.Guide = &state.Role{
 				Relay: &state.Relay{To: seed, At: a.now.Add(-time.Minute), Expires: a.now.Add(10 * time.Minute)},
 				Run:   56,
 			}
-			_, evs, err := guideRole.start(st, state.Party{Name: guideName56, Session: origID}, false, false, a.now)
+			_, evs, err := guideRole.Take(st, state.Party{Name: guideName56, Session: origID}, false, false, a.now)
 			if err != nil {
 				return nil, err
 			}
 			st.GuideWork = []state.GuideWork{{ID: 1, Kind: paramTask, Text: resumedWorkText, Due: a.now, By: seed}}
-			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
+			st.Notes = []state.Note{{ID: 1152, Kind: state.NoteDecision, For: guideRole.Name, Text: resumedNoteText, At: a.now.Add(-time.Minute)}}
 			return evs, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -446,13 +461,16 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 // A relay can finish after recovery is queued but before the serialized slot
 // becomes available. Neither the old guide's roster entry nor its queued guide
 // wake may resume it, and the successor's roster entry must not double-deliver.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 	w, _ := onceWatch(t, nil)
-	w.standby = true
+	w.Standby = true
 	oldGuide := state.Party{Name: "Guide run 61", Session: "suspend-old-guide"}
 	newGuide := state.Party{Name: "Guide run 62", Session: "suspend-new-guide"}
-	supervisedBy(t, w, oldGuide, w.now.Add(-time.Minute))
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+	supervisedBy(t, w, oldGuide, watchApp(w.Host).now.Add(-time.Minute))
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{
 			{Party: oldGuide, Task: suspendFixtureTask},
 			{Party: newGuide, Task: suspendFixtureTask},
@@ -461,40 +479,40 @@ func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.resumed(st, nil, w.now.Add(-time.Hour), w.now)
-	w.stand.busy.Store(true)
-	w.recoverSuspend(t.Context())
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, By: newGuide, At: w.now, Taken: w.now})
-		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: w.now}
+	w.Resumed(st, nil, watchApp(w.Host).now.Add(-time.Hour), watchApp(w.Host).now)
+	w.Stand.Busy.Store(true)
+	w.RecoverSuspend(t.Context())
+	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Relieved = append(st.Guide.Relieved, state.Relief{Party: oldGuide, By: newGuide, At: watchApp(w.Host).now, Taken: watchApp(w.Host).now})
+		st.Guide.Holder = &state.Supervisor{Party: newGuide, Since: watchApp(w.Host).now}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	calls := map[string]int{}
-	w.suspendDeliver = func(_ context.Context, wake suspendWake) error {
-		calls[wake.party.Session]++
+	w.SuspendDeliver = func(_ context.Context, wake watch.SuspendWake) error {
+		calls[wake.Party.Session]++
 		return nil
 	}
-	w.stand.busy.Store(false)
-	w.recoverSuspend(t.Context())
-	w.stand.inflight.Wait()
-	w.recoverSuspend(t.Context())
-	w.stand.inflight.Wait()
+	w.Stand.Busy.Store(false)
+	w.RecoverSuspend(t.Context())
+	w.Stand.Inflight.Wait()
+	w.RecoverSuspend(t.Context())
+	w.Stand.Inflight.Wait()
 	if len(calls) != 1 || calls[newGuide.Session] != 1 {
 		t.Fatalf("deliveries after relay: %v", calls)
 	}
 	// A later suspend must also ignore the stale relieved roster entry.
-	st, err = w.store.Read()
+	st, err = watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
-	if len(w.suspendRecovery) != 1 || !w.suspendRecovery[newGuide.Name].guide {
-		t.Fatalf("queued after relay: %v", w.suspendRecovery)
+	w.Resumed(st, nil, watchApp(w.Host).now, watchApp(w.Host).now.Add(time.Hour))
+	if len(w.SuspendRecovery) != 1 || !w.SuspendRecovery[newGuide.Name].Guide {
+		t.Fatalf("queued after relay: %v", w.SuspendRecovery)
 	}
 }

@@ -150,18 +150,21 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 
 // The watch's AGENTS STOPPED line tells an agent parked on a person apart
 // from one that ended on a wait again after its resume.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStoppedAgentsTellParkedFromEndedOnAWait(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
-	w.cfg.Guide.Person = personTimo
+	watchApp(w.Host).cfg.Guide.Person = personTimo
 	parked, again := staleAgent("Parked"), staleAgent("Again")
 	parked.Task, again.Task = "a rollout", "a proof"
-	again.AssignedAt = w.now.Add(-time.Hour)
-	again.ResumedWait, again.ResumedOn = w.now.Add(-10*time.Minute), `"Wait for CI"`
+	again.AssignedAt = watchApp(w.Host).now.Add(-time.Hour)
+	again.ResumedWait, again.ResumedOn = watchApp(w.Host).now.Add(-10*time.Minute), `"Wait for CI"`
 	st := &state.State{
 		Agents:  []state.Agent{parked, again},
 		Records: []state.Record{{Session: parked.Party, Waits: "Alex's go for the rollout"}},
 	}
-	w.stoppedAgents(st, nil)
+	w.StoppedAgents(st, nil)
 	s := out.String()
 	if !strings.Contains(s, `"Parked" (parked on a person: Alex's go for the rollout`) ||
 		!strings.Contains(s, `"Again" (ended on a wait again after its resume at `) || !strings.Contains(s, `on "Wait for CI"`) {

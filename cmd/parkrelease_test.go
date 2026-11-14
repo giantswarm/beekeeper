@@ -8,6 +8,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 func TestParseReleaseTarget(t *testing.T) {
@@ -24,6 +25,8 @@ func TestParseReleaseTarget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkReleaseAvailability(t *testing.T) {
 	w := parkingWatch(t, nil)
 	const target = "example/tool@v1.2.3"
@@ -34,11 +37,11 @@ func TestParkReleaseAvailability(t *testing.T) {
 	if ag.Park == nil || ag.Park.On != target || ag.Park.ReviewHead != "" {
 		t.Fatalf("park %+v", ag.Park)
 	}
-	if got := parkedText(ag.Park, w.now); !strings.Contains(got, target) {
+	if got := parkedText(ag.Park, watchApp(w.Host).now); !strings.Contains(got, target) {
 		t.Fatal(got)
 	}
-	old := readParkRelease
-	t.Cleanup(func() { readParkRelease = old })
+	old := watch.ReadParkRelease
+	t.Cleanup(func() { watch.ReadParkRelease = old })
 	for _, tc := range []struct {
 		name, raw string
 		err       error
@@ -52,25 +55,25 @@ func TestParkReleaseAvailability(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			readParkRelease = func(_ context.Context, repo, version string) ([]byte, error) {
+			watch.ReadParkRelease = func(_ context.Context, repo, version string) ([]byte, error) {
 				calls++
 				if repo != "example/tool" || version != "v1.2.3" {
 					t.Fatalf("target %s %s", repo, version)
 				}
 				return []byte(tc.raw), tc.err
 			}
-			st, _ := w.store.Read()
+			st, _ := watchApp(w.Host).store.Read()
 			st.Parks = append(st.Parks, state.Park{By: state.Party{Name: "off roster", Session: "release-session"}, On: target})
-			settled := w.settledParks(context.Background(), st)
+			settled := w.SettledParks(context.Background(), st)
 			if len(settled) != tc.want || calls != 1 {
 				t.Fatalf("settled %+v, calls %d", settled, calls)
 			}
 			if tc.want > 0 {
-				lines, _ := markResumable(st, settled, true, w.now)
+				lines, _ := watch.MarkResumable(st, settled, true, watchApp(w.Host).now)
 				if len(lines) != 2 || !strings.Contains(lines[0], "is available") {
 					t.Fatalf("wake lines %v", lines)
 				}
-				if again := w.settledParks(context.Background(), st); len(again) != 0 {
+				if again := w.SettledParks(context.Background(), st); len(again) != 0 {
 					t.Fatalf("repeated wake: %+v", again)
 				}
 			}
@@ -90,30 +93,32 @@ func TestServeReleaseTarget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReleaseParkWakesOnce(t *testing.T) {
 	w := parkingWatch(t, nil)
-	w.cfg.Agents.AutoResume = true
+	watchApp(w.Host).cfg.Agents.AutoResume = true
 	woke := stubWakes(t)
 	const target = "example/tool@v1.2.3"
 	if err := park(t, w, "--on", target, "release to promote"); err != nil {
 		t.Fatal(err)
 	}
-	old := readParkRelease
-	t.Cleanup(func() { readParkRelease = old })
+	old := watch.ReadParkRelease
+	t.Cleanup(func() { watch.ReadParkRelease = old })
 	available := false
-	readParkRelease = func(context.Context, string, string) ([]byte, error) {
+	watch.ReadParkRelease = func(context.Context, string, string) ([]byte, error) {
 		if available {
 			return []byte(`{"verdict":"available","exitCode":0}`), nil
 		}
 		return []byte(`{"verdict":"timeout","exitCode":2}`), nil
 	}
-	w.pending(context.Background(), nil)
+	w.Pending(context.Background(), nil)
 	if len(*woke) != 0 {
 		t.Fatalf("woke before availability: %v", *woke)
 	}
 	available = true
 	for range 3 {
-		w.pending(context.Background(), nil)
+		w.Pending(context.Background(), nil)
 	}
 	assertFreshQueue(t, w, *woke, "release "+target+" is available")
 

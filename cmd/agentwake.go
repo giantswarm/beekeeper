@@ -842,7 +842,7 @@ func (a *app) roleTarget(name string) (string, error) {
 	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, now)
 	}
-	return relayAddress(rl.get(st), rl, sessions, liveSocket, now, rl.cfg(a.cfg).RelayTTL.Duration)
+	return relayAddress(rl.Get(st), rl, sessions, liveSocket, now, rl.Cfg(a.cfg).RelayTTL.Duration)
 }
 
 // liveSocket is the peer socket of the CLI pid, "" when it has none.
@@ -879,16 +879,16 @@ func holderRole(st *state.State, name string) string {
 		return ""
 	}
 	for _, rl := range roles {
-		h := rl.get(st).Holder
+		h := rl.Get(st).Holder
 		if h == nil {
 			continue
 		}
 		if strings.EqualFold(h.Name, name) || h.Session == name || h.HostSession == name {
-			return rl.name
+			return rl.Name
 		}
 		for _, ag := range st.Agents {
 			if (strings.EqualFold(ag.Name, name) || ag.Session == name) && ag.Is(h.Party) {
-				return rl.name
+				return rl.Name
 			}
 		}
 	}
@@ -907,7 +907,7 @@ func relayAddress(r state.Role, rl role, sessions []*claude.Session, sock func(p
 	if r.Holder != nil && rel != nil && !rel.Taken.IsZero() && rel.To.Is(r.Holder.Party) && now.Sub(rel.Taken) < window {
 		if s, ok := claude.Live(sessions, r.Holder.Party); ok && sock(s.PID) == "" {
 			return "", fmt.Errorf("the %s is %q since %s, whose CLI %d takes no message yet (its first turn runs headless, or the desktop is warming its CLI): send again in a minute; the relieved %q gets none",
-				rl.name, r.Holder.Name, clock(now, rel.Taken), s.PID, rel.From.Name)
+				rl.Name, r.Holder.Name, clock(now, rel.Taken), s.PID, rel.From.Name)
 		}
 	}
 	return roleAddress(r.Holder, rl, sessions, sock)
@@ -920,7 +920,7 @@ func relayAddress(r state.Role, rl role, sessions []*claude.Session, sock func(p
 // its CLI by session id, so a shared title never makes the role ambiguous.
 func roleAddress(holder *state.Supervisor, rl role, sessions []*claude.Session, sock func(pid int) string) (string, error) {
 	if holder == nil {
-		return "", fmt.Errorf("no session holds the %s's role (beekeeper %s status): the message has nobody to go to", rl.name, rl.name)
+		return "", fmt.Errorf("no session holds the %s's role (beekeeper %s status): the message has nobody to go to", rl.Name, rl.Name)
 	}
 	if s, ok := claude.Live(sessions, holder.Party); ok {
 		name, err := uniqueName(sessions, s)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -93,6 +94,8 @@ func TestEndedReleasedDeliveryDoesNotStall(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestEndedWorkerTimersAreCancelled(t *testing.T) {
 	now := time.Now().UTC()
 	by := state.Party{Name: abandonName, Session: abandonSession}
@@ -113,7 +116,7 @@ func TestEndedWorkerTimersAreCancelled(t *testing.T) {
 			{ID: 6, Wake: handedBy.Session, Due: now.Add(time.Hour)},
 		},
 	}
-	_, events, fires, changed := settleTimers(st, nil, now)
+	_, events, fires, changed := watch.SettleTimers(st, nil, now)
 	if !changed || len(events) != 4 || len(fires) != 0 || len(st.Timers) != 2 || st.Timers[0].ID != 3 || st.Timers[1].ID != 6 {
 		t.Fatalf("timers=%+v events=%+v fires=%+v", st.Timers, events, fires)
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const (
@@ -295,6 +296,8 @@ func TestReviveBackgroundAlreadyRunning(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 	const (
 		resumedID            = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
@@ -309,7 +312,7 @@ func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 			a, _ := stubApp(t)
 			p := state.Party{Session: resumedID, Name: "Guide run 56"}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Starts = []state.Start{{Party: p, Background: true, Role: guideRole.name}}
+				st.Starts = []state.Start{{Party: p, Background: true, Role: guideRole.Name}}
 				st.Guide = &state.Role{Holder: &state.Supervisor{Party: p}, Run: 56}
 				return nil, nil
 			}); err != nil {
@@ -415,6 +418,9 @@ func TestTakesRelayByRunName(t *testing.T) {
 // A background successor starts as a background session; its relay names
 // its run, then the id the claude daemon chose, and its brief has it take
 // the role and go on in the same turn.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestBackgroundSuccessor(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -429,7 +435,7 @@ func TestBackgroundSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if to.Session != bgID || to.HostSession != "" || to.Name != guideRole.runName(12) {
+	if to.Session != bgID || to.HostSession != "" || to.Name != guideRole.RunName(12) {
 		t.Errorf("successor %+v", to)
 	}
 	if len(*calls) != 1 {
@@ -704,25 +710,28 @@ func stubFresh(t *testing.T, live *[]*claude.Session) {
 }
 
 // pollStop runs the watch's stop step on the state read now and live.
-func pollStop(t *testing.T, w *watcher, live []*claude.Session) {
+func pollStop(t *testing.T, w *watch.Watcher, live []*claude.Session) {
 	t.Helper()
-	st, err := w.store.Read()
+	st, err := watchApp(w.Host).store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.stopParked(t.Context(), st, live)
+	w.StopParked(t.Context(), st, live)
 }
 
 // A parked background session costs no memory: once its turn ended the
 // watch stops it (claude stop, once), and the park's resume continues it
 // from its transcript (claude --bg --resume) with what settled the wait.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	dir := t.TempDir()
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, dir)
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now}}
 	stubFresh(t, &live)
 	calls := stubBackground(t, "")
@@ -730,7 +739,7 @@ func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Fatalf("stopped in its turn: %q", argvs(*calls))
 	}
-	w.now = a.now.Add(time.Minute)
+	watchApp(w.Host).now = a.now.Add(time.Minute)
 	pollStop(t, w, live)
 	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:], []string{bgStopCmd, bgShortID}) {
 		t.Fatalf("calls %q", argvs(*calls))
@@ -761,13 +770,16 @@ func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 // A resume that lands between the watch's look and its stop (it ended the
 // park and sent its message to the running CLI) keeps the session running:
 // the stop looks again under the session's lock and finds no park.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, t.TempDir())
 	a.now = a.now.Add(time.Minute)
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, PID: 4242, LastActive: a.now.Add(-time.Hour)}}
 	stubFresh(t, &live)
 	calls := stubBackground(t, "")
@@ -779,7 +791,7 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 	if err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, bgName); err != nil || len(*woke) != 0 {
 		t.Fatalf("resume: %v, woke %v", err, *woke)
 	}
-	w.stopParked(t.Context(), seen, live)
+	w.StopParked(t.Context(), seen, live)
 	if len(*calls) != 1 {
 		t.Errorf("the parked resident did not stop after queuing its continuation: %q", argvs(*calls))
 	}
@@ -787,7 +799,7 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 	if _, err := a.park(p, "", "the next review"); err != nil {
 		t.Fatal(err)
 	}
-	w.stopParked(t.Context(), seen, live)
+	w.StopParked(t.Context(), seen, live)
 	if len(*calls) != 1 {
 		t.Errorf("stopped on a park it did not see: %q", argvs(*calls))
 	}
@@ -800,12 +812,15 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 // A wake that comes while the stop runs waits for it, then resumes the
 // stopped session (claude --bg --resume) instead of sending to the CLI the
 // stop ends; a wake just made keeps the session running for stewardQuiet.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, t.TempDir())
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
 	stubFresh(t, &live)
 	stubBackground(t, "")
@@ -862,6 +877,9 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 
 // A stop that fails leaves the session parked and running, says so, and is
 // tried again on the next poll.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundStopFails(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -881,7 +899,7 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 		tries++
 		return "no such session", errors.New("exit status 1")
 	}
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
 	stubFresh(t, &live)
 	for range 2 {
@@ -894,13 +912,16 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 
 // A parked background session keeps events for a fresh worker; it is never
 // resumed and its idle resident can still be stopped to release memory.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	dir := t.TempDir()
 	p := state.Party{Session: bgID, Name: bgName}
 	parkedBackground(t, a, p, dir)
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "-w", bgID+".jsonl")
 	parkedTurn := `{"type":"user","cwd":"` + dir + `"}` + "\n" +
 		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"parked"}]}}` + "\n"

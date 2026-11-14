@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 // graphqlRefusedText is GitHub's refusal of a GraphQL call while its
@@ -173,15 +174,18 @@ func TestBudgetRereadsAReadingPastItsReset(t *testing.T) {
 }
 
 // The watch says a GraphQL refusal once, with the callers, and its end once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	refuse := true
 	refusingGitHub(t, &refuse)
 	a, out := budgetApp(t)
 	a.cfg.Merge.BudgetFresh.Duration = 0
 	a.cfg.Watch.Repeat.Duration = time.Hour
-	w := &watcher{app: a, last: map[string]time.Time{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}}
 	for range 2 {
-		w.budget(context.Background(), time.Now())
+		w.Budget(context.Background(), time.Now())
 	}
 	if n := strings.Count(out.String(), "GRAPHQL REFUSED"); n != 1 {
 		t.Errorf("the watch said the refusal %d times, want once:\n%s", n, out)
@@ -190,7 +194,7 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 		t.Errorf("the refusal names no callers:\n%s", out)
 	}
 	refuse = false
-	w.budget(context.Background(), time.Now())
+	w.Budget(context.Background(), time.Now())
 	if !strings.Contains(out.String(), "ENDED GRAPHQL REFUSED") {
 		t.Errorf("the refusal's end was not said:\n%s", out)
 	}

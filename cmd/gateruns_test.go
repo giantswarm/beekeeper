@@ -53,9 +53,12 @@ func detachedWait(t *testing.T, dir string, owner state.Party) (string, int) {
 // gate runs lists a detached release wait with its owner, command, start
 // and merge-child; gate stop ends it within seconds, logs who stopped it
 // and leaves the stop for the merge-child's outcome.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGateStopEndsADetachedReleaseWait(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := watchApp(w.Host)
 	base, child := detachedWait(t, a.store.Dir(), four)
 	finished, _ := detachedWait(t, a.store.Dir(), four)
 	if err := os.WriteFile(finished+".rc", []byte("0"), 0o600); err != nil {
@@ -102,11 +105,11 @@ func TestGateStopEndsADetachedReleaseWait(t *testing.T) {
 // place too. The queued run's files under runs/ are the merge's, not a
 // wait of their own.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := watchApp(w.Host)
 	dir := a.store.Dir()
 	stubPulls(t, map[int]github.Pull{1: {State: github.Open}})
 	child := hungChild(t, dir, hungRepo, 1)
@@ -166,8 +169,8 @@ func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 // A wait gate stop ended tells its owner who stopped it, and nothing is
 // owed to an owner who stopped it.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAStoppedWaitsOutcomeNamesTheStopper(t *testing.T) {
 	r := childResult{spec: gate.ChildSpec{Argv: strings.Fields(releaseWaitCmd), Owner: four}, rc: 128 + int(syscall.SIGTERM),
 		stop: syscall.SIGTERM, stoppedBy: state.Party{Session: "s9", Name: supervisorName}}
@@ -182,8 +185,8 @@ func TestAStoppedWaitsOutcomeNamesTheStopper(t *testing.T) {
 	}
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	r.stoppedBy = four
-	w.tellOwner(t.Context(), r)
-	if st, err := w.store.Read(); err != nil || len(st.Owed) != 0 {
+	watchApp(w.Host).tellOwner(t.Context(), r)
+	if st, err := watchApp(w.Host).store.Read(); err != nil || len(st.Owed) != 0 {
 		t.Errorf("owed to the owner who stopped it: %+v (%v)", st.Owed, err)
 	}
 }
@@ -215,11 +218,11 @@ func TestGateRoutesItsSubcommands(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	dir := w.store.Dir()
+	dir := watchApp(w.Host).store.Dir()
 	now := time.Now().UTC()
 	for _, tc := range []struct {
 		name   string
@@ -256,7 +259,7 @@ func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 					if err != nil || !strings.Contains(string(raw), `"phase":"dead"`) {
 						t.Fatalf("JSON: %s, %v", raw, err)
 					}
-					if _, err := w.gateStop(four, r.ID); Code(err) != ExitRefused {
+					if _, err := watchApp(w.Host).gateStop(four, r.ID); Code(err) != ExitRefused {
 						t.Fatalf("dead stop: %v", err)
 					}
 				}
@@ -342,9 +345,11 @@ func TestWatchCleanupRetiresOnlyOldDeadRuns(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGateRunsRendersDeadWait(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	a := w.app
+	a := watchApp(w.Host)
 	base, pid := detachedWait(t, a.store.Dir(), four)
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	if !eventually(5*time.Second, func() bool { return !proc.Alive(pid) }) {

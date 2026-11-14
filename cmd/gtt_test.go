@@ -4,8 +4,11 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGTTLine(t *testing.T) {
 	gpus := []machine.GPU{{Device: "card1", GTTUsedMiB: 43008, GTTTotalMiB: 44068, VRAMUsedMiB: 8000, VRAMTotMiB: 8192}}
 	models := []machine.HostModel{
@@ -22,7 +25,7 @@ func TestGTTLine(t *testing.T) {
 	if gttLine(nil, models) != "" {
 		t.Error("a machine without amdgpu has a GTT line")
 	}
-	if because("") != "" || because("x") != "; cause: x" {
+	if watch.Because("") != "" || watch.Because("x") != "; cause: x" {
 		t.Error("because")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
 const claimSupervisor = "Supervisor"
@@ -202,16 +203,16 @@ func claimAgent(t *testing.T, a *app) {
 func settleParks(t *testing.T, a *app) {
 	t.Helper()
 	a.cfg.Agents.AutoResume = true
-	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	w := &watch.Watcher{Host: a, Last: map[string]time.Time{}, Reported: map[string]bool{}}
 	for range 2 {
 		st, err := a.store.Read()
 		if err != nil {
 			t.Fatal(err)
 		}
-		w.autoResume(context.Background(), st)
-		parks := w.settledParks(context.Background(), st)
+		w.AutoResume(context.Background(), st)
+		parks := w.SettledParks(context.Background(), st)
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			_, evs := markResumable(st, parks, true, a.now)
+			_, evs := watch.MarkResumable(st, parks, true, a.now)
 			return evs, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -223,6 +224,9 @@ func settleParks(t *testing.T, a *app) {
 // the agent on the lease and exits 3; no process waits. The watch leaves it
 // parked while the lease is held and wakes it once, with the words to claim
 // it, when the holder released it and its grant is first.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
 	claimAgent(t, a)
@@ -245,7 +249,7 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	}
 	settleParks(t, a)
 	settleParks(t, a)
-	assertFreshQueue(t, &watcher{app: a}, *woke, "free and yours")
+	assertFreshQueue(t, &watch.Watcher{Host: a}, *woke, "free and yours")
 
 	if out, err := runLease(a, "claim", labOne, "-p", "my proof"); err != nil || !strings.HasPrefix(out, "held by you since") {
 		t.Errorf("the claim after the wake: %q, %v", out, err)
@@ -253,6 +257,9 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 }
 
 // A refused claim with --park parks nothing: no grant waits for it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
 	a := claimApp(t)
 	claimAgent(t, a)
@@ -261,7 +268,7 @@ func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, "refused: graveler is held") || !strings.Contains(out, "\nnot parked: no grant of graveler to you waits") {
 		t.Errorf("a refused claim with --park: %q, exit %d", out, Code(err))
 	}
-	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil {
+	if ag := agentOf(t, &watch.Watcher{Host: a}); ag.Park != nil {
 		t.Errorf("parked on a refused claim: %+v", ag.Park)
 	}
 }
