@@ -72,7 +72,7 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	headless := succ
 	headless.HostSession = ""
 	taken := at.Add(10 * time.Second)
-	if _, _, err := guideRole.Start(st, headless, true, false, taken); err != nil {
+	if _, _, err := guideRole.Take(st, headless, true, false, taken); err != nil {
 		t.Fatal(err)
 	}
 	if h := guideRole.Get(st).Holder; h.HostSession != succ.HostSession {
@@ -109,7 +109,7 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 	if _, _, err := guideRole.Relay(st, out, succ, at, window); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.Start(st, succ, true, false, at.Add(10*time.Second)); err != nil {
+	if _, _, err := guideRole.Take(st, succ, true, false, at.Add(10*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	sessions := []*claude.Session{

@@ -53,13 +53,13 @@ func TestRelayMovesTheRole(t *testing.T) {
 		t.Fatalf("relay: %q, %v", msg, err)
 	}
 	log = append(log, evs...)
-	if _, _, err := guideRole.Start(st, agentC, true, false, relayNow); Code(err) != ExitRefused || !strings.Contains(err.Error(), `its relay names "Guide run 12", not you`) {
+	if _, _, err := guideRole.Take(st, agentC, true, false, relayNow); Code(err) != ExitRefused || !strings.Contains(err.Error(), `its relay names "Guide run 12", not you`) {
 		t.Fatalf("an unnamed start was not refused: %v", err)
 	}
 	if relievedIn(st.GuideRole(), supA) != nil {
 		t.Fatal("relieved before the successor started")
 	}
-	msg, evs, err = guideRole.Start(st, supB, true, false, relayNow.Add(time.Minute))
+	msg, evs, err = guideRole.Take(st, supB, true, false, relayNow.Add(time.Minute))
 	if err != nil || !strings.Contains(msg, `relieving "Guide run 11"`) || strings.Contains(msg, "grant") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
@@ -98,7 +98,7 @@ func TestRelayExpiresAndCancels(t *testing.T) {
 	if lines, _ := guideRole.FireRelay(st, relayNow.Add(time.Minute)); len(lines) != 0 {
 		t.Fatalf("open relay reported: %q", lines)
 	}
-	if _, _, err := guideRole.Start(st, supB, true, false, later); Code(err) != ExitRefused || !strings.Contains(err.Error(), "its relay to you expired") {
+	if _, _, err := guideRole.Take(st, supB, true, false, later); Code(err) != ExitRefused || !strings.Contains(err.Error(), "its relay to you expired") {
 		t.Fatalf("an expired relay was taken: %v", err)
 	}
 	if !st.Guide.Holder.Is(supA) {
@@ -118,10 +118,10 @@ func TestRelayExpiresAndCancels(t *testing.T) {
 	if err != nil || st.Guide.Relay != nil || len(evs) != 1 || !strings.Contains(msg, "cancelled") {
 		t.Fatalf("cancel: %q, %v", msg, err)
 	}
-	if _, _, err := guideRole.Start(st, supB, true, false, later); Code(err) != ExitRefused {
+	if _, _, err := guideRole.Take(st, supB, true, false, later); Code(err) != ExitRefused {
 		t.Fatalf("a cancelled relay was taken: %v", err)
 	}
-	if _, _, err := guideRole.Start(st, supB, false, false, later); err != nil || !st.Guide.Holder.Is(supB) {
+	if _, _, err := guideRole.Take(st, supB, false, false, later); err != nil || !st.Guide.Holder.Is(supB) {
 		t.Fatalf("a start over a gone guide: %v", err)
 	}
 }
@@ -149,7 +149,7 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 		return err
 	}
 	start := func(who state.Party, at time.Duration) error {
-		_, _, err := guideRole.Start(st, who, true, false, relayNow.Add(at))
+		_, _, err := guideRole.Take(st, who, true, false, relayNow.Add(at))
 		return err
 	}
 	if err := relay(supA, supB, 0); err != nil || relieved(supA) != nil {
@@ -230,7 +230,7 @@ func TestRestartGraceThroughACLIRestart(t *testing.T) {
 	if sv := read(time.Hour+grace, nil); !sv.Down() || !sv.Gone.Equal(relayNow.Add(time.Hour)) {
 		t.Fatalf("down: %+v", sv)
 	}
-	if _, _, err := guideRole.Start(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
+	if _, _, err := guideRole.Take(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if sv := read(2*time.Hour, nil); !sv.Restarting() || !sv.Gone.Equal(relayNow.Add(2*time.Hour)) {

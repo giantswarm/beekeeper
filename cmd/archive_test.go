@@ -154,7 +154,7 @@ func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.Start(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
+	if _, _, err := guideRole.Take(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	st.Archives, st.ArchivesSeeded, st.FinishedSeeded = nil, true, true
@@ -285,7 +285,7 @@ func TestRelievedRunStaysThePersons(t *testing.T) {
 	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	msg, _, err := guideRole.Start(st, supB, true, false, relayNow.Add(time.Minute))
+	msg, _, err := guideRole.Take(st, supB, true, false, relayNow.Add(time.Minute))
 	if err != nil || !strings.Contains(msg, "stays in the person's session list until they archive it") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
@@ -329,10 +329,10 @@ func TestTakenOverGuideStaysThePersons(t *testing.T) {
 	if keepsRole(st, old) {
 		t.Fatal("keepsRole before it guided")
 	}
-	if _, _, err := guideRole.Start(st, old, false, false, relayNow); err != nil {
+	if _, _, err := guideRole.Take(st, old, false, false, relayNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.Start(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
+	if _, _, err := guideRole.Take(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if holdsRole(st, old) || !keepsRole(st, old) {

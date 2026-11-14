@@ -51,10 +51,10 @@ func (rl Role) otherRole(st *state.State, p state.Party) (Role, bool) {
 	return Role{}, false
 }
 
-// Start makes me rl's holder in st: through a relay that names me, over a
+// Take makes me rl's holder in st: through a relay that names me, over a
 // recorded holder whose session is gone, or with takeOver. prevLive says
 // whether the recorded holder's session runs.
-func (rl Role) Start(st *state.State, me state.Party, prevLive, takeOver bool, now time.Time) (string, []state.Event, error) {
+func (rl Role) Take(st *state.State, me state.Party, prevLive, takeOver bool, now time.Time) (string, []state.Event, error) {
 	if o, ok := rl.otherRole(st, me); ok {
 		return "", nil, Cmd.Refused("you are the %s: a session holds one role; `beekeeper %s stop` or relay it first", o.Name, o.Name)
 	}

@@ -21,7 +21,7 @@ func TestBroadcastSkipsRelievedRosterRun(t *testing.T) {
 	if _, _, err := guideRole.Relay(st, from, to, now, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := guideRole.Start(st, to, true, false, now.Add(time.Minute)); err != nil {
+	if _, _, err := guideRole.Take(st, to, true, false, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	for _, ag := range st.Agents {

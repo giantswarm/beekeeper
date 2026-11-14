@@ -423,7 +423,7 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 				Relay: &state.Relay{To: seed, At: a.now.Add(-time.Minute), Expires: a.now.Add(10 * time.Minute)},
 				Run:   56,
 			}
-			_, evs, err := guideRole.Start(st, state.Party{Name: guideName56, Session: origID}, false, false, a.now)
+			_, evs, err := guideRole.Take(st, state.Party{Name: guideName56, Session: origID}, false, false, a.now)
 			if err != nil {
 				return nil, err
 			}

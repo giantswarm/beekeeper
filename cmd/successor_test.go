@@ -73,18 +73,18 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 // The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStartNumbersTheRun(t *testing.T) {
 	st := handOverState() // "Guide run 11" guides; its session is gone
-	msg, _, err := guideRole.Start(st, agentC, false, false, relayNow)
+	msg, _, err := guideRole.Take(st, agentC, false, false, relayNow)
 	if err != nil || st.Guide.Run != 12 || !strings.Contains(msg, `"Agent three" guides now as Guide run 12`) {
 		t.Fatalf("an untitled start: %q, run %d, %v", msg, st.Guide.Run, err)
 	}
-	if _, _, err := guideRole.Start(st, agentC, true, false, relayNow.Add(time.Minute)); err != nil || st.Guide.Run != 12 {
+	if _, _, err := guideRole.Take(st, agentC, true, false, relayNow.Add(time.Minute)); err != nil || st.Guide.Run != 12 {
 		t.Fatalf("a restart: run %d, %v", st.Guide.Run, err)
 	}
 	next := state.Party{Session: "sN", HostSession: "local_N", Name: supThirteen}
 	if _, _, err := guideRole.Relay(st, agentC, next, relayNow.Add(2*time.Minute), 15*time.Minute); err != nil || st.Guide.Run != 13 {
 		t.Fatalf("the relay: run %d, %v", st.Guide.Run, err)
 	}
-	msg, _, err = guideRole.Start(st, next, true, false, relayNow.Add(3*time.Minute))
+	msg, _, err = guideRole.Take(st, next, true, false, relayNow.Add(3*time.Minute))
 	if err != nil || st.Guide.Run != 13 || strings.Contains(msg, " as ") {
 		t.Fatalf("the successor's start: %q, run %d, %v", msg, st.Guide.Run, err)
 	}

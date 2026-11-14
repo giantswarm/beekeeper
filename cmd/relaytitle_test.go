@@ -24,7 +24,7 @@ func TestRelayKeepsRunNameAfterDesktopCLIRestarts(t *testing.T) {
 			if _, _, err := rl.Relay(st, out, next, relayNow, time.Minute); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := rl.Start(st, next, true, false, relayNow); err != nil {
+			if _, _, err := rl.Take(st, next, true, false, relayNow); err != nil {
 				t.Fatal(err)
 			}
 			for i, name := range []string{next.Name, "workspace-12", "", "workspace-13"} {

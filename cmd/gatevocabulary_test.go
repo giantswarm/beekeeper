@@ -9,12 +9,12 @@ import (
 // TestGateVocabulary keeps the copy the gate has of the command's names equal to
 // the command's own: it cannot import them.
 //
-// control: none: this guards the new internal/gate vocabulary after a code-only extraction.
-// The merge base has no internal/gate package or vocabulary to compare.
+// control: none: shares the vocabClaudeComm key constant with the new watch vocabulary
+// test without changing the checked value, and package cmd does not build on the merge base.
 func TestGateVocabulary(t *testing.T) {
 	own := map[string]any{
 		"ExitCentral":    ExitCentral,
-		"claudeComm":     claudeComm,
+		vocabClaudeComm:  claudeComm,
 		"holdParkFlag":   holdParkFlag,
 		"paramReason":    paramReason,
 		"paramRepo":      paramRepo,

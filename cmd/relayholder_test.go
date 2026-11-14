@@ -30,7 +30,7 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 		if _, _, err := guideRole.Relay(st, from, to, a.now, 15*time.Minute); err != nil {
 			return nil, err
 		}
-		_, evs, err := guideRole.Start(st, to, true, false, a.now.Add(time.Minute))
+		_, evs, err := guideRole.Take(st, to, true, false, a.now.Add(time.Minute))
 		return evs, err
 	}); err != nil {
 		t.Fatal(err)

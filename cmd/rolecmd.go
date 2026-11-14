@@ -153,7 +153,7 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		sv := readHolder(rl.Get(st), sessions, a.now, rl.Cfg(a.cfg).RestartGrace.Duration)
 		var evs []state.Event
 		prev := rl.Get(st).Holder
-		msg, evs, err = rl.Start(st, me, sv.Live || sv.Restarting(), takeOver, a.now)
+		msg, evs, err = rl.Take(st, me, sv.Live || sv.Restarting(), takeOver, a.now)
 		if err != nil {
 			return nil, err
 		}

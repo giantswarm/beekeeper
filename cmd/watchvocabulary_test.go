@@ -15,7 +15,7 @@ func TestWatchVocabulary(t *testing.T) {
 	own := map[string]any{
 		"ExitRelieved":          ExitRelieved,
 		"answerRecorded":        answerRecorded,
-		"claudeComm":            claudeComm,
+		vocabClaudeComm:         claudeComm,
 		"closedOvertaken":       closedOvertaken,
 		"configFlag":            configFlag,
 		"envTimerCommand":       envTimerCommand,
