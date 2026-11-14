@@ -25,7 +25,7 @@ func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
 		first, later int
 	}{
 		{failure: "", first: 9},
-		{failure: "revision"},
+		{failure: revisionStep},
 		{failure: "full inventory", first: 9, later: 9},
 	} {
 		t.Run("failure="+tc.failure, func(t *testing.T) {
@@ -46,7 +46,7 @@ func TestIdleInventoryGraphQLCallsBounded(t *testing.T) {
 			}
 			loop.ReadRepoPullRevision = func(_ context.Context, _, etag string) (string, bool, error) {
 				revisions++
-				if tc.failure == "revision" {
+				if tc.failure == revisionStep {
 					return "", false, errors.New("repository unavailable")
 				}
 				return "inventory-validator", etag != "", nil

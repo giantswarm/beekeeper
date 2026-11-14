@@ -401,13 +401,17 @@ func TestLoopPassAdmitsOnTheSavedReading(t *testing.T) {
 	}
 }
 
+// revisionStep is loop.LoopRevisionStep, the conditional REST read of a
+// repository's newest pull request. The tests keep their own copy so they
+// also build on a merge base that lacks it (Go-test control).
+const revisionStep = "revision"
+
 // The conditional REST read of a repository's newest pull request spends
 // no GraphQL: it is admitted on the saved reading and the background scans'
 // REST allowance, takes no budget reading and leaves the GraphQL allowance
 // alone. It still waits while that REST allowance is exhausted, with
 // github.floor enabled or disabled, and while the saved reading is under
-// the floor (#3769). The step is named by its value, so the test also
-// builds on a merge base without loop.LoopRevisionStep.
+// the floor (#3769).
 func TestLoopRevisionReadTakesNoBudgetReading(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -424,11 +428,9 @@ func TestLoopRevisionReadTakesNoBudgetReading(t *testing.T) {
 				t.Fatal("the revision read took a budget reading")
 				return github.Budget{}, nil
 			}
-			// loop.LoopRevisionStep
-			step := "revision"
 			runs := 0
 			read := func() error { runs++; return nil }
-			if err := r.a.loopGitHub(t.Context(), step, read); err != nil || runs != 1 {
+			if err := r.a.loopGitHub(t.Context(), revisionStep, read); err != nil || runs != 1 {
 				t.Fatalf("healthy saved reading: runs=%d err=%v, want the read admitted", runs, err)
 			}
 			var spend loopGraphQLSpend
@@ -441,7 +443,7 @@ func TestLoopRevisionReadTakesNoBudgetReading(t *testing.T) {
 			if err := r.a.store.WriteFile(loopRESTFile, exhausted); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.a.loopGitHub(t.Context(), step, read); !errors.Is(err, loop.ErrLoopLater) || runs != 1 {
+			if err := r.a.loopGitHub(t.Context(), revisionStep, read); !errors.Is(err, loop.ErrLoopLater) || runs != 1 {
 				t.Fatalf("exhausted REST allowance: runs=%d err=%v, want the read held", runs, err)
 			}
 			if tc.floor <= 0 {
@@ -456,7 +458,7 @@ func TestLoopRevisionReadTakesNoBudgetReading(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.a.loopGitHub(t.Context(), step, read); !errors.Is(err, loop.ErrLoopLater) || runs != 1 {
+			if err := r.a.loopGitHub(t.Context(), revisionStep, read); !errors.Is(err, loop.ErrLoopLater) || runs != 1 {
 				t.Fatalf("saved reading under github.floor: runs=%d err=%v, want the read held", runs, err)
 			}
 		})
