@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -33,7 +34,11 @@ var diskHoldingMin int64 = 100 << 20
 
 // keptReferencesUnknown keeps a candidate decided while some process's
 // references could not be read.
-const keptReferencesUnknown = "process references unknown"
+const (
+	keptReferencesUnknown   = "process references unknown"
+	keptCachesBuildsRunning = "caches: builds running"
+	keptCachesUnknown       = "caches: " + keptReferencesUnknown
+)
 
 // unknownReferences reports a scan that read every process but some: its
 // references are known for all but those, so only the step it gates keeps.
@@ -282,13 +287,14 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	}
 	if known {
 		a.pruneCacheRoots(&r, m, pressure)
+		a.pruneAbandonedStaging(&r, m)
 	} else {
 		r.Keep("caches and tmp: " + keptReferencesUnknown)
 	}
 	if a.context().Err() != nil {
 		return r
 	}
-	if pressure && known {
+	if pressure {
 		a.pruneFinishedState(&r, &m)
 	}
 	if a.context().Err() != nil {
@@ -381,12 +387,66 @@ func rereadDisk(r *diskRun, m *diskMachine) (known, ok bool) {
 	return err == nil, true
 }
 
-func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
-	if m.builds {
-		r.Keep("caches: builds running")
+// pruneAbandonedStaging reclaims crashed publication and source-fetch staging
+// directories once they have been inactive for an hour and hold no live reference.
+func (a *app) pruneAbandonedStaging(r *diskRun, m diskMachine) {
+	var matches []string
+	for _, pattern := range []string{
+		filepath.Join(a.cfg.StateDir, executionPublications, "transfer-*"),
+		filepath.Join(a.cfg.StateDir, executionSourcesDir, "*", "fetch-*"),
+	} {
+		found, _ := filepath.Glob(pattern)
+		matches = append(matches, found...)
+	}
+	if len(matches) == 0 {
 		return
 	}
-	release, ok, err := gocache.TryTrim(filepath.Join(a.store.Dir(), "build-cache"))
+	slices.Sort(matches)
+	live := diskprune.NewRefs(m.refs)
+	cutoff := a.now.Add(-time.Hour)
+	for _, path := range matches {
+		if a.context().Err() != nil {
+			return
+		}
+		r.Add(live.Output(path, cutoff, r.dry))
+	}
+}
+
+func goCachePastMargin(dir string, capBytes int64) bool {
+	if dir == "" || capBytes <= 0 {
+		return false
+	}
+	u, err := gocache.Scan(dir)
+	return err == nil && u.Bytes > goCacheForce(capBytes)
+}
+
+func holdCacheForRuns(parent context.Context, dir string) (func(), bool, error) {
+	ctx, cancel := context.WithTimeout(parent, goCacheHoldWait)
+	defer cancel()
+	release, err := gocache.Hold(ctx, dir, func() {})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return release, true, nil
+}
+
+func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
+	goCap := a.builtinCache(config.DiskCacheGo, config.DiskCacheModeGo).MaxBytes()
+	force := pressure || goCachePastMargin(m.cache, goCap)
+	if m.builds && !force {
+		r.Keep(keptCachesBuildsRunning)
+		return
+	}
+	buildCache := filepath.Join(a.store.Dir(), "build-cache")
+	release, ok, err := gocache.TryTrim(buildCache)
+	waited := false
+	if err == nil && !ok && force && !r.dry {
+		release, ok, err = holdCacheForRuns(a.context(), buildCache)
+		waited = ok
+	}
 	if err != nil {
 		r.Errors = append(r.Errors, err)
 		return
@@ -400,17 +460,23 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 	if !ok {
 		return
 	}
-	if m.builds {
-		r.Keep("caches: builds running")
+	force = pressure || goCachePastMargin(m.cache, goCap)
+	if m.builds && !force {
+		r.Keep(keptCachesBuildsRunning)
 		return
 	}
 	if !known {
-		r.Keep("caches: " + keptReferencesUnknown)
+		r.Keep(keptCachesUnknown)
 		return
 	}
 	// Also honor use locks held by older runs and manual cache clear go.
 	if m.cache != "" {
 		releaseGo, ok, err := gocache.TryTrim(m.cache)
+		waitedGo := false
+		if err == nil && !ok && force && !r.dry {
+			releaseGo, ok, err = holdCacheForRuns(a.context(), m.cache)
+			waitedGo = ok
+		}
 		if err != nil {
 			r.Errors = append(r.Errors, err)
 			return
@@ -420,31 +486,45 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 			return
 		}
 		defer releaseGo()
+		if waited || waitedGo {
+			known, ok = rereadDisk(r, &m)
+			if !ok {
+				return
+			}
+			if !known {
+				r.Keep(keptCachesUnknown)
+				return
+			}
+		}
 		if diskprune.InUse(m.cache, m.refs) {
 			r.Keep("Go cache in use")
 		} else {
-			u, err := gocache.Scan(m.cache)
+			u, scanErr := gocache.Scan(m.cache)
 			before := r.Freed
-			if err != nil {
-				r.Errors = append(r.Errors, err)
-			} else if target, trim := diskCacheTarget(u.Bytes, a.builtinCache(config.DiskCacheGo, config.DiskCacheModeGo).MaxBytes(), pressure); !trim {
+			if scanErr != nil {
+				r.Errors = append(r.Errors, scanErr)
+			} else if target, trim := diskCacheTarget(u.Bytes, goCap, pressure); !trim {
 				r.Keep("Go cache under cap")
 			} else if r.dry {
 				dryTrim(r, u, target)
 			} else {
-				n, removed, err := gocache.Trim(u, target, func() bool { return a.context().Err() != nil })
+				n, removed, trimErr := gocache.Trim(u, target, func() bool { return a.context().Err() != nil })
 				r.Freed += n
 				r.Removed += removed
-				if err != nil {
-					r.Errors = append(r.Errors, err)
+				if trimErr != nil {
+					r.Errors = append(r.Errors, trimErr)
 				}
 			}
-			if err == nil {
+			if scanErr == nil {
 				recordBuiltin(r, config.DiskCacheGo, m.cache, u, before)
 			}
 		}
 	}
 	if a.context().Err() != nil {
+		return
+	}
+	if m.builds {
+		r.Keep(keptCachesBuildsRunning)
 		return
 	}
 	pruneSccacheContext(a.context(), r, m, a.builtinCache(config.DiskCacheSccache, config.DiskCacheModeSc).MaxBytes(), pressure)
@@ -521,7 +601,7 @@ func (a *app) diskCmd() *cobra.Command {
 		if apply && dry {
 			return errors.New("--apply and --dry-run exclude each other")
 		}
-		a.now = time.Now()
+		a.now = clk.Now()
 		r := a.pruneDisk(!apply, false, func() (diskMachine, error) { return liveDisk(a) })
 		_, err := fmt.Fprint(a.out, r.String()+"\n"+r.listing())
 		if report {

@@ -143,9 +143,50 @@ func openInstallation(ctx context.Context, path string) (*installation, error) {
 	if !ok {
 		return nil, ErrUpdateLocked
 	}
-	return &installation{target: target, dir: dir, external: external, lock: l, ctx: ctx}, nil
+	inst := &installation{target: target, dir: dir, external: external, lock: l, ctx: ctx}
+	inst.sweepStageDirs()
+	return inst, nil
 }
 func (i *installation) close() { _ = i.lock.Unlock() }
+
+const stageDirPrefix = ".beekeeper-update-"
+
+func (i *installation) stageRoot() string {
+	if i.external {
+		return i.dir
+	}
+	return filepath.Dir(i.target)
+}
+
+// sweepStageDirs removes interrupted .beekeeper-update-* staging directories
+// while holding the installation's exclusive lock.
+func (i *installation) sweepStageDirs() {
+	stageRoot := i.stageRoot()
+	entries, err := os.ReadDir(stageRoot)
+	if err != nil {
+		return
+	}
+	var root *os.Root
+	defer func() {
+		if root != nil {
+			_ = root.Close()
+		}
+	}()
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, stageDirPrefix) || !entry.IsDir() {
+			continue
+		}
+		if root == nil {
+			r, openErr := os.OpenRoot(stageRoot)
+			if openErr != nil {
+				return
+			}
+			root = r
+		}
+		_ = root.RemoveAll(name)
+	}
+}
 
 // journal is the path of the installation's journal.
 func (i *installation) journal() string { return filepath.Join(i.dir, journalFile) }

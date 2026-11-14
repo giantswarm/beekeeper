@@ -65,6 +65,9 @@ func TestSystemdSetupFiles(t *testing.T) {
 		if files[i].Path != want.path || !strings.Contains(string(files[i].Content), want.content) || files[i].Service != (i < 3) {
 			t.Errorf("file %d: %s\n%s", i, files[i].Path, files[i].Content)
 		}
+		if i < 3 && !strings.Contains(string(files[i].Content), "\nLimitCORE=0\n") {
+			t.Errorf("service %d missing LimitCORE=0:\n%s", i, files[i].Content)
+		}
 	}
 
 	for _, notify := range []bool{false, true} {

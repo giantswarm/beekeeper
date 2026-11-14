@@ -16,6 +16,7 @@ FileDescriptorStoreMax=1
 Restart=on-failure
 RestartSec=5s
 MemoryMax=128M
+LimitCORE=0
 
 [Install]
 WantedBy=default.target

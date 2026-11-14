@@ -196,7 +196,12 @@ func (r *Result) Keep(why string) {
 // Output reclaims a known output directory, refusing checkouts, active
 // references and data newer than cutoff. A dry run measures without writes.
 func Output(dir string, cutoff time.Time, refs []string, dry bool) Result {
-	return output(dir, cutoff, NewRefs(refs), dry)
+	return NewRefs(refs).Output(dir, cutoff, dry)
+}
+
+// Output is Output against already-resolved live references.
+func (r Refs) Output(dir string, cutoff time.Time, dry bool) Result {
+	return output(dir, cutoff, r, dry)
 }
 
 func output(dir string, cutoff time.Time, refs Refs, dry bool) Result {

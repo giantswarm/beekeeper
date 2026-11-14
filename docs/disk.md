@@ -75,14 +75,17 @@ Automatic disk pruning releases its reclamation lock during discovery and remote
 worktree checks, so an idle supervisor does not lock out a manual prune. Under
 pressure, confirmed ended worktrees lose their retention grace; live sessions,
 locks, open pull requests and unpublished work remain protected. Finished task
-proofs and aside output, and fully retired execution source bundles, can be
-reclaimed without waiting for age grace. Unknown ownership, checkouts and pending
-execution recovery are retained. The built-in `agy-conversations` and `agy-brain`
-cache policies each cap their store at 2 GiB, trimming older entries first while
-protecting active conversations and the most recent hour. Each policy can be
-configured or disabled through `disk.caches`.
+proofs, aside output, and fully retired execution source and publication
+transfer bundles can be reclaimed without waiting for age grace; abandoned
+publication or source-fetch staging directories older than an hour are swept as
+well. Go build cache trims wait boundedly for active `beekeeper run` locks and
+reclaim unreferenced entries even while external builds run. Unknown ownership,
+checkouts and pending execution recovery are retained. The built-in
+`agy-conversations` and `agy-brain` cache policies each cap their store at 2 GiB,
+trimming older entries first while protecting active conversations and the most
+recent hour. Each policy can be configured or disabled through `disk.caches`.
 
-Positive `watch.diskMinMiB` values retain a minimum 2 GiB reserve (5% on smaller
+Positive `watch.diskMinMiB` values retain a minimum 10 GiB reserve (5% on smaller
 disks). This floor applies to start admission and the watch's LOW DISK warning,
 so a tiny configured value cannot silently allow starts until the disk is full.
 

@@ -25,7 +25,7 @@ func (a *app) publicationCache(ctx context.Context, repository string) string {
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") || !filepath.IsLocal(owner) || !filepath.IsLocal(name) {
 		return ""
 	}
-	cache := filepath.Join(a.cfg.StateDir, "execution-publications", "cache", owner, name+".git")
+	cache := filepath.Join(a.cfg.StateDir, executionPublications, "cache", owner, name+".git")
 	if info, err := os.Stat(filepath.Join(cache, "objects", "info")); err == nil && info.IsDir() {
 		return cache
 	}

@@ -1429,3 +1429,26 @@ func TestReviewerPublicationWaitsForItsAssignment(t *testing.T) {
 		t.Fatal("unassigned reviewer created or edited a pull request")
 	}
 }
+
+func TestFailedPublicationRemovesTemporaryStagingDirectory(t *testing.T) {
+	rig := newPublicationRig(t)
+	head := rig.commit(t, "change.txt", "one\n")
+	p := rig.publication(t, head)
+	rig.refuseCreate = errors.New("HTTP 403: refused create")
+	var result executionPublicationResult
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err == nil {
+		t.Fatal("refused publication unexpectedly succeeded")
+	}
+	transferDir := rig.a.publicationTransferDir(rig.request.Ref)
+	pubRoot := filepath.Dir(filepath.Dir(filepath.Dir(transferDir)))
+	matches, err := filepath.Glob(filepath.Join(pubRoot, "transfer-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("failed publication leaked temporary staging: %v", matches)
+	}
+	if newestPublicationTransfer(transferDir) == "" {
+		t.Fatal("durable uploaded bundle missing for recovery")
+	}
+}

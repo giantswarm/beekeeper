@@ -155,12 +155,12 @@ func (w Watch) GTTMax(ramMiB int) int { return atMost(w.GTTMaxMiB, DefaultGTTMax
 func (w Watch) TmpMax(tmpMiB int) int { return atMost(w.TmpMaxMiB, DefaultTmpMax, tmpMiB) }
 
 // DiskMin is the LOW DISK threshold. Explicit positive values retain at least
-// a 2 GiB reserve (or 5% on smaller disks). Negative disables it.
+// a 10 GiB reserve (or 5% on smaller disks). Negative disables it.
 func (w Watch) DiskMin(diskMiB int) int {
 	if w.DiskMinMiB < 0 {
 		return 0
 	}
-	return max(min(2048, int(DefaultDiskMin*float64(diskMiB))), atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB))
+	return max(min(10<<10, int(DefaultDiskMin*float64(diskMiB))), atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB))
 }
 
 // DiskCritical is the DISK NEARLY FULL threshold on a / of diskMiB.

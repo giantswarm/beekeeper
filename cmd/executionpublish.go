@@ -449,7 +449,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		writeCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 		return writeCtx, cancel, nil
 	}
-	root := filepath.Join(a.cfg.StateDir, "execution-publications")
+	root := filepath.Join(a.cfg.StateDir, executionPublications)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return result, err
 	}
@@ -457,21 +457,16 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if err != nil {
 		return result, err
 	}
-	// Keep failed transfers for inspection. Successful transfers contain only
-	// public repository objects, and are removed after their result is known.
-	success := false
-	defer func() {
-		if success {
-			_ = os.RemoveAll(dir)
-		}
-	}()
+	// Durable uploaded bundles remain under execution-publications/transfers
+	// for recovery; temporary bare-git staging is always discarded at exit.
+	defer func() { _ = os.RemoveAll(dir) }()
 	repo := filepath.Join(dir, "repository.git")
 	if _, err = publishGit(ctx, dir, "init", "--bare", repo); err != nil {
 		return result, err
 	}
 	cache := a.publicationCache(ctx, r.Request.Repository)
 	borrowPublicationCache(repo, cache)
-	sourceBundle := filepath.Join(a.cfg.StateDir, "execution-sources", string(ref.Execution), "source.bundle")
+	sourceBundle := filepath.Join(a.cfg.StateDir, executionSourcesDir, string(ref.Execution), "source.bundle")
 	if data, readErr := readPublicationBundle(sourceBundle); readErr == nil && (r.Request.SourceDigest == "" || execution.Digest(data) == r.Request.SourceDigest) {
 		_, _ = publishGit(ctx, repo, "fetch", "--no-tags", "--", sourceBundle, "refs/heads/execution-source:refs/heads/source")
 	}
@@ -707,7 +702,6 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			}
 		}
 	}
-	success = true
 	return result, nil
 }
 
@@ -760,7 +754,7 @@ func (a *app) hasUnrecoveredPublication(r *state.ExecutionRecord) bool {
 }
 
 func (a *app) publicationTransferDir(ref execution.Ref) string {
-	return filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(ref.Execution), fmt.Sprint(ref.Generation))
+	return filepath.Join(a.cfg.StateDir, executionPublications, publicationTransfersDir, string(ref.Execution), fmt.Sprint(ref.Generation))
 }
 
 // newestPublicationTransfer names the most recently written publication

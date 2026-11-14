@@ -28,11 +28,21 @@ func referenceFiles() referenceIO {
 	return referenceIO{os.ReadFile, os.ReadDir, os.Readlink, os.Stat}
 }
 
+const (
+	procStatusFile  = "status"
+	procEnvironFile = "environ"
+	procMapsFile    = "maps"
+)
+
 func referencesAt(root string, pid int) ([]string, error) {
 	return referencesWith(root, pid, false, referenceFiles())
 }
 
 func referencesWith(root string, pid int, protected bool, files referenceIO) ([]string, error) {
+	return referencesTaskWith(root, pid, false, protected, files)
+}
+
+func referencesTaskWith(root string, pid int, thread, protected bool, files referenceIO) ([]string, error) {
 	dir := filepath.Join(root, strconv.Itoa(pid))
 	ignored := func(err error) bool {
 		return errors.Is(err, os.ErrNotExist) || protected && errors.Is(err, os.ErrPermission)
@@ -55,15 +65,18 @@ func referencesWith(root string, pid int, protected bool, files referenceIO) ([]
 			paths = appendReference(paths, p)
 		}
 	}
-	for _, name := range []string{"environ", "maps"} {
+	for _, name := range []string{procEnvironFile, procMapsFile} {
 		raw, err := files.readFile(filepath.Clean(filepath.Join(dir, name)))
 		if err != nil && ignored(err) {
 			continue
 		}
+		if errors.Is(err, syscall.ESRCH) && memoryReleasedAt(filepath.Join(dir, procStatusFile), thread, files) {
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
-		if name == "environ" {
+		if name == procEnvironFile {
 			for _, e := range bytes.Split(raw, []byte{0}) {
 				k, v, _ := strings.Cut(string(e), "=")
 				switch k {
@@ -205,8 +218,9 @@ func processReferences(root string, pid, uid int, files referenceIO) ([]string, 
 	}
 	commErr := err
 	comm := strings.TrimSpace(string(raw))
-	raw, err = files.readFile(filepath.Join(dir, "status"))
-	if errors.Is(err, os.ErrNotExist) {
+	statusPath := filepath.Join(dir, procStatusFile)
+	raw, err = files.readFile(statusPath)
+	if errors.Is(err, os.ErrNotExist) || (errors.Is(err, syscall.ESRCH) && statGone(statusPath, files)) {
 		return nil, "", false, nil
 	}
 	if err != nil {
@@ -226,9 +240,9 @@ func processReferences(root string, pid, uid int, files referenceIO) ([]string, 
 	// A cached directory inode may retain its original owner after a
 	// process becomes non-dumpable. Ptrace-gated children reflect the
 	// current protection, including when status omits Dumpable.
-	for _, path := range []string{dir, filepath.Join(dir, "environ")} {
+	for _, path := range []string{dir, filepath.Join(dir, procEnvironFile)} {
 		info, err := files.stat(path)
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || (errors.Is(err, syscall.ESRCH) && statGone(dir, files)) {
 			return nil, "", false, nil
 		}
 		if err != nil {
@@ -242,11 +256,14 @@ func processReferences(root string, pid, uid int, files referenceIO) ([]string, 
 		paths, live, err = zombieThreadReferences(dir, pid, protected, files)
 	} else {
 		paths, err = referencesWith(root, pid, protected, files)
+		if errors.Is(err, syscall.ESRCH) && leaderNeedsThreadScan(statusPath, files) {
+			paths, live, err = zombieThreadReferences(dir, pid, protected, files)
+		}
 	}
 	if errors.Is(err, os.ErrPermission) && foreignNamespace(root, pid, raw, files) {
 		return nil, comm, false, fmt.Errorf("%w: %w", errForeign, err)
 	}
-	if err != nil && exitConfirmed(err, filepath.Join(dir, "status"), false, files) {
+	if err != nil && exitConfirmed(err, statusPath, false, files) {
 		return nil, "", false, nil
 	}
 	if err != nil {
@@ -291,7 +308,7 @@ func foreignNamespace(root string, pid int, status []byte, files referenceIO) bo
 func zombieThreadReferences(dir string, pid int, protected bool, files referenceIO) ([]string, bool, error) {
 	tasks := filepath.Join(dir, "task")
 	entries, err := files.readDir(tasks)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (errors.Is(err, syscall.ESRCH) && statGone(tasks, files)) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -304,8 +321,9 @@ func zombieThreadReferences(dir string, pid int, protected bool, files reference
 		if err != nil || tid == pid {
 			continue
 		}
-		raw, err := files.readFile(filepath.Join(tasks, e.Name(), "status"))
-		if errors.Is(err, os.ErrNotExist) {
+		statusPath := filepath.Join(tasks, e.Name(), procStatusFile)
+		raw, err := files.readFile(statusPath)
+		if errors.Is(err, os.ErrNotExist) || (errors.Is(err, syscall.ESRCH) && statGone(statusPath, files)) {
 			continue
 		}
 		if err != nil {
@@ -314,8 +332,8 @@ func zombieThreadReferences(dir string, pid int, protected bool, files reference
 		if zombie, _ := referenceState(raw); zombie {
 			continue
 		}
-		got, err := referencesWith(tasks, tid, protected, files)
-		if err != nil && exitConfirmed(err, filepath.Join(tasks, e.Name(), "status"), true, files) {
+		got, err := referencesTaskWith(tasks, tid, true, protected, files)
+		if err != nil && exitConfirmed(err, statusPath, true, files) {
 			continue
 		}
 		if err != nil {
@@ -328,28 +346,78 @@ func zombieThreadReferences(dir string, pid int, protected bool, files reference
 }
 
 // exitConfirmed reports that a read failed with ESRCH because the process
-// or thread exited meanwhile: its status, read again, is gone or a zombie
-// (a leader only with no live thread left). The kernel answers ESRCH for the
-// environ and maps of a task whose memory is already released, so an exit
-// racing the scan must not make every reference unknown. A task still live
-// on the second read keeps the error and fails closed.
+// or thread exited meanwhile: its status, read again, is gone, exited or a
+// user task in do_exit past exit_mm (a leader only with no live thread left).
+// The kernel answers ESRCH for the environ and maps of a task whose memory is
+// already released before exit_notify marks it Z or X, so an exit racing the
+// scan must not make every reference unknown. A task still live on the second
+// read keeps the error and fails closed.
 func exitConfirmed(err error, status string, thread bool, files referenceIO) bool {
 	if !errors.Is(err, syscall.ESRCH) {
 		return false
 	}
 	raw, err := files.readFile(status)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (errors.Is(err, syscall.ESRCH) && statGone(status, files)) {
 		return true
 	}
 	if err != nil {
 		return false
 	}
 	zombie, threads := referenceState(raw)
-	return zombie && (thread || threads >= 0 && threads <= 1)
+	return (zombie || memoryReleased(raw)) && (thread || threads >= 0 && threads <= 1)
 }
 
-// referenceState reads whether a process is a zombie and its thread count,
-// -1 when unknown. A zombie leader with more threads may have live ones.
+// memoryReleasedAt reports whether a task whose cwd, exe and fd were already
+// read has released its mm_struct (Kthread: 0 and no VmSize in status) without
+// other threads left solely behind a leader scan.
+func memoryReleasedAt(status string, thread bool, files referenceIO) bool {
+	raw, err := files.readFile(status)
+	if err != nil {
+		return false
+	}
+	zombie, threads := referenceState(raw)
+	if zombie || !memoryReleased(raw) {
+		return false
+	}
+	return thread || (threads >= 0 && threads <= 1)
+}
+
+// memoryReleased reports a user task in do_exit past exit_mm: task_state still
+// writes Kthread: 0 while task_mem omits VmSize once tsk->mm is NULL.
+func memoryReleased(status []byte) bool {
+	userTask := false
+	hasVM := false
+	for line := range strings.Lines(string(status)) {
+		key, value, _ := strings.Cut(line, ":")
+		switch key {
+		case "Kthread":
+			userTask = strings.TrimSpace(value) == "0"
+		case "VmSize":
+			hasVM = true
+		}
+	}
+	return userTask && !hasVM
+}
+
+// leaderNeedsThreadScan reports a thread-group leader that entered exit_mm or
+// zombie state mid-scan while sibling threads may still be live.
+func leaderNeedsThreadScan(status string, files referenceIO) bool {
+	raw, err := files.readFile(status)
+	if err != nil {
+		return false
+	}
+	zombie, threads := referenceState(raw)
+	return (zombie || memoryReleased(raw)) && (threads < 0 || threads > 1)
+}
+
+func statGone(path string, files referenceIO) bool {
+	_, err := files.stat(path)
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// referenceState reads whether a task has exited (Z zombie or X/x dead) and
+// its thread count, -1 when unknown. A zombie leader with more threads may
+// have live ones.
 func referenceState(status []byte) (bool, int) {
 	zombie := false
 	threads := -1
@@ -358,7 +426,7 @@ func referenceState(status []byte) (bool, int) {
 		switch key {
 		case "State":
 			fields := strings.Fields(value)
-			zombie = len(fields) > 0 && fields[0] == "Z"
+			zombie = len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X" || fields[0] == "x")
 		case "Threads":
 			if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && n >= 0 {
 				threads = n

@@ -27,7 +27,10 @@ func (a *app) pruneFinishedState(r *diskRun, m *diskMachine) {
 		}
 		id := string(x.Handle.Ref.Execution)
 		if id != "" && filepath.Base(id) == id {
-			paths = append(paths, filepath.Join(a.cfg.StateDir, "execution-sources", id))
+			paths = append(paths,
+				filepath.Join(a.cfg.StateDir, executionSourcesDir, id),
+				filepath.Join(a.cfg.StateDir, executionPublications, publicationTransfersDir, id),
+			)
 		}
 	}
 	for _, root := range []string{"proofs", "aside"} {
@@ -42,13 +45,20 @@ func (a *app) pruneFinishedState(r *diskRun, m *diskMachine) {
 			}
 		}
 	}
+	if len(paths) == 0 {
+		return
+	}
+	known, ok := rereadDisk(r, m)
+	if !ok || !known {
+		r.Keep("finished artifacts: " + keptReferencesUnknown)
+		return
+	}
+	live := diskprune.NewRefs(m.refs)
 	for _, path := range paths {
-		known, ok := rereadDisk(r, m)
-		if !ok || !known {
-			r.Keep("finished artifacts: process references unknown")
+		if a.context().Err() != nil {
 			return
 		}
-		r.Add(diskprune.Output(path, time.Time{}, m.refs, r.dry))
+		r.Add(live.Output(path, time.Time{}, r.dry))
 	}
 }
 

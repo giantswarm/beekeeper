@@ -1057,10 +1057,10 @@ and a SHA-256 digest over the complete bundle. A bundle is bounded to 64 MiB;
 a larger transfer is explicitly refused rather than truncated or sent with a
 credential workaround. Chunk retries verify existing bytes; partial or corrupt
 bundles cannot be published. Transfer files remain under the coordinator's
-`execution-publications/transfers` state directory for recovery and may be moved
-aside once the execution is retired. Failed staging directories remain for
-inspection under the coordinator's `execution-publications/transfer-*` state
-directories; successful staging directories are removed.
+`execution-publications/transfers` state directory for recovery and are reclaimed
+once the execution is retired. Temporary `execution-publications/transfer-*` and
+`execution-sources/*/fetch-*` staging directories are removed when the operation
+ends, and `disk prune` sweeps any crashed staging directory inactive for an hour.
 
 A start's source travels the same way, under the same 64 MiB bound, but only
 the history the host lacks: before it pins the source, the coordinator asks the

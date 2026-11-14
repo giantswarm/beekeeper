@@ -17,7 +17,7 @@ import (
 // carries only the history beyond them, so a large repository's start ships
 // what the host lacks, not its whole history.
 func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartRequest, basis []string) (execution.StartRequest, []byte, error) {
-	root := filepath.Join(a.cfg.StateDir, "execution-sources", string(r.Ref.Execution))
+	root := filepath.Join(a.cfg.StateDir, executionSourcesDir, string(r.Ref.Execution))
 	bundle := filepath.Join(root, "source.bundle")
 	if r.SourceDigest != "" {
 		data, err := readPublicationBundle(bundle)
@@ -36,6 +36,7 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	if err != nil {
 		return r, nil, err
 	}
+	defer func() { _ = os.RemoveAll(dir) }()
 	repo := filepath.Join(dir, "repository.git")
 	stagedBundle := filepath.Join(dir, "source.bundle")
 	if _, err = publishGit(ctx, dir, "init", "--bare", repo); err != nil {
@@ -90,9 +91,6 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	if err != nil {
 		return r, nil, err
 	}
-	// The saved bundle is sufficient for recovery; discard only the successful
-	// temporary fetch, as publication does after a completed transfer.
-	_ = os.RemoveAll(dir)
 	return r, data, nil
 }
 

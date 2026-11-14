@@ -1137,3 +1137,21 @@ func TestInstallFailureNamesTheJournalOnlyWhenItHoldsSomething(t *testing.T) {
 	}
 	assertUnchanged(t, exe, []byte(thirdBinary))
 }
+
+func TestUpdateSweepsLeftoverStageDirectories(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, _ := installed(t)
+	leftover := filepath.Join(filepath.Dir(exe), ".beekeeper-update-interrupted")
+	if err := os.MkdirAll(leftover, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leftover, "beekeeper"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(leftover); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("leftover stage directory survived update: err=%v", err)
+	}
+}

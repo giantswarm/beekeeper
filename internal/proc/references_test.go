@@ -608,3 +608,152 @@ func TestUserReferencesSkipsThreadExitingMidScan(t *testing.T) {
 		})
 	}
 }
+
+// A task in do_exit past exit_mm (Kthread: 0 without VmSize) answers ESRCH on
+// environ before exit_notify sets Z or X, while still holding descriptors it
+// has not closed yet; a dead (X) or unhashed thread is skipped, and a leader
+// exiting mid-scan still inspects its remaining live threads.
+func TestUserReferencesHandlesExitingTasksWithReleasedMemoryAndDeadThreads(t *testing.T) {
+	const heldPath = "/scratch/exiting-held"
+	uid := os.Getuid()
+	ids := fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid)
+
+	t.Run("thread past exit_mm keeps open fd without unknown error", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "42")
+		thread := filepath.Join(dir, "task", "43")
+		for _, d := range []string{dir, filepath.Join(dir, "task", "42"), thread} {
+			if err := os.MkdirAll(filepath.Join(d, "fd"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			data := ids + "State: Z (zombie)\nThreads: 2\n"
+			if d == thread {
+				data = "State:\tR (running)\nThreads:\t2\nKthread:\t0\n"
+			}
+			for name, content := range map[string]string{fixtureStatus: data, fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: fixtureName} {
+				if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := os.Symlink(heldPath, filepath.Join(thread, "fd", "3")); err != nil {
+			t.Skip(err)
+		}
+		files := referenceFiles()
+		files.readFile = func(path string) ([]byte, error) {
+			if filepath.Clean(path) == filepath.Join(thread, fixtureEnvironment) {
+				return nil, &os.PathError{Op: readOp, Path: path, Err: syscall.ESRCH}
+			}
+			return os.ReadFile(filepath.Clean(path))
+		}
+		refs, _, err := userReferencesAt(root, uid, files)
+		if err != nil {
+			t.Fatalf("thread past exit_mm made references unknown: %v", err)
+		}
+		if !slices.Contains(refs, heldPath) {
+			t.Fatalf("lost open descriptor of exiting thread: %v", refs)
+		}
+	})
+
+	t.Run("dead X thread and unhashed status ESRCH are skipped", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "42")
+		deadThread := filepath.Join(dir, "task", "43")
+		unhashedThread := filepath.Join(dir, "task", "44")
+		for _, d := range []string{dir, filepath.Join(dir, "task", "42"), deadThread, unhashedThread} {
+			if err := os.MkdirAll(filepath.Join(d, "fd"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			data := ids + "State: Z (zombie)\nThreads: 3\n"
+			if d == deadThread {
+				data = "State:\tX (dead)\nThreads:\t1\n"
+			}
+			for name, content := range map[string]string{fixtureStatus: data, fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: fixtureName} {
+				if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		unhashedStatus := filepath.Join(unhashedThread, fixtureStatus)
+		if err := os.Remove(unhashedStatus); err != nil {
+			t.Fatal(err)
+		}
+		files := referenceFiles()
+		files.readFile = func(path string) ([]byte, error) {
+			if filepath.Clean(path) == unhashedStatus {
+				return nil, &os.PathError{Op: readOp, Path: path, Err: syscall.ESRCH}
+			}
+			return os.ReadFile(filepath.Clean(path))
+		}
+		refs, commands, err := userReferencesAt(root, uid, files)
+		if err != nil || len(refs) != 0 || len(commands) != 0 {
+			t.Fatalf("dead/unhashed threads blocked scan: refs=%v commands=%v err=%v", refs, commands, err)
+		}
+	})
+
+	t.Run("leader exiting mid-scan falls over to live sibling thread", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "42")
+		thread := filepath.Join(dir, "task", "43")
+		for _, d := range []string{dir, filepath.Join(dir, "task", "42"), thread} {
+			if err := os.MkdirAll(filepath.Join(d, "fd"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			data := ids + "State: S (sleeping)\nThreads: 2\n"
+			if d == thread {
+				data = fixtureLiveStatus
+			}
+			for name, content := range map[string]string{fixtureStatus: data, fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: fixtureName} {
+				if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := os.Symlink(heldPath, filepath.Join(thread, "fd", "3")); err != nil {
+			t.Skip(err)
+		}
+		leaderStatus := filepath.Join(dir, fixtureStatus)
+		leaderEnviron := filepath.Join(dir, fixtureEnvironment)
+		reads := 0
+		files := referenceFiles()
+		files.readFile = func(path string) ([]byte, error) {
+			switch filepath.Clean(path) {
+			case leaderEnviron:
+				return nil, &os.PathError{Op: readOp, Path: path, Err: syscall.ESRCH}
+			case leaderStatus:
+				if reads++; reads > 1 {
+					return []byte(ids + "State: Z (zombie)\nThreads: 2\n"), nil
+				}
+			}
+			return os.ReadFile(filepath.Clean(path))
+		}
+		refs, _, err := userReferencesAt(root, uid, files)
+		if err != nil || !slices.Contains(refs, heldPath) {
+			t.Fatalf("leader exit lost sibling thread references: refs=%v err=%v", refs, err)
+		}
+	})
+
+	t.Run("live user task with VmSize still fails closed on ESRCH", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "42")
+		if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		liveWithVM := ids + "State:\tR (running)\nThreads:\t1\nKthread:\t0\nVmSize:\t1024 kB\n"
+		for name, content := range map[string]string{fixtureStatus: liveWithVM, fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: fixtureName} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		files := referenceFiles()
+		files.readFile = func(path string) ([]byte, error) {
+			if filepath.Clean(path) == filepath.Join(dir, fixtureEnvironment) {
+				return nil, &os.PathError{Op: readOp, Path: path, Err: syscall.ESRCH}
+			}
+			return os.ReadFile(filepath.Clean(path))
+		}
+		if _, _, err := userReferencesAt(root, uid, files); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("live user task with VmSize did not fail closed: %v", err)
+		}
+	})
+}

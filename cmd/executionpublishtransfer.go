@@ -16,8 +16,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const publicationTransfer = "publish-transfer"
-const publicationChunkSize = 256 << 10
+const (
+	publicationTransfer     = "publish-transfer"
+	publicationChunkSize    = 256 << 10
+	executionPublications   = "execution-publications"
+	publicationTransfersDir = "transfers"
+	executionSourcesDir     = "execution-sources"
+)
 
 type publicationChunk struct {
 	Digest   string `json:"digest"`
@@ -32,7 +37,7 @@ func (a *app) publicationTransferPath(ref execution.Ref, digest string) (string,
 	if ref.Validate() != nil || !strings.HasPrefix(digest, "sha256:") || decodeErr != nil || len(decoded) != 32 {
 		return "", refused("invalid publication transfer identity")
 	}
-	return filepath.Join(a.cfg.StateDir, "execution-publications", "transfers", string(ref.Execution), fmt.Sprint(ref.Generation), digest[7:]), nil
+	return filepath.Join(a.cfg.StateDir, executionPublications, publicationTransfersDir, string(ref.Execution), fmt.Sprint(ref.Generation), digest[7:]), nil
 }
 
 func (a *app) transferPublication(st *state.State, ref execution.Ref, p publicationChunk) (publicationChunk, error) {

@@ -94,11 +94,7 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 		return err
 	}
 	mode := info.Mode().Perm()
-	stageRoot := filepath.Dir(i.target)
-	if i.external {
-		stageRoot = i.dir
-	}
-	stageDir, err := os.MkdirTemp(stageRoot, ".beekeeper-update-*")
+	stageDir, err := os.MkdirTemp(i.stageRoot(), stageDirPrefix+"*")
 	if err != nil {
 		return err
 	}

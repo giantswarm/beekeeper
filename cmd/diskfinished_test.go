@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/capacity"
 	"github.com/giantswarm/beekeeper/internal/diskprune"
+	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -62,5 +65,75 @@ func TestHarnessCapKeepsIdleActiveConversation(t *testing.T) {
 	r := diskprune.Cache(diskprune.Policy{Root: a.cfg.Agy.ConversationsDir, MaxBytes: 1}, a.now, true, refs, nil, false)
 	if len(r.Errors) != 0 || !exists(filepath.Join(a.cfg.Agy.ConversationsDir, "disk-conversation.pb")) || exists(filepath.Join(a.cfg.Agy.ConversationsDir, "ended.pb")) {
 		t.Fatalf("cap: %+v", r)
+	}
+}
+
+func TestPressureReclaimsRetiredTransfersStagingAndGoCacheUnderBuilds(t *testing.T) {
+	a, m := diskFixture(t)
+	retiredRef := execution.Ref{Execution: "exec-retired", Generation: 1}
+	activeRef := execution.Ref{Execution: "exec-active", Generation: 1}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{
+			{Execution: &state.ExecutionRecord{
+				Handle:             execution.Handle{Ref: retiredRef},
+				HostJournalMissing: true,
+				Retirement:         &state.ExecutionRetirement{RevokedAt: a.now, RetiredAt: a.now},
+			}},
+			{Execution: &state.ExecutionRecord{
+				Handle: execution.Handle{Ref: activeRef},
+			}},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retiredTransfers := filepath.Dir(a.publicationTransferDir(retiredRef))
+	activeTransfers := filepath.Dir(a.publicationTransferDir(activeRef))
+	pubRoot := filepath.Dir(filepath.Dir(retiredTransfers))
+	writeT(t, filepath.Join(retiredTransfers, "1", "bundle"), strings.Repeat("x", 4096))
+	writeT(t, filepath.Join(activeTransfers, "1", "bundle"), strings.Repeat("x", 4096))
+
+	staleStage := filepath.Join(pubRoot, "transfer-stale")
+	recentStage := filepath.Join(pubRoot, "transfer-recent")
+	writeT(t, filepath.Join(staleStage, "pack"), strings.Repeat("x", 4096))
+	writeT(t, filepath.Join(recentStage, "pack"), strings.Repeat("x", 4096))
+	old := a.now.Add(-2 * time.Hour)
+	for _, p := range []string{filepath.Join(staleStage, "pack"), staleStage} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prevWait := goCacheHoldWait
+	goCacheHoldWait = 2 * time.Second
+	t.Cleanup(func() { goCacheHoldWait = prevWait })
+	releaseUse, err := gocache.Use(context.Background(), m.cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		releaseUse()
+	}()
+	m.builds = true
+
+	r := a.pruneDisk(false, true, func() (diskMachine, error) { return m, nil })
+	if len(r.Errors) != 0 {
+		t.Fatalf("pressure prune errors: %s", r)
+	}
+	if exists(retiredTransfers) {
+		t.Fatalf("retired publication transfers remained: %s", r)
+	}
+	if !exists(activeTransfers) {
+		t.Fatalf("active publication transfers removed: %s", r)
+	}
+	if exists(staleStage) || !exists(recentStage) {
+		t.Fatalf("staging retention failed (stale=%v recent=%v): %s", exists(staleStage), exists(recentStage), r)
+	}
+	if exists(filepath.Join(m.cache, "ab", "data")) {
+		t.Fatalf("pressure prune did not trim Go cache while builds ran: %s", r)
+	}
+	if !exists(filepath.Join(m.sccache, "0", "data")) {
+		t.Fatalf("sccache trimmed while builds ran: %s", r)
 	}
 }

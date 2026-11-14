@@ -1,0 +1,57 @@
+name: abandoned-publication-staging-prunes-after-grace
+description: >
+  Temporary bare-git staging directories under execution-publications/transfer-*
+  and execution-sources/*/fetch-* are protected while active within their
+  one-hour grace window even under disk pressure, and reclaimed once inactive
+  past that grace window.
+issue: https://github.com/giantswarm/beekeeper/issues/3496
+flow: regression
+tags: [regression, disk, guards]
+timeout: 60s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      watch: {interval: 30s, diskMinMiB: 2000000000}
+  files:
+    - path: state/execution-publications/transfer-abandoned/repository.git/objects/pack/stale.pack
+      content: "abandoned publication pack\n"
+    - path: state/execution-sources/exec-1/fetch-abandoned/repository.git/objects/pack/stale.pack
+      content: "abandoned source pack\n"
+
+when:
+  - name: recent
+    run: {args: [disk, prune, --apply]}
+    expect:
+      - exit: 0
+      - output:
+          contains:
+            - "freed 0 B in 0 cache/output/tmp/trash entries"
+            - "2 recently used"
+  - advance: 2h
+  - name: reclaim
+    run: {args: [disk, prune, --apply]}
+    expect:
+      - exit: 0
+      - output:
+          contains:
+            - "in 2 cache/output/tmp/trash entries"
+          not_contains:
+            - "recently used"
+  - name: clean
+    run: {args: [disk, prune, --apply]}
+    expect:
+      - exit: 0
+      - output:
+          contains:
+            - "freed 0 B in 0 cache/output/tmp/trash entries"
+          not_contains:
+            - "recently used"
+
+then:
+  - step: reclaim
+    output:
+      contains:
+        - "in 2 cache/output/tmp/trash entries"
+  - events: {contains: [disk.prune]}
