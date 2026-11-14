@@ -3,7 +3,8 @@ description: >
   A worker started on an SSH execution host publishes its pull request and
   parks on it; the loop ends the execution for the desk review and keeps
   its review park. A red check gets a fresh fixer under the worker's name,
-  whose execution crashes and is retired: the entry stays on the roster, and
+  whose execution crashes and is retired despite inheriting the review
+  record: the entry stays on the roster, and
   no message reaches its execution any more. When the next check turns red,
   the loop gives that entry's work to a fresh fixer on the pull request's
   branch instead of waking the retired one. Live, agents wake refused the
@@ -116,7 +117,7 @@ when:
   - wait_for:
       timeout: 30s
       expect:
-        - worker: {name: app 1, host: builder, turns: 2, outcome: crash}
+        - worker: {name: app 1, host: builder, turns: 2, outcome: crash, running: false}
   # The watch sees the execution ended and retires it; its entry stays on
   # the roster with its task.
   - advance: 2s

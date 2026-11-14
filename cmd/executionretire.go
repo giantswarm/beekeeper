@@ -29,7 +29,10 @@ const (
 // and thread stay, whatever its unit does between turns.
 func executionUnfinished(st *state.State, r *state.ExecutionRecord) bool {
 	ref := r.Handle.Ref
-	if slices.ContainsFunc(st.ReviewParks, func(p state.ReviewPark) bool { return p.Execution != nil && *p.Execution == ref }) {
+	// A fixer inherits the review record, but has not parked its own round.
+	// Only a completed round is kept by that record; an unreported crash
+	// must retire so the next repair can replace its ended execution.
+	if r.Completed && slices.ContainsFunc(st.ReviewParks, func(p state.ReviewPark) bool { return p.Execution != nil && *p.Execution == ref }) {
 		return true
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Execution != nil && *ag.Execution == ref })

@@ -82,6 +82,11 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 	}{
 		{name: "running worker", change: func(_ *state.State, r *state.ExecutionRecord) { r.Observation.ProcessState = execution.Running }},
 		{name: "crash", want: execution.RetireTriggerCrash},
+		{name: "crashed fixer inherited a review record", want: execution.RetireTriggerCrash, change: func(st *state.State, r *state.ExecutionRecord) {
+			ref := r.Handle.Ref
+			r.Observation.ProcessState = execution.Failed
+			st.ReviewParks = []state.ReviewPark{{On: retireFixturePark, Execution: &ref}}
+		}},
 		{name: "never accepted its task", want: execution.RetireTriggerFailedStart, change: func(_ *state.State, r *state.ExecutionRecord) { r.Observation.Ready = false }},
 		{name: "released reservation", want: execution.RetireTriggerFailedStart, change: func(st *state.State, r *state.ExecutionRecord) {
 			st.Agents = nil
