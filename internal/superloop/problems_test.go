@@ -118,3 +118,114 @@ func TestDeliveryProgressStaysSettledAfterOwnerLeaves(t *testing.T) {
 		t.Fatalf("settled progress replayed after owner left: %+v", acts)
 	}
 }
+
+func TestPartOfContinuationAndContextProblemsStayInTimeline(t *testing.T) {
+	const (
+		contAgent  = "r 7 next-0123abcd"
+		mergedRef  = "o/r#6"
+		otherOpen  = "o/r#9"
+		servedURL  = "https://github.com/o/r/issues/7"
+		sshAgent   = "r 8 next-deadbeef"
+		reviewName = "Review r 8 r1"
+	)
+	pulls := map[string]Pull{
+		mergedRef:  {State: Merged},
+		overlapPRB: {State: Open, Body: "Part of " + servedURL},
+		otherOpen:  {State: Open},
+	}
+	for _, tc := range []struct {
+		name, agent, body string
+		workers           []Worker
+		done, wantFile    bool
+	}{
+		{
+			name:    "part-of PR with merged context and non-repo slash tokens",
+			agent:   contAgent,
+			workers: []Worker{{Name: contAgent, Issues: []string{servedURL}}},
+			body:    "CI red on https://github.com/o/r/pull/8 after https://github.com/o/r/pull/6 merged, in src/index.rs, cmd/app-test, recovery/broken-candidate and x/crypto (i/o timeout, yaml/v4, os/exec)",
+		},
+		{
+			name:    "SSH checks wait and continuation worker name",
+			agent:   sshAgent,
+			workers: []Worker{{Name: sshAgent, ParkedOn: overlapPRB, Waits: "CI"}},
+			body:    "re-reading CI failure on " + overlapPRBURL,
+		},
+		{
+			name:     "unowned open PR alongside owned PR still files",
+			agent:    contAgent,
+			workers:  []Worker{{Name: contAgent, Issues: []string{servedURL}}},
+			body:     "CI red on https://github.com/o/r/pull/8 and https://github.com/o/r/pull/9",
+			wantFile: true,
+		},
+		{
+			name:     "final done report naming merged PR still files",
+			agent:    contAgent,
+			workers:  []Worker{{Name: contAgent, Issues: []string{servedURL}}},
+			body:     "https://github.com/o/r/pull/8 overlapped https://github.com/o/r/pull/6",
+			done:     true,
+			wantFile: true,
+		},
+		{
+			name:     "reviewer non-forwarded problem on reviewed PR still files",
+			agent:    reviewName,
+			workers:  []Worker{{Name: reviewName, Serves: overlapPRB}},
+			body:     "gate slot queue stalled while checking " + overlapPRBURL,
+			wantFile: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := Input{
+				Workers: tc.workers,
+				Pulls:   pulls,
+				Events:  []Event{{At: t0, Verb: VerbProblem, Agent: tc.agent, Detail: tc.agent + ": " + tc.body}},
+			}
+			if tc.done {
+				in.Events = append(in.Events, Event{At: t0, Verb: VerbDone, Agent: tc.agent})
+			}
+			file := false
+			for _, act := range Plan(in) {
+				file = file || act.Kind == KindFile
+			}
+			if file != tc.wantFile {
+				t.Fatalf("file = %v, want %v (actions = %+v)", file, tc.wantFile, Plan(in))
+			}
+		})
+	}
+}
+
+func TestUnreadCandidatePullWaitsForObservationWithoutDoubleSettling(t *testing.T) {
+	ev := Event{At: t0, Verb: VerbProblem, Agent: worker, Detail: worker + ": CI red on " + overlapPRBURL}
+	in := Input{
+		Now:        t0,
+		PullReadAt: map[string]time.Time{},
+		Workers:    []Worker{{Name: worker, Serves: pr}},
+		Pulls:      map[string]Pull{},
+		Events:     []Event{ev},
+	}
+	if acts := Plan(in); len(acts) != 0 {
+		t.Fatalf("settled before unread candidate pull was observed: %+v", acts)
+	}
+
+	// Once observed as the worker's Part-of PR, it settles as progress.
+	ownedIn := in
+	ownedIn.Pulls = map[string]Pull{overlapPRB: {State: Open, Body: "Part of https://github.com/o/r/issues/7"}}
+	ownedIn.PullReadAt = map[string]time.Time{overlapPRB: t1}
+	only(t, Plan(ownedIn), KindProgress)
+
+	// An already-filed single problem never emits a second progress action later.
+	filedAlready := ownedIn
+	filedAlready.Taken = taken(t, t1, Action{Key: eventKey(KindFile, ev), Kind: KindFile, Agent: worker})
+	if acts := Plan(filedAlready); len(acts) != 0 {
+		t.Fatalf("already-filed problem double-settled as progress: %+v", acts)
+	}
+
+	// Once observed as an unowned open PR, or past the observation bound, it files.
+	unownedIn := in
+	unownedIn.Pulls = map[string]Pull{overlapPRB: {State: Open}}
+	unownedIn.PullReadAt = map[string]time.Time{overlapPRB: t1}
+	only(t, Plan(unownedIn), KindFile)
+
+	timedOut := in
+	timedOut.Now = t0.Add(6 * time.Minute)
+	only(t, Plan(timedOut), KindFile)
+}

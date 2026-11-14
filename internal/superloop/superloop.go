@@ -183,6 +183,9 @@ type Worker struct {
 	Done bool
 	// Issues are all active serve records.
 	Issues []string
+	// Pulls are the pull requests and primary task items (owner/repo#n) the
+	// worker's active task, serve record, publication or review park owns.
+	Pulls []string
 	// ReviewRequested distinguishes a proven published branch from a plain wait.
 	ReviewRequested bool
 	Name            string
@@ -261,6 +264,9 @@ type Input struct {
 	Workers      []Worker
 	// Pulls are the tracked pull requests (Tracked) by ref.
 	Pulls map[string]Pull
+	// ProblemPulls are pull requests observed solely to classify unsettled
+	// worker problem reports without entering review, overlap or sweep planning.
+	ProblemPulls map[string]Pull
 	// Events are the log's events since the loop's first start.
 	Events []Event
 	Notes  []Note
@@ -778,7 +784,11 @@ func Plan(in Input) []Action {
 		if l.has(key) || l.has(eventKey(KindProgress, e)) {
 			return true
 		}
-		if !ownDeliveryProblem(in, l, e) {
+		isPaired := paired(e)
+		if problemAlreadyFiled(l, eventsByAgent[e.Agent], e, near, isPaired) {
+			return true
+		}
+		if !ownDeliveryProblem(in, l, e, isPaired) {
 			return false
 		}
 		ev := e
@@ -795,8 +805,13 @@ func Plan(in Input) []Action {
 				// the others go to the guide's feed to file, before the
 				// agent leaves the roster.
 				var filed, unfiled []string
+				awaitingPull := false
 				for _, p := range eventsByAgent[e.Agent] {
 					if p.Verb != VerbProblem || !near(p, e) || forwarded(p) || progress(p) {
+						continue
+					}
+					if problemAwaitsPull(in, l, p, true) {
+						awaitingPull = true
 						continue
 					}
 					if Filed(p.Detail) {
@@ -807,6 +822,9 @@ func Plan(in Input) []Action {
 					} else {
 						unfiled = append(unfiled, problemText(p))
 					}
+				}
+				if awaitingPull {
+					continue
 				}
 				fk := eventKey(KindFile, e)
 				if len(unfiled) > 0 && !l.has(fk) {
@@ -856,7 +874,7 @@ func Plan(in Input) []Action {
 			// finding, never a decision: one naming its issue is filed,
 			// one naming none goes to the guide's feed to file in its
 			// owning repository, and the agent keeps its task.
-			if !paired(e) && !forwarded(e) && !progress(e) {
+			if !paired(e) && !forwarded(e) && !progress(e) && !problemAwaitsPull(in, l, e, false) {
 				if Filed(e.Detail) {
 					for _, u := range issueURL.FindAllString(e.Detail, -1) {
 						intake(issueRefFromURL(u), u, e.Agent, originOf(e, u))

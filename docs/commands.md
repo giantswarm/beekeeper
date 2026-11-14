@@ -1228,9 +1228,10 @@ event logs whom it reached.
 Records a mid-task finding immediately as `agents.problem` and delivers it to the supervisor’s
 watch, preserving the worker’s task and park. Include evidence and the owning repository, with full
 issue and PR URLs. Repeating a finding, including at `idle --problem`, logs and delivers it once per
-worker assignment. Reports explicitly naming only the worker’s claimed issues or owned open PRs stay
-in the delivery timeline as `supervisor.progress`, including after the worker leaves; they create no
-guide filing task. Unknown ownership and reports naming another repository remain findings. Repeated
+worker assignment. Reports whose subject is the worker’s claimed issues or owned open PRs (including
+newly opened `Part of` PRs and same-repository merged or closed context references) stay in the
+delivery timeline as `supervisor.progress`, including after the worker leaves; they create no guide
+filing task. Unknown ownership and reports naming another repository remain findings. Repeated
 fingerprints already mapped to filed issues increment their observation tally without creating new
 guide work. A multiline report in the filing format of `agents problem --help` (an owner or issue
 URL, a stable title and the complete current description) is placed by the loop instead, its own

@@ -86,6 +86,7 @@ type loopPullWatcher struct {
 	Mu       sync.Mutex
 	Snapshot LoopPullSnapshot
 	tracked  map[string]bool
+	problem  map[string]bool
 	extra    map[string]bool
 	changed  chan struct{}
 	ready    chan struct{}
@@ -110,7 +111,7 @@ type loopPullWatcher struct {
 }
 
 func newPullWatcher() *loopPullWatcher {
-	return &loopPullWatcher{Snapshot: LoopPullSnapshot{Pulls: map[string]WatchedLoopPull{}}, tracked: map[string]bool{}, extra: map[string]bool{}, changed: make(chan struct{}, 1), ready: make(chan struct{}, 1)}
+	return &loopPullWatcher{Snapshot: LoopPullSnapshot{Pulls: map[string]WatchedLoopPull{}}, tracked: map[string]bool{}, problem: map[string]bool{}, extra: map[string]bool{}, changed: make(chan struct{}, 1), ready: make(chan struct{}, 1)}
 }
 
 func (l *Loop) PullWatcher() *loopPullWatcher {
@@ -196,6 +197,25 @@ func (w *loopPullWatcher) Set(refs, authors, orgs []string, floor int, never []s
 	}
 }
 
+func (w *loopPullWatcher) SetProblemPulls(refs []string) {
+	w.Mu.Lock()
+	next := make(map[string]bool, len(refs))
+	added := false
+	for _, ref := range refs {
+		next[ref] = true
+		if !w.problem[ref] && !w.tracked[ref] {
+			if _, seen := w.Snapshot.Pulls[ref]; !seen {
+				added = true
+			}
+		}
+	}
+	w.problem = next
+	w.Mu.Unlock()
+	if added {
+		signalPullWatch(w.changed)
+	}
+}
+
 // SetBots has the listing find the pull requests bots opened in the
 // repositories desk owns, teams being the team files' owners as last read
 // (known false until they are): without it the sweep never sees one, and
@@ -271,7 +291,22 @@ func (w *loopPullWatcher) needsPoll(tracked []string, now time.Time) bool {
 		}
 		return p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && (p.At.IsZero() || now.Sub(p.At) > LoopPullMaxAge)
 	}
-	return slices.ContainsFunc(tracked, check) || slices.ContainsFunc(w.Snapshot.Open, check)
+	if slices.ContainsFunc(tracked, check) || slices.ContainsFunc(w.Snapshot.Open, check) {
+		return true
+	}
+	for ref := range w.problem {
+		if why, _ := desk.Unread(ref); why != "" {
+			continue
+		}
+		p, ok := w.Snapshot.Pulls[ref]
+		if !ok || p.Error != "" || p.At.IsZero() {
+			return true
+		}
+		if p.Pull.State != "" && p.Pull.State != superloop.Merged && p.Pull.State != superloop.Closed && now.Sub(p.At) > LoopPullMaxAge {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *loopPullWatcher) Read(ref string, now time.Time) (WatchedLoopPull, error) {
@@ -496,7 +531,12 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 	w.Mu.Lock()
 	authors, orgs, floor := slices.Clone(w.authors), slices.Clone(w.orgs), w.floor
 	desk := superloop.Desk{Orgs: orgs, Never: slices.Clone(w.never)}
+	wasTracked := maps.Clone(w.tracked)
+	problem := maps.Clone(w.problem)
 	refs := maps.Clone(w.tracked)
+	for ref := range w.problem {
+		refs[ref] = true
+	}
 	for ref := range w.extra {
 		refs[ref] = true
 	}
@@ -562,7 +602,7 @@ func (w *loopPullWatcher) Poll(ctx context.Context, l *Loop) (time.Duration, err
 			delete(refs, ref)
 			continue
 		}
-		if p, ok := before.Pulls[ref]; ok && (p.Pull.State == superloop.Merged || p.Pull.State == superloop.Closed) {
+		if p, ok := before.Pulls[ref]; ok && (p.Pull.State == superloop.Merged || p.Pull.State == superloop.Closed || problem[ref] && !wasTracked[ref] && p.Error == "" && p.Pull.State == "" && !p.At.IsZero()) {
 			continue
 		}
 		if _, ok := Cmd.ParseRef(ref); ok {

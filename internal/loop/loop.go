@@ -647,12 +647,12 @@ func (l *Loop) liveOpen(ctx context.Context, ref string) bool {
 // owner/repo#n: "" without one, once its session ended or once it waits
 // for "done".
 func LoopServes(st *state.State, ag state.Agent) string {
-	for i := range st.Records {
+	for i := len(st.Records) - 1; i >= 0; i-- {
 		r := &st.Records[i]
-		if !r.Session.Is(ag.Party) {
+		if !r.Session.Is(ag.Party) || !r.Ended.IsZero() {
 			continue
 		}
-		if !r.Ended.IsZero() || strings.HasPrefix(strings.ToLower(r.Waits), "done") {
+		if strings.HasPrefix(strings.ToLower(r.Waits), "done") {
 			return ""
 		}
 		if ref, ok := Cmd.ParseRef(r.Issue); ok {
@@ -672,6 +672,36 @@ func LoopTaskServes(ag state.Agent, parkedOn string) string {
 		}
 	}
 	return ""
+}
+
+func LoopTaskPull(ag state.Agent) string {
+	for _, task := range []string{ag.Task, ag.LastTask} {
+		if m := Cmd.RefURL().FindString(task); m != "" && loopParkPull.MatchString(m) {
+			if r, ok := Cmd.ParseRef(m); ok {
+				return Cmd.RefName(r)
+			}
+		}
+	}
+	return ""
+}
+
+func isLoopReviewer(name string) bool {
+	return strings.HasPrefix(name, "Review ")
+}
+
+func appendWorkerRef(refs []string, raw string) []string {
+	if raw == "" {
+		return refs
+	}
+	r, ok := Cmd.ParseRef(raw)
+	if !ok {
+		return refs
+	}
+	ref := Cmd.RefName(r)
+	if !slices.ContainsFunc(refs, func(existing string) bool { return strings.EqualFold(existing, ref) }) {
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 // loopOutput serializes parallel loop actions and asynchronous timer output.
@@ -1714,6 +1744,28 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		if w.Serves == "" && ag.Park != nil && ag.Park.ReviewHead == "" {
 			w.Serves = LoopTaskServes(ag, w.ParkedOn)
 		}
+		if !isLoopReviewer(ag.Name) {
+			w.Pulls = appendWorkerRef(w.Pulls, LoopTaskServes(ag, w.ParkedOn))
+			w.Pulls = appendWorkerRef(w.Pulls, LoopTaskPull(ag))
+			if ag.Execution != nil {
+				if rec, _ := Cmd.ExecutionRecord(st, *ag.Execution); rec != nil && rec.Published != nil {
+					w.Pulls = appendWorkerRef(w.Pulls, rec.Published.URL)
+				}
+			}
+			for _, d := range st.Deliveries {
+				if d.Abandoned {
+					continue
+				}
+				ownsDelivery := d.Agent != "" && strings.EqualFold(d.Agent, ag.Name) ||
+					w.Serves != "" && strings.EqualFold(d.Ref, w.Serves) ||
+					slices.ContainsFunc(w.Pulls, func(ref string) bool { return strings.EqualFold(d.Ref, ref) })
+				if ownsDelivery {
+					for _, pr := range d.Pulls {
+						w.Pulls = appendWorkerRef(w.Pulls, pr)
+					}
+				}
+			}
+		}
 		in.Workers = append(in.Workers, w)
 	}
 	for _, n := range st.Notes {
@@ -1768,9 +1820,27 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 			endedParks = true
 			continue
 		}
+		for i := range in.Workers {
+			if !isLoopReviewer(in.Workers[i].Name) &&
+				(strings.EqualFold(in.Workers[i].Name, rp.Agent) || rp.Continuing != "" && strings.EqualFold(in.Workers[i].Name, rp.Continuing)) {
+				in.Workers[i].Pulls = appendWorkerRef(in.Workers[i].Pulls, rp.On)
+				in.Workers[i].Pulls = appendWorkerRef(in.Workers[i].Pulls, rp.Serves)
+			}
+		}
 		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
 			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(LoopParkOn(ag.Park), rp.On)
 		}) {
+			if rp.Agent != "" && !isLoopReviewer(rp.Agent) && !slices.ContainsFunc(in.Workers, func(w superloop.Worker) bool { return strings.EqualFold(w.Name, rp.Agent) }) {
+				var pulls []string
+				pulls = appendWorkerRef(pulls, rp.On)
+				pulls = appendWorkerRef(pulls, rp.Serves)
+				in.Workers = append(in.Workers, superloop.Worker{
+					Done:  true,
+					Name:  rp.Agent,
+					Pulls: pulls,
+					Saved: true,
+				})
+			}
 			continue
 		}
 		in.Workers = append(in.Workers, superloop.Worker{
@@ -1803,13 +1873,16 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		}
 	}
 	in.Pulls = map[string]superloop.Pull{}
+	in.ProblemPulls = map[string]superloop.Pull{}
 	in.PullReadAt = map[string]time.Time{}
 	tracked := DeliveryTrackedPulls(superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk), st.Deliveries, in.Desk)
 	tracked = slices.DeleteFunc(tracked, func(ref string) bool {
 		return !a.ParkIsPull(ctx, st, ref)
 	})
 	SortTrackedPulls(in, tracked)
+	problemPulls := superloop.UnsettledProblemPulls(in)
 	l.PullWatcher().Set(tracked, in.Desk.Authors, a.Cfg().GitHub.AllowedOrgs, a.Cfg().GitHub.Floor, a.Cfg().Supervisor.Ownership.Never)
+	l.PullWatcher().SetProblemPulls(problemPulls)
 	l.PullWatcher().SetBots(in.Desk.Bots, in.Desk, l.Teams, l.Teams != nil)
 	if l.Once && l.Host.LoopNow() != nil && !l.DryRun || l.DryRun && l.PullWatcher().needsPoll(tracked, in.Now) {
 		PollOncePullWatcher(ctx, l)
@@ -1894,6 +1967,58 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 					}
 				}
 			}
+		}
+	}
+	if len(problemPulls) > 0 {
+		snap := l.PullWatcher().View()
+		for _, ref := range problemPulls {
+			if stop, err := l.passCheckpoint(ctx); stop || err != nil {
+				return err
+			}
+			for k, p := range in.Pulls {
+				if strings.EqualFold(k, ref) {
+					in.ProblemPulls[ref] = p
+					if at, ok := in.PullReadAt[k]; ok && !at.IsZero() {
+						in.PullReadAt[ref] = at
+					}
+					break
+				}
+			}
+			if _, ok := in.ProblemPulls[ref]; ok {
+				continue
+			}
+			l.Mu.Lock()
+			mergedPull, wasMerged := l.Merged[ref]
+			l.Mu.Unlock()
+			if wasMerged {
+				in.ProblemPulls[ref] = mergedPull
+				in.PullReadAt[ref] = in.Now
+				continue
+			}
+			p, err := l.ObservePullStep(ctx, ref, time.Time{}, LoopPullStep)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if wp, ok := snap.Pulls[ref]; ok && !wp.At.IsZero() && wp.Error == "" && wp.Pull.State == "" {
+					in.PullReadAt[ref] = wp.At
+				} else if !errors.Is(err, ErrLoopLater) {
+					in.PullReadAt[ref] = in.Now
+				}
+				continue
+			}
+			if r, ok := Cmd.ParseRef(ref); ok {
+				p.Team = l.Teams[strings.ToLower(r.Repo)]
+			}
+			p.Reviews = DeskVerdicts(p.Reviews, in.Desk.Authors)
+			in.ProblemPulls[ref] = p
+			l.Mu.Lock()
+			at := l.Pulls[ref].At
+			l.Mu.Unlock()
+			if at.IsZero() {
+				at = in.Now
+			}
+			in.PullReadAt[ref] = at
 		}
 	}
 	for stage, by := range stageDetail {
@@ -2233,6 +2358,11 @@ func (l *Loop) RunPassActions(ctx context.Context, st *state.State, claims map[s
 	reservations, _ := l.DeliveryReservations(current)
 
 	planned := map[string]bool{}
+	if !restarting {
+		for _, agent := range superloop.PendingProblemAgents(in) {
+			planned[agent] = true
+		}
+	}
 	var (
 		laneOrder  []string
 		laneMerges = map[string][]superloop.Action{}
