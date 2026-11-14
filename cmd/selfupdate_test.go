@@ -141,7 +141,8 @@ func TestSelfUpdateCanaryChecksLiveConfigAndRetriesBudgetFailure(t *testing.T) {
 		t.Fatalf("self-update --check after budget failure = %v", err)
 	}
 
-	// Verify all four canary checks run with --config when healthy.
+	// Verify the four live canary checks run with --config when healthy, and
+	// the isolated workflow probe last, without the live configuration.
 	ranChecks = nil
 	failGate = false
 	a := &app{cfgPath: cfgPath, store: store}
@@ -153,6 +154,7 @@ func TestSelfUpdateCanaryChecksLiveConfigAndRetriesBudgetFailure(t *testing.T) {
 		gateArgs,
 		{cfgSwitch, cfgPath, supervisorName, executionStatus},
 		{cfgSwitch, cfgPath, "capacity"},
+		{selfUpdateCmdName, installationProbeArg},
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)

@@ -50,6 +50,8 @@ const verbSelfUpdateComparison = "self-update.comparison"
 // are skipped on later checks and updates.
 const skippedReleasesFile = "skipped-releases.json"
 
+const installationProbeArg = "--installation-probe"
+
 // budgetGateArgs is the command that checks the GitHub budget and active gates.
 var budgetGateArgs = strings.Fields("budget --gate")
 
@@ -546,7 +548,8 @@ func (a *app) noteUncompared(w io.Writer, version, why string) {
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
-	name, why, busy := canaryCheck(ctx, w, a.cfgPath, path)
+	checks := append(slices.Clone(canaryChecks), []string{selfUpdateCmdName, installationProbeArg})
+	name, why, busy := canaryRunChecks(ctx, w, a.cfgPath, path, checks)
 	if why == "" {
 		return nil
 	}
@@ -586,10 +589,15 @@ func canaryFailure(ctx context.Context, cfgPath, path string) string {
 // that check ran out of its deadline and the running release's same check
 // did not pass either: the host is judged, not the binary.
 func canaryCheck(ctx context.Context, w io.Writer, cfgPath, path string) (name, why string, busy bool) {
-	for _, check := range canaryChecks {
+	return canaryRunChecks(ctx, w, cfgPath, path, canaryChecks)
+}
+
+func canaryRunChecks(ctx context.Context, w io.Writer, cfgPath, path string, checks [][]string) (name, why string, busy bool) {
+	for _, check := range checks {
 		name = strings.Join(check, " ")
 		args := check
-		if cfgPath != "" {
+		// The workflow fixture is deliberately isolated from the live desk.
+		if cfgPath != "" && !slices.Contains(check, installationProbeArg) {
 			args = append([]string{"--" + configFlag, cfgPath}, check...)
 		}
 		out, err := runCanaryCheckWithin(ctx, canaryDeadline, path, args)

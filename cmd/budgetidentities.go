@@ -173,7 +173,7 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 	if credential.Err != nil {
 		return unknown(credential.Err)
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 20 * time.Second, Transport: budgetIdentityTransport{identity: id}}
 	repo := a.cfg.GitHub.ProbeRepo
 	if id == github.IdentityApp {
 		repo = github.BudgetAppRepo
@@ -278,4 +278,16 @@ func observedGraphQL(previous state.Budget, current *state.GraphQL, now time.Tim
 func storedGraphQL(g *github.GraphQL, at time.Time) *state.GraphQL {
 	return &state.GraphQL{Identity: g.Identity, Login: g.Login, BlockedBy: g.BlockedBy, Remaining: g.Remaining,
 		Limit: g.Limit, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary, Err: g.Err, At: at}
+}
+
+// Rate limits and network failures leave the credential alone. Only GitHub's
+// authentication rejection requires another helper invocation.
+type budgetIdentityTransport struct{ identity string }
+
+func (t budgetIdentityTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	if err == nil && resp.StatusCode == http.StatusUnauthorized {
+		github.RejectBudgetCredential(t.identity)
+	}
+	return resp, err
 }
