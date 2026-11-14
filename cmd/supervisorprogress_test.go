@@ -156,7 +156,7 @@ func TestProgressItemWaivesPositiveCeilingOnly(t *testing.T) {
 	}
 	saved := loop.BoardProgress{
 		BoardAt: keepNow,
-		Items:   []board.Candidate{{Ref: itemRef, Status: "Up Next"}},
+		Items:   []board.Candidate{{Item: board.Item{Ref: itemRef, Status: "Up Next"}}},
 		Entries: map[string]loop.ItemProgress{
 			itemRef: {Signal: "null", Changed: keepNow.Add(-31 * time.Minute), Seen: keepNow},
 		},

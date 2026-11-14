@@ -1682,8 +1682,8 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		DevctlOwners: a.Cfg().Merge.DevctlOwners, Admin: a.Cfg().Merge.Admin, MergeMethods: a.Cfg().Merge.Methods,
 		RequireReview: a.Cfg().Merge.RequireReview,
 		BaseMerged:    func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		NitsChecked: func(p superloop.Pull, approved string) bool { return st.ReviewNitsChecked(p.Ref, p.Head, approved) },
-		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.Cfg().Agents.StaleAfter.Duration,
+		NitsChecked:   func(p superloop.Pull, approved string) bool { return st.ReviewNitsChecked(p.Ref, p.Head, approved) },
+		Open:          func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.Cfg().Agents.StaleAfter.Duration,
 		Board: a.Cfg().Board.Owner != "" && a.Cfg().Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
