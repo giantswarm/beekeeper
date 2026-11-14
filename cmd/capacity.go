@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/loop"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -187,6 +188,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
 	withPaceOffs(readings, st, now)
+	a.withProgressPace(readings)
 	h := a.readHeadroom(ctx, k, a.watchSwap())
 	choicesCap := capacity.FilterChoiceModel(k, wantModel)
 	v := capacity.BuildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
@@ -401,6 +403,9 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.validateProgressItem(); err != nil {
+				return err
+			}
 			if host != "" && host != executionLocal {
 				h, err := a.executionHost(host)
 				if err != nil {
@@ -504,6 +509,7 @@ nothing; it makes no GitHub call.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&a.progressItem, loop.BoardProgressFlag, "", "supervisor recovery of a stalled board item")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
 	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")

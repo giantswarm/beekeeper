@@ -391,7 +391,7 @@ when:
   (`internal/update/source_release.go`).
 - **The recovery controller** of a watched candidate is a unit the updater
   asks the service manager for (`beekeeper-recovery.service`). It evaluates
-  once a minute, and one evaluation with its isolated workflow probe takes
+  once a minute; release installation and controller evaluations can take
   longer than a step of the world's clock, so evaluations would be dropped.
   A scenario therefore answers that `systemd-run` call in `given.calls` and
   runs the unit's command itself, as a background step of the last known

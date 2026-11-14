@@ -1087,6 +1087,7 @@ func ReadTranscript(path string, now time.Time, sessionModel ...string) (claude.
 			case itemFunctionCall:
 				tName, argsJSON := normalizeToolArgs(item.Name, item.Arguments)
 				acts.Call(item.CallID, tName, argsJSON, cwd)
+				a.LastTool = item.CallID
 				isGH := tName == toolBash && invokesGitHub(argsJSON)
 				for _, c := range counts {
 					c.ToolCalls++
@@ -1097,6 +1098,7 @@ func ReadTranscript(path string, now time.Time, sessionModel ...string) (claude.
 			case itemCustomToolCall:
 				tName, argsJSON := normalizeCustomToolArgs(item.Name, item.Input)
 				acts.Call(item.CallID, tName, argsJSON, cwd)
+				a.LastTool = item.CallID
 				for _, c := range counts {
 					c.ToolCalls++
 				}
@@ -1107,6 +1109,7 @@ func ReadTranscript(path string, now time.Time, sessionModel ...string) (claude.
 				}
 				argsJSON, _ := json.Marshal(map[string]string{keyCommand: cmdStr})
 				acts.Call(item.CallID, toolBash, argsJSON, cwd)
+				a.LastTool = item.CallID
 				isGH := claude.InvokesGitHub(cmdStr)
 				for _, c := range counts {
 					c.ToolCalls++
@@ -1179,6 +1182,7 @@ func ReadTranscript(path string, now time.Time, sessionModel ...string) (claude.
 					acts.Result(si.ID, si.AggregatedOutput)
 				}
 				isGH := claude.InvokesGitHub(si.Command)
+				a.LastTool = si.ID
 				isErr := si.ExitCode != nil && *si.ExitCode != 0
 				for _, c := range counts {
 					c.ToolCalls++

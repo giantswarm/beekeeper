@@ -86,6 +86,7 @@ type Host interface {
 // there until their own packages exist; a field goes when its function has
 // moved to a package the loop can import.
 type Command struct {
+	LoopBoardProgress          func(l *Loop, ctx context.Context, st *state.State, in superloop.Input, unread map[string]bool) (bool, error)
 	About                      func(e state.Event, ref string) state.Event
 	AgyAgentStartID            func(ag state.Agent) string
 	AgyQuotaError              func(cfg *config.Config, ag state.Agent) *agy.QuotaError

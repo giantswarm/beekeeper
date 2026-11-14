@@ -66,7 +66,7 @@ func (l *Loop) RefillTick(ctx context.Context) (result error) {
 	l.RefillConfigMu.RLock()
 	defer l.RefillConfigMu.RUnlock()
 	dispatched := false
-	why := "loop stopping or waiting to re-exec"
+	why := refillStoppingReason
 	defer func() {
 		if !l.DryRun && !dispatched && l.Host.Cfg().Supervisor.WorkerBrief != "" {
 			if result != nil {

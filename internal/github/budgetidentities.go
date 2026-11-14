@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	clk "github.com/giantswarm/beekeeper/internal/clock"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -72,59 +73,122 @@ type BudgetCredential struct {
 	Warning string `json:"-"`
 }
 
-// BudgetCredentials explicitly selects the stored gh login and, when
-// configured, devctl's App login. Neither route depends on cwd or GH_REPO.
+// Credential helpers are process-local: no token is persisted or used as a
+// cache key. Serialize acquisition so concurrent loop/watch probes fork once.
+var budgetCredentialCache struct {
+	sync.Mutex
+	key     string
+	entries map[string]cachedBudgetCredential
+}
+
+type cachedBudgetCredential struct {
+	credential      BudgetCredential
+	readAt, retryAt time.Time
+}
+
+// budgetCredentialMaxAge reads a held credential again well before an
+// expiring one (an App's token lasts an hour) is refused in a probe: a
+// refused probe is an unreadable identity, and the budget fails closed.
+const budgetCredentialMaxAge = 10 * time.Minute
+
+// BudgetCredentials selects the stored gh login and devctl's App login, read
+// at most once per budgetCredentialMaxAge per process. Unavailable providers
+// are retried after a minute; a rejected credential is invalidated by the
+// HTTP probe. Without devctl there is no App identity, as before the cache.
+// A read the caller cancelled is not kept. Neither route depends on cwd.
 func BudgetCredentials(ctx context.Context) []BudgetCredential {
+	budgetCredentialCache.Lock()
+	defer budgetCredentialCache.Unlock()
+	key := strings.Join([]string{os.Getenv("PATH"), os.Getenv("HOME"),
+		os.Getenv("XDG_CONFIG_HOME"), os.Getenv("GH_CONFIG_DIR"),
+		APIURL(), fmt.Sprint(DevctlSkipVersionCheck())}, "\x00")
+	if budgetCredentialCache.key != key {
+		budgetCredentialCache.key = key
+		budgetCredentialCache.entries = nil
+	}
+	if budgetCredentialCache.entries == nil {
+		budgetCredentialCache.entries = map[string]cachedBudgetCredential{}
+	}
+	now := clk.Now()
+	var credentials []BudgetCredential
+	for _, id := range []string{IdentityGH, IdentityApp} {
+		// A missing devctl is a path lookup, no process. Leaving the App out
+		// lets the caller report a previously configured App as unavailable.
+		if id == IdentityApp {
+			if _, err := budgetDevctl(); err != nil {
+				delete(budgetCredentialCache.entries, id)
+				continue
+			}
+		}
+		cached, ok := budgetCredentialCache.entries[id]
+		if !ok || !now.Before(cached.retryAt) {
+			read := readBudgetCredential(ctx, id)
+			if ctx.Err() != nil {
+				// The caller's deadline says nothing about the provider; a
+				// cached failure would fail every other caller's budget closed.
+				credentials = append(credentials, read)
+				continue
+			}
+			cached = cachedBudgetCredential{credential: read, readAt: now, retryAt: now.Add(budgetCredentialMaxAge)}
+			if read.Err != nil || read.Skip {
+				cached.retryAt = now.Add(time.Minute)
+			}
+			budgetCredentialCache.entries[id] = cached
+		}
+		credentials = append(credentials, cached.credential)
+	}
+	return credentials
+}
+
+// RejectBudgetCredential expires only the rejected identity. A broken provider
+// cannot cause more than one acquisition per minute, even under concurrent 401s.
+func RejectBudgetCredential(identity string) {
+	budgetCredentialCache.Lock()
+	defer budgetCredentialCache.Unlock()
+	if cached, ok := budgetCredentialCache.entries[identity]; ok {
+		if retry := cached.readAt.Add(time.Minute); retry.Before(cached.retryAt) {
+			cached.retryAt = retry
+		}
+		budgetCredentialCache.entries[identity] = cached
+	}
+}
+
+func readBudgetCredential(parent context.Context, identity string) BudgetCredential {
 	gh, err := budgetGH()
 	if err != nil {
-		return []BudgetCredential{{Identity: IdentityGH, Err: err}}
+		return BudgetCredential{Identity: identity, Err: err}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	env := budgetEnv(os.Environ())
-	devctl, devctlErr := budgetDevctl()
-	var (
-		personal BudgetCredential
-		app      BudgetCredential
-		wg       sync.WaitGroup
-	)
-	wg.Go(func() {
-		personal = budgetCredential(ctx, IdentityGH, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
-	})
-	if devctlErr == nil {
-		wg.Go(func() {
-			status := proc.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
-			status.Env = env
-			status.WaitDelay = 100 * time.Millisecond
-			// The overall exit status covers other providers too (for example CircleCI).
-			// Its stdout can still contain usable GitHub metadata.
-			raw, _ := status.Output()
-			var metadata struct {
-				GitHub struct {
-					Present *bool `json:"present"`
-				} `json:"github"`
-			}
-			if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
-				app = BudgetCredential{Identity: IdentityApp, Skip: true,
-					Warning: "devctl App credential metadata unavailable; probing stored gh identity only"}
-				return
-			}
-			if !*metadata.GitHub.Present {
-				app = BudgetCredential{Identity: IdentityApp, Skip: true}
-				return
-			}
-			// devctl applies its owner routing even under auth exec. Pin the App's
-			// owner explicitly so a personal checkout cannot select the gh login.
-			appEnv := ghEnv(env, BudgetAppRepo)
-			app = budgetCredential(ctx, IdentityApp, devctl,
-				[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, appEnv)
-		})
+	if identity == IdentityGH {
+		return budgetCredential(ctx, identity, gh, []string{budgetAuthCommand, "token", budgetHostFlag, "github.com"}, env)
 	}
-	wg.Wait()
-	if devctlErr != nil {
-		return []BudgetCredential{personal}
+	devctl, err := budgetDevctl()
+	if err != nil {
+		return BudgetCredential{Identity: identity, Skip: true}
 	}
-	return []BudgetCredential{personal, app}
+	status := proc.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
+	status.Env = env
+	status.WaitDelay = 100 * time.Millisecond
+	// The overall exit status covers other providers too. Its stdout can
+	// still contain usable GitHub metadata.
+	raw, _ := status.Output()
+	var metadata struct {
+		GitHub struct {
+			Present *bool `json:"present"`
+		} `json:"github"`
+	}
+	if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
+		return BudgetCredential{Identity: identity, Skip: true,
+			Warning: "devctl App credential metadata unavailable; probing stored gh identity only"}
+	}
+	if !*metadata.GitHub.Present {
+		return BudgetCredential{Identity: identity, Skip: true}
+	}
+	// Pin App routing to the same repository as its budget probe.
+	return budgetCredential(ctx, identity, devctl,
+		[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, ghEnv(env, BudgetAppRepo))
 }
 
 // The loop service may have a smaller PATH than a worker. The sibling of

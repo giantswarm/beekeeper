@@ -15,7 +15,6 @@ import (
 )
 
 const backgroundRESTFile = "background-rest.json"
-const backgroundRESTLimit = 2000
 
 func (a *app) backgroundRESTContext(ctx context.Context) context.Context {
 	who := envParty(os.Getenv)
@@ -25,14 +24,18 @@ func (a *app) backgroundRESTContext(ctx context.Context) context.Context {
 	return github.WithRESTAdmission(ctx, a.admitBackgroundREST)
 }
 
-// This is an invocation ceiling, not a replacement for the measured scan
-// allowance. The lower ceiling leaves room for pagination and budget probes.
-// All background processes share it, including reads outside loopScanREST.
+// All background processes reserve invocations against the latest measured
+// REST headroom. This does not replace the measured loopScanREST allowance.
+// Pagination and retries can spend more than one request per invocation.
 type backgroundRESTSpend struct {
-	Reset   time.Time      `json:"reset"`
-	Calls   int            `json:"calls"`
-	Limit   int            `json:"limit"`
-	Callers map[string]int `json:"callers"`
+	Reading  time.Time      `json:"reading"`
+	Identity string         `json:"identity,omitempty"`
+	Login    string         `json:"login,omitempty"`
+	Reserved int            `json:"reserved"`
+	Reset    time.Time      `json:"reset"`
+	Calls    int            `json:"calls"`
+	Limit    int            `json:"limit"`
+	Callers  map[string]int `json:"callers"`
 }
 
 func (a *app) admitBackgroundREST(ctx context.Context, class string) error {
@@ -41,10 +44,10 @@ func (a *app) admitBackgroundREST(ctx context.Context, class string) error {
 	lock := flock.New(filepath.Join(a.store.Dir(), "background-rest.lock"))
 	held, err := lock.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil {
-		return fmt.Errorf("background REST admission: %w", err)
+		return fmt.Errorf("background REST admission lock: %w", err)
 	}
 	if !held {
-		return fmt.Errorf("background REST admission busy")
+		return fmt.Errorf("background REST admission lock busy")
 	}
 	defer func() { _ = lock.Unlock() }()
 	var spend backgroundRESTSpend
@@ -64,32 +67,35 @@ func (a *app) admitBackgroundREST(ctx context.Context, class string) error {
 }
 
 func (s *backgroundRESTSpend) admit(now time.Time, budget *state.Budget, floor int, class string) error {
-	limit := backgroundRESTLimit
 	known := budget != nil && budget.Limit > 0 && now.Before(budget.Reset)
-	if known {
-		limit = min(limit, (budget.Limit-1)/2)
-	} else {
-		// Permit bootstrap without an extra probe; unknown windows never get
-		// a full allowance. Budget probes themselves do not use this gate.
-		limit = 100
-	}
-	if !now.Before(s.Reset) {
+	if !now.Before(s.Reset) || known && (s.Identity != budget.Identity || s.Login != budget.Login || !s.Reset.Equal(budget.Reset)) || !known && !s.Reading.IsZero() {
 		*s = backgroundRESTSpend{Reset: now.Add(time.Hour), Callers: map[string]int{}}
 		if known {
-			s.Reset = budget.Reset
+			s.Reset, s.Identity, s.Login = budget.Reset, budget.Identity, budget.Login
 		}
 	}
 	if s.Callers == nil {
 		s.Callers = map[string]int{}
 	}
-	s.Limit = limit
-	// When a probe first identifies the window, retain the bootstrap spend.
-	// Never refund calls on identity/window changes while a ledger is live.
-	if known && budget.Reset.After(s.Reset) {
-		s.Reset = budget.Reset
-	}
-	if s.Calls >= limit || known && budget.Remaining <= max(floor, budget.Limit/2) {
-		return fmt.Errorf("background REST held: %s used %d calls; all background callers used %d of %d, reset %s", class, s.Callers[class], s.Calls, limit, s.Reset.UTC().Format(time.RFC3339))
+	if !known {
+		s.Limit = 100
+		if s.Calls >= s.Limit {
+			return fmt.Errorf("background REST held: unknown reading, bootstrap invocation cap %d reached, reset %s; caller %s", s.Limit, s.Reset.UTC().Format(time.RFC3339), class)
+		}
+	} else {
+		// A newer measurement settles prior reservations, including the old
+		// fixed-cap ledger. Reusing a reading never refunds an invocation.
+		if budget.At.After(s.Reading) {
+			s.Reading, s.Reserved = budget.At, 0
+		}
+		s.Limit = max(0, budget.Remaining-max(0, floor))
+		if budget.Remaining <= max(0, floor) {
+			return fmt.Errorf("background REST held: saved remaining %d of %d at or below floor %d, reading %s, reset %s; caller %s", budget.Remaining, budget.Limit, floor, budget.At.UTC().Format(time.RFC3339), budget.Reset.UTC().Format(time.RFC3339), class)
+		}
+		if s.Reserved >= s.Limit {
+			return fmt.Errorf("background REST held: invocation allowance %d exhausted since reading %s (%d remaining, floor %d), reset %s; caller %s", s.Limit, budget.At.UTC().Format(time.RFC3339), budget.Remaining, floor, budget.Reset.UTC().Format(time.RFC3339), class)
+		}
+		s.Reserved++
 	}
 	s.Calls++
 	s.Callers[class]++

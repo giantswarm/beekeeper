@@ -94,6 +94,9 @@ func (a *app) remoteControl(ctx context.Context, op string, data any) error {
 		}
 		return fmt.Errorf("coordinator delivery unconfirmed; retry the identical request, no host-local scheduling state was changed: %w", err)
 	}
+	if a.json && op == execution.ControlPark {
+		return a.printJSON(map[string]string{paramMessage: result.Output})
+	}
 	_, err = fmt.Fprintln(a.out, result.Output)
 	return err
 }
@@ -506,14 +509,17 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
-		reviewHead, kind := "", v.RefKind
-		if _, isRef := parseRef(v.On); isRef && ag.Execution != nil && isDeskReviewWait(v.Waits) {
-			if r, _ := executionRecord(st, *ag.Execution); r != nil {
-				head := v.Head
-				if head == "" {
-					head = v.ReviewHead
+		reviewHead, reviewReason, kind := "", "", v.RefKind
+		if _, isRef := parseRef(v.On); isRef && isDeskReviewWait(v.Waits) {
+			reviewReason = "execution record is unavailable; no owned publication could be verified"
+			if ag.Execution != nil {
+				if r, _ := executionRecord(st, *ag.Execution); r != nil {
+					head := v.Head
+					if head == "" {
+						head = v.ReviewHead
+					}
+					reviewHead, reviewReason = executionReviewVerification(ctx, r, v.On, head)
 				}
-				reviewHead = executionReviewHead(ctx, r, v.On, head)
 			}
 		}
 		if reviewHead != "" {
@@ -539,7 +545,11 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				st.Records[i].Waits = oneLine(v.Waits)
 			}
 		}
-		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", append(a.recordTaskOutcome(st, *ag, state.OutcomeParked, ag.Park.On+": "+ag.Park.Waits), event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))), nil
+		mode := parkReviewMode(reviewHead)
+		if reviewHead == "" && reviewReason != "" {
+			mode += "; verification reason: " + reviewReason
+		}
+		return "park recorded on coordinator; " + mode + "; end your turn now", append(a.recordTaskOutcome(st, *ag, state.OutcomeParked, ag.Park.On+": "+ag.Park.Waits), event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))), nil
 	case execution.ControlResume:
 		// The worker leaves its own park once its wait settled: nobody is
 		// woken, the line carries what settled it.
@@ -662,15 +672,28 @@ var executionReviewGH = github.RunGH
 // older host sends none, and the owned branch's head stands). Anything else,
 // or a pull request GitHub does not answer for, is a plain wait.
 func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head string) string {
+	head, _ = executionReviewVerification(ctx, r, on, head)
+	return head
+}
+
+// executionReviewVerification retains the reason a park grants no review
+// authority. It reports fixed diagnostics, never raw GitHub responses.
+func executionReviewVerification(ctx context.Context, r *state.ExecutionRecord, on, head string) (string, string) {
 	ref, ok := parseRef(on)
-	if !ok || (!r.Request.GitHub && !strings.EqualFold(ref.Repo, r.Request.Repository)) || head != "" && !publicationCommit(head) {
-		return ""
+	if !ok {
+		return "", "target is not an issue or pull request reference"
+	}
+	if !r.Request.GitHub && !strings.EqualFold(ref.Repo, r.Request.Repository) {
+		return "", "target repository does not match the execution repository"
+	}
+	if head != "" && !publicationCommit(head) {
+		return "", "workspace HEAD is not a full commit ID"
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	out, err := executionReviewGH(github.ActingOn(ctx, ref.Repo), "api", fmt.Sprintf("repos/%s/pulls/%d", ref.Repo, ref.N))
 	if err != nil {
-		return ""
+		return "", "GitHub pull request lookup failed; retry after connectivity or budget recovery"
 	}
 	var p struct {
 		Draft bool
@@ -681,8 +704,23 @@ func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Draft || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, ref.Repo) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
-		return ""
+	if json.Unmarshal(out, &p) != nil {
+		return "", "GitHub pull request response could not be decoded"
 	}
-	return p.Head.SHA
+	if p.Draft {
+		return "", parkDraftReason
+	}
+	if p.Head.Ref != executionOwnedBranch(r) {
+		return "", "pull request head branch is not owned by this execution"
+	}
+	if !strings.EqualFold(p.Head.Repo.FullName, ref.Repo) {
+		return "", "pull request head repository does not match the target repository"
+	}
+	if !publicationCommit(p.Head.SHA) {
+		return "", "GitHub pull request response has no valid head commit"
+	}
+	if head != "" && p.Head.SHA != head {
+		return "", "published HEAD does not match the workspace HEAD; publish the committed changes and park again"
+	}
+	return p.Head.SHA, ""
 }

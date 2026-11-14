@@ -149,7 +149,8 @@ a new publication asks for that head's review. A local roster worker's explicit
 "desk review" request whose publication cannot be verified is saved with its
 worktree and retried by the supervisor loop after GitHub access recovers. Until
 verification succeeds it grants no review or merge authority. Other unverified
-parks record a plain wait. The command says which it recorded. A bot's pull request the desk
+parks record a plain wait. The command says which it recorded and why verification
+failed, including for SSH workers and in --json's message. A bot's pull request the desk
 did not open gets the same review once its login is in supervisor.ownership.bots. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
 park. --as <name> parks the registered agent of that name, whatever

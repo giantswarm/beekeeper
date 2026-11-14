@@ -50,6 +50,7 @@ func RemoteStatus(ctx context.Context, git Git, t Tree, hadPull bool) (gone, pub
 		return false, false, err
 	}
 	found := false
+	var tips []string
 	for line := range strings.Lines(string(out)) {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
@@ -58,11 +59,18 @@ func RemoteStatus(ctx context.Context, git Git, t Tree, hadPull bool) (gone, pub
 		found = found || fields[1] == "refs/heads/"+t.HeadBranch()
 		if fields[0] == t.Head {
 			published = true
-			continue
 		}
-		if _, err := git(ctx, t.Dir, "merge-base", "--is-ancestor", t.Head, fields[0]); err == nil {
-			published = true
-		}
+		tips = append(tips, fields[0])
+	}
+	if !published && len(tips) > 0 {
+		// Ask once whether HEAD has any commit outside all advertised tips.
+		// Missing remote objects are ignored, never treated as publication.
+		// HEAD came from Inspect and must exist locally.
+		slices.Sort(tips)
+		tips = slices.Compact(tips)
+		args := append([]string{"rev-list", "--max-count=1", "--ignore-missing", t.Head, "--not"}, tips...)
+		remaining, err := git(ctx, t.Dir, args...)
+		published = err == nil && len(strings.TrimSpace(string(remaining))) == 0
 	}
 	trackedBranch := t.Pushed != "" && t.Pushed == t.HeadBranch()
 	return !found && (trackedBranch || hadPull), published, nil

@@ -245,7 +245,12 @@ and it runs from that pull request's worktree branch at its published HEAD. The
 command records and prints the verified head. Other parks, including older parks
 without this evidence, are plain waits: no reviewer, merge go or findings
 forwarded; the watch resumes them when the pull request merges or closes. If
-publication could not be verified, request review in one shell call:
+publication could not be verified, the output names the reason, also in `--json`'s `message`.
+A local roster worker's explicit review request retains its worktree for automatic verification
+retries after GitHub access recovers. An SSH worker's unverified request remains a plain wait:
+the coordinator explains a draft, an unread or invalid GitHub response, a different repository
+or owned branch, or a workspace HEAD that has not been published. Correct the reported condition
+and request review again in one shell call:
 `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`.
 
 The park hands over the head it verified, and a head that only merges the base into it. A head its

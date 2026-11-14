@@ -3,6 +3,25 @@
 The supervisor loop is the desk's supervisor. It is a user service, not a session: it fills
 the desk from the board, watches pull requests and outages, and routes alerts.
 
+## Recovering stalled board work
+
+The loop observes the first five actionable **In Progress** items in the configured board order,
+putting items titled `P1:` or labelled `P1` / `priority/p1` first. It saves PR heads, each check's
+conclusion, review assignments and verdicts, and serving workers' latest tool-call activity in
+`supervisor-board-progress.json`. A loop restart retains the elapsed time. Board membership is
+refreshed every minute; unread board, PR or process observations never authorize recovery.
+
+After 30 minutes without a changed signal, the next pass uses the existing recovery paths: a
+fresh continuation for a dead worker, a fixer for a red head without a live fixer, or the missing
+assignment of a supervisor-started SSH reviewer at its pinned head. An unstaffed item can start
+despite subscription pace, unless `board next` names an owner for it (a session's serve record, a
+task naming it or a running session working on it): such an item is reported, never doubled. The
+pace exception applies only to commands for that item, expires with its observation, and never
+changes the provider's global settings. Weekly and session caps,
+machine limits, WIP admission, repository holds, explicit waits and the person's stop still apply.
+A live but quiet process is reported rather than replaced. Only unresolved causes reach the guide;
+successful actions are recorded as `supervisor.board-progress`. Up Next work keeps normal admission.
+
 ## Filling the desk
 
 With `supervisor.workerBrief` configured, refill runs on its own `supervisor.loopInterval` cadence,
@@ -78,6 +97,14 @@ depend on GraphQL admission. Fresh conditional budget samples settle the reserva
 or unreadable sample keeps it. Concurrent callers' spending during a batch counts conservatively.
 Exhausting this allowance holds background scans until reset; tracked PR reads, reviews and merges
 retain their own admission. Supervisor status names the scan hold.
+
+All native background REST callers also reserve invocations against the latest measured REST
+headroom above `github.floor`. A newer reading settles those reservations; a changed identity or
+window starts a new ledger. There is no fixed 2,000-call cap or implicit half-window reserve.
+Unknown or expired readings permit 100 bootstrap invocations per hour until a fresh reading arrives.
+Holds name the cause, reading, threshold and reset. Caller totals are diagnostics, not per-caller
+quotas. This gate counts invocations, so pagination and retries can spend more REST points; the
+measured scan allowance still applies separately.
 
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.

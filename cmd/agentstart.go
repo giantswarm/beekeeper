@@ -370,6 +370,9 @@ work, which takes no choice on a self-hosted provider.`,
 					return err
 				}
 			}
+			if err := a.validateProgressItem(); err != nil {
+				return err
+			}
 			kind := capacity.StartKind(review, ofSelfHosted)
 			if host == "" {
 				// supervisor.hostsFirst places a start without --host as the
@@ -464,6 +467,9 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			brief, err := readBrief(briefFile)
 			if err != nil {
+				return err
+			}
+			if err := a.validateProgressTask(brief); err != nil {
 				return err
 			}
 			visibilityCheckout := ""
@@ -718,6 +724,7 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 		},
 	}
+	c.Flags().StringVar(&a.progressItem, loop.BoardProgressFlag, "", "supervisor recovery of a stalled board item")
 	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
 	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")

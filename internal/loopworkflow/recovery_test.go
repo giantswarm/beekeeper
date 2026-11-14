@@ -184,12 +184,21 @@ func (d *desk) journal(t *testing.T) *update.Journal {
 	return j
 }
 
+// brokenCandidate cannot start on the desk, as a release that crashes at
+// startup on this host. It takes a second to fail, so the crash exercise below
+// kills the first controller between two failed probes.
+const brokenCandidate = "#!/bin/sh\n/bin/sleep 1\necho 'candidate cannot start' >&2\nexit 1\n"
+
 // TestRecoveryRestoresABrokenCandidate is the post-canary defect: a candidate
-// that passed everything else cannot merge on the desk. A controller of the
+// that passed everything else cannot start on the desk. A controller of the
 // good release, killed once mid-way, restores it from the journal alone, with
-// no person and no backlog, and the desk merges again.
+// no person and no backlog, and the desk merges again. A candidate that starts
+// but cannot merge never gets this far: the pre-install canary runs its
+// isolated workflow (self-update --installation-probe), and that refuses the
+// parser defect, as the end of this test shows.
 func TestRecoveryRestoresABrokenCandidate(t *testing.T) {
-	good, broken := versioned(t, goodRelease, ""), versioned(t, nextRelease, parserOverlay(t))
+	good, unmergeable := versioned(t, goodRelease, ""), versioned(t, nextRelease, parserOverlay(t))
+	broken := []byte(brokenCandidate)
 	d := newDesk(t, good, broken)
 	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
 	defer cancel()
@@ -245,21 +254,32 @@ func TestRecoveryRestoresABrokenCandidate(t *testing.T) {
 	if err := Probe(ctx, d.target, self, t.TempDir()); err != nil {
 		t.Fatalf("the restored desk does not merge: %v", err)
 	}
-	if err := Probe(ctx, filepath.Join(d.target+".update", hexSum(broken)), self, t.TempDir()); err == nil {
-		t.Fatal("the control: the probe passes the broken candidate")
+	// The pre-install canary's isolated workflow: the good release passes it,
+	// the parser defect does not, so that candidate is never installed.
+	if err := CandidateProbe(ctx, d.target, self, t.TempDir()); err != nil {
+		t.Fatalf("the canary's installation probe refuses the good release: %v", err)
+	}
+	unmergeablePath := filepath.Join(t.TempDir(), "beekeeper-unmergeable")
+	if err := os.WriteFile(unmergeablePath, unmergeable, 0o700); err != nil { //nolint:gosec // the fixture's executable
+		t.Fatal(err)
+	}
+	if err := CandidateProbe(ctx, unmergeablePath, self, t.TempDir()); err == nil || errors.Is(err, ErrInconclusive) {
+		t.Fatalf("the control: the canary's installation probe does not fail the parser defect: %v", err)
 	} else {
-		fmt.Fprintln(os.Stderr, "broken candidate:", err)
+		fmt.Fprintln(os.Stderr, "unmergeable candidate:", err)
 	}
 	writeProofArtifact(t, "recovery-proof.json", map[string]any{
-		"good_version":        goodRelease,
-		"good_sha256":         hexSum(good),
-		"broken_version":      nextRelease,
-		"broken_sha256":       hexSum(broken),
-		"rolled_back":         j.RolledBack(),
-		"quarantine_reason":   j.Quarantine[hexSum(broken)],
-		"elapsed":             j.Observed.Elapsed.String(),
-		"notification_logged": evs[0].Detail,
-		"post_rollback_probe": "passed",
+		"good_version":             goodRelease,
+		"good_sha256":              hexSum(good),
+		"broken_version":           nextRelease,
+		"broken_sha256":            hexSum(broken),
+		"rolled_back":              j.RolledBack(),
+		"quarantine_reason":        j.Quarantine[hexSum(broken)],
+		"elapsed":                  j.Observed.Elapsed.String(),
+		"notification_logged":      evs[0].Detail,
+		"post_rollback_probe":      "passed",
+		"unmergeable_sha256":       hexSum(unmergeable),
+		"unmergeable_installation": "refused",
 	})
 }
 

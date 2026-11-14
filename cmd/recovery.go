@@ -62,9 +62,18 @@ type recoveryHold struct {
 	At     time.Time
 }
 
-// recoveryProbe drives the candidate through the isolated workflow; the tests
-// replace it.
-var recoveryProbe = loopworkflow.CandidateProbe
+// The workflow fixture belongs to the pre-install canary. Recovery observes
+// live health and checks that the installed executable still starts; it must
+// never run a second supervisor loop and fixture GitHub inventory every tick.
+// Tests replace this seam to exercise failures and their control.
+var recoveryProbe = func(ctx context.Context, binary, _, _ string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c := proc.CommandContext(ctx, binary, "version") //nolint:gosec // verified candidate or recovery artifact
+	c.WaitDelay = 100 * time.Millisecond
+	_, err := c.Output()
+	return err
+}
 
 // recoveryGitHubUp says whether GitHub answers at all; the tests replace it. A
 // failure streak during an outage is GitHub's, not the candidate's.
@@ -105,6 +114,9 @@ type recoveryController struct {
 	scratch  string
 	step     time.Duration
 	prepared int
+	// Pin one installation. A surviving controller never judges a later one.
+	candidate   string
+	installedAt time.Time
 	// now and moveProcesses are the clock and restart; the tests replace them.
 	now           func() time.Time
 	moveProcesses func(ctx context.Context, attempt int) bool
@@ -209,6 +221,9 @@ func (c *recoveryController) observe(ctx context.Context, change func(*update.Ob
 	ctx, cancel := context.WithTimeout(ctx, recoveryJournalWait)
 	defer cancel()
 	return update.Observe(ctx, c.target, func(j *update.Journal) error {
+		if c.candidate != "" && (j.Candidate.Digest != c.candidate || !j.InstalledAt.Equal(c.installedAt)) {
+			return errors.New("recovery installation changed")
+		}
 		if j.Observed == nil {
 			j.Observed = &update.Observed{}
 		}
@@ -224,6 +239,16 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	if err != nil {
 		return true, c.hold(ctx, "", err)
 	}
+	if j != nil {
+		if c.candidate == "" {
+			c.candidate, c.installedAt = j.Candidate.Digest, j.InstalledAt
+		} else if c.candidate != j.Candidate.Digest || !c.installedAt.Equal(j.InstalledAt) {
+			return true, nil
+		}
+	}
+	// A rolled-back journal goes to finish even where Settled calls it done
+	// (no observations, a hold): finish releases the recovery writer fence,
+	// idempotently, and probes nothing.
 	switch {
 	case j.RolledBack():
 		return c.finish(ctx, j)
@@ -243,6 +268,20 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	}
 	o.Elapsed += c.step
 	c.probe(ctx, j, &o)
+	// A rollback or replacement while the probe ran ends this evaluation.
+	// Never write its observations onto the new journal or launch its control.
+	current, err := update.Inspect(c.target)
+	if err != nil {
+		return false, err
+	}
+	if current == nil || current.Candidate.Digest != c.candidate || !current.InstalledAt.Equal(c.installedAt) {
+		return true, nil
+	}
+	// A rollback still owes its finish, which the next tick runs: Settled
+	// calls an unobserved one done, so it must not end the controller here.
+	if !current.Pending() || current.RollingBack() {
+		return current.Settled() && !current.RolledBack(), nil
+	}
 	s := c.signals(ctx, j)
 	o.NoteLoop(s)
 	verdict, reason := update.Decide(o, s)
@@ -284,7 +323,7 @@ func (c *recoveryController) tick(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// probe runs the isolated workflow when one is due: at once, after a failure,
+// probe checks the executable when one is due: at once, after a failure,
 // and every recoveryProbeEvery after a pass.
 func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *update.Observed) {
 	if o.ProbePassed && o.ProbeFailures == 0 && o.Elapsed-o.ProbedAt < recoveryProbeEvery {
@@ -301,6 +340,11 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 		_, _ = fmt.Fprintf(c.w, "probe of %s: %v\n", j.Candidate.Version, err)
 	default:
 		o.ProbePassed = false
+		current, readErr := update.Inspect(c.target)
+		if readErr != nil || current == nil || !current.Pending() || current.RollingBack() ||
+			current.Candidate.Digest != j.Candidate.Digest || !current.InstalledAt.Equal(j.InstalledAt) {
+			return
+		}
 		// The control: what the last known good cannot do either says nothing
 		// about the candidate, whose rollback would fix nothing.
 		if cerr := recoveryProbe(ctx, c.server, c.server, c.scratch); cerr != nil {
@@ -308,8 +352,8 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 			return
 		}
 		o.ProbeFailures++
-		// Probe runs with isolated fixture configuration and no credentials. Keep
-		// enough of its cause for the durable rollback line, without log growth.
+		// Keep enough of the startup failure for the durable rollback line,
+		// without log growth.
 		o.ProbeFailure = strings.Join(strings.Fields(err.Error()), " ")
 		const failureLimit = 512
 		if len(o.ProbeFailure) > failureLimit {

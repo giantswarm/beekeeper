@@ -140,7 +140,7 @@ CI's job runs one beside it, and locally the same image does:
 
 ```bash
 docker run -d --rm --name beekeeper-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 \
-  gsoci.azurecr.io/giantswarm/postgres:18.6-alpine
+  gsoci.azurecr.io/giantswarm/postgres:18.7-alpine
 BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable' make test-envtest
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
@@ -580,6 +580,13 @@ timer from the running watches.
   forwarder that says so. A seam entry goes when its target moves to a package the loop can import.
   The loop uses `internal/gate` directly for its command name, exit codes, release verdict and
   short commit IDs, without command callbacks or copied gate constants.
+- `internal/superloop`: The supervisor's pure planner: the pass's input, actions, `Tracked` and
+  `Plan` in `superloop.go`, the action ledger and tracking episodes in `ledger.go`, the pull
+  request stage in `pull.go`, the overlap stage in `overlap.go`, the orphan sweep in `sweep.go`,
+  another desk's claims in `elsewhere.go`, ownership policy in `ownership.go`, event and report
+  helpers in `events.go`, owned delivery problems in `problems.go`, closing-issue and absorbed-pull
+  parsers in `closes.go`, delivery state derivation in `delivery.go` and standstills recording in
+  `record.go`.
 - `internal/lease`: Lease directories and the grant rule; a lab's claim-time `agentlab.yaml`, the keys a release finds changed and the change left for the next claim.
 - `internal/peer`: The command-line send to a running Claude session: one headless `claude -p` turn
   whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's
@@ -1003,6 +1010,16 @@ or recover every ownerless In Progress item. The broader 15-minute orphan sweep
 remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
 pulls without saved review metadata and stale serve records from relieved or
 off-roster sessions.
+
+One session repairs a conflicting head. The loop claims a pull request's conflict repair (its
+wake or fixer start, keyed `conflict <pull request>@<head> …`) for one session. That session, or
+the fresh continuation that took its task, holds the claim while it is on the roster, busy with a
+task, not done and not parked again since. While the claim stands, no other session is woken,
+started or continued for that pull request: the loop logs one
+`leave <pull request> conflict-held@<head>` line instead. A fresh continuation for that pull
+request (plain overlap waits on another worker's pull request aside) is not started either: a
+session beekeeper started is retired with the reason (`supervisor.done`), and one its person
+started stays parked with its events until the claim is released.
 
 The guide defaults to a 200k relay point. When a feed line arrives after an hour
 of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`

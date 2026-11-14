@@ -1,0 +1,73 @@
+name: stalled-board-item-served-by-a-session
+description: >
+  The top In Progress P1 has no pull request and no worker the progress
+  observer counts, but a live session works on it: board next names that
+  session its owner (here by its title), so normal intake leaves the item
+  alone. After 30 minutes without progress the loop starts no second worker
+  for it under the pace exception and reports the wait instead.
+issue: https://github.com/giantswarm/beekeeper/issues/4003
+control:
+  none: guards the stalled-item start this pull request adds; the merge base never starts a stalled item, so it starts no second worker either
+flow: regression
+tags: [regression, loop, progress, ownership]
+timeout: 120s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      agents: {staleAfter: 24h}
+      board:
+        order: [{name: progress, status: [In Progress]}]
+  files:
+    - path: hand.txt
+      content: "Investigate https://github.com/example/app/issues/2\n"
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: 'P1: Served by a session', board: In Progress}
+          - {number: 2, title: Side investigation}
+  harness:
+    usage:
+      claude: {session: 10, week: 40}
+    workers:
+      - name: app 1 hand
+        turns:
+          - outcome: hang
+      - name: app 1
+        turns:
+          - outcome: hang
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ''}
+
+when:
+  - run: {args: [watch, --once]}
+  - run:
+      args: [--as, supervisor loop, agents, start, app 1 hand, /work/hand.txt]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 20s
+      expect:
+        - worker: {name: app 1 hand, turns: 1, running: true}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - worker: {name: app 1, turns: 0}
+  - advance: 30m
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {not_contains: [supervisor.board-progress]}
+  - run: {args: [supervisor, loop, --once]}
+
+then:
+  - worker: {name: app 1, turns: 0}
+  - worker: {name: app 1 hand, turns: 1, running: true}
+  - events: {not_contains: [supervisor.board-progress]}
