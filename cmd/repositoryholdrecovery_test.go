@@ -73,6 +73,9 @@ func TestAgyQuotaReplacementWaitsForTheRepositoryHold(t *testing.T) {
 	if err := l.RecoverQuota(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
+	if err := loopRoster(l, context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
 	if len(runCalls) != 0 {
 		t.Fatalf("a held repository's quota replacement started: %v", runCalls)
 	}
