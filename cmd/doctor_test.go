@@ -28,6 +28,8 @@ const testParkRelieved = "relieved-role"
 
 const parkedIssueRef = "giantswarm/x#4"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
 	for _, reason := range []string{verbDone, testParkRelieved} {
 		t.Run(reason, func(t *testing.T) {
@@ -147,6 +149,9 @@ func TestPlanChores(t *testing.T) {
 // A managed SSH execution is never removed for local CLI staleness or
 // archived in the desktop; once its stop is acknowledged (or it reported
 // done and its execution is terminal), the doctor takes it off the roster.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	a, _ := stubApp(t)
 	now := a.now
@@ -364,6 +369,9 @@ const (
 
 // agents idle --done requires the report's "Problems found", and each
 // finding reaches the supervisor's watch once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleDoneProblemsFound(t *testing.T) {
 	const task, merged = "the task", "merged " + prURL
 	a, out := noteApp(t)
@@ -437,6 +445,9 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 // A park on a person reaches the supervisor's watch once; a park on a
 // merge ahead in the lane, a timer or the supervisor's lease grant does not,
 // and a park on a lease is said once as a lease wait with its queue place.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 	now := time.Now()
 	lab := labOne
@@ -470,6 +481,9 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 }
 
 // Operational handoffs are not news for the person; explicit human waits are.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 	for name, tc := range map[string]struct {
 		on, waits string
@@ -734,6 +748,9 @@ func TestCheckCodexSkills(t *testing.T) {
 // idle entries without a CLI, while leaving active role holders, relieved
 // role runs (the person's to close) and sessions the person started
 // running.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -794,6 +811,9 @@ func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 // The doctor flags a running supervisor loop whose binary version is older
 // than the installed binary, and stays silent once the loop runs the installed
 // version.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}

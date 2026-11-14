@@ -26,6 +26,9 @@ func rebootedGuide() *state.Role {
 // A guide whose own watch went with it (a reboot, a crash) is recorded
 // gone by the standby watch at its first poll, so its grace runs out and
 // its successor starts, instead of a grace that starts anew on every poll.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyRecordsAGuideGoneWithItsWatch(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	var started atomic.Int32
@@ -117,6 +120,9 @@ func TestOnlyABeekeeperRunTakesTheGuide(t *testing.T) {
 // guide start --new starts the next run as a background session with
 // Remote Control when none is recorded; its start records the role, so its
 // own guide start takes it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNewGuideRunWithoutAGuide(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -187,6 +193,9 @@ func TestNewGuideRunRefusals(t *testing.T) {
 
 // beekeeper resume starts the guide whose session runs no CLI after the
 // stop and a reboot; none when no guide is recorded.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeStartsAGoneGuide(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -224,6 +233,9 @@ func TestResumeStartsAGoneGuide(t *testing.T) {
 }
 
 // The first background launch reserves its run before the daemon returns.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestInitialGuideRunReservesLaunch(t *testing.T) {
 	for _, run := range []int{0, 11} {
 		t.Run(guideRole.RunName(run+1), func(t *testing.T) {
@@ -296,6 +308,8 @@ func TestInitialGuideRunReservesLaunch(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestInitialGuideRunLaunchFailureWithdrawsReservation(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}

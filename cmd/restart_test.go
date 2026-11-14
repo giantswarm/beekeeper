@@ -22,6 +22,9 @@ const restartExe = "/home/u/.go/bin/beekeeper"
 // reopens that still run the binary it replaced to restart, names each and
 // leaves the rest: a --once poll, a reopen's detaching stop-post, an alerts
 // or guide watch, a gate, another binary's process, one not replaced.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRequestRestarts(t *testing.T) {
 	procs := map[int]string{
 		3:  "beekeeper watch --standby --notify",
@@ -119,6 +122,9 @@ func TestSupervisorRestartRequested(t *testing.T) {
 // A process restarts for a request newer than its start or the request it
 // restarted for, of the path it runs, once another file replaced it: a
 // re-executed process, no longer replaced, never restarts twice.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRestartDue(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
@@ -155,6 +161,9 @@ func TestRestartDue(t *testing.T) {
 
 // A watch an install asks to restart ends its run after the poll, once every
 // background run it started ended, with the request it restarts for.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	at := time.Now().Add(-time.Second)
@@ -190,6 +199,9 @@ func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 
 // A watch without a request runs on: poll after poll, each asking for the
 // request, its loops wait for the next, and only the cancel ends the run.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	clk := newFakeClock(t)
@@ -219,6 +231,8 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchCancellationWaitsForBackgroundRuns(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	clk := newFakeClock(t)
@@ -400,6 +414,8 @@ func TestRestartBrokerFailureRevokesHandover(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchCancellationSkipsBackgroundStartAndPendingSteps(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
 	ctx, cancel := context.WithCancel(context.Background())

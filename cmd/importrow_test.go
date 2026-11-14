@@ -279,6 +279,9 @@ func (stubDesktopDown) Running(*proc.Table) time.Time { return time.Time{} }
 // what shows it: the standby's import beside a running turn, else the
 // doctor's reopen; a worker with a row, a fresh start, a finished or idle
 // one, a role holder and a session a person started are not in it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysNoDesktopRowOnce(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	orig := plat
@@ -380,6 +383,9 @@ func TestAgentsMarkAWorkerWithoutADesktopRow(t *testing.T) {
 
 // Managed SSH executions and desks whose agents.mode is not the desktop
 // never offer or launch a local desktop reopen.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Claude.DesktopLog = capLog(t, 4)

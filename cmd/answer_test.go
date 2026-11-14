@@ -297,6 +297,9 @@ func TestNoteAnswerTellsTheFilerAndPostsNothing(t *testing.T) {
 // An answer to a decision its default closed within the day replaces the
 // default: logged, its filer told so, the decision no longer kept. One a
 // day after the default is refused.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 	a, out := answerApp(t)
 	stubAnswerGH(t, &answerGH{})
@@ -354,6 +357,9 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 
 // A decision (note add --for the person) without --ref is refused; a note on a thread the person
 // answered on is filed with a warning quoting the answer.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	a, out := answerApp(t)
 	stubAnswerGH(t, &answerGH{})

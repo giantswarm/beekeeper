@@ -150,6 +150,9 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 
 // The watch's AGENTS STOPPED line tells an agent parked on a person apart
 // from one that ended on a wait again after its resume.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStoppedAgentsTellParkedFromEndedOnAWait(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	watchApp(w.Host).cfg.Guide.Person = personTimo

@@ -120,6 +120,9 @@ func runIn(a *app, c interface {
 // successor's prompt carries the epics with their plans and every held item
 // with what holds it, read from GitHub as the predecessor's was, and its first
 // board next walks the same order past the same holds. Nothing is filed for it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARelayKeepsTheBoardHoldsWithoutANote(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}

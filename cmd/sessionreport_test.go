@@ -228,6 +228,9 @@ func TestSessionReportDeliveryOutcomes(t *testing.T) {
 // minutes after it queued its approval; the loop then rejected the approval
 // as one of an ended assignment, and the guide never got it
 // (https://github.com/giantswarm/beekeeper/issues/3625).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorKeepsSessionUntilItsQueuedReportApplies(t *testing.T) {
 	a, _ := stubApp(t)
 	runLive(t, a, nil)

@@ -21,6 +21,9 @@ import (
 
 // Killing the gate must not hide its still-running child or tell its owner
 // that the merge was lost. The child PID alone keeps the lane occupied.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four,
 		PID: deadPID(t), Child: os.Getpid(), Phase: state.Running, Started: relayNow})

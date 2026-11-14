@@ -234,6 +234,9 @@ func TestTrimGoCachePastTheMarginWaitsForTheRuns(t *testing.T) {
 // A desk where a go build always runs: the cache over its cap waits, the
 // watch says GO CACHE with its size, cap and wait once it stayed over the
 // cap across two intervals, and the trim runs once it is past the margin.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 	a, cache := goCacheApp(t)
 	overCap(t, a, cache)

@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 	for _, sessions := range []int{1, 2} {
 		for _, failed := range []bool{false, true} {
@@ -60,6 +62,8 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchDefaultedBatchesCurrentRoleHolder(t *testing.T) {
 	w, _ := onceWatch(t, openRefs)
 	holder := state.Party{Session: "fixture-current-session", Name: litGuideRun2}

@@ -149,8 +149,8 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 // behind it starts: merged, its release unknown, the lane settles by the
 // settle rule first; not merged, the promotion starts at once.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, held string

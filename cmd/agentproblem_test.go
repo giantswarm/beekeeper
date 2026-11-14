@@ -64,6 +64,8 @@ func TestAgentProblemCanonicalFindings(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentProblemReregisterAssignment(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -121,6 +123,8 @@ func TestAgentProblemReregisterAssignment(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	a, out := noteApp(t)
 	run := func(args ...string) error {
@@ -209,6 +213,8 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentProblemRemoteCoordinator(t *testing.T) {
 	a, request := executionTestApp(t)
 	s := hostUpdateServer(t, a, hostNewRelease)

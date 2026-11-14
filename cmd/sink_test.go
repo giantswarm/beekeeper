@@ -131,6 +131,9 @@ func TestTheWatchDispatchesTheSinksWorkflowOnTheSelectedEvents(t *testing.T) {
 }
 
 // Cancellation releases every failed claim for a replacement watch to retry.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
 	a, _ := sinkApp(t, "sink:\n  repo: o/site\n  workflow: refresh.yaml\n  verbs: [session.serve, merged]\n")
 	w := a.newWatcher(false, true)

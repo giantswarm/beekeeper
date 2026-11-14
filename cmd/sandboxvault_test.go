@@ -351,6 +351,9 @@ func TestStatusLineNamesVaultWaits(t *testing.T) {
 
 // The watch says the approval with its end, each waiting call, and a call
 // that gave up as timed out with the vault still locked, never as ENDED.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysTheVault(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
@@ -408,6 +411,9 @@ func TestRunSignin(t *testing.T) {
 }
 
 // The watch says a failed sign-in with its reason, and its end.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAFailedSignin(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
@@ -682,6 +688,9 @@ func TestVaultSigninGivesUpOnAStoreThatNeverComes(t *testing.T) {
 }
 
 // The watch says a sign-in the broker retries, and its end once it unlocked.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysARetriedSignin(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer
@@ -700,6 +709,9 @@ func TestWatchSaysARetriedSignin(t *testing.T) {
 
 // The watch says a session op stopped taking while the broker signs in
 // again, and its end once the new sign-in unlocked.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysADroppedSession(t *testing.T) {
 	a := vaultApp(t, time.Minute)
 	var out bytes.Buffer

@@ -296,6 +296,8 @@ func TestReviveBackgroundAlreadyRunning(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeBackgroundAfterSessionIDChanged(t *testing.T) {
 	const (
 		resumedID            = "2e1b7ca7-98b8-4682-a3e3-e9a7b0f31f0a"
@@ -416,6 +418,9 @@ func TestTakesRelayByRunName(t *testing.T) {
 // A background successor starts as a background session; its relay names
 // its run, then the id the claude daemon chose, and its brief has it take
 // the role and go on in the same turn.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestBackgroundSuccessor(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -717,6 +722,9 @@ func pollStop(t *testing.T, w *watch.Watcher, live []*claude.Session) {
 // A parked background session costs no memory: once its turn ended the
 // watch stops it (claude stop, once), and the park's resume continues it
 // from its transcript (claude --bg --resume) with what settled the wait.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -762,6 +770,9 @@ func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
 // A resume that lands between the watch's look and its stop (it ended the
 // park and sent its message to the running CLI) keeps the session running:
 // the stop looks again under the session's lock and finds no park.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -801,6 +812,9 @@ func TestParkedBackgroundStopAfterAResume(t *testing.T) {
 // A wake that comes while the stop runs waits for it, then resumes the
 // stopped session (claude --bg --resume) instead of sending to the CLI the
 // stop ends; a wake just made keeps the session running for stewardQuiet.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -863,6 +877,9 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 
 // A stop that fails leaves the session parked and running, says so, and is
 // tried again on the next poll.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundStopFails(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -895,6 +912,9 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 
 // A parked background session keeps events for a fresh worker; it is never
 // resumed and its idle resident can still be stopped to release memory.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}

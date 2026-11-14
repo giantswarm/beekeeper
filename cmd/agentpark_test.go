@@ -93,6 +93,9 @@ func stubWakes(t *testing.T) *[]string {
 
 // A parked agent keeps its task and counts parked, not busy; one without a
 // task, or parked on a note that is not open, is refused.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkCountsTheAgentParked(t *testing.T) {
 	w := parkingWatch(t, nil)
 	if err := park(t, w, "--on", "#9", "an answer"); err == nil || !strings.Contains(err.Error(), "note #9 is not open") {
@@ -132,6 +135,9 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 // Answering the note an agent parked on says AGENT RESUMABLE once; with
 // agents.autoResume the next poll resumes it once with the answer word for
 // word in a fresh continuation and retains the park until startup.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 	w := parkingWatch(t, nil)
 	watchApp(w.Host).cfg.Agents.AutoResume = true
@@ -160,6 +166,9 @@ func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 // Without agents.autoResume the watch only says the park resumable; a
 // merged pull request settles a park on it, and agents resume wakes it with
 // the merge.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 	refs := map[string]string{refOne: github.Open}
 	w := parkingWatch(t, refs)
@@ -192,6 +201,9 @@ func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 // agents idle, though a session registered it: a session of another harness
 // or a wrapper script parks and reports as its agent without a harness's
 // session variables. A managed SSH execution's entry is not reached by name.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAsNamesTheRegisteredAgent(t *testing.T) {
 	const session = "5f0c2a7e-0000-4000-8000-000000000001"
 	w := parkingWatch(t, nil)
@@ -236,6 +248,9 @@ func TestAsNamesTheRegisteredAgent(t *testing.T) {
 }
 
 // A park without --on is resumed by hand, its turn naming who resumed it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeByHand(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
@@ -262,6 +277,9 @@ func resume(t *testing.T, w *watch.Watcher, args ...string) error {
 // A parked agent leaves its own park once the wait settled: agents resume
 // without an agent, or naming itself, ends the park, wakes nobody and prints
 // what settled it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
 	for _, args := range [][]string{nil, {agentOne}} {
 		w := parkingWatch(t, nil)
@@ -297,6 +315,9 @@ func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
 // harness's host prefix) is never woken headless: its park line and the
 // watch's AGENT RESUMABLE say so, agents.autoResume leaves it resumable,
 // and agents resume by another ends its park and says so.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	w := parkingWatch(t, nil)
 	watchApp(w.Host).cfg.Agents.AutoResume = true
@@ -355,6 +376,9 @@ func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 }
 
 // A session off the roster leaves its own park too, waking nobody.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOffRosterSessionLeavesItsOwnPark(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
@@ -383,6 +407,9 @@ func TestOffRosterSessionLeavesItsOwnPark(t *testing.T) {
 // A park on a hold is refused while nothing holds the target, and settles
 // once the hold is lifted: a gate's exit 77 waits there, not on a pull
 // request that never settles while the hold lifts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	w := parkingWatch(t, nil)
 	if err := park(t, w, "--on", "hold:merges", "the devctl release window"); err == nil || !strings.Contains(err.Error(), "nothing holds merges") {
@@ -474,6 +501,8 @@ func TestPublishedParkHead(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
@@ -496,6 +525,8 @@ func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPlainPullWaitWakesOnMergeOrClose(t *testing.T) {
 	for _, status := range []string{github.Merged, github.Closed} {
 		t.Run(status, func(t *testing.T) {
@@ -545,6 +576,9 @@ func replyingRefs(t *testing.T, reply *github.Reply) {
 // A session off the roster parks on a pull request; a review by anyone but
 // its author after the park settles it, and with agents.autoResume the watch
 // wakes the session by its id, once, and drops the park.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAReviewResumesASessionParkedOffTheRoster(t *testing.T) {
 	w := parkingWatch(t, nil)
 	watchApp(w.Host).cfg.Agents.AutoResume = true
@@ -588,6 +622,9 @@ func TestAReviewResumesASessionParkedOffTheRoster(t *testing.T) {
 
 // A roster agent's park on a pull request settles on a review too, never on
 // one older than the park.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAReviewMakesAnAgentsParkResumable(t *testing.T) {
 	w := parkingWatch(t, nil)
 	reply := &github.Reply{By: reviewerLogin, At: relayNow.Add(time.Minute), Kind: "comment"}
@@ -603,6 +640,9 @@ func TestAReviewMakesAnAgentsParkResumable(t *testing.T) {
 
 // A session parked off the roster is resumed by hand by its id; one whose
 // session has no task context keeps its park and is refused without a resume.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestResumeOffTheRosterRequiresRecordedTask(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
@@ -621,6 +661,9 @@ func TestResumeOffTheRosterRequiresRecordedTask(t *testing.T) {
 // A session that parked off the roster and then joins it ends that park: a
 // later settle wakes nobody, through registerAgent or any other way onto the
 // roster.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
 	for _, viaRegister := range []bool{true, false} {
 		w := parkingWatch(t, nil)
@@ -659,6 +702,9 @@ func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
 
 // Publication evidence and its mode survive the shared park path for a
 // session off the roster, as they do for registered workers.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
@@ -679,6 +725,8 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
 	for _, exhausted := range []bool{false, true} {
 		t.Run(fmt.Sprint(exhausted), func(t *testing.T) {
@@ -718,6 +766,8 @@ func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSettledParksKeepsPartialBatchResultsOnError(t *testing.T) {
 	w := parkingWatch(t, nil)
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
@@ -751,6 +801,8 @@ func TestSettledParksKeepsPartialBatchResultsOnError(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
 	for _, on := range []string{"", "#3", "hold:merges", "alert:Down"} {
 		w := parkingWatch(t, nil)
@@ -776,6 +828,9 @@ func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
 // park on a pull request whose reason speaks of a hold, something held, a
 // release window or a gate run is recorded on that pull request, by the
 // command and directly, and refuses nothing.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkReasonMaySayAnything(t *testing.T) {
 	for _, waits := range []string{
 		"the editor's held-still source for the opening shot",
@@ -808,6 +863,9 @@ func TestParkReasonMaySayAnything(t *testing.T) {
 // TestMergedPRSettlesAParkWhateverItsReason: the watch settles a park on a
 // pull request by that pull request, whatever its reason says, roster and
 // off-roster parks alike.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMergedPRSettlesAParkWhateverItsReason(t *testing.T) {
 	for _, waits := range []string{"the held-still source", "the merge hold lifting", "gate run completion"} {
 		t.Run(waits, func(t *testing.T) {
@@ -846,6 +904,8 @@ func TestMergedPRSettlesAParkWhateverItsReason(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDeskReviewParkSaysVerificationPending(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open})
 	oldHead, oldWorktree := parkReviewHead, parkWorktree
@@ -875,6 +935,8 @@ func assertFreshQueue(t *testing.T, w *watch.Watcher, woke []string, contains st
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDeskReviewParkJSONExplainsPendingVerification(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open})
 	old := parkReviewHead
@@ -893,6 +955,8 @@ func TestDeskReviewParkJSONExplainsPendingVerification(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMatchingHeadWithNonReviewReasonStaysPlain(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
@@ -913,6 +977,8 @@ func TestMatchingHeadWithNonReviewReasonStaysPlain(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDraftReviewParkExplainsPlainWait(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })

@@ -62,6 +62,9 @@ func stubPulls(t *testing.T, pulls map[int]github.Pull) {
 // merged is ended by the watch, and the next poll records it: its release
 // unconfirmed, it settles its lane by the settle rule. A run whose pull
 // request is open, or that merged recently, runs on.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchEndsAHungMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).now = relayNow
@@ -121,6 +124,9 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 
 // A wall-clock jump representing suspend must not turn a live release
 // wait into a hung merge. Continuous awake checks still end it afterwards.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchHungMergeAcrossSuspend(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).now = relayNow
@@ -166,6 +172,9 @@ func TestWatchHungMergeAcrossSuspend(t *testing.T) {
 
 // lanes drop ends a running merge whose pull request merged while its
 // devctl runs on, and records it; one whose pull request is open is refused.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLanesDropEndsAHungRun(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	a := watchApp(w.Host)
@@ -220,8 +229,8 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 // A long post-merge CircleCI wait stays alive while devctl reports progress,
 // even after the watch's historical hung threshold has elapsed.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	now := relayNow

@@ -24,6 +24,8 @@ func batchWatcher(t *testing.T) (*watch.Watcher, *strings.Builder, *fakeClock) {
 	return w, out, clk
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchKeepsActionsImmediate(t *testing.T) {
 	w, out, _ := batchWatcher(t)
 	w.EmitNow("doctor", "DOCTOR archived a finished worker")
@@ -66,6 +68,8 @@ func TestWatchBatchKeepsActionsImmediate(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchQuietHalfHour(t *testing.T) {
 	w, out, clk := batchWatcher(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,6 +96,8 @@ func TestWatchBatchQuietHalfHour(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchDisabledAndEmbeddedNewlines(t *testing.T) {
 	w, out, _ := batchWatcher(t)
 	w.BatchEvery = 0 // --once never enables the buffer
@@ -113,6 +119,8 @@ func TestWatchBatchDisabledAndEmbeddedNewlines(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchOtherTeamNotifyAndRecovery(t *testing.T) {
 	w, out, _ := batchWatcher(t)
 	for _, line := range []string{"ALERT NEW alpha notify other Alert ns/pod", "ENDED HIGH LOAD (since 12:00)", "ENDED CPU PRESSURE (since 12:00)", "ENDED READS SLOWED (since 12:00)"} {
@@ -134,6 +142,9 @@ func TestWatchBatchOtherTeamNotifyAndRecovery(t *testing.T) {
 
 // A sanitized hour of recorded desk output supplies the same events to
 // both policies; every action must remain at exactly its original time.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchRecordedHour(t *testing.T) {
 	raw, err := os.ReadFile("testdata/watch-hour.txt")
 	if err != nil {
@@ -194,6 +205,8 @@ func TestWatchTickRejectsNonpositiveDuration(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchLoopRunsBetweenSlowPolls(t *testing.T) {
 	needsPlatform(t)
 	w, out := loopWatcher(t, "1h", "", nil)
@@ -219,6 +232,9 @@ func TestWatchBatchLoopRunsBetweenSlowPolls(t *testing.T) {
 
 // These production doctor messages describe unresolved failures, even
 // though their source also emits completed chores under the DOCTOR prefix.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchDoctorFailuresAreImmediate(t *testing.T) {
 	for _, tc := range []struct {
 		name, line string
@@ -245,6 +261,8 @@ func TestWatchBatchDoctorFailuresAreImmediate(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchBatchDoctorSuccessfulUnitResetIsRoutine(t *testing.T) {
 	w, out, _ := batchWatcher(t)
 	line := "reset the failed units beekeeper-worker.service: their outcomes are in the event log"

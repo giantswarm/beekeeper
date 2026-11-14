@@ -572,6 +572,9 @@ func TestServingModesSwitchBackAndRaise(t *testing.T) {
 // command reports it — a failing switch keeps the old mode and is retried;
 // a reader disagreeing with the recorded mode re-bases the state on what it
 // reports, never on what was recorded.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestServingModesFailureLeavesMode(t *testing.T) {
 	s := newServingModesTest(t)
 	// The fake switcher: a switch into the tiny mode fails while the tries
@@ -776,6 +779,8 @@ sleep 2
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestServingModesStatusAndWatch(t *testing.T) {
 	s := newServingModesTest(t)
 

@@ -266,6 +266,9 @@ func TestReviewVerdictsPrintACommentedVerdict(t *testing.T) {
 }
 
 // A wake that cannot reach the starter is said, not dropped.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAVerdictItCouldNotDeliver(t *testing.T) {
 	r := newLoopRig(t)
 	w := &watch.Watcher{Host: r.a, Last: map[string]time.Time{}, Reported: map[string]bool{}}

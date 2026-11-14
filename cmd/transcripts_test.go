@@ -70,6 +70,8 @@ func newTranscriptTestApp(t *testing.T) (*app, *bytes.Buffer) {
 	return a, &out
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	a, out := newTranscriptTestApp(t)
 	ctx := context.Background()
@@ -398,6 +400,8 @@ func TestExecutionTranscriptRPC(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTranscriptsUnknownHarnessHasNoGuideAccess(t *testing.T) {
 	const session = "unregistered-worker"
 	a, _ := newTranscriptTestApp(t)

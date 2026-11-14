@@ -15,6 +15,9 @@ import (
 
 // An upstream refusal is a hook.refused event, and the watch says each one
 // logged after its first reading once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysUpstreamRefusals(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

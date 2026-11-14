@@ -99,6 +99,9 @@ func TestEndMergedKeepsSameNameOtherSessionRequest(t *testing.T) {
 }
 
 // The live worker runs the done command the loop told it to run after a merge.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 	w := parkingWatch(t, nil)
 	agent := state.Party{Session: "done-session", HostSession: "local_done-session", Name: agentOne}

@@ -21,6 +21,8 @@ const (
 	bigModel   = "big"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestModelBreaches(t *testing.T) {
 	resources := []string{labOne, labTwo}
 	lab1 := machine.HostModel{Name: bigModel, SizeMiB: 18000, Client: labOneNode}
@@ -74,6 +76,8 @@ func TestModelBreaches(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLabOf(t *testing.T) {
 	res := []string{labOne, labTwo, "kind-x"}
 	for client, want := range map[string]string{
@@ -89,6 +93,8 @@ func TestLabOf(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestModelServerLine(t *testing.T) {
 	bs := []watch.ModelBreach{{Model: machine.HostModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.HostModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
 	got := watch.ModelServerLine(bs, map[string]error{bigModel: nil})
@@ -120,6 +126,8 @@ func TestClaimBudget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHostModels(t *testing.T) {
 	lemonade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/health" {

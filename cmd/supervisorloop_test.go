@@ -2251,6 +2251,9 @@ func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
 
 // Line-only timers belong to the supervisor's watch, including its desktop
 // notification. The loop must neither check nor consume them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 	for _, conditional := range []bool{false, true} {
 		t.Run(fmt.Sprintf("conditional=%t", conditional), func(t *testing.T) {
@@ -2755,6 +2758,9 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 // without a CLI leave the roster; their background sessions are stopped but
 // a relieved role run's, which stays the person's to close, while active
 // role holders, in-turn sessions and sessions the person started stay.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Agents.Mode = config.ModeBackground

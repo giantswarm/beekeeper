@@ -78,6 +78,9 @@ func TestSupersededPublicationTransferDoesNotHoldRetirement(t *testing.T) {
 // Publishing twice in the same turn leaves the second bundle as the newest
 // recovered transfer without a separate recovery pass, and the first watch
 // sync after completion retires the execution on its host.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetiresOnHostAfterMultiplePublications(t *testing.T) {
 	rig := newPublicationRig(t)
 	ctx := context.Background()

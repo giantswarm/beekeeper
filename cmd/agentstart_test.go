@@ -494,6 +494,9 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 // desktop warms the CLI of the session its window shows, which the watch
 // stops as revived, so a window sent back there would revive it on every
 // start, reopen and wake (the doctor's archive asks among them).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestShowBrieflyLeavesASupersededSession(t *testing.T) {
 	taken := time.Now().Add(-time.Hour)
 	guide38 := state.Party{Session: "guide-38", HostSession: "local_guide-38", Name: guideRole.RunName(38)}

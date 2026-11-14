@@ -25,6 +25,9 @@ func simArgs(verb string, args ...string) []string { return append([]string{verb
 
 // TestSimCommands: model, run, observe and compare print their figures from
 // the configuration and the event log alone, and --json returns them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSimCommands(t *testing.T) {
 	a, out := supervisorApp(t)
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)

@@ -37,6 +37,8 @@ func (f *orphanTransport) Inventory(context.Context, string) ([]execution.Ref, e
 }
 func (f *orphanTransport) Missing(context.Context, execution.Ref) (bool, error) { return f.absent, nil }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionOrphanInventoryStopsOnlyUnknownJournal(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.Identity.Host = r.Coordinator
@@ -244,6 +246,8 @@ func (f *unsupportedMissingTransport) Missing(context.Context, execution.Ref) (b
 	return false, execution.ErrUnsupported
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionWatchFindsHostOnlyJournal(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.Identity.Host = r.Coordinator

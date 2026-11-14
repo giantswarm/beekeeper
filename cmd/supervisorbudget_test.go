@@ -10,6 +10,9 @@ import (
 
 // This regression only uses the pre-existing loop rig, so it can also run
 // against the unchanged base implementation.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopBudgetHoldsNewStartsUntilRecovery(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())

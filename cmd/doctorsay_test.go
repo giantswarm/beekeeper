@@ -7,6 +7,9 @@ import (
 
 // A chore line the doctor said is not said again while it is unchanged; a
 // changed one is.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSayChoresOnce(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	rep := doctorReport{chores: []string{`"a": its desktop session local_a stays: its CLI 7 is in a turn`}}
@@ -23,6 +26,9 @@ func TestSayChoresOnce(t *testing.T) {
 }
 
 // An empty report has no archive configuration reminder.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSayChoresEmpty(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchSayChores(w, doctorReport{})

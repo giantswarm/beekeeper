@@ -30,6 +30,9 @@ func grantees(t *testing.T, a *app, res string) []string {
 // A grantee queued behind the holder releases its own queued grant: the
 // grant leaves the queue, its park on the lease ends, the next grant moves
 // up, lease list shows it and the log records it. The holder keeps the lease.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseReleaseWithdrawsTheCallersQueuedGrant(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute), claimGrant(labOne, claimFirst, 4*time.Minute))
 	claimAgent(t, a)
@@ -109,6 +112,9 @@ func TestLeaseRevokeOfAnotherSessionsGrantIsRefused(t *testing.T) {
 // The supervisor loop revokes a parked grantee's grant while another session
 // holds the lease: the watch resumes the grantee at once with the words to
 // ask again, instead of leaving it parked until the lease is free.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
 	claimAgent(t, a)

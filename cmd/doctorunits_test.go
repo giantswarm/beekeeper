@@ -70,6 +70,9 @@ func TestDoctorResetsOwnFailedUnits(t *testing.T) {
 // The doctor reports and stops runner units whose session parked, reported
 // done or left the roster, while keeping units of live unparked sessions and
 // busy turns running.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorStopsRunnerUnitsWithoutLiveSession(t *testing.T) {
 	orig := plat
 	t.Cleanup(func() { plat = orig })

@@ -174,6 +174,9 @@ func TestBudgetRereadsAReadingPastItsReset(t *testing.T) {
 }
 
 // The watch says a GraphQL refusal once, with the callers, and its end once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	refuse := true
 	refusingGitHub(t, &refuse)

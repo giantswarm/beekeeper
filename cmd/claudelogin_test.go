@@ -98,6 +98,8 @@ func TestClaudeLoginUnknownAndExternal(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchClaudeLoginCredentialStep(t *testing.T) {
 	path := loginFixture(t)
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
@@ -146,6 +148,8 @@ func TestWatchClaudeLoginCredentialStep(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExpiredClaudeLoginStopsLaunches(t *testing.T) {
 	path := loginFixture(t)
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
@@ -180,6 +184,8 @@ func TestClaudeLoginUTCExpiryInCET(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRefreshableClaudeLoginDoesNotFilePersonNote(t *testing.T) {
 	path := loginFixture(t)
 	w, _, out := notifyingWatch(t, t.TempDir(), false)

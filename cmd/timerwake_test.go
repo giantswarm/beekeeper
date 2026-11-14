@@ -26,6 +26,9 @@ const (
 // Include an old repeating reminder, a successful unrelated probe, a failed
 // probe reaching its deadline, and idle/usage notices. Only the note's
 // answer may resume the agent.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 	w := parkingWatch(t, nil)
 	watchApp(w.Host).cfg.Agents.AutoResume = true
@@ -81,6 +84,8 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 	for _, tc := range []struct {
 		name, on, waits, when string
@@ -166,6 +171,8 @@ func TestSupervisorLeavesPersonParkAsleep(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPersonMessageStillReachesParkedSession(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
@@ -180,6 +187,8 @@ func TestPersonMessageStillReachesParkedSession(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 	const target = "parked-mail-worker"
 	address := "local:" + mailHost + "/" + target
@@ -201,6 +210,8 @@ func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
 	for _, on := range []string{"#3", parkedCentralNote} {
 		t.Run(on, func(t *testing.T) {
@@ -237,6 +248,9 @@ func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
 
 // A gated wait's own result is a wake condition, including red CI. A plain
 // PR park must still hear it; waiting for a person's review is different.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
@@ -255,6 +269,8 @@ func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
@@ -281,6 +297,8 @@ func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	if _, err := watchApp(w.Host).timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
@@ -288,6 +306,8 @@ func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
@@ -300,6 +320,9 @@ func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 // A skip or harness failure must leave another attempt, rather than a park
 // with its only timer gone. Run settlement as well as delivery to cover the
 // claim removing the timer before the park is checked again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerUndeliveredWakeRetries(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint("harness failure=", fail), func(t *testing.T) {
@@ -371,6 +394,8 @@ func TestTimerUndeliveredWakeRetries(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	w.Clock = timerRetryClock{w: w}
@@ -418,6 +443,9 @@ func TestSkippedConditionalTimerStaysOpenPastExpiry(t *testing.T) {
 
 // A one-shot probe may stop holding after its first successful observation.
 // Retry the fired wake, rather than waiting for that observation again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestConditionalWakeRetryKeepsFiredOccurrence(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
 		t.Run("repeat="+repeat, func(t *testing.T) {
@@ -472,6 +500,8 @@ type timerRetryClock struct {
 
 func (c timerRetryClock) Now() time.Time { return watchApp(c.w.Host).now }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	clock := newFakeClock(t)
@@ -502,6 +532,8 @@ func TestDelayedWakeRetryUsesDeliveryTime(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOwnedExternalWaitTimerIsItsWakeCondition(t *testing.T) {
 	owner := state.Party{Name: agentOne, Session: continuationOldSession}
 	for _, tc := range []struct {

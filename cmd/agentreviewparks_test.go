@@ -17,6 +17,8 @@ const pendingReviewWorktree = "/fixture/worktree"
 
 const multiParkSecondPR = "o/r#8"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewParksRetainEachPullRequest(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open, refTwo: github.Open})
 	was := parkReviewHead
@@ -125,6 +127,8 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Open, refTwo: github.Open})
 	was := parkReviewHead

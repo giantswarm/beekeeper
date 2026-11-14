@@ -33,6 +33,8 @@ func TestLeaseClaimWaitNamesTheOverrun(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchLeaseRound(t *testing.T) {
 	a := claimApp(t)
 	h := lease.Holder{Env: graveler, Name: claimOther.Name, Purpose: "60-minute round", Since: a.now.Add(-time.Hour).Format(time.RFC3339)}

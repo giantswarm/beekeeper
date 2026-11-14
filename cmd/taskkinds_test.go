@@ -316,6 +316,9 @@ func TestSessionsByKind(t *testing.T) {
 
 // The watch says SPEND <kind> once a day past its dailySpend, and a
 // restarted watch keeps its mark.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysKindSpendOnceADay(t *testing.T) {
 	a := kindsApp(t)
 	a.cfg.Agents.Kinds[0].DailySpend = 2

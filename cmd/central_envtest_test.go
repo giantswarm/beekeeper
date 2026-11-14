@@ -92,6 +92,9 @@ func (p *person) watcher(out *bytes.Buffer) *watch.Watcher {
 // own resources stay local, each machine's agents are on the central roster,
 // and an unreachable central instance refuses the central verbs with their
 // own exit code and is one watch line.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCentralEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")

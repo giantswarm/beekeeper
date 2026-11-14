@@ -75,6 +75,8 @@ const (
 	labelTeam      = "team"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -101,6 +103,9 @@ func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 // The team's alerts are relevant 24/7: one the business-hours inhibition
 // mutes is read from the Alertmanager's answer, published by the watch and
 // routed by the loop like any other page.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -199,6 +204,8 @@ func TestLoopAlertReplacesUnresumableWorkerAndRetriesStaffing(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 	for _, resumable := range []bool{true, false} {
 		t.Run(strconv.FormatBool(resumable), func(t *testing.T) {
@@ -252,6 +259,8 @@ func TestLoopAlertParkCommandAcceptsNamedEvent(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertReadsWatchEvent(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -481,6 +490,8 @@ func TestLoopAlertLegacyOwnerKeepsItsInstallation(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopAlertLegacyWatchStateKeepsOwner(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)

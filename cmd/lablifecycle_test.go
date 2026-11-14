@@ -50,6 +50,8 @@ func lifecycleDocker(t *testing.T, a *app) (*bool, *int, *int) {
 	return &running, &starts, &stops
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLabLifecycleStopsAndClaimRestarts(t *testing.T) {
 	a := claimApp(t)
 	running, starts, stops := lifecycleDocker(t, a)
@@ -96,6 +98,8 @@ func TestLabLifecycleStopsAndClaimRestarts(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -168,6 +172,8 @@ func TestLabLifecycleFailureAndRefusal(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLabLifecycleDryRunAndDockerFailures(t *testing.T) {
 	a := claimApp(t)
 	_, _, stops := lifecycleDocker(t, a)
@@ -209,6 +215,8 @@ func TestLabLifecycleDryRunAndDockerFailures(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorProtectsClaimAfterSessionSnapshot(t *testing.T) {
 	a := claimApp(t)
 	lifecycleDocker(t, a)
@@ -239,6 +247,9 @@ func TestLabLifecycleRestartHonorsClusterLimit(t *testing.T) {
 
 // Handover preserves Since and records the successor before launching it.
 // An older process snapshot therefore cannot judge that successor gone.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorProtectsHandoverAfterSnapshot(t *testing.T) {
 	for _, successor := range []state.Party{
 		claimMe,

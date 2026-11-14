@@ -19,6 +19,9 @@ import (
 
 // The watch says each agent whose shell resolves a gh other than the agent's
 // own (agents.shell.path) once, and its end once the agent's gh is its own.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 	const own, plain, missing, unread = "Own", "Plain", "Missing", "Unread"
 	dir := t.TempDir()

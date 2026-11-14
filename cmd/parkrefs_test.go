@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIssueParkWaitsForCloseAndBoundsReads(t *testing.T) {
 	w := parkingWatch(t, nil)
 	reads := 0
@@ -81,6 +83,8 @@ func TestLoopCachesLegacyIssueParksAcrossRestarts(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIssueParkSuggestsLinkedPullForServedIssue(t *testing.T) {
 	w := parkingWatch(t, nil)
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
@@ -135,6 +139,8 @@ func stubIssuePark(t *testing.T, on string) {
 	readParkSuggestions = func(context.Context, github.PR) (string, error) { return "", nil }
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
 	w := parkingWatch(t, nil)
 	reads, closed := 0, false
@@ -176,6 +182,8 @@ func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
 
 var errParkLookup = errors.New("GitHub lookup unavailable")
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkRefusesFailedReadsThenRetries(t *testing.T) {
 	for _, kind := range []string{github.RefIssue, github.RefPullRequest} {
 		t.Run(kind, func(t *testing.T) {
@@ -291,6 +299,8 @@ func TestLoopBacksOffUnansweredLegacyParksAcrossRestarts(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatcherBacksOffFailedLegacyParkClassification(t *testing.T) {
 	for _, offRoster := range []bool{false, true} {
 		name := "roster"
@@ -344,6 +354,8 @@ func TestWatcherBacksOffFailedLegacyParkClassification(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkSuggestionMatchesWholeIssueReferences(t *testing.T) {
 	w := parkingWatch(t, nil)
 	before := readParkSuggestions
@@ -370,6 +382,8 @@ func TestParkSuggestionMatchesWholeIssueReferences(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkRefusesSettledReference(t *testing.T) {
 	for _, target := range []struct{ kind, status string }{
 		{github.RefIssue, github.Closed},

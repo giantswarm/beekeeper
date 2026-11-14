@@ -116,6 +116,8 @@ func mailboxWatchVia(t *testing.T, mb *mailboxStandIn, refuse ...string) (*watch
 	return w, &sent, out.String, m
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxDeliversToTheMachinesAgents(t *testing.T) {
 	mb := &mailboxStandIn{}
 	expired, _ := json.Marshal(mailEnvelope{To: "bob@example.com", MessageID: "m-7", Deadline: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)})
@@ -150,6 +152,8 @@ func TestMailboxDeliversToTheMachinesAgents(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxKeepsWhatItsAgentDoesNotTake(t *testing.T) {
 	mb := &mailboxStandIn{}
 	mb.queue = []mailbox.Delivery{
@@ -184,6 +188,8 @@ func TestMailboxKeepsWhatItsAgentDoesNotTake(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestConverseSaysItAsTheCallingAgent(t *testing.T) {
 	mb := &mailboxStandIn{}
 	w, _, _ := mailboxWatch(t, mb)
@@ -202,6 +208,8 @@ func TestConverseSaysItAsTheCallingAgent(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "first")}}
 	w, _, out, m := mailboxWatchVia(t, mb)
@@ -244,6 +252,8 @@ func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxDrainRetriesFailedAcknowledgement(t *testing.T) {
 	mb := &mailboxStandIn{
 		queue:       []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "retry acknowledgement")},
@@ -265,6 +275,9 @@ func TestMailboxDrainRetriesFailedAcknowledgement(t *testing.T) {
 }
 
 // A standing subscription need not notify again for an unacknowledged message.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
 	mb := &mailboxStandIn{ackFailures: 1}
 	w, _, _, m := mailboxWatchVia(t, mb)
@@ -369,6 +382,9 @@ func noteAnswerMail(seq int64, id, to, text string) mailbox.Delivery {
 // now, as on the machine: the run that filed it relayed meanwhile. With no
 // run holding the role, it waits for the role's next start, acked, instead
 // of waiting in the mailbox for a run that never comes back.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	const (
 		ended   = "Guide run 268"

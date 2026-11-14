@@ -366,6 +366,9 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 // USAGE across watch restarts, USAGE HIGH / ENDED USAGE HIGH, once-per-episode
 // messaging of live busy workers, and gating of agents resume + autoResume
 // until fiveHour.resetsAt.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchUsageReportHighWorkersAndAutoResume(t *testing.T) {
 	_, cfgPath := isolateUsageTestEnv(t)
 
@@ -841,6 +844,9 @@ const (
 // review loosens, --exclude, busy agent attribution per provider/bucket,
 // machine guards capping the total, watch once-per-tick USAGE output, and
 // agents start --harness auto.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	dir, cfgPath := isolateUsageTestEnv(t)
 
@@ -1740,6 +1746,9 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 //     and watchProvidersUsage clears the warning when a fresh reading arrives;
 //   - watchProvidersUsage with !w.chores reuses the resolved reading in memory
 //     even when w.store == nil.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 	_, cfgPath := isolateUsageTestEnv(t)
 
@@ -1877,6 +1886,9 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 //     agent's provider and bucket (blocking resume on a high provider/bucket
 //     even when another provider or bucket has room, while allowing resume on
 //     non-high providers/buckets).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProvidersAndBucketsUsageHighResumeAndWatch(t *testing.T) {
 	_, cfgPath := isolateUsageTestEnv(t)
 
@@ -3154,6 +3166,9 @@ omp:
 // capacity.ceiling configured 0, busy agents reaching the self-hosted
 // provider's own ceiling raise neither CAPACITY LOW nor CAPACITY FULL — the
 // derived ceiling carries the self-hosted room, the configured hold stands.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSelfHostedWatchSilentAtCeilingZero(t *testing.T) {
 	_, cfgPath := isolateUsageTestEnv(t)
 	if err := os.WriteFile(cfgPath, []byte(selfHostedRawCfg), 0o600); err != nil {
@@ -3740,6 +3755,8 @@ func TestUsageLastGoodFallback(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUsageReaderDeadline(t *testing.T) {
 	_, err := runUsageCommand(context.Background(), []string{sleepComm, "60"}, 20*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timed out after") {
@@ -3752,6 +3769,8 @@ func TestUsageReaderDeadline(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	const readFailure = "reader timeout"
 	store, err := state.OpenVersion(t.TempDir(), "dev")
@@ -3958,6 +3977,8 @@ func TestCodexAccountStopSurvivesProbeFailure(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 	for _, providers := range []bool{false, true} {
 		t.Run(fmt.Sprintf("providers=%t", providers), func(t *testing.T) {
@@ -4018,6 +4039,9 @@ func TestUsageRefreshValidatesAtCompletion(t *testing.T) {
 // An unreadable Codex reading keeps the last good reading, or the configured
 // ceiling when none is saved, and is raised to the guide; only an explicit
 // quota stop holds Codex starts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 	unreadable := errors.New("usage reading timestamp 2026-11-07T12:00:00Z is in the future")
 	stop := errors.New("codex spend control reached")
@@ -4100,6 +4124,8 @@ func TestCodexUnreadableKeepsStartsQuotaStopHolds(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSubscriptionUnderuseDetectionAndEscalation(t *testing.T) {
 	_, cfgPath := isolateUsageTestEnv(t)
 	rawCfg := `capacity:

@@ -84,8 +84,8 @@ func TestPreToolUseGuardsOffRoutesInScope(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuardsOffDevctlVersionGatePropagation(t *testing.T) {
 	t.Cleanup(func() { github.SetDevctlSkipVersionCheck(false) })
 	const (

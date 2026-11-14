@@ -82,6 +82,8 @@ func TestRecordGuardPanicLog(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 	oldPlatform := plat
 	t.Cleanup(func() { plat = oldPlatform })

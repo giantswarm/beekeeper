@@ -128,8 +128,8 @@ func TestGateTakesOverOlderBinaryAndLateSaveIsRefused(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLanesAndWatchSayStaleMergeOnce(t *testing.T) {
 	g := takeoverGate(t, 1<<30, state.Running)
 	var out bytes.Buffer
@@ -165,8 +165,8 @@ func TestSameSessionReusesWaitingPlace(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMergedWaitingHeadLeavesQueueWithLiveOwner(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	g := takeoverGate(t, sleeper(t), state.Waiting)

@@ -45,6 +45,9 @@ func useEndRevived(t *testing.T) *[]int {
 // session answers to the name again, no SAME TITLE is said, and the doctor
 // owes its desktop session the archive. The follow-up and a person's own
 // session of the same title run on.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 	const name = "BK 37984 serve on gazelle"
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
@@ -112,6 +115,9 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 // own desktop session runs on for watch.ArchiveWarmGrace: the watch neither stops
 // it as revived nor says SAME TITLE beside its follow-up, so its archive
 // call runs. Past the grace it is stopped like any revived CLI.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
 	const name = "BS 2867 provider connect prompt"
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
@@ -157,6 +163,9 @@ func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
 // A relieved run whose CLI the desktop or the person brings back runs on,
 // right after the relay and long after it: the person decides when its
 // session goes (https://github.com/giantswarm/beekeeper/issues/2195).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchLeavesARelievedRunRunning(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	useLauncher(t, &stopLauncher{})
@@ -196,6 +205,9 @@ func TestTheWatchLeavesARelievedRunRunning(t *testing.T) {
 // Once the warmed CLI of a handed-over session archived its desktop session,
 // the doctor owes it nothing and the warm's mark is gone: the watch stops the
 // CLI as done, logged as agents.archive, never REVIVED, and owes no archive.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchStopsAnArchivedSessionsCLIQuietly(t *testing.T) {
 	const name = "WS 38113 backstage workspaces"
 	w, _, out := notifyingWatch(t, t.TempDir(), false)

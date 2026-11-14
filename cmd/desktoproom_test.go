@@ -82,6 +82,9 @@ func TestRoomFor(t *testing.T) {
 // relay relieved is past (its work ended with the relay), so its idle CLI
 // makes room, and the forRole successor may end a worker idle on its task.
 // Neither the holder nor a run still active within stewardQuiet is ended.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRoomForRelievedRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 13, 4, 0, 0, time.UTC)
 	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: guideRole.RunName(12)}

@@ -28,6 +28,8 @@ func ciAnswer(state string, rollup ...string) []byte {
 	return []byte(`{"state":"` + state + `","headRefOid":"` + ciHead + `","statusCheckRollup":[` + strings.Join(rollup, ",") + `]}`)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 	c, err := conditionCheck(prChecks7)
 	if err != nil || c.cmd != "gh pr view 7 --repo o/r --json state,headRefOid,statusCheckRollup" || !c.github || c.judge == nil {
@@ -74,6 +76,9 @@ func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 // wait, with a pr-checks timer: the timer keeps waiting while the checks
 // run, queues a fresh worker on failure with the check and URL, and closes.
 // A green run goes directly to review without a worker turn.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPlainCIParkWakesOnRedAndOnGreen(t *testing.T) {
 	for name, tc := range map[string]struct {
 		settled []byte

@@ -29,6 +29,8 @@ const (
 	supThirteen      = "Guide run 13"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRunOf(t *testing.T) {
 	for name, want := range map[string]int{
 		"Guide run 35": 35, " Guide run 7 ": 7, "Supervisor run 7": 0, agentTwentyEight: 0,
@@ -43,6 +45,8 @@ func TestRunOf(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLastRunReadsTheRecordedNames(t *testing.T) {
 	r := state.Role{
 		Run:      3,
@@ -64,6 +68,9 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 
 // A start numbers the run: a relayed or titled run keeps its number, any
 // other start is the next run, a restart keeps its run.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStartNumbersTheRun(t *testing.T) {
 	st := handOverState() // "Guide run 11" guides; its session is gone
 	msg, _, err := guideRole.Start(st, agentC, false, false, relayNow)
@@ -83,6 +90,8 @@ func TestStartNumbersTheRun(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuccessorBriefTakesTheRoleAndEndsTheTurn(t *testing.T) {
 	b := guideRole.SuccessorBrief(config.Role{Skill: guideName}, guideEight, guideSeven)
 	if !strings.HasPrefix(b, "/guide You are ") {
@@ -125,6 +134,9 @@ func TestAFailedSuccessorWithdrawsItsRelay(t *testing.T) {
 
 // A gone guide gets a successor from the standby watch once: its relay
 // keeps the next polls from starting another.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyStartsAGoneGuidesSuccessor(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	var started atomic.Int32
@@ -163,6 +175,9 @@ func TestStandbyStartsAGoneGuidesSuccessor(t *testing.T) {
 }
 
 // A holder between beekeeper's start and its desktop CLI is not gone.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAFirstTurnIsNotGone(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	w.Stand = standbyWatch{
@@ -188,6 +203,9 @@ func TestAFirstTurnIsNotGone(t *testing.T) {
 }
 
 // A new CLI of the guide is told to take its role up again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyResumesARestartedGuide(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
 	sent := make(chan string, 2)
@@ -306,6 +324,9 @@ func supervisedBy(t *testing.T, w *watch.Watcher, p state.Party, since time.Time
 // headless, not replaced; one that does not come up is one note, and the
 // next successors start a bounded number of times, further and further
 // apart.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	watchApp(w.Host).cfg.Guide.Person = pat
@@ -362,6 +383,9 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 
 // A holder that is no start of beekeeper's gets its successor at once, and
 // a holder up again ends a chain of failed successors.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
 	var succeeded atomic.Int32
@@ -404,6 +428,9 @@ func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 
 // The resume goes to the holder's desktop CLI, never to the headless first
 // turn that took the role.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
 	sent := make(chan string, 2)
@@ -442,6 +469,9 @@ func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
 // A role skill carries disable-model-invocation: only a prompt that starts
 // with its bare slash command loads it, never a "Run /<skill>" the model
 // would hand to the Skill tool.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
 	for _, c := range []struct {
 		cfg  config.Role

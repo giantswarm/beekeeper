@@ -87,6 +87,8 @@ func feedbackWatch(t *testing.T) (*watch.Watcher, *slackStandIn, *[]string, *byt
 	return w, slack, &sent, out
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 	w, slack, sent, out := feedbackWatch(t)
 	ctx := context.Background()
@@ -118,6 +120,8 @@ func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestFeedbackKeepsAReplyNotDelivered(t *testing.T) {
 	w, _, sent, out := feedbackWatch(t)
 	deliver := w.Deliver
@@ -134,6 +138,8 @@ func TestFeedbackKeepsAReplyNotDelivered(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestFeedbackUnreadableIsSaidOnce(t *testing.T) {
 	w, slack, _, out := feedbackWatch(t)
 	slack.fail = "execution_failed: missing_scope"
@@ -149,6 +155,8 @@ func TestFeedbackUnreadableIsSaidOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterPostRecordsItsThread(t *testing.T) {
 	dir := t.TempDir()
 	w, _, _ := reportingWatch(t, dir)

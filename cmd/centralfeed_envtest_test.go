@@ -49,6 +49,9 @@ func soon(t *testing.T, what string, cond func() bool) {
 // each with its actor's person and host, once each across a restart: a
 // watch with no mark starts at the newest event, a restarted one prints
 // what happened while it was down and nothing it printed before.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCentralFeedEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")
@@ -110,6 +113,9 @@ func TestCentralFeedEnvtest(t *testing.T) {
 // A watch down through more than feedLength events prints every one of
 // them after its restart, and one down until the feed no longer holds the
 // last event it printed says CENTRAL FEED GAP before the events since.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCentralFeedResumeEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")

@@ -345,6 +345,9 @@ func TestMessageByNameToAnAgentWithoutACLI(t *testing.T) {
 }
 
 // The watch says once per wait which import waits, on what and until when.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAnImportWaits(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).now = relayNow

@@ -75,6 +75,9 @@ func laterWatch(t *testing.T, a *app, after time.Duration) *watch.Watcher {
 // manager going down with the desktop session) stays owed: its owner hears
 // nothing yet, the failure is logged once. The watch's next try, once
 // GitHub answers, hands the merge over and logs it merged.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAStoppedMergeGitHubDoesNotAnswerForIsHandedOverByTheWatch(t *testing.T) {
 	a, r, woke := stoppedMerge(t)
 	stubPull(t, github.Pull{}, errors.New("keychain OpenSession: Could not activate remote peer"))
@@ -117,6 +120,9 @@ func TestAStoppedMergeGitHubDoesNotAnswerForIsHandedOverByTheWatch(t *testing.T)
 // A stopped merge GitHub reports open asks its owner to run it again; one
 // GitHub never answers for within owedAsk is handed over without the
 // answer.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAStoppedMergeSaysWhatGitHubSays(t *testing.T) {
 	a, r, woke := stoppedMerge(t)
 	stubPull(t, github.Pull{State: github.Open}, nil)
@@ -142,6 +148,9 @@ func TestAStoppedMergeSaysWhatGitHubSays(t *testing.T) {
 
 // A wake the service manager refuses (a stopping user manager) keeps the
 // outcome owed; the watch wakes the owner once it can.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARefusedWakeIsRetriedByTheWatch(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
 	refuse := errors.New("Transaction for beekeeper-wake.service/start is destructive")
@@ -169,6 +178,9 @@ func TestARefusedWakeIsRetriedByTheWatch(t *testing.T) {
 // An outcome owed by a merge-child that ended before it handed it over
 // (killed while it waited for its gate) is handed over by the watch, unless
 // the gate's caller heard it; one owed past watch.OwedFor is given up, logged.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchHandsOverWhatAKilledMergeChildOwed(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
 	o := r.owed(time.Now().Add(-owedRetry))
@@ -210,6 +222,9 @@ func TestTheWatchHandsOverWhatAKilledMergeChildOwed(t *testing.T) {
 
 // The watch leaves an outcome to the gate and merge-child still handing it
 // over.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchLeavesAnOutcomeItsMergeChildHandsOver(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
 	if err := a.owe(r.owed(time.Now().Add(-owedRetry))); err != nil {
@@ -222,6 +237,8 @@ func TestTheWatchLeavesAnOutcomeItsMergeChildHandsOver(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRequestedCancellationSurvivesDeferredWatchDelivery(t *testing.T) {
 	a, r, woke := stoppedMerge(t)
 	r.stoppedBy = state.Party{Name: "supervisor", Session: "s9"}

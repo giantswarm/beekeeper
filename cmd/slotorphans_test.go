@@ -94,6 +94,9 @@ func slotTable() *proc.Table {
 // manager adopted) is named at the first sample, stopped once it has run on
 // for the grace, and the slot is free; a live run's scope in the same slice
 // is left alone. A --once watch names it and stops nothing.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 	t.Setenv("MEMCAP_STATE", "")
 	t.Setenv("MEMCAP_SLOTS", "")
@@ -149,6 +152,8 @@ func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOrphanedScope(t *testing.T) {
 	table := slotTable()
 	for _, c := range []struct {
@@ -183,6 +188,9 @@ const (
 
 // Empty holders are different from orphaned scopes: their wrapper still
 // owns the flock but no command runs. Never infer this just from no child.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 	for _, mode := range []string{"deadline", legacyHolderMode, "unready", holderLive, "child", "changed-identity", "once", "changed-record", scopeReadFailureMode} {
 		t.Run(mode, func(t *testing.T) {

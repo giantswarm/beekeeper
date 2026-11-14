@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStaleWatches(t *testing.T) {
 	const path = "/home/u/.go/bin/beekeeper"
 	table := func(ps ...*proc.Process) *proc.Table {
@@ -80,6 +82,8 @@ func TestStaleWatches(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReportsFailedGateAfterInstall(t *testing.T) {
 	const path = "/home/u/.go/bin/beekeeper"
 	var out bytes.Buffer

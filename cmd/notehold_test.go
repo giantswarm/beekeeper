@@ -348,6 +348,9 @@ func TestItemHeldByTwoDecisionsWaitsForBoth(t *testing.T) {
 
 // A decision closed by its default, or as overtaken, by the watch releases
 // its hold with no other command: board next offers the item again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReleasesTheHoldOfADefaultedOrOvertakenDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name, ref, how string

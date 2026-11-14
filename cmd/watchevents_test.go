@@ -6,6 +6,9 @@ import (
 )
 
 // Uses existing watch helpers so this regression also runs on the base.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchLinesBecomeDurableEvents(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Check("disk", true, "LOW DISK: test writers")

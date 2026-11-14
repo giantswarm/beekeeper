@@ -82,6 +82,8 @@ func listedFor(t *testing.T, w *watch.Watcher, person string) string {
 	return out.String()
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestKeywordCloseKeepsTheNoteOpenAndSaysSoOnce(t *testing.T) {
 	refs := map[string]string{refOne: keywordClosed}
 	w, out := overtakingWatch(t, refs)
@@ -111,6 +113,8 @@ func TestKeywordCloseKeepsTheNoteOpenAndSaysSoOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 	refs := map[string]string{refOne: keywordClosed, refTwo: github.Closed}
 	w, out := overtakingWatch(t, refs)
@@ -164,6 +168,8 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWorkerNoteClosedAfterItsTaskEndedIsOvertaken(t *testing.T) {
 	w, _ := overtakingWatch(t, map[string]string{refOne: keywordClosed})
 	// The worker is off the roster already; its note carries the task's end.
@@ -203,6 +209,8 @@ func overtakenEvents(t *testing.T, w *watch.Watcher) []state.Event {
 	return evs
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNoteClosesOnePollAfterItsIssueCloses(t *testing.T) {
 	refs := map[string]string{refOne: github.Open, refTwo: github.Open}
 	w, out := overtakingWatch(t, refs)
@@ -233,6 +241,8 @@ func TestNoteClosesOnePollAfterItsIssueCloses(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNoteWithOneOpenAndOneClosedRefStaysOpen(t *testing.T) {
 	w, _ := overtakingWatch(t, map[string]string{refOne: github.Closed, refTwo: github.Open})
 	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne, refTwo}},
@@ -246,6 +256,8 @@ func TestNoteWithOneOpenAndOneClosedRefStaysOpen(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAnsweredNoteIsNeverOvertaken(t *testing.T) {
 	refs := map[string]string{refOne: github.Open}
 	w, _ := overtakingWatch(t, refs)
@@ -307,6 +319,8 @@ func archivedNotes(t *testing.T, dir string) []state.Note {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNoteWithoutRefsStaysOpenOnceItsSessionIsArchived(t *testing.T) {
 	w, out := overtakingWatch(t, nil)
 	setNotes(t, w, archivedNotes(t, watchApp(w.Host).cfg.Claude.DesktopDir)...)
@@ -324,6 +338,8 @@ func TestNoteWithoutRefsStaysOpenOnceItsSessionIsArchived(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideFeedSaysOrphanedNotesOnce(t *testing.T) {
 	a, _ := noteApp(t)
 	a.cfg.Claude.DesktopDir = filepath.Join(t.TempDir(), "desktop")
@@ -342,6 +358,8 @@ func TestGuideFeedSaysOrphanedNotesOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceNamesOvertakenNotesAndWritesNothing(t *testing.T) {
 	w, out := overtakingWatch(t, map[string]string{refOne: github.Closed, refTwo: github.Closed + " by o/r#3"})
 	w.Chores = false
@@ -391,6 +409,8 @@ func TestNoteAddRefAndDoneOvertaken(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideFeedSaysOvertakenOnce(t *testing.T) {
 	a, _ := noteApp(t)
 	st := &state.State{Notes: []state.Note{{ID: 4, Kind: noteDecision, For: notePerson, Text: askedQ, By: state.Party{Name: agentOne}}}}
@@ -409,6 +429,9 @@ func TestGuideFeedSaysOvertakenOnce(t *testing.T) {
 
 // The same merge settles an older question but cannot settle one filed
 // about the already merged PR, even after its worker reports done.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNoteOvertakenOnlyByMergeAfterItWasAdded(t *testing.T) {
 	merged := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {
@@ -460,6 +483,9 @@ func TestNoteOvertakenOnlyByMergeAfterItWasAdded(t *testing.T) {
 // A person's to-do is theirs whatever happens to the issue it names: its
 // ref closing never closes it, and the watch reads no GitHub for it
 // (https://github.com/giantswarm/beekeeper/issues/3848).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTodoIsNeverOvertakenByItsRef(t *testing.T) {
 	w, out := overtakingWatch(t, map[string]string{refOne: github.Closed})
 	setNotes(t, w, state.Note{ID: 1, Kind: noteTodo, For: personTimo, Text: "rotate the robot password", Refs: []string{refOne}})
@@ -495,6 +521,9 @@ func reopenNote(a *app, args ...string) error {
 // note show reads it back with its reason, and note reopen puts it back
 // whole, without the hold its close released, where its settled ref no
 // longer overtakes it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenRestoresAnOvertakenNote(t *testing.T) {
 	w, _ := overtakingWatch(t, map[string]string{refOne: github.Closed})
 	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Default: dfltOK, Refs: []string{refOne}})
@@ -534,6 +563,9 @@ func TestReopenRestoresAnOvertakenNote(t *testing.T) {
 
 // note reopen drops what the close released: the board items the note
 // held and the watch's reason for keeping it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenHoldsNothing(t *testing.T) {
 	a, out := noteApp(t)
 	n := state.Note{ID: 3, Kind: noteDecision, For: notePerson, Text: askedQ, Default: dfltOK, Refs: []string{refOne},
@@ -556,6 +588,9 @@ func TestReopenHoldsNothing(t *testing.T) {
 // An overtaken event written before the note was retained whole names the
 // note's text but not its person: note show says it, and note reopen
 // refuses, saying to file it again, instead of "not found".
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenOfAnOldOvertakenNoteSaysToFileItAgain(t *testing.T) {
 	a, out := noteApp(t)
 	old := event(watch.WatchParty, noteOvertaken, "#5 overtaken: o/r#1 closed%srotate the robot password", overtakenSep)

@@ -19,6 +19,9 @@ func table(ps ...*proc.Process) *proc.Table {
 
 // The top consumers are the CPU time burned since the last read, grouped by
 // command name; a reused PID counts as new.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTopCPUGroupsTheSpanByCommand(t *testing.T) {
 	prev := table(
 		&proc.Process{PID: 1, Comm: "go", StartTicks: 5, CPU: 100 * time.Second},
@@ -47,6 +50,9 @@ func TestTopCPUGroupsTheSpanByCommand(t *testing.T) {
 }
 
 // LOAD RISING is a steep climb past one per core, not a high steady load.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoadRising(t *testing.T) {
 	for _, c := range []struct {
 		load [3]float64
@@ -64,6 +70,9 @@ func TestLoadRising(t *testing.T) {
 
 // CPU PRESSURE waits for a second sample over watch.cpuPSIMax;
 // it ends with one ENDED line.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysCPUPressureOnTheSecondSample(t *testing.T) {
 	w, out := loopWatcher(t, "250ms", ", loadMax: 1000000, cpuPSIMax: -1", nil)
 	now := time.Now()
@@ -83,6 +92,9 @@ func TestWatchSaysCPUPressureOnTheSecondSample(t *testing.T) {
 }
 
 // A swapoff is read from the sample's process table.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSwapoffRuns(t *testing.T) {
 	if watch.SwapoffRuns(nil) {
 		t.Error("swapoff without a process table")

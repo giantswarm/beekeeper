@@ -323,6 +323,8 @@ func TestLoopFillNeverRepeatsStaleBoardItem(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 	for _, answer := range []struct {
 		name, body string
@@ -999,6 +1001,9 @@ func TestLoopHeldOnAStaleReadingReadsTheBudgetItself(t *testing.T) {
 
 // Consecutive empty reads double the refill's pause up to four times
 // supervisor.fillRetryEvery; a change that ends the pause starts it over.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
 	r, l, reads := emptyBoardFill(t)
 	ceiling := 5

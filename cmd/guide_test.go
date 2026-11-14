@@ -18,6 +18,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
 	st := &state.State{}
 	guideRole.Set(st, state.Role{Holder: &state.Supervisor{Party: agentC, Since: relayNow}})
@@ -134,6 +136,8 @@ func TestGuideQueueHoldsOnlyItsPersonsNotes(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideFeedSaysOnlyItsPersonsNotesOnce(t *testing.T) {
 	st := guideNotes(t)
 	a := &app{now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "PAT"}}}
@@ -164,6 +168,8 @@ func TestGuideFeedSaysOnlyItsPersonsNotesOnce(t *testing.T) {
 
 const guideHost = "local_g"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
 	guide := state.Party{Session: "sG", HostSession: guideHost, Name: "Guide Alex through his decisions"}
 	st := &state.State{}
@@ -326,6 +332,8 @@ func TestGuideQueueSkipsAgentsThatReportedAfterTheWait(t *testing.T) {
 
 const guideNoteReader = "Reader"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideCentralFeedLifecycle(t *testing.T) {
 	for _, verb := range []string{answerRecorded, noteDone, noteDefaulted, noteOvertaken} {
 		t.Run(verb, func(t *testing.T) {

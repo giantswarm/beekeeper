@@ -56,6 +56,8 @@ func notifyingWatch(t *testing.T, dir string, standby bool) (*watch.Watcher, *de
 	return w, d, &out
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchNotifiesEachDueOnceAcrossWatches(t *testing.T) {
 	dir := t.TempDir()
 	a, da, _ := notifyingWatch(t, dir, false)
@@ -148,6 +150,9 @@ func TestStaleUpgradeHoldIsMarked(t *testing.T) {
 // The machine's lines are the supervisor's: a watch --notify prints them
 // and sends none of them to the desktop, an imminent systemd-oomd kill
 // among them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMachineLinesNeverNotify(t *testing.T) {
 	needsPlatform(t)
 	w, d, out := notifyingWatch(t, t.TempDir(), false)
@@ -170,6 +175,8 @@ func TestMachineLinesNeverNotify(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSwapLineSaysDiskZswapAndOomdRule(t *testing.T) {
 	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 10627, ZswappedMiB: 8000, ZswapPoolMiB: 2500}
 	unwatched := &machine.OOMDSwap{LimitPercent: 90}
@@ -190,6 +197,9 @@ func TestSwapLineSaysDiskZswapAndOomdRule(t *testing.T) {
 
 // The swap trend is the rate over watch.swapWindow (10m), rated once the
 // readings span five minutes; a burst older than the window has left it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSwapTrendOverTheWindow(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
@@ -218,6 +228,9 @@ func TestSwapTrendOverTheWindow(t *testing.T) {
 // zswap's writeback moves pages already swapped from its pool to disk: with
 // swap in use flat it is no disk swap growth, and new swap-outs alongside it
 // still are.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
@@ -255,6 +268,9 @@ func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
 
 // Swap in use means pressure only while disk swap grows and MemAvailable
 // falls, and oomd's swap kill is imminent only when it watches a cgroup.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestOomdImminentNeedsAWatchedCgroupAndDiskGrowth(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
@@ -283,6 +299,9 @@ func TestOomdImminentNeedsAWatchedCgroupAndDiskGrowth(t *testing.T) {
 }
 
 // The swap check keys on disk swap: zswap's share sits in RAM.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSwapOverIgnoresZswap(t *testing.T) {
 	grow := watch.SwapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
 	zswapped := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 16383, ZswappedMiB: 14000}

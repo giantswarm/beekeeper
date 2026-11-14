@@ -63,6 +63,9 @@ func cutQueuedRun(t *testing.T, w *watch.Watcher) string {
 // A merge whose gate and devctl were killed with the machine before devctl
 // wrote its exit code is recorded as cut, and the watch wakes its owner
 // with what GitHub says, once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchWakesTheOwnerOfACutMerge(t *testing.T) {
 	stubGitHub(t, github.Merged, "")
 	stubPull(t, github.Pull{State: github.Merged, MergedAt: mergedAt}, nil)
@@ -84,6 +87,9 @@ func TestTheWatchWakesTheOwnerOfACutMerge(t *testing.T) {
 
 // A queued merge's own run cut while it waited for its turn wakes its owner
 // with the pull request still open, once; the place stays for a rerun.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Phase: state.Waiting,
@@ -109,6 +115,9 @@ func TestTheWatchWakesTheOwnerOfACutQueuedRun(t *testing.T) {
 
 // A queued run whose merge-child ended owed its outcome itself and removed
 // its files: nobody is woken a second time.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAFinishedQueuedRunIsNoCut(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	run := filepath.Join(t.TempDir(), ownedRuns, "pr-merge-o_r-7-4242")
@@ -134,8 +143,8 @@ func TestADevctlEndedBySignalSaysWhatGitHubSays(t *testing.T) {
 
 // A requested cancellation recovered by the watch must not invite a retry.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchDoesNotRetryARequestedCancellation(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubPull(t, github.Pull{State: github.Open}, nil)

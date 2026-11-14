@@ -35,6 +35,8 @@ func openRefs(_ context.Context, rs []github.PR) (map[github.PR]github.RefState,
 	return m, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceSaysAFailedNotesReadAndExitsNonZero(t *testing.T) {
 	w, out := onceWatch(t, func(context.Context, []github.PR) (map[github.PR]github.RefState, error) {
 		return nil, errors.New("gh: connection reset")
@@ -50,6 +52,9 @@ func TestWatchOnceSaysAFailedNotesReadAndExitsNonZero(t *testing.T) {
 
 // Under the ceiling, the watch says nothing and does not read the machine's
 // headroom.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceWithoutChangeIsSilent(t *testing.T) {
 	w, out := onceWatch(t, openRefs)
 	reads := 0
@@ -66,6 +71,8 @@ func TestWatchOnceWithoutChangeIsSilent(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceSaysWhatKeepsTheNotesUnread(t *testing.T) {
 	w, out := onceWatch(t, func(ctx context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
 		m, _ := openRefs(ctx, rs[:1])

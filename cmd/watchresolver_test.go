@@ -33,6 +33,8 @@ func (f *fakeWatchResolver) Lookup(_ context.Context, server string) error {
 }
 func (f *fakeWatchResolver) Reset(context.Context) error { f.resets++; return f.resetErr }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchResolverDiscrimination(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
@@ -72,6 +74,8 @@ func TestWatchResolverDiscrimination(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchResolverHealthyStubKeepsTargetFailure(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	f := &fakeWatchResolver{stubOK: true, upstreamOK: true}
@@ -82,6 +86,8 @@ func TestWatchResolverHealthyStubKeepsTargetFailure(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchResolverLeavesUnrelatedEventsAlone(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	f := &fakeWatchResolver{}

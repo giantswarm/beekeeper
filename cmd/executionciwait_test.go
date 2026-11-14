@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 	for _, result := range []string{ciSucceeded, ciLintRed} {
 		t.Run(result, func(t *testing.T) {
@@ -136,6 +138,9 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 }
 
 // CI that never settles wakes the worker too, at the wait a merge gives it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionCIParkWakesAtItsDeadline(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.Merge.CITimeout = config.Duration{Duration: time.Hour}

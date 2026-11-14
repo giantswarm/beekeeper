@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleRelayDue(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -154,6 +156,9 @@ func TestGuideFeedRelaysOnANewLineAfterIdle(t *testing.T) {
 
 // A busy run keeps adding requests within a turn. No waiting-session or
 // decision event is needed to announce the crossing or repeat the warning.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
 	a, _ := stubApp(t)
 	runLive(t, a, map[int]string{1: agentOne})

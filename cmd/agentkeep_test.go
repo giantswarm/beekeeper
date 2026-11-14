@@ -61,6 +61,9 @@ func TestPlanChoresLeavesKeptEntries(t *testing.T) {
 
 // The doctor's removal checks the marker again under the lock: a keep set
 // after the plan stops a removal for staleness, never one for a done task.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRemoveAgentsHonoursAKeepSetSincePlan(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(dir)
@@ -164,6 +167,9 @@ func TestRegisterAgentCarriesTheKeep(t *testing.T) {
 }
 
 // The watch says no AGENTS STOPPED line for an entry parked on purpose.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStoppedAgentsLeaveKeptEntriesOut(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	kept, woken, stopped := staleAgent("Judge"), staleAgent("BK 1"), staleAgent("Crashed")

@@ -19,6 +19,9 @@ import (
 // A lane whose arrived merge waits behind a seed that has not arrived is
 // stalled in lanes and one LANE STALLED line of the watch, folded while it
 // lasts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLanesAndWatchSayAStall(t *testing.T) {
 	needsPlatform(t)
 	dir := t.TempDir()
@@ -84,6 +87,9 @@ func gazelleHRs(version, ready string) string {
 // A settling merge whose release rolls only after merge.settleTimeout is
 // one LANE STUCK line while it waits and leaves its lane once the lane is
 // Ready, with one ENDED line: the watch never stops checking it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -154,6 +160,8 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchUnknownReleaseNamesRecoveryAndRegistration(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {

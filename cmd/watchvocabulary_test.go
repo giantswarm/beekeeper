@@ -8,6 +8,9 @@ import (
 
 // TestWatchVocabulary keeps the copy the watch has of the command's names equal to
 // the command's own: it cannot import them.
+//
+// control: none: it guards the copies of the command's constants in internal/watch,
+// which the merge base does not have, so it cannot build there.
 func TestWatchVocabulary(t *testing.T) {
 	own := map[string]any{
 		"ExitRelieved":          ExitRelieved,

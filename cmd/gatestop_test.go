@@ -173,6 +173,9 @@ func writeRC(t *testing.T, dir, repo string, pr, rc int) {
 // A gate killed while its merge ran leaves no place after one watch tick:
 // its devctl gone, or ended while its merge-child still hands the outcome
 // over, the run is recorded, nothing merged, and leaves the lane.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).now = relayNow
@@ -207,6 +210,9 @@ func TestAKilledGateLeavesNoPlaceAfterOneTick(t *testing.T) {
 // running merge's devctl through its merge-child, a waiting merge's place
 // (a seeded place stays). A task of another session, or one that runs no
 // gate, is left alone.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTaskStopEndsTheGatesMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	a := watchApp(w.Host)
@@ -347,6 +353,9 @@ func TestAncestorOutputStopsAtTheCLI(t *testing.T) {
 
 // A TaskStop that reaches a running merge whose pull request merged before
 // it says so, never "nothing merged".
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTaskStopSaysAMergeLandedBeforeIt(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	a := watchApp(w.Host)

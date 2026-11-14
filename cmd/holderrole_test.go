@@ -19,6 +19,9 @@ const (
 // run name on the roster: a message by the run name addresses the role and
 // reaches the holder's running CLI by its title, where the run name alone
 // would be refused as an agent with no CLI.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 	now := time.Date(2026, 10, 7, 1, 0, 0, 0, time.UTC)
 	run := state.Party{Session: runID, HostSession: "local_sup82", Name: runName}

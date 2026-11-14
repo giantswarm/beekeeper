@@ -48,6 +48,9 @@ func TestTimerConditionsProbeTheirReference(t *testing.T) {
 
 // Ten timers on one reference cost one check per tick, and none until
 // their interval has passed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 	count := filepath.Join(t.TempDir(), "count")
 	probe := "echo x >> " + count + "; false"
@@ -75,6 +78,9 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 
 // A pr-merged timer wakes its agent within one watch tick of the merge,
 // once, and closes.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.Doctoring.Store(true) // the doctor is not under test; its goroutine outlives the watch
@@ -125,6 +131,9 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 // watch --once is a look: a due timer it finds is a line marked that --once
 // writes nothing, and its agent is not woken, its command not run and the
 // timer neither closed nor re-armed nor checked.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchOnceFiresNoTimer(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.Chores = false // --once
@@ -187,6 +196,9 @@ func TestWatchOnceFiresNoTimer(t *testing.T) {
 // Past --until a timer fires as timed out, or closes unfired with
 // --expire; a timer with only an agent fires at its time; a plain timer is
 // left to the watch's TIMER line and timer done.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 	past := relayNow.Add(-time.Hour)
 	st := &state.State{Timers: []state.Timer{
@@ -219,6 +231,8 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRunLogsItsExitCode(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.RunTimer(context.Background(), timerFire{T: state.Timer{ID: 4, Run: "echo hi; exit 3", What: "resume"}})
@@ -234,6 +248,8 @@ func TestTimerRunLogsItsExitCode(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 	a := &app{now: relayNow}
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
@@ -259,6 +275,8 @@ func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRepeatingTimerReArmsAtItsLocalTime(t *testing.T) {
 	// relayNow is Friday 2026-09-25 02:00; each timer was due an hour ago.
 	past := relayNow.Add(-time.Hour)
@@ -285,6 +303,8 @@ func TestRepeatingTimerReArmsAtItsLocalTime(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 	a := &app{now: relayNow}
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
@@ -311,6 +331,9 @@ func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 
 // A condition that has not held for a day is one TIMER STUCK line, the
 // timer still waiting: a probe of a field Flux leaves empty never exits 0.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 	st := &state.State{Timers: []state.Timer{{ID: 7, Due: relayNow.Add(-time.Hour), Probe: probeFails, What: "check the rollout"}}}
 	settle := func(at time.Time) []string {
@@ -343,6 +366,9 @@ func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 // A timer that fires more than one tick past its time says how late it is
 // and what held it, its due time and its firing in one zone: a stop it was
 // held by, or no tick at all between its time and its firing.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
 	z := relayNow.Format("MST")
 	due := relayNow.Add(-14 * time.Minute)
@@ -377,6 +403,9 @@ func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
 
 // A fired timer's command runs with the timer's id, time and lateness, which
 // an agents start it runs reads.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRunPassesTheTimerToItsCommand(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	due := time.Date(2026, 11, 2, 7, 30, 0, 0, time.UTC)
@@ -386,6 +415,8 @@ func TestTimerRunPassesTheTimerToItsCommand(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRunMarksInheritedSession(t *testing.T) {
 	t.Setenv(envTimerCommand, "outer")
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
@@ -398,6 +429,9 @@ func TestTimerRunMarksInheritedSession(t *testing.T) {
 
 // Both supervisor re-arms and self-update restarts cancel the watch's
 // context, then wait for timerActs before starting the replacement watch.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
 		t.Run("repeat="+repeat, func(t *testing.T) {
@@ -453,6 +487,8 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerRunKilledRearms(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.RunTimer(t.Context(), timerFire{T: state.Timer{ID: 43, Due: watchApp(w.Host).now, Run: litKillKill, What: "killed command"}})

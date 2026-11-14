@@ -27,6 +27,9 @@ const (
 
 // A supervisor inventory can hold admission longer than the fatal timer
 // deadline. Timers must defer that check and still deliver unrelated wakes.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherBoundsGitHubAdmissionWait(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -85,6 +88,8 @@ func TestTimerDispatcherBoundsGitHubAdmissionWait(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
 	for _, repeat := range []string{"", state.RepeatDaily} {
 		t.Run("repeat="+repeat, func(t *testing.T) {
@@ -155,6 +160,8 @@ func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) 
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherWorksWithoutWatchOrLoopAndClaimsOnce(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -227,6 +234,8 @@ func TestTimerDispatcherStopRetainsInterruptedWake(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -268,6 +277,8 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherHonorsStopForCommandsAndWakes(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -289,6 +300,8 @@ func TestTimerDispatcherHonorsStopForCommandsAndWakes(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -320,6 +333,8 @@ func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherPreservesLongCheckIntervals(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -437,6 +452,9 @@ func TestTimerDispatcherBusyLockKeepsServiceAlive(t *testing.T) {
 // of a minute each, so a check ran on its tick but settled past the fatal
 // deadline. A writer holding the lock must not hold back the checks: the
 // pass checks from the snapshot, and only its settlement waits for the lock.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatcherChecksWhileWriterHoldsStateLock(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -530,6 +548,9 @@ func TestTimerDispatcherObservesStopWithoutStateLock(t *testing.T) {
 
 // Rejected plain wakes must wait between delivery attempts just like conditional
 // wakes, without losing the original occurrence or its delivery reason.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPlainWakeRetryWaitsForInterval(t *testing.T) {
 	now := time.Now().UTC()
 	timer := state.Timer{ID: 1, Due: now.Add(-time.Hour), Checked: now, Wake: workerRole, PendingWakeReason: timerDueEarlier, Every: time.Minute}
@@ -560,6 +581,8 @@ func (s *timerWriteCountingStore) Record(events ...state.Event) error {
 	return s.Store.Record(events...)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
 	a, _ := stubApp(t)
 	store := &timerWriteCountingStore{Store: a.store}
@@ -574,6 +597,8 @@ func TestIdleTimerDispatchDoesNotWriteState(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatchBatchesSkippedAndFailedWakeRetries(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -627,6 +652,8 @@ func TestTimerDispatchBatchesSkippedAndFailedWakeRetries(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -691,6 +718,8 @@ func TestTimerDispatchSkipsConditionProbesForPendingWakeRetries(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestIdleWatchHealthPassesDoNotWriteState(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard

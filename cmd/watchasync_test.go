@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchWaitsForAsyncDelivery(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	started, release, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})

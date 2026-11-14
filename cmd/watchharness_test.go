@@ -42,6 +42,8 @@ func (harnessJournal) OomdKills(context.Context, time.Time) ([]string, error) {
 	return []string{"fixture oomd kill"}, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchTracksEveryHarnessRunner(t *testing.T) {
 	savedMachine := plat.Machine
 	plat.Machine = harnessJournal{savedMachine}

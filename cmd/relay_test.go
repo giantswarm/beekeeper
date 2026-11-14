@@ -50,6 +50,8 @@ func pendingState() *state.State {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestFirePendingReportsEachOnce(t *testing.T) {
 	st := pendingState()
 	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
@@ -81,6 +83,8 @@ func TestFirePendingReportsEachOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSessionChangesLeavesARecordedEndToItsLine(t *testing.T) {
 	var out bytes.Buffer
 	w := &watch.Watcher{Host: &app{out: &out, cfg: &config.Config{}}, Records: []state.Record{{Session: four, Issue: issue}}}

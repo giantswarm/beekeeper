@@ -24,6 +24,8 @@ func hourly() config.Reporter {
 	return config.Reporter{Every: config.Duration{Duration: time.Hour}, Brief: "b.md", Timeout: config.Duration{Duration: 20 * time.Minute}}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReportDue(t *testing.T) {
 	slot := reportSlot(time.Hour, reportNow)
 	last := slot.Add(-time.Hour)
@@ -84,6 +86,8 @@ func reportingWatch(t *testing.T, dir string) (*watch.Watcher, *[]string, *bytes
 	return w, &launched, out
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	dir := t.TempDir()
 	a, la, _ := reportingWatch(t, dir)
@@ -108,6 +112,8 @@ func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterSkipsTheNextSlotWhileItRuns(t *testing.T) {
 	dir := t.TempDir()
 	w, launched, out := reportingWatch(t, dir)
@@ -125,6 +131,8 @@ func TestReporterSkipsTheNextSlotWhileItRuns(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterEndsOnThePost(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)
@@ -158,6 +166,8 @@ func TestReporterEndsOnThePost(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterTimesOut(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)
@@ -174,6 +184,8 @@ func TestReporterTimesOut(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterOnlyInTheStandbyWatch(t *testing.T) {
 	w, launched, _ := reportingWatch(t, t.TempDir())
 	w.Standby = false
@@ -183,6 +195,8 @@ func TestReporterOnlyInTheStandbyWatch(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterNotStartedSaysWhyOnce(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	watchApp(w.Host).cfg.Reporter.Brief = filepath.Join(t.TempDir(), "missing.md")
@@ -194,6 +208,8 @@ func TestReporterNotStartedSaysWhyOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTurnPIDs(t *testing.T) {
 	tb := &proc.Table{ByPID: map[int]*proc.Process{
 		10: {PID: 10, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, "s1", "--", "brief"}},
@@ -216,6 +232,8 @@ func verbs(t *testing.T, w *watch.Watcher, verb string) int {
 	return len(evs)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterEndsATurnThatEndedWithoutAPost(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	ctx := context.Background()
@@ -229,6 +247,8 @@ func TestReporterEndsATurnThatEndedWithoutAPost(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStoppedAgentsLeaveTheRunningReporterOut(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	rp := state.Party{Session: "r-1", Name: "Status report 23:00"}
@@ -239,6 +259,8 @@ func TestStoppedAgentsLeaveTheRunningReporterOut(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReportSettings(t *testing.T) {
 	var s struct {
 		Hooks struct {
@@ -260,6 +282,8 @@ func TestReportSettings(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReporterFinalThenPaused(t *testing.T) {
 	dir := t.TempDir()
 	w, launched, out := reportingWatch(t, dir)

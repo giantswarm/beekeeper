@@ -46,6 +46,8 @@ func (f *testExecutionTransport) Message(ctx context.Context, r execution.Ref, m
 	return f.message(ctx, r, m)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionWatchReconcilesWithBoundedDeadlineAndThrottle(t *testing.T) {
 	a, r := executionTestApp(t)
 	st, err := a.store.Read()
@@ -84,6 +86,8 @@ func TestExecutionWatchReconcilesWithBoundedDeadlineAndThrottle(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionWatchDeadlineBackoffAndSingleUnconfirmedReport(t *testing.T) {
 	a, r := executionTestApp(t)
 	var out bytes.Buffer
@@ -197,6 +201,8 @@ func TestExecutionWatchDeadlineBackoffAndSingleUnconfirmedReport(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionWatchEndedRunSettlesAndMultiHostRotationDoesNotFlap(t *testing.T) {
 	a, r := executionTestApp(t)
 	var out bytes.Buffer

@@ -175,6 +175,9 @@ func stopDesk(t *testing.T) (*app, *haltLauncher, *[]string) {
 // and ends the worker's session; it spares the supervisor's, the guide's
 // and the person's sessions and their units. Resume lifts the holds and
 // starts the installed units again, and names the session that waits.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStopAndResume(t *testing.T) {
 	a, l, ended := stopDesk(t)
 	out := a.out.(interface{ String() string })
@@ -348,6 +351,9 @@ func refusedStop(err error) bool {
 // While stopped, a pending reopen leaves its session closed and starts no
 // unit, and the standby watch starts no successor for a gone supervisor,
 // revives none and reopens nothing: nothing starts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestNothingStartsWhileStopped(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	l := &haltLauncher{active: []string{"beekeeper-reopen-4579230b-11111111.service"}, installed: map[string]string{}}

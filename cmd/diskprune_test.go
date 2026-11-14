@@ -129,6 +129,8 @@ func TestDiskPruneExternalOutputOnlyForEndedOwner(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk = config.Disk{Prune: config.DiskPruneAuto, Every: config.Duration{Duration: time.Hour}}
@@ -163,6 +165,8 @@ func TestDiskPrunePressureScheduleAndAsk(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLowDiskStartsDiskPrune(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk.Prune = config.DiskPruneAuto
@@ -258,6 +262,8 @@ func TestDiskPruneRechecksNewProcessReferences(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDiskFillingStartsPruneBeforeLowDisk(t *testing.T) {
 	a, m := diskFixture(t)
 	a.cfg.Disk = config.Disk{Prune: config.DiskPruneAuto, Every: config.Duration{Duration: time.Hour}}

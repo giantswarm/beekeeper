@@ -24,6 +24,8 @@ const continuationOldSession = "continuation-old-session"
 const continuationNewSession = "continuation-new-session"
 const continuationTaskRef = "o/r#12"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkWakeQueuesFreshContinuationWithoutHarness(t *testing.T) {
 	for _, harness := range []string{claudeComm, config.CodexHarness, capacity.HarnessAgy} {
 		t.Run(harness, func(t *testing.T) {
@@ -117,6 +119,8 @@ func TestContinuationTransfersOwnershipOnlyAfterAcceptedStart(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 	w := parkingWatch(t, nil)
 	if err := watchApp(w.Host).store.Update(func(st *state.State) ([]state.Event, error) {
@@ -131,6 +135,8 @@ func TestContinuationRefusesNewEventsDuringStartup(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewWaitIgnoresLegacyMechanicalTimers(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
@@ -300,6 +306,9 @@ func TestAlertWakeAndEndedParkCandidatePreserveQueuedContinuation(t *testing.T) 
 // Exercise generated briefs through the real lint and duplicate-PR gate, not
 // just a fake successful start. Both timer and message delivery must replace
 // the owner of an existing PR without turning its previous transcript.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestContinuationOfOpenPullPassesRealStartGates(t *testing.T) {
 	for _, fromTimer := range []bool{false, true} {
 		t.Run(fmt.Sprint("timer=", fromTimer), func(t *testing.T) {

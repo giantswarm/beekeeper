@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCodexUnreadableFallback(t *testing.T) {
 	for _, providers := range []bool{false, true} {
 		for _, chores := range []bool{false, true} {

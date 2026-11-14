@@ -15,6 +15,9 @@ import (
 
 // A process started since the last read counts toward the storm; a Go
 // program's pidfd probe (its own command line, no CPU) is its parent.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStormLineNamesTheFreshCommandsAndSessions(t *testing.T) {
 	prev := named(table(
 		&proc.Process{PID: 10, Args: strings.Fields("claude"), StartTicks: 1},
@@ -44,6 +47,9 @@ func TestStormLineNamesTheFreshCommandsAndSessions(t *testing.T) {
 // Four copies of a sleeping command under one parent are one stack, named
 // with the count, the oldest age and the parent; one MCP server under each
 // of many CLIs, interactive shells and short-lived copies are none.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStacks(t *testing.T) {
 	now := time.Now()
 	old := func(pid, ppid int, age time.Duration, cmdline string) *proc.Process {
@@ -123,6 +129,8 @@ func TestDisplayLeavesValuesOut(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestInteractiveShell(t *testing.T) {
 	for args, want := range map[string]bool{
 		"/bin/zsh -l":         true,
@@ -149,6 +157,9 @@ const outsideTable = -1
 // PROCESS STORM line from the second sample over the threshold on and one ENDED line once it stops;
 // four sleeping copies under one parent are one STACKED line and one ENDED.
 // A negative threshold turns its line off.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleProcsSaysAStormAndAStackOnce(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
@@ -208,6 +219,9 @@ func TestSampleProcsSaysAStormAndAStackOnce(t *testing.T) {
 // three samples in a row, are one LOAD line naming the commands and the
 // sessions, and one ENDED line once they are gone; a negative
 // watch.toolProcsMax turns it off.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleProcsSaysLoadOnce(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
@@ -259,6 +273,9 @@ func named(t *proc.Table) *proc.Table {
 
 // The watch's own processes, its alert reads among them, are the watch's in
 // a PROCESS STORM line, not the session's that started the watch.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleProcsNamesTheWatchsOwnReads(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
@@ -287,6 +304,8 @@ func TestSampleProcsNamesTheWatchsOwnReads(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestToolLoadNamesRecursion(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

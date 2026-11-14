@@ -209,6 +209,9 @@ func TestEnvtestCentralAnswerLong(t *testing.T) {
 // unknown central note is refused, a second decision folds into the first
 // by lab#<n> and by its bare number, and once bo answers, ana's watch
 // settles the park with bo's answer word for word, read from the feed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestEnvtestCentralParkAndFold(t *testing.T) {
 	e := newServeEnv(t)
 	decisionsVia(t, e, &fakeGateway{})

@@ -104,6 +104,9 @@ func TestStatusWithoutSessions(t *testing.T) {
 
 // The watch says each missing section once over many polls and raises no
 // condition for it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysMissingSectionsOnce(t *testing.T) {
 	a, _ := stubApp(t)
 	out := &syncBuffer{}

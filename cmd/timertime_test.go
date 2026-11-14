@@ -29,6 +29,8 @@ func TestTimerTime(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerAddNowWithDayAndWeekDeadline(t *testing.T) {
 	for _, until := range []string{"7d", "1w", "168h"} {
 		t.Run(until, func(t *testing.T) {

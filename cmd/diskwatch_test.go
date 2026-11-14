@@ -36,6 +36,9 @@ var errUnreadable = errors.New("permission denied")
 // by one session's crane: LOW DISK at once, DISK FILLING naming crane and
 // the session once two minutes of samples show the rate, DISK NEARLY FULL
 // under 1 % free, each said once.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 	var out bytes.Buffer
 	writes := map[int]int64{20: 0}
@@ -80,6 +83,9 @@ func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 // A fill rate over the free-disk floor is a forecast: the published
 // reading says Filling without Low, and LOW DISK stays silent. The same
 // rate under the floor is the emergency (Low), which is what holds starts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Watch.DiskFillWithin = config.Duration{Duration: 2 * time.Hour}
@@ -103,6 +109,9 @@ func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
 
 // A slow fill that would take far longer than diskFillWithin is no DISK
 // FILLING, and free space that holds steady ends one.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSampleDiskIgnoresASlowFill(t *testing.T) {
 	var out bytes.Buffer
 	w := diskWatcher(&out, map[int]int64{})
@@ -118,6 +127,9 @@ func TestSampleDiskIgnoresASlowFill(t *testing.T) {
 
 // A fill no readable process wrote (a root daemon) says so, with the share
 // of the loss it cannot attribute.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWritersLineNamesTheUnreadableShare(t *testing.T) {
 	dw := watch.DiskWatch{ReadWrites: func(int) (int64, error) { return 0, errUnreadable }}
 	start := time.Now()
@@ -132,6 +144,9 @@ func TestWritersLineNamesTheUnreadableShare(t *testing.T) {
 
 // The baseline is replaced once the newer one is a window old, so the
 // writers span between one and two windows; a reused PID counts from zero.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRebaseKeepsTheOlderBaseline(t *testing.T) {
 	writes := map[int]int64{1: 100}
 	dw := watch.DiskWatch{ReadWrites: func(pid int) (int64, error) { return writes[pid], nil }}

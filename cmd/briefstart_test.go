@@ -53,6 +53,9 @@ func TestCleanBriefPrintsNoWarning(t *testing.T) {
 
 // A relay's brief names the successor's run, which the lint's role-run rule
 // flags. A hand-over must survive that, as a file too.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayBriefIsNeverRefused(t *testing.T) {
 	text := guideRole.SuccessorBrief(config.Role{Skill: guideName}, guideRole.RunName(12), guideRole.RunName(11)) + "\nGuide run 12 takes over.\n"
 	path := filepath.Join(t.TempDir(), "brief.md")

@@ -122,6 +122,9 @@ func takeCalls(t *testing.T, log string) map[string]int {
 // Five quiet installations are read once each per upgrades.every; the one
 // whose upgrade begins is read every watch.interval until UPGRADE ENDED, and
 // a second watch, the snapshot and the ui use the shared readings.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
@@ -212,6 +215,9 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 // With no supervisor's watch, the standby watch reads the upgrades, holds
 // the installation at UPGRADE and lifts the hold at UPGRADE ENDED; once a
 // supervisor's watch runs, it reads none of its own until that watch stops.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
@@ -289,6 +295,9 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 // named in one line per watch, never one line each; one whose context
 // resolves and fails to read keeps its own line. The snapshot's upgrades
 // name them in one entry.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
@@ -383,6 +392,8 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
@@ -412,6 +423,8 @@ func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUpgradeRetryDoesNotReportUnreadable(t *testing.T) {
 	a, out := stubApp(t)
 	upgradeContexts(t, t.TempDir(), snapshotInstallation)
@@ -467,6 +480,8 @@ func TestSnapshotUpgradeFromHold(t *testing.T) {
 
 const snapshotInstallation = "prod"
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 	for _, firstRunning := range []bool{false, true} {
 		t.Run(fmt.Sprintf("first-running-%t", firstRunning), func(t *testing.T) {

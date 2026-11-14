@@ -36,6 +36,9 @@ func TestAgentDir(t *testing.T) {
 }
 
 // A role may use exactly its own configured folder outside the worker roots.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAgentDirRoleFolders(t *testing.T) {
 	a, _ := stubApp(t)
 	base := t.TempDir()
@@ -75,6 +78,9 @@ func TestAgentDirRoleFolders(t *testing.T) {
 }
 
 // The relay launches each successor in its role folder, outside worker roots.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuccessorStartsInRoleFolder(t *testing.T) {
 	for _, rl := range roles {
 		t.Run(rl.Name, func(t *testing.T) {

@@ -224,6 +224,9 @@ func eventually(within time.Duration, cond func() bool) bool {
 // neither the machine's lines nor the next poll: the memory breach is said
 // before the first interval ends, the polls go on, and the hung read is not
 // started a second time while it runs.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 	needsPlatform(t)
 	release := make(chan struct{})
@@ -262,6 +265,9 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 
 // While the CPU is under pressure the installation reads run watch.SlowReads
 // times less often and at nice 10, said once as READS SLOWED.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 	needsPlatform(t)
 	const intervals = 12
@@ -300,6 +306,9 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 }
 
 // A loop whose run overruns its interval skips the ticks it missed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopSkipsMissedTicks(t *testing.T) {
 	clk := newFakeClock(t)
 	w := &watch.Watcher{Clock: clk}

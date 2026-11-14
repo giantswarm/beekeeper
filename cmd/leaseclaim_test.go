@@ -224,6 +224,9 @@ func settleParks(t *testing.T, a *app) {
 // the agent on the lease and exits 3; no process waits. The watch leaves it
 // parked while the lease is held and wakes it once, with the words to claim
 // it, when the holder released it and its grant is first.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
 	claimAgent(t, a)
@@ -254,6 +257,9 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 }
 
 // A refused claim with --park parks nothing: no grant waits for it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
 	a := claimApp(t)
 	claimAgent(t, a)

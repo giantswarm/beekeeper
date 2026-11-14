@@ -141,6 +141,9 @@ func TestDaemonsInUnits(t *testing.T) {
 // own and logs it; a dry run only says it; a process that left the unit
 // meanwhile stays where it is, a daemon that left it is not moved; a move
 // that fails says the daemon stays, with why.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.Load(filepath.Join(dir, "missing.yaml"))
@@ -210,6 +213,8 @@ type daemonSnapshotMachine struct {
 
 func (m daemonSnapshotMachine) Processes() (*proc.Table, error) { return m.snapshot() }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
 	for _, failRecovery := range []bool{false, true} {
 		t.Run(map[bool]string{false: "same tick", true: "subsequent tick"}[failRecovery], func(t *testing.T) {
@@ -275,6 +280,9 @@ func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
 }
 
 // Incomplete or unreadable verification never records a successful migration.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "bounded retries", true: "unreadable snapshot"}[unreadable], func(t *testing.T) {
@@ -304,6 +312,8 @@ func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDaemonMigrationIncludesForeignServicesAndScopes(t *testing.T) {
 	for _, unit := range []string{"claude-bg-daemon.service", "other-agent.service", "app-desktop.scope", "session-42.scope", "claude-daemon-old.service"} {
 		t.Run(unit, func(t *testing.T) {

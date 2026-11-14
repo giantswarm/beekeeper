@@ -34,6 +34,8 @@ const (
 	testSupervisor = "test: supervisor"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
@@ -90,6 +92,9 @@ func TestHandoversDue(t *testing.T) {
 // serve record waits on the report or says the merge landed, or the gate saw
 // its merge land. The hold lasts lastStepGrace from that evidence and ends at
 // lastStepCeiling; an agent that reported done is never handed over.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHandoversHeldInTheLastStep(t *testing.T) {
 	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
@@ -166,6 +171,9 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 
 // The watch says HANDOVER HELD once for an agent in its last step and, once
 // the grace is over, HANDOVER DUE once, saying how long it was held.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysHandoverHeldOnce(t *testing.T) {
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
@@ -574,6 +582,9 @@ func TestNoteFailsFastNamingAPendingImport(t *testing.T) {
 
 // A revive check in another reader must leave the old CLI running even once
 // a successor is visible. Cancellation of the handover releases that guard.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
 	a, _ := stubApp(t)
 	a.as = testSupervisor

@@ -28,6 +28,8 @@ func (f *suspendFixture) SuspendRecords(context.Context, time.Time) ([]machine.S
 	return f.records, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	w.Standby = true
@@ -76,6 +78,8 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRespectsDeskStop(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true
@@ -92,6 +96,8 @@ func TestSuspendRespectsDeskStop(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true
@@ -110,6 +116,8 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRestartsSupervisorService(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true
@@ -133,6 +141,8 @@ func TestSuspendRestartsSupervisorService(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendReportsEachCompletedGap(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{
@@ -156,6 +166,8 @@ func TestSuspendReportsEachCompletedGap(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRecoveryDoesNotRetryFailuresAfterRelay(t *testing.T) {
 	w, out := onceWatch(t, nil)
 	w.Standby = true
@@ -214,6 +226,8 @@ func (m staticProcMachine) Processes() (*proc.Table, error) {
 	return m.table, nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 	const (
 		origID            = "a2e980cb-6c26-411f-a3fd-45bc0a0ebde0"
@@ -447,6 +461,9 @@ func TestSuspendResumedGuideKeepsRoleForWorkDoneAnswerAndStart(t *testing.T) {
 // A relay can finish after recovery is queued but before the serialized slot
 // becomes available. Neither the old guide's roster entry nor its queued guide
 // wake may resume it, and the successor's roster entry must not double-deliver.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSuspendRecoveryRelayWhileQueued(t *testing.T) {
 	w, _ := onceWatch(t, nil)
 	w.Standby = true

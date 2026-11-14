@@ -15,6 +15,9 @@ import (
 
 // A relay due said at one relayAt is said again once relayAt changed, a
 // record from before relayAt was kept among them.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayDueAgainAtAChangedRelayAt(t *testing.T) {
 	sup := &state.Supervisor{Party: agentC, Since: relayNow.Add(-time.Hour)}
 	for _, said := range []*state.RelayDue{
@@ -39,6 +42,9 @@ func TestRelayDueAgainAtAChangedRelayAt(t *testing.T) {
 
 // A watch process that did not say a standing relay due says it once, in
 // both of its poll's passes, and keeps when it was first reported.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayDueOncePerWatchProcess(t *testing.T) {
 	const relayAt = 150_000
 	since, first := relayNow.Add(-3*time.Hour), relayNow.Add(-2*time.Hour)
@@ -74,6 +80,8 @@ func TestRelayDueOncePerWatchProcess(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPastRelayGrace(t *testing.T) {
 	cfg := config.Role{RelayAt: 150_000, RelayGrace: config.Duration{Duration: 30 * time.Minute}}
 	sup := &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}
@@ -101,6 +109,9 @@ func TestPastRelayGrace(t *testing.T) {
 
 // The standby watch relays a live guide that stays over its relayAt past
 // relayGrace after its relay due, once until the backoff passed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 	for _, rl := range roles {
 		t.Run(rl.Name, func(t *testing.T) {
@@ -144,6 +155,9 @@ func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 }
 
 // Under its relayAt, the holder is not relayed.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyLeavesAHolderUnderItsRelayAt(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
 	watchApp(w.Host).cfg.LeaseDir = t.TempDir()

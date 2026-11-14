@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchKeepsQuietAlertsOutOfEventFeed(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
@@ -27,6 +29,8 @@ func TestLoopWatchKeepsQuietAlertsOutOfEventFeed(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	r := newLoopRig(t)
 	old := runLoopWatch
@@ -51,6 +55,8 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
@@ -62,6 +68,8 @@ func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
@@ -89,6 +97,8 @@ func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
@@ -130,6 +140,8 @@ func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchPressureHoldsAndRecovers(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -165,6 +177,8 @@ func TestLoopWatchStaleBudgetHoldsStarts(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFeedsCapacity(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
@@ -175,6 +189,8 @@ func TestLoopWatchDiskFeedsCapacity(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 	r := newLoopRig(t)
 	old := r.a.newWatcher(false, false)
@@ -194,6 +210,8 @@ func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	prunes := 0
@@ -241,6 +259,9 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 
 // A failed cleanup's cause must survive the loop restarting before the next
 // disk sample: the guide needs the cause, not just the usage-level hold.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	r := newLoopRig(t)
 	r.answer = func(args []string) (string, int) {
@@ -288,6 +309,8 @@ func TestLoopWatchDiskFailureReachesGuideAfterRestart(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchLevelsOnlyLogTransitions(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
@@ -310,6 +333,8 @@ func TestLoopWatchLevelsOnlyLogTransitions(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
@@ -344,6 +369,8 @@ func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchDiskRecoveryAfterPruneDoesNotAlarm(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)

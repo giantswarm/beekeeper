@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkedLeaseHolder(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

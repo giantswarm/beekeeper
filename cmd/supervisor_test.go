@@ -40,6 +40,8 @@ func handOverState() *state.State {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayMovesTheRole(t *testing.T) {
 	st := handOverState()
 	var log []state.Event
@@ -85,6 +87,8 @@ func TestRelayMovesTheRole(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelayExpiresAndCancels(t *testing.T) {
 	st := handOverState()
 	if _, _, err := guideRole.Relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
@@ -126,6 +130,8 @@ func TestRelayExpiresAndCancels(t *testing.T) {
 // stripped to the usage lines: its last request read 163018 tokens.
 var supervisorTranscript = filepath.Join("..", "internal", "claude", "testdata", "transcript", "window.jsonl")
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	st := handOverState()
 	relieved := func(p state.Party) *state.Relief { return relievedIn(st.GuideRole(), p) }
@@ -186,6 +192,9 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 // A holder's CLI back under the same session within the grace is a
 // restart, logged once; past the grace it is gone, and a new term has a
 // grace of its own.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRestartGraceThroughACLIRestart(t *testing.T) {
 	const grace = time.Minute
 	st := handOverState()
@@ -229,6 +238,8 @@ func TestRestartGraceThroughACLIRestart(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRoleViewShowsTheContext(t *testing.T) {
 	a := &app{cfg: &config.Config{Guide: config.Guide{Role: config.Role{RelayAt: 400_000}}}, now: relayNow}
 	r := state.Role{Holder: &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}}
@@ -245,6 +256,8 @@ func TestRoleViewShowsTheContext(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARenamedHolderIsKnownByItsCurrentTitle(t *testing.T) {
 	const renamedTitle = "Guide run 18"
 	st := handOverState()
@@ -323,6 +336,9 @@ func (f *fakeLoopService) service() *watch.LoopService {
 // at most once a minute, says SUPERVISOR LOOP DOWN once past the grace and
 // notifies, and never starts or relays a session: the supervisor session is
 // gone. A loop back is one line; a stop restarts nothing.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 	dir := t.TempDir()
 	w, d, out := notifyingWatch(t, dir, true)

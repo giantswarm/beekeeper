@@ -93,6 +93,9 @@ func TestUngatedMerges(t *testing.T) {
 
 // The watch says each ungated merge once while it runs, naming its session
 // and its parent, and its end once, as one ENDED line with the same label.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchSaysAnUngatedMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).now = time.Now()
@@ -217,6 +220,9 @@ func runnerTable() *proc.Table {
 // A merge a runner started from its arguments, which slipped past the hook,
 // is ungated in the watch and the doctor, naming the runner as its parent;
 // one the runner started through the gate is none.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUngatedMergesUnderRunners(t *testing.T) {
 	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
 	want := []string{
@@ -243,6 +249,9 @@ func TestUngatedMergesUnderRunners(t *testing.T) {
 
 // A merge a script starts beneath a shell's -c is still visible to both
 // watch and doctor if it slips past the hook; shell ancestry is no gate.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUngatedMergesInShellCode(t *testing.T) {
 	for _, command := range []string{"bash merge.sh", ". merge.sh", "./merge.sh", "sh -c 'bash merge.sh'"} {
 		t.Run(command, func(t *testing.T) {

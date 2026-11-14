@@ -48,6 +48,9 @@ func useLauncher(t *testing.T, l platform.Launcher) {
 // A relay's successor whose first turn took the role and ended, and whose
 // reopen waits on a desktop window the person works in, is resumed headless
 // past the restart grace: the reopen is no turn.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.RunName(67)}
@@ -84,6 +87,9 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 // A successor that asked for a desktop turn (agents desktop) is not resumed
 // headless while its start unit runs the reopen: the reopen goes ahead at
 // once and warms the desktop's CLI, which a resume would run beside.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.RunName(67)}
@@ -112,6 +118,9 @@ func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
 }
 
 // While the headless turn of a start or wake runs, its holder is not gone.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestStandbyWaitsForARunningTurn(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	run := state.Party{Session: runSixtySeven, Name: guideRole.RunName(67)}
@@ -135,6 +144,9 @@ func TestStandbyWaitsForARunningTurn(t *testing.T) {
 // window yields to the headless resume the standby started meanwhile when
 // the desktop imported the session already: the desktop warms no second
 // CLI beside it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
@@ -223,6 +235,9 @@ func (l *wakeLaterLauncher) Running(context.Context, bool, ...string) []string {
 // A resume that starts while the reopen waits for the person's typing to
 // pause is found right before the show: the reopen yields, and the desktop
 // warms no CLI beside it.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenYieldsToAResumeStartedDuringItsWait(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
@@ -280,6 +295,9 @@ func (o *recordingOpener) Open(_ context.Context, url string, _ bool) error {
 // person sees the role's holder only in the desktop's sidebar. The resume
 // stays frozen while the desktop reads the transcript and remains the
 // session's only CLI.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReopenImportsBesideAHeadlessResume(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
@@ -403,6 +421,9 @@ func (o *importingOpener) Open(ctx context.Context, url string, running bool) er
 
 // A steward's send request names the desktop's session messaging, the
 // holder's desktop id and the message word for word.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSendRequestDeliversTheMessageThroughTheDesktop(t *testing.T) {
 	host := "local_" + runSixtySeven
 	msg := guideRole.ResumeMessage("the desktop runs your CLI now")

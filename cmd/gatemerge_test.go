@@ -325,8 +325,8 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestADeadMergesToolWindowCloses(t *testing.T) {
 	for _, c := range []struct {
 		name, pull, version string
@@ -384,8 +384,8 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 // installs the release lifts it, and the merges held behind it pass. The
 // merge's own record then finds no window left.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	pull, version, updates, fail := github.Open, devctlFrom, 0, error(nil)
@@ -481,8 +481,8 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 // A running promotion's window updates devctl as its release comes and
 // lifts once devctl reports a release newer than the window's opening one.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
 	version := devctlFrom
@@ -847,8 +847,8 @@ func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 // toolUpdateEvery, a failed one is logged, and the window lifts once devctl
 // reports the release.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version, updates, fail := devctlFrom, 0, error(nil)
@@ -911,8 +911,8 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlTo)
 	// Stop after the startup transaction so no external merge runs.
@@ -1055,8 +1055,8 @@ func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 // merge's devctl still waits for the rest of the release: no update installs
 // a candidate, so devctl never reports it.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	toolRelease = func(context.Context, string) (string, error) { return devctlTo + "-rc.1", nil }
@@ -1110,8 +1110,8 @@ func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 // devctl reports the stable release; one that ends without its document,
 // with no pull request to ask, lifts it.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	version := devctlFrom + "-rc.1"
@@ -1163,8 +1163,8 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 // A merged window stays until devctl reports its release: another version
 // than the window's opening one is not enough.
 //
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 	stubGitHub(t, github.Merged, "v8.0.5")
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
@@ -1308,8 +1308,8 @@ func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 	}
 }
 
-// control: none: the gate extraction only changes names and access paths; assertions are unchanged.
-// The merge base has no internal/gate package, so these tests cannot build there.
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(fmt.Sprint(live), func(t *testing.T) {

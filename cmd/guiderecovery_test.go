@@ -28,6 +28,8 @@ func (h *blockedRecoveryHarness) Discover(*config.Config, *proc.Table, time.Time
 	return nil
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 	needsPlatform(t)
 	w, out := loopWatcher(t, "30s", "", nil)
@@ -83,6 +85,8 @@ func TestGuideRecoversWhileMainWatchIsBlocked(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGuideRecoveryHonorsStopAndUnknownProcesses(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	seed(t, watchApp(w.Host), func(st *state.State) {

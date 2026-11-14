@@ -29,6 +29,9 @@ const probeResumeDeploy = "the link is up: resume the deploy"
 // 255, a host name that did not resolve, a command not found or not
 // executable. Only a probe that ran and exits non-zero is "not yet", a
 // refused connection included.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatCannotRunIsNoAnswer(t *testing.T) {
 	for name, tc := range map[string]struct {
 		cmd        string
@@ -60,6 +63,9 @@ func TestProbeThatCannotRunIsNoAnswer(t *testing.T) {
 // clean check, a false one, is "not yet" and closes the guide's work; the
 // probe failing again is a report of its own, and a timer timing out on it
 // says it could not run, not that its condition did not hold.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 	ctx := context.Background()
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(ctx, sshUnresolved))
@@ -141,6 +147,9 @@ func TestProbeThatCannotRunIsOneGuideProblem(t *testing.T) {
 // guide's report. A wake not delivered re-arms the timer from its firing,
 // which must not bring the failure back: timer list says nothing of a probe
 // that ran.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 	// Read the persisted field so this regression also compiles on the
 	// merge base, where Timer has no Failing field yet.
@@ -191,6 +200,9 @@ func TestProbeThatHoldsAfterFailingIsNotListedAsFailing(t *testing.T) {
 
 // A probe that could not run for a day is stuck without its condition said
 // false: it has not been seen to hold, and could not run since when.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestProbeThatCannotRunForADayIsNotSaidFalse(t *testing.T) {
 	cannot := checkOf(state.Timer{Probe: sshUnresolved}).result(probeOutput(context.Background(), sshUnresolved))
 	st := &state.State{Timers: []state.Timer{{ID: 3284, Due: relayNow, Probe: sshUnresolved, What: probeResumeDeploy}}}

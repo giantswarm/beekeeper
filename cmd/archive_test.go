@@ -142,6 +142,9 @@ func TestSeedArchives(t *testing.T) {
 // worker's that reported done) and never a session someone brought back
 // from the Archived list; each is asked for once its session stayed quiet
 // a day.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	st := handOverState()
 	done := state.Party{Session: "w-done", HostSession: "local_w-done", Name: "reported done"}
@@ -273,6 +276,9 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 // its session stays the person's to close, and the start message says how.
 // An archive owed before the fix is owed no longer; the doctor neither
 // seeds nor reseeds one (https://github.com/giantswarm/beekeeper/issues/2195).
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRelievedRunStaysThePersons(t *testing.T) {
 	st := handOverState()
 	st.Starts = []state.Start{{Party: supA, Role: guideName}, {Party: supB}}
@@ -312,6 +318,9 @@ func TestRelievedRunStaysThePersons(t *testing.T) {
 
 // A guide taken over after a crash or a reboot, its session gone without a
 // relay, stays the person's too: its start took the role.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTakenOverGuideStaysThePersons(t *testing.T) {
 	// Names that are no role's runs: only the start says they guided.
 	old := state.Party{Session: "gA", HostSession: "local_gA", Name: "desk guide"}

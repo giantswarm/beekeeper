@@ -247,6 +247,8 @@ func TestNoteFoldKeysOnItsRefNotOnCitedURLs(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 	st := &state.State{Notes: []state.Note{
 		{ID: 1, Kind: noteLogin, Until: probeHolds, Text: "sign in"},

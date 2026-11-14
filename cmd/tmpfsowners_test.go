@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 	root := t.TempDir()
 	for i, name := range []string{litSmall, "medium", "large", "largest"} {
@@ -40,6 +42,8 @@ func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTmpfsLargestDoesNotFollowSymlinks(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	writeT(t, filepath.Join(outside, "data"), strings.Repeat("x", 2<<20))

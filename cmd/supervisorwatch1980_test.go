@@ -17,6 +17,9 @@ import (
 // DISK FILLING from the write rate; only free space under the floor is the
 // emergency. On the base the loop reads the forecast as Low: starts stay
 // held, a note for the person appears.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Watch.DiskFillWithin = config.Duration{Duration: 2 * time.Hour}

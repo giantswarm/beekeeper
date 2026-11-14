@@ -18,6 +18,9 @@ import (
 // a run the relay relieved, whose status no longer counts it, and never a
 // bare run name nothing answers: while the successor's CLI runs without a
 // peer socket the message is refused with when to send again.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	at := time.Date(2026, 10, 18, 1, 7, 0, 0, time.UTC)
 	window := 15 * time.Minute
@@ -93,6 +96,9 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 // name reaches the successor's CLI by the name it takes messages under, which
 // a desktop CLI derived from its folder keeps while its title follows the
 // run's name; never the relieved predecessor.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 	at := time.Date(2026, 10, 21, 8, 34, 0, 0, time.UTC)
 	window := 15 * time.Minute

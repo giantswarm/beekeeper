@@ -25,6 +25,9 @@ import (
 
 // Use a real PID-namespace init and brokered scope. The sandbox's initial
 // shell stays alive while its scoped command leaves a child behind.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchStopsSandboxOrphan(t *testing.T) {
 	if !plat.Launcher.Available() {
 		t.Skip("no user systemd")

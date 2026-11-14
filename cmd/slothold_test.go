@@ -17,6 +17,9 @@ import (
 // A run holding a build slot past memcap.holdBound is one SLOT HELD LONG
 // line naming the slot, its holder, since when and the command, folded
 // while it lasts, and one ENDED line once the slot is free.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysASlotHeldLong(t *testing.T) {
 	t.Setenv("MEMCAP_STATE", "")
 	t.Setenv("MEMCAP_SLOTS", "")

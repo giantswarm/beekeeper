@@ -74,6 +74,8 @@ func tick(t *testing.T, a *app, w *watch.Watcher) {
 	w.RetireEndedExecutions(context.Background(), st)
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementTriggers(t *testing.T) {
 	park := &state.Park{On: retireFixturePark}
 	for _, tc := range []struct {
@@ -155,6 +157,9 @@ func TestExecutionWatchRetiresOnceAndKeepsParkedWorkers(t *testing.T) {
 
 // An unreachable host neither blocks revocation nor reads as retired, and the
 // retry resumes the retirement already recorded.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, func(_ *state.State, r *state.ExecutionRecord) { r.Request.GitHub = true })
 	fake.fail = &execution.UnreachableError{Operation: "retire", Cause: errors.New("connection refused")}
@@ -181,6 +186,9 @@ func TestExecutionRetirementSurvivesAnUnreachableHost(t *testing.T) {
 
 // A failed revocation is retried on its own and never reported as done, while
 // the host's part does not wait for GitHub.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRevocationRetriesWithoutFalseSuccess(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, func(_ *state.State, r *state.ExecutionRecord) { r.Request.GitHub = true })
 	ledger := a.workerGitHubPath(ref)
@@ -275,6 +283,9 @@ func TestExecutionRetirementRefusesAnUnconfirmedAnswer(t *testing.T) {
 
 // A host on an older release holds the retirement open on its backoff without
 // reporting it as retired.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, nil)
 	fake.fail = execution.ErrUnsupported
@@ -289,6 +300,9 @@ func TestExecutionRetirementWaitsForAnOlderHost(t *testing.T) {
 }
 
 // A backlog retires in bounded ticks, the rest on the next one.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestExecutionRetirementBoundsATick(t *testing.T) {
 	a, w, fake, _ := retireFixture(t, func(st *state.State, _ *state.ExecutionRecord) {
 		first := st.Starts[0]

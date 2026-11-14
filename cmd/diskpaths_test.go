@@ -217,6 +217,8 @@ func TestDiskUsageNamesOwners(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDiskPathGrowthAndReports(t *testing.T) {
 	prev := []diskPath{{Path: "/cache/a", Bytes: 100}, {Path: diskGrowthTestPath, Bytes: 5}, {Path: "/cache/partial", Bytes: 1, Partial: true}}
 	cur := []diskPath{{Path: "/cache/a", Bytes: 90}, {Path: diskGrowthTestPath, Bytes: 15}, {Path: "/cache/new", Bytes: 1000}, {Path: "/cache/partial", Bytes: 20}}

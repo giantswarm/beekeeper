@@ -129,6 +129,8 @@ func TestGoneAgentReadsTranscriptBetweenTurns(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 	a, _ := stubApp(t)
 	runLive(t, a, nil)
@@ -166,6 +168,8 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoneRetirementRechecksActivity(t *testing.T) {
 	for _, change := range []string{agentWakeName, "keep", "transcript"} {
 		t.Run(change, func(t *testing.T) {
@@ -240,6 +244,8 @@ func TestGoneWakeAndResumeRestoreCapacity(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestGoneWatchReportsAgeTransition(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).cfg.Claude.ProjectsDir = t.TempDir()

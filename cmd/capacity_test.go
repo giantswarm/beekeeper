@@ -265,6 +265,9 @@ func supervised(n int) *state.State {
 // The watch says CAPACITY FULL at the ceiling and ENDED when busy drops below
 // it; below the ceiling it stays silent (no CAPACITY LOW) and clears any stale
 // capacity-low condition.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchCapacity(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	room := roomy()
@@ -288,6 +291,9 @@ func TestWatchCapacity(t *testing.T) {
 }
 
 // The watch's swap reading reaches capacity through the state while fresh.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSwapReading(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	w.KeepSwap(&capacity.SwapReading{At: relayNow, UsedMiB: 900, PerHourMiB: 40, Rated: true})
@@ -384,6 +390,9 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 
 // A configured ceiling of 0 says "no start: ceiling 0", refuses agents start
 // without --force, and keeps the watch silent; unset keeps the default 10.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	zero := config.Capacity{Ceiling: 0}
 	for _, n := range []int{0, 2} {

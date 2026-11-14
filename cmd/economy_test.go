@@ -37,6 +37,9 @@ var (
 // through its session tracking, the alerts through their line and its
 // brackets, the rest as they came. Each fact is said exactly once, and the
 // hour stays under hourBudget.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 	raw, err := os.ReadFile("testdata/watch-hour.txt")
 	if err != nil {
@@ -143,6 +146,9 @@ func names(list string) []string {
 
 // A lasting condition is one line when it starts and one ENDED line when
 // it ends, however many polls it lasts.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestWatchSaysAConditionsStartAndEndOnce(t *testing.T) {
 	var out bytes.Buffer
 	cfg := &config.Config{}
@@ -223,6 +229,9 @@ func TestSecondReadSaysNoChange(t *testing.T) {
 
 // A restarted watch of the same caller resumes its open conditions: the
 // condition still in progress gives no new line until it ends.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestRestartedWatchSaysAnOpenConditionOnlyAtItsEnd(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

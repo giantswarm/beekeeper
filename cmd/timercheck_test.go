@@ -84,6 +84,9 @@ func TestControlPlaneReadyReadsBothAPIVersions(t *testing.T) {
 // A controlplane-ready timer records why the control plane is not ready yet
 // and wakes its agent within one tick of the rollout, for either API
 // version.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 	for version, stages := range map[string][2]string{
 		"v1beta1": {kcpV1beta1Rolling, kcpV1beta1Rolled},
@@ -141,6 +144,9 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 
 // A reference the watch cannot read is one TIMER UNREADABLE line, again only
 // when the reason changes; the timer keeps waiting and fires once it holds.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.Doctoring.Store(true) // only timers are under test; no concurrent doctor output
@@ -196,6 +202,9 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 
 // A check reads its reference's output: a failure to read it, or output that
 // is not the reference, is unreadable; a probe's non-zero exit is "not yet".
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCheckResultTellsUnreadableFromNotYet(t *testing.T) {
 	kcp, _ := conditionCheck(cpWhen)
 	pr, _ := conditionCheck(prMerged7)
@@ -271,6 +280,9 @@ func TestHelmReleaseReadyReadsTheRolledVersionFromItsHistory(t *testing.T) {
 
 // A helmrelease-ready timer with a version fires once the release runs it,
 // read through the condition's own kubectl command.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestHelmReleaseTimerFiresOnceTheVersionRolled(t *testing.T) {
 	obj, err := os.ReadFile(filepath.Join("testdata", "helmrelease-history.json"))
 	if err != nil {
@@ -301,6 +313,9 @@ func TestProbeOutputSaysHowItFailed(t *testing.T) {
 
 // timer list -v says what each condition's last check found; timer check
 // runs it now and leaves the timer as it is.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	a := watchApp(w.Host)
@@ -378,6 +393,8 @@ func TestTimerProbeHelpDocumentsBudget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTimerProbeTimeoutWatchLine(t *testing.T) {
 	// An expired deadline exercises the command runner without a ten second sleep.
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))

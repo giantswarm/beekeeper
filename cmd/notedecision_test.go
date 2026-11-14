@@ -163,6 +163,8 @@ func TestAnswerEventsParse(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 	now := relayNow
 	past, later := now.Add(-time.Minute), now.Add(time.Hour)
@@ -190,6 +192,8 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
 	for _, dflt := range []string{choiceWaitWord, ghNone, "nothing happens", "", "ask again"} {
 		t.Run(dflt, func(t *testing.T) {
@@ -362,6 +366,9 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 
 // Every decision its default closed longer than defaultedKeep ago leaves in
 // the same call that closes the due ones; a younger one stays answerable.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
 	now := relayNow
 	old := now.Add(-defaultedKeep - time.Minute)

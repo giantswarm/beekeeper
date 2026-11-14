@@ -233,6 +233,8 @@ func TestReviewFixTerminalParksWakeRemainingTasks(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 	for _, roster := range []bool{false, true} {
 		for _, head := range []string{"", loopHead} {
@@ -269,6 +271,8 @@ func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReviewFixOldOffRosterReviewParkStillSettles(t *testing.T) {
 	w := parkingWatch(t, map[string]string{refOne: github.Merged})
 	work := ""

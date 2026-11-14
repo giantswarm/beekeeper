@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/watch"
 )
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseWakeReservesFullWindow(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimMe, 29*time.Minute))
 	st, err := a.store.Read()
@@ -51,6 +53,8 @@ func TestExpiredGrantNeverPromisesLease(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestLeaseWakeRechecksQueue(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimFirst, time.Minute))
 	st, err := a.store.Read()

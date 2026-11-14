@@ -25,6 +25,8 @@ func TestParseReleaseTarget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestParkReleaseAvailability(t *testing.T) {
 	w := parkingWatch(t, nil)
 	const target = "example/tool@v1.2.3"
@@ -91,6 +93,8 @@ func TestServeReleaseTarget(t *testing.T) {
 	}
 }
 
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestReleaseParkWakesOnce(t *testing.T) {
 	w := parkingWatch(t, nil)
 	watchApp(w.Host).cfg.Agents.AutoResume = true

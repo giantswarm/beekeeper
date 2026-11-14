@@ -102,6 +102,9 @@ func TestADesktopSendWaitsForTheHeadlessTurn(t *testing.T) {
 // once one is left. Discover lists the session once; the process table holds
 // both CLIs. A CLI younger than twinGrace (a restart's overlap) counts not
 // yet.
+//
+// control: none: the watch extraction only changes names and access paths; assertions are unchanged.
+// The merge base has neither internal/watch nor the names these tests now use, so they cannot build there.
 func TestTheWatchSaysATwinCLI(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	watchApp(w.Host).now = time.Now()
