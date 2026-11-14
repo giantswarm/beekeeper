@@ -1,0 +1,139 @@
+name: stalled-prefix-approval-gets-exact-head-review
+description: >
+  With merge.requireReview enabled, review round one approves the initial head,
+  and a subsequent worker turn pushes a non-base fix and parks on the new head.
+  Instead of issuing a doomed merge go for the unapproved head or refusing a
+  second review, the loop starts round two on the new green head and merges
+  once round two approves it.
+issue: https://github.com/giantswarm/beekeeper/issues/4003
+flow: regression
+tags: [regression, loop, review, merge]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      merge: {requireReview: true}
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+      board:
+        order: [{name: progress, status: [In Progress]}]
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: 'P1: Exact-head review after post-approval fix', board: In Progress}
+  harness:
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-1]
+                dir: app
+              - write: {path: app/change.txt, content: "the worker's change\n"}
+              - git: [add, change.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: the worker's change"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-1, --title, "feat: the worker's change", --body, "Closes https://github.com/example/app/issues/1"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+          - steps:
+              - git: [fetch, --quiet, origin]
+                dir: app
+              - write: {path: app/fix.txt, content: "post-approval fix\n"}
+              - git: [add, fix.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "fix: post-approval adjustment"]
+                dir: app
+              - git: [push, --quiet, origin, app-1]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#2', --post-merge, '', desk review]
+                dir: app
+      - name: Review app 2 r1
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+      - name: Review app 2 r2
+        turns:
+          - steps:
+              - gh: [pr, view, '2', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '2', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/2", --problem, none]
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ''}
+
+when:
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 2, state: open}}
+  - advance: 2s
+  - github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [agents.park, supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: Review app 2 r1, outcome: finish}
+  - advance: 2s
+  - run:
+      args: [--as, supervisor loop, agents, start, app 1, /work/worker.txt, --harness, codex, --model, gpt-5.2-codex]
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 2, outcome: finish}
+        - origin: {repository: example/app, branch: app-1, ahead: 2}
+  - advance: 2s
+  - github: {check: {repo: example/app, pull: 2, name: build, state: green}}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: Review app 2 r2, outcome: finish}
+  - advance: 2s
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 2, state: merged}}
+  - advance: 2s
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+
+then:
+  - github: {pull: {repo: example/app, number: 2, state: merged, merged_into: main}}
+  - github: {issue: {repo: example/app, number: 1, state: closed, pulls: 1, open_pulls: 0}}
+  - worker: {name: Review app 2 r1, turns: 1, outcome: finish}
+  - worker: {name: Review app 2 r2, turns: 1, outcome: finish}
+  - calls: {program: gh, args: [pr, merge], min: 1, max: 1}

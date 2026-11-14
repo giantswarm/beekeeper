@@ -5,22 +5,29 @@ the desk from the board, watches pull requests and outages, and routes alerts.
 
 ## Recovering stalled board work
 
-The loop observes the first five actionable **In Progress** items in the configured board order,
-putting items titled `P1:` or labelled `P1` / `priority/p1` first. It saves PR heads, each check's
-conclusion, review assignments and verdicts, and serving workers' latest tool-call activity in
-`supervisor-board-progress.json`. A loop restart retains the elapsed time. Board membership is
-refreshed every minute; unread board, PR or process observations never authorize recovery.
+The loop observes the first five actionable **In Progress** and **Up Next** items in the configured
+board order (including actionable sub-issues of top epics), putting items titled `P1:` or labelled
+`P1` / `priority/p1` first. It saves open PR heads, each check's conclusion, review assignments and
+verdicts, and serving workers' latest tool-call activity in `supervisor-board-progress.json`. Merged
+or closed `Part of` slice PRs and ended review parks leave the open-PR set once read so multi-slice
+items continue instead of stalling on completed slices. A loop restart retains the elapsed time.
+Board membership and epic snapshots refresh every minute; unread board, PR or process observations
+never authorize recovery.
 
-After 30 minutes without a changed signal, the next pass uses the existing recovery paths: a
-fresh continuation for a dead worker, a fixer for a red head without a live fixer, or the missing
-assignment of a supervisor-started SSH reviewer at its pinned head. An unstaffed item can start
-despite subscription pace, unless `board next` names an owner for it (a session's serve record, a
-task naming it or a running session working on it): such an item is reported, never doubled. The
-pace exception applies only to commands for that item, expires with its observation, and never
-changes the provider's global settings. Weekly and session caps,
-machine limits, WIP admission, repository holds, explicit waits and the person's stop still apply.
-A live but quiet process is reported rather than replaced. Only unresolved causes reach the guide;
-successful actions are recorded as `supervisor.board-progress`. Up Next work keeps normal admission.
+After 30 minutes without a changed signal, the next pass acts on every cause the loop knows: a fresh
+continuation for a dead worker, a fixer for a red head without a live fixer (or an open green
+unapproved head whose worker left without parking), the missing assignment of a supervisor-started
+SSH reviewer at its pinned head, a fresh continuation for a parked worker whose wait is positively
+settled (a free lease, lifted hold, closed or answered note, published or installed release, or
+closed or merged awaited reference), or an independent review round when `merge.requireReview` is
+enabled and a green head moved past an earlier approval without a base-only merge or nit
+attestation. An unstaffed item starts with `--progress-item`, waiving subscription 7-day pace, WIP,
+epic and unmerged limits, and positive worker ceilings (`> 0`) for that item's commands unless an
+owner already holds it: owned items and live quiet processes are reported, never doubled. The
+exception expires with its observation and never overrides `ceiling: 0`, usage-high window caps,
+machine headroom, self-hosted VRAM limits, SSH host `maxBusy`, repository holds, unsettled person
+waits or the person's stop. Only unresolved causes reach the guide; successful actions are recorded
+as `supervisor.board-progress`.
 
 ## Filling the desk
 

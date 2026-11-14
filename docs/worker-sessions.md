@@ -235,7 +235,9 @@ attest a nit-only push with
 `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`,
 for a head no park asks the go for. Workers cannot attest their own fixes.
 `merge.requireReview: true` requires the fixed approval comment covering the
-head (including a supervisor-attested nit delta); a merge go alone is insufficient.
+head (including a base-only merge or a supervisor-attested nit delta); a merge go
+alone is insufficient, and a parked green head not covered by an approval gets an
+independent review round.
 Review-raised issues use the `follow-up` label, stay unranked in backlog and are
 never attached as epic sub-issues. `board next` skips that label by default.
 

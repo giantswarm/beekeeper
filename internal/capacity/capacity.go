@@ -135,6 +135,8 @@ func (v *View) WithLocal(st *state.State, k config.Capacity) *View {
 	limit := n
 	if v.Review && n > 0 {
 		l.ReviewHeadroom, limit = k.ReviewHeadroom, reviewCeiling(n, k.ReviewHeadroom)
+	} else if k.Progress && !v.Review && n > 0 {
+		limit = max(n, len(busy)+1)
 	}
 	l.Room = max(0, limit-len(busy))
 	v.Local = l
@@ -790,6 +792,8 @@ func NewStartCapacity(c AgentCount, k config.Capacity, h *Headroom, builds bool,
 	base := k.Ceiling
 	if kind != ForWorker {
 		k.Ceiling = reviewCeiling(base, k.ReviewHeadroom)
+	} else if k.Progress && k.Ceiling > 0 {
+		k.Ceiling = max(k.Ceiling, len(c.Busy)+1)
 	}
 	return NewCapacity(c, k, h, builds).WithReviewHeadroom(k.ReviewHeadroom, base, len(c.Busy), kind)
 }
@@ -871,10 +875,10 @@ func WindowUnderused(sd *UsageWindow, u config.Usage, now time.Time) bool {
 }
 
 func BuildSingleProviderView(name string, pCfg config.Provider, pa ProviderAgents, res ProviderReadingResult, now time.Time) *ProviderView {
-	return buildProviderForStart(name, pCfg, pa, res, now, 0, ForWorker)
+	return buildProviderForStart(name, pCfg, pa, res, now, 0, ForWorker, false)
 }
 
-func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents, res ProviderReadingResult, now time.Time, extra int, kind StartFor) *ProviderView {
+func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents, res ProviderReadingResult, now time.Time, extra int, kind StartFor, progress bool) *ProviderView {
 	if pCfg.SelfHosted() {
 		return BuildSelfHostedProviderView(name, pCfg, pa, res, now)
 	}
@@ -934,7 +938,7 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 			sd := effectiveSevenDayWindow(b.SevenDay, now)
 			sevenDays = append(sevenDays, sd)
 			var pace *float64
-			if kind == ForWorker && !pv.PaceOff.waives(sd) {
+			if kind == ForWorker && !progress && !pv.PaceOff.waives(sd) {
 				pace = sdPace(sd)
 			}
 			dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)
@@ -945,6 +949,9 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 			bBusy := pa.BucketBusy[bName]
 			if bBusy == nil {
 				bBusy = []string{}
+			}
+			if progress && kind == ForWorker && !high && dp.Ceiling > 0 {
+				dp.Ceiling = max(dp.Ceiling, len(bBusy)+1)
 			}
 			var bBlocks []string
 			switch {
@@ -1003,6 +1010,9 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 			return pv
 		}
 		pv.Ceiling = min(reviewCeiling(pCfg.Ceiling, extra), maxBucketCeiling)
+		if progress && kind == ForWorker && pv.Ceiling > 0 {
+			pv.Ceiling = max(pv.Ceiling, len(pv.Busy)+1)
+		}
 		switch {
 		case pv.Ceiling == 0:
 			pv.Blocks = []string{ceilingZero}
@@ -1025,11 +1035,14 @@ func buildProviderForStart(name string, pCfg config.Provider, pa ProviderAgents,
 	pv.Underused = WindowUnderused(pv.SevenDay, pCfg.Usage, now)
 	pv.PaceOff.settle(pv.SevenDay)
 	var pace *float64
-	if kind == ForWorker && !pv.PaceOff.waives(pv.SevenDay) {
+	if kind == ForWorker && !progress && !pv.PaceOff.waives(pv.SevenDay) {
 		pace = pv.Pace
 	}
 	dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pace)
 	pv.Ceiling, pv.High = reviewCeiling(dp.Ceiling, extra), high
+	if progress && kind == ForWorker && !pv.High && pv.Ceiling > 0 {
+		pv.Ceiling = max(pv.Ceiling, len(pv.Busy)+1)
+	}
 	switch {
 	case pv.High:
 		pv.Blocks = []string{HighBlockText(pv.FiveHour, pv.HighPercent, now)}
@@ -1143,7 +1156,7 @@ func BuildProvidersCapacity(c AgentCount, pa map[string]ProviderAgents, k config
 	anySelfHosted := false
 	for _, name := range k.ProviderNames() {
 		pCfg := k.Providers[name]
-		pv := buildProviderForStart(name, pCfg, pa[name], readings[name], now, extra, kind)
+		pv := buildProviderForStart(name, pCfg, pa[name], readings[name], now, extra, kind, k.Progress)
 		providers[name] = pv
 		sumCeiling += pv.Ceiling
 		// capacity.ceiling caps the subscription providers, not a self-hosted
@@ -1154,6 +1167,44 @@ func BuildProvidersCapacity(c AgentCount, pa map[string]ProviderAgents, k config
 		} else {
 			anySubscription = true
 			subCeiling += pv.Ceiling
+		}
+	}
+	// subscriptionBusy is the busy agents of the subscription providers;
+	// machineBusy those weighing against the total. A self-hosted agent asks
+	// nothing of a subscription, so capacity.ceiling — which a desk lowers to
+	// 0 to hold one on its weekly pace — bounds the subscription side alone
+	// and never counts them.
+	subscriptionBusy := 0
+	for _, name := range k.ProviderNames() {
+		if !k.Providers[name].SelfHosted() {
+			subscriptionBusy += len(providers[name].Busy)
+		}
+	}
+	// unassignedBusy is capacity's own count of the busy sessions of no
+	// provider of the pool, the weight forTarget names in the verdict of a
+	// start that resolves to no provider: with a subscription provider in
+	// the pool every busy agent weighs on its side, with none only those of
+	// no provider of the pool.
+	unassignedBusy := 0
+	if !anySubscription {
+		assigned := map[string]bool{}
+		for _, name := range k.ProviderNames() {
+			for _, n := range providers[name].Busy {
+				assigned[n] = true
+			}
+		}
+		for _, n := range c.Busy {
+			if !assigned[n] {
+				unassignedBusy++
+			}
+		}
+	}
+	if k.Progress && kind == ForWorker && k.Ceiling > 0 {
+		k.Ceiling = max(k.Ceiling, max(subscriptionBusy, unassignedBusy)+1)
+		if subCeiling > 0 {
+			diff := max(0, subscriptionBusy+1-subCeiling)
+			subCeiling += diff
+			sumCeiling += diff
 		}
 	}
 	effCeiling := sumCeiling
@@ -1174,17 +1225,6 @@ func BuildProvidersCapacity(c AgentCount, pa map[string]ProviderAgents, k config
 			selfHostedRoom += providers[name].Room
 		}
 	}
-	// subscriptionBusy is the busy agents of the subscription providers;
-	// machineBusy those weighing against the total. A self-hosted agent asks
-	// nothing of a subscription, so capacity.ceiling — which a desk lowers to
-	// 0 to hold one on its weekly pace — bounds the subscription side alone
-	// and never counts them.
-	subscriptionBusy := 0
-	for _, name := range k.ProviderNames() {
-		if !k.Providers[name].SelfHosted() {
-			subscriptionBusy += len(providers[name].Busy)
-		}
-	}
 	// The subscription side stands alone under capacity.ceiling; a self-hosted
 	// agent asks nothing of it and never weighs against it. With no
 	// subscription provider in the pool it is bounded by capacity.ceiling
@@ -1198,24 +1238,7 @@ func BuildProvidersCapacity(c AgentCount, pa map[string]ProviderAgents, k config
 	// minus the busy agents that resolve to no provider of the pool — an agent
 	// of the pool belongs to its provider's own target, never to this one.
 	subscriptionCap := max(0, min(k.Ceiling, subCeiling)-subscriptionBusy)
-	// unassignedBusy is capacity's own count of the busy sessions of no
-	// provider of the pool, the weight forTarget names in the verdict of a
-	// start that resolves to no provider: with a subscription provider in
-	// the pool every busy agent weighs on its side, with none only those of
-	// no provider of the pool.
-	unassignedBusy := 0
 	if !anySubscription {
-		assigned := map[string]bool{}
-		for _, name := range k.ProviderNames() {
-			for _, n := range providers[name].Busy {
-				assigned[n] = true
-			}
-		}
-		for _, n := range c.Busy {
-			if !assigned[n] {
-				unassignedBusy++
-			}
-		}
 		subscriptionCap = max(0, k.Ceiling-unassignedBusy)
 	}
 	subRoomCap := subscriptionCap
@@ -1496,7 +1519,7 @@ func EvaluateChoices(k config.Capacity, providers map[string]*ProviderView, mach
 		}
 		reason := ModelPolicyReason(k, ch, pv, bucketName, kind)
 		if reason == "" {
-			reason = evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
+			reason = evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, k.Progress, now)
 		}
 		if reason == "" {
 			cand.OK = true
@@ -1563,7 +1586,7 @@ func windowRate(w *UsageWindow, now time.Time) (float64, bool) {
 	return max(0, 100-w.UsedPercent) / hours, true
 }
 
-func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *ProviderView, bucketName string, machineBlocks []string, stopped string, excludes, providerNames []string, kind StartFor, now time.Time) string {
+func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *ProviderView, bucketName string, machineBlocks []string, stopped string, excludes, providerNames []string, kind StartFor, progress bool, now time.Time) string {
 	if ChoiceExcluded(ch, excludes, providerNames) {
 		return "excluded"
 	}
@@ -1650,7 +1673,7 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *ProviderVi
 	// does, within the 7-day window it was set in. Desk reviews inside the
 	// reserved review headroom are not refused by the pace check, only by a
 	// provider at its hard limit.
-	if kind == ForWorker && sd != nil && sd.Pace != nil && !pv.PaceOff.waives(sd) {
+	if kind == ForWorker && !progress && sd != nil && sd.Pace != nil && !pv.PaceOff.waives(sd) {
 		margin := min(ch.EffectivePaceMargin(pCfg), pCfg.PaceMargin, 0)
 		over := math.Round((sd.UsedPercent-*sd.Pace)*10) / 10
 		if over > margin+1e-9 {

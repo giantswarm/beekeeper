@@ -86,8 +86,8 @@ func (l *Loop) WakeEpicOwners(ctx context.Context, st *state.State) error {
 }
 
 // epicStart runs in the command, which holds what it needs (loopEpicStart).
-func (l *Loop) epicStart(next LoopBoardItem) error {
-	return Cmd.LoopEpicStart(l, next)
+func (l *Loop) epicStart(ctx context.Context, next LoopBoardItem) error {
+	return Cmd.LoopEpicStart(ctx, l, next)
 }
 
 var EpicGitHub = github.RunGH

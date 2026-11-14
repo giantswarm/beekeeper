@@ -108,6 +108,7 @@ type Capacity struct {
 	TaskKind     string                `yaml:"-"`
 	AuthorModel  string                `yaml:"-"`
 	AuthorFamily string                `yaml:"-"`
+	Progress     bool                  `yaml:"-"`
 	// Ceiling is the most busy agents the supervisor starts (10). Zero is
 	// honoured: ceiling 0 refuses every unforced start.
 	Ceiling    int `yaml:"ceiling"`

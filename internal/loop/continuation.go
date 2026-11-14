@@ -54,7 +54,7 @@ func (l *Loop) ContinueParks(ctx context.Context, st *state.State) error {
 			ref = ag.Park.On
 		}
 		if _, ok := Cmd.ParseRef(ref); !ok {
-			if refs := Cmd.NamedRefs(ag.Task+" "+ag.LastTask, l.Host.Cfg().Board.Owner); len(refs) > 0 {
+			if refs := Cmd.NamedRefs(ag.Task+" "+ag.LastTask+" "+strings.Join(ag.Park.Continuation, " "), l.Host.Cfg().Board.Owner); len(refs) > 0 {
 				ref = refs[0]
 			}
 		}

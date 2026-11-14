@@ -247,7 +247,7 @@ func DeriveUsageViewForStart(r UsageReading, k config.Capacity, kind StartFor, n
 	fh := effectiveWindow(r.FiveHour, now)
 	sd := effectiveSevenDayWindow(r.SevenDay, now)
 	var pace *float64
-	if kind == ForWorker {
+	if kind == ForWorker && !k.Progress {
 		pace = sdPace(sd)
 	}
 	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), pace)

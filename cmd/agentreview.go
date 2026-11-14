@@ -99,7 +99,7 @@ with execution review flags.`,
 			if err != nil {
 				return err
 			}
-			round, err := reviewRound(st, p)
+			round, err := reviewRoundWithPolicy(cmd.Context(), st, p, a.cfg != nil && a.cfg.Merge.RequireReview)
 			if err != nil {
 				return err
 			}
@@ -173,26 +173,70 @@ with execution review flags.`,
 // session on the pull request, including after restart and before its comment
 // lands.
 func reviewRound(st *state.State, p superloop.Pull) (int, error) {
+	return reviewRoundWithPolicy(context.Background(), st, p, false)
+}
+
+func reviewRoundWithPolicy(ctx context.Context, st *state.State, p superloop.Pull, requireReview bool) (int, error) {
 	once := func(verdict, head string) error {
 		return refused("%s had its one desk review, %s at head %s: no second review starts; the loop merges after the fixes", p.Ref, verdict, gate.ShortSHA(head))
 	}
-	// Every desk verdict refuses, one of a head its author replaced
-	// (superloop.Replaced) too: this command reads no loop ledger, which
-	// alone tells a replaced head from a verdict the loop acted on or one
-	// that raced its reviewer's own push. The loop starts the round after a
-	// replaced head's review itself.
-	for _, r := range p.Reviews {
-		if r.Verdict != "" {
-			return 0, once(r.Verdict, cmp.Or(r.Head, r.Commit))
+	approvalCovers := func(approved string) bool {
+		if approved == "" {
+			return false
 		}
+		if loop.SameCommit(approved, p.Head) || st.ReviewNitsChecked(p.Ref, p.Head, approved) {
+			return true
+		}
+		ok, err := loop.ReadBaseMerge(ctx, p, approved)
+		return err == nil && ok
 	}
 	round := 1
+	if !requireReview {
+		// Every desk verdict refuses, one of a head its author replaced
+		// (superloop.Replaced) too: this command reads no loop ledger, which
+		// alone tells a replaced head from a verdict the loop acted on or one
+		// that raced its reviewer's own push. The loop starts the round after a
+		// replaced head's review itself.
+		for _, r := range p.Reviews {
+			if r.Verdict != "" {
+				return 0, once(r.Verdict, cmp.Or(r.Head, r.Commit))
+			}
+		}
+	} else {
+		var latest *superloop.Review
+		earlierVerdict := false
+		for i := range p.Reviews {
+			r := &p.Reviews[i]
+			if r.Verdict == "" || r.Replaced {
+				continue
+			}
+			head := cmp.Or(r.Head, r.Commit)
+			if loop.SameCommit(head, p.Head) {
+				return 0, once(r.Verdict, head)
+			}
+			earlierVerdict = true
+			if latest == nil || !r.At.Before(latest.At) {
+				latest = r
+			}
+		}
+		if latest != nil && latest.Verdict == superloop.Approved && approvalCovers(cmp.Or(latest.Head, latest.Commit)) {
+			return 0, once(latest.Verdict, cmp.Or(latest.Head, latest.Commit))
+		}
+		if earlierVerdict {
+			round = 2
+		}
+	}
 	for _, r := range st.DeskReviews {
 		if !strings.EqualFold(r.Ref, p.Ref) {
 			continue
 		}
 		if r.Result != nil && r.Result.Verdict != "" {
-			return 0, once(r.Result.Verdict, cmp.Or(r.Result.Head, r.Head))
+			head := cmp.Or(r.Result.Head, r.Head)
+			if !requireReview || loop.SameCommit(head, p.Head) || (r.Result.Verdict == superloop.Approved && approvalCovers(head)) {
+				return 0, once(r.Result.Verdict, head)
+			}
+			round = max(round, r.Round+1)
+			continue
 		}
 		if r.Released.IsZero() {
 			return 0, refused("%s already has a reviewer for head %s", p.Ref, r.Head)
@@ -398,13 +442,17 @@ func (a *app) reserveReview(act superloop.Action) error {
 				return nil, refused("%s already requested this head or review round", act.Ref)
 			}
 		}
+		requireReview := a.cfg != nil && a.cfg.Merge.RequireReview
 		for i := range st.DeskReviews {
 			round := &st.DeskReviews[i]
 			if !strings.EqualFold(round.Ref, act.Ref) {
 				continue
 			}
 			if round.Result != nil {
-				return nil, refused("%s already assigned its one review", act.Ref)
+				if !requireReview || loop.SameCommit(cmp.Or(round.Result.Head, round.Head), act.Head) || round.Round == act.Round {
+					return nil, refused("%s already assigned its one review", act.Ref)
+				}
+				continue
 			}
 			if round.Released.IsZero() && (!replaced || round.Head == act.Head || round.Round == act.Round) {
 				return nil, refused("%s already assigned its one review", act.Ref)
@@ -537,7 +585,7 @@ func reviewRequestOwned(st *state.State, r state.ReviewRequest) bool {
 		}
 	}
 	for _, round := range st.DeskReviews {
-		if round.Released.IsZero() && strings.EqualFold(round.Ref, r.Ref) && (round.Head == r.Head || round.Round == r.Round) {
+		if round.Released.IsZero() && round.Result == nil && strings.EqualFold(round.Ref, r.Ref) && (round.Head == r.Head || round.Round == r.Round) {
 			return true
 		}
 	}

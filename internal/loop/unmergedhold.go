@@ -165,7 +165,7 @@ func (l *Loop) UnmergedStart(ctx context.Context, nextRef string) error {
 	if l.Host != nil && l.Host.Store() != nil {
 		st, _ = l.Host.Store().Read()
 	}
-	exempt := Cmd.IncidentExempt(st, l.Host.TimeNow(), nextRef)
+	exempt := Cmd.IncidentExempt(st, l.Host.TimeNow(), nextRef) || strings.EqualFold(ProgressItem(ctx), nextRef)
 	recent, why, err := l.RepoRecentUnmerged(ctx, r.Repo)
 	if err != nil {
 		l.SayOnce("unmerged read "+strings.ToLower(r.Repo), "SUPERVISOR LOOP cannot read open pull requests for %s: %v", r.Repo, err)

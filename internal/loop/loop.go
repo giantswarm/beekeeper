@@ -1680,7 +1680,8 @@ func (l *Loop) Pass(ctx context.Context) (result error) {
 		Desk: superloop.Desk{Since: l.Since, Orgs: a.Cfg().GitHub.AllowedOrgs, Authors: own.Authors, Bots: own.Bots, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.Cfg().Merge.DevctlOwners, Admin: a.Cfg().Merge.Admin, MergeMethods: a.Cfg().Merge.Methods,
-		BaseMerged:  func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
+		RequireReview: a.Cfg().Merge.RequireReview,
+		BaseMerged:    func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
 		NitsChecked: func(p superloop.Pull, approved string) bool { return st.ReviewNitsChecked(p.Ref, p.Head, approved) },
 		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.Cfg().Agents.StaleAfter.Duration,
 		Board: a.Cfg().Board.Owner != "" && a.Cfg().Board.Project != 0}
@@ -4489,13 +4490,16 @@ type LoopBoardItem struct {
 }
 
 func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoardItem, reserved ...[]string) (string, error) {
-	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+	progressExempt := strings.EqualFold(ProgressItem(ctx), next.Ref)
+	if !progressExempt {
+		if err := l.deliveryPriority(ctx, reserved...); err != nil {
+			return "", err
+		}
+	}
+	if err := l.epicStart(ctx, next); err != nil {
 		return "", err
 	}
-	if err := l.epicStart(next); err != nil {
-		return "", err
-	}
-	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
+	if err := l.deliveryStart(next.Ref, next.WIPExempt || progressExempt); err != nil {
 		return "", err
 	}
 	if why := l.unreadRepo(next.Ref); why != "" {
@@ -4571,13 +4575,15 @@ func (l *Loop) StartItem(ctx context.Context, act superloop.Action, next LoopBoa
 	if err := l.UnmergedStart(ctx, next.Ref); err != nil {
 		return "", err
 	}
-	if err := l.deliveryPriority(ctx, reserved...); err != nil {
+	if !progressExempt {
+		if err := l.deliveryPriority(ctx, reserved...); err != nil {
+			return "", err
+		}
+	}
+	if err := l.epicStart(ctx, next); err != nil {
 		return "", err
 	}
-	if err := l.epicStart(next); err != nil {
-		return "", err
-	}
-	if err := l.deliveryStart(next.Ref, next.WIPExempt); err != nil {
+	if err := l.deliveryStart(next.Ref, next.WIPExempt || progressExempt); err != nil {
 		return "", err
 	}
 	if err := l.claim(act, name); err != nil {

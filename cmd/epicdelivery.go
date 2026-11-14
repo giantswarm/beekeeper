@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -32,7 +33,11 @@ func epicOwner(st *state.State, ref string) *state.Agent {
 // Offer the owner even after the last child closes: only acceptance ends an epic.
 // This uses the same ranked eligibility gates as implementation work.
 func epicCandidates(snap *board.Snapshot, cfg config.Board, cands []board.Candidate, states ...*state.State) ([]board.Candidate, epicSnapshot) {
-	view := epicSnapshot{At: time.Now().UTC()}
+	return epicCandidatesAt(time.Now().UTC(), snap, cfg, cands, states...)
+}
+
+func epicCandidatesAt(now time.Time, snap *board.Snapshot, cfg config.Board, cands []board.Candidate, states ...*state.State) ([]board.Candidate, epicSnapshot) {
+	view := epicSnapshot{At: now.UTC()}
 	var owners []board.Candidate
 	for _, it := range snap.Items {
 		if !snap.Gate.Epic(it) || (it.Status != snap.Gate.Go && (len(states) == 0 || epicOwner(states[0], it.Ref) == nil)) {
@@ -78,6 +83,10 @@ func epicCandidates(snap *board.Snapshot, cfg config.Board, cands []board.Candid
 
 // Admission is recomputed against the locked state when claiming a candidate.
 func epicAdmission(st *state.State, c board.Candidate, sc pickScope) string {
+	return epicAdmissionWithProgress(st, c, sc, false)
+}
+
+func epicAdmissionWithProgress(st *state.State, c board.Candidate, sc pickScope, progressExempt bool) string {
 	if !c.EpicOwner && c.Epic == "" {
 		return ""
 	}
@@ -93,7 +102,7 @@ func epicAdmission(st *state.State, c board.Candidate, sc pickScope) string {
 		return why
 	}
 	owner := epicOwner(st, ref)
-	if owner == nil && sc.epicLimit > 0 {
+	if owner == nil && sc.epicLimit > 0 && !progressExempt {
 		slots := sc.epicLimit
 		for _, ag := range st.Agents {
 			if !ag.Done && strings.HasPrefix(ag.Task, epicOwnerTask) {
@@ -142,7 +151,7 @@ func epicAdmission(st *state.State, c board.Candidate, sc pickScope) string {
 	if parallel <= 0 {
 		parallel = 3
 	}
-	if n >= parallel {
+	if !progressExempt && n >= parallel {
 		return "epic parallelism limit reached"
 	}
 	return ""
@@ -205,7 +214,7 @@ func (a *app) epicStatus(st *state.State) (string, error) {
 	return b.String(), nil
 }
 
-func loopEpicStart(l *loop.Loop, next loop.LoopBoardItem) error {
+func loopEpicStart(ctx context.Context, l *loop.Loop, next loop.LoopBoardItem) error {
 	if !next.EpicOwner && next.Epic == "" {
 		return nil
 	}
@@ -222,7 +231,7 @@ func loopEpicStart(l *loop.Loop, next loop.LoopBoardItem) error {
 	}
 	c := board.Candidate{Item: board.Item{Ref: next.Ref}, Epic: next.Epic, EpicOwner: next.EpicOwner}
 	sc := pickScope{epics: view, epicLimit: asApp(l.Host).cfg.Delivery.EpicLimit, epicParallel: asApp(l.Host).cfg.Delivery.EpicParallel, listed: asApp(l.Host).timeNow(), wipPolicy: asApp(l.Host).deliveryPolicy()}
-	if why := epicAdmission(st, c, sc); why != "" {
+	if why := epicAdmissionWithProgress(st, c, sc, strings.EqualFold(loop.ProgressItem(ctx), next.Ref)); why != "" {
 		return fmt.Errorf("%s: %s: %w", next.URL, why, loop.ErrLoopLater)
 	}
 	return nil

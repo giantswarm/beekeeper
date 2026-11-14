@@ -289,6 +289,10 @@ type Input struct {
 	// gh pr merge --admin --match-head-commit to merge past their branch
 	// ruleset after the approved review.
 	Admin []string
+	// RequireReview is merge.requireReview: every head that brings new
+	// non-base changes past an earlier review gets its own independent desk
+	// review instead of merging on an unreviewed head's go.
+	RequireReview bool
 	// BaseMerged reports whether p's head only brings its base into
 	// approved, an earlier head the loop's go covers: it merges the base,
 	// resolving the merge's conflicts or not, or rebases onto it

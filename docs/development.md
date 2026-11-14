@@ -957,9 +957,10 @@ approval when it only brings the base into the approved one (`github.ApprovalCov
 of the base, a conflict's resolution with lines of either side, or a rebase, with no change
 of its own), and the loop
 accepts such a head, including when `merge.requireReview` is enabled; its planner gives the
-go for it without a fresh park. Any other repaired head gets the go once its worker parked
-on it, never a second review; with `merge.requireReview` the gate merges only a head an
-approval covers. Emergency review-only admin merges also allow an unchanged
+go for it without a fresh park. Without `merge.requireReview`, any other repaired head gets
+the go once its worker parked on it, never a second review; with `merge.requireReview`, the
+gate merges only a head an approval covers and the loop starts a review round on a parked
+green head that moved past its approval. Emergency review-only admin merges also allow an unchanged
 green head behind its base when effective rules do not require up-to-date branches. They
 recognize review dismissal restrictions without bypassing strict status checks or other
 non-review requirements. A restart reads GitHub before repeating

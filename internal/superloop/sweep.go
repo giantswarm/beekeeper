@@ -232,19 +232,22 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		fix(fmt.Sprintf("a review asked for changes on head %s and nobody fixed them: answer and fix its findings", short(p.Head)))
 	case !p.Green:
 		// Its checks run, or have not reported yet: nothing to own yet.
-	case l.has(goKey(ref, p.Head)):
+	case l.has(goKey(ref, p.Head)) && (!in.RequireReview || (v != nil && v.Verdict == Approved && in.approvalCovers(p, v.Head))):
 		a := goAction(in, base, fmt.Sprintf("the merge go for head %s was given and never carried out; %s", short(p.Head), idle))
 		a.Key = sweepKey("go", ref, p.Head, since)
 		add(a)
-	case v != nil && v.Verdict == Approved && (sameHead(v.Head, p.Head) || in.baseMerged(p, v.Head)):
+	case v != nil && v.Verdict == Approved && in.approvalCovers(p, v.Head):
 		// planPull gives its go.
 	case once != nil:
 		// Commits past the one review that nobody parked on: a worker
-		// takes them over and parks, and the loop merges the head
-		// without a second review.
+		// takes them over and parks.
 		a := base
 		a.Key, a.Kind = sweepKey("fix", ref, p.Head, since), KindRework
-		a.Message = fmt.Sprintf("%s: its one desk review, round %d, %s head %s (%s), and head %s carries commits past it that nobody parked on. You own it now: finish them (fix every finding the review left), bring head %s to green CI without conflicts, then park from its worktree (beekeeper agents park --on %s \"desk review\"): no second review runs, the loop merges it. Never force-push.", idle, onceRound, once.Verdict, short(once.Head), cmp.Or(once.URL, p.URL), short(p.Head), short(p.Head), ref)
+		afterPark := "no second review runs, the loop merges it"
+		if in.RequireReview && !(once.Verdict == Approved && in.approvalCovers(p, once.Head)) {
+			afterPark = "the loop reviews the new head and merges it once approved"
+		}
+		a.Message = fmt.Sprintf("%s: its one desk review, round %d, %s head %s (%s), and head %s carries commits past it that nobody parked on. You own it now: finish them (fix every finding the review left), bring head %s to green CI without conflicts, then park from its worktree (beekeeper agents park --on %s \"desk review\"): %s. Never force-push.", idle, onceRound, once.Verdict, short(once.Head), cmp.Or(once.URL, p.URL), short(p.Head), short(p.Head), ref, afterPark)
 		add(a)
 	case reviewedHere || l.has(reviewKey(ref, p.Head)):
 		// A review of this head started and ended without a verdict.

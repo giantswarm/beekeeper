@@ -42,8 +42,17 @@ func WithProgressItem(ctx context.Context, ref string) context.Context {
 	return context.WithValue(ctx, progressContextKey{}, ref)
 }
 
-func progressArgs(ctx context.Context, args []string) []string {
+// ProgressItem returns the stalled top-of-board item ref scoped on ctx, or "".
+func ProgressItem(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	ref, _ := ctx.Value(progressContextKey{}).(string)
+	return ref
+}
+
+func progressArgs(ctx context.Context, args []string) []string {
+	ref := ProgressItem(ctx)
 	if ref == "" {
 		return args
 	}

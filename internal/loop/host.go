@@ -122,7 +122,7 @@ type Command struct {
 	IsDeskReviewWait           func(waits string) bool
 	IssueURL                   func(ref string) string
 	LoopBroker                 func(ctx context.Context) (string, error)
-	LoopEpicStart              func(l *Loop, next LoopBoardItem) error
+	LoopEpicStart              func(ctx context.Context, l *Loop, next LoopBoardItem) error
 	LoopFiledIssues            func(l *Loop, st *state.State) []superloop.FiledIssue
 	LoopFinishContinuation     func(l *Loop, old state.Agent, name string) error
 	LoopFireTimers             func(l *Loop, ctx context.Context, st *state.State) error

@@ -349,7 +349,7 @@ func deliveryPullStep(in Input, l ledger, p Pull, w *Worker) string {
 		}
 		// A head its author moved past the round's ends the round
 		// (planPull): its author works on it until it parks on it.
-		moved := !sameHead(rd.head, p.Head) && len(rs) < MaxReviews && !in.baseMerged(p, rd.head)
+		moved := !sameHead(rd.head, p.Head) && (len(rs) < MaxReviews || in.RequireReview) && !in.baseMerged(p, rd.head)
 		if (!reviewerDone && !moved || sameHead(rd.head, p.Head)) && p.verdict(rd, l.pushed(p)) == nil {
 			return state.DeliveryReviewing
 		}

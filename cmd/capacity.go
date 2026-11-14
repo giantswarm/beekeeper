@@ -224,14 +224,15 @@ func capacityStopped(v *capacity.View, a *app, st *state.State) *capacity.View {
 // falls back to a.cfg.Capacity when no configuration file path is active or
 // on a read or parse error.
 func (a *app) liveCapacity() config.Capacity {
+	progress := a.progressItem != "" && a.validateProgressItem() == nil
 	if p := cmp.Or(a.cfgPath, a.loadedCfg); p != "" {
 		if c, err := config.Load(p); err == nil {
-			c.Capacity.TaskKind, c.Capacity.AuthorModel = a.selectionKind, a.selectionAuthor
+			c.Capacity.TaskKind, c.Capacity.AuthorModel, c.Capacity.Progress = a.selectionKind, a.selectionAuthor, progress
 			return c.Capacity
 		}
 	}
 	k := a.cfg.Capacity
-	k.TaskKind, k.AuthorModel = a.selectionKind, a.selectionAuthor
+	k.TaskKind, k.AuthorModel, k.Progress = a.selectionKind, a.selectionAuthor, progress
 	return k
 }
 
@@ -509,7 +510,7 @@ nothing; it makes no GitHub call.`,
 			return nil
 		},
 	}
-	c.Flags().StringVar(&a.progressItem, loop.BoardProgressFlag, "", "supervisor recovery of a stalled board item")
+	c.PersistentFlags().StringVar(&a.progressItem, loop.BoardProgressFlag, "", "supervisor recovery of a stalled board item")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
 	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")
@@ -559,6 +560,9 @@ budget per hour (rate) and distance behind pace, each provider's windows and
 verdict, and the headroom. Exit 0 either way; reads only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.validateProgressItem(); err != nil {
+				return err
+			}
 			a.selectionKind = strings.TrimSpace(a.selectionKind)
 			if a.selectionKind == capacity.TaskKindReview {
 				review = true

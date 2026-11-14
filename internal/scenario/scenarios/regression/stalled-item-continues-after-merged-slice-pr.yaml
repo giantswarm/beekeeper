@@ -1,0 +1,132 @@
+name: stalled-item-continues-after-merged-slice-pr
+description: >
+  A worker merges a Part of slice pull request without post-merge continuation,
+  leaving its In Progress board item open while another delivery occupies
+  delivery.wipLimit. Merged pull requests in the item's delivery history do not
+  block progress recovery: after 30 minutes without progress, the loop starts
+  the next worker for the remaining work.
+issue: https://github.com/giantswarm/beekeeper/issues/4003
+flow: regression
+tags: [regression, loop, progress, delivery]
+timeout: 180s
+
+given:
+  desk:
+    config:
+      github: {probeRepo: example/app}
+      delivery: {wipLimit: 1}
+      capacity:
+        providers: {codex: {ceiling: 2}}
+        choices: [{harness: codex, model: gpt-5.2-codex}]
+      board:
+        order:
+          - {name: ready, status: [Ready]}
+          - {name: progress, status: [In Progress]}
+  github:
+    repositories:
+      - name: example/app
+        issues:
+          - {number: 1, title: Other active item, board: Backlog}
+          - {number: 2, title: 'P1: Multi-slice delivery', board: In Progress}
+  harness:
+    usage:
+      claude: {session: 10, week: 40}
+      codex: {session: 10, week: 40}
+    workers:
+      - name: app 1
+        turns:
+          - outcome: hang
+      - name: app 2
+        turns:
+          - steps:
+              - git: [clone, --quiet, https://github.com/example/app.git, app]
+              - git: [checkout, --quiet, -b, app-2-slice-1]
+                dir: app
+              - write: {path: app/slice1.txt, content: "first slice\n"}
+              - git: [add, slice1.txt]
+                dir: app
+              - git: [commit, --quiet, -m, "feat: first slice"]
+                dir: app
+              - git: [push, --quiet, origin, app-2-slice-1]
+                dir: app
+              - gh: [pr, create, --repo, example/app, --base, main, --head, app-2-slice-1, --title, "feat: first slice", --body, "Part of https://github.com/example/app/issues/2"]
+                dir: app
+              - beekeeper: [agents, park, --on, 'example/app#3', --post-merge, '', desk review]
+                dir: app
+          - outcome: hang
+      - name: 'Review app 3 r\d+'
+        turns:
+          - steps:
+              - gh: [pr, view, '3', --repo, example/app, --json, headRefOid, --jq, .headRefOid]
+                save: head
+              - gh: [pr, review, '3', --repo, example/app, --comment, --body, "Desk review (opus): approved\nHead reviewed: `${head}`"]
+              - beekeeper: [agents, idle, --done, --report, "Desk review (opus): approved https://github.com/example/app/pull/3", --problem, none]
+  calls:
+    - program: devctl
+      args: [auth, status]
+      respond: {stdout: '{"github":{"present":false}}'}
+    - program: journalctl
+      respond: {stdout: ''}
+
+when:
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 2, turns: 1, outcome: finish}
+        - github: {pull: {repo: example/app, number: 3, state: open}}
+  - advance: 2s
+  - github: {check: {repo: example/app, pull: 3, name: build, state: green}}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.review]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: 'Review app 3 r1', outcome: finish}
+  - advance: 2s
+  - run: {args: [supervisor, loop, --once]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - github: {pull: {repo: example/app, number: 3, state: merged, merged_into: main}}
+  - run: {args: [board, move, 'example/app#1', Ready]}
+  - advance: 2s
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.end]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 1, turns: 1, running: true}
+  - advance: 10m
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - worker: {name: app 2, turns: 1}
+  - advance: 19m
+  - run: {args: [watch, --once]}
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - worker: {name: app 2, turns: 1}
+  - advance: 1m
+  - run: {args: [supervisor, loop, --once]}
+    expect:
+      - exit: 0
+      - events: {contains: [supervisor.board-progress]}
+  - wait_for:
+      timeout: 15s
+      expect:
+        - worker: {name: app 2, turns: 2, running: true}
+
+then:
+  - github: {pull: {repo: example/app, number: 3, state: merged, merged_into: main}}
+  - github: {issue: {repo: example/app, number: 2, state: open}}
+  - worker: {name: app 1, turns: 1, running: true}
+  - worker: {name: app 2, turns: 2, running: true}
+  - events: {contains: [supervisor.end, supervisor.board-progress]}
